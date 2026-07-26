@@ -19,8 +19,8 @@ from enum import Enum
 from typing import TypeVar
 
 from situc import ast
-from situc.diagnostics import Span, error
-from situc.expr import Env, build_env, evaluate
+from situc.diagnostics import SituError, Span, error
+from situc.expr import Env, Interval, build_env, evaluate, interval_of, scalar_interval
 from situc.types import ScalarType
 
 BITS_PER_BYTE = 8
@@ -49,10 +49,12 @@ class Placement:
 
 	path: str
 	name: str
-	kind: str			# "field" or "reserved"
+	kind: str			# "field", "reserved" or "marker"
 	type_name: str
-	offset_bits: int
-	size_bits: int
+	# None once something dynamic precedes this member: the offset exists, it
+	# is just not knowable until parse time.
+	offset_bits: int | None
+	size_bits: int			# the lower bound, and the exact size when fixed
 	scalar: ScalarType | None
 	endian: ast.Endian | None
 	bit_order: ast.BitOrder | None
@@ -62,13 +64,41 @@ class Placement:
 	array_count: int | None		= None
 	element_bits: int | None	= None
 	bit_position: BitPosition | None = None
+	# None means unbounded above. Equal to size_bits when the size is fixed.
+	size_max_bits: int | None	= None
+	# The offset is measured from a frame base rather than the message base,
+	# which is what an array element or a member of a dynamically placed struct
+	# gets. Section 12.2: this is the island of staticness.
+	frame_relative: bool		= False
+	# The member whose value drives this one's size, for blame.
+	sized_by: str | None		= None
+	# The earlier member that made this one's offset dynamic, and where it is
+	# declared. Section 17 asks a blame chain to name the root cause and point
+	# at it, not at the field that suffers.
+	dynamic_cause: str | None	= None
+	dynamic_cause_span: Span | None	= None
+	dynamic_cause_size: str | None	= None
+	# Whether the frame this member is measured against is itself placed
+	# dynamically. An element of a fixed array at a known offset is
+	# frame-relative in its offset but nothing can move it, so its address is
+	# still Stable; an element of an array after a variable-length member is not.
+	frame_base_dynamic: bool	= False
+
+	@property
+	def is_fixed_size(self) -> bool:
+		return self.size_max_bits == self.size_bits
+
+	@property
+	def has_static_offset(self) -> bool:
+		return self.offset_bits is not None
 
 	@property
 	def is_byte_aligned(self) -> bool:
-		return self.offset_bits % BITS_PER_BYTE == 0
+		return self.offset_bits is not None and self.offset_bits % BITS_PER_BYTE == 0
 
 	@property
 	def offset_bytes(self) -> int:
+		assert self.offset_bits is not None, "offset is dynamic"
 		return self.offset_bits // BITS_PER_BYTE
 
 
@@ -79,6 +109,17 @@ class StructLayout:
 	placements: list[Placement]	= field(default_factory=list)
 	span: Span | None		= None
 	reserved_count: int		= 0
+	# None means unbounded. A struct is a frame exactly when these differ:
+	# some member's size is not known until parse time (section 9.1).
+	size_max_bits: int | None	= None
+
+	@property
+	def is_frame(self) -> bool:
+		return self.size_max_bits != self.size_bits
+
+	@property
+	def is_fixed_size(self) -> bool:
+		return not self.is_frame
 
 	@property
 	def is_byte_sized(self) -> bool:
@@ -87,6 +128,12 @@ class StructLayout:
 	@property
 	def size_bytes(self) -> int:
 		return self.size_bits // BITS_PER_BYTE
+
+	@property
+	def size_max_bytes(self) -> int | None:
+		if self.size_max_bits is None:
+			return None
+		return self.size_max_bits // BITS_PER_BYTE
 
 
 @dataclass
@@ -108,7 +155,9 @@ class SchemaLayout:
 
 		if not rest:
 			if builtin == "size":
-				return None if not layout.is_byte_sized else layout.size_bytes
+				if not layout.is_byte_sized or layout.is_frame:
+					return None
+				return layout.size_bytes
 			if builtin == "offset":
 				return 0
 			return None
@@ -118,11 +167,15 @@ class SchemaLayout:
 			return None
 
 		if builtin == "size":
+			if not placement.is_fixed_size:
+				return None
 			bits = placement.size_bits
 			return None if bits % BITS_PER_BYTE else bits // BITS_PER_BYTE
 		if builtin == "offset":
-			bits = placement.offset_bits
-			return None if bits % BITS_PER_BYTE else bits // BITS_PER_BYTE
+			offset = placement.offset_bits
+			if offset is None or offset % BITS_PER_BYTE:
+				return None
+			return offset // BITS_PER_BYTE
 		return placement.array_count
 
 	def find(self, path: str) -> Placement | None:
@@ -166,9 +219,11 @@ class Scope:
 			if attr.name == "endian":
 				resolved = _endian_attr(attr)
 				if isinstance(resolved, str):
-					marker, endian = resolved, None
+					marker = resolved
+					endian = None
 				else:
-					endian, marker = resolved, None
+					endian = resolved
+					marker = None
 			elif attr.name == "bit_order":
 				bit_order = _attr_enum(attr, ast.BitOrder, "bit order")
 
@@ -212,6 +267,41 @@ def _attr_enum(attr: ast.Attr, enum: type[EnumT], described: str) -> EnumT:
 	)
 
 
+@dataclass(frozen=True)
+class Extent:
+	"""A running bit offset that may have stopped being a single number.
+
+	`lo == hi` means the cursor is still exact and every member so far has had
+	a fixed size. Once they differ, every subsequent member's offset is dynamic
+	-- which is the locality rule of section 11.3, expressed as a value rather
+	than as a flag somebody has to remember to set.
+	"""
+
+	lo: int
+	hi: int | None
+
+	@property
+	def is_exact(self) -> bool:
+		return self.hi == self.lo
+
+	def advance(self, size: Interval) -> Extent:
+		hi = None if self.hi is None or size.hi is None else self.hi + size.hi
+		return Extent(self.lo + size.lo, hi)
+
+
+@dataclass
+class Walk:
+	"""Solver state threaded through one struct's members."""
+
+	fields: dict[str, Interval]
+	cursor: Extent
+	# Set once a `[remaining]` member has been placed: nothing may follow it.
+	closed_by: str | None = None
+	# The first member whose size was not fixed, which is what every later
+	# member's Dynamic offset traces back to.
+	cause: tuple[str, Span, str] | None = None
+
+
 # ---------------------------------------------------------------------------
 # The solver
 # ---------------------------------------------------------------------------
@@ -250,29 +340,45 @@ class Solver:
 		scope  = self.file_scope.narrow(decl.attrs, self.result.env)
 		layout = StructLayout(name=name, size_bits=0, span=decl.span)
 
-		# Registered before the walk so a nested struct that has already been
-		# solved is reused rather than recomputed.
-		cursor = self.place_members(decl, decl.members, scope, layout, prefix=name, cursor=0)
-		layout.size_bits = cursor
+		# `fields` accumulates as the walk proceeds, so a size expression can
+		# only ever name a field declared before it. That is the
+		# no-forward-reference rule of section 10, enforced by construction
+		# rather than by a check.
+		state  = Walk(fields={}, cursor=Extent(0, 0))
+		self.place_members(decl, decl.members, scope, layout, name, state)
+
+		layout.size_bits     = state.cursor.lo
+		layout.size_max_bits = state.cursor.hi
 		self.result.structs[name] = layout
 		return layout
 
 	def place_members(self, decl: ast.StructDecl, members: tuple[ast.Member, ...],
-			scope: Scope, layout: StructLayout, prefix: str, cursor: int) -> int:
-		for member in members:
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
+		for index, member in enumerate(members):
 			if isinstance(member, ast.PositionalBlock):
-				# A positional block is a staticness assertion, not a frame:
-				# its members keep accumulating into the enclosing struct.
-				cursor = self.place_members(decl, member.members, scope, layout,
-				                            prefix, cursor)
+				# A positional block is a staticness assertion, not a frame: its
+				# members keep accumulating into the enclosing struct, and
+				# anything dynamic inside one is an error (section 9.2).
+				before = state.cursor
+				self.place_members(decl, member.members, scope, layout, prefix, state)
+				if state.cursor.hi != state.cursor.lo and before.hi == before.lo:
+					raise error(
+						"a `positional` block cannot contain a dynamic member",
+						member.span,
+						label = "staticness is asserted here",
+						notes = ["`positional` exists so the compiler defends a "
+						         "region the author wants to stay static "
+						         "(project.md section 9.2)",
+						         "move the dynamic member outside the block"],
+					)
 			elif isinstance(member, ast.MarkerField):
-				cursor = self.place_marker(decl, member, scope, layout, prefix, cursor)
+				self.place_marker(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, (ast.Field, ast.Reserved)):
-				cursor = self.place_one(decl, member, scope, layout, prefix, cursor)
-		return cursor
+				last = index == len(members) - 1
+				self.place_one(decl, member, scope, layout, prefix, state, last)
 
 	def place_marker(self, decl: ast.StructDecl, member: ast.MarkerField,
-			scope: Scope, layout: StructLayout, prefix: str, cursor: int) -> int:
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
 		"""A marker field is its backing type, read before any order is known.
 
 		It carries no endianness of its own: the bytes are compared as a
@@ -292,31 +398,46 @@ class Solver:
 		scalar = marker.backing.scalar
 		assert scalar is not None, "the parser rejects a non-scalar backing"
 
-		if cursor % BITS_PER_BYTE != 0:
+		cursor = state.cursor
+		if cursor.is_exact and cursor.lo % BITS_PER_BYTE != 0:
 			raise error(
 				f"marker `{member.name}` must start on a byte boundary",
 				member.span,
-				label = f"lands {cursor % BITS_PER_BYTE} bits into a byte",
+				label = f"lands {cursor.lo % BITS_PER_BYTE} bits into a byte",
 			)
 
 		layout.placements.append(Placement(
-			path         = f"{prefix}.{member.name}",
-			name         = member.name,
-			kind         = "marker",
-			type_name    = member.name,
-			offset_bits  = cursor,
-			size_bits    = scalar.bits,
-			scalar       = scalar,
-			endian       = None,
-			bit_order    = scope.bit_order,
-			span         = member.span,
-			attrs        = member.attrs,
-			element_bits = scalar.bits,
+			path          = f"{prefix}.{member.name}",
+			name          = member.name,
+			kind          = "marker",
+			type_name     = member.name,
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = scalar.bits,
+			size_max_bits = scalar.bits,
+			scalar        = scalar,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = member.span,
+			attrs         = member.attrs,
+			element_bits  = scalar.bits,
 		))
-		return cursor + scalar.bits
+
+		state.fields[member.name] = scalar_interval(scalar.bits, signed=False)
+		state.cursor = cursor.advance(Interval.point(scalar.bits))
 
 	def place_one(self, decl: ast.StructDecl, member: ast.Field | ast.Reserved,
-			scope: Scope, layout: StructLayout, prefix: str, cursor: int) -> int:
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk,
+			last: bool) -> None:
+		if state.closed_by is not None:
+			raise error(
+				f"nothing may follow `{state.closed_by}`",
+				member.span,
+				label = "declared after a `[remaining]` member",
+				notes = [f"`{state.closed_by}` runs to the end of its frame, so "
+				         "this member has no bytes to occupy",
+				         "move it before the `[remaining]` member"],
+			)
+
 		local = scope.narrow(member.attrs, self.result.env)
 
 		# A reserved region has no name, but the map still has to name it: an
@@ -330,72 +451,222 @@ class Solver:
 			layout.reserved_count += 1
 
 		path   = f"{prefix}.{name}"
-		width  = self.width_of(member, local)
-		count  = self.array_count(member)
 		scalar = self.effective_scalar(member, local)
+		cursor = state.cursor
 
-		element_bits = width
-		total_bits   = width if count is None else width * count
+		element = self.element_extent(member, local)
+		count   = self.array_extent(member, state, last)
+		total   = _multiply(element, count)
 
-		self.check_alignment(decl, member, scalar, cursor, element_bits)
-		position = self.bit_position(scalar, local, cursor, element_bits)
+		self.check_alignment(decl, member, scalar, cursor, element)
+		position = self.bit_position(scalar, local, cursor, element)
 
 		layout.placements.append(Placement(
-			path         = path,
-			name         = name,
-			kind         = "field" if isinstance(member, ast.Field) else "reserved",
-			type_name    = member.type_ref.name,
-			offset_bits  = cursor,
-			size_bits    = total_bits,
-			scalar       = scalar,
-			endian       = local.endian,
-			bit_order    = local.bit_order,
-			span         = member.span,
-			attrs        = member.attrs,
-			marker       = local.marker,
-			array_count  = count,
-			element_bits = element_bits,
-			bit_position = position,
+			path           = path,
+			name           = name,
+			kind           = "field" if isinstance(member, ast.Field) else "reserved",
+			type_name      = member.type_ref.name,
+			offset_bits    = cursor.lo if cursor.is_exact else None,
+			size_bits      = total.lo,
+			size_max_bits  = total.hi,
+			scalar         = scalar,
+			endian         = local.endian,
+			bit_order      = local.bit_order,
+			span           = member.span,
+			attrs          = member.attrs,
+			marker         = local.marker,
+			array_count    = count.value() if count.is_point and member.array else None,
+			element_bits   = element.lo if element.is_point else None,
+			bit_position   = position,
+			frame_relative = False,
+			sized_by       = self.sizing_field(member),
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
 		))
 
 		if isinstance(member, ast.Field) and member.type_ref.scalar is None:
-			self.absorb_nested(member, layout, path, cursor)
+			self.absorb_nested(member, layout, path, cursor, element,
+			                   layout.placements[-1])
 
-		return cursor + total_bits
+		self.record_interval(member, scalar, state, path, name)
 
-	def absorb_nested(self, member: ast.Field, layout: StructLayout,
-			path: str, base: int) -> None:
-		"""Copy a nested struct's placements into the parent, rebased.
+		if member.array is not None and isinstance(member.array.size, ast.Remaining):
+			state.closed_by = name
 
-		The map names every reachable field, so `Header.flags.urgent` has to
-		appear with its offset relative to the outermost struct. Arrays of
-		structs are not expanded per element: `recs[].value` is one entry
-		describing every element, because that is how a capability path names
-		them (section 16).
+		if state.cause is None and total.hi != total.lo:
+			state.cause = (name, member.span, _render_extent(total))
+
+		state.cursor = cursor.advance(total)
+
+	def record_interval(self, member: ast.Field | ast.Reserved,
+			scalar: ScalarType | None, state: Walk, path: str, name: str) -> None:
+		"""Make this member visible to the size expressions that follow it.
+
+		Only scalars are recorded: a struct has no value, and an array's
+		elements are not addressable from an expression.
+		"""
+		if not isinstance(member, ast.Field):
+			return
+
+		# An array has no single value, so nothing about it is nameable.
+		if member.array is not None:
+			return
+
+		if member.type_ref.name in self.structs:
+			self.record_nested_intervals(member, state, name)
+			return
+
+		if scalar is None:
+			return
+
+		state.fields[name] = self.constrain(
+			scalar_interval(scalar.bits, scalar.signed), member.attrs)
+
+	def record_nested_intervals(self, member: ast.Field, state: Walk,
+			name: str) -> None:
+		"""A nested struct's scalars are visible as `member.field`.
+
+		This is what lets `u8 opts[hdr.length]` work: `hdr` is a struct, and
+		`length` is one of its fields.
 		"""
 		nested = self.result.structs.get(member.type_ref.name)
 		if nested is None:
 			return
 
-		suffix = "[]" if member.array is not None else ""
+		for inner in nested.placements:
+			if inner.kind != "field" or inner.scalar is None:
+				continue
+			if inner.array_count is not None:
+				continue
+			tail = inner.path[len(nested.name) + 1 :]
+			if "." in tail:
+				continue
+			state.fields[f"{name}.{tail}"] = self.constrain(
+				scalar_interval(inner.scalar.bits, inner.scalar.signed), inner.attrs)
+
+	def constrain(self, base: Interval, attrs: tuple[ast.Attr, ...]) -> Interval:
+		"""Narrow a field's range by the constraints it declares.
+
+		`[must_eq = 4]` collapses the interval to a point, which is what makes
+		`x[hdr.n]` a fixed array rather than a dynamic one. Section 10 states
+		this outright, and it is the whole reason a schema can pin a generic
+		format into a static one.
+		"""
+		lo, hi = base.lo, base.hi
+		env    = self.result.env
+
+		for attr in attrs:
+			if attr.value is None:
+				continue
+			try:
+				value = evaluate(attr.value, env)
+			except SituError:
+				continue
+
+			if attr.name == "must_eq":
+				return Interval.point(value)
+			if attr.name == "max":
+				hi = value if hi is None else min(hi, value)
+			elif attr.name == "min":
+				lo = max(lo, value)
+
+		return Interval(lo, hi)
+
+	def sizing_field(self, member: ast.Field | ast.Reserved) -> str | None:
+		"""The field whose value drives this member's size, for blame."""
+		if member.array is None or member.array.size is None:
+			return None
+		if isinstance(member.array.size, ast.Remaining):
+			return "remaining"
+		from situc.expr import path_text
+		return path_text(member.array.size)
+
+	def absorb_nested(self, member: ast.Field, layout: StructLayout, path: str,
+			cursor: Extent, element: Interval, parent: Placement) -> None:
+		"""Copy a nested struct's placements into the parent, rebased.
+
+		The map names every reachable field, so `Header.flags.urgent` has to
+		appear with its offset relative to the outermost struct.
+
+		Three cases, and the difference between them is the whole of section
+		12.2. An array's elements are described once, frame-relative, because
+		`recs[].value` names every element rather than one. A struct at a
+		dynamic offset is likewise frame-relative: its interior is static
+		relative to a base nobody knows yet, which is the island of staticness.
+		A struct at a known offset simply adds.
+		"""
+		nested = self.result.structs.get(member.type_ref.name)
+		if nested is None:
+			return
+
+		array  = member.array is not None
+		suffix = "[]" if array else ""
+		framed = array or not cursor.is_exact
+
+		# The element base moves only when the array itself is dynamically
+		# placed. A fixed array at a known offset is frame-relative in its
+		# offsets but nothing can shift it.
+		base_dynamic = not cursor.is_exact
+		cause        = (parent.dynamic_cause, parent.dynamic_cause_span,
+		                parent.dynamic_cause_size) if parent.dynamic_cause else None
+
+		# The element itself gets an entry, not only its members. Section 11.4
+		# names `Message.recs[]` as a thing with a size and an offset, because
+		# that is what a capability requirement addresses.
+		if array:
+			layout.placements.append(Placement(
+				path           = f"{path}[]",
+				name           = f"{member.name}[]",
+				kind           = "element",
+				type_name      = member.type_ref.name,
+				offset_bits    = 0,
+				size_bits      = element.lo,
+				size_max_bits  = element.hi,
+				scalar         = None,
+				endian         = None,
+				bit_order      = None,
+				span           = member.span,
+				frame_relative = True,
+				frame_base_dynamic = base_dynamic,
+				dynamic_cause      = cause[0] if cause else None,
+				dynamic_cause_span = cause[1] if cause else None,
+				dynamic_cause_size = cause[2] if cause else None,
+			))
+
 		for inner in nested.placements:
 			tail = inner.path[len(nested.name) :]
+
+			if framed:
+				offset = inner.offset_bits
+			elif inner.offset_bits is None:
+				offset = None
+			else:
+				offset = cursor.lo + inner.offset_bits
+
 			layout.placements.append(Placement(
-				path         = f"{path}{suffix}{tail}",
-				name         = inner.name,
-				kind         = inner.kind,
-				type_name    = inner.type_name,
-				offset_bits  = base + inner.offset_bits if not suffix else inner.offset_bits,
-				size_bits    = inner.size_bits,
-				scalar       = inner.scalar,
-				endian       = inner.endian,
-				bit_order    = inner.bit_order,
-				span         = inner.span,
-				attrs        = inner.attrs,
-				marker       = inner.marker,
-				array_count  = inner.array_count,
-				element_bits = inner.element_bits,
-				bit_position = inner.bit_position,
+				path           = f"{path}{suffix}{tail}",
+				name           = inner.name,
+				kind           = inner.kind,
+				type_name      = inner.type_name,
+				offset_bits    = offset,
+				size_bits      = inner.size_bits,
+				size_max_bits  = inner.size_max_bits,
+				scalar         = inner.scalar,
+				endian         = inner.endian,
+				bit_order      = inner.bit_order,
+				span           = inner.span,
+				attrs          = inner.attrs,
+				marker         = inner.marker,
+				array_count    = inner.array_count,
+				element_bits   = inner.element_bits,
+				bit_position   = inner.bit_position,
+				frame_relative = framed or inner.frame_relative,
+				sized_by       = inner.sized_by,
+				frame_base_dynamic = base_dynamic or inner.frame_base_dynamic,
+				dynamic_cause      = cause[0] if cause else None,
+				dynamic_cause_span = cause[1] if cause else None,
+				dynamic_cause_size = cause[2] if cause else None,
 			))
 
 	# -- widths -----------------------------------------------------------
@@ -418,29 +689,38 @@ class Solver:
 
 		return None
 
-	def width_of(self, member: ast.Field | ast.Reserved, scope: Scope) -> int:
+	def element_extent(self, member: ast.Field | ast.Reserved,
+			scope: Scope) -> Interval:
+		"""The size of one element, which may itself be a range for a frame."""
 		type_ref = member.type_ref
 
 		if type_ref.scalar is not None:
 			self.check_directives(member, type_ref.scalar, scope)
-			return type_ref.scalar.bits
+			return Interval.point(type_ref.scalar.bits)
 
 		enum = self.enums.get(type_ref.name)
 		if enum is not None:
 			backing = enum.backing.scalar
 			assert backing is not None, "parser rejects non-scalar enum backing"
 			self.check_directives(member, backing, scope)
-			return backing.bits
+			return Interval.point(backing.bits)
 
-		nested = self.structs.get(type_ref.name)
-		if nested is not None:
-			return self.layout_of(type_ref.name).size_bits
+		if type_ref.name in self.structs:
+			nested = self.layout_of(type_ref.name)
+			return Interval(nested.size_bits, nested.size_max_bits)
 
 		raise error(f"unknown type `{type_ref.name}`", type_ref.span, label="not declared")
 
-	def array_count(self, member: ast.Field | ast.Reserved) -> int | None:
+	def array_extent(self, member: ast.Field | ast.Reserved, state: Walk,
+			last: bool) -> Interval:
+		"""How many elements, as a range.
+
+		A single-point range is a fixed array however it was written, so a
+		count driven by a `[must_eq]` field is as static as a literal.
+		"""
 		if member.array is None:
-			return None
+			return Interval.point(1)
+
 		if member.array.size is None:
 			raise error(
 				"an array needs a size here",
@@ -450,13 +730,27 @@ class Solver:
 				         "region, which arrives in phase 6"],
 			)
 
-		env   = self.result.env.with_layout(self.result.lookup)
-		count = evaluate(member.array.size, env)
+		if isinstance(member.array.size, ast.Remaining):
+			if not last:
+				raise error(
+					"`[remaining]` must be the last member of its frame",
+					member.array.span,
+					label = "runs to the end of the frame",
+					notes = ["a member after this one would have no bytes to "
+					         "occupy (project.md section 8.5)"],
+				)
+			# The frame's extent is not known here, and for a top-level struct
+			# it is not known at all. Unbounded is the honest answer.
+			return Interval(0, None)
 
-		if count < 0:
-			raise error(f"array length {count} is negative", member.array.size.span,
-			            label = "must be zero or more")
-		if count == 0:
+		env   = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		count = interval_of(member.array.size, env)
+
+		if count.lo < 0:
+			raise error(f"array length {count.render()} may be negative",
+			            member.array.size.span, label="must be zero or more")
+
+		if count.is_point and count.value() == 0:
 			raise error(
 				"array length is zero",
 				member.array.size.span,
@@ -464,6 +758,7 @@ class Solver:
 				notes = ["a zero-length field occupies no bytes and can never be "
 				         "read or written; remove it instead"],
 			)
+
 		return count
 
 	# -- placement rules --------------------------------------------------
@@ -497,7 +792,7 @@ class Solver:
 			)
 
 	def check_alignment(self, decl: ast.StructDecl, member: ast.Field | ast.Reserved,
-			scalar: ScalarType | None, cursor: int, width: int) -> None:
+			scalar: ScalarType | None, extent: Extent, element: Interval) -> None:
 		"""Byte-aligned types must start on a byte boundary.
 
 		Situ inserts no implicit padding (section 8.4), so a whole-byte type
@@ -510,6 +805,16 @@ class Solver:
 		enum demand a byte boundary it can never have.
 		"""
 		packed = scalar is not None and scalar.is_bit_packed
+
+		# A dynamic cursor cannot be checked here. Everything after a dynamic
+		# member is byte-aligned by construction, because a dynamic size is
+		# always a whole number of bytes: only a bit-packed field can be
+		# sub-byte, and a bit-packed field cannot have a dynamic count.
+		if not extent.is_exact:
+			return
+
+		cursor = extent.lo
+		width  = element.lo
 
 		if not packed and cursor % BITS_PER_BYTE != 0:
 			stray = cursor % BITS_PER_BYTE
@@ -547,11 +852,13 @@ class Solver:
 		)
 
 	def bit_position(self, scalar: ScalarType | None, scope: Scope,
-			cursor: int, width: int) -> BitPosition | None:
-		if scalar is None or not scalar.is_bit_packed:
+			extent: Extent, element: Interval) -> BitPosition | None:
+		if scalar is None or not scalar.is_bit_packed or not extent.is_exact:
 			return None
 
-		local = cursor % BITS_PER_BYTE
+		cursor = extent.lo
+		width  = element.lo
+		local  = cursor % BITS_PER_BYTE
 		first = cursor // BITS_PER_BYTE
 		last  = (cursor + width - 1) // BITS_PER_BYTE
 
@@ -595,6 +902,20 @@ class Solver:
 				self.check_pin(member, placement, expected)
 
 	def check_pin(self, member: ast.Field, placement: Placement, expected: int) -> None:
+		if placement.offset_bits is None:
+			raise error(
+				f"`{member.name}` has no static offset, so the pin cannot hold",
+				member.pin.span if member.pin else member.span,
+				label = f"pinned to {_hex(expected)}",
+				notes = [
+					f"a dynamically sized member precedes it"
+					+ (f": `{placement.sized_by}` drives it" if placement.sized_by
+					   else ""),
+					"a pin asserts a compile-time offset; move the field before "
+					"the dynamic member, or drop the pin",
+				],
+			)
+
 		if not placement.is_byte_aligned:
 			raise error(
 				f"`{member.name}` is not at a byte offset, so the pin cannot hold",
@@ -629,6 +950,20 @@ class Solver:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _render_extent(size: Interval) -> str:
+	lo = size.lo // BITS_PER_BYTE
+	if size.hi is None:
+		return f"Unbounded (at least {lo} bytes)"
+	return f"Bounded({lo}, {size.hi // BITS_PER_BYTE})"
+
+
+def _multiply(element: Interval, count: Interval) -> Interval:
+	"""Total extent of `count` elements of `element` size."""
+	if element.hi is None or count.hi is None:
+		return Interval(element.lo * count.lo, None)
+	return Interval(element.lo * count.lo, element.hi * count.hi)
 
 
 def _file_scope(schema: ast.Schema) -> Scope:

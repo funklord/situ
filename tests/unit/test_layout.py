@@ -24,6 +24,7 @@ def offsets(body: str, struct: str = "S", preamble: str = PREAMBLE) -> dict[str,
 	return {
 		p.path.split(".", 1)[1]: p.offset_bits
 		for p in solved.structs[struct].placements
+		if p.offset_bits is not None
 	}
 
 
@@ -283,7 +284,7 @@ def test_zero_length_array_rejected() -> None:
 
 
 def test_negative_length_array_rejected() -> None:
-	assert "is negative" in rendered("const N = 0 - 1;\nstruct S { u8 a[N]; }")
+	assert "may be negative" in rendered("const N = 0 - 1;\nstruct S { u8 a[N]; }")
 
 
 def test_empty_array_form_deferred_to_phase_six() -> None:
@@ -292,10 +293,29 @@ def test_empty_array_form_deferred_to_phase_six() -> None:
 	assert "phase 6" in report
 
 
-def test_field_reference_in_an_array_size_rejected() -> None:
-	"""Phase 1 accepts the syntax; constness is the solver's to enforce."""
-	report = rendered("struct S { u8 n; u8 a[n]; }")
-	assert "not a compile-time constant" in report
+def test_array_sized_by_an_earlier_field() -> None:
+	"""The size is a range, so the array is dynamic and the struct is a frame."""
+	solved = layout("struct S { u8 n; u8 a[n]; }")
+	struct = solved.structs["S"]
+
+	assert struct.is_frame
+	assert struct.size_bits == 8			# just `n` when the count is 0
+	assert struct.size_max_bits == 8 + 255 * 8
+
+
+def test_forward_reference_in_an_array_size_rejected() -> None:
+	"""Section 10 forbids it, and the walk enforces it by construction: `n` is
+	not in scope until it has been placed."""
+	report = rendered("struct S { u8 a[n]; u8 n; }")
+	assert "`n` is not in scope here" in report
+
+
+def test_array_sized_by_a_pinned_field_is_static() -> None:
+	"""An expression whose interval is a single point is a compile-time
+	constant even though it names a field (section 10)."""
+	solved = layout("struct S { u8 n [must_eq = 4]; u8 a[n]; }")
+	assert solved.structs["S"].is_fixed_size
+	assert solved.structs["S"].size_bytes == 5
 
 
 # -- size and offset builtins -----------------------------------------------
@@ -327,3 +347,113 @@ def test_unknown_path_is_not_found() -> None:
 	solved = layout("struct S { u8 a; }")
 	assert solved.lookup("size", "S.nope") is None
 	assert solved.lookup("size", "Nope") is None
+
+
+# -- dynamic layout (phase 5) -----------------------------------------------
+
+
+def test_a_struct_with_a_variable_member_is_a_frame() -> None:
+	solved = layout("struct S { u8 n; u8 a[n]; u8 z; }")
+	assert solved.structs["S"].is_frame
+
+
+def test_members_before_the_dynamic_one_keep_static_offsets() -> None:
+	"""The locality rule: a dynamic member weakens what follows it, and
+	nothing else (section 11.3)."""
+	solved = layout("struct S { u16 a; u8 n; u8 v[n]; u16 z; }")
+	found  = {p.name: p for p in solved.structs["S"].placements}
+
+	assert found["a"].offset_bits == 0
+	assert found["n"].offset_bits == 16
+	assert found["v"].offset_bits == 24
+	assert found["z"].offset_bits is None
+
+
+def test_size_bounds_come_from_the_driving_field() -> None:
+	solved = layout("struct S { u16 n [max = 1500]; u8 v[n]; }")
+	found  = {p.name: p for p in solved.structs["S"].placements}
+
+	assert found["v"].size_bits == 0
+	assert found["v"].size_max_bits == 1500 * 8
+
+
+def test_remaining_is_unbounded() -> None:
+	solved = layout("struct S { u8 a; u8 rest[remaining]; }")
+	found  = {p.name: p for p in solved.structs["S"].placements}
+
+	assert found["rest"].size_max_bits is None
+	assert solved.structs["S"].size_max_bits is None
+
+
+def test_remaining_must_be_last() -> None:
+	report = rendered("struct S { u8 rest[remaining]; u8 z; }")
+	assert "must be the last member of its frame" in report
+
+
+def test_nothing_may_follow_remaining_even_indirectly() -> None:
+	report = rendered("struct S { u8 a; u8 rest[remaining]; u16 z; }")
+	assert "must be the last member" in report
+
+
+def test_array_of_structs_records_its_elements_once() -> None:
+	body   = "struct R { u32 id; u16 v; } struct S { u8 n; R rs[n]; }"
+	solved = layout(body)
+	paths  = [p.path for p in solved.structs["S"].placements]
+
+	assert "S.rs[]" in paths
+	assert "S.rs[].v" in paths
+	assert "S.rs[0].v" not in paths
+
+
+def test_element_offsets_are_frame_relative() -> None:
+	body   = "struct R { u32 id; u16 v; } struct S { u8 n; R rs[n]; }"
+	solved = layout(body)
+	found  = {p.path: p for p in solved.structs["S"].placements}
+
+	assert found["S.rs[].v"].offset_bits == 32
+	assert found["S.rs[].v"].frame_relative
+
+	# The count varies but the base does not: `rs` starts right after `n`, so
+	# element k is at a computable 1 + k*6 and nothing can move it.
+	assert not found["S.rs[].v"].frame_base_dynamic
+
+
+def test_a_dynamically_placed_array_has_a_moving_base() -> None:
+	body   = ("struct R { u32 id; u16 v; }"
+	          "struct S { u8 n; u8 pad[n]; u8 m; R rs[m]; }")
+	solved = layout(body)
+	found  = {p.path: p for p in solved.structs["S"].placements}
+
+	# `pad` is variable, so everything after it moves -- including the base the
+	# elements are measured from.
+	assert found["S.rs[].v"].frame_relative
+	assert found["S.rs[].v"].frame_base_dynamic
+
+
+def test_fixed_array_elements_have_a_static_base() -> None:
+	"""Nothing can move a const-count array at a known offset."""
+	body   = "struct R { u32 id; u16 v; } struct S { R rs[4]; }"
+	solved = layout(body)
+	found  = {p.path: p for p in solved.structs["S"].placements}
+
+	assert found["S.rs[].v"].frame_relative
+	assert not found["S.rs[].v"].frame_base_dynamic
+
+
+def test_positional_block_refuses_a_dynamic_member() -> None:
+	"""Section 9.2: the block exists so the compiler defends a static region."""
+	report = rendered("struct S { u8 n; positional { u8 v[n]; } }")
+	assert "cannot contain a dynamic member" in report
+	assert "staticness is asserted here" in report
+
+
+def test_pin_on_a_dynamically_placed_field_rejected() -> None:
+	report = rendered("struct S { u8 n; u8 v[n]; u32 z @ 0x08; }")
+	assert "no static offset, so the pin cannot hold" in report
+	assert "dynamically sized member precedes it" in report
+
+
+def test_size_builtin_refuses_a_frame() -> None:
+	"""`size(X)` is a single number; a frame does not have one."""
+	solved = layout("struct S { u8 n; u8 v[n]; }")
+	assert solved.lookup("size", "S") is None

@@ -512,8 +512,6 @@ class Parser:
 		size: ast.Expr | None = None
 		if not self.current.is_symbol("]"):
 			size = self.parse_expr()
-			if isinstance(size, ast.Remaining):
-				raise not_yet_implemented("`remaining` array sizing", size.span, 5)
 
 		self.expect_symbol("]", "to close the array size")
 		return ast.ArraySpec(self.span_from(start), size)

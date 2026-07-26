@@ -64,8 +64,8 @@ def test_schema_is_named_after_its_directory() -> None:
 
 
 def test_both_groups_are_populated() -> None:
-	assert len(CURRENT) >= 8
-	assert len(FUTURE) >= 3
+	assert len(CURRENT) >= 10
+	assert len(FUTURE) >= 2
 
 
 @pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))

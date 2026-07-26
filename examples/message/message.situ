@@ -1,7 +1,5 @@
 // project.md example 5.2: a dynamic frame containing static islands.
 //
-// STATUS: needs phase 5. `remaining` and counted arrays are rejected until then.
-//
 // This is the example the whole frame-relative staticness design exists for,
 // and its expected capability map is the phase 5 acceptance criterion:
 //
@@ -81,3 +79,8 @@ require random_access(Message.recs);
 // assert rather than require, so the schema keeps building while it documents
 // the known cost.
 assert absolute_static(Message.recs);
+
+// Nothing bounds the trailer, so the frame has no worst case and cannot be
+// statically allocated. Recorded rather than required, because for this format
+// that is the intent.
+assert max_size(Message, 2048);

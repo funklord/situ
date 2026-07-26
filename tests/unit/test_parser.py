@@ -431,10 +431,10 @@ def test_future_members_name_their_phase(member: str, phase: int) -> None:
 	assert f"phase {phase}" in caught.value.diagnostic.render()
 
 
-def test_remaining_array_size_deferred_to_phase_five() -> None:
-	with pytest.raises(SituError, match="not yet implemented") as caught:
-		parse_text("struct S { u8 trailer[remaining]; }")
-	assert "phase 5" in caught.value.diagnostic.render()
+def test_remaining_array_size_parses() -> None:
+	field = first_field("struct S { u8 trailer[remaining]; }")
+	assert field.array is not None
+	assert isinstance(field.array.size, ast.Remaining)
 
 
 def test_positional_block_is_accepted() -> None:

@@ -45,6 +45,10 @@ class Rule:
 	construct: str
 	effects: tuple[Effect, ...]
 	remedy: str = ""
+	# When set, a weakening from this rule points at the construct that caused
+	# it rather than at the field that suffers it. Section 17: a blame chain
+	# names the root cause and its source location.
+	blames_cause: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,15 @@ class Context:
 
 
 def _align_value(placement: Placement) -> Value:
+	"""Alignment is a property of a known offset.
+
+	A dynamically placed field has no alignment the compiler can promise: where
+	it lands depends on how long the bytes before it turn out to be. Unaligned
+	is the honest answer and the weaker one.
+	"""
+	if placement.offset_bits is None:
+		return Value("Unaligned")
+
 	alignment = alignment_of(placement.offset_bits)
 	return Value("Aligned", (str(alignment),)) if alignment else Value("Unaligned")
 
@@ -159,6 +172,8 @@ def _is_unaligned_multibyte(context: Context) -> bool:
 	scalar = context.scalar
 	if scalar is None or scalar.is_bit_packed or scalar.bits <= BITS_PER_BYTE:
 		return False
+	if context.placement.offset_bits is None:
+		return False
 	width_bytes = scalar.bits // BITS_PER_BYTE
 	return alignment_of(context.placement.offset_bits) < min(width_bytes, MAX_ALIGN)
 
@@ -180,6 +195,36 @@ def _is_odd_width_scalar(context: Context) -> bool:
 	return (scalar is not None
 	        and not scalar.is_bit_packed
 	        and scalar.bits not in ATOMIC_WIDTHS)
+
+
+def _has_dynamic_offset(context: Context) -> bool:
+	return context.placement.offset_bits is None
+
+
+def _is_frame_relative(context: Context) -> bool:
+	return (context.placement.frame_relative
+	        and context.placement.offset_bits is not None)
+
+
+def _is_bounded_size(context: Context) -> bool:
+	placement = context.placement
+	return (placement.size_max_bits is not None
+	        and placement.size_max_bits != placement.size_bits)
+
+
+def _is_unbounded_size(context: Context) -> bool:
+	return context.placement.size_max_bits is None
+
+
+def _has_dynamic_elements(context: Context) -> bool:
+	"""An array whose element type is itself variable-sized.
+
+	Element k cannot be found without walking the k-1 before it, so access
+	drops to Sequential (section 11.3).
+	"""
+	placement = context.placement
+	return (placement.kind == "element"
+	        and placement.size_max_bits != placement.size_bits)
 
 
 def _is_host_dependent(context: Context) -> bool:
@@ -280,6 +325,85 @@ TABLE: tuple[Row, ...] = (
 	),
 	Row(
 		rule = Rule(
+			name      = "dynamic-predecessor",
+			construct = "a dynamically sized member earlier in the same frame",
+			effects   = (
+				Effect(Axis.OFFSET, Value("Dynamic"),
+				       "the bytes before this field vary in length, so its "
+				       "position is not known until parse time"),
+				Effect(Axis.ADDRESS, Value("Unstable"),
+				       "a pointer to it is invalidated by any write that "
+				       "changes the length of what precedes it"),
+			),
+			remedy    = "move the variable-length member after this one; that "
+			            "costs nothing and restores a static offset to "
+			            "everything between them",
+			blames_cause = True,
+		),
+		applies = _has_dynamic_offset,
+	),
+	Row(
+		rule = Rule(
+			name      = "frame-relative",
+			construct = "a member of a frame, addressed from the frame base",
+			# The address effect is attached per placement: an element of a
+			# fixed array at a known offset is frame-relative in its offset but
+			# nothing can move it, so its address is still Stable.
+			effects   = (Effect(Axis.OFFSET, Value("FrameStatic"),
+			                    "the offset is fixed relative to the frame base, "
+			                    "which is itself found once"),),
+			remedy    = "acquire a view of the frame once; the fields inside it "
+			            "are then constant offsets from its base",
+		),
+		applies = _is_frame_relative,
+	),
+	Row(
+		rule = Rule(
+			name      = "bounded-size",
+			construct = "a member whose length comes from an earlier field",
+			effects   = (
+				Effect(Axis.SIZE, Value("Bounded"),
+				       "the extent is a range, not a number, so a caller must "
+				       "size buffers for the worst case"),
+				Effect(Axis.MUTATE, Value("Shifting"),
+				       "writing a different length moves every member after "
+				       "this one"),
+			),
+			remedy    = "pin the length with `[must_eq = N]` to make it fixed, "
+			            "or `[max = N]` to bound the worst case",
+		),
+		applies = _is_bounded_size,
+	),
+	Row(
+		rule = Rule(
+			name      = "unbounded-size",
+			construct = "a member with no upper bound on its length",
+			effects   = (
+				Effect(Axis.SIZE, Value("Unbounded"),
+				       "nothing in the schema limits how many bytes this can "
+				       "occupy, so it cannot be statically allocated"),
+				Effect(Axis.MUTATE, Value("Shifting"),
+				       "changing its length moves everything after it"),
+			),
+			remedy    = "give the driving length field a `[max = N]`, which makes "
+			            "the region statically allocatable",
+		),
+		applies = _is_unbounded_size,
+	),
+	Row(
+		rule = Rule(
+			name      = "dynamic-element-type",
+			construct = "an array whose element type is variable-sized",
+			effects   = (Effect(Axis.ACCESS, Value("Sequential"),
+			                    "element N cannot be found without walking the "
+			                    "N-1 elements before it"),),
+			remedy    = "give the element type a fixed size, or use an `indexed` "
+			            "region so an offset table makes access O(1)",
+		),
+		applies = _has_dynamic_elements,
+	),
+	Row(
+		rule = Rule(
 			name      = "endian-native",
 			construct = "`endian native`",
 			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
@@ -357,8 +481,13 @@ def apply(context: Context) -> Resolved:
 		effects = row.rule.effects
 		if row.rule.name == "endian-marker-scope":
 			effects = _marker_effects(context)
+		elif row.rule.name == "dynamic-predecessor":
+			effects = _predecessor_effects(context)
+		elif row.rule.name == "frame-relative":
+			effects = _frame_effects(context)
 
 		for effect in effects:
+			effect  = _parameterise(effect, context.placement)
 			current = vector.get(effect.axis)
 			# Meet, not assignment: a rule never strengthens an axis another
 			# rule already weakened. An effect at the same strength still
@@ -371,11 +500,72 @@ def apply(context: Context) -> Resolved:
 			weakenings.append(Weakening(
 				rule    = row.rule,
 				effect  = effect,
-				span    = placement.span,
+				span    = (placement.dynamic_cause_span or placement.span)
+				          if row.rule.blames_cause else placement.span,
 				subject = placement.path,
 			))
 
 	return Resolved(placement=placement, vector=vector, weakenings=weakenings)
+
+
+def _frame_effects(context: Context) -> tuple[Effect, ...]:
+	effects = [Effect(Axis.OFFSET, Value("FrameStatic"),
+	                  "the offset is fixed relative to the frame base, which is "
+	                  "itself found once")]
+
+	if context.placement.frame_base_dynamic:
+		effects.append(Effect(
+			Axis.ADDRESS, Value("FrameStable"),
+			"a pointer stays valid only while the frame's base does not move"))
+
+	return tuple(effects)
+
+
+def _predecessor_effects(context: Context) -> tuple[Effect, ...]:
+	"""Name the member that actually caused the loss.
+
+	"offset is Dynamic" is a fact; "`opts` has size Bounded(0, 1500), which is
+	why everything after it moved" is a diagnostic.
+	"""
+	placement = context.placement
+	cause     = placement.dynamic_cause
+	size      = placement.dynamic_cause_size
+
+	if cause is None:
+		blame = "an earlier member's length is not fixed"
+	else:
+		blame = f"`{cause}` has size {size}, so the bytes before this field vary"
+
+	return (
+		Effect(Axis.OFFSET, Value("Dynamic"), blame),
+		Effect(Axis.ADDRESS, Value("Unstable"),
+		       "a pointer to it is invalidated by any write that changes the "
+		       "length of what precedes it"),
+	)
+
+
+def _parameterise(effect: Effect, placement: Placement) -> Effect:
+	"""Fill in a value's parameters from the placement it applies to.
+
+	The table states which value an axis takes; the numbers belong to the field,
+	not to the rule, so they are attached here rather than duplicated per row.
+	"""
+	if effect.value.params:
+		return effect
+
+	if effect.axis is Axis.OFFSET and effect.value.base == "FrameStatic":
+		assert placement.offset_bits is not None
+		return Effect(effect.axis,
+		              Value("FrameStatic", (render_offset(placement.offset_bits),)),
+		              effect.because)
+
+	if effect.axis is Axis.SIZE and effect.value.base == "Bounded":
+		assert placement.size_max_bits is not None
+		return Effect(effect.axis, Value("Bounded", (
+			render_size(placement.size_bits),
+			render_size(placement.size_max_bits))), effect.because)
+
+	return effect
 
 
 def _marker_effects(context: Context) -> tuple[Effect, ...]:
@@ -399,12 +589,22 @@ def _marker_effects(context: Context) -> tuple[Effect, ...]:
 
 
 def _base_vector(placement: Placement) -> Vector:
-	"""Facts the layout established, before any rule fires."""
+	"""Facts the layout established, before any rule fires.
+
+	Offsets and sizes start at their strongest values and are weakened by the
+	rows above. Starting anywhere else would let a construct strengthen an axis,
+	which invariant 2 forbids.
+	"""
 	vector = Vector()
-	vector = vector.with_value(
-		Axis.OFFSET, Value("AbsoluteStatic", (render_offset(placement.offset_bits),)))
-	vector = vector.with_value(
-		Axis.SIZE, Value("Fixed", (render_size(placement.size_bits),)))
+
+	if placement.offset_bits is not None:
+		vector = vector.with_value(
+			Axis.OFFSET,
+			Value("AbsoluteStatic", (render_offset(placement.offset_bits),)))
+
+	if placement.size_max_bits == placement.size_bits:
+		vector = vector.with_value(
+			Axis.SIZE, Value("Fixed", (render_size(placement.size_bits),)))
 
 	# Always stored, so the map renders `Aligned(8)` rather than a bare
 	# `Aligned` for a field that happens to sit at the strongest boundary.

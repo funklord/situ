@@ -259,10 +259,10 @@ def test_later_phase_predicates_are_deferred_not_passed() -> None:
 def test_deferrals_are_grouped_by_phase() -> None:
 	outcomes = discharge(
 		"struct S { u8 a; }\n"
-		"require frame_static(S.a);\n"
+		"require no_alloc(S);\n"
 		"require verify_gated(S);\n")
 	report = "\n".join(note.render() for note in requirements.deferrals(outcomes))
-	assert "needs phase 5" in report
+	assert "needs phase 4" in report
 	assert "needs phase 8" in report
 
 
@@ -347,3 +347,72 @@ def test_example_5_1_axes() -> None:
 	assert seq.vector.get(Axis.OFFSET).params == ("0x05",)
 	assert seq.vector.get(Axis.REPR).base == "ValueConverted"
 	assert seq.vector.get(Axis.ATOMIC).base == "NonAtomic"
+
+
+# -- dynamic layout (phase 5) -----------------------------------------------
+
+
+def test_frame_static_passes_for_an_array_element() -> None:
+	body = ("struct R { u32 id; u16 v; }"
+	        "struct S { u8 n; u8 pad[n]; u8 m; R rs[m]; }\n"
+	        "require frame_static(S.rs[].v);")
+	assert discharge(body)[0].satisfied
+
+
+def test_absolute_static_fails_and_blames_the_dynamic_member() -> None:
+	"""Section 17's worked example: name the root cause, not the victim."""
+	report = failure(
+		"struct S {\n\tu16 n [max = 1500];\n\tu8 opts[n];\n\tu32 z;\n}\n"
+		"require absolute_static(S.z);")
+
+	assert "offset(S.z) is Dynamic, required AbsoluteStatic" in report
+	assert "`opts` has size Bounded(0, 1500)" in report
+	assert "remedy: move the variable-length member after this one" in report
+	# The blame points at the line `opts` is declared on, not at `z`. The
+	# preamble is two lines, so `opts` is line 5.
+	assert "dynamic-predecessor applies here" in report
+	assert ":5:" in report
+
+
+def test_max_size_passes_within_the_bound() -> None:
+	body = ("struct S { u16 n [max = 100]; u8 v[n]; }\n"
+	        "require max_size(S.v, 100);")
+	assert discharge(body)[0].satisfied
+
+
+def test_max_size_fails_above_the_bound() -> None:
+	report = failure("struct S { u16 n [max = 100]; u8 v[n]; }\n"
+	                 "require max_size(S.v, 50);")
+	assert "size(S.v) is Bounded(0, 100), required Bounded(50)" in report
+
+
+def test_max_size_fails_for_an_unbounded_region() -> None:
+	"""A region with no upper bound cannot be statically allocated at any N."""
+	report = failure("struct S { u8 a; u8 rest[remaining]; }\n"
+	                 "require max_size(S.rest, 4096);")
+	assert "Unbounded" in report
+	assert "caused by:" in report
+
+
+def test_bounded_size_weakens_mutation_to_shifting() -> None:
+	body = ("struct S { u16 n [max = 100]; u8 v[n]; u32 z; }\n"
+	        "assert in_place(S.v);")
+	outcome = discharge(body)[0]
+	assert not outcome.satisfied
+	assert "Shifting" in outcome.detail
+
+
+def test_a_pinned_count_keeps_everything_static() -> None:
+	"""An interval that is a single point is a constant, however written."""
+	body = ("struct S { u8 n [must_eq = 4]; u8 v[n]; u32 z; }\n"
+	        "require absolute_static(S.z);\n"
+	        "require in_place(S.v);")
+	assert all(outcome.satisfied for outcome in discharge(body))
+
+
+def test_map_shows_dynamic_and_frame_offsets() -> None:
+	text = rendered_map("struct R { u32 id; }"
+	                    "struct S { u8 n; u8 pad[n]; u8 m; R rs[m]; }")
+	assert "offset=Dynamic" in text
+	assert "offset=FrameStatic(0x00)" in text
+	assert "size=Unbounded" not in text

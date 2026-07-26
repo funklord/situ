@@ -30,7 +30,7 @@ CMOCKA_LIBS	?= -lcmocka
 
 # Every test is compiled twice: the checked build exercises the bounds and
 # generation assertions, the release build proves they compile out cleanly.
-TESTS		:= test_runtime test_header test_tiff
+TESTS		:= test_runtime test_header test_tiff test_message
 BINS		:= $(TESTS:%=$(BUILD_DIR)/%) $(TESTS:%=$(BUILD_DIR)/%_checked)
 
 # Schemas whose generated accessors are exercised here. The code is generated
@@ -42,7 +42,8 @@ GEN_DIR		:= $(BUILD_DIR)/gen
 
 # Schemas are named by their path relative to the repository root, so an
 # example can be exercised where it lives rather than copied here to drift.
-SCHEMAS		:= tests/schemas/header.situ examples/tiff/tiff.situ
+SCHEMAS		:= tests/schemas/header.situ examples/tiff/tiff.situ \
+		   examples/message/message.situ
 GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))
 GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
 GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
@@ -53,6 +54,14 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 VECTOR_SCHEMAS	:= header
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 FUZZ_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
+
+# Which generated objects each test needs. Linking all of them into every
+# binary would collide: two schemas may both declare a `Header`, and each
+# generates its own accessors for it.
+OBJS_test_runtime	:=
+OBJS_test_header	:= $(GEN_DIR)/header.o
+OBJS_test_tiff		:= $(GEN_DIR)/tiff.o
+OBJS_test_message	:= $(GEN_DIR)/message.o
 
 .PHONY: all test clean generate
 
@@ -81,12 +90,12 @@ $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 $(BUILD_DIR)/%_checked: %.c $(RUNTIME_LIB) $(GEN_OBJS)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -DSITU_CHECKED -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_OBJS) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
 
 $(BUILD_DIR)/%: %.c $(RUNTIME_LIB) $(GEN_OBJS)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_OBJS) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
 
 # Standalone fallback: only reached when the parent did not supply a library.
 $(BUILD_DIR)/runtime/libsitu.a:

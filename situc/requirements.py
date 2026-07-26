@@ -45,6 +45,13 @@ PREDICATES: dict[str, Predicate] = {
 	"static": Predicate(
 		"static", Axis.OFFSET, Value("FrameStatic"),
 		"the offset is known at compile time, from the message or frame base"),
+	"frame_static": Predicate(
+		"frame_static", Axis.OFFSET, Value("FrameStatic"),
+		"the offset is fixed relative to a frame base resolved once at parse time"),
+	"max_size": Predicate(
+		"max_size", Axis.SIZE, Value("Bounded"),
+		"the worst-case extent is known, so a static buffer can hold it",
+		takes_argument=True),
 	"in_place": Predicate(
 		"in_place", Axis.MUTATE, Value("InPlaceSlack"),
 		"the field can be written without moving anything else"),
@@ -81,14 +88,12 @@ PREDICATES: dict[str, Predicate] = {
 
 # Predicates whose axis exists but which need a construct from a later phase.
 DEFERRED_PREDICATES = {
-	"frame_static":		5,
 	"in_place_dirty":	8,
 	"deterministic":	7,
 	"no_tag_invalidation":	8,
 	"verify_gated":		8,
 	"no_alloc":		4,
 	"bounded_stack":	4,
-	"max_size":		5,
 	"no_realloc":		5,
 }
 
@@ -196,7 +201,9 @@ def _discharge_capability(requirement: ast.Requirement, call: ast.Call,
 
 	actual = vector.get(predicate.axis)
 
-	if predicate.exact:
+	if predicate.name == "max_size":
+		satisfied, actual = _within_max_size(actual, required)
+	elif predicate.exact:
 		satisfied = actual.base == required.base
 	else:
 		satisfied = is_at_least(predicate.axis, actual, required)
@@ -211,6 +218,23 @@ def _discharge_capability(requirement: ast.Requirement, call: ast.Call,
 			requirement, call, predicate, path, actual, required, resolved, blame)
 
 	return outcome
+
+
+def _within_max_size(actual: Value, required: Value) -> tuple[bool, Value]:
+	"""`max_size(X) <= N`: the worst case must fit, and must be known.
+
+	An Unbounded size fails whatever N is, which is the point: a region with no
+	upper bound cannot be statically allocated at any size.
+	"""
+	limit = int(required.params[0])
+
+	if actual.base == "Unbounded":
+		return False, actual
+	if actual.base == "Fixed":
+		return int(actual.params[0]) <= limit, actual
+
+	worst = int(actual.params[-1])
+	return worst <= limit, actual
 
 
 def _member_blame(entries: list[Resolved], axis: Axis, required: Value) -> list[Weakening]:

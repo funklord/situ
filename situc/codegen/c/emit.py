@@ -156,32 +156,141 @@ class Emitter:
 			lines.append(" * number of bytes, so no accessors are generated for it. */")
 			return lines
 
-		size = layout.size_bytes
-		lines.extend([
-			f"#define {macro(self.prefix, struct.name, 'SIZE_FIXED')} {size}u",
-			f"#define {macro(self.prefix, struct.name, 'SIZE_MIN')}   {size}u",
-			f"#define {macro(self.prefix, struct.name, 'SIZE_MAX')}   {size}u",
-			"",
-			"/* Acquire a view. This is the one bounds check; the field accessors",
-			" * below are unchecked constant offsets from the view base. */",
-			f"static inline situ_err_t {ident(self.prefix, struct.name, 'view')}"
-			"(const situ_msg_t *msg, uint32_t offset, situ_view_t *out)",
-			"{",
-			f"\treturn situ_view_at(msg, offset, "
-			f"{macro(self.prefix, struct.name, 'SIZE_FIXED')}, out);",
-			"}",
-		])
+		lines.extend(self._size_constants(struct))
+		lines.extend(self._view_acquisition(struct))
 
 		for entry in struct.entries:
 			lines.extend(self._field(struct, entry))
 
+		lines.extend(self._shifting_setters(struct))
 		lines.extend(self._validate_decl(struct))
+		return lines
+
+	def _size_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""So callers can size static buffers without running the compiler.
+
+		SIZE_FIXED is emitted only when there is one. A frame has a range, and
+		pretending otherwise would hand a caller a number that is wrong for
+		every message but the shortest.
+		"""
+		layout = struct.layout
+		name   = struct.name
+		lines  = []
+
+		if layout.is_fixed_size:
+			lines.append(f"#define {macro(self.prefix, name, 'SIZE_FIXED')} "
+			             f"{layout.size_bytes}u")
+
+		lines.append(f"#define {macro(self.prefix, name, 'SIZE_MIN')}   "
+		             f"{layout.size_bytes}u")
+
+		if layout.size_max_bytes is not None:
+			lines.append(f"#define {macro(self.prefix, name, 'SIZE_MAX')}   "
+			             f"{layout.size_max_bytes}u")
+		else:
+			lines.extend([
+				f"/* No {macro(self.prefix, name, 'SIZE_MAX')}: nothing in the "
+				"schema bounds this",
+				" * struct's length. Give the driving length field a `[max = N]`",
+				" * to make it statically allocatable. */",
+			])
+
+		lines.append("")
+		return lines
+
+	def _view_acquisition(self, struct: ResolvedStruct) -> list[str]:
+		"""One bounds check at the frame boundary (section 12.2).
+
+		A fixed struct knows its own extent. A frame does not: how many bytes it
+		occupies depends on the data, so the caller supplies what they have and
+		the check is against that.
+		"""
+		layout = struct.layout
+		name   = struct.name
+
+		if layout.is_fixed_size:
+			return [
+				"/* Acquire a view. This is the one bounds check; the field",
+				" * accessors below are constant offsets from the view base. */",
+				f"static inline situ_err_t {ident(self.prefix, name, 'view')}"
+				"(const situ_msg_t *msg, uint32_t offset, situ_view_t *out)",
+				"{",
+				f"\treturn situ_view_at(msg, offset, "
+				f"{macro(self.prefix, name, 'SIZE_FIXED')}, out);",
+				"}",
+			]
+
+		return [
+			"/* Acquire a view. This struct is a frame: its extent depends on the",
+			" * data, so the caller supplies the length they have and the bounds",
+			" * check is made against that. The fields at a static offset are then",
+			" * constant offsets from the base; the rest resolve through their own",
+			" * offset functions below. */",
+			f"static inline situ_err_t {ident(self.prefix, name, 'view')}"
+			"(const situ_msg_t *msg, uint32_t offset, uint32_t length,",
+			"\t\tsitu_view_t *out)",
+			"{",
+			f"\tif (length < {macro(self.prefix, name, 'SIZE_MIN')}) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"",
+			"\treturn situ_view_at(msg, offset, length, out);",
+			"}",
+		]
+
+	def _shifting_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""Setters for fields that drive a length in this struct.
+
+		Writing one of these moves every member after the region it sizes, so
+		the message's generation has to be bumped: that is the only thing
+		standing between a caller and a stale view (section 12.3). The setter
+		therefore takes the message, which also makes the cost visible in the
+		signature rather than only in a comment.
+		"""
+		drivers = {
+			placement.sized_by
+			for placement in self._top_level(struct)
+			if placement.sized_by and placement.sized_by != "remaining"
+		}
+		if not drivers:
+			return []
+
+		lines = ["", "/* Writing any of these changes where later members start, so each",
+		         " * one bumps the message generation and invalidates outstanding",
+		         " * views. In a SITU_CHECKED build a stale view is then caught on",
+		         " * use; in a release build the check compiles out. */"]
+
+		for path in sorted(drivers):
+			target = self.resolved.find(f"{struct.name}.{path}")
+			if target is None or target.placement.scalar is None:
+				continue
+
+			local = c_name(path)
+			ctype = self._field_ctype(target.placement)
+			store = self._store_statement(
+				target.placement.scalar, target.placement, "view.base", "value")
+
+			lines.extend([
+				f"static inline void "
+				f"{ident(self.prefix, struct.name, local, 'set')}"
+				f"(situ_msg_t *msg, situ_view_t view, {ctype} value)",
+				"{",
+				f"\t{store}",
+				"\tsitu_msg_touch(msg);",
+				"}",
+			])
+
 		return lines
 
 	# -- one field ------------------------------------------------------
 
 	def _field(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
+
+		# An element entry describes every element of an array at once, so it
+		# has no accessor of its own: the array field emits an indexed one.
+		if placement.kind == "element":
+			return []
 
 		# A nested struct's members are emitted under their own struct, so only
 		# the aggregate itself gets an accessor here. Checked before the
@@ -198,11 +307,19 @@ class Emitter:
 			lines.extend(self._marker(struct, placement))
 			return lines
 
+		# A dynamically placed member needs its offset worked out at runtime
+		# before anything can read it.
+		if placement.offset_bits is None:
+			lines.extend(self._offset_function(struct, placement))
+
 		if placement.type_name in self.structs:
-			lines.extend(self._sub_view(struct, placement))
+			if self._is_array(placement):
+				lines.extend(self._element_view(struct, placement))
+			else:
+				lines.extend(self._sub_view(struct, placement))
 			return lines
 
-		if placement.array_count is not None:
+		if placement.array_count is not None or placement.sized_by is not None:
 			lines.extend(self._array(struct, entry))
 			return lines
 
@@ -288,14 +405,134 @@ class Emitter:
 			"}",
 		]
 
+	def _is_array(self, placement: Placement) -> bool:
+		return self.resolved.find(placement.path + "[]") is not None
+
+	def _base_expression(self, struct: ResolvedStruct, placement: Placement) -> str:
+		"""Where this member starts, in bytes, as a C expression."""
+		if placement.offset_bits is not None:
+			return f"{placement.offset_bytes}u"
+		local = c_name(self._local(struct, placement))
+		return f"{ident(self.prefix, struct.name, local, 'offset')}(view)"
+
+	def _top_level(self, struct: ResolvedStruct) -> list[Placement]:
+		"""The struct's own members, without absorbed nested ones."""
+		return [
+			entry.placement for entry in struct.entries
+			if entry.placement.kind != "element"
+			and "." not in entry.placement.path[len(struct.name) + 1 :]
+		]
+
+	def _offset_function(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Resolve a dynamic offset by summing what precedes it.
+
+		Everything before the first variable-length member contributes a
+		constant; each variable-length member contributes its own length, read
+		from the field that drives it. That field always has a static offset,
+		because a size expression may only name a field declared before it and
+		everything before the first dynamic member is statically placed.
+		"""
+		local = c_name(self._local(struct, placement))
+		lines = [
+			f"static inline uint32_t "
+			f"{ident(self.prefix, struct.name, local, 'offset')}(situ_view_t view)",
+			"{",
+		]
+
+		constant = 0
+		terms    = []
+		for other in self._top_level(struct):
+			if other.path == placement.path:
+				break
+			if other.is_fixed_size:
+				constant += other.size_bits // BITS_PER_BYTE
+			else:
+				terms.append(self._length_expression(struct, other))
+
+		lines.append(f"\tuint32_t offset = {constant}u;")
+		for term in terms:
+			lines.append(f"\toffset = offset + ({term});")
+		lines.extend(["", "\treturn offset;", "}"])
+		return lines
+
+	def _length_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""How many bytes a variable-length member occupies, at runtime."""
+		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+
+		if placement.sized_by == "remaining":
+			return f"view.limit - {self._base_expression(struct, placement)}"
+
+		count = self._count_expression(struct, placement)
+		return f"(uint32_t){count}" if element == 1 else f"(uint32_t){count} * {element}u"
+
+	def _count_expression(self, struct: ResolvedStruct, placement: Placement) -> str:
+		"""Read the field that drives a member's length.
+
+		A constant-offset load: the driving field has to precede the member it
+		sizes, so it lands before anything dynamic.
+		"""
+		if placement.sized_by is None:
+			return f"{placement.array_count or 0}u"
+
+		target = self.resolved.find(f"{struct.name}.{placement.sized_by}")
+		if target is None or target.placement.scalar is None:
+			return f"{placement.array_count or 0}u"
+
+		loaded = self._load_expression(
+			target.placement.scalar, target.placement, "view.base")
+		return f"({loaded})"
+
+	def _element_view(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Indexed access to one element of an array of structs.
+
+		Acquiring the element view is the bounds check; the fields inside it are
+		then constant offsets from its base (section 12.2). That is what gives a
+		dynamically positioned static struct its static capabilities back, and
+		why the accessors inside `Record` are the same ones a standalone
+		`Record` would have.
+		"""
+		local  = c_name(self._local(struct, placement))
+		nested = placement.type_name
+		base   = self._base_expression(struct, placement)
+		lines  = []
+
+		if placement.array_count is not None:
+			lines.append(f"#define {macro(self.prefix, struct.name, local, 'COUNT')} "
+			             f"{placement.array_count}u")
+		else:
+			lines.extend([
+				f"static inline uint32_t "
+				f"{ident(self.prefix, struct.name, local, 'count')}(situ_view_t view)",
+				"{",
+				f"\treturn (uint32_t){self._count_expression(struct, placement)};",
+				"}",
+			])
+
+		lines.extend([
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'at')}"
+			"(situ_view_t view, uint32_t index, situ_view_t *out)",
+			"{",
+			f"\tconst uint32_t stride = {macro(self.prefix, nested, 'SIZE_FIXED')};",
+			f"\tconst uint32_t base   = {base};",
+			"",
+			"\treturn situ_view_sub(view, base + index * stride, stride, out);",
+			"}",
+		])
+		return lines
+
 	def _sub_view(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		nested = placement.type_name
+		base   = self._base_expression(struct, placement)
 		return [
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, c_name(self._local(struct, placement)), 'view')}"
 			"(situ_view_t view, situ_view_t *out)",
 			"{",
-			f"\treturn situ_view_sub(view, {placement.offset_bytes}u, "
+			f"\treturn situ_view_sub(view, {base}, "
 			f"{macro(self.prefix, nested, 'SIZE_FIXED')}, out);",
 			"}",
 		]
@@ -305,11 +542,22 @@ class Emitter:
 		local     = c_name(self._local(struct, placement))
 		scalar    = placement.scalar
 		count     = placement.array_count
-		assert scalar is not None and count is not None
+		assert scalar is not None
 
-		lines = [
-			f"#define {macro(self.prefix, struct.name, local, 'COUNT')} {count}u",
-		]
+		lines = []
+		if count is not None:
+			lines.append(
+				f"#define {macro(self.prefix, struct.name, local, 'COUNT')} {count}u")
+		else:
+			# A run-time length: the count comes from the field that drives it,
+			# and `remaining` measures to the end of the view.
+			lines.extend([
+				f"static inline uint32_t "
+				f"{ident(self.prefix, struct.name, local, 'len')}(situ_view_t view)",
+				"{",
+				f"\treturn {self._length_expression(struct, placement)};",
+				"}",
+			])
 
 		if scalar.bits == BITS_PER_BYTE:
 			# A byte array is the bytes: MemoryIdentical, so a pointer is safe
@@ -318,7 +566,7 @@ class Emitter:
 				f"static inline uint8_t *"
 				f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
 				"{",
-				f"\treturn view.base + {placement.offset_bytes}u;",
+				f"\treturn view.base + {self._base_expression(struct, placement)};",
 				"}",
 			])
 			return lines
@@ -338,8 +586,9 @@ class Emitter:
 		stride    = scalar.bits // BITS_PER_BYTE
 		getter    = ident(self.prefix, struct.name, local, "get")
 
-		load = self._load_expression(scalar, placement,
-		                             f"view.base + {placement.offset_bytes}u + index * {stride}u")
+		base = self._base_expression(struct, placement)
+		load = self._load_expression(
+			scalar, placement, f"view.base + {base} + index * {stride}u", offset=0)
 		return [
 			f"static inline {ctype} {getter}(situ_view_t view, uint32_t index)",
 			"{",
@@ -424,8 +673,8 @@ class Emitter:
 		return lines
 
 	def _load_expression(self, scalar: ScalarType, placement: Placement,
-			base: str) -> str:
-		offset = placement.offset_bytes
+			base: str, offset: int | None = None) -> str:
+		offset = placement.offset_bytes if offset is None else offset
 
 		if placement.marker is not None and not scalar.is_bit_packed \
 				and scalar.bits > BITS_PER_BYTE:
@@ -484,8 +733,8 @@ class Emitter:
 		return ident(self.prefix, owner, placement.marker or "", "is_little") + "(view)"
 
 	def _store_statement(self, scalar: ScalarType, placement: Placement,
-			base: str, value: str) -> str:
-		offset = placement.offset_bytes
+			base: str, value: str, offset: int | None = None) -> str:
+		offset = placement.offset_bytes if offset is None else offset
 
 		if placement.marker is not None and not scalar.is_bit_packed \
 				and scalar.bits > BITS_PER_BYTE:

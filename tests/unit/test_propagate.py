@@ -287,14 +287,17 @@ def test_reachable_rows_are_all_tested() -> None:
 		"enum-default-pass",
 		"secret-field",
 		"endian-marker-scope",
+		"dynamic-predecessor",
+		"frame-relative",
+		"bounded-size",
+		"unbounded-size",
+		"dynamic-element-type",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
 
 # Rows of section 11.3 not yet reachable, with the phase that adds them:
 #
-#   array [expr], array [remaining], dynamic-size element type,
-#   entering a frame with dynamic base                              phase 5
 #   variant with unequal arm sizes, opaque, tlv, indexed,
 #   tlv unknown = preserve                                          phase 6
 #   authenticated, sealed                                           phase 8
