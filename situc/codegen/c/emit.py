@@ -347,6 +347,10 @@ class Emitter:
 			lines.extend(self._varint_note(placement))
 			return lines
 
+		if placement.kind == "variant":
+			lines.extend(self._variant_note(placement))
+			return lines
+
 		# A dynamically placed member needs its offset worked out at runtime
 		# before anything can read it.
 		if placement.offset_bits is None:
@@ -379,6 +383,21 @@ class Emitter:
 			f"/* {placement.path} : {placement.type_name}  at {offset}",
 			f" * {axes}",
 			" */",
+		]
+
+	def _variant_note(self, placement: Placement) -> list[str]:
+		"""A variant has no accessor of its own: exactly one arm is present.
+
+		Which one depends on the discriminant, so reaching the members means
+		reading it first and taking the matching arm's view. Arm dispatch is
+		later phase 6 codegen work.
+		"""
+		arms = ", ".join(f"`{name}`" for name, _ in placement.arm_sizes)
+		return [
+			f"/* No accessor: `{placement.name}` is a variant, so exactly one of",
+			f" * its arms is present{f' ({arms})' if arms else ''}. Arm dispatch",
+			" * is not generated yet; read the discriminant and take the matching",
+			" * arm's view. */",
 		]
 
 	def _varint_note(self, placement: Placement) -> list[str]:

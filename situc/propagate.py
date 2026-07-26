@@ -209,13 +209,16 @@ def _is_frame_relative(context: Context) -> bool:
 def _is_bounded_size(context: Context) -> bool:
 	"""A member whose extent is a range.
 
-	Varints are excluded: their own row covers both axes, and it claims
-	InPlaceSlack rather than Shifting because a value that re-encodes to the
-	same length does not move anything (section 8.1.1). Letting this row fire
-	as well would meet the two to Shifting and lose that distinction.
+	Constructs with a row of their own are excluded, because that row states
+	the same two axes with a reason specific to the construct. A varint claims
+	InPlaceSlack rather than Shifting, since a value that re-encodes to the same
+	length moves nothing (section 8.1.1); a variant names its arms and costs
+	equalizing them. Letting this row fire as well would meet the values to the
+	same place but bury the reason, and the reason is the product.
 	"""
 	placement = context.placement
 	return (placement.varint is None
+	        and not _has_unequal_arms(context)
 	        and placement.size_max_bits is not None
 	        and placement.size_max_bits != placement.size_bits)
 
@@ -250,6 +253,11 @@ def _is_varint(context: Context) -> bool:
 
 def _is_non_minimal_varint(context: Context) -> bool:
 	return context.placement.varint is not None and not context.placement.varint_minimal
+
+
+def _has_unequal_arms(context: Context) -> bool:
+	sizes = {size for _, size in context.placement.arm_sizes}
+	return len(sizes) > 1
 
 
 def _is_host_dependent(context: Context) -> bool:
@@ -429,6 +437,17 @@ TABLE: tuple[Row, ...] = (
 	),
 	Row(
 		rule = Rule(
+			name      = "variant-unequal-arms",
+			construct = "a variant whose arms are not the same size",
+			effects   = (),		# costed per placement; see _variant_effects
+			remedy    = "add `[equalize]` to pad every arm to the largest, which "
+			            "restores static offsets after the variant at the cost of "
+			            "the padding",
+		),
+		applies = _has_unequal_arms,
+	),
+	Row(
+		rule = Rule(
 			name      = "varint",
 			construct = "a variable-length integer",
 			effects   = (
@@ -550,6 +569,8 @@ def apply(context: Context) -> Resolved:
 			effects = _predecessor_effects(context)
 		elif row.rule.name == "frame-relative":
 			effects = _frame_effects(context)
+		elif row.rule.name == "variant-unequal-arms":
+			effects = _variant_effects(context)
 
 		for effect in effects:
 			effect  = _parameterise(effect, context.placement)
@@ -571,6 +592,29 @@ def apply(context: Context) -> Resolved:
 			))
 
 	return Resolved(placement=placement, vector=vector, weakenings=weakenings)
+
+
+def _variant_effects(context: Context) -> tuple[Effect, ...]:
+	"""Cost the arms, so the advisor's equalization suggestion is concrete.
+
+	Section 18.2 wants the padding cost of equalizing the arms, not just the
+	news that they differ. It is the difference between each arm and the
+	largest, which is exactly what padding to the largest would add.
+	"""
+	sizes   = context.placement.arm_sizes
+	largest = max(size for _, size in sizes)
+	worst   = max(largest - size for _, size in sizes) // BITS_PER_BYTE
+
+	detail = ", ".join(f"`{name}` {size // BITS_PER_BYTE}" for name, size in sizes)
+
+	return (
+		Effect(Axis.SIZE, Value("Bounded"),
+		       f"the extent is whichever arm is selected: {detail} bytes; "
+		       f"equalizing them would cost up to {worst} bytes of padding"),
+		Effect(Axis.MUTATE, Value("Shifting"),
+		       "selecting a different arm changes the extent, moving every "
+		       "member after the variant"),
+	)
 
 
 def _frame_effects(context: Context) -> tuple[Effect, ...]:

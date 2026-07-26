@@ -87,6 +87,9 @@ class Placement:
 	# frame-relative in its offset but nothing can move it, so its address is
 	# still Stable; an element of an array after a variable-length member is not.
 	frame_base_dynamic: bool	= False
+	# For a variant: each arm's name and worst-case size, so the advisor can
+	# cost equalizing them.
+	arm_sizes: tuple[tuple[str, int], ...] = ()
 
 	@property
 	def is_fixed_size(self) -> bool:
@@ -376,11 +379,145 @@ class Solver:
 						         "(project.md section 9.2)",
 						         "move the dynamic member outside the block"],
 					)
+			elif isinstance(member, ast.Variant):
+				self.place_variant(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.MarkerField):
 				self.place_marker(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, (ast.Field, ast.Reserved)):
 				last = index == len(members) - 1
 				self.place_one(decl, member, scope, layout, prefix, state, last)
+
+	def place_variant(self, decl: ast.StructDecl, variant: ast.Variant,
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
+		"""A variant occupies the extent of whichever arm is selected.
+
+		Section 9.6: the size is the size of the selected arm, so unless every
+		arm is the same size the variant makes everything after it dynamic. The
+		arms are laid out at the same base, because exactly one of them is
+		present.
+		"""
+		self.check_discriminant(variant, state)
+
+		cursor = state.cursor
+		if cursor.is_exact and cursor.lo % BITS_PER_BYTE != 0:
+			raise error(
+				f"variant `{variant.name}` must start on a byte boundary",
+				variant.span,
+				label = f"lands {cursor.lo % BITS_PER_BYTE} bits into a byte",
+			)
+
+		# The variant's own entry is inserted here, before its arms, so the map
+		# reads container-then-contents like every other aggregate.
+		slot = len(layout.placements)
+
+		low: int | None  = None
+		high: int | None = 0
+		arm_sizes: list[tuple[str, int]] = []
+
+		for arm in variant.arms:
+			if arm.member is None:
+				# `error` rejects the message and `opaque` consumes the rest;
+				# neither contributes a fixed extent of its own.
+				if arm.is_opaque:
+					high = None
+				continue
+
+			extent = self.arm_extent(decl, arm, scope, layout, prefix, variant, state)
+			low    = extent.lo if low is None else min(low, extent.lo)
+			if extent.hi is None or high is None:
+				high = None
+			else:
+				high = max(high, extent.hi)
+				arm_sizes.append((_arm_name(arm), extent.hi))
+
+		total = Interval(low or 0, high)
+
+		# `[equalize]` pads every arm to the largest, which is section 17.0's
+		# explicit resolution for unequal arms: the ambiguity is accepted and
+		# its consequence reported, or it is paid off in padding.
+		if _has_attr(variant.attrs, "equalize"):
+			if high is None:
+				raise error(
+					f"`[equalize]` needs every arm to have a known size",
+					variant.span,
+					label = "one arm is unbounded",
+					notes = ["an `opaque` default arm has no size to pad to"],
+				)
+			total     = Interval(high, high)
+			arm_sizes = []
+
+		layout.placements.insert(slot, Placement(
+			path          = f"{prefix}.{variant.name}",
+			name          = variant.name,
+			kind          = "variant",
+			type_name     = "variant",
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = total.lo,
+			size_max_bits = total.hi,
+			scalar        = None,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = variant.span,
+			attrs         = variant.attrs,
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+			arm_sizes     = tuple(arm_sizes),
+		))
+
+		if state.cause is None and total.hi != total.lo:
+			state.cause = (variant.name, variant.span, _render_extent(total))
+
+		state.cursor = cursor.advance(total)
+
+	def arm_extent(self, decl: ast.StructDecl, arm: ast.VariantArm, scope: Scope,
+			layout: StructLayout, prefix: str, variant: ast.Variant,
+			state: Walk) -> Interval:
+		"""Lay one arm out at the variant's base and report its extent.
+
+		Every arm starts where the variant starts: exactly one is present, so
+		they overlay rather than follow one another.
+		"""
+		assert arm.member is not None
+
+		arm_state = Walk(fields=dict(state.fields), cursor=state.cursor,
+		                 cause=state.cause)
+		before    = state.cursor
+
+		self.place_members(decl, (arm.member,), scope, layout,
+		                   f"{prefix}.{variant.name}", arm_state)
+
+		lo = arm_state.cursor.lo - before.lo
+		hi = (None if arm_state.cursor.hi is None or before.hi is None
+		      else arm_state.cursor.hi - before.hi)
+		return Interval(lo, hi)
+
+	def check_discriminant(self, variant: ast.Variant, state: Walk) -> None:
+		"""The discriminant must be parsed strictly before the variant.
+
+		Section 9.6 makes a forward reference an error: the selector has to be
+		readable before the thing it selects, or nothing can be parsed at all.
+		"""
+		from situc.expr import path_text
+
+		path = path_text(variant.discriminant)
+		if path is None:
+			raise error(
+				f"variant `{variant.name}` needs a field as its discriminant",
+				variant.discriminant.span,
+				label = "expected a name such as `kind` or `hdr.type`",
+			)
+
+		if path not in state.fields:
+			known = ", ".join(sorted(state.fields)[:6]) or "none"
+			raise error(
+				f"`{path}` is not readable before variant `{variant.name}`",
+				variant.discriminant.span,
+				label = "not declared yet",
+				notes = ["the discriminant must be parsed strictly before the "
+				         "variant in layout order (project.md section 9.6)",
+				         f"fields in scope here: {known}"],
+			)
 
 	def place_marker(self, decl: ast.StructDecl, member: ast.MarkerField,
 			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
@@ -986,6 +1123,14 @@ class Solver:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _arm_name(arm: ast.VariantArm) -> str:
+	if arm.member is None:
+		return "default"
+	if isinstance(arm.member, ast.Field):
+		return arm.member.name
+	return "arm"
 
 
 def _render_extent(size: Interval) -> str:

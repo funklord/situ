@@ -191,6 +191,54 @@ class Reserved(Member):
 
 
 @dataclass(frozen=True)
+class VariantArm(Node):
+	"""One `case` of a variant, or its `default`.
+
+	`member` is None for `default: error;`, which rejects an unknown
+	discriminant rather than accepting it -- the default default, and
+	deliberately so (section 14.5).
+	"""
+
+	span: Span
+	value: Expr | None		# None for the default arm
+	member: Member | None
+	is_error: bool			= False
+	is_opaque: bool			= False
+
+	@property
+	def is_default(self) -> bool:
+		return self.value is None
+
+
+@dataclass(frozen=True)
+class Variant(Member):
+	"""A discriminated union selected by an already-parsed field (section 9.6).
+
+	The discriminant must be parsed strictly before the variant in layout
+	order; a forward reference is an error. Unless every arm is the same size,
+	the variant makes everything after it dynamic -- which the advisor points
+	out, along with the padding cost of equalizing them.
+	"""
+
+	span: Span
+	name: str
+	discriminant: Expr
+	arms: tuple[VariantArm, ...]
+	attrs: tuple[Attr, ...]	= ()
+
+	def members_of(self) -> list[Member]:
+		"""The members the arms declare, skipping the policy-only arms."""
+		return [arm.member for arm in self.arms if arm.member is not None]
+
+	@property
+	def default_arm(self) -> VariantArm | None:
+		for arm in self.arms:
+			if arm.is_default:
+				return arm
+		return None
+
+
+@dataclass(frozen=True)
 class PositionalBlock(Member):
 	"""`positional { ... }`: a locally-checked staticness guarantee.
 

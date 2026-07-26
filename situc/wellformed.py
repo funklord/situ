@@ -27,6 +27,7 @@ def check(schema: ast.Schema) -> None:
 	check_unique_member_names(schema)
 	check_unique_attributes(schema)
 	check_types_resolve(schema)
+	check_variant_exhaustiveness(schema)
 	check_no_recursive_types(schema)
 
 
@@ -149,6 +150,9 @@ def _collect_member_names(members: tuple[ast.Member, ...], seen: dict[str, ast.F
 	for member in members:
 		if isinstance(member, ast.PositionalBlock):
 			_collect_member_names(member.members, seen)
+		elif isinstance(member, ast.Variant):
+			for arm in member.members_of():
+				_collect_member_names((arm,), seen)
 		elif isinstance(member, ast.Field):
 			previous = seen.get(member.name)
 			if previous is not None:
@@ -263,6 +267,110 @@ def _within_one_edit(a: str, b: str) -> bool:
 		if longer[:index] + longer[index + 1 :] == shorter:
 			return True
 	return False
+
+
+# ---------------------------------------------------------------------------
+# Variants
+# ---------------------------------------------------------------------------
+
+
+def check_variant_exhaustiveness(schema: ast.Schema) -> None:
+	"""A variant over an enum must cover it, or say what to do otherwise.
+
+	Section 9.6: a missing case without a `default` arm is an error. This is the
+	same position as section 14.5's on unknown enum values -- an unhandled
+	discriminant is a malleability surface, and silently accepting one is what
+	situ refuses to do.
+	"""
+	enums = {decl.name: decl for decl in schema.enums()}
+
+	for struct in schema.structs():
+		for variant in _variants(struct.members):
+			_check_one_variant(variant, struct, enums)
+
+
+def _variants(members: tuple[ast.Member, ...]) -> list[ast.Variant]:
+	found: list[ast.Variant] = []
+	for member in members:
+		if isinstance(member, ast.Variant):
+			found.append(member)
+		elif isinstance(member, ast.PositionalBlock):
+			found.extend(_variants(member.members))
+	return found
+
+
+def _check_one_variant(variant: ast.Variant, struct: ast.StructDecl,
+		enums: dict[str, ast.EnumDecl]) -> None:
+	enum = _discriminant_enum(variant, struct, enums)
+	if enum is None:
+		# Not switching on an enum, so there is no set of values to be
+		# exhaustive over. A default arm is then the only way to be total.
+		if variant.default_arm is None:
+			raise error(
+				f"variant `{variant.name}` has no `default` arm",
+				variant.span,
+				label = "not exhaustive",
+				notes = ["the discriminant is not an enum, so the compiler cannot "
+				         "tell which values are covered",
+				         "add `default: error;` to reject the rest, which is the "
+				         "safe choice (project.md section 14.5)"],
+			)
+		return
+
+	covered = {name for name in (_case_member(arm, enum) for arm in variant.arms)
+	           if name is not None}
+	missing = [member.name for member in enum.members if member.name not in covered]
+
+	if missing and variant.default_arm is None:
+		listed = ", ".join(f"`{name}`" for name in missing)
+		raise error(
+			f"variant `{variant.name}` does not cover every value of `{enum.name}`",
+			variant.span,
+			label = f"missing: {listed}",
+			notes = [
+				f"add a `case {enum.name}.{missing[0]}:` arm, or a `default:` arm "
+				"for the rest",
+				"`default: error;` rejects an unknown discriminant, which is the "
+				"safe choice (project.md section 14.5)",
+			],
+		)
+
+
+def _discriminant_enum(variant: ast.Variant, struct: ast.StructDecl,
+		enums: dict[str, ast.EnumDecl]) -> ast.EnumDecl | None:
+	"""The enum the discriminant field is typed as, if it is one."""
+	from situc.expr import path_text
+
+	path = path_text(variant.discriminant)
+	if path is None:
+		return None
+
+	head = path.partition(".")[0]
+	for member in _fields(struct.members):
+		if member.name == head and "." not in path:
+			return enums.get(member.type_ref.name)
+
+	return None
+
+
+def _case_member(arm: ast.VariantArm, enum: ast.EnumDecl) -> str | None:
+	"""The enum member a `case` names, if it names one of this enum's."""
+	if arm.value is None:
+		return None
+	if isinstance(arm.value, ast.Access) and isinstance(arm.value.base, ast.NameRef):
+		if arm.value.base.name == enum.name:
+			return arm.value.name
+	return None
+
+
+def _fields(members: tuple[ast.Member, ...]) -> list[ast.Field]:
+	found: list[ast.Field] = []
+	for member in members:
+		if isinstance(member, ast.Field):
+			found.append(member)
+		elif isinstance(member, ast.PositionalBlock):
+			found.extend(_fields(member.members))
+	return found
 
 
 # ---------------------------------------------------------------------------

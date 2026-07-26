@@ -415,7 +415,6 @@ def test_future_declarations_name_their_phase(source: str, phase: int) -> None:
 
 
 @pytest.mark.parametrize(("member", "phase"), [
-	("variant body switch (t) { case 1: u8 a; }",	6),
 	("opaque payload [4];",				6),
 	("tlv options (tag_type = u8);",		6),
 	("indexed(offset_type = u16) { u8 a; }",	6),
@@ -618,3 +617,62 @@ def test_varint_rejects_an_unknown_encoding() -> None:
 def test_varint_name_collides_like_any_other_type() -> None:
 	with pytest.raises(SituError, match="declared more than once"):
 		parse_text("struct v { u8 a; } varint_type v { encoding = leb128; max_bits = 8; }")
+
+
+# -- variants (section 9.6) -------------------------------------------------
+
+
+ENUMS = "enum K : u8 { hello = 1, data = 2, close = 3, }\nstruct A { u16 x; }\n"
+
+
+def test_variant_parses() -> None:
+	schema = parse_text(ENUMS + "struct S { K k; variant b switch (k) { "
+	                    "case K.hello: A a; default: error; } }")
+	variant = schema.structs()[-1].members[1]
+	assert isinstance(variant, ast.Variant)
+	assert variant.name == "b"
+	assert len(variant.arms) == 2
+	assert variant.default_arm is not None
+
+
+def test_variant_default_error_arm_carries_no_member() -> None:
+	schema  = parse_text(ENUMS + "struct S { K k; variant b switch (k) { "
+	                     "case K.hello: A a; default: error; } }")
+	variant = schema.structs()[-1].members[1]
+	assert isinstance(variant, ast.Variant)
+	default = variant.default_arm
+	assert default is not None and default.is_error and default.member is None
+
+
+def test_variant_needs_at_least_one_arm() -> None:
+	with pytest.raises(SituError, match="has no arms"):
+		parse_text(ENUMS + "struct S { K k; variant b switch (k) { } }")
+
+
+def test_variant_takes_at_most_one_default() -> None:
+	with pytest.raises(SituError, match="at most one `default` arm"):
+		parse_text(ENUMS + "struct S { K k; variant b switch (k) { "
+		           "default: error; default: error; } }")
+
+
+def test_variant_must_cover_its_enum() -> None:
+	"""Section 9.6: a missing case without a default arm is an error."""
+	with pytest.raises(SituError, match="does not cover every value of `K`") as caught:
+		parse_text(ENUMS + "struct S { K k; variant b switch (k) { case K.hello: A a; } }")
+
+	report = caught.value.diagnostic.render()
+	assert "`data`" in report and "`close`" in report
+	assert "`default: error;` rejects an unknown discriminant" in report
+
+
+def test_a_default_arm_makes_a_partial_variant_legal() -> None:
+	schema = parse_text(ENUMS + "struct S { K k; variant b switch (k) { "
+	                    "case K.hello: A a; default: error; } }")
+	assert len(schema.structs()) == 2
+
+
+def test_a_non_enum_discriminant_needs_a_default() -> None:
+	"""Nothing tells the compiler which values are covered, so the only way to
+	be total is to say what happens to the rest."""
+	with pytest.raises(SituError, match="has no `default` arm"):
+		parse_text(ENUMS + "struct S { u8 k; variant b switch (k) { case 1: A a; } }")

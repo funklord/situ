@@ -294,14 +294,14 @@ def test_reachable_rows_are_all_tested() -> None:
 		"dynamic-element-type",
 		"varint",
 		"non-minimal-varint",
+		"variant-unequal-arms",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
 
 # Rows of section 11.3 not yet reachable, with the phase that adds them:
 #
-#   variant with unequal arm sizes, opaque, tlv, indexed,
-#   tlv unknown = preserve                                          phase 6
+#   opaque, tlv, indexed, tlv unknown = preserve                    phase 6
 #   authenticated, sealed                                           phase 8
 #   register no_rmw, register EffectOnRead                          phase 10
 
@@ -407,3 +407,64 @@ def test_the_varint_remedy_names_the_fixed_width_alternative() -> None:
 	remedy = next(w.rule.remedy for w in entry.blame(Axis.MUTATE))
 	assert "fixed-width scalar" in remedy
 	assert "restores static offsets" in remedy
+
+
+# -- row: variant with unequal arm sizes ------------------------------------
+
+
+VARIANT = (
+	"enum K : u8 { hello = 1, data = 2, }"
+	"struct A { u16 x; }"
+	"struct B { u32 y; u32 z; }"
+)
+
+
+def variant_body(attrs: str = "") -> str:
+	return (VARIANT + "struct S { K kind; variant body switch (kind)" + attrs
+	        + " { case K.hello: A a; case K.data: B b; } u16 tail; }")
+
+
+def test_unequal_arms_make_the_variant_bounded() -> None:
+	assert axis_of(variant_body(), "S.body", Axis.SIZE) == Value("Bounded", ("2", "8"))
+
+
+def test_unequal_arms_make_following_members_dynamic() -> None:
+	assert axis_of(variant_body(), "S.tail", Axis.OFFSET) == Value("Dynamic")
+
+
+def test_the_variant_rule_costs_the_arms() -> None:
+	"""Section 18.2 wants the padding cost of equalizing, not just the news
+	that the arms differ."""
+	entry  = entries(variant_body())["S.body"]
+	reason = next(w.effect.because for w in entry.blame(Axis.SIZE))
+
+	assert "`a` 2, `b` 8 bytes" in reason
+	assert "would cost up to 6 bytes of padding" in reason
+
+
+def test_the_variant_remedy_names_equalize() -> None:
+	entry  = entries(variant_body())["S.body"]
+	remedy = next(w.rule.remedy for w in entry.blame(Axis.SIZE))
+	assert "[equalize]" in remedy
+
+
+def test_equalize_pays_the_cost_and_restores_static_offsets() -> None:
+	"""Section 17.0's explicit resolution: accept the consequence, or pay it."""
+	body = variant_body(" [equalize]")
+	assert axis_of(body, "S.body", Axis.SIZE) == Value("Fixed", ("8",))
+	assert axis_of(body, "S.tail", Axis.OFFSET) == Value("AbsoluteStatic", ("0x09",))
+
+
+def test_equal_arms_cost_nothing() -> None:
+	body = (VARIANT + "struct S { K kind; variant body switch (kind) "
+	        "{ case K.hello: A a; case K.data: A b; } u16 tail; }")
+	assert axis_of(body, "S.body", Axis.SIZE) == Value("Fixed", ("2",))
+	assert axis_of(body, "S.tail", Axis.OFFSET) == Value("AbsoluteStatic", ("0x03",))
+
+
+def test_arms_overlay_at_the_same_base() -> None:
+	"""Exactly one arm is present, so they share a base rather than following
+	one another."""
+	found = entries(variant_body())
+	assert found["S.body.a"].placement.offset_bits == 8
+	assert found["S.body.b"].placement.offset_bits == 8

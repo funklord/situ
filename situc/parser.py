@@ -31,7 +31,6 @@ def evaluate_literal(expr: ast.Expr) -> int | None:
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
 FUTURE_CONSTRUCTS = {
-	"variant":		(6,  "`variant`"),
 	"opaque":		(6,  "`opaque`"),
 	"tlv":			(6,  "`tlv`"),
 	"indexed":		(6,  "`indexed`"),
@@ -511,6 +510,8 @@ class Parser:
 				return self.parse_reserved()
 			if token.text == "positional":
 				return self.parse_positional()
+			if token.text == "variant":
+				return self.parse_variant()
 
 		return self.parse_field()
 
@@ -520,6 +521,63 @@ class Parser:
 		members = self.parse_members()
 		self.expect_symbol("}", "to close the positional block")
 		return ast.PositionalBlock(self.span_from(start), members)
+
+	def parse_variant(self) -> ast.Variant:
+		"""`variant body switch (hdr.type) { case A: X a; default: error; }`"""
+		start = self.advance()
+		name  = self.expect_ident("a variant name")
+		self.expect_keyword("switch", "after the variant name")
+		self.expect_symbol("(", "before the discriminant")
+		discriminant = self.parse_expr()
+		self.expect_symbol(")", "after the discriminant")
+		attrs = self.parse_attrs()
+		self.expect_symbol("{", "to open the variant body")
+
+		arms: list[ast.VariantArm] = []
+		while not self.current.is_symbol("}"):
+			arms.append(self.parse_variant_arm())
+
+		self.expect_symbol("}", "to close the variant body")
+
+		if not arms:
+			raise error(
+				f"variant `{name.text}` has no arms",
+				self.span_from(start),
+				label = "expected at least one `case`",
+			)
+
+		defaults = [arm for arm in arms if arm.is_default]
+		if len(defaults) > 1:
+			raise error("a variant has at most one `default` arm", defaults[1].span)
+
+		return ast.Variant(self.span_from(start), name.text, discriminant,
+		                   tuple(arms), attrs)
+
+	def parse_variant_arm(self) -> ast.VariantArm:
+		start = self.current
+
+		if self.accept_ident("default") is not None:
+			self.expect_symbol(":", "after `default`")
+			return self._arm_body(start, value=None)
+
+		self.expect_keyword("case", "to open a variant arm")
+		value = self.parse_expr()
+		self.expect_symbol(":", "after the case value")
+		return self._arm_body(start, value)
+
+	def _arm_body(self, start: Token, value: ast.Expr | None) -> ast.VariantArm:
+		"""An arm is a member, or one of the two policies for an unknown value."""
+		if self.accept_ident("error") is not None:
+			self.expect_symbol(";", "after `error`")
+			return ast.VariantArm(self.span_from(start), value, None, is_error=True)
+
+		if self.current.is_ident("opaque") and self.peek().is_symbol(";"):
+			self.advance()
+			self.expect_symbol(";", "after `opaque`")
+			return ast.VariantArm(self.span_from(start), value, None, is_opaque=True)
+
+		member = self.parse_member()
+		return ast.VariantArm(self.span_from(start), value, member)
 
 	def parse_reserved(self) -> ast.Reserved:
 		start    = self.advance()
