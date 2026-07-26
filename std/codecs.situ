@@ -1,0 +1,243 @@
+// Standard codec signatures.
+//
+// Hand-written signatures are where silent capability lies enter the system
+// (project.md section 13.1), so users should rarely need to write one. Every
+// signature here has been checked against what the algorithm actually does, and
+// each carries a note saying why its properties are what they are -- because a
+// property nobody can justify is one nobody can review.
+//
+// These are contracts, not implementations. Bind one with:
+//
+//     impl aes_ctr_128 extern "my_aes_ctr";
+//
+// and the capability map does not change by a single line: every conclusion the
+// compiler draws comes from the signature.
+//
+// None of these declares `impl`. A signature with no binding analyses cleanly
+// and fails only at code generation, which is the normal case for a protocol
+// under design.
+
+// ---------------------------------------------------------------------------
+// Block ciphers and stream ciphers
+// ---------------------------------------------------------------------------
+
+// CTR mode is the one that keeps everything. The keystream at position N does
+// not depend on the plaintext, so a field can be re-encrypted without touching
+// its neighbours -- which is why a sealed payload in CTR mode keeps fixed
+// interior offsets and single-field in-place mutation.
+codec aes_ctr_128 {
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	invertible;
+	deterministic;
+}
+
+codec aes_ctr_256 {
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	invertible;
+	deterministic;
+}
+
+// CBC is the contrast. Each block depends on the one before it, so a write
+// re-encrypts from the changed block onward; and with padding it is not
+// length-preserving at all. Declared here without padding, as the raw mode.
+codec aes_cbc_128 {
+	length_preserving;
+	not seekable;
+	granularity = block(16);
+	invertible;
+	deterministic;
+	error_propagating;
+}
+
+// ChaCha20 is a stream cipher with the same seekability story as CTR.
+codec chacha20 {
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	invertible;
+	deterministic;
+}
+
+// ---------------------------------------------------------------------------
+// Authenticated encryption
+//
+// The ciphertext core is length-preserving and seekable; the tag is a separate
+// field in the schema, which is why these signatures do not carry its size.
+// ---------------------------------------------------------------------------
+
+codec aes_gcm_128 {
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+codec chacha20_poly1305 {
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+// ---------------------------------------------------------------------------
+// Checksums and authentication tags
+//
+// Not invertible: a digest cannot be undone, so a region under one is read-only
+// as far as the transform is concerned. In practice these are declared with the
+// `checksum` and `tag` machinery rather than as codecs (section 13.4), and the
+// signatures are here for the cases where a raw digest really is a transform.
+// ---------------------------------------------------------------------------
+
+codec hmac_sha256 {
+	expansion = +32;
+	granularity = stream;
+	not seekable;
+	deterministic;
+}
+
+codec crc32 {
+	expansion = +4;
+	granularity = block(any);
+	systematic;
+	seekable = linear;
+	deterministic;
+}
+
+codec crc16_ccitt {
+	expansion = +2;
+	granularity = block(any);
+	systematic;
+	seekable = linear;
+	deterministic;
+}
+
+// ---------------------------------------------------------------------------
+// Forward error correction
+//
+// `systematic` is the highest-value property in section 13.2: the data bytes
+// are left verbatim at computable offsets, so a field can be read with no
+// decode at all and a write only recomputes parity over its own block.
+// ---------------------------------------------------------------------------
+
+// RS(255, 223): 223 data bytes, 32 parity, per block.
+codec reed_solomon_255_223 {
+	expansion = +32;
+	granularity = block(255);
+	systematic;
+	seekable = linear;
+	invertible;
+	deterministic;
+	error_propagating;
+}
+
+// Hamming(7, 4) is systematic in its standard form: four data bits, three
+// parity, with the data bits in known positions.
+codec hamming_7_4 {
+	expansion = ratio_exact(7, 4);
+	granularity = bit(4);
+	systematic;
+	seekable = linear;
+	invertible;
+	deterministic;
+}
+
+// ---------------------------------------------------------------------------
+// Line codes
+//
+// Exact ratios, which is what keeps their interiors statically addressable.
+// Not systematic: the input symbols do not appear verbatim in the output, so
+// nothing can be read without decoding.
+// ---------------------------------------------------------------------------
+
+// Manchester: one input bit becomes two output bits. The 2:1 ratio is exact, so
+// output position stays a linear function of input position.
+codec manchester {
+	expansion = ratio_exact(2, 1);
+	granularity = bit(1);
+	seekable = linear;
+	invertible;
+	deterministic;
+}
+
+codec code_4b5b {
+	expansion = ratio_exact(5, 4);
+	granularity = symbol(4);
+	seekable = linear;
+	invertible;
+	deterministic;
+}
+
+codec code_8b10b {
+	expansion = ratio_exact(10, 8);
+	granularity = symbol(8);
+	seekable = linear;
+	invertible;
+	deterministic;
+}
+
+// NRZI feeds back from its own output, so a corrupted bit damages the ones
+// after it and the encoder cannot be started from an arbitrary position.
+codec nrzi {
+	length_preserving;
+	granularity = bit(1);
+	not seekable;
+	invertible;
+	deterministic;
+	error_propagating;
+}
+
+// ---------------------------------------------------------------------------
+// Framing and stuffing
+//
+// Stuffing destroys interior addressing: how many bytes an encoded region takes
+// depends on its content. This is why real protocols apply stuffing only at the
+// outermost layer, and the advisor should say so when it sees one applied
+// inward.
+// ---------------------------------------------------------------------------
+
+codec cobs {
+	expansion = ratio_bounded(255, 254);
+	granularity = stream;
+	not seekable;
+	invertible;
+	deterministic;
+}
+
+codec hdlc_bit_stuffing {
+	expansion = ratio_bounded(6, 5);
+	granularity = bit(1);
+	not seekable;
+	invertible;
+	deterministic;
+}
+
+// ---------------------------------------------------------------------------
+// Compression
+//
+// Unbounded expansion is conservatively fatal downstream (section 13.3): every
+// member after one of these is Dynamic and Unbounded, with no attempt to be
+// clever about it.
+// ---------------------------------------------------------------------------
+
+codec deflate {
+	expansion = unbounded;
+	granularity = stream;
+	not seekable;
+	invertible;
+}
+
+codec lz4 {
+	expansion = unbounded;
+	granularity = stream;
+	not seekable;
+	invertible;
+	deterministic;
+}

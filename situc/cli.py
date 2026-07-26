@@ -27,7 +27,6 @@ FUTURE_COMMANDS = {
 	"diff":			9,
 	"doc":			9,
 	"gen-dissector":	9,
-	"gen-codec-tests":	7,
 	"import-proto":		13,
 }
 
@@ -61,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
 	tests_cmd.add_argument("vectors", type=Path)
 	tests_cmd.add_argument("--out", type=Path, default=Path("."))
 	tests_cmd.add_argument("--prefix", default="situ")
+
+	codec_cmd = sub.add_parser(
+		"gen-codec-tests", help="generate property tests from codec signatures")
+	codec_cmd.add_argument("schema", type=Path)
+	codec_cmd.add_argument("--out", type=Path, default=Path("."))
+	codec_cmd.add_argument("--prefix", default="situ")
 
 	fuzz_cmd = sub.add_parser("gen-fuzz", help="generate a fuzz harness")
 	fuzz_cmd.add_argument("schema", type=Path)
@@ -164,6 +169,29 @@ def cmd_gen_tests(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_gen_codec_tests(args: argparse.Namespace) -> int:
+	"""Emit the tests that would falsify a lying signature (section 13.1).
+
+	The compiler cannot verify an implementation it never sees, but each
+	declared property has a cheap falsifying test, and generating them from the
+	signature costs the user nothing.
+	"""
+	from situc.codegen.c import codectests
+
+	source = read_source(args.schema)
+	schema = parse(source)
+	name   = args.schema.stem
+	text   = codectests.generate(schema, name, args.prefix)
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	target = args.out / f"{name}_codec_tests.c"
+	target.write_text(text, encoding="ascii")
+
+	declared = len(schema.codecs())
+	print(f"situc: wrote {target} ({declared} codec signatures)", file=sys.stderr)
+	return 0
+
+
 def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 	from situc.codegen.c import fuzz
 
@@ -242,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
 		"build":    cmd_build,
 		"gen-fuzz": cmd_gen_fuzz,
 		"gen-tests": cmd_gen_tests,
+		"gen-codec-tests": cmd_gen_codec_tests,
 		"explain":  cmd_explain,
 	}
 

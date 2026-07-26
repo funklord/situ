@@ -214,3 +214,99 @@ def test_a_discriminant_may_not_reference_transform_output() -> None:
 
 def test_a_size_from_outside_the_region_is_fine() -> None:
 	rendered_map(CTR + "struct S { u8 n; coded b(aes_ctr) { u16 x; } u8 v[n]; }")
+
+
+# -- gen-codec-tests (section 13.1) -----------------------------------------
+
+
+def codec_tests(body: str) -> str:
+	from situc.codegen.c import codectests
+
+	return codectests.generate(parse_text(PREAMBLE + body), "unit")
+
+
+def test_a_length_claim_gets_a_sweep() -> None:
+	text = codec_tests("codec c { length_preserving; }")
+	assert "test_c_length" in text
+	assert "assert_int_equal(out_len, in_len);" in text
+
+
+def test_a_fixed_expansion_is_checked_exactly() -> None:
+	text = codec_tests("codec c { expansion = +4; }")
+	assert "assert_int_equal(out_len, in_len + 4u);" in text
+
+
+def test_an_exact_ratio_is_checked_exactly() -> None:
+	text = codec_tests("codec c { expansion = ratio_exact(2, 1); }")
+	assert "assert_int_equal(out_len, (in_len * 2u + 0u) / 1u);" in text
+
+
+def test_a_bounded_ratio_is_checked_as_a_bound() -> None:
+	text = codec_tests("codec c { expansion = ratio_bounded(255, 254); }")
+	assert "assert_true(out_len <= (in_len * 255u + 253u) / 254u);" in text
+
+
+def test_unbounded_expansion_gets_no_length_test() -> None:
+	"""It claims nothing about extent, so there is nothing to falsify. Saying
+	so beats emitting a test that always passes."""
+	text = codec_tests("codec c { expansion = unbounded; }")
+	assert "makes no length claim" in text
+	assert "test_c_length" not in text
+
+
+@pytest.mark.parametrize(("property_", "expected"), [
+	("deterministic;", "test_c_deterministic"),
+	("invertible;", "test_c_invertible"),
+	("seekable = linear;", "test_c_seekable_linear"),
+])
+def test_each_declared_property_gets_its_test(property_: str, expected: str) -> None:
+	assert expected in codec_tests(f"codec c {{ {property_} }}")
+
+
+def test_an_undeclared_property_gets_no_test() -> None:
+	"""The suite attacks what was claimed, not what might have been."""
+	text = codec_tests("codec c { length_preserving; }")
+	assert "test_c_deterministic" not in text
+	assert "test_c_invertible" not in text
+	assert "test_c_seekable_linear" not in text
+
+
+def test_a_systematic_appended_parity_codec_is_checked() -> None:
+	text = codec_tests("codec c { expansion = +4; systematic; }")
+	assert "test_c_systematic" in text
+	assert "assert_memory_equal(output, input, sizeof(input));" in text
+
+
+def test_a_systematic_codec_with_no_computable_offsets_says_so() -> None:
+	"""Rather than emitting a test that checks the wrong bytes."""
+	text = codec_tests("codec c { expansion = ratio_exact(7, 4); systematic; }")
+	assert "cannot say where the data lands" in text
+	assert "test_c_systematic" not in text
+
+
+def test_block_granularity_checks_independence() -> None:
+	text = codec_tests("codec c { length_preserving; granularity = block(16); }")
+	assert "test_c_block_independence" in text
+	assert "Disturb one byte of the second block" in text
+
+
+def test_a_signature_claiming_nothing_produces_no_tests() -> None:
+	"""And the generated main says why, rather than reporting a pass."""
+	text = codec_tests("codec c { expansion = unbounded; }")
+	assert "That is not a pass: it means the signatures claim nothing" in text
+
+
+def test_the_standard_library_generates_a_full_suite() -> None:
+	from pathlib import Path
+
+	from situc.codegen.c import codectests
+
+	path   = Path(__file__).resolve().parents[2] / "std" / "codecs.situ"
+	schema = parse_text(path.read_text(encoding="ascii"))
+	text   = codectests.generate(schema, "codecs")
+
+	# Every signature that claims something gets attacked.
+	assert text.count("static void test_") >= 60
+	assert "test_aes_ctr_128_seekable_linear" in text
+	assert "test_manchester_invertible" in text
+	assert "test_crc32_systematic" in text

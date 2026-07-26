@@ -55,6 +55,12 @@ VECTOR_SCHEMAS	:= header
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 FUZZ_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
 
+# The conformance harness generated from the standard signature library. It is
+# compiled but not run: it needs implementations, and shipping those is the
+# user's job. Compiling it is what proves the generator emits valid C for every
+# signature in the library, which is where a codegen bug would otherwise hide.
+CODEC_SUITE	:= $(GEN_DIR)/codecs_codec_tests.o
+
 # Which generated objects each test needs. Linking all of them into every
 # binary would collide: two schemas may both declare a `Header`, and each
 # generates its own accessors for it.
@@ -66,7 +72,7 @@ OBJS_test_protobuf	:=
 
 .PHONY: all test clean generate
 
-all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS)
+all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CODEC_SUITE)
 
 generate: $(GEN_HEADERS)
 
@@ -110,6 +116,14 @@ $(GEN_DIR)/%_vectors.c: $(REPO_ROOT)/tests/schemas/%.situ \
 	@mkdir -p '$(GEN_DIR)'
 	cd '$(REPO_ROOT)' && $(SITUC) gen-tests 'tests/schemas/$*.situ' \
 		'tests/schemas/$*.vectors' --out '$(abspath $(GEN_DIR))'
+
+$(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ
+	@mkdir -p '$(GEN_DIR)'
+	cd '$(REPO_ROOT)' && $(SITUC) gen-codec-tests std/codecs.situ \
+		--out '$(abspath $(GEN_DIR))'
+
+$(GEN_DIR)/codecs_codec_tests.o: $(GEN_DIR)/codecs_codec_tests.c
+	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
 $(GEN_DIR)/%_fuzz.c: $(REPO_ROOT)/tests/schemas/%.situ
 	@mkdir -p '$(GEN_DIR)'
