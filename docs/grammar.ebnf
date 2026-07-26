@@ -1,0 +1,119 @@
+(* situ grammar, v0.
+ *
+ * Extracted from project.md section 7 and kept in sync with it. Where the two
+ * disagree, project.md is authoritative and this file is the bug.
+ *
+ * Alternatives are tab-indented rather than column-aligned, because no tab
+ * width is prescribed in this project and column alignment would not survive
+ * one (docs/decisions/0003-source-formatting.md).
+ *
+ * A production marked PHASE n is not accepted by the parser yet; the front end
+ * rejects it with a "not yet implemented" diagnostic naming that phase.
+ *)
+
+schema		= { directive | decl } ;
+
+directive	= "target" target_kind ";"
+	| "endian" endian ";"
+	| "bit_order" bitorder ";"
+	| "import" string ";" ;
+
+target_kind	= "buffer" | "mmio" ;
+endian		= "big" | "little" | "native" ;
+bitorder	= "msb_first" | "lsb_first" ;
+
+decl		= const_decl
+	| enum_decl
+	| struct_decl
+	| codec_decl			(* PHASE 7 *)
+	| register_decl			(* PHASE 10 *)
+	| requirement ;
+
+const_decl	= "const" ident "=" expr ";" ;
+
+enum_decl	= "enum" ident ":" scalar_type "{" enum_body "}" ;
+enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
+
+struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
+
+member		= field | reserved | block | variant | tag_field ;
+
+field		= type_ref ident [ array_spec ] [ pin ] [ attrs ] ";" ;
+reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
+tag_field	= "tag" scalar_type array_spec [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
+
+block		= "positional" "{" { member } "}"
+	| "authenticated" "{" { member } "}"				(* PHASE 8 *)
+	| "sealed" "(" codec_args ")" "{" { member } "}"		(* PHASE 8 *)
+	| "indexed" "(" index_args ")" "{" { member } "}"		(* PHASE 6 *)
+	| "opaque" ident "[" size_expr "]" [ attrs ] ";"		(* PHASE 6 *)
+	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;			(* PHASE 6 *)
+
+variant		= "variant" ident "switch" "(" expr ")" "{"		(* PHASE 6 *)
+		{ "case" expr ":" member }
+		[ "default" ":" ( member | "error" | "opaque" ) ]
+	"}" ;
+
+array_spec	= "[" [ size_expr ] "]" ;
+size_expr	= expr | "remaining" ;
+pin		= "@" expr ;
+
+attrs		= "[" attr { "," attr } "]" ;
+attr		= ident [ "=" expr ] ;
+
+type_ref	= scalar_type | ident ;
+scalar_type	= uint | sint | float | bitfield | "bool" | "byte" ;
+uint		= "u" digits ;		(* u1..u64, non-power-of-2 allowed *)
+sint		= "i" digits ;
+float		= "f16" | "f32" | "f64" ;
+bitfield	= "bit" ;		(* single bit; uN < 8 also bit-packed *)
+
+codec_decl	= "codec" ident "{" { codec_prop ";" } "}" ;		(* PHASE 7 *)
+codec_prop	= "length_preserving"
+	| "expansion" "=" ( "+" digits | "unbounded" | ratio )
+	| "granularity" "=" ( "byte" | "block" "(" digits ")" | "stream" )
+	| [ "not" ] "seekable"
+	| "authenticated" | "invertible" | "deterministic" ;
+
+requirement	= ( "require" | "assert" ) capability_expr ";" ;
+
+
+(* --------------------------------------------------------------------------
+ * Productions described elsewhere in project.md but absent from section 7.
+ * Listed here so the gap is visible rather than discovered during the phase
+ * that needs them. Surface syntax below is taken from the worked examples and
+ * is not yet normative; each needs a decision record before its phase.
+ * -------------------------------------------------------------------------- *)
+
+(* Section 8.1.1, PHASE 6 *)
+varint_decl	= "varint_type" ident "{" { varint_prop ";" } "}" ;
+varint_prop	= "encoding" "=" ident
+	| "transform" "=" ident
+	| "max_bits" "=" digits
+	| "minimal" ;
+
+(* Section 8.3, PHASE 4 *)
+endian_marker_decl = "endian_marker" ident ":" scalar_type "{" { ident "=" expr "," } "}" ;
+
+(* Section 13.1, PHASE 7. The signature and its implementation are separate
+ * declarations, which is what makes a built-in algorithm replaceable. *)
+impl_decl	= "impl" ident ( "derived" | "extern" string ) ";" ;
+
+(* Section 15.2, PHASE 10 *)
+register_decl	= "register" ident [ pin ] "{" { register_member } "}" ;
+register_member	= ( "width" | "access_width" ) "=" digits ";"
+	| "volatile" ";"
+	| "no_rmw" ";"
+	| field
+	| reserved ;
+
+(* Referenced by the productions above but never given in section 7. *)
+ref_list	= ident { "," ident } ;
+codec_args	= ident { "," attr } ;
+index_args	= attr { "," attr } ;
+tlv_args	= attr { "," attr } ;
+capability_expr	= ident "(" expr { "," expr } ")" | expr ;
+ratio		= "ratio_exact" "(" digits "," digits ")"
+	| "ratio_bounded" "(" digits "," digits ")" ;
+ident		= letter { letter | digit | "_" } ;
+digits		= digit { digit | "_" } ;

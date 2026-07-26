@@ -1,0 +1,7 @@
+# Editor configuration only; the build does not read this file and the
+# Makefiles remain the authority on flags. This exists so clangd can find the
+# runtime headers from tests and, from phase 4, from generated code.
+CompileFlags:
+  Add:
+    - -I../../runtime/c
+    - -Iruntime/c

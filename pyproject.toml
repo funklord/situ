@@ -1,0 +1,16 @@
+# situc has no runtime dependencies and is not packaged yet, so this file
+# carries tool configuration only. Adding a dependency requires a decision
+# record (project.md section 22).
+
+[tool.pytest.ini_options]
+testpaths       = ["tests"]
+pythonpath      = ["."]
+filterwarnings  = ["error"]
+
+[tool.mypy]
+python_version         = "3.11"
+strict                 = true
+warn_unreachable       = true
+disallow_any_unimported = true
+show_error_codes       = true
+pretty                 = true

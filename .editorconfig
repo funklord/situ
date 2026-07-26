@@ -1,0 +1,21 @@
+# project.md section 25: tabs carry structural indent, spaces carry alignment
+# within a level. No tab width is prescribed anywhere; the viewer decides.
+# Enforced by tools/lint_conventions.py, since no autoformatter supports this.
+
+root = true
+
+[*]
+charset                  = utf-8
+end_of_line              = lf
+insert_final_newline     = true
+trim_trailing_whitespace = true
+indent_style             = tab
+
+[*.md]
+indent_style             = space
+indent_size              = 2
+trim_trailing_whitespace = false
+
+[*.{yml,yaml,clangd}]
+indent_style             = space
+indent_size              = 2
