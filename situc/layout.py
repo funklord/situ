@@ -72,6 +72,10 @@ class Placement:
 	frame_relative: bool		= False
 	# The member whose value drives this one's size, for blame.
 	sized_by: str | None		= None
+	# Set when the field's type is a varint, which the propagation table reads
+	# to attach the right reasons.
+	varint: str | None		= None
+	varint_minimal: bool		= True
 	# The earlier member that made this one's offset dynamic, and where it is
 	# declared. Section 17 asks a blame chain to name the root cause and point
 	# at it, not at the field that suffers.
@@ -322,6 +326,7 @@ class Solver:
 		self.structs = {decl.name: decl for decl in schema.structs()}
 		self.enums   = {decl.name: decl for decl in schema.enums()}
 		self.markers = {decl.name: decl for decl in schema.markers()}
+		self.varints = {decl.name: decl for decl in schema.varints()}
 		self.file_scope = _file_scope(schema)
 
 	def run(self) -> None:
@@ -475,6 +480,9 @@ class Solver:
 			span           = member.span,
 			attrs          = member.attrs,
 			marker         = local.marker,
+			varint         = (member.type_ref.name
+			                  if member.type_ref.name in self.varints else None),
+			varint_minimal = self._varint_minimal(member),
 			array_count    = count.value() if count.is_point and member.array else None,
 			element_bits   = element.lo if element.is_point else None,
 			bit_position   = position,
@@ -498,6 +506,10 @@ class Solver:
 			state.cause = (name, member.span, _render_extent(total))
 
 		state.cursor = cursor.advance(total)
+
+	def _varint_minimal(self, member: ast.Field | ast.Reserved) -> bool:
+		varint = self.varints.get(member.type_ref.name)
+		return True if varint is None else varint.minimal
 
 	def record_interval(self, member: ast.Field | ast.Reserved,
 			scalar: ScalarType | None, state: Walk, path: str, name: str) -> None:
@@ -698,12 +710,22 @@ class Solver:
 			self.check_directives(member, type_ref.scalar, scope)
 			return Interval.point(type_ref.scalar.bits)
 
+		# A varint carries its own byte order in its encoding, so it needs no
+		# `endian` in scope: the continuation bit decides the order.
+
 		enum = self.enums.get(type_ref.name)
 		if enum is not None:
 			backing = enum.backing.scalar
 			assert backing is not None, "parser rejects non-scalar enum backing"
 			self.check_directives(member, backing, scope)
 			return Interval.point(backing.bits)
+
+		varint = self.varints.get(type_ref.name)
+		if varint is not None:
+			# Section 8.1.1: one to ceil(max_bits / 7) bytes. The lower bound is
+			# one byte even for a zero value, because the continuation bit has
+			# to be somewhere.
+			return Interval(BITS_PER_BYTE, varint.max_bytes * BITS_PER_BYTE)
 
 		if type_ref.name in self.structs:
 			nested = self.layout_of(type_ref.name)

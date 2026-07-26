@@ -59,6 +59,10 @@ def _named_declarations(schema: ast.Schema) -> list[tuple[str, str, ast.Decl]]:
 			named.append(("enum", decl.name, decl))
 		elif isinstance(decl, ast.ConstDecl):
 			named.append(("const", decl.name, decl))
+		elif isinstance(decl, ast.VarintDecl):
+			named.append(("varint type", decl.name, decl))
+		elif isinstance(decl, ast.EndianMarkerDecl):
+			named.append(("endian marker", decl.name, decl))
 	return named
 
 
@@ -200,8 +204,10 @@ def check_types_resolve(schema: ast.Schema) -> None:
 	if any(isinstance(decl, ast.ImportDirective) for decl in schema.decls):
 		return
 
-	declared = {decl.name for decl in schema.structs()}
+	declared  = {decl.name for decl in schema.structs()}
 	declared |= {decl.name for decl in schema.enums()}
+	declared |= {decl.name for decl in schema.varints()}
+	declared |= {decl.name for decl in schema.markers()}
 
 	for decl in schema.structs():
 		_check_member_types(decl.members, declared)

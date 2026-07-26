@@ -343,6 +343,10 @@ class Emitter:
 			lines.extend(self._marker(struct, placement))
 			return lines
 
+		if placement.varint is not None:
+			lines.extend(self._varint_note(placement))
+			return lines
+
 		# A dynamically placed member needs its offset worked out at runtime
 		# before anything can read it.
 		if placement.offset_bits is None:
@@ -375,6 +379,21 @@ class Emitter:
 			f"/* {placement.path} : {placement.type_name}  at {offset}",
 			f" * {axes}",
 			" */",
+		]
+
+	def _varint_note(self, placement: Placement) -> list[str]:
+		"""A varint has no constant-offset accessor to generate.
+
+		Its width is not known until it is read, so there is no `base + K` for
+		this field and none for anything after it in the same frame. Decoding
+		them is phase 6 codegen work; refusing to emit an accessor is better
+		than emitting one that pretends the width is fixed.
+		"""
+		return [
+			f"/* No accessor: `{placement.name}` is a `{placement.varint}`, whose",
+			" * width is not known until it is read. Varint decoding is not",
+			" * generated yet; the capability map already records what the field",
+			" * costs. */",
 		]
 
 	def _reserved_note(self, placement: Placement) -> list[str]:

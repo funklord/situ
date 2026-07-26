@@ -207,8 +207,16 @@ def _is_frame_relative(context: Context) -> bool:
 
 
 def _is_bounded_size(context: Context) -> bool:
+	"""A member whose extent is a range.
+
+	Varints are excluded: their own row covers both axes, and it claims
+	InPlaceSlack rather than Shifting because a value that re-encodes to the
+	same length does not move anything (section 8.1.1). Letting this row fire
+	as well would meet the two to Shifting and lose that distinction.
+	"""
 	placement = context.placement
-	return (placement.size_max_bits is not None
+	return (placement.varint is None
+	        and placement.size_max_bits is not None
 	        and placement.size_max_bits != placement.size_bits)
 
 
@@ -216,15 +224,32 @@ def _is_unbounded_size(context: Context) -> bool:
 	return context.placement.size_max_bits is None
 
 
+def _is_array(placement: Placement) -> bool:
+	return placement.array_count is not None or placement.sized_by is not None
+
+
 def _has_dynamic_elements(context: Context) -> bool:
 	"""An array whose element type is itself variable-sized.
 
 	Element k cannot be found without walking the k-1 before it, so access
-	drops to Sequential (section 11.3).
+	drops to Sequential (section 11.3). Section 8.1.1 says the same thing about
+	an array of varints in particular, and it is the same rule: what matters is
+	that the element width is not known, not what makes it unknown.
 	"""
 	placement = context.placement
-	return (placement.kind == "element"
-	        and placement.size_max_bits != placement.size_bits)
+
+	if placement.kind == "element":
+		return placement.size_max_bits != placement.size_bits
+
+	return _is_array(placement) and placement.element_bits is None
+
+
+def _is_varint(context: Context) -> bool:
+	return context.placement.varint is not None
+
+
+def _is_non_minimal_varint(context: Context) -> bool:
+	return context.placement.varint is not None and not context.placement.varint_minimal
 
 
 def _is_host_dependent(context: Context) -> bool:
@@ -401,6 +426,46 @@ TABLE: tuple[Row, ...] = (
 			            "region so an offset table makes access O(1)",
 		),
 		applies = _has_dynamic_elements,
+	),
+	Row(
+		rule = Rule(
+			name      = "varint",
+			construct = "a variable-length integer",
+			effects   = (
+				Effect(Axis.SIZE, Value("Bounded"),
+				       "one byte per seven payload bits, so the extent is a "
+				       "range and a caller must size for the worst case"),
+				Effect(Axis.MUTATE, Value("InPlaceSlack"),
+				       "a new value that encodes to the same length stays in "
+				       "place; any other length moves everything after it"),
+				Effect(Axis.ALIGN, Value("Unaligned"),
+				       "the field has no fixed width, so it has no natural "
+				       "boundary to sit on"),
+				Effect(Axis.ATOMIC, Value("NonAtomic"),
+				       "the value spans a number of bytes that is not known "
+				       "until it is read"),
+				Effect(Axis.REPR, Value("ValueConverted"),
+				       "the value is base-128 groups with continuation bits, "
+				       "not the bytes"),
+			),
+			remedy    = "if the field carries a `max` constraint, a fixed-width "
+			            "scalar is usually free: a varint costs two bytes across "
+			            "most of the range of a `max = 1500` field anyway, and "
+			            "`u16` restores static offsets for everything after it",
+		),
+		applies = _is_varint,
+	),
+	Row(
+		rule = Rule(
+			name      = "non-minimal-varint",
+			construct = "a varint type without `minimal`",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "non-minimal varint encodings are accepted, so "
+			                    "the same value has more than one encoding"),),
+			remedy    = "declare `minimal;` on the varint type, which is required "
+			            "for `require canonical`",
+		),
+		applies = _is_non_minimal_varint,
 	),
 	Row(
 		rule = Rule(

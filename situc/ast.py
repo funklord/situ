@@ -286,6 +286,37 @@ class EnumDecl(Decl):
 		return self.default or EnumDefault.ERROR
 
 
+class VarintEncoding(Enum):
+	LEB128 = "leb128"
+
+
+class VarintTransform(Enum):
+	ZIGZAG = "zigzag"
+
+
+@dataclass(frozen=True)
+class VarintDecl(Decl):
+	"""A variable-length integer type (section 8.1.1).
+
+	Required rather than optional: describing protobuf is impossible without
+	them. The capability consequences are severe and have to be reported
+	clearly, because this is exactly the construct users reach for without
+	understanding the cost.
+	"""
+
+	span: Span
+	name: str
+	encoding: VarintEncoding
+	max_bits: int
+	minimal: bool
+	transform: VarintTransform | None = None
+
+	@property
+	def max_bytes(self) -> int:
+		"""Worst-case encoded length: seven payload bits per byte."""
+		return (self.max_bits + 6) // 7
+
+
 @dataclass(frozen=True)
 class EndianMarkerDecl(Decl):
 	"""A byte-order marker: the TIFF `II`/`MM` pattern (section 8.3).
@@ -354,3 +385,6 @@ class Schema(Node):
 
 	def markers(self) -> list[EndianMarkerDecl]:
 		return [decl for decl in self.decls if isinstance(decl, EndianMarkerDecl)]
+
+	def varints(self) -> list[VarintDecl]:
+		return [decl for decl in self.decls if isinstance(decl, VarintDecl)]

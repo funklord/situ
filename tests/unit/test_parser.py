@@ -403,7 +403,6 @@ def test_unclosed_parenthesis_rejected() -> None:
 
 
 @pytest.mark.parametrize(("source", "phase"), [
-	("varint_type leb128 { encoding = leb128; }",		6),
 	("codec aes { deterministic; }",			7),
 	("impl aes derived;",					7),
 	("register CtrlReg { width = 32; }",			10),
@@ -547,3 +546,75 @@ def test_endian_from_attribute_parses_as_a_call() -> None:
 		"struct S [endian = from(bo)] { endian_marker bo; }").structs()[0]
 	assert decl.attrs[0].name == "endian"
 	assert isinstance(decl.attrs[0].value, ast.Call)
+
+
+# -- varint types (section 8.1.1) -------------------------------------------
+
+
+def test_varint_declaration() -> None:
+	decl = parse_text(
+		"varint_type leb128 { encoding = leb128; max_bits = 64; minimal; }").varints()[0]
+	assert decl.name == "leb128"
+	assert decl.encoding is ast.VarintEncoding.LEB128
+	assert decl.max_bits == 64
+	assert decl.minimal
+	assert decl.transform is None
+
+
+def test_varint_worst_case_length() -> None:
+	"""Seven payload bits per byte, so 64 bits needs ten."""
+	decl = parse_text(
+		"varint_type v { encoding = leb128; max_bits = 64; }").varints()[0]
+	assert decl.max_bytes == 10
+
+	decl = parse_text(
+		"varint_type v { encoding = leb128; max_bits = 32; }").varints()[0]
+	assert decl.max_bytes == 5
+
+
+def test_varint_zigzag_transform() -> None:
+	decl = parse_text("varint_type zz { encoding = leb128; transform = zigzag; "
+	                  "max_bits = 64; minimal; }").varints()[0]
+	assert decl.transform is ast.VarintTransform.ZIGZAG
+
+
+def test_varint_minimal_is_never_defaulted() -> None:
+	"""Section 17.0 lists non-minimal acceptance as an ambiguity to resolve
+	explicitly: it decides whether the format can be canonical."""
+	decl = parse_text("varint_type v { encoding = leb128; max_bits = 64; }").varints()[0]
+	assert not decl.minimal
+
+
+def test_varint_needs_an_encoding() -> None:
+	with pytest.raises(SituError, match="does not declare an encoding"):
+		parse_text("varint_type v { max_bits = 64; }")
+
+
+def test_varint_needs_max_bits() -> None:
+	with pytest.raises(SituError, match="does not declare `max_bits`"):
+		parse_text("varint_type v { encoding = leb128; }")
+
+
+def test_varint_max_bits_is_bounded() -> None:
+	with pytest.raises(SituError, match="must be a literal from 1 to 64"):
+		parse_text("varint_type v { encoding = leb128; max_bits = 65; }")
+
+
+def test_varint_rejects_an_unknown_property() -> None:
+	with pytest.raises(SituError, match="unknown varint property `wibble`"):
+		parse_text("varint_type v { encoding = leb128; max_bits = 8; wibble; }")
+
+
+def test_varint_rejects_a_repeated_property() -> None:
+	with pytest.raises(SituError, match="`minimal` is given twice"):
+		parse_text("varint_type v { encoding = leb128; max_bits = 8; minimal; minimal; }")
+
+
+def test_varint_rejects_an_unknown_encoding() -> None:
+	with pytest.raises(SituError, match="unknown encoding `sqlite`"):
+		parse_text("varint_type v { encoding = sqlite; max_bits = 8; }")
+
+
+def test_varint_name_collides_like_any_other_type() -> None:
+	with pytest.raises(SituError, match="declared more than once"):
+		parse_text("struct v { u8 a; } varint_type v { encoding = leb128; max_bits = 8; }")

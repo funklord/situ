@@ -11,10 +11,22 @@ diagnostics are the product.
 
 from __future__ import annotations
 
+from enum import Enum
+from typing import TypeVar
+
 from situc import ast, wellformed
 from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
 from situc.types import WidthError, lookup
+
+
+EnumT = TypeVar("EnumT", bound=Enum)
+
+
+def evaluate_literal(expr: ast.Expr) -> int | None:
+	"""An integer literal, or None. Used where a property must be a constant
+	the parser can see, rather than an expression a later pass folds."""
+	return expr.value if isinstance(expr, ast.IntLiteral) else None
 
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
@@ -23,7 +35,6 @@ FUTURE_CONSTRUCTS = {
 	"opaque":		(6,  "`opaque`"),
 	"tlv":			(6,  "`tlv`"),
 	"indexed":		(6,  "`indexed`"),
-	"varint_type":		(6,  "`varint_type`"),
 	"codec":		(7,  "`codec`"),
 	"impl":			(7,  "`impl`"),
 	"authenticated":	(8,  "`authenticated`"),
@@ -179,6 +190,7 @@ class Parser:
 			"enum":		self.parse_enum,
 			"struct":	self.parse_struct,
 			"endian_marker": self.parse_endian_marker,
+			"varint_type":	self.parse_varint,
 			"require":	self.parse_requirement,
 			"assert":	self.parse_requirement,
 		}
@@ -311,6 +323,87 @@ class Parser:
 				         "canonical = NonCanonical (project.md section 8.7)"],
 			)
 		return default
+
+	def parse_varint(self) -> ast.VarintDecl:
+		"""`varint_type leb128 { encoding = leb128; max_bits = 64; minimal; }`
+
+		`minimal` is present or absent, never defaulted: section 17.0 lists
+		non-minimal varint acceptance as an ambiguity that has to be resolved
+		explicitly, because it decides whether the format can be canonical and
+		the wrong answer is undetectable at runtime.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a varint type name")
+		self.expect_symbol("{", "to open the varint body")
+
+		encoding: ast.VarintEncoding | None  = None
+		transform: ast.VarintTransform | None = None
+		max_bits: int | None                  = None
+		minimal                               = False
+		seen: set[str] = set()
+
+		while not self.current.is_symbol("}"):
+			prop = self.expect_ident("a varint property")
+			if prop.text in seen:
+				raise error(f"`{prop.text}` is given twice", prop.span)
+			seen.add(prop.text)
+
+			if prop.text == "minimal":
+				minimal = True
+			elif prop.text == "encoding":
+				self.expect_symbol("=", "after `encoding`")
+				encoding = self._varint_enum(ast.VarintEncoding, "encoding")
+			elif prop.text == "transform":
+				self.expect_symbol("=", "after `transform`")
+				transform = self._varint_enum(ast.VarintTransform, "transform")
+			elif prop.text == "max_bits":
+				self.expect_symbol("=", "after `max_bits`")
+				token = self.current
+				max_bits = evaluate_literal(self.parse_expr())
+				if max_bits is None or not 1 <= max_bits <= 64:
+					raise error(
+						"`max_bits` must be a literal from 1 to 64",
+						token.span,
+						label = "out of range",
+					)
+			else:
+				raise error(
+					f"unknown varint property `{prop.text}`",
+					prop.span,
+					label = "expected `encoding`, `transform`, `max_bits` or `minimal`",
+				)
+
+			self.expect_symbol(";", "after the varint property")
+
+		self.expect_symbol("}", "to close the varint body")
+
+		if encoding is None:
+			raise error(
+				f"varint type `{name.text}` does not declare an encoding",
+				self.span_from(start),
+				label = "expected `encoding = leb128;`",
+			)
+		if max_bits is None:
+			raise error(
+				f"varint type `{name.text}` does not declare `max_bits`",
+				self.span_from(start),
+				label = "expected `max_bits = N;`",
+				notes = ["without it the worst-case encoded length is unknown, so "
+				         "nothing downstream can be bounded"],
+			)
+
+		return ast.VarintDecl(self.span_from(start), name.text, encoding,
+		                      max_bits, minimal, transform)
+
+	def _varint_enum(self, enum: type[EnumT], described: str) -> EnumT:
+		token = self.expect_ident(f"a varint {described}")
+		for candidate in enum:
+			if candidate.value == token.text:
+				return candidate
+
+		options = ", ".join(f"`{item.value}`" for item in enum)
+		raise error(f"unknown {described} `{token.text}`", token.span,
+		            label = f"expected one of {options}")
 
 	def parse_endian_marker(self) -> ast.EndianMarkerDecl:
 		"""`endian_marker byte_order : u16 { little = 0x4949, big = 0x4D4D, }`

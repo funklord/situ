@@ -292,6 +292,8 @@ def test_reachable_rows_are_all_tested() -> None:
 		"bounded-size",
 		"unbounded-size",
 		"dynamic-element-type",
+		"varint",
+		"non-minimal-varint",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
@@ -340,3 +342,68 @@ def test_single_byte_field_is_unaffected_by_a_marker() -> None:
 def test_the_marker_itself_is_not_converted() -> None:
 	"""It is compared as a byte sequence; it cannot depend on its own answer."""
 	assert axis_of(MARKER, "S.bo", Axis.REPR) == Value("MemoryIdentical")
+
+
+# -- row: varint (section 8.1.1) --------------------------------------------
+
+
+VARINT = "varint_type v { encoding = leb128; max_bits = 64; minimal; }"
+LOOSE  = "varint_type w { encoding = leb128; max_bits = 64; }"
+
+
+def test_varint_size_is_bounded_by_its_max_bits() -> None:
+	body = VARINT + "struct S { v a; }"
+	assert axis_of(body, "S.a", Axis.SIZE) == Value("Bounded", ("1", "10"))
+
+
+def test_varint_mutation_is_in_place_when_the_length_matches() -> None:
+	"""Section 8.1.1 says InPlaceSlack, not Shifting: a value that re-encodes
+	to the same length moves nothing."""
+	body = VARINT + "struct S { v a; }"
+	assert axis_of(body, "S.a", Axis.MUTATE) == Value("InPlaceSlack")
+	assert "varint" in rules_for(body, "S.a", Axis.MUTATE)
+
+
+def test_a_varint_makes_everything_after_it_dynamic() -> None:
+	"""The consequence users reach for the construct without understanding."""
+	body = VARINT + "struct S { v a; u32 z; }"
+	assert axis_of(body, "S.z", Axis.OFFSET) == Value("Dynamic")
+	assert axis_of(body, "S.z", Axis.ADDRESS) == Value("Unstable")
+
+
+def test_a_varint_is_neither_aligned_nor_atomic() -> None:
+	body = VARINT + "struct S { v a; }"
+	assert axis_of(body, "S.a", Axis.ALIGN) == Value("Unaligned")
+	assert axis_of(body, "S.a", Axis.ATOMIC) == Value("NonAtomic")
+
+
+def test_a_minimal_varint_stays_canonical() -> None:
+	assert axis_of(VARINT + "struct S { v a; }", "S.a", Axis.CANONICAL) \
+	       == Value("Canonical")
+
+
+def test_a_non_minimal_varint_is_not_canonical() -> None:
+	body = LOOSE + "struct S { w a; }"
+	assert axis_of(body, "S.a", Axis.CANONICAL) == Value("NonCanonical")
+	assert rules_for(body, "S.a", Axis.CANONICAL) == ["non-minimal-varint"]
+
+
+def test_an_array_of_varints_is_sequential() -> None:
+	"""Section 8.1.1: never Random. Element k cannot be found without walking
+	the ones before it."""
+	body = VARINT + "struct S { u8 n; v xs[n]; }"
+	assert axis_of(body, "S.xs", Axis.ACCESS) == Value("Sequential")
+
+
+def test_an_array_of_fixed_scalars_stays_random() -> None:
+	body = VARINT + "struct S { u8 n; u16 xs[n]; }"
+	assert axis_of(body, "S.xs", Axis.ACCESS) == Value("Random")
+
+
+def test_the_varint_remedy_names_the_fixed_width_alternative() -> None:
+	"""Section 18.2's suggestion, carried on the rule that costs the capability."""
+	body   = VARINT + "struct S { v a; }"
+	entry  = entries(body)["S.a"]
+	remedy = next(w.rule.remedy for w in entry.blame(Axis.MUTATE))
+	assert "fixed-width scalar" in remedy
+	assert "restores static offsets" in remedy
