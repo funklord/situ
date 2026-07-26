@@ -1,0 +1,13 @@
+# Golden vectors for the protobuf conformance test.
+#
+# Regenerate with an independent implementation, never with situ:
+#
+#   printf '...' | protoc --encode=User user.proto | xxd -p
+#
+# A description that agrees only with its own compiler has demonstrated nothing.
+user_id: 150                                                 089601
+username: "situ"                                             120473697475
+score: 1.5                                                   1d0000c03f
+user_id: 150;username: "situ";score: 1.5                     0896011204736974751d0000c03f
+user_id: 0                                                   0800
+user_id: 18446744073709551615                                08ffffffffffffffffff01

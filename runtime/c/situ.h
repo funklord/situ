@@ -305,6 +305,202 @@ static inline int64_t situ_sign_extend(uint64_t raw, uint32_t width)
 	}
 }
 
+/* ------------------------------------------------------------------------
+ * Variable-length integers
+ *
+ * LEB128: base-128 groups, least significant first, with the top bit of each
+ * byte set on every group but the last. `minimal` is a schema property rather
+ * than a decoder one -- a decoder that rejected non-minimal encodings could not
+ * read protobuf -- so these accept them, and the capability map records that
+ * the format is not canonical as a result.
+ * ------------------------------------------------------------------------ */
+
+/* Decode one varint. Returns bytes consumed, or 0 if the buffer ends mid-value
+ * or the value needs more than `max_bytes`. */
+static inline uint32_t situ_varint_get(const uint8_t *p, uint32_t avail,
+		uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc   = 0;
+	uint32_t shift = 0;
+	uint32_t i;
+
+	for (i = 0; i < avail && i < max_bytes; i++) {
+		uint8_t byte = p[i];
+
+		if (shift < 64u) {
+			acc |= (uint64_t)(byte & 0x7Fu) << shift;
+		}
+		shift += 7u;
+
+		if ((byte & 0x80u) == 0u) {
+			*out = acc;
+			return i + 1u;
+		}
+	}
+
+	return 0;
+}
+
+/* Encoded length of a value, so a writer can tell whether it still fits. */
+static inline uint32_t situ_varint_len(uint64_t value)
+{
+	uint32_t n = 1;
+
+	while (value >= 0x80u) {
+		value >>= 7;
+		n++;
+	}
+	return n;
+}
+
+/* Encode one varint minimally. Returns bytes written, or 0 if too small. */
+static inline uint32_t situ_varint_put(uint8_t *p, uint32_t avail, uint64_t value)
+{
+	uint32_t n = situ_varint_len(value);
+	uint32_t i;
+
+	if (n > avail) {
+		return 0;
+	}
+
+	for (i = 0; i + 1u < n; i++) {
+		p[i] = (uint8_t)((value & 0x7Fu) | 0x80u);
+		value >>= 7;
+	}
+	p[n - 1u] = (uint8_t)(value & 0x7Fu);
+	return n;
+}
+
+/* ZigZag, as protobuf's sint32 and sint64 use it: a small magnitude stays short
+ * whether it is positive or negative. */
+static inline uint64_t situ_zigzag_encode(int64_t value)
+{
+	return ((uint64_t)value << 1) ^ (uint64_t)(value >> 63);
+}
+
+static inline int64_t situ_zigzag_decode(uint64_t raw)
+{
+	return (int64_t)((raw >> 1) ^ (~(raw & 1u) + 1u));
+}
+
+/* ------------------------------------------------------------------------
+ * Tag-length-value iteration
+ *
+ * A cursor over a tlv region. Items are found by walking from the start, which
+ * is why the access axis reports Sequential and lookup by tag is O(n). The
+ * cursor is the honest shape of the construct, not a limitation of this
+ * implementation.
+ * ------------------------------------------------------------------------ */
+
+/* Protobuf wire types, which decide how a value's extent is found. */
+#define SITU_WIRE_VARINT	0u
+#define SITU_WIRE_64BIT		1u
+#define SITU_WIRE_LENGTH	2u
+#define SITU_WIRE_32BIT		5u
+
+typedef struct situ_tlv_iter {
+	situ_view_t view;
+	uint32_t    offset;	/* cursor within the region			*/
+	uint64_t    tag;	/* raw tag of the current item			*/
+	uint32_t    value_off;	/* where the current item's value starts	*/
+	uint32_t    value_len;	/* how long it is				*/
+} situ_tlv_iter_t;
+
+static inline void situ_tlv_begin(situ_tlv_iter_t *it, situ_view_t view)
+{
+	it->view      = view;
+	it->offset    = 0;
+	it->tag       = 0;
+	it->value_off = 0;
+	it->value_len = 0;
+}
+
+/* Advance to the next item. Returns SITU_OK, SITU_ERR_BOUNDS at the end of the
+ * region or on a truncated item, or SITU_ERR_CONSTRAINT on a wire type situ
+ * does not describe. */
+static inline situ_err_t situ_tlv_next(situ_tlv_iter_t *it)
+{
+	const uint8_t *base = it->view.base;
+	uint32_t limit      = it->view.limit;
+	uint64_t tag        = 0;
+	uint32_t used;
+
+	if (it->offset >= limit) {
+		return SITU_ERR_BOUNDS;
+	}
+
+	used = situ_varint_get(base + it->offset, limit - it->offset, 10u, &tag);
+	if (used == 0u) {
+		return SITU_ERR_BOUNDS;
+	}
+
+	it->tag     = tag;
+	it->offset += used;
+
+	switch ((uint32_t)(tag & 0x7u)) {
+	case SITU_WIRE_VARINT: {
+		uint64_t ignored = 0;
+		used = situ_varint_get(base + it->offset, limit - it->offset, 10u, &ignored);
+		if (used == 0u) {
+			return SITU_ERR_BOUNDS;
+		}
+		it->value_off = it->offset;
+		it->value_len = used;
+		it->offset   += used;
+		return SITU_OK;
+	}
+	case SITU_WIRE_64BIT:
+		if (limit - it->offset < 8u) {
+			return SITU_ERR_BOUNDS;
+		}
+		it->value_off = it->offset;
+		it->value_len = 8u;
+		it->offset   += 8u;
+		return SITU_OK;
+	case SITU_WIRE_32BIT:
+		if (limit - it->offset < 4u) {
+			return SITU_ERR_BOUNDS;
+		}
+		it->value_off = it->offset;
+		it->value_len = 4u;
+		it->offset   += 4u;
+		return SITU_OK;
+	case SITU_WIRE_LENGTH: {
+		uint64_t length = 0;
+		used = situ_varint_get(base + it->offset, limit - it->offset, 10u, &length);
+		if (used == 0u) {
+			return SITU_ERR_BOUNDS;
+		}
+		it->offset += used;
+		if (length > (uint64_t)(limit - it->offset)) {
+			return SITU_ERR_BOUNDS;
+		}
+		it->value_off = it->offset;
+		it->value_len = (uint32_t)length;
+		it->offset   += (uint32_t)length;
+		return SITU_OK;
+	}
+	default:
+		/* Wire types 3 and 4 are groups, which situ does not describe. */
+		return SITU_ERR_CONSTRAINT;
+	}
+}
+
+static inline uint32_t situ_tlv_field(const situ_tlv_iter_t *it)
+{
+	return (uint32_t)(it->tag >> 3);
+}
+
+static inline uint32_t situ_tlv_wire(const situ_tlv_iter_t *it)
+{
+	return (uint32_t)(it->tag & 0x7u);
+}
+
+static inline const uint8_t *situ_tlv_value(const situ_tlv_iter_t *it)
+{
+	return it->view.base + it->value_off;
+}
+
 /* Human-readable name for a code, for tests and diagnostics. Never NULL. */
 const char *situ_err_str(situ_err_t err);
 

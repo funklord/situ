@@ -30,7 +30,7 @@ CMOCKA_LIBS	?= -lcmocka
 
 # Every test is compiled twice: the checked build exercises the bounds and
 # generation assertions, the release build proves they compile out cleanly.
-TESTS		:= test_runtime test_header test_tiff test_message
+TESTS		:= test_runtime test_header test_tiff test_message test_protobuf
 BINS		:= $(TESTS:%=$(BUILD_DIR)/%) $(TESTS:%=$(BUILD_DIR)/%_checked)
 
 # Schemas whose generated accessors are exercised here. The code is generated
@@ -62,6 +62,7 @@ OBJS_test_runtime	:=
 OBJS_test_header	:= $(GEN_DIR)/header.o
 OBJS_test_tiff		:= $(GEN_DIR)/tiff.o
 OBJS_test_message	:= $(GEN_DIR)/message.o
+OBJS_test_protobuf	:=
 
 .PHONY: all test clean generate
 
