@@ -478,3 +478,101 @@ def test_generated_vector_test_compiles(tmp_path: Path) -> None:
 		 "-c", str(tmp_path / "unit_vectors.c"), "-o", str(tmp_path / "v.o")],
 		capture_output=True, text=True)
 	assert build.returncode == 0, build.stderr
+
+
+# -- view invalidation documentation (section 12.3) -------------------------
+
+
+def test_a_fixed_struct_says_nothing_invalidates_it() -> None:
+	header, _ = emit("struct S { u32 a; u16 b; }")
+	assert "INVALIDATION: nothing invalidates a S view" in header
+	assert "no write can move another" in header
+
+
+def test_a_frame_names_the_fields_that_invalidate_it() -> None:
+	"""Section 12.3: the header documents, per view type, exactly which
+	operations invalidate it. The C type system cannot enforce this, so the
+	only other record of the rule would be in the compiler's head."""
+	header, _ = emit("struct S { u16 n [max = 100]; u8 v[n]; u32 z; }")
+	assert "INVALIDATION: a S view" in header
+	assert "invalidated by writing `n`" in header
+	assert "Re-acquire the view after any such write" in header
+
+
+def test_a_frame_emits_generation_bumping_setters() -> None:
+	header, _ = emit("struct S { u16 n [max = 100]; u8 v[n]; u32 z; }")
+	assert ("static inline void situ_S_n_set(situ_msg_t *msg, situ_view_t view, "
+	        "uint16_t value)") in header
+	assert "situ_msg_touch(msg);" in header
+
+
+def test_a_frame_view_takes_a_length() -> None:
+	"""A frame's extent depends on the data, so the caller supplies what they
+	have and the bounds check is made against that."""
+	header, _ = emit("struct S { u16 n [max = 100]; u8 v[n]; }")
+	assert "situ_S_view(const situ_msg_t *msg, uint32_t offset, uint32_t length," in header
+	assert "if (length < SITU_S_SIZE_MIN) {" in header
+
+
+def test_a_frame_has_no_size_fixed_constant() -> None:
+	"""Emitting one would hand a caller a number that is wrong for every
+	message but the shortest."""
+	header, _ = emit("struct S { u16 n [max = 100]; u8 v[n]; }")
+	assert "SITU_S_SIZE_FIXED" not in header
+	assert "#define SITU_S_SIZE_MIN   2u" in header
+	assert "#define SITU_S_SIZE_MAX   102u" in header
+
+
+def test_an_unbounded_frame_says_why_it_has_no_maximum() -> None:
+	header, _ = emit("struct S { u8 a; u8 rest[remaining]; }")
+	assert "No SITU_S_SIZE_MAX" in header
+	assert "Give the driving length field a `[max = N]`" in header
+
+
+# -- dynamic accessors ------------------------------------------------------
+
+
+def test_dynamic_offset_resolves_from_the_driving_field() -> None:
+	header, _ = emit("struct S { u16 n [max = 100]; u8 v[n]; u32 z; }")
+	assert "static inline uint32_t situ_S_z_offset(situ_view_t view)" in header
+	# The driving field is at a static offset, so reading it is a constant load.
+	assert "situ_get_be16(view.base + 0u)" in header
+
+
+def test_remaining_measures_to_the_end_of_the_view() -> None:
+	header, _ = emit("struct S { u8 a; u8 rest[remaining]; }")
+	assert "situ_S_rest_len(situ_view_t view)" in header
+	assert "view.limit - 1u" in header
+
+
+def test_array_of_structs_gets_an_indexed_element_view() -> None:
+	"""Acquiring the element view is the bounds check; the fields inside it are
+	then constant offsets from its base (section 12.2)."""
+	header, _ = emit("struct R { u32 id; u16 v; } struct S { u8 n; R rs[n]; }")
+	assert "situ_S_rs_at(situ_view_t view, uint32_t index, situ_view_t *out)" in header
+	assert "const uint32_t stride = SITU_R_SIZE_FIXED;" in header
+	assert "situ_view_sub(view, base + index * stride, stride, out)" in header
+
+
+def test_dynamic_array_gets_a_runtime_count() -> None:
+	header, _ = emit("struct R { u32 id; } struct S { u8 n; R rs[n]; }")
+	assert "static inline uint32_t situ_S_rs_count(situ_view_t view)" in header
+	assert "SITU_S_RS_COUNT" not in header
+
+
+def test_fixed_array_keeps_a_compile_time_count() -> None:
+	header, _ = emit("struct R { u32 id; } struct S { R rs[4]; }")
+	assert "#define SITU_S_RS_COUNT 4u" in header
+	assert "situ_S_rs_count(situ_view_t view)" not in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+@pytest.mark.parametrize("body", [
+	"struct S { u16 n [max = 100]; u8 v[n]; u32 z; }",
+	"struct S { u8 a; u8 rest[remaining]; }",
+	"struct R { u32 id; u16 v; } struct S { u8 n; R rs[n]; u8 tail[remaining]; }",
+	"struct S { u8 n [must_eq = 4]; u8 v[n]; u32 z; }",
+	"struct R { u32 id; } struct S { u8 n; u8 pad[n]; u8 m; R rs[m]; }",
+])
+def test_dynamic_code_compiles_warning_clean(tmp_path: Path, body: str) -> None:
+	compile_generated(tmp_path, body)

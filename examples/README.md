@@ -21,6 +21,7 @@ meant to be read in roughly this order.
 | [bmp](bmp/) | Little endian, and the canonical misaligned layout. |
 | [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |
 | [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
+| [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
 
 ## Waiting on later phases
 
@@ -30,7 +31,6 @@ become live as each phase lands.
 
 | Example | Needs | Demonstrates |
 |---|---|---|
-| [message](message/) | phase 5 | Islands of staticness inside a dynamic frame. project.md example 5.2. |
 | [packet](packet/) | phase 8 | The doom principle as a stage gate; tag coverage against in-place mutation. project.md example 5.3. |
 | [registers](registers/) | phase 10 | MMIO: where a missing setter is the deliverable. project.md example 15.2. |
 
@@ -68,8 +68,9 @@ Three jobs, in order of how much they matter:
 2. **Test material.** Every schema here is parsed by the test suite, the
    buildable ones are checked to round-trip, their committed maps are
    regenerated and compared, and their generated C is compiled warning-clean
-   on host and aarch64. `tiff` is exercised end to end under cmocka, from its
-   schema straight out of this directory, so it cannot drift from a copy.
+   on host and aarch64. `tiff` and `message` are exercised end to end under cmocka,
+   from their schemas straight out of this directory, so they cannot drift from
+   a copy.
 3. **A place to put generated code.** Each directory holds its schema and its
    capability map; generated `.h`/`.c` land in the build tree rather than being
    committed, so a codegen change cannot leave a stale copy behind.

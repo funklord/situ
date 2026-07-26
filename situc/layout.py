@@ -806,11 +806,25 @@ class Solver:
 		"""
 		packed = scalar is not None and scalar.is_bit_packed
 
-		# A dynamic cursor cannot be checked here. Everything after a dynamic
-		# member is byte-aligned by construction, because a dynamic size is
-		# always a whole number of bytes: only a bit-packed field can be
-		# sub-byte, and a bit-packed field cannot have a dynamic count.
 		if not extent.is_exact:
+			# A dynamic cursor cannot be checked here, and a bit-packed field
+			# cannot be placed against one: its bit phase within the resolved
+			# byte is not something this phase computes. Refused rather than
+			# guessed -- a wrong bit offset is undetectable at runtime.
+			if packed:
+				raise error(
+					f"`{member.type_ref.name}` is bit-packed and cannot follow a "
+					"dynamically sized member",
+					member.span,
+					label = "no resolvable bit position",
+					notes = [
+						"the byte it lands in is only known at parse time, and "
+						"bit phase across a dynamic boundary arrives with the "
+						"sub-byte codecs of phase 12",
+						"move this field before the dynamic member, or widen it "
+						"to a whole number of bytes",
+					],
+				)
 			return
 
 		cursor = extent.lo

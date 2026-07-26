@@ -210,6 +210,7 @@ class Emitter:
 
 		if layout.is_fixed_size:
 			return [
+				*self._invalidation_note(struct),
 				"/* Acquire a view. This is the one bounds check; the field",
 				" * accessors below are constant offsets from the view base. */",
 				f"static inline situ_err_t {ident(self.prefix, name, 'view')}"
@@ -221,6 +222,7 @@ class Emitter:
 			]
 
 		return [
+			*self._invalidation_note(struct),
 			"/* Acquire a view. This struct is a frame: its extent depends on the",
 			" * data, so the caller supplies the length they have and the bounds",
 			" * check is made against that. The fields at a static offset are then",
@@ -238,6 +240,42 @@ class Emitter:
 			"}",
 		]
 
+	def _drivers(self, struct: ResolvedStruct) -> list[str]:
+		"""Fields whose value decides where later members start."""
+		return sorted({
+			placement.sized_by
+			for placement in self._top_level(struct)
+			if placement.sized_by and placement.sized_by != "remaining"
+		})
+
+	def _invalidation_note(self, struct: ResolvedStruct) -> list[str]:
+		"""Document, per view type, exactly what invalidates it.
+
+		Section 12.3 asks for this by name. The C type system cannot enforce
+		view invalidation, so the generated header has to say what does it --
+		otherwise the only record of the rule is in the compiler's head.
+		"""
+		drivers = self._drivers(struct)
+
+		if not drivers:
+			return [
+				f"/* INVALIDATION: nothing invalidates a {struct.name} view.",
+				" * Every member has a fixed size, so no write can move another.",
+				" */",
+			]
+
+		listed = ", ".join(f"`{name}`" for name in drivers)
+		return [
+			f"/* INVALIDATION: a {struct.name} view, and every view derived from",
+			f" * it, is invalidated by writing {listed} -- those decide where the",
+			" * members after them start. Use the setters at the end of this",
+			" * struct's section, which bump the message generation; a stale view",
+			" * is then caught on use in a SITU_CHECKED build.",
+			" *",
+			" * Re-acquire the view after any such write.",
+			" */",
+		]
+
 	def _shifting_setters(self, struct: ResolvedStruct) -> list[str]:
 		"""Setters for fields that drive a length in this struct.
 
@@ -247,11 +285,7 @@ class Emitter:
 		therefore takes the message, which also makes the cost visible in the
 		signature rather than only in a comment.
 		"""
-		drivers = {
-			placement.sized_by
-			for placement in self._top_level(struct)
-			if placement.sized_by and placement.sized_by != "remaining"
-		}
+		drivers = self._drivers(struct)
 		if not drivers:
 			return []
 
@@ -260,7 +294,7 @@ class Emitter:
 		         " * views. In a SITU_CHECKED build a stale view is then caught on",
 		         " * use; in a release build the check compiles out. */"]
 
-		for path in sorted(drivers):
+		for path in drivers:
 			target = self.resolved.find(f"{struct.name}.{path}")
 			if target is None or target.placement.scalar is None:
 				continue
@@ -268,7 +302,9 @@ class Emitter:
 			local = c_name(path)
 			ctype = self._field_ctype(target.placement)
 			store = self._store_statement(
-				target.placement.scalar, target.placement, "view.base", "value")
+				target.placement.scalar, target.placement,
+				self._value_base(struct, target.placement), "value",
+				offset=self._value_offset(target.placement))
 
 			lines.extend([
 				f"static inline void "
@@ -405,6 +441,21 @@ class Emitter:
 			"}",
 		]
 
+	def _value_base(self, struct: ResolvedStruct, placement: Placement) -> str:
+		"""The pointer a scalar accessor loads from.
+
+		A statically placed field reads from the view base at a constant
+		displacement. A dynamically placed one has its offset resolved first,
+		so the displacement folds into the pointer and the load itself stays a
+		single access.
+		"""
+		if placement.offset_bits is not None:
+			return "view.base"
+		return f"(view.base + {self._base_expression(struct, placement)})"
+
+	def _value_offset(self, placement: Placement) -> int | None:
+		return None if placement.offset_bits is not None else 0
+
 	def _is_array(self, placement: Placement) -> bool:
 		return self.resolved.find(placement.path + "[]") is not None
 
@@ -470,8 +521,11 @@ class Emitter:
 	def _count_expression(self, struct: ResolvedStruct, placement: Placement) -> str:
 		"""Read the field that drives a member's length.
 
-		A constant-offset load: the driving field has to precede the member it
-		sizes, so it lands before anything dynamic.
+		Usually a constant-offset load, but not always: the driving field has to
+		precede the member it sizes, which does not mean it precedes every
+		dynamic member. A second variable-length region can be counted by a
+		field that is itself dynamically placed, so this goes through the same
+		base resolution as any other read.
 		"""
 		if placement.sized_by is None:
 			return f"{placement.array_count or 0}u"
@@ -481,7 +535,9 @@ class Emitter:
 			return f"{placement.array_count or 0}u"
 
 		loaded = self._load_expression(
-			target.placement.scalar, target.placement, "view.base")
+			target.placement.scalar, target.placement,
+			self._value_base(struct, target.placement),
+			offset=self._value_offset(target.placement))
 		return f"({loaded})"
 
 	def _element_view(self, struct: ResolvedStruct,
@@ -562,6 +618,7 @@ class Emitter:
 		if scalar.bits == BITS_PER_BYTE:
 			# A byte array is the bytes: MemoryIdentical, so a pointer is safe
 			# and is what callers actually want.
+			lines.extend(self._address_note(entry))
 			lines.extend([
 				f"static inline uint8_t *"
 				f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
@@ -607,7 +664,9 @@ class Emitter:
 		local  = c_name(self._local(struct, placement))
 		ctype  = self._field_ctype(placement)
 		getter = ident(self.prefix, struct.name, local, "get")
-		load   = self._load_expression(scalar, placement, "view.base")
+		base   = self._value_base(struct, placement)
+		load   = self._load_expression(scalar, placement, base,
+		                               offset=self._value_offset(placement))
 
 		lines = [
 			f"static inline {ctype} {getter}(situ_view_t view)",
@@ -622,11 +681,13 @@ class Emitter:
 				and not scalar.is_bit_packed
 				and placement.kind != "marker"
 				and placement.type_name not in self.enums):
+			lines.extend(self._address_note(entry))
 			lines.extend([
 				f"static inline {self._ctype(scalar)} *"
 				f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
 				"{",
-				f"\treturn ({self._ctype(scalar)} *)(view.base + {placement.offset_bytes}u);",
+				f"\treturn ({self._ctype(scalar)} *)(view.base + "
+				f"{self._base_expression(struct, placement)});",
 				"}",
 			])
 
@@ -642,16 +703,49 @@ class Emitter:
 		if refusal is not None:
 			return refusal
 
+		# A field that drives a length gets one setter, not two: writing it
+		# moves later members, so it has to bump the generation. The shifting
+		# setter at the end of this struct's section is that one.
+		local_path = self._local(struct, placement)
+		if local_path in self._drivers(struct):
+			return [
+				f"/* No plain setter: `{local_path}` decides where later members",
+				" * start, so writing it must invalidate outstanding views. Use",
+				f" * {ident(self.prefix, struct.name, c_name(local_path), 'set')}(),",
+				" * which takes the message and bumps its generation. */",
+			]
+
 		local = c_name(self._local(struct, placement))
 		ctype = self._field_ctype(placement)
 		setter = ident(self.prefix, struct.name, local, "set")
 
+		base = self._value_base(struct, placement)
 		return [
 			f"static inline void {setter}(situ_view_t view, {ctype} value)",
 			"{",
-			f"\t{self._store_statement(scalar, placement, 'view.base', 'value')}",
+			f"\t{self._store_statement(scalar, placement, base, 'value', offset=self._value_offset(placement))}",
 			"}",
 		]
+
+	def _address_note(self, entry: Resolved) -> list[str]:
+		"""Say how long a pointer stays good.
+
+		The pointer is valid now; what varies is what invalidates it. Section
+		11.1's address axis exists to answer exactly that, so the answer belongs
+		beside the accessor rather than only in the map.
+		"""
+		address = entry.vector.get(Axis.ADDRESS).base
+
+		if address == "Stable":
+			return []
+
+		if address == "FrameStable":
+			return ["/* The returned pointer is valid while the enclosing frame's",
+			        " * base does not move. */"]
+
+		return ["/* The returned pointer is invalidated by any write that changes",
+		        " * the length of what precedes this field; see the INVALIDATION",
+		        " * note on this struct's view accessor. */"]
 
 	def _setter_refusal(self, entry: Resolved) -> list[str] | None:
 		"""Explain a missing setter, in the header, where it will be looked for.

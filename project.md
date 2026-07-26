@@ -2050,9 +2050,13 @@ that depends on it.
 3. **Cross-field invariants.** `invariant len == size(payload);` is attractive
    -- checked on parse, maintained automatically on mutation. Where does the
    maintenance obligation live in the generated API? Deferred.
-4. **Slack tracking.** `InPlaceSlack` implies the runtime knows the allocated
-   capacity of a region separately from its current size. That needs a place in
-   the view struct. Decide during phase 5.
+4. ~~**Slack tracking.**~~ **RESOLVED.** No field is added to the view. `limit`
+   *is* the capacity, established once at acquisition; the used extent is read
+   from the data rather than stored a second time, so slack is
+   `view.limit - used` and both terms are already available. The consequence to
+   hold onto: a sub-view of a variable-length region must be acquired with the
+   region's *maximum* extent, or a grow-in-place fails its own bounds check.
+   `docs/decisions/0008-slack-tracking.md`.
 5. **Bit-level offsets in the pin syntax.** `@ 0x14` is a byte offset. Does
    `@ 0x14:3` (byte 0x14, bit 3) earn its keep? Probably yes for registers.
 6. ~~**Non-power-of-two integer widths above 8 bits.**~~ **RESOLVED.** A width

@@ -25,6 +25,7 @@ bitorder	= "msb_first" | "lsb_first" ;
 decl		= const_decl
 	| enum_decl
 	| struct_decl
+	| endian_marker_decl
 	| codec_decl			(* PHASE 7 *)
 	| register_decl			(* PHASE 10 *)
 	| requirement ;
@@ -36,7 +37,7 @@ enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
 
 struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 
-member		= field | reserved | block | variant | tag_field ;
+member		= field | reserved | marker_field | block | variant | tag_field ;
 
 field		= type_ref ident [ array_spec ] [ pin ] [ attrs ] ";" ;
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
@@ -97,8 +98,19 @@ varint_prop	= "encoding" "=" ident
 	| "max_bits" "=" digits
 	| "minimal" ;
 
-(* Section 8.3, PHASE 4 *)
-endian_marker_decl = "endian_marker" ident ":" scalar_type "{" { ident "=" expr "," } "}" ;
+(* Section 8.3. Exactly two members, named `little` and `big`: naming them
+ * anything else would leave the compiler guessing which is which, and a wrong
+ * guess here is undetectable at runtime. The backing type must be a whole
+ * number of bytes, because the marker is read before its own byte order is
+ * known. *)
+endian_marker_decl = "endian_marker" ident ":" scalar_type "{"
+	"little" "=" expr ","
+	"big" "=" expr [ "," ]
+"}" ;
+
+(* A struct declares the marker's storage, and scopes itself to it. *)
+marker_field	= "endian_marker" ident [ attrs ] ";" ;
+endian_from	= "endian" "=" "from" "(" ident ")" ;
 
 (* Section 13.1, PHASE 7. The signature and its implementation are separate
  * declarations, which is what makes a built-in algorithm replaceable. *)
