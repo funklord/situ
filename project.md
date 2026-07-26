@@ -204,10 +204,10 @@ struct Header {
     MsgType  type;
     Flags    flags;
     u16      length   [max = MAX_PAYLOAD];
-    u32      seq      @ 0x06;          // pin: assert solver agrees
+    u32      seq      @ 0x05;          // pin: assert solver agrees
 }
 
-require size(Header) == 10;
+require size(Header) == 9;
 require absolute_static(Header);
 require in_place(Header.seq);
 ```
@@ -219,6 +219,17 @@ struct Record {
     u32  id;
     u16  kind;
     u16  value;
+}
+
+// The header of 5.1 plus the element count this message needs, which makes it
+// 11 bytes with `seq` at 0x07.
+struct Header {
+    u8       version  [must_eq = 1];
+    MsgType  type;
+    Flags    flags;
+    u16      length   [max = MAX_PAYLOAD];
+    u16      rec_count;
+    u32      seq      @ 0x07;
 }
 
 struct Message {
@@ -330,6 +341,24 @@ pin           = "@" expr ;
 attrs         = "[" attr { "," attr } "]" ;
 attr          = ident [ "=" expr ] ;
 
+(* `array_spec` and `attrs` both open with "[", so this grammar is ambiguous as
+   written: `u8 x [foo];` is either an array of `foo` elements or a scalar
+   carrying the flag `foo`. Resolved by the attribute vocabulary, which is
+   closed and fixed by the language:
+
+     a bracket group is an attribute list when it holds "=" or "," at bracket
+     depth 1, or when it holds exactly one identifier and that identifier is a
+     known attribute name. Otherwise it is an array spec.
+
+   "=" and "," cannot occur at the top level of a size expression -- "==" is a
+   distinct token and an array has exactly one size -- so only the lone
+   identifier is genuinely ambiguous, and the vocabulary decides it. Every
+   bare-identifier bracket in this document resolves correctly under the rule.
+
+   A `const` whose name collides with an attribute name is rejected at its
+   declaration, which kills the residual ambiguity at the source rather than at
+   each use. See docs/decisions/0006-bracket-disambiguation.md. *)
+
 type_ref      = scalar_type | ident ;
 scalar_type   = uint | sint | float | bitfield | "bool" | "byte" ;
 uint          = "u" digits ;          (* u1..u64, non-power-of-2 allowed *)
@@ -353,13 +382,19 @@ requirement   = ( "require" | "assert" ) capability_expr ";" ;
 
 ### 8.1 Scalars
 
-- `u1` .. `u64`, `i1` .. `i64`. Non-power-of-two widths are legal and imply
-  bit packing (`u3`, `u12`, `u48`).
+- `u1` .. `u64`, `i1` .. `i64`. Non-power-of-two widths are legal.
 - `f16`, `f32`, `f64` (IEEE 754).
 - `bool` is `u1` with value constraint; `byte` is an alias for `u8` with
   `endian` irrelevant.
-- Widths >= 8 that are multiples of 8 are byte-aligned by default; others
-  participate in bit packing with the surrounding fields.
+- **A width divisible by 8 is a byte-aligned scalar; every other width
+  participates in bit packing with the surrounding fields.** So `u24` and `u48`
+  are ordinary byte-aligned scalars, and `u3`, `u12` and `u20` are bit packed.
+  What decides it is whether the width is a whole number of bytes, not whether
+  it is a power of two.
+- A bit-packed width above 8 bits cannot fit inside one byte at any offset, so
+  it always straddles and therefore always needs `[allow_straddle]`
+  (Section 8.2). That is the intended gate: the cost is reported rather than the
+  width being refused. See `docs/decisions/0005-integer-widths.md`.
 - OPEN: fixed-point (`q16_16`) and BCD. Deferred to a later phase; do not
   implement in v0 but leave the type table extensible.
 
@@ -818,7 +853,8 @@ These are normative. Implement them as a table, not as scattered conditionals.
 | non-native endian scalar | `repr := ValueConverted` |
 | bit field | `repr := ValueConverted`, `atomic := NonAtomic`, `mutate := max(mutate, InPlaceFixed)` but write is RMW |
 | straddling bit field | as above, plus `atomic := NonAtomic` and a warning |
-| unaligned multi-byte scalar | `align := Unaligned` |
+| unaligned multi-byte scalar | `align := Unaligned`, `atomic := NonAtomic` |
+| scalar whose width is not 8, 16, 32 or 64 | `atomic := NonAtomic` |
 | array `[N]` const | element vectors preserved; `offset` of element k is base + k*size |
 | array `[expr]` | elements `offset := FrameStatic`; **all following members** `offset := Dynamic`, `address := Unstable` |
 | array `[remaining]` | `size := Bounded(0, frame_remaining)`; must be last in frame |
@@ -850,9 +886,9 @@ islands of staticness work.
 For 5.2 `Message`:
 
 ```
-Message.hdr              offset=AbsoluteStatic(0)  size=Fixed(10)   mutate=InPlaceFixed
-Message.hdr.seq          offset=AbsoluteStatic(6)  repr=ValueConverted (big endian)
-Message.opts             offset=AbsoluteStatic(10) size=Bounded(0,1500) mutate=Shifting
+Message.hdr              offset=AbsoluteStatic(0)  size=Fixed(11)   mutate=InPlaceFixed
+Message.hdr.seq          offset=AbsoluteStatic(7)  repr=ValueConverted (big endian)
+Message.opts             offset=AbsoluteStatic(11) size=Bounded(0,1500) mutate=Shifting
 Message.recs             offset=Dynamic            access=Random
 Message.recs[]           offset=FrameStatic(0)     size=Fixed(8)    address=FrameStable
 Message.recs[].value     offset=FrameStatic(6)     mutate=InPlaceFixed
@@ -1736,9 +1772,21 @@ usable entry points.
   self-contained. The parent injects values via environment export for Make and
   via cache variables for CMake. **No shared include files between
   sub-projects.**
-- Beware the GNU Make `LD` quirk: the built-in default `LD=ld` means `?=` never
-  fires. Use `$(origin LD)` to distinguish a built-in default from an explicit
-  user choice.
+- Beware the GNU Make built-in defaults. `CC=cc`, `AR=ar` and `LD=ld` are all
+  defined by Make itself, so `?=` never fires for any of them and a cross build
+  silently uses the host tools while reporting success. Use `$(origin ...)` on
+  each to distinguish a built-in default from an explicit user choice:
+
+  ```make
+  ifeq ($(origin CC),default)
+  CC := $(CROSS_COMPILE)gcc
+  endif
+  ```
+
+  A parent that compiles nothing should export a toolchain variable only when
+  `origin` shows the user actually chose it; exporting unconditionally pushes
+  the host tools into every sub-project's environment and defeats their own
+  `CROSS_COMPILE` handling.
 - Cross-compilation must work out of the box for aarch64; the generated code
   and runtime must build clean for a Cortex-A55 target with
   `-Wall -Wextra -Werror -Wconversion -Wsign-conversion`.
@@ -2007,9 +2055,13 @@ that depends on it.
    the view struct. Decide during phase 5.
 5. **Bit-level offsets in the pin syntax.** `@ 0x14` is a byte offset. Does
    `@ 0x14:3` (byte 0x14, bit 3) earn its keep? Probably yes for registers.
-6. **Non-power-of-two integer widths above 8 bits.** `u12` and `u48` are useful
-   and unambiguous when byte-aligned, less so when packed. Constrain to
-   byte-aligned only, or allow packed? Decide in phase 1.
+6. ~~**Non-power-of-two integer widths above 8 bits.**~~ **RESOLVED.** A width
+   divisible by 8 is a byte-aligned scalar, so `u24` and `u48` are ordinary
+   scalars. Every other width is bit packed and may sit at any bit offset, so
+   `u12` is legal; because it cannot fit inside one byte it always straddles,
+   and the straddle rule of Section 8.2 does the gating rather than a width
+   restriction. Section 8.1 amended to state the rule once instead of twice.
+   `docs/decisions/0005-integer-widths.md`.
 7. ~~**Whether `native` endian should be permitted at all.**~~ **RESOLVED.**
    Split into two constructs (Section 8.3): `endian native` for genuinely
    host-order formats, gated behind `[allow_host_dependent]` and non-canonical;

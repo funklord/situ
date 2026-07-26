@@ -3,8 +3,7 @@
 // The phase 1 acceptance schema. Every construct here is in the static subset,
 // and `situc dump-ast` must round-trip it exactly.
 //
-// DIVERGENCE FROM project.md. The example as printed asserts `seq @ 0x06` and
-// `size(Header) == 10`. Both are off by one. The declared fields are
+// The layout, for anyone checking the pin by hand:
 //
 //     version  u8       1 byte    at 0
 //     type     MsgType  1 byte    at 1   (enum : u8)
@@ -12,13 +11,8 @@
 //     length   u16      2 bytes   at 3
 //     seq      u32      4 bytes   at 5
 //
-// which totals 9 bytes with `seq` at 0x05. Reaching 0x06 and 10 would need a
-// padding byte, and section 8.4 is explicit that situ inserts none: layout is
-// exactly as declared.
-//
-// The field list below is verbatim from the document; only the pin and the size
-// requirement are corrected, so the layout this describes is unchanged and the
-// capability map is the one example 5.1 was always going to produce.
+// Nine bytes. Section 8.4 inserts no padding, so the layout is exactly as
+// declared and `seq` lands at 0x05.
 
 target buffer;
 endian big;

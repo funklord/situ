@@ -87,8 +87,9 @@ described above: it prevents nothing, because such a field still ends mid-byte.
 describing a 48-bit field as `u8[6]`, which loses the value semantics and the
 endianness handling.
 
-## Note for review
+## Confirmed
 
-This overrides one of two contradictory sentences in project.md section 8.1.
-Section 8.1's first sentence should be amended to match, or this decision
-revisited if the intent was the other way round.
+Reviewed and confirmed by the project owner: a width not divisible by 8 is bit
+packed. project.md section 8.1 has been amended to state the rule once instead
+of twice, and open question 6 is marked resolved. This decision now records the
+reasoning behind what the document says rather than a reading of it.

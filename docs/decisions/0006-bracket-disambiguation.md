@@ -97,8 +97,8 @@ size, otherwise an attribute. Rejected: it makes parsing depend on name
 resolution, so a schema's parse tree would change when an unrelated `const` is
 added or removed.
 
-## Note for review
+## Confirmed
 
-This resolves an ambiguity in project.md section 7 rather than in any schema. If
-the intended reading was different, the grammar should say so explicitly and
-this decision be revisited.
+Reviewed and confirmed by the project owner. project.md section 7 now states the
+disambiguation rule alongside the two productions it applies to, so the grammar
+no longer reads as ambiguous to someone who has not found this file.

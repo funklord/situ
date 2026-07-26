@@ -5,9 +5,9 @@
 // This is the example the whole frame-relative staticness design exists for,
 // and its expected capability map is the phase 5 acceptance criterion:
 //
-//   Message.hdr           offset=AbsoluteStatic(0)  size=Fixed(10)  mutate=InPlaceFixed
-//   Message.hdr.seq       offset=AbsoluteStatic(6)  repr=ValueConverted
-//   Message.opts          offset=AbsoluteStatic(10) size=Bounded(0,1500) mutate=Shifting
+//   Message.hdr           offset=AbsoluteStatic(0)  size=Fixed(11)  mutate=InPlaceFixed
+//   Message.hdr.seq       offset=AbsoluteStatic(7)  repr=ValueConverted
+//   Message.opts          offset=AbsoluteStatic(11) size=Bounded(0,1500) mutate=Shifting
 //   Message.recs          offset=Dynamic            access=Random
 //   Message.recs[]        offset=FrameStatic(0)     size=Fixed(8)   address=FrameStable
 //   Message.recs[].value  offset=FrameStatic(6)     mutate=InPlaceFixed
