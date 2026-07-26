@@ -38,10 +38,25 @@ become live as each phase lands.
 
 ```
 situc dump-ast examples/ipv4/ipv4.situ
+situc map      examples/ipv4/ipv4.situ
+situc map --format=summary examples/ntp/ntp.situ
 ```
 
-From phase 2, `situc map` will print the capability vector for every field,
-which is where these stop being documentation and start being the point.
+Each buildable example carries a committed `*.situ.map` beside its schema. That
+is the capability vector of every field, and it is the artifact worth reading:
+the maps are where these stop being documentation and start being the point.
+
+The map is regenerated and compared by the test suite, so a change to the
+compiler that moves a field or weakens an axis shows up as a reviewable diff in
+the same commit. Regenerate one with:
+
+```
+python3 -m situc.cli map examples/ipv4/ipv4.situ > examples/ipv4/ipv4.situ.map
+```
+
+Requirements the current build cannot decide are reported rather than passed
+over. Today that means the capability predicates, which need the lattice from
+phase 3; `situc map` names them and the phase that will check them.
 
 ## What they are for
 

@@ -18,7 +18,11 @@ from pathlib import Path
 INDENT_SUFFIXES = frozenset({".py", ".c", ".h", ".situ", ".ebnf"})
 INDENT_NAMES = frozenset({"Makefile"})
 
-TEXT_SUFFIXES = INDENT_SUFFIXES | frozenset({".md", ".json", ".toml", ".cfg", ".clangd"})
+# Capability maps are generated, and indented with spaces so their columns line
+# up; they get the ASCII and whitespace checks but not the tab rule.
+TEXT_SUFFIXES = INDENT_SUFFIXES | frozenset({
+	".md", ".json", ".toml", ".cfg", ".clangd", ".map",
+})
 
 SKIP_DIRS = frozenset({".git", "build", "__pycache__", ".mypy_cache", ".pytest_cache"})
 

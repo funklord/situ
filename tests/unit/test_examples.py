@@ -13,8 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from situc import capmap, requirements
 from situc.diagnostics import Source, SituError
 from situc.dump import dump
+from situc.layout import solve
 from situc.parser import parse
 from situc.unparse import unparse
 
@@ -86,6 +88,45 @@ def test_current_examples_state_their_requirements(path: Path) -> None:
 	"""
 	schema = parse(Source(str(path), path.read_text(encoding="ascii")))
 	assert schema.requirements(), f"{path.parent.name} states no requirements"
+
+
+@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+def test_current_examples_solve(path: Path) -> None:
+	solve(parse(Source(str(path), path.read_text(encoding="ascii"))))
+
+
+@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+def test_committed_map_is_current(path: Path) -> None:
+	"""The committed map must match what the compiler produces today.
+
+	This is the snapshot test that makes a capability regression appear as a
+	reviewable diff at the moment of editing, rather than as a performance
+	surprise months later (project.md section 18.1). The `situc map --check`
+	CLI that does the same thing for a user's own schemas is phase 9; this
+	covers the repository's own examples until then.
+	"""
+	committed = path.with_suffix(".situ.map")
+	assert committed.exists(), (
+		f"{path.parent.name} has no committed map; run:\n"
+		f"    python3 -m situc.cli map {path} > {committed}"
+	)
+
+	source = Source(str(path), path.read_text(encoding="ascii"))
+	schema = parse(source)
+	layout = solve(schema)
+	requirements.discharge(schema, layout)
+
+	assert capmap.render(schema, layout, source.path) == committed.read_text(
+		encoding="ascii"), (
+		f"the capability map of {path.parent.name} has changed; review the diff, "
+		f"then run:\n    python3 -m situc.cli map {path} > {committed}"
+	)
+
+
+@pytest.mark.parametrize("path", FUTURE, ids=ids(FUTURE))
+def test_future_examples_have_no_stale_map(path: Path) -> None:
+	"""A schema that does not build cannot have a map to commit."""
+	assert not path.with_suffix(".situ.map").exists()
 
 
 @pytest.mark.parametrize("path", FUTURE, ids=ids(FUTURE))

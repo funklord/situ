@@ -11,15 +11,16 @@ import argparse
 import sys
 from pathlib import Path
 
+from situc import capmap, requirements
 from situc.diagnostics import Source, SituError
 from situc.dump import dump
+from situc.layout import solve
 from situc.parser import parse
 from situc.unparse import unparse
 
 # Subcommands named in section 21 but not yet built, with the phase that adds
-# each one. Listed so `situc map` says "phase 2" rather than "invalid choice".
+# each one. Listed so `situc advise` says "phase 9" rather than "invalid choice".
 FUTURE_COMMANDS = {
-	"map":			2,
 	"build":		4,
 	"gen-tests":		4,
 	"gen-fuzz":		4,
@@ -48,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
 	dump_cmd.add_argument("--format", choices=("tree", "source"), default="tree",
 	                      help="structural dump, or the AST rendered back to situ source")
 
+	map_cmd = sub.add_parser("map", help="emit the capability map")
+	map_cmd.add_argument("schema", type=Path)
+	map_cmd.add_argument("--format", choices=("text", "summary"), default="text",
+	                     help="the committable map, or a per-struct digest")
+
 	for name in sorted(FUTURE_COMMANDS):
 		future = sub.add_parser(name, help=f"not yet implemented (phase {FUTURE_COMMANDS[name]})")
 		future.add_argument("args", nargs="*")
@@ -70,6 +76,26 @@ def cmd_dump_ast(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_map(args: argparse.Namespace) -> int:
+	source = read_source(args.schema)
+	schema = parse(source)
+	layout = solve(schema)
+
+	# Requirements are discharged before the map is printed: a schema whose
+	# budget is blown should fail rather than emit a map recording the breach.
+	outcomes = requirements.discharge(schema, layout)
+
+	if args.format == "summary":
+		sys.stdout.write(capmap.summary(layout))
+	else:
+		sys.stdout.write(capmap.render(schema, layout, source.path))
+
+	for diagnostic in requirements.warnings(outcomes) + requirements.deferrals(outcomes):
+		print(diagnostic.render(), file=sys.stderr)
+
+	return 0
+
+
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 
@@ -84,14 +110,20 @@ def main(argv: list[str] | None = None) -> int:
 		      "planned for phase 3 (project.md section 26)", file=sys.stderr)
 		return 2
 
+	commands = {
+		"dump-ast": cmd_dump_ast,
+		"map":      cmd_map,
+	}
+
+	handler = commands.get(args.command)
+	if handler is None:
+		raise AssertionError(f"unhandled command {args.command}")
+
 	try:
-		if args.command == "dump-ast":
-			return cmd_dump_ast(args)
+		return handler(args)
 	except SituError as exc:
 		print(exc.diagnostic.render(), file=sys.stderr)
 		return 1
-
-	raise AssertionError(f"unhandled command {args.command}")
 
 
 if __name__ == "__main__":

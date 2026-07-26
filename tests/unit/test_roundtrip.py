@@ -43,8 +43,8 @@ schema
 		field length : u16
 			attr max = MAX_PAYLOAD
 		field seq : u32
-			pin 0x06
-	require size(Header) == 10
+			pin 0x05
+	require size(Header) == 9
 	require absolute_static(Header)
 	require in_place(Header.seq)
 """

@@ -43,7 +43,6 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(("command", "phase"), [
-	("map",		2),
 	("build",	4),
 	("gen-tests",	4),
 	("advise",	9),

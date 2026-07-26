@@ -1,0 +1,17 @@
+# situ capability map v0
+# schema: arp.situ
+# axes:   offset size align repr atomic
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct ArpPacket size=28
+  ArpPacket.hardware_type                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ArpPacket.protocol_type                offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  ArpPacket.hardware_length              offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  ArpPacket.protocol_length              offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ArpPacket.operation                    offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  ArpPacket.sender_hardware              offset=AbsoluteStatic(0x08) size=Fixed(6) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  ArpPacket.sender_protocol              offset=AbsoluteStatic(0x0E) size=Fixed(4) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  ArpPacket.target_hardware              offset=AbsoluteStatic(0x12) size=Fixed(6) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  ArpPacket.target_protocol              offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic

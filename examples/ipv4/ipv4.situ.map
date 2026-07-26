@@ -1,0 +1,28 @@
+# situ capability map v0
+# schema: ipv4.situ
+# axes:   offset size align repr atomic
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct IPv4Address size=4
+  IPv4Address.octets                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
+struct IPv4Header size=20
+  IPv4Header.version                     offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.ihl                         offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.dscp                        offset=AbsoluteStatic(0x01) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.ecn                         offset=AbsoluteStatic(0x01:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.total_length                offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  IPv4Header.identification              offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  IPv4Header.<reserved0>                 offset=AbsoluteStatic(0x06) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.dont_fragment               offset=AbsoluteStatic(0x06:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.more_fragments              offset=AbsoluteStatic(0x06:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.fragment_offset             offset=AbsoluteStatic(0x06:3) size=Fixed(13bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  IPv4Header.time_to_live                offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  IPv4Header.protocol                    offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  IPv4Header.header_checksum             offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  IPv4Header.source                      offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  IPv4Header.source.octets               offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  IPv4Header.destination                 offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  IPv4Header.destination.octets          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
