@@ -1,0 +1,37 @@
+// Ethernet II frame header (IEEE 802.3).
+//
+// The simplest interesting case: everything is fixed width and byte aligned,
+// so every capability sits at its strongest value. Useful as the control
+// against which the other examples' losses can be read.
+
+target buffer;
+endian big;
+
+// Network byte order is big endian, so on a little-endian host every multi-byte
+// field here is repr = ValueConverted. The 48-bit address is not: it is a byte
+// array, so it stays MemoryIdentical and a caller may take a pointer to it.
+struct MacAddress {
+	u8  octets[6];
+}
+
+enum EtherType : u16 {
+	ipv4      = 0x0800,
+	arp       = 0x0806,
+	vlan      = 0x8100,
+	ipv6      = 0x86DD,
+}
+
+struct EthernetHeader {
+	MacAddress  destination;
+	MacAddress  source;
+	EtherType   ethertype;
+}
+
+require size(MacAddress) == 6;
+require size(EthernetHeader) == 14;
+require absolute_static(EthernetHeader);
+require canonical(EthernetHeader);
+
+// Every field is reachable in place: nothing before them is dynamic.
+require in_place(EthernetHeader.ethertype);
+require stable_address(EthernetHeader.source);

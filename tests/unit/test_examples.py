@@ -1,0 +1,109 @@
+"""Every schema in examples/ is exercised by the test suite.
+
+Examples rot silently otherwise: a schema nobody parses stops being true the
+first time the language moves. The ones needing a later phase are checked to be
+rejected naming that phase, so they pin the phase-gating behaviour instead of
+merely sitting there.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from situc.diagnostics import Source, SituError
+from situc.dump import dump
+from situc.parser import parse
+from situc.unparse import unparse
+
+EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+
+# `// STATUS: needs phase N.` marks the phase at which a schema becomes fully
+# buildable. A schema may be blocked by an earlier phase's construct first --
+# packet needs `codec` from phase 7 before it can reach the phase 8 crypto --
+# so the reported phase is bounded by the marker rather than equal to it.
+STATUS = re.compile(r"^// STATUS: needs phase (\d+)\.", re.MULTILINE)
+
+REPORTED_PHASE = re.compile(r"planned for phase (\d+)")
+
+
+def schemas() -> list[Path]:
+	found = sorted(EXAMPLES.glob("*/*.situ"))
+	assert found, "no example schemas found"
+	return found
+
+
+def required_phase(path: Path) -> int | None:
+	match = STATUS.search(path.read_text(encoding="ascii"))
+	return int(match.group(1)) if match else None
+
+
+def ids(paths: list[Path]) -> list[str]:
+	return [path.parent.name for path in paths]
+
+
+CURRENT = [path for path in schemas() if required_phase(path) is None]
+FUTURE  = [path for path in schemas() if required_phase(path) is not None]
+
+
+def test_every_example_directory_holds_a_schema() -> None:
+	directories = {path.parent for path in schemas()}
+	present     = {p for p in EXAMPLES.iterdir() if p.is_dir()}
+	assert directories == present
+
+
+def test_schema_is_named_after_its_directory() -> None:
+	"""Codegen will key output filenames off the directory, so keep them equal."""
+	for path in schemas():
+		assert path.stem == path.parent.name
+
+
+def test_both_groups_are_populated() -> None:
+	assert len(CURRENT) >= 8
+	assert len(FUTURE) >= 3
+
+
+@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+def test_current_examples_parse(path: Path) -> None:
+	parse(Source(str(path), path.read_text(encoding="ascii")))
+
+
+@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+def test_current_examples_round_trip(path: Path) -> None:
+	first = parse(Source(str(path), path.read_text(encoding="ascii")))
+	again = parse(Source(str(path), unparse(first)))
+	assert dump(again) == dump(first)
+
+
+@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+def test_current_examples_state_their_requirements(path: Path) -> None:
+	"""An example without a requirement is documentation, not a schema.
+
+	The requirements are what make the capability claims checkable once the
+	solver exists, so every example must carry at least one.
+	"""
+	schema = parse(Source(str(path), path.read_text(encoding="ascii")))
+	assert schema.requirements(), f"{path.parent.name} states no requirements"
+
+
+@pytest.mark.parametrize("path", FUTURE, ids=ids(FUTURE))
+def test_future_examples_are_rejected_naming_their_phase(path: Path) -> None:
+	phase = required_phase(path)
+	assert phase is not None
+
+	with pytest.raises(SituError) as caught:
+		parse(Source(str(path), path.read_text(encoding="ascii")))
+
+	rendered = caught.value.diagnostic.render()
+	assert "not yet implemented" in rendered
+
+	match = REPORTED_PHASE.search(rendered)
+	assert match is not None, f"no phase named in:\n{rendered}"
+
+	reported = int(match.group(1))
+	assert 2 <= reported <= phase, (
+		f"{path.parent.name} is marked buildable at phase {phase}, but the parser "
+		f"reported phase {reported}:\n{rendered}"
+	)

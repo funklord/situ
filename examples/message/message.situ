@@ -1,0 +1,83 @@
+// project.md example 5.2: a dynamic frame containing static islands.
+//
+// STATUS: needs phase 5. `remaining` and counted arrays are rejected until then.
+//
+// This is the example the whole frame-relative staticness design exists for,
+// and its expected capability map is the phase 5 acceptance criterion:
+//
+//   Message.hdr           offset=AbsoluteStatic(0)  size=Fixed(10)  mutate=InPlaceFixed
+//   Message.hdr.seq       offset=AbsoluteStatic(6)  repr=ValueConverted
+//   Message.opts          offset=AbsoluteStatic(10) size=Bounded(0,1500) mutate=Shifting
+//   Message.recs          offset=Dynamic            access=Random
+//   Message.recs[]        offset=FrameStatic(0)     size=Fixed(8)   address=FrameStable
+//   Message.recs[].value  offset=FrameStatic(6)     mutate=InPlaceFixed
+//   Message.trailer       offset=Dynamic            size=Bounded(0,...)
+//
+// The point: `opts` is variable length, so everything after it loses
+// AbsoluteStatic. But `Record` is fully static once its base is resolved, so
+// the elements keep fixed interior offsets relative to the frame. That is the
+// island of staticness, and it is the common case in real protocols rather
+// than an exception.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+const MAX_PAYLOAD = 1500;
+
+enum MsgType : u8 {
+	hello = 0x01,
+	data  = 0x02,
+	close = 0x03,
+}
+
+struct Flags {
+	bit       urgent;
+	bit       ack;
+	u3        priority;
+	reserved  u3  [must_be_zero];
+}
+
+struct Header {
+	u8       version  [must_eq = 1];
+	MsgType  type;
+	Flags    flags;
+	u16      length   [max = MAX_PAYLOAD];
+	u16      rec_count;
+	u32      seq;
+}
+
+struct Record {
+	u32  id;
+	u16  kind;
+	u16  value;
+}
+
+struct Message {
+	Header   hdr;
+	u8       opts[hdr.length];        // dynamic: shifts everything after it
+	Record   recs[hdr.rec_count];     // frame-relative static elements
+	u8       trailer[remaining];
+}
+
+require size(Record) == 8;
+
+// Passes: Record is fully static once its base is resolved.
+require frame_static(Message.recs[]);
+require in_place(Message.recs[].value);
+require random_access(Message.recs);
+
+// Fails, deliberately, and the diagnostic is the deliverable. Expected blame:
+//
+//   error: requirement not satisfied
+//     = offset(Message.recs) is Dynamic, required AbsoluteStatic
+//     = caused by: Message.opts has size Bounded(0,1500)
+//     = 2 further members lost absolute addressing: recs, trailer
+//     = remedy: move `opts` after `recs` and `trailer`
+//               cost: 0 bytes; restores AbsoluteStatic for 2 members
+//     = remedy: pin `opts` to a fixed size with [size = 1500]
+//               cost: +1500 bytes typical, +0 worst case
+//
+// assert rather than require, so the schema keeps building while it documents
+// the known cost.
+assert absolute_static(Message.recs);

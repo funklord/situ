@@ -1,0 +1,107 @@
+// A sensor telemetry frame, designed rather than described.
+//
+// The other examples document formats that already exist. This one is the
+// workflow project.md section 1 calls the product: a protocol under design,
+// with the capability budget written into the schema as requirements so a
+// later edit cannot quietly regress it.
+//
+// Every design choice here trades compactness for addressability, and each one
+// is annotated with what it bought.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+const PROTOCOL_VERSION = 2;
+const CHANNEL_COUNT    = 8;
+const DEVICE_ID_BYTES  = 8;
+
+enum FrameKind : u8 {
+	sample      = 0x01,
+	heartbeat   = 0x02,
+	fault       = 0x03,
+	calibration = 0x04,
+}
+
+enum Quality : u2 {
+	good        = 0,
+	degraded    = 1,
+	stale       = 2,
+	invalid     = 3,
+}
+
+// One byte of status. The bits are grouped so the whole byte closes exactly:
+// nothing straddles, so no [allow_straddle] and every write is a single-byte
+// read-modify-write.
+struct Status {
+	bit      calibrated;
+	bit      self_test_passed;
+	bit      power_good;
+	bit      over_temperature;
+	Quality  quality;
+	reserved u2  [must_be_zero];
+}
+
+// A fixed-size reading. Deliberately not a varint: a varint would cost two
+// bytes across most of this range anyway, and would make every channel after
+// the first one dynamically positioned. See the note at the bottom.
+struct Reading {
+	i16      value;
+	Status   status;
+	u8       channel;
+}
+
+struct TelemetryFrame {
+	u8         version  [must_eq = PROTOCOL_VERSION];
+	FrameKind  kind;
+	u16        sequence;
+
+	// A 64-bit monotonic microsecond counter, split so the schema does not
+	// pretend situ has a time type.
+	u32        timestamp_high;
+	u32        timestamp_low;
+
+	u8         device_id[DEVICE_ID_BYTES];
+
+	// The readings array is a compile-time constant length, which is what
+	// keeps `checksum` at a fixed offset. A device with fewer live channels
+	// sends Quality.invalid rather than a shorter frame.
+	Reading    readings[CHANNEL_COUNT]  @ 0x14;
+
+	u32        checksum;
+}
+
+require size(Status) == 1;
+require size(Reading) == 4;
+require size(TelemetryFrame) == 56;
+
+// The budget. These are `require` rather than `assert` on purpose: they are a
+// build-time gate, so inserting a variable-length field above `readings` fails
+// the build rather than silently costing the fleet its in-place updates.
+require absolute_static(TelemetryFrame);
+require canonical(TelemetryFrame);
+require in_place(TelemetryFrame.readings[].value);
+require stable_address(TelemetryFrame.device_id);
+require aligned(TelemetryFrame.timestamp_high, 4);
+require random_access(TelemetryFrame.readings);
+
+// Reordering note: `checksum` is last so that everything it covers precedes
+// it. Putting it in the header, as many protocols do, would mean computing it
+// over bytes that come after it -- legal, but it forces a two-pass writer.
+
+// PHASE 8: `checksum u32 [covers(version, ..., readings)]` gives this field the
+// tag-dirty machinery, so mutating any covered byte marks it stale and the
+// generated API refuses to hand out a transmittable buffer until it is
+// recomputed. That is the whole reason to model a CRC as a tag rather than a
+// plain field (project.md section 13.4).
+
+// THE TRADE, stated explicitly. A compact encoding of this frame would use a
+// varint sequence, elide absent channels, and pack the channel number into the
+// status byte. That would save perhaps 20 bytes on a typical frame and cost:
+//   - AbsoluteStatic on everything after the first elided channel
+//   - random access to readings, which become Sequential
+//   - in-place mutation of any reading, which becomes Shifting
+//   - a fixed buffer size, since the frame becomes Bounded rather than Fixed
+// For a device that rewrites one reading in place and DMAs the frame out, that
+// is a bad trade. Situ's value is making it visible per field rather than
+// discovering it after the firmware ships.

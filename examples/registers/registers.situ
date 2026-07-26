@@ -1,0 +1,57 @@
+// project.md example 15.2: memory-mapped registers.
+//
+// STATUS: needs phase 10. `register` is rejected until then.
+//
+// The other half of the thesis. SystemRDL and CMSIS-SVD already have a mature
+// vocabulary for access modes and side effects; what nobody did was unify it
+// with wire-protocol description so that one capability lattice answers both.
+//
+// The payoff is concrete. `access_width = 32` plus a one-bit field means
+// setting that bit needs a read-modify-write. `no_rmw` says reads have side
+// effects, so RMW is unsafe. Those two facts together make the field
+// mutate = RewriteRequired, and the generated API therefore exposes no
+// `set_enable()` at all -- only a whole-word write the caller composes.
+//
+// Setting one bit becomes a compile error rather than a runtime hazard, and
+// the header says why. That is the same refusal-with-an-explanation the buffer
+// target gives for a field behind a varint.
+
+target mmio;
+endian little;
+bit_order lsb_first;
+
+register CtrlReg @ 0x00 {
+	width        = 32;
+	access_width = 32;          // partial access forbidden implicitly
+	volatile;
+	no_rmw;                     // reads have side effects; RMW unsafe
+
+	bit       enable  [rw];
+	bit       start   [wo, on_write = trigger];
+	u3        mode    [rw];
+	bit       busy    [ro];
+	bit       error   [w1c];
+	reserved  u25     [preserve];
+}
+
+register StatusReg @ 0x04 {
+	width        = 32;
+	access_width = 32;
+	volatile;
+
+	bit       ready       [ro];
+	bit       fifo_empty  [ro];
+	bit       fifo_full   [ro];
+	u8        fill_level  [ro];
+	reserved  u21         [preserve];
+}
+
+// Fails, and the message is the product:
+//   cannot synthesize single-bit write: access_width=32 and no_rmw on CtrlReg
+require in_place(CtrlReg.enable);
+
+// `w1c` generates clear_error() rather than set_error(false), because the write
+// semantics are not assignment.
+// `wo` fields generate no getter; `ro` fields generate no setter.
+// `volatile` reads must not be cached or reordered.
+assert immutable(StatusReg.ready);

@@ -1,0 +1,52 @@
+// ICMP echo request and reply (RFC 792).
+//
+// Eight bytes, and the smallest example of a field whose meaning depends on an
+// earlier field: the last four bytes are an identifier and a sequence number
+// for echo messages, and something else entirely for destination-unreachable
+// or redirect messages.
+//
+// That is a `variant switch (type)`, which phase 6 adds. Until then this
+// schema describes the echo shape only and says so.
+
+target buffer;
+endian big;
+
+enum IcmpType : u8 {
+	echo_reply              = 0,
+	destination_unreachable = 3,
+	redirect                = 5,
+	echo_request            = 8,
+	time_exceeded           = 11,
+	parameter_problem       = 12,
+}
+
+struct IcmpEcho {
+	IcmpType  type  [must_eq = IcmpType.echo_request];
+	u8        code  [must_be_zero];
+	u16       checksum;
+	u16        identifier;
+	u16       sequence;
+}
+
+require size(IcmpEcho) == 8;
+require absolute_static(IcmpEcho);
+require in_place(IcmpEcho.sequence);
+
+// The checksum covers the whole message including the payload, so mutating
+// `sequence` invalidates it. Modelled as a plain field here, which means the
+// caller is responsible for recomputation and nothing warns them.
+//
+// PHASE 8: declaring it `checksum u16 [covers(...)]` instead gives the field
+// the tag-dirty machinery of section 14.2 -- mutating a covered field marks
+// the checksum stale and the generated API refuses to hand out a transmittable
+// buffer until it is recomputed. That is the same mechanism as a cryptographic
+// tag, minus the cryptography (section 13.4).
+
+// PHASE 6: the body is
+//     variant body switch (type) {
+//         case IcmpType.echo_request: EchoBody echo;
+//         case IcmpType.time_exceeded: UnusedThenDatagram exceeded;
+//         default: error;
+//     }
+// All the arms are four bytes, so unusually for a variant this one costs
+// nothing on the offset axis.

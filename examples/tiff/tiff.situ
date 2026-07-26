@@ -1,0 +1,49 @@
+// TIFF header (TIFF 6.0), the byte-order-marker case.
+//
+// STATUS: needs phase 4. `endian_marker` is rejected until then.
+//
+// TIFF is the reason `endian_marker` is a first-class construct rather than a
+// special case of `endian native` (project.md section 8.3). The first two bytes
+// say which byte order the rest of the file uses, so endianness is resolved at
+// parse time from a value in the data.
+//
+// The saving grace, and the reason this is cheap to support: endianness never
+// changes extent. `offset` and `size` are untouched, so a byte-order-marked
+// format costs nothing on the axes that matter most. What it costs is:
+//
+//   repr      := ConditionallyConverted(byte_order)  for every field in scope
+//   canonical := CanonicalGiven(byte_order)
+//
+// and getters that return by value only, never by pointer.
+
+target buffer;
+
+endian_marker byte_order : u16 {
+	little = 0x4949,        // "II"
+	big    = 0x4D4D,        // "MM"
+}
+
+struct TiffHeader [endian = from(byte_order)] {
+	endian_marker  byte_order;
+	u16            magic       [must_eq = 42];
+	u32            ifd_offset;
+}
+
+require size(TiffHeader) == 8;
+require absolute_static(TiffHeader);
+
+// This is the distinction section 11.1 insists on. The format admits two
+// encodings of the same value, so it is not canonical; but exactly one encoding
+// is valid given the marker, and a writer always emits host order plus the
+// matching marker, so the writer is deterministic.
+//
+// The consequence, stated as a rule: verify over received bytes, never over
+// re-encoded bytes.
+require deterministic_writer(TiffHeader);
+assert canonical(TiffHeader);           // reports CanonicalGiven(byte_order)
+
+// Phase 4 also emits, per marker type, a host-order constant and accessor so a
+// writer can populate the field without hardcoding:
+//
+//     #define SITU_TIFFHEADER_BYTE_ORDER_HOST  0x4949   /* on a LE build */
+//     uint16_t situ_TiffHeader_byte_order_host(void);

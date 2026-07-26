@@ -11,8 +11,8 @@ diagnostics are the product.
 
 from __future__ import annotations
 
-from situc import ast
-from situc.diagnostics import Source, Span, SituError, error, not_yet_implemented
+from situc import ast, wellformed
+from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
 from situc.types import WidthError, lookup
 
@@ -153,7 +153,7 @@ class Parser:
 		while self.current.kind is not TokenKind.EOF:
 			schema.decls.append(self.parse_decl())
 
-		check_no_recursive_types(schema)
+		wellformed.check(schema)
 		return schema
 
 	def parse_decl(self) -> ast.Decl:
@@ -563,75 +563,6 @@ class Parser:
 		close = self.expect_symbol(")", "to close the argument list")
 		return ast.Call(Span(self.source, name.span.start, close.span.end),
 		                name.text, tuple(args))
-
-
-# ---------------------------------------------------------------------------
-# Well-formedness checks that need the whole schema
-# ---------------------------------------------------------------------------
-
-Structs = dict[str, ast.StructDecl]
-
-
-def check_no_recursive_types(schema: ast.Schema) -> None:
-	"""Reject recursive struct declarations (project.md section 2).
-
-	Recursive types make size and capability computation non-terminating, so
-	they are rejected at parse time rather than diagnosed later by a solver that
-	failed to converge.
-	"""
-	structs = {decl.name: decl for decl in schema.structs()}
-
-	for name in structs:
-		cycle = _find_cycle(name, structs, [])
-		if cycle is not None:
-			raise _recursion_error(cycle, structs)
-
-
-def _find_cycle(name: str, structs: Structs, path: list[str]) -> list[str] | None:
-	if name in path:
-		return path[path.index(name) :] + [name]
-
-	decl = structs.get(name)
-	if decl is None:
-		return None
-
-	for referenced in _referenced_structs(decl.members, structs):
-		found = _find_cycle(referenced, structs, path + [name])
-		if found is not None:
-			return found
-
-	return None
-
-
-def _referenced_structs(members: tuple[ast.Member, ...], structs: Structs) -> list[str]:
-	names: list[str] = []
-	for member in members:
-		if isinstance(member, ast.PositionalBlock):
-			names.extend(_referenced_structs(member.members, structs))
-		elif isinstance(member, ast.Field) and member.type_ref.name in structs:
-			names.append(member.type_ref.name)
-	return names
-
-
-def _recursion_error(cycle: list[str], structs: Structs) -> SituError:
-	decl  = structs[cycle[0]]
-	chain = " -> ".join(cycle)
-
-	if len(cycle) == 2:
-		summary = f"struct `{cycle[0]}` contains itself"
-	else:
-		summary = f"struct `{cycle[0]}` is recursive through {chain}"
-
-	return error(
-		summary,
-		decl.span,
-		label = "declared here",
-		notes = [
-			f"cycle: {chain}",
-			"recursive types make size and capability computation "
-			"non-terminating, so they are rejected (project.md section 2)",
-		],
-	)
 
 
 def parse(source: Source) -> ast.Schema:

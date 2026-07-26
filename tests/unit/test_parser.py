@@ -163,7 +163,7 @@ def test_empty_struct() -> None:
 
 
 def test_named_type_field() -> None:
-	field = first_field("struct S { MsgType type; }")
+	field = first_field("enum MsgType : u8 { a = 1, } struct S { MsgType type; }")
 	assert field.type_ref.name == "MsgType"
 	assert not field.type_ref.is_scalar
 

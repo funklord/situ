@@ -1,0 +1,72 @@
+// DNS message header (RFC 1035).
+//
+// Twelve bytes of header in front of a body that situ cannot describe
+// statically at all: DNS names use length-prefixed labels with a compression
+// scheme that lets a name point backwards into the message. That is a pointer
+// graph, not a layout, and it is exactly the kind of thing project.md
+// section 2 puts out of scope.
+//
+// The header is worth describing anyway, and the honest boundary is worth
+// recording. See the note at the bottom.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+enum Opcode : u4 {
+	query  = 0,
+	iquery = 1,
+	status = 2,
+	notify = 4,
+	update = 5,
+}
+
+enum ResponseCode : u4 {
+	no_error        = 0,
+	format_error    = 1,
+	server_failure  = 2,
+	name_error      = 3,
+	not_implemented = 4,
+	refused         = 5,
+}
+
+struct DnsHeader {
+	u16           id;
+
+	// One byte: response flag, opcode, three one-bit flags.
+	bit           is_response;
+	Opcode        opcode;
+	bit           authoritative;
+	bit           truncated;
+	bit           recursion_desired;
+
+	// One byte: the recursion flag, three unused bits, the response code.
+	bit           recursion_available;
+	reserved      u3    [must_be_zero];
+	ResponseCode  response_code;
+
+	u16           question_count;
+	u16           answer_count;
+	u16           authority_count;
+	u16           additional_count;
+}
+
+require size(DnsHeader) == 12;
+require absolute_static(DnsHeader);
+
+// Both packed bytes are exactly eight bits wide, so nothing straddles and no
+// [allow_straddle] is needed. The 4-bit enums sit inside one byte each.
+require in_place(DnsHeader.response_code);
+require in_place(DnsHeader.answer_count);
+
+// The reserved bits are rejected on parse rather than preserved. Section 14.5
+// is deliberate about this: every ignored bit is a malleability surface, and
+// DNS responses are a well-known covert channel.
+require canonical(DnsHeader);
+
+// OUT OF SCOPE: the question and answer sections. A DNS name is a chain of
+// length-prefixed labels which may terminate in a two-byte pointer to an
+// earlier offset in the same message. Resolving one means following a pointer
+// graph, which situ does not model at any phase -- project.md section 2 rules
+// out object graphs and cyclic references. A real dissector would treat the
+// body as `opaque` (phase 6) and hand it to a name parser.

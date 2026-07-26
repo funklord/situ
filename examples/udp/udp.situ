@@ -1,0 +1,30 @@
+// UDP header (RFC 768).
+//
+// Four fields, eight bytes, no bit packing. Included because it is the
+// smallest schema that still has a length field pointing at a payload the
+// schema does not describe, which is the commonest shape in real protocols.
+
+target buffer;
+endian big;
+
+struct UdpHeader {
+	u16  source_port;
+	u16  destination_port;
+	u16  length  [min = 8];
+	u16  checksum;
+}
+
+require size(UdpHeader) == 8;
+require absolute_static(UdpHeader);
+require canonical(UdpHeader);
+require aligned(UdpHeader.length, 2);
+
+// Every field is freely mutable: nothing here is covered by an authentication
+// tag, and the UDP checksum is not modelled as one because it is optional over
+// IPv4. A schema that wanted the checksum maintained automatically would
+// declare it `checksum` and gain the dirty-tracking of section 14.2.
+require in_place(UdpHeader.checksum);
+
+// PHASE 5: the payload is `u8 payload[length - 8];`, which makes nothing after
+// it static -- but there is nothing after it, so UDP pays no price for being
+// variable length. That is not an accident of the design.

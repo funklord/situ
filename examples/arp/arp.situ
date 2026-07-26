@@ -1,0 +1,51 @@
+// ARP packet for IPv4 over Ethernet (RFC 826).
+//
+// ARP is generic over address sizes -- `hardware_length` and `protocol_length`
+// declare how long the four address fields are -- but in practice it is only
+// ever used with 6-byte MAC and 4-byte IPv4 addresses.
+//
+// This schema pins those two fields with [must_eq], which turns the generic
+// format into a fully static one. That is the compact-versus-mutable tradeoff
+// of project.md section 27.8 resolved in favour of static: an expression whose
+// interval is a single point is a compile-time constant even though it
+// textually references a field (section 10).
+
+target buffer;
+endian big;
+
+enum HardwareType : u16 {
+	ethernet = 1,
+}
+
+enum Operation : u16 {
+	request = 1,
+	reply   = 2,
+}
+
+struct ArpPacket {
+	HardwareType  hardware_type    [must_eq = HardwareType.ethernet];
+	u16           protocol_type    [must_eq = 0x0800];
+	u8            hardware_length  [must_eq = 6];
+	u8            protocol_length  [must_eq = 4];
+	Operation     operation;
+
+	u8            sender_hardware[6];
+	u8            sender_protocol[4];
+	u8            target_hardware[6];
+	u8            target_protocol[4];
+}
+
+require size(ArpPacket) == 28;
+require absolute_static(ArpPacket);
+require canonical(ArpPacket);
+
+// The addresses land at 8, 14, 18 and 24. Only two of the four are 4-byte
+// aligned, which is a property of the wire format: the 6-byte hardware
+// addresses push everything after them off alignment.
+require aligned(ArpPacket.sender_hardware, 2);
+assert aligned(ArpPacket.target_protocol, 4);
+
+// PHASE 5: without the [must_eq] pins the address fields become
+// `u8 sender_hardware[hardware_length];` and everything after the first one
+// loses AbsoluteStatic. Comparing the two capability maps is the clearest
+// demonstration of what pinning a length buys.

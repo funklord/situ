@@ -1,0 +1,71 @@
+// IPv4 header (RFC 791), fixed portion.
+//
+// The bit-packing example. Two things here are worth the reader's attention:
+//
+// 1. `fragment_offset` is 13 bits and therefore cannot fit inside one byte at
+//    any starting position, so the struct must declare [allow_straddle].
+//    Straddling forces a multi-byte read-modify-write, which is why situ makes
+//    the author say so rather than discovering it in generated code.
+//
+// 2. Options are what make the real header variable length. They are omitted
+//    here deliberately: this schema describes the 20-byte fixed portion only,
+//    and `ihl` is the field that would drive the options array once phase 5
+//    lands. See the note at the bottom.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+enum Protocol : u8 {
+	icmp = 1,
+	igmp = 2,
+	tcp  = 6,
+	udp  = 17,
+	gre  = 47,
+	esp  = 50,
+	ah   = 51,
+}
+
+struct IPv4Address {
+	u8  octets[4];
+}
+
+struct IPv4Header [allow_straddle] {
+	u4        version  [must_eq = 4];
+	u4        ihl      [min = 5];
+	u6        dscp;
+	u2        ecn;
+	u16       total_length;
+	u16       identification;
+
+	// The flags byte and the fragment offset share two bytes: 1 + 1 + 1 + 13.
+	reserved  bit      [must_be_zero];
+	bit       dont_fragment;
+	bit       more_fragments;
+	u13       fragment_offset;
+
+	u8        time_to_live;
+	Protocol  protocol;
+	u16       header_checksum;
+	IPv4Address  source       @ 0x0C;
+	IPv4Address  destination  @ 0x10;
+}
+
+require size(IPv4Header) == 20;
+require absolute_static(IPv4Header);
+
+// The addresses are byte arrays at byte-aligned offsets, so they keep the
+// strongest representation despite the bit packing above them.
+require aligned(IPv4Header.source, 4);
+require in_place(IPv4Header.time_to_live);
+
+// `fragment_offset` straddles, so writing it is a read-modify-write of two
+// bytes and it can never be atomic. Asserted rather than required so the
+// schema documents the cost without failing the build.
+assert atomic(IPv4Header.fragment_offset);
+
+// PHASE 5: the variable part. Once counted arrays land this becomes
+//     u8 options[(ihl - 5) * 4];
+// and every byte after it loses AbsoluteStatic. `header_checksum` covering a
+// variable range is the reason a checksum is modelled with the tag machinery
+// (project.md section 13.4) rather than as a plain field.

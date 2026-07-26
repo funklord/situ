@@ -1,0 +1,89 @@
+// project.md example 5.3: a sealed packet.
+//
+// STATUS: needs phase 8. `codec`, `authenticated`, `sealed` and `tag` are
+// rejected until then.
+//
+// The security position in one file. Three properties are load-bearing:
+//
+// 1. THE DOOM PRINCIPLE AS A STAGE GATE. The interior of a sealed region is
+//    stage = VerifyGated, and the generated API provides no way to obtain a
+//    view into it before the tag verifies. "Parse attacker-controlled plaintext
+//    before authenticating it" is not discouraged here; it is unrepresentable.
+//
+// 2. IN-PLACE MUTATION AND AUTHENTICATION ARE IN CONFLICT. Touch one byte
+//    covered by a tag and the tag is stale. Fields outside coverage stay freely
+//    mutable, which is exactly why real protocols put routing headers and hop
+//    counters outside coverage -- and situ makes that design pressure visible.
+//
+// 3. CTR-MODE SEEKABILITY BUYS INTERIOR ADDRESSING. Because the codec is
+//    length-preserving, byte-granular and linearly seekable, the sealed
+//    interior keeps fixed offsets and single-field in-place mutation. A
+//    CBC-with-padding codec would not, and the capability map would say so.
+
+target buffer;
+endian big;
+
+codec aes_gcm_128 {
+	granularity = byte;
+	length_preserving;          // ciphertext core; tag declared separately
+	seekable;                   // CTR-mode core
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+impl aes_gcm_128 extern "my_aes_gcm_128";
+
+enum MsgType : u8 {
+	hello = 0x01,
+	data  = 0x02,
+	close = 0x03,
+}
+
+struct Header {
+	u8       version  [must_eq = 1];
+	MsgType  type;
+	u16      length;
+	u32      seq;
+}
+
+struct Packet {
+	authenticated {
+		Header  hdr;
+		u8      nonce[12]  [nonce];
+	}
+
+	sealed(aes_gcm_128, nonce = nonce) {
+		u16  inner_kind;
+		u32  inner_seq;
+		u8   body[remaining];
+	}
+
+	tag u8[16];                 // coverage inferred: all authenticated
+	                            // and sealed regions in this struct
+}
+
+// Positional layout means exactly one encoding of a given value, which is what
+// makes this format signable at all. Protobuf cannot do this for five
+// independent reasons (project.md section 9.7).
+require canonical(Packet);
+
+// No parse before verify.
+require verify_gated(Packet.sealed);
+
+// CTR-mode seekability survives the seal.
+require in_place(Packet.sealed.inner_seq);
+
+// DELIBERATELY FAILS. `hdr` is inside `authenticated { }`, so mutating
+// `hdr.seq` is possible but invalidates the tag. The correct diagnostic
+// explains that distinction and points at the two fixes: move the field out of
+// coverage, or accept recomputation.
+require in_place(Packet.hdr.seq);
+
+// The second fix, spelled out. This one passes: it asserts in-place mutation
+// is possible while acknowledging the tag goes dirty and finalize must run.
+require in_place_dirty(Packet.hdr.seq);
+
+// The first fix would be to move `seq` outside the authenticated block, after
+// which this would pass:
+// require no_tag_invalidation(Packet.seq);

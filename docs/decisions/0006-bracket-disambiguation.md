@@ -56,17 +56,24 @@ rule. All of them -- `[unknown]`, `[secret]`, `[allow_host_dependent]`, `[rw]`,
 attributes and are in the table. The only bare-identifier size form in the
 document is `[remaining]`, which is a keyword rather than an identifier.
 
-## The residual collision
+## The residual collision -- closed
 
-A constant whose name collides with an attribute name makes `u8 buf[secret];`
-mean the wrong thing silently. That is the one case where section 17.0 applies
-as written, and it should become an error naming both readings once const
-resolution exists.
+A constant whose name collides with an attribute name would make
+`u8 buf[secret];` mean the wrong thing silently, with no way for the author to
+spell the other reading. That is the one case where section 17.0 applies as
+written.
 
-It cannot be detected in phase 1, because the parser does not resolve names.
-**Phase 2 must add this check**, when constant resolution lands: a `const` whose
-name is in `ATTRIBUTE_NAMES` is an error at its declaration, which kills the
-collision at the source rather than at each use.
+This was first deferred to phase 2 on the assumption that it needed constant
+resolution. It does not: rejecting the *declaration* needs only its name. A
+`const` whose name is in `ATTRIBUTE_NAMES` is therefore an error at the point of
+declaration, implemented in `wellformed.check_const_names_do_not_shadow_attributes`.
+
+Killing the collision at its source rather than at each use is also the better
+diagnostic: the author is told to rename one constant, instead of being told
+that one of their array declarations parsed as something else.
+
+A test asserts that *every* name in `ATTRIBUTE_NAMES` is refused as a constant,
+so adding a name to the vocabulary cannot silently reopen the ambiguity.
 
 ## Alternatives considered
 
