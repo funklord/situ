@@ -103,6 +103,10 @@ class Context:
 	struct_attrs: tuple[ast.Attr, ...]
 	enum_default_pass: bool
 	reserved_unknown: bool
+	# The signature of the codec transforming this placement, if any. The
+	# lattice reads properties and nothing else (section 13.3): no rule below
+	# may learn what an algorithm actually does.
+	codec: ast.CodecDecl | None = None
 
 
 def _align_value(placement: Placement) -> Value:
@@ -270,6 +274,81 @@ def _is_varint(context: Context) -> bool:
 
 def _is_non_minimal_varint(context: Context) -> bool:
 	return context.placement.varint is not None and not context.placement.varint_minimal
+
+
+def _inside_codec(context: Context) -> bool:
+	"""A member of a coded region, as opposed to the region itself."""
+	return context.codec is not None and context.placement.kind != "coded"
+
+
+def _codec_region(context: Context) -> bool:
+	return context.codec is not None and context.placement.kind == "coded"
+
+
+def _interior_in_place(context: Context) -> bool:
+	"""Length-preserving, byte-granular, linearly seekable: the CTR-mode case.
+
+	Re-transforming a single byte range is possible, so a same-size field write
+	stays in place. This is the row the whole transform design exists to reach.
+	"""
+	codec = context.codec
+	return (_inside_codec(context)
+	        and codec is not None
+	        and codec.expansion is ast.Expansion.PRESERVING
+	        and codec.seekable is ast.Seekable.LINEAR
+	        and codec.granularity is ast.Granularity.BYTE)
+
+
+def _interior_block_slack(context: Context) -> bool:
+	codec = context.codec
+	return (_inside_codec(context)
+	        and codec is not None
+	        and codec.expansion is ast.Expansion.PRESERVING
+	        and codec.granularity is ast.Granularity.BLOCK)
+
+
+def _interior_permuted(context: Context) -> bool:
+	codec = context.codec
+	return (_inside_codec(context)
+	        and codec is not None
+	        and codec.expansion is ast.Expansion.PRESERVING
+	        and codec.seekable is ast.Seekable.PERMUTED)
+
+
+def _interior_whole_region(context: Context) -> bool:
+	"""Length-preserving but not seekable: offsets survive, mutation does not."""
+	codec = context.codec
+	return (_inside_codec(context)
+	        and codec is not None
+	        and codec.expansion is ast.Expansion.PRESERVING
+	        and codec.seekable is ast.Seekable.NONE
+	        and codec.granularity is not ast.Granularity.BLOCK)
+
+
+def _needs_decode_first(context: Context) -> bool:
+	"""Not systematic and not length-preserving: nothing is readable in place."""
+	codec = context.codec
+	return (_inside_codec(context)
+	        and codec is not None
+	        and not codec.systematic
+	        and codec.expansion is not ast.Expansion.PRESERVING)
+
+
+def _is_systematic(context: Context) -> bool:
+	codec = context.codec
+	return _inside_codec(context) and codec is not None and codec.systematic
+
+
+def _not_invertible(context: Context) -> bool:
+	codec = context.codec
+	return (context.codec is not None and codec is not None
+	        and not codec.invertible)
+
+
+def _error_propagating(context: Context) -> bool:
+	codec = context.codec
+	return (_codec_region(context) and codec is not None
+	        and codec.error_propagating)
 
 
 def _is_tlv(context: Context) -> bool:
@@ -505,6 +584,77 @@ TABLE: tuple[Row, ...] = (
 			            "region so an offset table makes access O(1)",
 		),
 		applies = _has_dynamic_elements,
+	),
+	# -- section 13.5, propagation through a transform ----------------------
+	#
+	# Every row below reads the property signature and nothing else. That is
+	# the decidability rule of 13.3, and it is what lets phase 12 add derived
+	# codecs without disturbing any of this: a derived codec arrives as a
+	# signature like any other.
+	Row(
+		rule = Rule(
+			name      = "codec-not-invertible",
+			construct = "a codec with no inverse",
+			effects   = (Effect(Axis.MUTATE, Value("Immutable"),
+			                    "the transform cannot be undone, so the region "
+			                    "can be read but never written back"),),
+			remedy    = "declare `invertible;` on the codec if it does have an "
+			            "inverse; otherwise the region is genuinely read-only",
+		),
+		applies = _not_invertible,
+	),
+	Row(
+		rule = Rule(
+			name      = "codec-needs-decode",
+			construct = "a codec that is neither systematic nor length-preserving",
+			effects   = (
+				Effect(Axis.STAGE, Value("TransformTime"),
+				       "the interior does not exist until the transform has run, "
+				       "so nothing can be read before decoding"),
+				Effect(Axis.ACCESS, Value("Sequential"),
+				       "the decoder produces the region in order"),
+			),
+			remedy    = "a `systematic` codec leaves the data verbatim at "
+			            "computable offsets, which allows reads with no decode "
+			            "at all",
+		),
+		applies = _needs_decode_first,
+	),
+	Row(
+		rule = Rule(
+			name      = "codec-whole-region-rewrite",
+			construct = "a length-preserving codec that is not seekable",
+			effects   = (Effect(Axis.MUTATE, Value("RewriteRequired"),
+			                    "interior offsets survive, but any write "
+			                    "re-transforms the whole region"),),
+			remedy    = "a seekable codec re-transforms only the byte range that "
+			            "changed; CTR mode is seekable where CBC is not",
+		),
+		applies = _interior_whole_region,
+	),
+	Row(
+		rule = Rule(
+			name      = "codec-block-granularity",
+			construct = "a length-preserving codec with block granularity",
+			effects   = (Effect(Axis.MUTATE, Value("InPlaceSlack"),
+			                    "a write re-transforms the containing block "
+			                    "rather than the whole region"),),
+			remedy    = "byte granularity narrows that to the bytes that changed",
+		),
+		applies = _interior_block_slack,
+	),
+	Row(
+		rule = Rule(
+			name      = "codec-permuted",
+			construct = "a codec whose output positions are a permutation",
+			effects   = (Effect(Axis.ADDRESS, Value("Unstable"),
+			                    "the position map is a bijection but not "
+			                    "monotone, so no contiguous span can be handed "
+			                    "out"),),
+			remedy    = "random access survives the permutation; sequential "
+			            "prefetch does not",
+		),
+		applies = _interior_permuted,
 	),
 	Row(
 		rule = Rule(

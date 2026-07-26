@@ -323,6 +323,23 @@ class Tlv(Member):
 
 
 @dataclass(frozen=True)
+class Coded(Member):
+	"""A region transformed by a codec, with an interior schema (section 13.5).
+
+	The general form. `sealed` (phase 8) is this plus authentication: a codec
+	over a region is a transform question, and encryption is one instance of it
+	rather than the only one. See docs/decisions/0009-coded-regions.md.
+	"""
+
+	span: Span
+	name: str
+	codec: str
+	args: tuple[Attr, ...]
+	members: tuple[Member, ...]
+	attrs: tuple[Attr, ...] = ()
+
+
+@dataclass(frozen=True)
 class PositionalBlock(Member):
 	"""`positional { ... }`: a locally-checked staticness guarantee.
 
@@ -449,6 +466,85 @@ class VarintDecl(Decl):
 		return (self.max_bits + 6) // 7
 
 
+class Seekable(Enum):
+	"""The class of a codec's output-position function (section 13.2)."""
+
+	LINEAR    = "linear"		# position is monotone in the input position
+	PERMUTED  = "permuted"		# a bijection, but not monotone: interleavers
+	BLOCKWISE = "blockwise"		# positions hold within a block
+	NONE      = "none"
+
+
+class Granularity(Enum):
+	"""The minimum independently transformable unit."""
+
+	BIT    = "bit"
+	SYMBOL = "symbol"
+	BYTE   = "byte"
+	BLOCK  = "block"
+	STREAM = "stream"
+
+
+class Expansion(Enum):
+	"""How output extent follows input extent."""
+
+	PRESERVING     = "length_preserving"
+	FIXED_ADD      = "add"			# expansion = +N
+	RATIO_EXACT    = "ratio_exact"		# a:b exactly, so offsets stay linear
+	RATIO_BOUNDED  = "ratio_bounded"	# worst case known, actual data-dependent
+	UNBOUNDED      = "unbounded"
+
+
+@dataclass(frozen=True)
+class CodecDecl(Decl):
+	"""A transform's property signature (section 13.2).
+
+	The signature is the interface between both codec tiers and everything
+	downstream: the capability lattice consumes property signatures and nothing
+	else. That is what makes adding derived codecs in phase 12 purely additive,
+	and what lets an implementation be swapped without the schema changing.
+
+	A tier-1 signature is trusted and unverified, so it can lie. The capability
+	map marks it `trusted` for exactly that reason, and `gen-codec-tests` emits
+	the tests that would catch a lying one.
+	"""
+
+	span: Span
+	name: str
+	expansion: Expansion		= Expansion.PRESERVING
+	expansion_add: int		= 0
+	ratio: tuple[int, int] | None	= None
+	seekable: Seekable		= Seekable.NONE
+	granularity: Granularity	= Granularity.STREAM
+	granularity_size: int | None	= None
+	systematic: bool		= False
+	authenticated: bool		= False
+	invertible: bool		= False
+	deterministic: bool		= False
+	error_propagating: bool		= False
+	has_kernel: bool		= False
+
+
+class ImplKind(Enum):
+	DERIVED = "derived"
+	EXTERN  = "extern"
+
+
+@dataclass(frozen=True)
+class ImplDecl(Decl):
+	"""Binds an implementation to a signature (section 13.1).
+
+	Separate from the signature so a hand-tuned assembly routine, a DMA-driven
+	hardware unit or a vendor library can replace the default without changing
+	one byte of the capability map.
+	"""
+
+	span: Span
+	codec: str
+	kind: ImplKind
+	symbol: str | None = None
+
+
 @dataclass(frozen=True)
 class EndianMarkerDecl(Decl):
 	"""A byte-order marker: the TIFF `II`/`MM` pattern (section 8.3).
@@ -520,3 +616,9 @@ class Schema(Node):
 
 	def varints(self) -> list[VarintDecl]:
 		return [decl for decl in self.decls if isinstance(decl, VarintDecl)]
+
+	def codecs(self) -> list[CodecDecl]:
+		return [decl for decl in self.decls if isinstance(decl, CodecDecl)]
+
+	def impls(self) -> list[ImplDecl]:
+		return [decl for decl in self.decls if isinstance(decl, ImplDecl)]

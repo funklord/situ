@@ -34,6 +34,64 @@ CORE_AXES = (Axis.OFFSET, Axis.SIZE, Axis.ALIGN, Axis.REPR, Axis.ATOMIC)
 PATH_WIDTH = 38
 
 
+def _codec_lines(schema: ast.Schema) -> list[str]:
+	"""Record every codec, and which of them are trusted rather than proven.
+
+	Section 13.1: a tier-1 codec can lie, because its declaration is trusted and
+	unverified. Marking it in the map is what lets a reviewer see which
+	capability conclusions rest on an assertion. A signature with no binding is
+	marked too -- it is not an error, but nothing implements it yet.
+	"""
+	codecs = schema.codecs()
+	if not codecs:
+		return []
+
+	bound = {impl.codec: impl for impl in schema.impls()}
+	lines = ["", "# codecs. `trusted` means the properties are declared and",
+	         "# unverified: run `situc gen-codec-tests` to falsify a lying one."]
+
+	for codec in sorted(codecs, key=lambda decl: decl.name):
+		impl = bound.get(codec.name)
+		if impl is None:
+			status = "unbound"
+		elif impl.kind is ast.ImplKind.DERIVED:
+			status = "derived"
+		else:
+			status = "trusted"
+
+		properties = " ".join(_codec_properties(codec))
+		lines.append(f"codec {codec.name} {status} {properties}".rstrip())
+
+	return lines
+
+
+def _codec_properties(codec: ast.CodecDecl) -> list[str]:
+	shown = []
+
+	if codec.expansion is ast.Expansion.PRESERVING:
+		shown.append("length_preserving")
+	elif codec.expansion is ast.Expansion.FIXED_ADD:
+		shown.append(f"expansion=+{codec.expansion_add}")
+	elif codec.expansion is ast.Expansion.UNBOUNDED:
+		shown.append("expansion=unbounded")
+	elif codec.ratio is not None:
+		shown.append(f"expansion={codec.expansion.value}"
+		             f"({codec.ratio[0]},{codec.ratio[1]})")
+
+	shown.append(f"seekable={codec.seekable.value}")
+	granularity = codec.granularity.value
+	if codec.granularity_size is not None:
+		granularity += f"({codec.granularity_size})"
+	shown.append(f"granularity={granularity}")
+
+	for flag in ("systematic", "authenticated", "invertible", "deterministic",
+	             "error_propagating"):
+		if getattr(codec, flag):
+			shown.append(flag)
+
+	return shown
+
+
 def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 	# Only the file name is recorded. A map committed beside its schema must be
 	# byte-identical however it was generated, and an invocation path would make
@@ -49,6 +107,8 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 		"# Offsets are byte values, or byte:bit where a field does not start on",
 		"# a byte boundary. Sizes are bytes unless suffixed with `bit`.",
 	]
+
+	lines.extend(_codec_lines(schema))
 
 	for name in sorted(resolved.structs):
 		lines.append("")

@@ -14,7 +14,7 @@ complain.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TypeVar
 
@@ -100,6 +100,8 @@ class Placement:
 	tlv_tag_varint: str | None	= None
 	tlv_tag_minimal: bool		= True
 	tlv_wire_types: tuple[int, ...]	= ()
+	# The codec transforming this region, or the one whose region contains it.
+	codec: str | None		= None
 
 	@property
 	def is_fixed_size(self) -> bool:
@@ -317,6 +319,10 @@ class Walk:
 	# The first member whose size was not fixed, which is what every later
 	# member's Dynamic offset traces back to.
 	cause: tuple[str, Span, str] | None = None
+	# Fields that exist only after a transform has run. Recorded so a reference
+	# to one gets the decidability diagnostic of section 13.3 rather than a
+	# bare "not in scope".
+	behind_codec: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +346,7 @@ class Solver:
 		self.enums   = {decl.name: decl for decl in schema.enums()}
 		self.markers = {decl.name: decl for decl in schema.markers()}
 		self.varints = {decl.name: decl for decl in schema.varints()}
+		self.codecs  = {decl.name: decl for decl in schema.codecs()}
 		self.file_scope = _file_scope(schema)
 
 	def run(self) -> None:
@@ -395,6 +402,8 @@ class Solver:
 				self.place_opaque(member, scope, layout, prefix, state)
 			elif isinstance(member, ast.Tlv):
 				self.place_tlv(member, scope, layout, prefix, state)
+			elif isinstance(member, ast.Coded):
+				self.place_coded(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.Indexed):
 				self.place_indexed(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.MarkerField):
@@ -440,6 +449,72 @@ class Solver:
 			state.cause = (member.name, member.span, _render_extent(bits))
 
 		state.cursor = cursor.advance(bits)
+
+	def place_coded(self, decl: ast.StructDecl, region: ast.Coded, scope: Scope,
+			layout: StructLayout, prefix: str, state: Walk) -> None:
+		"""A region whose bytes are the output of a transform (section 13.5).
+
+		The interior is laid out as though untransformed, because that is what
+		it is once decoded; the region's own extent is the interior's extent put
+		through the codec's expansion. The lattice reads the property signature
+		and nothing else -- this function never learns what the algorithm does.
+		"""
+		codec = self.codecs.get(region.codec)
+		assert codec is not None, "wellformed rejects an unknown codec"
+
+		cursor = state.cursor
+		slot   = len(layout.placements)
+
+		# The interior is placed at the region's base. Its offsets are what the
+		# decoded bytes look like, which is what a caller addresses.
+		inner = Walk(fields=dict(state.fields), cursor=cursor, cause=state.cause)
+		self.place_members(decl, region.members, scope, layout,
+		                   f"{prefix}.{region.name}", inner)
+
+		# The interior's fields are deliberately not merged back into the
+		# enclosing scope. Section 13.3: the expression language may not
+		# reference transform output, because a schema that could branch on a
+		# decoded value would make "is this in-place mutable?" undecidable.
+		for name in inner.fields:
+			if name not in state.fields:
+				state.behind_codec[name] = region.codec
+				state.behind_codec[f"{region.name}.{name}"] = region.codec
+
+		interior_lo = inner.cursor.lo - cursor.lo
+		interior_hi = (None if inner.cursor.hi is None or cursor.hi is None
+		               else inner.cursor.hi - cursor.hi)
+		interior    = Interval(interior_lo, interior_hi)
+		extent      = _expand(codec, interior)
+
+		layout.placements.insert(slot, Placement(
+			path          = f"{prefix}.{region.name}",
+			name          = region.name,
+			kind          = "coded",
+			type_name     = region.codec,
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = extent.lo,
+			size_max_bits = extent.hi,
+			scalar        = None,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = region.span,
+			attrs         = region.attrs,
+			codec         = region.codec,
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+		))
+
+		# Everything the region contains carries the codec, so the propagation
+		# table can read it without walking back up the tree.
+		for index in range(slot + 1, len(layout.placements)):
+			held = layout.placements[index]
+			layout.placements[index] = replace(held, codec=region.codec)
+
+		if state.cause is None and extent.hi != extent.lo:
+			state.cause = (region.name, region.span, _render_extent(extent))
+
+		state.cursor = cursor.advance(extent)
 
 	def place_tlv(self, member: ast.Tlv, scope: Scope, layout: StructLayout,
 			prefix: str, state: Walk) -> None:
@@ -659,6 +734,39 @@ class Solver:
 		      else arm_state.cursor.hi - before.hi)
 		return Interval(lo, hi)
 
+	def check_not_behind_codec(self, expr: ast.Expr, state: Walk) -> None:
+		"""Refuse an expression that names a field inside a coded region.
+
+		The first of section 13.3's three prohibitions, and the one that keeps
+		the whole system decidable: if a size or a discriminant could come from
+		transform output, the compiler would have to run the transform to answer
+		a capability question, and it never does.
+		"""
+		from situc.expr import path_text
+
+		path = path_text(expr)
+		if path is None:
+			return
+
+		codec = state.behind_codec.get(path)
+		if codec is None:
+			return
+
+		raise error(
+			f"`{path}` is inside a `{codec}` region and cannot be referenced here",
+			expr.span,
+			label = "transform output",
+			notes = [
+				"the expression language may not reference transform output "
+				"(project.md section 13.3)",
+				"the compiler reasons about property signatures, never about "
+				"what a transform produces; a size that depended on decoded "
+				"content would make in-place mutability undecidable",
+				"move the field outside the region, or size this member from "
+				"something outside it",
+			],
+		)
+
 	def check_discriminant(self, variant: ast.Variant, state: Walk) -> None:
 		"""The discriminant must be parsed strictly before the variant.
 
@@ -666,6 +774,8 @@ class Solver:
 		readable before the thing it selects, or nothing can be parsed at all.
 		"""
 		from situc.expr import path_text
+
+		self.check_not_behind_codec(variant.discriminant, state)
 
 		path = path_text(variant.discriminant)
 		if path is None:
@@ -1069,6 +1179,8 @@ class Solver:
 			# it is not known at all. Unbounded is the honest answer.
 			return Interval(0, None)
 
+		self.check_not_behind_codec(member.array.size, state)
+
 		env   = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
 		count = interval_of(member.array.size, env)
 
@@ -1295,6 +1407,41 @@ class Solver:
 def _path_of(expr: ast.Expr) -> str | None:
 	from situc.expr import path_text
 	return path_text(expr)
+
+
+def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
+	"""Output extent as a function of input extent (section 13.2).
+
+	Pure property arithmetic: the expansion form decides this and nothing else
+	does. An exact ratio keeps the output a linear function of the input, which
+	is why interior offsets survive it and why the earlier draft's blanket
+	"all ratios are unbounded" was wrong -- Manchester at 2:1 is the
+	counterexample.
+	"""
+	if codec.expansion is ast.Expansion.PRESERVING:
+		return interior
+
+	if codec.expansion is ast.Expansion.FIXED_ADD:
+		added = codec.expansion_add * BITS_PER_BYTE
+		return Interval(interior.lo + added,
+		                None if interior.hi is None else interior.hi + added)
+
+	if codec.expansion is ast.Expansion.UNBOUNDED:
+		return Interval(interior.lo, None)
+
+	assert codec.ratio is not None
+	numerator, denominator = codec.ratio
+
+	def scale(bits: int) -> int:
+		return -(-bits * numerator // denominator)	# ceil
+
+	if codec.expansion is ast.Expansion.RATIO_EXACT:
+		return Interval(scale(interior.lo),
+		                None if interior.hi is None else scale(interior.hi))
+
+	# ratio_bounded: worst case known, actual data-dependent.
+	return Interval(interior.lo,
+	                None if interior.hi is None else scale(interior.hi))
 
 
 def _arm_name(arm: ast.VariantArm) -> str:

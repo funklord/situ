@@ -403,8 +403,6 @@ def test_unclosed_parenthesis_rejected() -> None:
 
 
 @pytest.mark.parametrize(("source", "phase"), [
-	("codec aes { deterministic; }",			7),
-	("impl aes derived;",					7),
 	("register CtrlReg { width = 32; }",			10),
 	("register_block Block { }",				10),
 ])

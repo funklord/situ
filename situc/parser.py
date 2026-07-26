@@ -11,6 +11,7 @@ diagnostics are the product.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import TypeVar
 
@@ -23,6 +24,47 @@ from situc.types import WidthError, lookup
 EnumT = TypeVar("EnumT", bound=Enum)
 
 
+@dataclass
+class _CodecProperties:
+	"""Accumulator for a codec body.
+
+	Every default is the conservative one: a signature that says nothing claims
+	nothing, which is the only safe reading of silence in a declaration the
+	compiler cannot verify.
+	"""
+
+	expansion: ast.Expansion	= ast.Expansion.PRESERVING
+	expansion_add: int		= 0
+	ratio: tuple[int, int] | None	= None
+	seekable: ast.Seekable		= ast.Seekable.NONE
+	granularity: ast.Granularity	= ast.Granularity.STREAM
+	granularity_size: int | None	= None
+	systematic: bool		= False
+	authenticated: bool		= False
+	invertible: bool		= False
+	deterministic: bool		= False
+	error_propagating: bool		= False
+	has_kernel: bool		= False
+
+	def build(self, span: Span, name: str) -> ast.CodecDecl:
+		return ast.CodecDecl(
+			span              = span,
+			name              = name,
+			expansion         = self.expansion,
+			expansion_add     = self.expansion_add,
+			ratio             = self.ratio,
+			seekable          = self.seekable,
+			granularity       = self.granularity,
+			granularity_size  = self.granularity_size,
+			systematic        = self.systematic,
+			authenticated     = self.authenticated,
+			invertible        = self.invertible,
+			deterministic     = self.deterministic,
+			error_propagating = self.error_propagating,
+			has_kernel        = self.has_kernel,
+		)
+
+
 def evaluate_literal(expr: ast.Expr) -> int | None:
 	"""An integer literal, or None. Used where a property must be a constant
 	the parser can see, rather than an expression a later pass folds."""
@@ -31,8 +73,6 @@ def evaluate_literal(expr: ast.Expr) -> int | None:
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
 FUTURE_CONSTRUCTS = {
-	"codec":		(7,  "`codec`"),
-	"impl":			(7,  "`impl`"),
 	"authenticated":	(8,  "`authenticated`"),
 	"sealed":		(8,  "`sealed`"),
 	"tag":			(8,  "`tag`"),
@@ -93,6 +133,11 @@ class Parser:
 		self.source = source
 		self.tokens = tokenize(source)
 		self.pos    = 0
+		# Set by `codec X extern { ... }`, which implies its own binding. The
+		# implied impl is appended after the declaration so both spellings of a
+		# binding reach the same place.
+		self._pending_extern: tuple[str, Span] | None = None
+		self._dispatch_cases: tuple[int, ...] = ()
 
 	# -- token access ---------------------------------------------------
 
@@ -158,6 +203,11 @@ class Parser:
 
 		while self.current.kind is not TokenKind.EOF:
 			schema.decls.append(self.parse_decl())
+			if self._pending_extern is not None:
+				name, span = self._pending_extern
+				schema.decls.append(
+					ast.ImplDecl(span, name, ast.ImplKind.EXTERN, None))
+				self._pending_extern = None
 
 		wellformed.check(schema)
 		return schema
@@ -187,6 +237,8 @@ class Parser:
 			"struct":	self.parse_struct,
 			"endian_marker": self.parse_endian_marker,
 			"varint_type":	self.parse_varint,
+			"codec":	self.parse_codec,
+			"impl":		self.parse_impl,
 			"require":	self.parse_requirement,
 			"assert":	self.parse_requirement,
 		}
@@ -319,6 +371,176 @@ class Parser:
 				         "canonical = NonCanonical (project.md section 8.7)"],
 			)
 		return default
+
+	def parse_codec(self) -> ast.CodecDecl:
+		"""`codec aes_ctr_128 { length_preserving; seekable = linear; ... }`
+
+		Every property is optional and every default is the conservative one:
+		not seekable, stream granularity, not systematic, not invertible. A
+		signature that says nothing therefore claims nothing, which is the only
+		safe reading of silence in a declaration the compiler cannot verify.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a codec name")
+
+		# `codec X extern { ... }` is the section 13.2 spelling; the binding it
+		# implies is recorded as a separate impl so both spellings converge.
+		external = self.accept_ident("extern") is not None
+
+		self.expect_symbol("{", "to open the codec body")
+
+		properties     = _CodecProperties()
+		seen: set[str] = set()
+
+		while not self.current.is_symbol("}"):
+			self.parse_codec_property(properties, seen)
+			self.expect_symbol(";", "after the codec property")
+
+		self.expect_symbol("}", "to close the codec body")
+		span = self.span_from(start)
+
+		self._pending_extern = (name.text, span) if external else None
+		return properties.build(span, name.text)
+
+	def parse_codec_property(self, properties: _CodecProperties,
+			seen: set[str]) -> None:
+		negated = self.accept_ident("not") is not None
+		token   = self.expect_ident("a codec property")
+
+		if token.text in seen:
+			raise error(f"`{token.text}` is given twice", token.span)
+		seen.add(token.text)
+
+		if token.text == "length_preserving":
+			properties.expansion = ast.Expansion.PRESERVING
+		elif token.text == "expansion":
+			self.expect_symbol("=", "after `expansion`")
+			self.parse_expansion(properties)
+		elif token.text == "seekable":
+			if negated:
+				properties.seekable = ast.Seekable.NONE
+			elif self.accept_symbol("=") is not None:
+				properties.seekable = self._named(
+					ast.Seekable, "seekability", properties, size=False)
+			else:
+				# Bare `seekable;` is the linear case, as in example 5.3.
+				properties.seekable = ast.Seekable.LINEAR
+		elif token.text == "granularity":
+			self.expect_symbol("=", "after `granularity`")
+			properties.granularity = self._named(
+				ast.Granularity, "granularity", properties, size=True)
+		elif token.text == "kernel":
+			self.expect_symbol("=", "after `kernel`")
+			self._skip_call()
+			properties.has_kernel = True
+		elif token.text in ("systematic", "authenticated", "invertible",
+		                    "deterministic", "error_propagating"):
+			setattr(properties, token.text, not negated)
+		else:
+			raise error(
+				f"unknown codec property `{token.text}`",
+				token.span,
+				label = "not a property of a transform",
+				notes = ["the property set is fixed by section 13.2; a codec "
+				         "cannot declare a property the lattice does not read"],
+			)
+
+	def parse_expansion(self, properties: _CodecProperties) -> None:
+		if self.accept_symbol("+") is not None:
+			token = self.current
+			value = evaluate_literal(self.parse_expr())
+			if value is None or value < 0:
+				raise error("`expansion = +N` needs a literal byte count", token.span)
+			properties.expansion     = ast.Expansion.FIXED_ADD
+			properties.expansion_add = value
+			return
+
+		token = self.expect_ident("an expansion form")
+
+		if token.text == "unbounded":
+			properties.expansion = ast.Expansion.UNBOUNDED
+			return
+
+		if token.text in ("ratio_exact", "ratio_bounded"):
+			self.expect_symbol("(", "before the ratio")
+			first = evaluate_literal(self.parse_expr())
+			self.expect_symbol(",", "between the ratio terms")
+			second = evaluate_literal(self.parse_expr())
+			self.expect_symbol(")", "after the ratio")
+
+			if first is None or second is None or first <= 0 or second <= 0:
+				raise error("a ratio needs two positive literals", token.span)
+
+			properties.expansion = (ast.Expansion.RATIO_EXACT
+			                        if token.text == "ratio_exact"
+			                        else ast.Expansion.RATIO_BOUNDED)
+			properties.ratio = (first, second)
+			return
+
+		raise error(
+			f"unknown expansion form `{token.text}`",
+			token.span,
+			label = "expected `+N`, `unbounded`, `ratio_exact(a, b)` or "
+			        "`ratio_bounded(a, b)`",
+		)
+
+	def _named(self, enum: type[EnumT], described: str,
+			properties: _CodecProperties, size: bool) -> EnumT:
+		"""A property value that may carry a size: `block(16)`, `symbol(5)`."""
+		token = self.expect_ident(f"a {described}")
+
+		for candidate in enum:
+			if candidate.value != token.text:
+				continue
+			if self.current.is_symbol("("):
+				self.advance()
+				inner = self.current
+				value = evaluate_literal(self.parse_expr())
+				self.expect_symbol(")", "after the size")
+				if value is None and not inner.is_ident("any"):
+					raise error(f"`{token.text}` needs a literal size or `any`",
+					            inner.span)
+				if size:
+					properties.granularity_size = value
+			return candidate
+
+		options = ", ".join(f"`{item.value}`" for item in enum)
+		raise error(f"unknown {described} `{token.text}`", token.span,
+		            label = f"expected one of {options}")
+
+	def _skip_call(self) -> None:
+		"""Consume a `name(...)` clause whose interior a later phase owns."""
+		self.expect_ident("a kernel family")
+		if self.current.is_symbol("("):
+			self._skip_balanced("(", ")")
+
+	def parse_impl(self) -> ast.ImplDecl:
+		"""`impl crc32 derived;` or `impl crc32 extern "my_fast_crc32";`"""
+		start = self.advance()
+		codec = self.expect_ident("a codec name")
+		kind  = self.expect_ident("`derived` or `extern`")
+
+		if kind.text == "derived":
+			self.expect_symbol(";", "after the impl binding")
+			return ast.ImplDecl(self.span_from(start), codec.text,
+			                    ast.ImplKind.DERIVED)
+
+		if kind.text != "extern":
+			raise error(f"unknown impl kind `{kind.text}`", kind.span,
+			            label = "expected `derived` or `extern`")
+
+		if self.current.kind is not TokenKind.STRING:
+			raise error(
+				"`extern` needs a quoted symbol name",
+				self.current.span,
+				label = "expected a string literal",
+				notes = ['for example: impl crc32 extern "my_fast_crc32";'],
+			)
+
+		symbol = self.advance()
+		self.expect_symbol(";", "after the impl binding")
+		return ast.ImplDecl(self.span_from(start), codec.text,
+		                    ast.ImplKind.EXTERN, symbol.text)
 
 	def parse_varint(self) -> ast.VarintDecl:
 		"""`varint_type leb128 { encoding = leb128; max_bits = 64; minimal; }`
@@ -515,6 +737,8 @@ class Parser:
 				return self.parse_indexed()
 			if token.text == "tlv":
 				return self.parse_tlv()
+			if token.text == "coded":
+				return self.parse_coded()
 
 		return self.parse_field()
 
@@ -564,6 +788,32 @@ class Parser:
 		name = members[0].name if isinstance(members[0], ast.Field) else "entries"
 		return ast.Indexed(self.span_from(start), name, tuple(args), members)
 
+	def parse_coded(self) -> ast.Coded:
+		"""`coded body(aes_ctr_128) { u16 kind; u8 rest[remaining]; }`
+
+		The codec's properties decide what the interior keeps: a
+		length-preserving, byte-granular, linearly seekable transform leaves
+		fixed offsets and single-field mutation intact, while a stream cipher
+		with no seekability does not. None of that is decided here.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a region name")
+		self.expect_symbol("(", "before the codec name")
+		codec = self.expect_ident("a codec name")
+
+		args: list[ast.Attr] = []
+		while self.accept_symbol(",") is not None:
+			args.append(self.parse_attr())
+
+		self.expect_symbol(")", "after the codec arguments")
+		attrs = self.parse_attrs()
+		self.expect_symbol("{", "to open the coded region")
+		members = self.parse_members()
+		self.expect_symbol("}", "to close the coded region")
+
+		return ast.Coded(self.span_from(start), name.text, codec.text,
+		                 tuple(args), members, attrs)
+
 	def parse_tlv(self) -> ast.Tlv:
 		"""`tlv options (tag_type = u8, known = { ... }, unknown = error);`
 
@@ -576,7 +826,7 @@ class Parser:
 		name  = self.expect_ident("a region name")
 		self.expect_symbol("(", "before the tlv arguments")
 
-		self._dispatch_cases: tuple[int, ...] = ()
+		self._dispatch_cases = ()
 		args: list[ast.Attr] = []
 		while not self.current.is_symbol(")"):
 			args.append(self.parse_tlv_argument())

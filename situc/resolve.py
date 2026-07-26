@@ -54,6 +54,7 @@ class ResolvedSchema:
 def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 	structs = {decl.name: decl for decl in schema.structs()}
 	enums   = {decl.name: decl for decl in schema.enums()}
+	codecs  = {decl.name: decl for decl in schema.codecs()}
 	result  = ResolvedSchema(layout=layout)
 
 	for name, struct_layout in layout.structs.items():
@@ -62,7 +63,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 		_check_required_alignment(decl, struct_layout)
 
 		entries = [
-			apply(_context(placement, decl, structs, enums))
+			apply(_context(placement, decl, structs, enums, codecs))
 			for placement in struct_layout.placements
 		]
 		_meet_aggregates(entries, structs)
@@ -139,7 +140,8 @@ def _struct_vector(layout: StructLayout, entries: list[Resolved]) -> Vector:
 
 def _context(placement: Placement, decl: ast.StructDecl,
 		structs: dict[str, ast.StructDecl],
-		enums: dict[str, ast.EnumDecl]) -> Context:
+		enums: dict[str, ast.EnumDecl],
+		codecs: dict[str, ast.CodecDecl]) -> Context:
 	enum = enums.get(placement.type_name)
 
 	return Context(
@@ -151,6 +153,7 @@ def _context(placement: Placement, decl: ast.StructDecl,
 		                     and enum.effective_default is ast.EnumDefault.PASS),
 		reserved_unknown  = (placement.kind == "reserved"
 		                     and _has_attr(placement.attrs, "unknown")),
+		codec             = codecs.get(placement.codec or ""),
 	)
 
 

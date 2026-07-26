@@ -303,6 +303,11 @@ def test_reachable_rows_are_all_tested() -> None:
 		"tlv-packed-and-unpacked",
 		"tlv-unknown-preserve",
 		"tlv-unordered-duplicates",
+		"codec-not-invertible",
+		"codec-needs-decode",
+		"codec-whole-region-rewrite",
+		"codec-block-granularity",
+		"codec-permuted",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
@@ -514,3 +519,101 @@ def test_the_indexed_remedy_says_insertion_is_not_an_operation() -> None:
 	remedy = next(w.rule.remedy for w in entry.blame(Axis.ADDRESS))
 	assert "insertion is not an operation here" in remedy
 	assert "element mutation stays in place" in remedy
+
+
+# -- section 13.5: propagation through a transform --------------------------
+#
+# Every row below reads the property signature and nothing else. That is the
+# decidability rule of 13.3, and it is why phase 12's derived codecs will slot
+# in without disturbing any of this: a derived codec arrives as a signature.
+
+
+def coded(properties: str, body: str = "u32 x;", tail: str = "u16 t;") -> str:
+	return (f"codec c {{ {properties} }}"
+	        f"struct S {{ coded b(c) {{ {body} }} {tail} }}")
+
+
+CTR   = "length_preserving; seekable = linear; granularity = byte; invertible;"
+CBC   = "length_preserving; granularity = block(16); invertible;"
+OPAQUE_CODEC = "length_preserving; not seekable; invertible;"
+PERM  = "length_preserving; seekable = permuted; granularity = byte; invertible;"
+
+
+def test_ctr_mode_keeps_in_place_interior_mutation() -> None:
+	"""The row the whole transform design exists to reach."""
+	assert axis_of(coded(CTR), "S.b.x", Axis.MUTATE) == Value("InPlaceFixed")
+	assert axis_of(coded(CTR), "S.b.x", Axis.OFFSET) == Value("AbsoluteStatic", ("0x00",))
+
+
+def test_block_granularity_gives_slack_not_fixed() -> None:
+	body = coded(CBC)
+	assert axis_of(body, "S.b.x", Axis.MUTATE) == Value("InPlaceSlack")
+	assert "codec-block-granularity" in rules_for(body, "S.b.x", Axis.MUTATE)
+
+
+def test_a_non_seekable_codec_rewrites_the_whole_region() -> None:
+	body = coded(OPAQUE_CODEC)
+	assert axis_of(body, "S.b.x", Axis.MUTATE) == Value("RewriteRequired")
+	# Offsets survive even though mutation does not.
+	assert axis_of(body, "S.b.x", Axis.OFFSET) == Value("AbsoluteStatic", ("0x00",))
+
+
+def test_a_permuted_codec_hands_out_no_span() -> None:
+	body = coded(PERM)
+	assert axis_of(body, "S.b.x", Axis.ADDRESS) == Value("Unstable")
+	# Random access survives the permutation; only contiguity does not.
+	assert axis_of(body, "S.b.x", Axis.ACCESS) == Value("Random")
+
+
+def test_a_non_invertible_codec_makes_the_region_read_only() -> None:
+	body = coded("length_preserving; seekable = linear; granularity = byte;")
+	assert axis_of(body, "S.b.x", Axis.MUTATE) == Value("Immutable")
+	assert "codec-not-invertible" in rules_for(body, "S.b.x", Axis.MUTATE)
+
+
+def test_a_fixed_expansion_keeps_following_members_static() -> None:
+	body = coded("expansion = +4; systematic; seekable = linear; invertible;")
+	assert axis_of(body, "S.t", Axis.OFFSET) == Value("AbsoluteStatic", ("0x08",))
+
+
+def test_an_exact_ratio_keeps_following_members_static() -> None:
+	"""Manchester at 2:1 is the counterexample to "all ratios are dynamic",
+	and section 13.2 says so outright."""
+	body = coded("expansion = ratio_exact(2, 1); seekable = linear; "
+	             "granularity = symbol(1); invertible;")
+	assert axis_of(body, "S.t", Axis.OFFSET) == Value("AbsoluteStatic", ("0x08",))
+
+
+def test_a_bounded_ratio_does_not() -> None:
+	body = coded("expansion = ratio_bounded(2, 1); granularity = stream; invertible;")
+	assert axis_of(body, "S.t", Axis.OFFSET) == Value("Dynamic")
+
+
+def test_unbounded_expansion_is_fatal_downstream() -> None:
+	"""Section 13.3's second prohibition: no attempt to be clever."""
+	body = coded("expansion = unbounded; granularity = stream; invertible;")
+	assert axis_of(body, "S.b", Axis.SIZE) == Value("Unbounded")
+	assert axis_of(body, "S.t", Axis.OFFSET) == Value("Dynamic")
+
+
+def test_a_systematic_codec_reads_without_decoding() -> None:
+	"""The highest-value property in section 13.2: the data is verbatim at
+	computable offsets, so a field can be read with no decode at all."""
+	body = coded("expansion = +32; systematic; seekable = linear; invertible;")
+	assert axis_of(body, "S.b.x", Axis.STAGE) == Value("CompileTime")
+	assert "codec-needs-decode" not in rules_for(body, "S.b.x", Axis.STAGE)
+
+
+def test_a_non_systematic_codec_gates_the_interior_behind_decoding() -> None:
+	body = coded("expansion = ratio_exact(3, 1); seekable = linear; invertible;")
+	assert axis_of(body, "S.b.x", Axis.STAGE) == Value("TransformTime")
+	assert "codec-needs-decode" in rules_for(body, "S.b.x", Axis.STAGE)
+
+
+def test_error_propagating_is_advisory_only() -> None:
+	"""Section 13.5: reported in the map, no capability effect."""
+	plain = coded(CTR)
+	noisy = coded(CTR + " error_propagating;")
+	for path in ("S.b.x", "S.t"):
+		for axis in (Axis.MUTATE, Axis.OFFSET, Axis.ACCESS, Axis.STAGE):
+			assert axis_of(plain, path, axis) == axis_of(noisy, path, axis)

@@ -28,6 +28,7 @@ def check(schema: ast.Schema) -> None:
 	check_unique_attributes(schema)
 	check_types_resolve(schema)
 	check_variant_exhaustiveness(schema)
+	check_codec_bindings(schema)
 	check_no_recursive_types(schema)
 
 
@@ -64,6 +65,8 @@ def _named_declarations(schema: ast.Schema) -> list[tuple[str, str, ast.Decl]]:
 			named.append(("varint type", decl.name, decl))
 		elif isinstance(decl, ast.EndianMarkerDecl):
 			named.append(("endian marker", decl.name, decl))
+		elif isinstance(decl, ast.CodecDecl):
+			named.append(("codec", decl.name, decl))
 	return named
 
 
@@ -267,6 +270,63 @@ def _within_one_edit(a: str, b: str) -> bool:
 		if longer[:index] + longer[index + 1 :] == shorter:
 			return True
 	return False
+
+
+# ---------------------------------------------------------------------------
+# Codecs
+# ---------------------------------------------------------------------------
+
+
+def check_codec_bindings(schema: ast.Schema) -> None:
+	"""Every `impl` names a declared codec, and no codec is bound twice.
+
+	A signature with *no* binding is legal and analyses cleanly: section 13.1
+	makes that the normal case for a protocol under design, and the missing
+	implementation is an error at code generation rather than here.
+	"""
+	codecs = {decl.name: decl for decl in schema.codecs()}
+	bound: dict[str, ast.ImplDecl] = {}
+
+	for impl in schema.impls():
+		if impl.codec not in codecs:
+			raise error(
+				f"`impl` names unknown codec `{impl.codec}`",
+				impl.span,
+				label = "no such codec",
+				notes = ["declare the signature first; an implementation binds to "
+				         "a contract, not the other way round"],
+			)
+
+		previous = bound.get(impl.codec)
+		if previous is not None:
+			raise _redeclaration("implementation of", impl.codec, previous, impl, [
+				"a codec has one implementation; swapping it means replacing the "
+				"binding, not adding another",
+			])
+		bound[impl.codec] = impl
+
+	for struct in schema.structs():
+		for region in _coded_regions(struct.members):
+			if region.codec not in codecs:
+				raise error(
+					f"unknown codec `{region.codec}`",
+					region.span,
+					label = "not declared",
+					notes = ["declare it with `codec " + region.codec + " { ... }`",
+					         "a codec's properties are what the lattice reads; "
+					         "without them nothing can be said about the region"],
+				)
+
+
+def _coded_regions(members: tuple[ast.Member, ...]) -> list[ast.Coded]:
+	found: list[ast.Coded] = []
+	for member in members:
+		if isinstance(member, ast.Coded):
+			found.append(member)
+			found.extend(_coded_regions(member.members))
+		elif isinstance(member, ast.PositionalBlock):
+			found.extend(_coded_regions(member.members))
+	return found
 
 
 # ---------------------------------------------------------------------------
