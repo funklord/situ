@@ -59,6 +59,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 	for name, struct_layout in layout.structs.items():
 		decl = structs[name]
 		_check_host_dependence(decl, struct_layout)
+		_check_required_alignment(decl, struct_layout)
 
 		entries = [
 			apply(_context(placement, decl, structs, enums))
@@ -182,6 +183,65 @@ def _check_host_dependence(decl: ast.StructDecl, layout: StructLayout) -> None:
 					"an `endian_marker` (project.md section 8.3)",
 				],
 			)
+
+
+def _check_required_alignment(decl: ast.StructDecl, layout: StructLayout) -> None:
+	"""`[require_aligned]` turns a misalignment into an error (section 8.4).
+
+	Section 17.0 lists a field's alignment as an ambiguity when the target may
+	fault on unaligned access: either the schema demands alignment, or it
+	accepts the consequence. Absence of the attribute is the acceptance, and
+	the align axis then records what was accepted. The attribute is the demand,
+	and it has to actually refuse.
+	"""
+	from situc.propagate import alignment_of
+
+	for placement in layout.placements:
+		if not _has_attr(placement.attrs, "require_aligned"):
+			continue
+
+		scalar = placement.scalar
+		if scalar is None or scalar.is_bit_packed:
+			raise error(
+				f"`{placement.name}` cannot be `[require_aligned]`",
+				placement.span,
+				label = "not a whole-byte scalar",
+				notes = ["a bit-packed field has no byte address to align",
+				         "widen it to a whole number of bytes, or drop the "
+				         "attribute"],
+			)
+
+		natural = min(scalar.bits // BITS_PER_BYTE, 8)
+
+		if placement.offset_bits is None:
+			raise error(
+				f"`{placement.name}` is `[require_aligned]` but has no static offset",
+				placement.span,
+				label = "placed after a dynamically sized member",
+				notes = ["where it lands depends on the data, so alignment cannot "
+				         "be promised at compile time",
+				         "move it before the dynamic member, or drop the attribute "
+				         "and handle the unaligned access"],
+			)
+
+		actual = alignment_of(placement.offset_bits)
+		if actual >= natural:
+			continue
+
+		raise error(
+			f"`{placement.name}` is `[require_aligned]` but lands at "
+			f"{actual}-byte alignment",
+			placement.span,
+			label = f"needs {natural}-byte alignment",
+			notes = [
+				f"it sits at offset {placement.offset_bits // BITS_PER_BYTE}, and "
+				f"a {scalar.bits}-bit scalar wants a multiple of {natural}",
+				"reorder the preceding members, or insert `reserved` padding, to "
+				"move it onto its natural boundary",
+				"unaligned access faults on some targets and is split on others "
+				"(project.md section 8.4)",
+			],
+		)
 
 
 def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:
