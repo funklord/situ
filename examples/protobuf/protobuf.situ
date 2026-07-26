@@ -1,0 +1,64 @@
+// The protobuf wire format, described in situ (project.md section 9.7).
+//
+// This is the language's hardest conformance test, and it is a test rather than
+// a feature. Protobuf is close to the worst case on every capability axis:
+// unbounded size, dynamic offsets, sequential access, no stable addressing, and
+// non-canonical for five independent reasons.
+//
+// If situ can describe it faithfully and then report exactly why each
+// capability is weak, the lattice is sound. If it cannot, the lattice is
+// decorative. Section 26.6 makes passing this the gate on phase 7.
+//
+// What situ deliberately does NOT reproduce: field-number-as-identity for
+// schema evolution (section 19.1), and re-serialisation that preserves unknown
+// fields in their original positions. This description can parse and report
+// unknown fields; round-tripping them byte-identically would need
+// `unknown = preserve` plus an explicit ordering rule, and the compiler says so.
+
+target buffer;
+endian little;
+
+// No `minimal`: the protobuf wire format accepts non-minimal varint encodings,
+// so a value has more than one legal encoding. That is the first of the five.
+varint_type pb_varint {
+	encoding = leb128;
+	max_bits = 64;
+}
+
+struct ProtoMessage {
+	tlv fields (
+		tag_type       = pb_varint,
+		tag_decode     = { field = tag >> 3, wire = tag & 0x7 },
+		value_size     = switch (wire) {
+			case 0: self_delimiting,
+			case 1: 8,
+			case 2: prefixed(pb_varint),
+			case 5: 4,
+			default: error,             // groups (3, 4) unsupported
+		},
+		duplicate_tags = allowed,       // repeated, and last-wins scalars
+		known = {
+			1 : { name = user_id,  wire = 0, type = pb_varint },
+			2 : { name = username, wire = 2, type = u8 },
+			3 : { name = score,    wire = 5, type = f32 },
+		},
+		unknown = preserve              // protobuf semantics
+	);
+}
+
+// The expected outcome, which the compiler must produce and explain:
+//
+//   ProtoMessage           size=Unbounded  offset=AbsoluteStatic(0)
+//   ProtoMessage.fields    access=Sequential  address=Unstable
+//   canonical = NonCanonical
+//
+// `situc explain ProtoMessage.fields` must enumerate the causes with source
+// locations. Asserted rather than required, because every one of them is a
+// true statement about protobuf that the schema exists to record.
+assert canonical(ProtoMessage);
+assert random_access(ProtoMessage.fields);
+assert stable_address(ProtoMessage.fields);
+
+// These do hold, and are the useful half: the region starts where it starts,
+// and situ can say so even about a format this hostile.
+require absolute_static(ProtoMessage.fields);

@@ -128,6 +128,11 @@ class Attr(Node):
 	span: Span
 	name: str
 	value: Expr | None = None
+	# Verbatim source of a value the parser retains but does not interpret --
+	# a `{ ... }` map of known tags, a `switch (...)` over wire types. Keeping
+	# the text is what lets the AST stay a faithful record of the schema even
+	# where a later phase owns the meaning.
+	raw: str | None    = None
 
 
 @dataclass(frozen=True)
@@ -266,6 +271,49 @@ class Indexed(Member):
 	name: str
 	args: tuple[Attr, ...]
 	members: tuple[Member, ...]
+
+	def argument(self, name: str) -> Expr | None:
+		for arg in self.args:
+			if arg.name == name:
+				return arg.value
+		return None
+
+
+class UnknownPolicy(Enum):
+	ERROR    = "error"
+	SKIP     = "skip"
+	PRESERVE = "preserve"
+
+
+class DuplicatePolicy(Enum):
+	ERROR   = "error"
+	ALLOWED = "allowed"
+
+
+@dataclass(frozen=True)
+class Tlv(Member):
+	"""A schema-free region of tag-length-value items (section 9.5).
+
+	Capabilities: sequential iteration, append if slack exists, lookup by tag
+	O(n), no stable addressing across any mutation, item mutation in place only
+	if same size.
+
+	`unknown` and `duplicate_tags` both default to `error`, deliberately: an
+	unknown tag or a repeated one is a malleability surface, and accepting one
+	silently is what situ refuses to do (section 14.5).
+	"""
+
+	span: Span
+	name: str
+	args: tuple[Attr, ...]
+	unknown: UnknownPolicy		= UnknownPolicy.ERROR
+	duplicates: DuplicatePolicy	= DuplicatePolicy.ERROR
+	ordered: bool			= False
+	attrs: tuple[Attr, ...]		= ()
+	# Wire types the `value_size` dispatch accepts. Protobuf's packed-versus-
+	# unpacked ambiguity is visible here and nowhere else: a repeated scalar
+	# may be written as several scalar items or as one length-prefixed one.
+	wire_types: tuple[int, ...]	= ()
 
 	def argument(self, name: str) -> Expr | None:
 		for arg in self.args:

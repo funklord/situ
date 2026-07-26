@@ -31,7 +31,6 @@ def evaluate_literal(expr: ast.Expr) -> int | None:
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
 FUTURE_CONSTRUCTS = {
-	"tlv":			(6,  "`tlv`"),
 	"codec":		(7,  "`codec`"),
 	"impl":			(7,  "`impl`"),
 	"authenticated":	(8,  "`authenticated`"),
@@ -514,6 +513,8 @@ class Parser:
 				return self.parse_opaque()
 			if token.text == "indexed":
 				return self.parse_indexed()
+			if token.text == "tlv":
+				return self.parse_tlv()
 
 		return self.parse_field()
 
@@ -562,6 +563,138 @@ class Parser:
 
 		name = members[0].name if isinstance(members[0], ast.Field) else "entries"
 		return ast.Indexed(self.span_from(start), name, tuple(args), members)
+
+	def parse_tlv(self) -> ast.Tlv:
+		"""`tlv options (tag_type = u8, known = { ... }, unknown = error);`
+
+		Both the simple and the general form of section 9.5 parse here: the
+		general form is the same argument list with `tag_decode`, `value_size`
+		and `duplicate_tags` present. Nothing about the shape differs, so
+		nothing about the parse does either.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a region name")
+		self.expect_symbol("(", "before the tlv arguments")
+
+		self._dispatch_cases: tuple[int, ...] = ()
+		args: list[ast.Attr] = []
+		while not self.current.is_symbol(")"):
+			args.append(self.parse_tlv_argument())
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol(")", "after the tlv arguments")
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after the tlv region")
+
+		span = self.span_from(start)
+		return ast.Tlv(
+			span       = span,
+			name       = name.text,
+			args       = tuple(args),
+			unknown    = self._tlv_policy(args, "unknown", ast.UnknownPolicy, span),
+			duplicates = self._tlv_policy(args, "duplicate_tags",
+			                              ast.DuplicatePolicy, span),
+			ordered    = any(arg.name == "ordering" for arg in args),
+			attrs      = attrs,
+			wire_types = self._dispatch_cases,
+		)
+
+	def parse_tlv_argument(self) -> ast.Attr:
+		"""One `key = value` of a tlv argument list.
+
+		The values are structured -- a `{ ... }` map of known tags, a
+		`switch (...)` over wire types -- so they are captured as written and
+		interpreted by the pass that needs them, rather than being flattened
+		into an expression here.
+		"""
+		name = self.expect_ident("a tlv argument name")
+		if self.accept_symbol("=") is None:
+			return ast.Attr(self.span_from(name), name.text, None)
+
+		if self.current.is_symbol("{"):
+			start = self.current
+			self._skip_balanced("{", "}")
+			return ast.Attr(self.span_from(name), name.text, None,
+			                raw=self._verbatim(start))
+
+		if self.current.is_ident("switch"):
+			start = self.current
+			self.advance()
+			if self.current.is_symbol("("):
+				self._skip_balanced("(", ")")
+			self._dispatch_cases = self._collect_cases()
+			return ast.Attr(self.span_from(name), name.text, None,
+			                raw=self._verbatim(start))
+
+		return ast.Attr(self.span_from(name), name.text, self.parse_expr())
+
+	def _verbatim(self, start: Token) -> str:
+		"""The source text from `start` to the cursor, as written."""
+		return self.source.text[start.span.start : self.tokens[self.pos - 1].span.end]
+
+	def _collect_cases(self) -> tuple[int, ...]:
+		"""Record the `case N:` labels of a dispatch while skipping its bodies.
+
+		The bodies are `self_delimiting`, `prefixed(...)` and the like, which
+		belong to a later pass. The labels are wire types, and which ones a
+		region accepts is a capability question: see the packed-versus-unpacked
+		rule in propagate.py.
+		"""
+		labels: list[int] = []
+
+		self.expect_symbol("{", "to open the dispatch")
+		depth = 1
+		while depth > 0:
+			if self.current.kind is TokenKind.EOF:
+				raise error("unterminated dispatch", self.current.span)
+
+			if self.current.is_symbol("{"):
+				depth += 1
+			elif self.current.is_symbol("}"):
+				depth -= 1
+			elif (depth == 1 and self.current.is_ident("case")
+					and self.peek().kind is TokenKind.INT):
+				labels.append(self.peek().value)
+
+			self.advance()
+
+		return tuple(labels)
+
+	def _skip_balanced(self, opener: str, closer: str) -> None:
+		"""Consume a balanced group, keeping its span but not its structure."""
+		self.expect_symbol(opener, "to open the group")
+		depth = 1
+		while depth > 0:
+			if self.current.kind is TokenKind.EOF:
+				raise error(f"unterminated `{opener}` group", self.current.span)
+			if self.current.is_symbol(opener):
+				depth += 1
+			elif self.current.is_symbol(closer):
+				depth -= 1
+			self.advance()
+
+	def _tlv_policy(self, args: list[ast.Attr], name: str, enum: type[EnumT],
+			span: Span) -> EnumT:
+		"""Read a policy argument, defaulting to the safe option.
+
+		Section 14.5: unknown tags are rejected by default and duplicates are
+		too. A schema that wants the permissive behaviour has to say so, and
+		saying so appears in the capability map.
+		"""
+		for arg in args:
+			if arg.name != name:
+				continue
+			if not isinstance(arg.value, ast.NameRef):
+				raise error(f"`{name}` needs a policy name", arg.span)
+			for candidate in enum:
+				if candidate.value == arg.value.name:
+					return candidate
+			options = ", ".join(f"`{item.value}`" for item in enum)
+			raise error(f"unknown `{name}` policy `{arg.value.name}`",
+			            arg.value.span, label=f"expected one of {options}")
+
+		return next(iter(enum))		# ERROR is first in both policies
 
 	def parse_variant(self) -> ast.Variant:
 		"""`variant body switch (hdr.type) { case A: X a; default: error; }`"""

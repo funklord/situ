@@ -415,7 +415,6 @@ def test_future_declarations_name_their_phase(source: str, phase: int) -> None:
 
 
 @pytest.mark.parametrize(("member", "phase"), [
-	("tlv options (tag_type = u8);",		6),
 	("authenticated { u8 a; }",			8),
 	("sealed(aes) { u8 a; }",			8),
 	("tag u8[16];",					8),

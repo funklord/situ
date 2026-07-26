@@ -297,13 +297,18 @@ def test_reachable_rows_are_all_tested() -> None:
 		"variant-unequal-arms",
 		"opaque",
 		"indexed",
+		"tlv",
+		"tlv-unordered-items",
+		"tlv-non-minimal-tag",
+		"tlv-packed-and-unpacked",
+		"tlv-unknown-preserve",
+		"tlv-unordered-duplicates",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
 
 # Rows of section 11.3 not yet reachable, with the phase that adds them:
 #
-#   tlv, tlv unknown = preserve                                     phase 6
 #   authenticated, sealed                                           phase 8
 #   register no_rmw, register EffectOnRead                          phase 10
 

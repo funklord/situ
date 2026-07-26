@@ -90,6 +90,16 @@ class Placement:
 	# For a variant: each arm's name and worst-case size, so the advisor can
 	# cost equalizing them.
 	arm_sizes: tuple[tuple[str, int], ...] = ()
+	# For a tlv region: the policies that decide whether it can be canonical.
+	tlv_unknown: str | None		= None
+	tlv_duplicates: str | None	= None
+	tlv_ordered: bool		= False
+	# The varint used as the tag type, and whether it demands minimal
+	# encodings. A non-minimal tag is a cause of non-canonicity in its own
+	# right, independent of anything the items do.
+	tlv_tag_varint: str | None	= None
+	tlv_tag_minimal: bool		= True
+	tlv_wire_types: tuple[int, ...]	= ()
 
 	@property
 	def is_fixed_size(self) -> bool:
@@ -383,6 +393,8 @@ class Solver:
 				self.place_variant(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.Opaque):
 				self.place_opaque(member, scope, layout, prefix, state)
+			elif isinstance(member, ast.Tlv):
+				self.place_tlv(member, scope, layout, prefix, state)
 			elif isinstance(member, ast.Indexed):
 				self.place_indexed(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.MarkerField):
@@ -428,6 +440,47 @@ class Solver:
 			state.cause = (member.name, member.span, _render_extent(bits))
 
 		state.cursor = cursor.advance(bits)
+
+	def place_tlv(self, member: ast.Tlv, scope: Scope, layout: StructLayout,
+			prefix: str, state: Walk) -> None:
+		"""A schema-free run of tag-length-value items (section 9.5).
+
+		Nothing about its extent is knowable here: the items are whatever the
+		data holds. It is Unbounded, and everything after it is Dynamic.
+		"""
+		cursor     = state.cursor
+		tag_type   = member.argument("tag_type")
+		tag_varint = (self.varints.get(tag_type.name)
+		              if isinstance(tag_type, ast.NameRef) else None)
+
+		layout.placements.append(Placement(
+			path          = f"{prefix}.{member.name}",
+			name          = member.name,
+			kind          = "tlv",
+			type_name     = "tlv",
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = 0,
+			size_max_bits = None,
+			scalar        = None,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = member.span,
+			attrs         = member.attrs,
+			tlv_unknown   = member.unknown.value,
+			tlv_duplicates = member.duplicates.value,
+			tlv_ordered   = member.ordered,
+			tlv_tag_varint = tag_varint.name if tag_varint else None,
+			tlv_tag_minimal = tag_varint.minimal if tag_varint else True,
+			tlv_wire_types = member.wire_types,
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+		))
+
+		if state.cause is None:
+			state.cause = (member.name, member.span, "Unbounded")
+
+		state.cursor = cursor.advance(Interval(0, None))
 
 	def place_indexed(self, decl: ast.StructDecl, member: ast.Indexed,
 			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:

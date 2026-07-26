@@ -217,10 +217,20 @@ def _is_bounded_size(context: Context) -> bool:
 	same place but bury the reason, and the reason is the product.
 	"""
 	placement = context.placement
-	return (placement.varint is None
+	return (not _owns_its_mutate(placement)
 	        and not _has_unequal_arms(context)
 	        and placement.size_max_bits is not None
 	        and placement.size_max_bits != placement.size_bits)
+
+
+# Constructs whose own row states the mutate axis with a reason specific to
+# them. The generic size rows below must not restate it: the values would often
+# meet to the same place, but the specific reason is the product.
+OWNS_MUTATE = frozenset({"tlv", "opaque"})
+
+
+def _owns_its_mutate(placement: Placement) -> bool:
+	return placement.kind in OWNS_MUTATE or placement.varint is not None
 
 
 def _is_unbounded_size(context: Context) -> bool:
@@ -260,6 +270,58 @@ def _is_varint(context: Context) -> bool:
 
 def _is_non_minimal_varint(context: Context) -> bool:
 	return context.placement.varint is not None and not context.placement.varint_minimal
+
+
+def _is_tlv(context: Context) -> bool:
+	return context.placement.kind == "tlv"
+
+
+def _tlv_preserves_unknown(context: Context) -> bool:
+	return context.placement.tlv_unknown == "preserve"
+
+
+def _tlv_has_no_ordering(context: Context) -> bool:
+	"""TLV items are self-describing, so they may appear in any order.
+
+	{A, B} and {B, A} encode the same content, which means the format admits
+	more than one encoding of a value unless the schema pins the order. This is
+	inherent to the construct, not to any policy on it.
+	"""
+	return context.placement.kind == "tlv" and not context.placement.tlv_ordered
+
+
+def _tlv_tag_is_non_minimal(context: Context) -> bool:
+	return (context.placement.kind == "tlv"
+	        and context.placement.tlv_tag_varint is not None
+	        and not context.placement.tlv_tag_minimal)
+
+
+# Protobuf wire types. 2 is length-prefixed; the rest carry a scalar directly.
+LENGTH_PREFIXED_WIRE = 2
+SCALAR_WIRES = frozenset({0, 1, 5})
+
+
+def _tlv_allows_packed_and_unpacked(context: Context) -> bool:
+	"""A repeated scalar that may be written either way.
+
+	Protobuf lets a repeated scalar field appear as several scalar items or as
+	one length-prefixed item holding all of them. Both are legal for the same
+	content, which is a cause of non-canonicity independent of ordering or
+	unknown-field retention. It is visible exactly where the dispatch accepts a
+	length-prefixed wire type alongside a scalar one, with duplicates allowed.
+	"""
+	placement = context.placement
+	if placement.kind != "tlv" or placement.tlv_duplicates != "allowed":
+		return False
+
+	wires = set(placement.tlv_wire_types)
+	return LENGTH_PREFIXED_WIRE in wires and bool(wires & SCALAR_WIRES)
+
+
+def _tlv_allows_unordered_duplicates(context: Context) -> bool:
+	"""Duplicates without an ordering rule: the same content, several encodings."""
+	return (context.placement.tlv_duplicates == "allowed"
+	        and not context.placement.tlv_ordered)
 
 
 def _is_opaque(context: Context) -> bool:
@@ -426,13 +488,7 @@ TABLE: tuple[Row, ...] = (
 		rule = Rule(
 			name      = "unbounded-size",
 			construct = "a member with no upper bound on its length",
-			effects   = (
-				Effect(Axis.SIZE, Value("Unbounded"),
-				       "nothing in the schema limits how many bytes this can "
-				       "occupy, so it cannot be statically allocated"),
-				Effect(Axis.MUTATE, Value("Shifting"),
-				       "changing its length moves everything after it"),
-			),
+			effects   = (),		# see _unbounded_effects
 			remedy    = "give the driving length field a `[max = N]`, which makes "
 			            "the region statically allocatable",
 		),
@@ -449,6 +505,93 @@ TABLE: tuple[Row, ...] = (
 			            "region so an offset table makes access O(1)",
 		),
 		applies = _has_dynamic_elements,
+	),
+	Row(
+		rule = Rule(
+			name      = "tlv",
+			construct = "a `tlv` region",
+			effects   = (
+				Effect(Axis.ACCESS, Value("Sequential"),
+				       "items are found by walking from the start; lookup by "
+				       "tag is O(n)"),
+				Effect(Axis.ADDRESS, Value("Unstable"),
+				       "no item keeps a stable address across any mutation of "
+				       "the region"),
+				Effect(Axis.MUTATE, Value("InPlaceSlack"),
+				       "an item is rewritten in place only at the same size, "
+				       "and an append needs slack"),
+			),
+			remedy    = "for a tag that is read on every message, a `positional` "
+			            "field gives O(1) access instead of an O(n) scan "
+			            "(project.md section 18.2)",
+		),
+		applies = _is_tlv,
+	),
+	Row(
+		rule = Rule(
+			name      = "tlv-unordered-items",
+			construct = "a `tlv` region with no ordering rule",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "items are self-describing, so the same content "
+			                    "can be written with them in any order"),),
+			remedy    = "declare an ordering rule on the region, which is what "
+			            "makes a tag-based format signable at all",
+		),
+		applies = _tlv_has_no_ordering,
+	),
+	Row(
+		rule = Rule(
+			name      = "tlv-non-minimal-tag",
+			construct = "a `tlv` region whose tag type accepts non-minimal encodings",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "the tag itself has more than one encoding, so "
+			                    "two byte sequences carry the same item"),),
+			remedy    = "declare `minimal;` on the varint type used as `tag_type`",
+		),
+		applies = _tlv_tag_is_non_minimal,
+	),
+	Row(
+		rule = Rule(
+			name      = "tlv-packed-and-unpacked",
+			construct = "a `tlv` region accepting both packed and unpacked "
+			            "encodings of a repeated value",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "a repeated value can be written as several "
+			                    "scalar items or as one length-prefixed item, so "
+			                    "the same content has more than one encoding"),),
+			remedy    = "accept one form or the other, not both: drop the "
+			            "length-prefixed wire type from the dispatch, or the "
+			            "scalar ones",
+		),
+		applies = _tlv_allows_packed_and_unpacked,
+	),
+	Row(
+		rule = Rule(
+			name      = "tlv-unknown-preserve",
+			construct = "a `tlv` region with `unknown = preserve`",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "unknown items are carried through unchanged, so "
+			                    "the encoding admits content the schema does not "
+			                    "describe"),),
+			remedy    = "use `unknown = error`, which is the default, and version "
+			            "the schema explicitly rather than retaining unknowns "
+			            "(project.md section 19)",
+		),
+		applies = _tlv_preserves_unknown,
+	),
+	Row(
+		rule = Rule(
+			name      = "tlv-unordered-duplicates",
+			construct = "a `tlv` region with `duplicate_tags = allowed` and no "
+			            "ordering rule",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "the same content can be written with the "
+			                    "duplicates in any order, so it has more than "
+			                    "one encoding"),),
+			remedy    = "declare an ordering rule alongside `duplicate_tags = "
+			            "allowed`, or use `duplicate_tags = error`",
+		),
+		applies = _tlv_allows_unordered_duplicates,
 	),
 	Row(
 		rule = Rule(
@@ -619,6 +762,8 @@ def apply(context: Context) -> Resolved:
 			effects = _frame_effects(context)
 		elif row.rule.name == "variant-unequal-arms":
 			effects = _variant_effects(context)
+		elif row.rule.name == "unbounded-size":
+			effects = _unbounded_effects(context)
 
 		for effect in effects:
 			effect  = _parameterise(effect, context.placement)
@@ -640,6 +785,18 @@ def apply(context: Context) -> Resolved:
 			))
 
 	return Resolved(placement=placement, vector=vector, weakenings=weakenings)
+
+
+def _unbounded_effects(context: Context) -> tuple[Effect, ...]:
+	effects = [Effect(Axis.SIZE, Value("Unbounded"),
+	                  "nothing in the schema limits how many bytes this can "
+	                  "occupy, so it cannot be statically allocated")]
+
+	if not _owns_its_mutate(context.placement):
+		effects.append(Effect(Axis.MUTATE, Value("Shifting"),
+		                      "changing its length moves everything after it"))
+
+	return tuple(effects)
 
 
 def _variant_effects(context: Context) -> tuple[Effect, ...]:

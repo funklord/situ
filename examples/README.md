@@ -22,6 +22,7 @@ meant to be read in roughly this order.
 | [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |
 | [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
+| [protobuf](protobuf/) | The language's hardest conformance test: the worst case on every axis, and five independent causes of non-canonicity. project.md section 9.7. |
 
 ## Waiting on later phases
 
@@ -65,6 +66,8 @@ Three jobs, in order of how much they matter:
 1. **Design pressure made visible.** ipv4 against tcp is the clearest pair: the
    same density of bit packing, but one of them straddles and the other does
    not, and that is a property of the wire format rather than of the schema.
+   `protobuf` is the other end of the range: a format that gives up almost
+   every capability, described faithfully and with each loss accounted for.
 2. **Test material.** Every schema here is parsed by the test suite, the
    buildable ones are checked to round-trip, their committed maps are
    regenerated and compared, and their generated C is compiled warning-clean

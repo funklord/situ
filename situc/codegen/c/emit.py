@@ -221,7 +221,7 @@ class Emitter:
 				"}",
 			]
 
-		return [
+		lines = [
 			*self._invalidation_note(struct),
 			"/* Acquire a view. This struct is a frame: its extent depends on the",
 			" * data, so the caller supplies the length they have and the bounds",
@@ -232,13 +232,23 @@ class Emitter:
 			"(const situ_msg_t *msg, uint32_t offset, uint32_t length,",
 			"\t\tsitu_view_t *out)",
 			"{",
-			f"\tif (length < {macro(self.prefix, name, 'SIZE_MIN')}) {{",
-			"\t\treturn SITU_ERR_BOUNDS;",
-			"\t}",
-			"",
-			"\treturn situ_view_at(msg, offset, length, out);",
-			"}",
 		]
+
+		# A minimum of zero would compile to `length < 0u`, which no compiler
+		# should have to be told is always false. The check is omitted rather
+		# than emitted and suppressed: a check that cannot fire is noise.
+		if layout.size_bytes > 0:
+			lines.extend([
+				f"\tif (length < {macro(self.prefix, name, 'SIZE_MIN')}) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"",
+			])
+		else:
+			lines.append("\t/* No minimum: every member of this struct may be empty. */")
+
+		lines.extend(["\treturn situ_view_at(msg, offset, length, out);", "}"])
+		return lines
 
 	def _drivers(self, struct: ResolvedStruct) -> list[str]:
 		"""Fields whose value decides where later members start."""

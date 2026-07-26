@@ -78,6 +78,17 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.StructDecl):
 		return _struct_lines(decl)
 
+	if isinstance(decl, ast.VarintDecl):
+		lines = [f"varint_type {decl.name} {{",
+		         f"\tencoding = {decl.encoding.value};"]
+		if decl.transform is not None:
+			lines.append(f"\ttransform = {decl.transform.value};")
+		lines.append(f"\tmax_bits = {decl.max_bits};")
+		if decl.minimal:
+			lines.append("\tminimal;")
+		lines.append("}")
+		return lines
+
 	if isinstance(decl, ast.EndianMarkerDecl):
 		return [
 			f"endian_marker {decl.name} : {decl.backing.name} {{",
@@ -119,6 +130,12 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 			lines.append(f"{indent}positional {{")
 			lines.extend(member_lines(member.members, depth + 1))
 			lines.append(f"{indent}}}")
+		elif isinstance(member, ast.Indexed):
+			lines.append(f"{indent}indexed({_args_to_source(member.args)}) {{")
+			lines.extend(member_lines(member.members, depth + 1))
+			lines.append(f"{indent}}}")
+		elif isinstance(member, ast.Variant):
+			lines.extend(_variant_lines(member, depth))
 		else:
 			lines.append(indent + member_to_source(member))
 
@@ -137,11 +154,51 @@ def member_to_source(member: ast.Member) -> str:
 	if isinstance(member, ast.MarkerField):
 		return f"endian_marker {member.name}{_attrs_to_source(member.attrs)};"
 
+	if isinstance(member, ast.Opaque):
+		return (f"opaque {member.name} [{expr_to_source(member.size)}]"
+		        f"{_attrs_to_source(member.attrs)};")
+
+	if isinstance(member, ast.Tlv):
+		return f"tlv {member.name} ({_args_to_source(member.args)});"
+
 	if isinstance(member, ast.Reserved):
 		return (f"reserved {member.type_ref.name}{_array_to_source(member.array)}"
 		        f"{_attrs_to_source(member.attrs)};")
 
 	raise TypeError(f"cannot unparse {type(member).__name__}")
+
+
+def _variant_lines(variant: ast.Variant, depth: int) -> list[str]:
+	indent = "\t" * depth
+	lines  = [f"{indent}variant {variant.name} switch "
+	          f"({expr_to_source(variant.discriminant)})"
+	          f"{_attrs_to_source(variant.attrs)} {{"]
+
+	for arm in variant.arms:
+		label = ("default" if arm.value is None
+		         else f"case {expr_to_source(arm.value)}")
+		if arm.is_error:
+			lines.append(f"{indent}\t{label}: error;")
+		elif arm.is_opaque:
+			lines.append(f"{indent}\t{label}: opaque;")
+		else:
+			assert arm.member is not None
+			lines.append(f"{indent}\t{label}: {member_to_source(arm.member)}")
+
+	lines.append(f"{indent}}}")
+	return lines
+
+
+def _args_to_source(args: tuple[ast.Attr, ...]) -> str:
+	rendered = []
+	for arg in args:
+		if arg.raw is not None:
+			rendered.append(f"{arg.name} = {arg.raw}")
+		elif arg.value is None:
+			rendered.append(arg.name)
+		else:
+			rendered.append(f"{arg.name} = {expr_to_source(arg.value)}")
+	return ", ".join(rendered)
 
 
 def _array_to_source(array: ast.ArraySpec | None) -> str:

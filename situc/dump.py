@@ -46,6 +46,13 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.StructDecl):
 		return _struct(decl, depth)
 
+	if isinstance(decl, ast.VarintDecl):
+		detail = f"encoding={decl.encoding.value} max_bits={decl.max_bits}"
+		if decl.transform is not None:
+			detail += f" transform={decl.transform.value}"
+		detail += f" minimal={'yes' if decl.minimal else 'no'}"
+		return [_indent(depth, f"varint_type {decl.name} {detail}")]
+
 	if isinstance(decl, ast.EndianMarkerDecl):
 		return [
 			_indent(depth, f"endian_marker {decl.name} : {decl.backing.name}"),
@@ -101,6 +108,34 @@ def _member(member: ast.Member, depth: int) -> list[str]:
 	if isinstance(member, ast.MarkerField):
 		lines = [_indent(depth, f"endian_marker {member.name}")]
 		lines.extend(_attrs(member.attrs, depth + 1))
+		return lines
+
+	if isinstance(member, ast.Opaque):
+		return [_indent(depth, f"opaque {member.name} [{expr_to_source(member.size)}]")]
+
+	if isinstance(member, ast.Tlv):
+		return [_indent(depth, f"tlv {member.name} unknown={member.unknown.value} "
+		                       f"duplicates={member.duplicates.value} "
+		                       f"ordered={'yes' if member.ordered else 'no'}")]
+
+	if isinstance(member, ast.Indexed):
+		lines = [_indent(depth, f"indexed {member.name}")]
+		lines.extend(_members(member.members, depth + 1))
+		return lines
+
+	if isinstance(member, ast.Variant):
+		lines = [_indent(depth,
+		                 f"variant {member.name} switch "
+		                 f"{expr_to_source(member.discriminant)}")]
+		for arm in member.arms:
+			label = ("default" if arm.value is None
+		         else f"case {expr_to_source(arm.value)}")
+			if arm.member is None:
+				policy = "error" if arm.is_error else "opaque"
+				lines.append(_indent(depth + 1, f"{label} -> {policy}"))
+			else:
+				lines.append(_indent(depth + 1, label))
+				lines.extend(_member(arm.member, depth + 2))
 		return lines
 
 	if isinstance(member, ast.Reserved):
