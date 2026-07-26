@@ -41,7 +41,7 @@ endif
 export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
-.PHONY: all runtime compiler test test-c test-py check lint cross clean help
+.PHONY: all runtime compiler test test-c test-py check lint cross cross-test clean help
 
 all: runtime
 
@@ -54,6 +54,7 @@ help:
 	@echo '  check      mypy strict over situc/'
 	@echo '  lint       source convention checks (indent, ASCII, whitespace)'
 	@echo '  cross      compile-only build for aarch64'
+	@echo '  cross-test run generated accessors on aarch64 under emulation'
 	@echo '  clean      remove the build tree'
 	@echo ''
 	@echo 'Variables: CC AR LD CFLAGS CROSS_COMPILE ARCH BUILD_ROOT PYTHON'
@@ -61,7 +62,7 @@ help:
 runtime:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime'
 
-test: test-py check lint test-c
+test: test-py check lint test-c cross-test
 
 test-py:
 	$(PYTHON) -m pytest tests -q
@@ -85,9 +86,16 @@ cross:
 	@$(MAKE) --no-print-directory \
 		CROSS_COMPILE='$(CROSS_AARCH64)' ARCH=aarch64 runtime
 
+# Behavioural, not just warning-clean: the generated accessors are run on
+# aarch64 under emulation, and compiled big endian with a static assertion on
+# the byte-order marker. See docs/decisions/0007-cross-architecture-testing.md.
+cross-test:
+	@$(MAKE) --no-print-directory -C tests/cross BUILD_DIR='$(BUILD_DIR)/cross' check
+
 clean:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime' clean
 	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' clean
+	@$(MAKE) --no-print-directory -C tests/cross BUILD_DIR='$(BUILD_DIR)/cross' clean
 	rm -rf '$(BUILD_ROOT)'
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 	rm -rf .mypy_cache .pytest_cache
