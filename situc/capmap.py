@@ -8,6 +8,11 @@ format is optimised for that over prettiness. Two consequences:
   the file. Fitting the column to the content would reflow every line of a
   block whenever a long name is added, burying the real change.
 
+Core axes are always present so a diff of one line reads on its own. Any other
+axis appears only when it has been weakened, which is exactly when a reader
+needs to see it -- and a field gaining a weakening shows up as a line gaining a
+token rather than as a reflowed block.
+
 The committed map doubles as the protocol documentation that projects always
 want and never have, which is the other reason it is readable text.
 """
@@ -17,98 +22,91 @@ from __future__ import annotations
 from pathlib import PurePath
 
 from situc import ast
-from situc.capability import Vector, derive
-from situc.layout import BITS_PER_BYTE, SchemaLayout, StructLayout
+from situc.capability import DOMAINS, Axis, Value, Vector
+from situc.resolve import ResolvedSchema
 
-FORMAT_VERSION = 0
+FORMAT_VERSION = 1
 
-# Phase 2 resolves these five (section 26.2). The rest arrive with the lattice.
-AXES = ("offset", "size", "align", "repr", "atomic")
+# Always shown: these describe where the bytes are, which is the question the
+# map exists to answer.
+CORE_AXES = (Axis.OFFSET, Axis.SIZE, Axis.ALIGN, Axis.REPR, Axis.ATOMIC)
 
 PATH_WIDTH = 38
 
 
-def render(schema: ast.Schema, layout: SchemaLayout, path: str) -> str:
+def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 	# Only the file name is recorded. A map committed beside its schema must be
 	# byte-identical however it was generated, and an invocation path would make
 	# it depend on the caller's working directory.
 	lines = [
 		f"# situ capability map v{FORMAT_VERSION}",
 		f"# schema: {PurePath(path).name}",
-		f"# axes:   {' '.join(AXES)}",
+		f"# core:   {' '.join(axis.value for axis in CORE_AXES)}",
+		"#",
+		"# Core axes are always shown. Any other axis appears only where it has",
+		"# been weakened below its strongest value.",
 		"#",
 		"# Offsets are byte values, or byte:bit where a field does not start on",
 		"# a byte boundary. Sizes are bytes unless suffixed with `bit`.",
 	]
 
-	aggregates = _aggregate_paths(schema, layout)
-
-	for name in sorted(layout.structs):
+	for name in sorted(resolved.structs):
 		lines.append("")
-		lines.extend(_struct(layout.structs[name], aggregates))
+		lines.extend(_struct(name, resolved))
 
 	return "\n".join(lines) + "\n"
 
 
-def _struct(layout: StructLayout, aggregates: set[str]) -> list[str]:
-	size  = (f"{layout.size_bytes}" if layout.is_byte_sized
-	         else f"{layout.size_bits}bit")
-	lines = [f"struct {layout.name} size={size}"]
+def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
+	struct  = resolved.structs[name]
+	layout  = struct.layout
+	size    = f"{layout.size_bytes}" if layout.is_byte_sized else f"{layout.size_bits}bit"
 
-	# Members are derived first so an aggregate can be given the vectors it has
-	# to meet over. Nested paths are the ones prefixed with the aggregate's own
-	# path, which the solver has already flattened into this list.
-	vectors = {
-		placement.path: derive(placement)
-		for placement in layout.placements
-		if placement.path not in aggregates
-	}
-
-	for placement in layout.placements:
-		if placement.path in aggregates:
-			members = [
-				vector for path, vector in vectors.items()
-				if path.startswith(placement.path + ".")
-			]
-			vector = derive(placement, members)
-		else:
-			vector = vectors[placement.path]
-
-		lines.append(_entry(placement.path, vector))
-
+	lines = [f"struct {name} size={size} {_axes(struct.vector, core=False)}".rstrip()]
+	for entry in struct.entries:
+		lines.append(_entry(entry.placement.path, entry.vector))
 	return lines
 
 
 def _entry(path: str, vector: Vector) -> str:
-	axes = " ".join(f"{name}={value}" for name, value in vector.items())
-	return f"  {path.ljust(PATH_WIDTH)} {axes}".rstrip()
+	return f"  {path.ljust(PATH_WIDTH)} {_axes(vector)}".rstrip()
 
 
-def _aggregate_paths(schema: ast.Schema, layout: SchemaLayout) -> set[str]:
-	"""Paths whose type is a struct rather than a scalar or enum.
+def _axes(vector: Vector, core: bool = True) -> str:
+	"""Core axes in their declared order, then any other weakened axis.
 
-	Their vector is the meet of their members', so they claim no representation
-	or atomicity of their own.
+	The order is fixed rather than taken from the Axis enum, so a line reads the
+	same way every time and a diff stays local to what actually changed.
 	"""
-	structs = {decl.name for decl in schema.structs()}
-	return {
-		placement.path
-		for struct in layout.structs.values()
-		for placement in struct.placements
-		if placement.type_name in structs
-	}
+	shown: list[tuple[Axis, Value]] = []
+
+	if core:
+		shown.extend((axis, vector.get(axis)) for axis in CORE_AXES)
+
+	for axis, value in vector.items():
+		if axis in CORE_AXES and core:
+			continue
+		if value.base != DOMAINS[axis][0]:
+			shown.append((axis, value))
+
+	return " ".join(f"{axis.value}={value.render()}" for axis, value in shown)
 
 
-def summary(layout: SchemaLayout) -> str:
+def summary(resolved: ResolvedSchema) -> str:
 	"""A one-line-per-struct digest, for humans rather than for diffing."""
 	lines = []
-	for name in sorted(layout.structs):
-		struct = layout.structs[name]
-		if struct.is_byte_sized:
-			lines.append(f"{name}: {struct.size_bytes} bytes, "
-			             f"{len(struct.placements)} entries")
-		else:
-			lines.append(f"{name}: {struct.size_bits} bits "
-			             f"({struct.size_bits % BITS_PER_BYTE} short of a byte), "
-			             f"{len(struct.placements)} entries")
+	for name in sorted(resolved.structs):
+		struct = resolved.structs[name]
+		layout = struct.layout
+		size   = (f"{layout.size_bytes} bytes" if layout.is_byte_sized
+		          else f"{layout.size_bits} bits")
+		weakened = sorted({
+			axis.value
+			for entry in struct.entries
+			for axis, value in entry.vector.items()
+			if value.base != DOMAINS[axis][0]
+		})
+		note = f"; weakened: {', '.join(weakened)}" if weakened else ""
+		lines.append(f"{name}: {size}, {len(struct.entries)} entries{note}")
+
 	return "\n".join(lines) + "\n"

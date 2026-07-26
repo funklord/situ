@@ -108,8 +108,37 @@ class Diagnostic:
 
 		return "\n".join(blocks)
 
+	def to_dict(self) -> dict[str, object]:
+		"""Machine-readable form for `--diagnostics=json`.
+
+		Emitted so the advisor, editors and CI can consume diagnostics without
+		parsing prose (project.md section 17). The shape is committed and
+		snapshot-tested: adding a key is compatible, renaming one is not.
+		"""
+		return {
+			"severity": self.severity.value,
+			"message":  self.message,
+			"primary":  _label_dict(self.primary) if self.primary else None,
+			"labels":   [_label_dict(label) for label in self.labels],
+			"notes":    list(self.notes),
+		}
+
 	def __str__(self) -> str:
 		return self.render()
+
+
+def _label_dict(label: Label) -> dict[str, object]:
+	line, column = label.span.source.locate(label.span.start)
+	end_line, end_column = label.span.source.locate(label.span.end)
+	return {
+		"file":         label.span.source.path,
+		"line":         line,
+		"column":       column,
+		"end_line":     end_line,
+		"end_column":   end_column,
+		"text":         label.span.text(),
+		"message":      label.message,
+	}
 
 
 def _render_label(label: Label, width: int, arrow: bool) -> str:

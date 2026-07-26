@@ -1,14 +1,17 @@
-# situ capability map v0
+# situ capability map v1
 # schema: ipv4.situ
-# axes:   offset size align repr atomic
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct IPv4Address size=4
+struct IPv4Address size=4 atomic=NonAtomic
   IPv4Address.octets                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
 
-struct IPv4Header size=20
+struct IPv4Header size=20 repr=ValueConverted atomic=NonAtomic
   IPv4Header.version                     offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   IPv4Header.ihl                         offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   IPv4Header.dscp                        offset=AbsoluteStatic(0x01) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic

@@ -1,208 +1,180 @@
-"""Capability axis values.
+"""The capability lattice: axes, values, weakening order and meet.
 
-Phase 2 populates the five axes decidable from a static layout alone: `offset`,
-`size`, `align`, `repr` and `atomic`. The lattice itself -- meet, the ordering,
-and the propagation table of section 11.3 as data -- arrives in phase 3. What
-lives here is the vocabulary, spelled exactly as project.md section 11.1 spells
-it, so the committed map can be read against the specification.
+This is the core of the compiler (project.md section 11). Every other pass
+exists to feed it or to report its results, and where a design decision
+elsewhere conflicts with keeping it sound and decidable, the lattice wins.
 
-The one rule that shapes everything below: no construct may strengthen an axis.
-Where a value is uncertain, the weaker one is correct.
+The axes are independent. Each is a lattice with a defined weakening order, and
+the vector is a product lattice: incomparable vectors exist and that is fine.
+The compiler never needs a total order, only meet.
+
+**Nothing strengthens a capability.** Every construct either leaves an axis
+alone or weakens it. If an implementation seems to need the other direction,
+the axis definition is wrong -- stop and ask.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
-from situc import ast
-from situc.layout import BITS_PER_BYTE, Placement
-from situc.types import ScalarKind
 
-# The widest scalar, and so the strongest alignment worth reporting.
-MAX_ALIGN = 8
+class Axis(Enum):
+	SIZE		= "size"
+	OFFSET		= "offset"
+	ACCESS		= "access"
+	MUTATE		= "mutate"
+	ADDRESS		= "address"
+	ALIGN		= "align"
+	REPR		= "repr"
+	ATOMIC		= "atomic"
+	CANONICAL	= "canonical"
+	STAGE		= "stage"
+	AUTH		= "auth"
+	SECRECY		= "secrecy"
+	EFFECT		= "effect"
 
-ATOMIC_WIDTHS = frozenset({8, 16, 32, 64})
+
+# Domains, strongest first, exactly as section 11.1 orders them. This is the
+# normative table; the code below reads it rather than restating it.
+#
+# `stage` is the one axis that increases rather than weakens, so it is listed
+# in the direction of less usable and treated uniformly with the rest.
+#
+# `auth` is not truly ordered -- it is a set-valued tag identity -- but meet
+# needs some order, and Covered is the more constrained of the two: mutating
+# covered bytes marks a tag dirty. Phase 8 owns the real treatment.
+DOMAINS: dict[Axis, tuple[str, ...]] = {
+	Axis.SIZE:	("Fixed", "Bounded", "Unbounded"),
+	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "Dynamic"),
+	Axis.ACCESS:	("Random", "Sequential"),
+	Axis.MUTATE:	("InPlaceFixed", "InPlaceSlack", "Shifting",
+			 "RewriteRequired", "Immutable"),
+	Axis.ADDRESS:	("Stable", "FrameStable", "Unstable"),
+	Axis.ALIGN:	("Aligned", "Unaligned"),
+	Axis.REPR:	("MemoryIdentical", "ValueConverted", "ConditionallyConverted"),
+	Axis.ATOMIC:	("AtomicWord", "NonAtomic"),
+	Axis.CANONICAL:	("Canonical", "CanonicalGiven", "NonCanonical"),
+	Axis.STAGE:	("CompileTime", "ParseTime", "TransformTime", "VerifyGated"),
+	Axis.AUTH:	("Uncovered", "Covered"),
+	Axis.SECRECY:	("Public", "Secret"),
+	Axis.EFFECT:	("Pure", "EffectOnRead", "EffectOnWrite", "EffectBoth"),
+}
+
+# Axes whose parameter carries strength rather than identity. `Aligned(8)` is
+# stronger than `Aligned(2)`; `AbsoluteStatic(0x04)` is not stronger or weaker
+# than `AbsoluteStatic(0x08)`, it is simply a different offset.
+NUMERIC_STRENGTH = frozenset({Axis.ALIGN})
+
+
+@dataclass(frozen=True)
+class Value:
+	"""One axis value, with any parameters it carries."""
+
+	base: str
+	params: tuple[str, ...] = ()
+
+	def render(self) -> str:
+		if not self.params:
+			return self.base
+		return f"{self.base}({', '.join(self.params)})"
+
+	def __str__(self) -> str:
+		return self.render()
+
+
+def rank(axis: Axis, value: Value) -> int:
+	"""Position in the weakening order; larger is weaker."""
+	domain = DOMAINS[axis]
+	if value.base not in domain:
+		raise ValueError(f"`{value.base}` is not a value of axis `{axis.value}`")
+	return domain.index(value.base)
+
+
+def is_at_least(axis: Axis, actual: Value, required: Value) -> bool:
+	"""Whether `actual` is at least as strong as `required` on one axis."""
+	actual_rank   = rank(axis, actual)
+	required_rank = rank(axis, required)
+
+	if actual_rank != required_rank:
+		return actual_rank < required_rank
+
+	if axis in NUMERIC_STRENGTH and actual.params and required.params:
+		return int(actual.params[0]) >= int(required.params[0])
+
+	return True
+
+
+def meet_values(axis: Axis, left: Value, right: Value) -> Value:
+	"""The weaker of two values on one axis.
+
+	Meet is the worst case, never the best. Where both sides sit at the same
+	base but carry a strength-bearing parameter, the smaller parameter wins.
+	"""
+	if rank(axis, left) != rank(axis, right):
+		return left if rank(axis, left) > rank(axis, right) else right
+
+	if axis in NUMERIC_STRENGTH and left.params and right.params:
+		return left if int(left.params[0]) <= int(right.params[0]) else right
+
+	return left
 
 
 @dataclass(frozen=True)
 class Vector:
-	"""One field's capability vector, restricted to the phase 2 axes."""
+	"""One field's capability vector.
 
-	offset: str
-	size: str
-	align: str
-	repr: str
-	atomic: str
-
-	def items(self) -> list[tuple[str, str]]:
-		return [
-			("offset", self.offset),
-			("size",   self.size),
-			("align",  self.align),
-			("repr",   self.repr),
-			("atomic", self.atomic),
-		]
-
-
-def render_offset(offset_bits: int) -> str:
-	"""A byte offset, or `byte:bit` when the field does not start on a byte.
-
-	Never truncated to bytes. A sub-byte offset that printed as a plain byte
-	number would be a lie, and section 26.2 asks specifically that it be
-	reported as such.
+	Axes absent from `values` are at their strongest, which is the identity
+	element: a fixed-size, byte-aligned, host-order scalar weakens nothing.
 	"""
-	byte, bit = divmod(offset_bits, BITS_PER_BYTE)
-	return f"0x{byte:02X}" if bit == 0 else f"0x{byte:02X}:{bit}"
+
+	values: tuple[tuple[Axis, Value], ...] = ()
+
+	def get(self, axis: Axis) -> Value:
+		for held, value in self.values:
+			if held is axis:
+				return value
+		return Value(DOMAINS[axis][0])
+
+	def with_value(self, axis: Axis, value: Value) -> Vector:
+		"""Set an axis, refusing to strengthen it.
+
+		The refusal is an assertion rather than a diagnostic because it is an
+		implementation error, not a schema error: invariant 2 of section 26 says
+		no construct may strengthen a capability.
+		"""
+		current = self.get(axis)
+		if rank(axis, value) < rank(axis, current):
+			raise ValueError(
+				f"cannot strengthen {axis.value} from {current} to {value}; "
+				"no construct may strengthen a capability (project.md section 26)")
+
+		kept = tuple((held, held_value) for held, held_value in self.values
+		             if held is not axis)
+		return Vector(kept + ((axis, value),))
+
+	def meet(self, other: Vector) -> Vector:
+		"""Pointwise worst case. A struct's vector is the meet of its members'."""
+		result = Vector()
+		for axis in Axis:
+			result = result.with_value(
+				axis, meet_values(axis, self.get(axis), other.get(axis)))
+		return result
+
+	def is_at_least(self, other: Vector) -> bool:
+		return all(is_at_least(axis, self.get(axis), other.get(axis)) for axis in Axis)
+
+	def items(self) -> list[tuple[Axis, Value]]:
+		return [(axis, self.get(axis)) for axis in Axis]
 
 
-def render_size(size_bits: int) -> str:
-	byte, bit = divmod(size_bits, BITS_PER_BYTE)
-	if bit == 0:
-		return str(byte)
-	return f"{size_bits}bit"
+def strongest() -> Vector:
+	"""The identity vector: every axis at its strongest value."""
+	return Vector()
 
 
-def alignment_of(offset_bits: int) -> int:
-	"""The strongest power-of-two byte boundary this offset satisfies.
-
-	A property of the offset alone, as section 11.1 defines the axis: alignment
-	relative to the message base. `aligned(X, n)` then passes for every n up to
-	this value, which is what a schema author is asking about.
-	"""
-	if offset_bits % BITS_PER_BYTE != 0:
-		return 0
-
-	byte = offset_bits // BITS_PER_BYTE
-	if byte == 0:
-		return MAX_ALIGN
-
-	alignment = 1
-	while alignment < MAX_ALIGN and byte % (alignment * 2) == 0:
-		alignment *= 2
-	return alignment
-
-
-# Weakening order per axis, strongest first (section 11.1). The full lattice
-# with meet over every axis is phase 3; these two are the ones an aggregate
-# needs today.
-REPR_ORDER   = ("MemoryIdentical", "ValueConverted", "ConditionallyConverted")
-ATOMIC_ORDER = ("AtomicWord", "NonAtomic")
-
-
-def meet(values: list[str], order: tuple[str, ...]) -> str:
-	"""The weakest of a set of values on one axis.
-
-	A struct's vector is the meet of its members' (section 11.2). Meet is the
-	worst case, never the best: nothing may strengthen a capability.
-	"""
-	if not values:
-		return order[-1]
-	return max(values, key=lambda value: order.index(_base(value)))
-
-
-def _base(value: str) -> str:
-	return value.split("(", 1)[0]
-
-
-def derive(placement: Placement, members: list[Vector] | None = None) -> Vector:
-	"""Compute the phase 2 axes for one placement.
-
-	`members` is supplied for a field whose type is a struct: its `repr` and
-	`atomic` are then the meet of its members' rather than anything it claims
-	for itself. Its offset, size and alignment remain its own.
-	"""
-	aggregate = members is not None
-
-	if aggregate:
-		assert members is not None
-		representation = meet([vector.repr for vector in members], REPR_ORDER)
-		# A multi-field update is never atomic in v0, whatever the members say.
-		atomicity = "NonAtomic"
-	else:
-		representation = _repr(placement)
-		atomicity      = _atomic(placement)
-
-	return Vector(
-		offset = f"AbsoluteStatic({render_offset(placement.offset_bits)})",
-		size   = f"Fixed({render_size(placement.size_bits)})",
-		align  = _align(placement),
-		repr   = representation,
-		atomic = atomicity,
-	)
-
-
-def _align(placement: Placement) -> str:
-	"""Alignment relative to the message base.
-
-	A bit-packed field is always Unaligned, whatever byte it starts in: its
-	address is not a byte address, so there is no aligned access to be had. The
-	uniform answer is also the honest one -- reporting `Aligned(8)` for the
-	first bit of a byte and `Unaligned` for the second would suggest a
-	difference that does not exist for the caller.
-	"""
-	scalar = placement.scalar
-	if scalar is not None and scalar.is_bit_packed:
-		return "Unaligned"
-
-	alignment = alignment_of(placement.offset_bits)
-	return f"Aligned({alignment})" if alignment else "Unaligned"
-
-
-def _repr(placement: Placement) -> str:
-	"""Whether the value is literally the bytes.
-
-	Reported host-independently, which is what makes the map committable: the
-	same schema must produce the same map on every machine, or `map --check`
-	would fail on a build host that differs from a developer's.
-
-	A multi-byte scalar with a declared byte order is therefore reported
-	ValueConverted even though it happens to be MemoryIdentical on a host of
-	that order. That is the conservative direction -- weaker, never stronger --
-	and it is the correct value on any host that does not match.
-	"""
-	scalar = placement.scalar
-
-	if scalar is None:
-		return "ValueConverted"
-
-	# Bit packing always converts: the value has to be shifted and masked out of
-	# its containing byte (section 11.3).
-	if scalar.is_bit_packed:
-		return "ValueConverted"
-
-	# A single byte has no byte order, so `byte`, `u8` and `i8` are the bytes
-	# whatever the host does.
-	if scalar.bits <= BITS_PER_BYTE:
-		return "MemoryIdentical"
-
-	if placement.endian is ast.Endian.NATIVE:
-		return "MemoryIdentical"
-
-	return "ValueConverted"
-
-
-def _atomic(placement: Placement) -> str:
-	"""Whether a single instruction can carry the whole access.
-
-	Section 11.1 is categorical about bit fields: writing one is a
-	read-modify-write of the containing byte, so it is never atomic. Multi-field
-	updates are never atomic in v0 either, so aggregates and arrays are out.
-	"""
-	scalar = placement.scalar
-
-	if scalar is None or placement.array_count is not None:
-		return "NonAtomic"
-
-	if scalar.is_bit_packed:
-		return "NonAtomic"
-
-	if scalar.bits not in ATOMIC_WIDTHS:
-		return "NonAtomic"
-
-	# A word-sized access is only single-instruction when it is naturally
-	# aligned; an unaligned one faults or is split on the targets that matter.
-	width_bytes = scalar.bits // BITS_PER_BYTE
-	if alignment_of(placement.offset_bits) < width_bytes:
-		return "NonAtomic"
-
-	return "AtomicWord"
+def meet_all(vectors: list[Vector]) -> Vector:
+	result = strongest()
+	for vector in vectors:
+		result = result.meet(vector)
+	return result

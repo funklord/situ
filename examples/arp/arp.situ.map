@@ -1,11 +1,14 @@
-# situ capability map v0
+# situ capability map v1
 # schema: arp.situ
-# axes:   offset size align repr atomic
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct ArpPacket size=28
+struct ArpPacket size=28 repr=ValueConverted atomic=NonAtomic
   ArpPacket.hardware_type                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   ArpPacket.protocol_type                offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
   ArpPacket.hardware_length              offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord

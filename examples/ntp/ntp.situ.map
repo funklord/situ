@@ -1,11 +1,14 @@
-# situ capability map v0
+# situ capability map v1
 # schema: ntp.situ
-# axes:   offset size align repr atomic
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct NtpPacket size=48
+struct NtpPacket size=48 repr=ValueConverted atomic=NonAtomic
   NtpPacket.leap                         offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   NtpPacket.version                      offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   NtpPacket.mode                         offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
@@ -28,6 +31,6 @@ struct NtpPacket size=48
   NtpPacket.transmit.seconds             offset=AbsoluteStatic(0x28) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   NtpPacket.transmit.fraction            offset=AbsoluteStatic(0x2C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
-struct Timestamp size=8
+struct Timestamp size=8 repr=ValueConverted
   Timestamp.seconds                      offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   Timestamp.fraction                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord

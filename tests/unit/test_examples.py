@@ -17,6 +17,7 @@ from situc import capmap, requirements
 from situc.diagnostics import Source, SituError
 from situc.dump import dump
 from situc.layout import solve
+from situc.resolve import resolve
 from situc.parser import parse
 from situc.unparse import unparse
 
@@ -111,12 +112,12 @@ def test_committed_map_is_current(path: Path) -> None:
 		f"    python3 -m situc.cli map {path} > {committed}"
 	)
 
-	source = Source(str(path), path.read_text(encoding="ascii"))
-	schema = parse(source)
-	layout = solve(schema)
-	requirements.discharge(schema, layout)
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	requirements.discharge(schema, resolved)
 
-	assert capmap.render(schema, layout, source.path) == committed.read_text(
+	assert capmap.render(schema, resolved, source.path) == committed.read_text(
 		encoding="ascii"), (
 		f"the capability map of {path.parent.name} has changed; review the diff, "
 		f"then run:\n    python3 -m situc.cli map {path} > {committed}"

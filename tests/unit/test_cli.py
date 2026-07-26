@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -46,7 +47,6 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 	("build",	4),
 	("gen-tests",	4),
 	("advise",	9),
-	("explain",	9),
 	("diff",	9),
 	("import-proto", 13),
 ])
@@ -57,9 +57,64 @@ def test_future_commands_name_their_phase(
 	assert f"phase {phase}" in capsys.readouterr().err
 
 
-def test_json_diagnostics_deferred_to_phase_three(capsys: pytest.CaptureFixture[str]) -> None:
-	assert main(["--diagnostics=json", "dump-ast", HEADER]) == 2
-	assert "phase 3" in capsys.readouterr().err
+def test_json_diagnostics_are_emitted(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""Machine-readable diagnostics so CI and editors need not parse prose."""
+	schema = tmp_path / "d.situ"
+	schema.write_text(
+		"endian big;\nstruct S { u8 a; }\nrequire verify_gated(S);\n",
+		encoding="ascii")
+
+	assert main(["--diagnostics=json", "map", str(schema)]) == 0
+
+	payload = json.loads(capsys.readouterr().err)
+	assert len(payload["diagnostics"]) == 1
+	assert payload["diagnostics"][0]["severity"] == "note"
+	assert "phase 8" in payload["diagnostics"][0]["message"]
+
+
+def test_json_diagnostics_on_failure(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	schema = tmp_path / "d.situ"
+	schema.write_text(
+		"endian big;\nstruct S { u8 a; }\nrequire size(S) == 4;\n", encoding="ascii")
+
+	assert main(["--diagnostics=json", "map", str(schema)]) == 1
+
+	payload = json.loads(capsys.readouterr().err)
+	assert payload["diagnostics"][0]["severity"] == "error"
+	assert payload["diagnostics"][0]["primary"]["line"] == 3
+
+
+def test_explain_prints_a_vector_and_blame(capsys: pytest.CaptureFixture[str]) -> None:
+	assert main(["explain", HEADER, "Header.seq"]) == 0
+
+	out = capsys.readouterr().out
+	assert "offset     AbsoluteStatic(0x05)" in out
+	assert "repr       ValueConverted  <- weakened" in out
+	assert "blame:" in out
+
+
+def test_explain_on_a_struct(capsys: pytest.CaptureFixture[str]) -> None:
+	assert main(["explain", HEADER, "Header"]) == 0
+	assert "struct Header" in capsys.readouterr().out
+
+
+def test_explain_on_an_unknown_path(capsys: pytest.CaptureFixture[str]) -> None:
+	assert main(["explain", HEADER, "Header.nope"]) == 1
+	assert "unknown path" in capsys.readouterr().err
+
+
+def test_map_command_emits_the_map(capsys: pytest.CaptureFixture[str]) -> None:
+	assert main(["map", HEADER]) == 0
+	assert capsys.readouterr().out.startswith("# situ capability map")
+
+
+def test_map_summary_format(capsys: pytest.CaptureFixture[str]) -> None:
+	assert main(["map", "--format=summary", HEADER]) == 0
+	assert "Header: 9 bytes" in capsys.readouterr().out
 
 
 def test_unknown_command_is_an_argparse_error() -> None:

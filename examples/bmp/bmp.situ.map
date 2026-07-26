@@ -1,18 +1,21 @@
-# situ capability map v0
+# situ capability map v1
 # schema: bmp.situ
-# axes:   offset size align repr atomic
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct BitmapFileHeader size=14
+struct BitmapFileHeader size=14 repr=ValueConverted atomic=NonAtomic
   BitmapFileHeader.signature             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   BitmapFileHeader.file_size             offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
   BitmapFileHeader.<reserved0>           offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
   BitmapFileHeader.<reserved1>           offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   BitmapFileHeader.pixel_offset          offset=AbsoluteStatic(0x0A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
 
-struct BitmapInfoHeader size=40
+struct BitmapInfoHeader size=40 repr=ValueConverted
   BitmapInfoHeader.header_size           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   BitmapInfoHeader.width                 offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   BitmapInfoHeader.height                offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
