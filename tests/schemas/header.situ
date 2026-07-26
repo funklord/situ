@@ -1,0 +1,35 @@
+// project.md example 5.1: the static header.
+//
+// The phase 1 acceptance schema. Every construct here is in the static subset,
+// and `situc dump-ast` must round-trip it exactly.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+const MAX_PAYLOAD = 1500;
+
+enum MsgType : u8 {
+	hello = 0x01,
+	data  = 0x02,
+	close = 0x03,
+}
+
+struct Flags {
+	bit  urgent;
+	bit  ack;
+	u3   priority;
+	reserved u3 [must_be_zero];
+}
+
+struct Header {
+	u8       version  [must_eq = 1];
+	MsgType  type;
+	Flags    flags;
+	u16      length   [max = MAX_PAYLOAD];
+	u32      seq      @ 0x06;          // pin: assert solver agrees
+}
+
+require size(Header) == 10;
+require absolute_static(Header);
+require in_place(Header.seq);

@@ -54,6 +54,11 @@ variant		= "variant" ident "switch" "(" expr ")" "{"		(* PHASE 6 *)
 		[ "default" ":" ( member | "error" | "opaque" ) ]
 	"}" ;
 
+(* array_spec and attrs both open with "[", so this grammar is ambiguous as
+ * written: `u8 x [foo];` is either an array of `foo` elements or a scalar
+ * carrying the flag `foo`. Resolved by the closed attribute vocabulary in
+ * docs/decisions/0006-bracket-disambiguation.md -- a bracket group is attrs
+ * when it holds "=" or "," at depth 1, or a lone known attribute name. *)
 array_spec	= "[" [ size_expr ] "]" ;
 size_expr	= expr | "remaining" ;
 pin		= "@" expr ;
