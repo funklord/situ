@@ -46,6 +46,13 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.StructDecl):
 		return _struct(decl, depth)
 
+	if isinstance(decl, ast.EndianMarkerDecl):
+		return [
+			_indent(depth, f"endian_marker {decl.name} : {decl.backing.name}"),
+			_indent(depth + 1, f"little = {expr_to_source(decl.little)}"),
+			_indent(depth + 1, f"big = {expr_to_source(decl.big)}"),
+		]
+
 	if isinstance(decl, ast.Requirement):
 		return [_indent(depth, f"{decl.kind.value} {expr_to_source(decl.expr)}")]
 
@@ -88,6 +95,11 @@ def _member(member: ast.Member, depth: int) -> list[str]:
 		lines = [_indent(depth, head)]
 		if member.pin is not None:
 			lines.append(_indent(depth + 1, f"pin {expr_to_source(member.pin)}"))
+		lines.extend(_attrs(member.attrs, depth + 1))
+		return lines
+
+	if isinstance(member, ast.MarkerField):
+		lines = [_indent(depth, f"endian_marker {member.name}")]
 		lines.extend(_attrs(member.attrs, depth + 1))
 		return lines
 

@@ -286,6 +286,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"reserved-unknown",
 		"enum-default-pass",
 		"secret-field",
+		"endian-marker-scope",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
@@ -296,6 +297,43 @@ def test_reachable_rows_are_all_tested() -> None:
 #   entering a frame with dynamic base                              phase 5
 #   variant with unequal arm sizes, opaque, tlv, indexed,
 #   tlv unknown = preserve                                          phase 6
-#   endian = from(marker)                                           phase 4
 #   authenticated, sealed                                           phase 8
 #   register no_rmw, register EffectOnRead                          phase 10
+
+
+# -- row: endian = from(marker) ---------------------------------------------
+
+
+MARKER = (
+	"endian_marker bo : u16 { little = 0x4949, big = 0x4D4D, }"
+	"struct S [endian = from(bo)] { endian_marker bo; u16 a; u8 b; }"
+)
+
+
+def test_marker_scope_makes_fields_conditionally_converted() -> None:
+	assert axis_of(MARKER, "S.a", Axis.REPR) == Value("ConditionallyConverted", ("bo",))
+	assert rules_for(MARKER, "S.a", Axis.REPR) == ["endian-marker-scope"]
+
+
+def test_marker_scope_is_canonical_given_the_marker() -> None:
+	"""Not canonical -- two byte sequences encode the same value -- but exactly
+	one does once the marker is known."""
+	assert axis_of(MARKER, "S.a", Axis.CANONICAL) == Value("CanonicalGiven", ("bo",))
+
+
+def test_marker_leaves_offset_and_size_alone() -> None:
+	"""The saving grace of the construct: endianness never changes extent."""
+	assert axis_of(MARKER, "S.a", Axis.OFFSET) == Value("AbsoluteStatic", ("0x02",))
+	assert axis_of(MARKER, "S.a", Axis.SIZE) == Value("Fixed", ("2",))
+	assert axis_of(MARKER, "S.a", Axis.ALIGN) == Value("Aligned", ("2",))
+
+
+def test_single_byte_field_is_unaffected_by_a_marker() -> None:
+	"""A byte has no byte order, so nothing is conditional about it."""
+	assert axis_of(MARKER, "S.b", Axis.REPR) == Value("MemoryIdentical")
+	assert axis_of(MARKER, "S.b", Axis.CANONICAL) == Value("Canonical")
+
+
+def test_the_marker_itself_is_not_converted() -> None:
+	"""It is compared as a byte sequence; it cannot depend on its own answer."""
+	assert axis_of(MARKER, "S.bo", Axis.REPR) == Value("MemoryIdentical")

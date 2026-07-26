@@ -78,6 +78,14 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.StructDecl):
 		return _struct_lines(decl)
 
+	if isinstance(decl, ast.EndianMarkerDecl):
+		return [
+			f"endian_marker {decl.name} : {decl.backing.name} {{",
+			f"\tlittle = {expr_to_source(decl.little)},",
+			f"\tbig = {expr_to_source(decl.big)},",
+			"}",
+		]
+
 	if isinstance(decl, ast.Requirement):
 		return [f"{decl.kind.value} {expr_to_source(decl.expr)};"]
 
@@ -125,6 +133,9 @@ def member_to_source(member: ast.Member) -> str:
 		parts.append(_attrs_to_source(member.attrs))
 		parts.append(";")
 		return "".join(parts)
+
+	if isinstance(member, ast.MarkerField):
+		return f"endian_marker {member.name}{_attrs_to_source(member.attrs)};"
 
 	if isinstance(member, ast.Reserved):
 		return (f"reserved {member.type_ref.name}{_array_to_source(member.array)}"

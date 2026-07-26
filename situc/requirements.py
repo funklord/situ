@@ -69,6 +69,14 @@ PREDICATES: dict[str, Predicate] = {
 	"aligned": Predicate(
 		"aligned", Axis.ALIGN, Value("Aligned"),
 		"the field starts on the requested byte boundary", takes_argument=True),
+	# Section 11.1 insists these two be distinguished. A byte-order-marked
+	# format is not canonical -- two byte sequences encode the same value -- but
+	# a writer is still deterministic, because it always emits host order plus
+	# the matching marker. The consequence, stated as a rule: verify over
+	# received bytes, never over re-encoded bytes.
+	"deterministic_writer": Predicate(
+		"deterministic_writer", Axis.CANONICAL, Value("CanonicalGiven"),
+		"a writer always emits the same bytes for the same value"),
 }
 
 # Predicates whose axis exists but which need a construct from a later phase.
@@ -76,7 +84,6 @@ DEFERRED_PREDICATES = {
 	"frame_static":		5,
 	"in_place_dirty":	8,
 	"deterministic":	7,
-	"deterministic_writer":	4,
 	"no_tag_invalidation":	8,
 	"verify_gated":		8,
 	"no_alloc":		4,

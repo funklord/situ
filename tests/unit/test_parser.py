@@ -403,7 +403,6 @@ def test_unclosed_parenthesis_rejected() -> None:
 
 
 @pytest.mark.parametrize(("source", "phase"), [
-	("endian_marker byte_order : u16 { little = 0x4949, }",	4),
 	("varint_type leb128 { encoding = leb128; }",		6),
 	("codec aes { deterministic; }",			7),
 	("impl aes derived;",					7),
@@ -497,3 +496,54 @@ def test_diamond_reference_is_not_recursion() -> None:
 		"struct Top { Mid1 a; Mid2 b; }"
 	)
 	assert len(schema.structs()) == 4
+
+
+# -- endian markers (section 8.3) -------------------------------------------
+
+
+def test_endian_marker_declaration() -> None:
+	decl = parse_text(
+		"endian_marker bo : u16 { little = 0x4949, big = 0x4D4D, }").markers()[0]
+	assert decl.name == "bo"
+	assert decl.backing.name == "u16"
+	assert isinstance(decl.little, ast.IntLiteral)
+	assert decl.little.value == 0x4949
+
+
+def test_marker_needs_both_orders() -> None:
+	with pytest.raises(SituError, match="does not declare big"):
+		parse_text("endian_marker bo : u16 { little = 0x4949, }")
+
+
+def test_marker_rejects_an_unknown_member() -> None:
+	with pytest.raises(SituError, match="unknown marker member `middle`"):
+		parse_text("endian_marker bo : u16 { middle = 1, }")
+
+
+def test_marker_rejects_a_duplicate_order() -> None:
+	with pytest.raises(SituError, match="`little` is declared twice"):
+		parse_text("endian_marker bo : u16 { little = 1, little = 2, }")
+
+
+def test_marker_backing_must_be_byte_sized() -> None:
+	"""The marker is read before its own byte order is known, so it has to be a
+	plain byte sequence."""
+	with pytest.raises(SituError, match="not a whole number of bytes"):
+		parse_text("endian_marker bo : u12 { little = 1, big = 2, }")
+
+
+def test_marker_field_in_a_struct() -> None:
+	schema = parse_text(
+		"endian_marker bo : u16 { little = 0x4949, big = 0x4D4D, }"
+		"struct S [endian = from(bo)] { endian_marker bo; u16 a; }")
+	member = schema.structs()[0].members[0]
+	assert isinstance(member, ast.MarkerField)
+	assert member.name == "bo"
+
+
+def test_endian_from_attribute_parses_as_a_call() -> None:
+	decl = parse_text(
+		"endian_marker bo : u16 { little = 1, big = 2, }"
+		"struct S [endian = from(bo)] { endian_marker bo; }").structs()[0]
+	assert decl.attrs[0].name == "endian"
+	assert isinstance(decl.attrs[0].value, ast.Call)

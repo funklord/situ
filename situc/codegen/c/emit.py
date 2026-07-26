@@ -80,6 +80,7 @@ class Emitter:
 		self.prefix   = prefix
 		self.structs  = {decl.name: decl for decl in schema.structs()}
 		self.enums    = {decl.name: decl for decl in schema.enums()}
+		self.markers  = {decl.name: decl for decl in schema.markers()}
 
 	# -- header ---------------------------------------------------------
 
@@ -193,6 +194,10 @@ class Emitter:
 
 		lines = ["", *self._field_comment(entry)]
 
+		if placement.kind == "marker":
+			lines.extend(self._marker(struct, placement))
+			return lines
+
 		if placement.type_name in self.structs:
 			lines.extend(self._sub_view(struct, placement))
 			return lines
@@ -225,6 +230,62 @@ class Emitter:
 			f"/* {placement.path} : {placement.type_name} -- reserved, no accessor.",
 			" * Reserved regions are validated on parse, not exposed; see the",
 			" * validate function below. */",
+		]
+
+	def _marker(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""The byte-order marker's constants and accessors (section 8.3).
+
+		The marker is compared as a byte sequence, not decoded as a number: it
+		has to be readable before its own byte order is known. Reading it big
+		endian and comparing against the literal as written is the only
+		interpretation that does not presuppose the answer.
+
+		The host constant is what a writer uses instead of hardcoding an order,
+		which is what makes the writer deterministic even though the format is
+		not canonical.
+		"""
+		from situc.expr import evaluate
+
+		marker = self.markers[placement.name]
+		scalar = placement.scalar
+		assert scalar is not None
+
+		env    = self.resolved.layout.env
+		little = evaluate(marker.little, env)
+		big    = evaluate(marker.big, env)
+		width  = scalar.bits
+		base   = macro(self.prefix, struct.name, placement.name)
+		local  = c_name(self._local(struct, placement))
+
+		return [
+			f"#define {base}_LITTLE 0x{little:0{width // 4}X}u",
+			f"#define {base}_BIG    0x{big:0{width // 4}X}u",
+			"",
+			"/* The host's own order, resolved at compile time. A writer stores",
+			" * this rather than picking an order, so the writer is deterministic",
+			" * even though the format admits both. */",
+			"#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__",
+			f"#define {base}_HOST {base}_BIG",
+			"#else",
+			f"#define {base}_HOST {base}_LITTLE",
+			"#endif",
+			"",
+			f"static inline int "
+			f"{ident(self.prefix, struct.name, local, 'is_little')}(situ_view_t view)",
+			"{",
+			f"\treturn situ_get_be{width}(view.base + {placement.offset_bytes}u)"
+			f" == {base}_LITTLE;",
+			"}",
+			f"static inline uint{width}_t "
+			f"{ident(self.prefix, struct.name, local, 'host')}(void)",
+			"{",
+			f"\treturn {base}_HOST;",
+			"}",
+			f"static inline void "
+			f"{ident(self.prefix, struct.name, local, 'set_host')}(situ_view_t view)",
+			"{",
+			f"\tsitu_put_be{width}(view.base + {placement.offset_bytes}u, {base}_HOST);",
+			"}",
 		]
 
 	def _sub_view(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
@@ -310,6 +371,7 @@ class Emitter:
 		# bytes. Section 20.2: never hand out a pointer into a converted field.
 		if (entry.vector.get(Axis.REPR).base == "MemoryIdentical"
 				and not scalar.is_bit_packed
+				and placement.kind != "marker"
 				and placement.type_name not in self.enums):
 			lines.extend([
 				f"static inline {self._ctype(scalar)} *"
@@ -365,6 +427,10 @@ class Emitter:
 			base: str) -> str:
 		offset = placement.offset_bytes
 
+		if placement.marker is not None and not scalar.is_bit_packed \
+				and scalar.bits > BITS_PER_BYTE:
+			return self._conditional_load(scalar, placement, base)
+
 		if scalar.is_bit_packed:
 			order = "lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST else "msb"
 			raw   = (f"situ_bits_get_{order}({base}, {placement.offset_bits}u, "
@@ -395,9 +461,52 @@ class Emitter:
 			return f"({self._ctype(scalar)})situ_sign_extend({raw}, {width}u)"
 		return f"({self._ctype(scalar)}){raw}"
 
+	def _conditional_load(self, scalar: ScalarType, placement: Placement,
+			base: str) -> str:
+		"""A parse-time branch on the marker.
+
+		The branch is on a public, layout-irrelevant value, so it is not a side
+		channel (section 11.1).
+		"""
+		predicate = self._marker_predicate(placement)
+		width     = scalar.bits
+		offset    = placement.offset_bytes
+		if width in WORD_WIDTHS:
+			return (f"{predicate} ? situ_get_le{width}({base} + {offset}u)"
+			        f" : situ_get_be{width}({base} + {offset}u)")
+
+		bits = placement.offset_bits
+		return (f"{predicate} ? situ_bits_get_lsb({base}, {bits}u, {width}u)"
+		        f" : situ_bits_get_msb({base}, {bits}u, {width}u)")
+
+	def _marker_predicate(self, placement: Placement) -> str:
+		owner = placement.path.partition(".")[0]
+		return ident(self.prefix, owner, placement.marker or "", "is_little") + "(view)"
+
 	def _store_statement(self, scalar: ScalarType, placement: Placement,
 			base: str, value: str) -> str:
 		offset = placement.offset_bytes
+
+		if placement.marker is not None and not scalar.is_bit_packed \
+				and scalar.bits > BITS_PER_BYTE:
+			width     = scalar.bits
+			predicate = self._marker_predicate(placement)
+			if width in WORD_WIDTHS:
+				return (f"if ({predicate}) {{\n"
+				        f"\t\tsitu_put_le{width}({base} + {offset}u, "
+				        f"(uint{width}_t){value});\n"
+				        f"\t}} else {{\n"
+				        f"\t\tsitu_put_be{width}({base} + {offset}u, "
+				        f"(uint{width}_t){value});\n"
+				        f"\t}}")
+			bits = placement.offset_bits
+			return (f"if ({predicate}) {{\n"
+			        f"\t\tsitu_bits_set_lsb({base}, {bits}u, {width}u, "
+			        f"(uint64_t){value});\n"
+			        f"\t}} else {{\n"
+			        f"\t\tsitu_bits_set_msb({base}, {bits}u, {width}u, "
+			        f"(uint64_t){value});\n"
+			        f"\t}}")
 
 		if scalar.is_bit_packed:
 			order = "lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST else "msb"
@@ -466,6 +575,8 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 		if scalar is None or placement.array_count is not None:
+			return []
+		if placement.kind == "marker":
 			return []
 		if "." in placement.path[len(struct.name) + 1 :]:
 			return []

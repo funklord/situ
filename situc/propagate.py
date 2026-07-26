@@ -122,11 +122,28 @@ def alignment_of(offset_bits: int) -> int:
 
 
 def _is_converted_scalar(context: Context) -> bool:
-	scalar = context.scalar
+	scalar    = context.scalar
+	placement = context.placement
 	return (scalar is not None
 	        and not scalar.is_bit_packed
 	        and scalar.bits > BITS_PER_BYTE
-	        and context.placement.endian is not ast.Endian.NATIVE)
+	        and placement.kind != "marker"
+	        and placement.marker is None
+	        and placement.endian is not ast.Endian.NATIVE)
+
+
+def _is_marker_scoped(context: Context) -> bool:
+	"""A multi-byte field whose byte order arrives with the data."""
+	scalar = context.scalar
+	return (context.placement.marker is not None
+	        and context.placement.kind != "marker"
+	        and scalar is not None
+	        and not scalar.is_bit_packed
+	        and scalar.bits > BITS_PER_BYTE)
+
+
+def _is_marker_field(context: Context) -> bool:
+	return context.placement.kind == "marker"
 
 
 def _is_bit_field(context: Context) -> bool:
@@ -184,6 +201,15 @@ TABLE: tuple[Row, ...] = (
 			            "by-value getter",
 		),
 		applies = _is_converted_scalar,
+	),
+	Row(
+		rule = Rule(
+			name      = "endian-marker-scope",
+			construct = "a field whose byte order comes from an `endian_marker`",
+			effects   = (),		# filled in below; the parameter is the marker
+			remedy    = "",
+		),
+		applies = _is_marker_scoped,
 	),
 	Row(
 		rule = Rule(
@@ -328,7 +354,11 @@ def apply(context: Context) -> Resolved:
 		if not row.applies(context):
 			continue
 
-		for effect in row.rule.effects:
+		effects = row.rule.effects
+		if row.rule.name == "endian-marker-scope":
+			effects = _marker_effects(context)
+
+		for effect in effects:
 			current = vector.get(effect.axis)
 			# Meet, not assignment: a rule never strengthens an axis another
 			# rule already weakened. An effect at the same strength still
@@ -346,6 +376,26 @@ def apply(context: Context) -> Resolved:
 			))
 
 	return Resolved(placement=placement, vector=vector, weakenings=weakenings)
+
+
+def _marker_effects(context: Context) -> tuple[Effect, ...]:
+	"""The two axes a byte-order marker moves, and only those.
+
+	Endianness never changes extent, so `offset` and `size` are untouched. That
+	is the saving grace of the construct and the reason it is cheap to support
+	(project.md section 8.3).
+	"""
+	marker = context.placement.marker
+	assert marker is not None
+
+	return (
+		Effect(Axis.REPR, Value("ConditionallyConverted", (marker,)),
+		       f"the byte swap is a parse-time branch on `{marker}`, so the value "
+		       "is not the memory and no pointer accessor is generated"),
+		Effect(Axis.CANONICAL, Value("CanonicalGiven", (marker,)),
+		       f"two byte sequences encode the same value at the format level, "
+		       f"but exactly one does given `{marker}`"),
+	)
 
 
 def _base_vector(placement: Placement) -> Vector:

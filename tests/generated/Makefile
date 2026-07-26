@@ -30,7 +30,7 @@ CMOCKA_LIBS	?= -lcmocka
 
 # Every test is compiled twice: the checked build exercises the bounds and
 # generation assertions, the release build proves they compile out cleanly.
-TESTS		:= test_runtime test_header
+TESTS		:= test_runtime test_header test_tiff
 BINS		:= $(TESTS:%=$(BUILD_DIR)/%) $(TESTS:%=$(BUILD_DIR)/%_checked)
 
 # Schemas whose generated accessors are exercised here. The code is generated
@@ -38,12 +38,14 @@ BINS		:= $(TESTS:%=$(BUILD_DIR)/%) $(TESTS:%=$(BUILD_DIR)/%_checked)
 # stale copy behind.
 PYTHON		?= python3
 SITUC		?= $(PYTHON) -m situc.cli
-SCHEMA_DIR	?= ../schemas
 GEN_DIR		:= $(BUILD_DIR)/gen
-GEN_SCHEMAS	:= header
-GEN_HEADERS	:= $(GEN_SCHEMAS:%=$(GEN_DIR)/%.h)
-GEN_SRCS	:= $(GEN_SCHEMAS:%=$(GEN_DIR)/%.c)
-GEN_OBJS	:= $(GEN_SCHEMAS:%=$(GEN_DIR)/%.o)
+
+# Schemas are named by their path relative to the repository root, so an
+# example can be exercised where it lives rather than copied here to drift.
+SCHEMAS		:= tests/schemas/header.situ examples/tiff/tiff.situ
+GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))
+GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
+GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 
 .PHONY: all test clean generate
 
@@ -51,12 +53,20 @@ all: $(BINS)
 
 generate: $(GEN_HEADERS)
 
-# situc runs from the repository root so `python3 -m situc.cli` finds the
-# package. GEN_DIR may be absolute (parent) or relative (standalone), so it is
-# resolved before the directory change rather than after.
-$(GEN_DIR)/%.h $(GEN_DIR)/%.c: $(SCHEMA_DIR)/%.situ
-	@mkdir -p '$(GEN_DIR)'
-	cd ../.. && $(SITUC) build 'tests/schemas/$*.situ' --out '$(abspath $(GEN_DIR))'
+# One rule per schema, because they live in different directories and a single
+# pattern rule cannot serve both. situc runs from the repository root so
+# `python3 -m situc.cli` finds the package; GEN_DIR may be absolute (parent) or
+# relative (standalone), so it is resolved before the directory change.
+define situ_generate
+$$(GEN_DIR)/$(notdir $(basename $(1))).h $$(GEN_DIR)/$(notdir $(basename $(1))).c: \
+		$$(REPO_ROOT)/$(1)
+	@mkdir -p '$$(GEN_DIR)'
+	cd '$$(REPO_ROOT)' && $$(SITUC) build '$(1)' --out '$$(abspath $$(GEN_DIR))'
+endef
+
+REPO_ROOT	:= $(abspath ../..)
+
+$(foreach schema,$(SCHEMAS),$(eval $(call situ_generate,$(schema))))
 
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@

@@ -20,6 +20,7 @@ meant to be read in roughly this order.
 | [ntp](ntp/) | A format designed with alignment in mind, and where `repr` starts to matter. |
 | [bmp](bmp/) | Little endian, and the canonical misaligned layout. |
 | [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |
+| [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
 
 ## Waiting on later phases
 
@@ -29,7 +30,6 @@ become live as each phase lands.
 
 | Example | Needs | Demonstrates |
 |---|---|---|
-| [tiff](tiff/) | phase 4 | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
 | [message](message/) | phase 5 | Islands of staticness inside a dynamic frame. project.md example 5.2. |
 | [packet](packet/) | phase 8 | The doom principle as a stage gate; tag coverage against in-place mutation. project.md example 5.3. |
 | [registers](registers/) | phase 10 | MMIO: where a missing setter is the deliverable. project.md example 15.2. |
@@ -65,7 +65,11 @@ Three jobs, in order of how much they matter:
 1. **Design pressure made visible.** ipv4 against tcp is the clearest pair: the
    same density of bit packing, but one of them straddles and the other does
    not, and that is a property of the wire format rather than of the schema.
-2. **Test material.** Every schema here is parsed by the test suite, and the
-   static ones are checked to round-trip.
-3. **A place to put generated code.** Each directory will hold its `.h`/`.c`,
-   its golden vectors and its capability map once phase 4 arrives.
+2. **Test material.** Every schema here is parsed by the test suite, the
+   buildable ones are checked to round-trip, their committed maps are
+   regenerated and compared, and their generated C is compiled warning-clean
+   on host and aarch64. `tiff` is exercised end to end under cmocka, from its
+   schema straight out of this directory, so it cannot drift from a copy.
+3. **A place to put generated code.** Each directory holds its schema and its
+   capability map; generated `.h`/`.c` land in the build tree rather than being
+   committed, so a codegen change cannot leave a stale copy behind.

@@ -19,8 +19,8 @@ def layout(body: str, preamble: str = PREAMBLE) -> SchemaLayout:
 	return solve(parse_text(preamble + body))
 
 
-def offsets(body: str, struct: str = "S") -> dict[str, int]:
-	solved = layout(body)
+def offsets(body: str, struct: str = "S", preamble: str = PREAMBLE) -> dict[str, int]:
+	solved = layout(body, preamble)
 	return {
 		p.path.split(".", 1)[1]: p.offset_bits
 		for p in solved.structs[struct].placements
@@ -212,10 +212,30 @@ def test_field_level_endian_overrides_the_file() -> None:
 	assert placements["a"].endian != placements["b"].endian
 
 
-def test_runtime_resolved_endian_deferred_to_phase_four() -> None:
-	report = rendered("struct S [endian = from(marker)] { u16 a; }", "")
-	assert "not yet implemented" in report
-	assert "phase 4" in report
+def test_unknown_marker_is_rejected() -> None:
+	report = rendered("struct S [endian = from(nope)] { endian_marker nope; }", "")
+	assert "unknown endian marker `nope`" in report
+
+
+def test_marker_satisfies_the_byte_order_requirement() -> None:
+	"""A marked struct needs no `endian` directive: the order is known, it just
+	is not known until parse time."""
+	body = ("endian_marker bo : u16 { little = 0x4949, big = 0x4D4D, }"
+	        "struct S [endian = from(bo)] { endian_marker bo; u32 a; }")
+	assert size_bits(body, "") == 48
+
+
+def test_marker_field_lays_out_as_its_backing_type() -> None:
+	body = ("endian_marker bo : u16 { little = 0x4949, big = 0x4D4D, }"
+	        "struct S [endian = from(bo)] { endian_marker bo; u16 a; }")
+	assert offsets(body, preamble="") == {"bo": 0, "a": 16}
+
+
+def test_marker_must_start_on_a_byte_boundary() -> None:
+	body = ("endian_marker bo : u16 { little = 0x4949, big = 0x4D4D, }"
+	        "struct S [endian = from(bo), allow_straddle] "
+	        "{ u3 x; endian_marker bo; }")
+	assert "must start on a byte boundary" in rendered(body)
 
 
 # -- pins -------------------------------------------------------------------

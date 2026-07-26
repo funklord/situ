@@ -19,7 +19,6 @@ from situc.types import WidthError, lookup
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
 FUTURE_CONSTRUCTS = {
-	"endian_marker":	(4,  "runtime-resolved endianness"),
 	"variant":		(6,  "`variant`"),
 	"opaque":		(6,  "`opaque`"),
 	"tlv":			(6,  "`tlv`"),
@@ -179,6 +178,7 @@ class Parser:
 			"const":	self.parse_const,
 			"enum":		self.parse_enum,
 			"struct":	self.parse_struct,
+			"endian_marker": self.parse_endian_marker,
 			"require":	self.parse_requirement,
 			"assert":	self.parse_requirement,
 		}
@@ -312,6 +312,74 @@ class Parser:
 			)
 		return default
 
+	def parse_endian_marker(self) -> ast.EndianMarkerDecl:
+		"""`endian_marker byte_order : u16 { little = 0x4949, big = 0x4D4D, }`
+
+		Exactly two members, named for the orders they select. Naming them
+		anything else would leave the compiler guessing which is which, and a
+		wrong guess here is undetectable at runtime.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a marker name")
+		self.expect_symbol(":", "after the marker name")
+
+		backing = self.parse_type_ref()
+		if not backing.is_scalar or backing.scalar is None:
+			raise error(
+				f"marker backing type must be a scalar, found `{backing.name}`",
+				backing.span,
+				label = "not a scalar type",
+			)
+		if backing.scalar.is_bit_packed:
+			raise error(
+				f"marker backing type `{backing.name}` is not a whole number of bytes",
+				backing.span,
+				label = "must be byte-sized",
+				notes = ["the marker is read before its own byte order is known, "
+				         "so it has to be a plain byte sequence"],
+			)
+
+		self.expect_symbol("{", "to open the marker body")
+
+		seen: dict[str, ast.Expr] = {}
+		while not self.current.is_symbol("}"):
+			member = self.expect_ident("`little` or `big`")
+			if member.text not in ("little", "big"):
+				raise error(
+					f"unknown marker member `{member.text}`",
+					member.span,
+					label = "expected `little` or `big`",
+				)
+			if member.text in seen:
+				raise error(f"`{member.text}` is declared twice", member.span)
+
+			self.expect_symbol("=", "after the marker member name")
+			seen[member.text] = self.parse_expr()
+
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol("}", "to close the marker body")
+
+		missing = sorted({"little", "big"} - set(seen))
+		if missing:
+			raise error(
+				f"marker `{name.text}` does not declare {' or '.join(missing)}",
+				self.span_from(start),
+				label = "both orders must be given",
+				notes = ["a marker that names only one order cannot select the other"],
+			)
+
+		return ast.EndianMarkerDecl(self.span_from(start), name.text, backing,
+		                            seen["little"], seen["big"])
+
+	def parse_marker_field(self) -> ast.MarkerField:
+		start = self.advance()
+		name  = self.expect_ident("the marker's name")
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after the marker field")
+		return ast.MarkerField(self.span_from(start), name.text, attrs)
+
 	def parse_struct(self) -> ast.StructDecl:
 		start = self.advance()
 		name  = self.expect_ident("a struct name")
@@ -344,6 +412,8 @@ class Parser:
 				phase, described = future
 				raise not_yet_implemented(described, token.span, phase)
 
+			if token.text == "endian_marker":
+				return self.parse_marker_field()
 			if token.text == "reserved":
 				return self.parse_reserved()
 			if token.text == "positional":

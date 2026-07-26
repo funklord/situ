@@ -58,6 +58,7 @@ class Placement:
 	bit_order: ast.BitOrder | None
 	span: Span
 	attrs: tuple[ast.Attr, ...]	= ()
+	marker: str | None		= None
 	array_count: int | None		= None
 	element_bits: int | None	= None
 	bit_position: BitPosition | None = None
@@ -152,18 +153,40 @@ class Scope:
 
 	endian: ast.Endian | None	= None
 	bit_order: ast.BitOrder | None	= None
+	# Set by `[endian = from(marker)]`. Distinct from `endian` being None:
+	# the byte order is known, it is just not known until parse time.
+	marker: str | None		= None
 
 	def narrow(self, attrs: tuple[ast.Attr, ...], env: Env) -> Scope:
 		endian    = self.endian
 		bit_order = self.bit_order
+		marker    = self.marker
 
 		for attr in attrs:
 			if attr.name == "endian":
-				endian = _attr_enum(attr, ast.Endian, "endianness")
+				resolved = _endian_attr(attr)
+				if isinstance(resolved, str):
+					marker, endian = resolved, None
+				else:
+					endian, marker = resolved, None
 			elif attr.name == "bit_order":
 				bit_order = _attr_enum(attr, ast.BitOrder, "bit order")
 
-		return Scope(endian, bit_order)
+		return Scope(endian, bit_order, marker)
+
+	@property
+	def has_byte_order(self) -> bool:
+		return self.endian is not None or self.marker is not None
+
+
+def _endian_attr(attr: ast.Attr) -> ast.Endian | str:
+	"""Resolve `[endian = ...]`, which may name an order or defer to a marker."""
+	if (isinstance(attr.value, ast.Call) and attr.value.name == "from"
+			and len(attr.value.args) == 1
+			and isinstance(attr.value.args[0], ast.NameRef)):
+		return attr.value.args[0].name
+
+	return _attr_enum(attr, ast.Endian, "endianness")
 
 
 EnumT = TypeVar("EnumT", bound=Enum)
@@ -173,14 +196,6 @@ def _attr_enum(attr: ast.Attr, enum: type[EnumT], described: str) -> EnumT:
 	if attr.value is None:
 		raise error(f"`{attr.name}` needs a value", attr.span,
 		            label = f"expected `{attr.name} = <{described}>`")
-
-	if isinstance(attr.value, ast.Call) and attr.value.name == "from":
-		raise error(
-			"runtime-resolved endianness is not yet implemented",
-			attr.value.span,
-			label = "not accepted by this build",
-			notes = ["planned for phase 4 (project.md section 26.4)"],
-		)
 
 	if not isinstance(attr.value, ast.NameRef):
 		raise error(f"expected a {described}", attr.value.span)
@@ -216,6 +231,7 @@ class Solver:
 		self.result  = result
 		self.structs = {decl.name: decl for decl in schema.structs()}
 		self.enums   = {decl.name: decl for decl in schema.enums()}
+		self.markers = {decl.name: decl for decl in schema.markers()}
 		self.file_scope = _file_scope(schema)
 
 	def run(self) -> None:
@@ -249,9 +265,55 @@ class Solver:
 				# its members keep accumulating into the enclosing struct.
 				cursor = self.place_members(decl, member.members, scope, layout,
 				                            prefix, cursor)
+			elif isinstance(member, ast.MarkerField):
+				cursor = self.place_marker(decl, member, scope, layout, prefix, cursor)
 			elif isinstance(member, (ast.Field, ast.Reserved)):
 				cursor = self.place_one(decl, member, scope, layout, prefix, cursor)
 		return cursor
+
+	def place_marker(self, decl: ast.StructDecl, member: ast.MarkerField,
+			scope: Scope, layout: StructLayout, prefix: str, cursor: int) -> int:
+		"""A marker field is its backing type, read before any order is known.
+
+		It carries no endianness of its own: the bytes are compared as a
+		sequence, which is the only way to read a value whose byte order it is
+		itself announcing.
+		"""
+		marker = self.markers.get(member.name)
+		if marker is None:
+			raise error(
+				f"unknown endian marker `{member.name}`",
+				member.span,
+				label = "not declared",
+				notes = ["declare it with `endian_marker " + member.name
+				         + " : u16 { little = ..., big = ..., }`"],
+			)
+
+		scalar = marker.backing.scalar
+		assert scalar is not None, "the parser rejects a non-scalar backing"
+
+		if cursor % BITS_PER_BYTE != 0:
+			raise error(
+				f"marker `{member.name}` must start on a byte boundary",
+				member.span,
+				label = f"lands {cursor % BITS_PER_BYTE} bits into a byte",
+			)
+
+		layout.placements.append(Placement(
+			path         = f"{prefix}.{member.name}",
+			name         = member.name,
+			kind         = "marker",
+			type_name    = member.name,
+			offset_bits  = cursor,
+			size_bits    = scalar.bits,
+			scalar       = scalar,
+			endian       = None,
+			bit_order    = scope.bit_order,
+			span         = member.span,
+			attrs        = member.attrs,
+			element_bits = scalar.bits,
+		))
+		return cursor + scalar.bits
 
 	def place_one(self, decl: ast.StructDecl, member: ast.Field | ast.Reserved,
 			scope: Scope, layout: StructLayout, prefix: str, cursor: int) -> int:
@@ -290,6 +352,7 @@ class Solver:
 			bit_order    = local.bit_order,
 			span         = member.span,
 			attrs        = member.attrs,
+			marker       = local.marker,
 			array_count  = count,
 			element_bits = element_bits,
 			bit_position = position,
@@ -329,6 +392,7 @@ class Solver:
 				bit_order    = inner.bit_order,
 				span         = inner.span,
 				attrs        = inner.attrs,
+				marker       = inner.marker,
 				array_count  = inner.array_count,
 				element_bits = inner.element_bits,
 				bit_position = inner.bit_position,
@@ -412,7 +476,7 @@ class Solver:
 		only for one that packs. Demanding both everywhere would make trivial
 		schemas noisy for no safety gain.
 		"""
-		if scalar.bits > BITS_PER_BYTE and scope.endian is None:
+		if scalar.bits > BITS_PER_BYTE and not scope.has_byte_order:
 			raise error(
 				f"no endianness in scope for `{member.type_ref.name}`",
 				member.span,

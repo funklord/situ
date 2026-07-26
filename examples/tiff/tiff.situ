@@ -1,7 +1,5 @@
 // TIFF header (TIFF 6.0), the byte-order-marker case.
 //
-// STATUS: needs phase 4. `endian_marker` is rejected until then.
-//
 // TIFF is the reason `endian_marker` is a first-class construct rather than a
 // special case of `endian native` (project.md section 8.3). The first two bytes
 // say which byte order the rest of the file uses, so endianness is resolved at
@@ -41,9 +39,15 @@ require absolute_static(TiffHeader);
 // re-encoded bytes.
 require deterministic_writer(TiffHeader);
 assert canonical(TiffHeader);           // reports CanonicalGiven(byte_order)
+require in_place(TiffHeader.ifd_offset);
 
-// Phase 4 also emits, per marker type, a host-order constant and accessor so a
-// writer can populate the field without hardcoding:
+// The generated header carries, per marker, the two literals, a host-order
+// constant resolved at compile time, and the accessors a writer needs:
 //
-//     #define SITU_TIFFHEADER_BYTE_ORDER_HOST  0x4949   /* on a LE build */
-//     uint16_t situ_TiffHeader_byte_order_host(void);
+//     #define SITU_TIFFHEADER_BYTE_ORDER_HOST  SITU_TIFFHEADER_BYTE_ORDER_LITTLE
+//     static inline int      situ_TiffHeader_byte_order_is_little(situ_view_t);
+//     static inline uint16_t situ_TiffHeader_byte_order_host(void);
+//     static inline void     situ_TiffHeader_byte_order_set_host(situ_view_t);
+//
+// The marker itself is compared as a byte sequence rather than decoded as a
+// number: it has to be readable before its own byte order is known.

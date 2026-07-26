@@ -287,6 +287,33 @@ class EnumDecl(Decl):
 
 
 @dataclass(frozen=True)
+class EndianMarkerDecl(Decl):
+	"""A byte-order marker: the TIFF `II`/`MM` pattern (section 8.3).
+
+	Distinct from `endian native`, and deliberately so. Host order with no
+	marker is non-canonical because the encoding depends on the machine.
+	A marker travels with the data, so exactly one encoding is valid once the
+	marker is known -- and endianness never changes extent, so this costs
+	nothing on the offset or size axes.
+	"""
+
+	span: Span
+	name: str
+	backing: TypeRef
+	little: Expr
+	big: Expr
+
+
+@dataclass(frozen=True)
+class MarkerField(Member):
+	"""`endian_marker byte_order;` -- the marker's own storage in a struct."""
+
+	span: Span
+	name: str
+	attrs: tuple[Attr, ...] = ()
+
+
+@dataclass(frozen=True)
 class StructDecl(Decl):
 	span: Span
 	name: str
@@ -324,3 +351,6 @@ class Schema(Node):
 
 	def requirements(self) -> list[Requirement]:
 		return [decl for decl in self.decls if isinstance(decl, Requirement)]
+
+	def markers(self) -> list[EndianMarkerDecl]:
+		return [decl for decl in self.decls if isinstance(decl, EndianMarkerDecl)]
