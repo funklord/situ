@@ -239,6 +239,42 @@ class Variant(Member):
 
 
 @dataclass(frozen=True)
+class Opaque(Member):
+	"""A region with a size but no interior schema (section 9.4).
+
+	Deliberately collapses structural capability in exchange for flexibility:
+	treat-as-bytes, whole-region replace if same size, no interior access. An
+	opaque region can later gain structure via a stage transition, which is how
+	sealed payloads work.
+	"""
+
+	span: Span
+	name: str
+	size: Expr
+	attrs: tuple[Attr, ...] = ()
+
+
+@dataclass(frozen=True)
+class Indexed(Member):
+	"""An offset table followed by elements, FlatBuffers style (section 9.3).
+
+	Buys O(1) random access through one indirection, and elements that need not
+	be fixed size. Insertion is not supported: the offsets would shift.
+	"""
+
+	span: Span
+	name: str
+	args: tuple[Attr, ...]
+	members: tuple[Member, ...]
+
+	def argument(self, name: str) -> Expr | None:
+		for arg in self.args:
+			if arg.name == name:
+				return arg.value
+		return None
+
+
+@dataclass(frozen=True)
 class PositionalBlock(Member):
 	"""`positional { ... }`: a locally-checked staticness guarantee.
 

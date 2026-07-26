@@ -21,7 +21,7 @@ from typing import TypeVar
 from situc import ast
 from situc.diagnostics import SituError, Span, error
 from situc.expr import Env, Interval, build_env, evaluate, interval_of, scalar_interval
-from situc.types import ScalarType
+from situc.types import ScalarType, lookup
 
 BITS_PER_BYTE = 8
 
@@ -381,11 +381,125 @@ class Solver:
 					)
 			elif isinstance(member, ast.Variant):
 				self.place_variant(decl, member, scope, layout, prefix, state)
+			elif isinstance(member, ast.Opaque):
+				self.place_opaque(member, scope, layout, prefix, state)
+			elif isinstance(member, ast.Indexed):
+				self.place_indexed(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.MarkerField):
 				self.place_marker(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, (ast.Field, ast.Reserved)):
 				last = index == len(members) - 1
 				self.place_one(decl, member, scope, layout, prefix, state, last)
+
+	def place_opaque(self, member: ast.Opaque, scope: Scope,
+			layout: StructLayout, prefix: str, state: Walk) -> None:
+		"""A sized region with no interior schema (section 9.4)."""
+		env    = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		size   = interval_of(member.size, env)
+		cursor = state.cursor
+
+		if size.lo < 0:
+			raise error("an opaque region may not have a negative size",
+			            member.size.span, label = f"range is {size.render()}")
+
+		bits = Interval(size.lo * BITS_PER_BYTE,
+		                None if size.hi is None else size.hi * BITS_PER_BYTE)
+
+		layout.placements.append(Placement(
+			path          = f"{prefix}.{member.name}",
+			name          = member.name,
+			kind          = "opaque",
+			type_name     = "opaque",
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = bits.lo,
+			size_max_bits = bits.hi,
+			scalar        = None,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = member.span,
+			attrs         = member.attrs,
+			sized_by      = _path_of(member.size),
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+		))
+
+		if state.cause is None and bits.hi != bits.lo:
+			state.cause = (member.name, member.span, _render_extent(bits))
+
+		state.cursor = cursor.advance(bits)
+
+	def place_indexed(self, decl: ast.StructDecl, member: ast.Indexed,
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
+		"""An offset table then elements (section 9.3).
+
+		The table is `count` entries of `offset_type`; the elements follow. The
+		indirection is what buys O(1) access to an element whose size is not
+		fixed, and it is why insertion is unsupported: every later offset would
+		have to move.
+		"""
+		env      = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		cursor   = state.cursor
+		element  = member.members[0]
+
+		offset_type = member.argument("offset_type")
+		if offset_type is None or not isinstance(offset_type, ast.NameRef):
+			raise error(
+				"an `indexed` region needs `offset_type`",
+				member.span,
+				label = "expected `offset_type = u16` or similar",
+				notes = ["the table's entry width decides how far the region can "
+				         "reach, so it cannot be inferred"],
+			)
+
+		width = lookup(offset_type.name)
+		if width is None or width.is_bit_packed:
+			raise error(
+				f"`{offset_type.name}` is not a whole-byte scalar",
+				offset_type.span,
+				label = "invalid offset type",
+			)
+
+		count_expr = member.argument("count")
+		if count_expr is None:
+			raise error(
+				"an `indexed` region needs `count`",
+				member.span,
+				label = "expected `count = <field>`",
+				notes = ["the table's length has to come from somewhere the "
+				         "parser can read before it"],
+			)
+
+		count = interval_of(count_expr, env)
+		table = Interval(
+			count.lo * width.bits,
+			None if count.hi is None else count.hi * width.bits)
+
+		# The elements themselves: reached through the table, so their extent
+		# is whatever remains rather than something this pass can total.
+		layout.placements.append(Placement(
+			path          = f"{prefix}.{member.name}",
+			name          = member.name,
+			kind          = "indexed",
+			type_name     = element.type_ref.name if isinstance(element, ast.Field)
+			                else "indexed",
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = table.lo,
+			size_max_bits = None,
+			scalar        = None,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = member.span,
+			sized_by      = _path_of(count_expr),
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+		))
+
+		if state.cause is None:
+			state.cause = (member.name, member.span, "Unbounded")
+
+		state.cursor = cursor.advance(Interval(table.lo, None))
 
 	def place_variant(self, decl: ast.StructDecl, variant: ast.Variant,
 			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
@@ -1123,6 +1237,11 @@ class Solver:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _path_of(expr: ast.Expr) -> str | None:
+	from situc.expr import path_text
+	return path_text(expr)
 
 
 def _arm_name(arm: ast.VariantArm) -> str:

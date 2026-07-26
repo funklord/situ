@@ -295,13 +295,15 @@ def test_reachable_rows_are_all_tested() -> None:
 		"varint",
 		"non-minimal-varint",
 		"variant-unequal-arms",
+		"opaque",
+		"indexed",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
 
 # Rows of section 11.3 not yet reachable, with the phase that adds them:
 #
-#   opaque, tlv, indexed, tlv unknown = preserve                    phase 6
+#   tlv, tlv unknown = preserve                                     phase 6
 #   authenticated, sealed                                           phase 8
 #   register no_rmw, register EffectOnRead                          phase 10
 
@@ -468,3 +470,42 @@ def test_arms_overlay_at_the_same_base() -> None:
 	found = entries(variant_body())
 	assert found["S.body.a"].placement.offset_bits == 8
 	assert found["S.body.b"].placement.offset_bits == 8
+
+
+# -- rows: opaque and indexed -----------------------------------------------
+
+
+OPAQUE  = "struct S { u16 n; opaque payload [n]; }"
+INDEXED = (
+	"struct R { u32 id; }"
+	"struct T { u16 n; indexed(offset_type = u16, count = n) { R entries[]; } }"
+)
+
+
+def test_opaque_has_no_interior_access() -> None:
+	"""Section 9.4: deliberately collapses structural capability in exchange
+	for flexibility."""
+	assert axis_of(OPAQUE, "S.payload", Axis.ACCESS) == Value("Sequential")
+	assert rules_for(OPAQUE, "S.payload", Axis.ACCESS) == ["opaque"]
+
+
+def test_opaque_is_replaced_whole() -> None:
+	assert axis_of(OPAQUE, "S.payload", Axis.MUTATE) == Value("RewriteRequired")
+
+
+def test_indexed_keeps_random_access() -> None:
+	"""The offset table is the whole reason to pay for the construct: element N
+	is one indirection away however wide the elements are (section 9.3)."""
+	assert axis_of(INDEXED, "T.entries", Axis.ACCESS) == Value("Random")
+
+
+def test_indexed_addresses_hold_only_while_the_table_does() -> None:
+	assert axis_of(INDEXED, "T.entries", Axis.ADDRESS) == Value("FrameStable")
+	assert "indexed" in rules_for(INDEXED, "T.entries", Axis.ADDRESS)
+
+
+def test_the_indexed_remedy_says_insertion_is_not_an_operation() -> None:
+	entry  = entries(INDEXED)["T.entries"]
+	remedy = next(w.rule.remedy for w in entry.blame(Axis.ADDRESS))
+	assert "insertion is not an operation here" in remedy
+	assert "element mutation stays in place" in remedy

@@ -351,6 +351,10 @@ class Emitter:
 			lines.extend(self._variant_note(placement))
 			return lines
 
+		if placement.kind in ("opaque", "indexed"):
+			lines.extend(self._region_note(struct, entry))
+			return lines
+
 		# A dynamically placed member needs its offset worked out at runtime
 		# before anything can read it.
 		if placement.offset_bits is None:
@@ -383,6 +387,41 @@ class Emitter:
 			f"/* {placement.path} : {placement.type_name}  at {offset}",
 			f" * {axes}",
 			" */",
+		]
+
+	def _region_note(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""An opaque or indexed region: bytes now, structure later.
+
+		An opaque region gets a pointer and a length, which is exactly what its
+		capability vector supports -- treat-as-bytes and nothing more. An
+		indexed one needs the offset table walked, which is later phase 6 work.
+		"""
+		placement = entry.placement
+		local     = c_name(self._local(struct, placement))
+		base      = self._base_expression(struct, placement)
+
+		if placement.kind == "indexed":
+			return [
+				f"/* No accessor: `{placement.name}` is an `indexed` region, whose",
+				" * elements are reached through an offset table. Table walking is",
+				" * not generated yet. Insertion is not an operation here at all:",
+				" * every offset after the insertion point would have to move. */",
+			]
+
+		return [
+			"/* Treat-as-bytes, which is the whole of what an `opaque` region",
+			" * supports: no interior access, and whole-region replacement only",
+			" * at the same size. */",
+			f"static inline uint32_t "
+			f"{ident(self.prefix, struct.name, local, 'len')}(situ_view_t view)",
+			"{",
+			f"	return {self._length_expression(struct, placement)};",
+			"}",
+			f"static inline uint8_t *"
+			f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
+			"{",
+			f"	return view.base + {base};",
+			"}",
 		]
 
 	def _variant_note(self, placement: Placement) -> list[str]:
@@ -548,6 +587,11 @@ class Emitter:
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str:
 		"""How many bytes a variable-length member occupies, at runtime."""
+		if placement.kind == "opaque":
+			# An opaque region's size expression is already a byte count; there
+			# are no elements to multiply by.
+			return f"(uint32_t){self._count_expression(struct, placement)}"
+
 		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
 
 		if placement.sized_by == "remaining":

@@ -244,6 +244,13 @@ def _has_dynamic_elements(context: Context) -> bool:
 	if placement.kind == "element":
 		return placement.size_max_bits != placement.size_bits
 
+	# Only a real array has elements to walk. An `opaque` region has no
+	# interior at all, and an `indexed` one is the exception the construct
+	# exists for: the offset table means element N is one indirection away
+	# however wide the elements are, so access stays Random (section 9.3).
+	if placement.kind != "field":
+		return False
+
 	return _is_array(placement) and placement.element_bits is None
 
 
@@ -253,6 +260,14 @@ def _is_varint(context: Context) -> bool:
 
 def _is_non_minimal_varint(context: Context) -> bool:
 	return context.placement.varint is not None and not context.placement.varint_minimal
+
+
+def _is_opaque(context: Context) -> bool:
+	return context.placement.kind == "opaque"
+
+
+def _is_indexed(context: Context) -> bool:
+	return context.placement.kind == "indexed"
 
 
 def _has_unequal_arms(context: Context) -> bool:
@@ -434,6 +449,39 @@ TABLE: tuple[Row, ...] = (
 			            "region so an offset table makes access O(1)",
 		),
 		applies = _has_dynamic_elements,
+	),
+	Row(
+		rule = Rule(
+			name      = "opaque",
+			construct = "an `opaque` region",
+			effects   = (
+				Effect(Axis.ACCESS, Value("Sequential"),
+				       "the region has no interior schema, so there is nothing "
+				       "to address inside it"),
+				Effect(Axis.MUTATE, Value("RewriteRequired"),
+				       "the whole region is replaced, and only by something of "
+				       "the same size"),
+			),
+			remedy    = "give the region an interior schema to regain field "
+			            "access, or leave it opaque and treat it as bytes",
+		),
+		applies = _is_opaque,
+	),
+	Row(
+		rule = Rule(
+			name      = "indexed",
+			construct = "an `indexed` region",
+			# Access deliberately stays Random: one indirection through the
+			# table reaches element N whatever the elements weigh, which is the
+			# whole reason to pay for the table.
+			effects   = (Effect(Axis.ADDRESS, Value("FrameStable"),
+			                    "an element is reached through the offset table, "
+			                    "so its address holds only while the table does"),),
+			remedy    = "insertion is not an operation here: every offset after "
+			            "the insertion point would have to move. Rebuild the "
+			            "region instead; element mutation stays in place",
+		),
+		applies = _is_indexed,
 	),
 	Row(
 		rule = Rule(

@@ -31,9 +31,7 @@ def evaluate_literal(expr: ast.Expr) -> int | None:
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
 FUTURE_CONSTRUCTS = {
-	"opaque":		(6,  "`opaque`"),
 	"tlv":			(6,  "`tlv`"),
-	"indexed":		(6,  "`indexed`"),
 	"codec":		(7,  "`codec`"),
 	"impl":			(7,  "`impl`"),
 	"authenticated":	(8,  "`authenticated`"),
@@ -512,6 +510,10 @@ class Parser:
 				return self.parse_positional()
 			if token.text == "variant":
 				return self.parse_variant()
+			if token.text == "opaque":
+				return self.parse_opaque()
+			if token.text == "indexed":
+				return self.parse_indexed()
 
 		return self.parse_field()
 
@@ -521,6 +523,45 @@ class Parser:
 		members = self.parse_members()
 		self.expect_symbol("}", "to close the positional block")
 		return ast.PositionalBlock(self.span_from(start), members)
+
+	def parse_opaque(self) -> ast.Opaque:
+		"""`opaque ciphertext [hdr.length];`"""
+		start = self.advance()
+		name  = self.expect_ident("a region name")
+		self.expect_symbol("[", "before the region size")
+		size = self.parse_expr()
+		self.expect_symbol("]", "after the region size")
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after the opaque region")
+		return ast.Opaque(self.span_from(start), name.text, size, attrs)
+
+	def parse_indexed(self) -> ast.Indexed:
+		"""`indexed(offset_type = u16, count = hdr.n) { Record entries[]; }`"""
+		start = self.advance()
+		self.expect_symbol("(", "before the index arguments")
+
+		args: list[ast.Attr] = []
+		while not self.current.is_symbol(")"):
+			args.append(self.parse_attr())
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol(")", "after the index arguments")
+		self.expect_symbol("{", "to open the indexed block")
+		members = self.parse_members()
+		self.expect_symbol("}", "to close the indexed block")
+
+		if len(members) != 1:
+			raise error(
+				"an `indexed` region holds exactly one element declaration",
+				self.span_from(start),
+				label = f"found {len(members)}",
+				notes = ["the offset table indexes one array; several would need "
+				         "several tables"],
+			)
+
+		name = members[0].name if isinstance(members[0], ast.Field) else "entries"
+		return ast.Indexed(self.span_from(start), name, tuple(args), members)
 
 	def parse_variant(self) -> ast.Variant:
 		"""`variant body switch (hdr.type) { case A: X a; default: error; }`"""

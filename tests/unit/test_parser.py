@@ -415,9 +415,7 @@ def test_future_declarations_name_their_phase(source: str, phase: int) -> None:
 
 
 @pytest.mark.parametrize(("member", "phase"), [
-	("opaque payload [4];",				6),
 	("tlv options (tag_type = u8);",		6),
-	("indexed(offset_type = u16) { u8 a; }",	6),
 	("authenticated { u8 a; }",			8),
 	("sealed(aes) { u8 a; }",			8),
 	("tag u8[16];",					8),
@@ -676,3 +674,28 @@ def test_a_non_enum_discriminant_needs_a_default() -> None:
 	be total is to say what happens to the rest."""
 	with pytest.raises(SituError, match="has no `default` arm"):
 		parse_text(ENUMS + "struct S { u8 k; variant b switch (k) { case 1: A a; } }")
+
+
+# -- opaque and indexed (sections 9.3, 9.4) ---------------------------------
+
+
+def test_opaque_parses() -> None:
+	member = only_struct("struct S { u16 n; opaque payload [n]; }").members[1]
+	assert isinstance(member, ast.Opaque)
+	assert member.name == "payload"
+
+
+def test_indexed_parses() -> None:
+	schema = parse_text("struct R { u32 id; }"
+	                    "struct S { u16 n; indexed(offset_type = u16, count = n) "
+	                    "{ R entries[]; } }")
+	member = schema.structs()[-1].members[1]
+	assert isinstance(member, ast.Indexed)
+	assert member.name == "entries"
+	assert isinstance(member.argument("offset_type"), ast.NameRef)
+
+
+def test_indexed_holds_exactly_one_element_declaration() -> None:
+	with pytest.raises(SituError, match="exactly one element declaration"):
+		parse_text("struct R { u32 id; } struct S { u16 n; "
+		           "indexed(offset_type = u16, count = n) { R a[]; R b[]; } }")

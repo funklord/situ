@@ -576,3 +576,59 @@ def test_fixed_array_keeps_a_compile_time_count() -> None:
 ])
 def test_dynamic_code_compiles_warning_clean(tmp_path: Path, body: str) -> None:
 	compile_generated(tmp_path, body)
+
+
+# -- phase 6 constructs -----------------------------------------------------
+
+
+def test_opaque_gets_bytes_and_a_length() -> None:
+	"""Treat-as-bytes is the whole of what an opaque region supports."""
+	header, _ = emit("struct S { u16 n; opaque payload [n]; }")
+	assert "situ_S_payload_len(situ_view_t view)" in header
+	assert "situ_S_payload_ptr(situ_view_t view)" in header
+	assert "no interior access" in header
+
+
+def test_opaque_length_is_a_byte_count_not_an_element_count() -> None:
+	header, _ = emit("struct S { u16 n; opaque payload [n]; }")
+	assert "return (uint32_t)(situ_get_be16(view.base + 0u));" in header
+
+
+def test_a_varint_gets_no_accessor() -> None:
+	"""Emitting one would pretend the width is fixed."""
+	header, _ = emit("varint_type v { encoding = leb128; max_bits = 64; minimal; }"
+	                 "struct S { u16 a; v n; }")
+	assert "No accessor" in header
+	assert "situ_S_n_get" not in header
+
+
+def test_a_variant_gets_no_single_accessor() -> None:
+	header, _ = emit("enum K : u8 { a = 1, b = 2, }"
+	                 "struct A { u16 x; } struct B { u32 y; }"
+	                 "struct S { K k; variant v switch (k) "
+	                 "{ case K.a: A p; case K.b: B q; } }")
+	assert "exactly one of" in header
+	assert "read the discriminant and take the matching" in header
+
+
+def test_an_indexed_region_says_insertion_is_not_an_operation() -> None:
+	header, _ = emit("struct R { u32 id; }"
+	                 "struct S { u16 n; indexed(offset_type = u16, count = n) "
+	                 "{ R entries[]; } }")
+	assert "reached through an offset table" in header
+	assert "Insertion is not an operation here at all" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+@pytest.mark.parametrize("body", [
+	"struct S { u16 n; opaque payload [n]; }",
+	"struct S { u16 n; opaque payload [n]; u32 z; }",
+	"varint_type v { encoding = leb128; max_bits = 64; minimal; }"
+	"struct S { u16 a; v n; }",
+	"enum K : u8 { a = 1, b = 2, }struct A { u16 x; } struct B { u32 y; }"
+	"struct S { K k; variant v switch (k) { case K.a: A p; case K.b: B q; } }",
+	"struct R { u32 id; }"
+	"struct S { u16 n; indexed(offset_type = u16, count = n) { R entries[]; } }",
+])
+def test_phase_six_constructs_compile_warning_clean(tmp_path: Path, body: str) -> None:
+	compile_generated(tmp_path, body)
