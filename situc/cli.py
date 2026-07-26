@@ -23,7 +23,6 @@ from situc.unparse import unparse
 # Subcommands named in section 21 but not yet built, with the phase that adds
 # each one. Listed so `situc advise` says "phase 9" rather than "invalid choice".
 FUTURE_COMMANDS = {
-	"build":		4,
 	"gen-tests":		4,
 	"gen-fuzz":		4,
 	"advise":		9,
@@ -49,6 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
 	dump_cmd.add_argument("schema", type=Path)
 	dump_cmd.add_argument("--format", choices=("tree", "source"), default="tree",
 	                      help="structural dump, or the AST rendered back to situ source")
+
+	build_cmd = sub.add_parser("build", help="generate accessor code")
+	build_cmd.add_argument("schema", type=Path)
+	build_cmd.add_argument("--out", type=Path, default=Path("."),
+	                       help="output directory (default: the current one)")
+	build_cmd.add_argument("--target", choices=("c",), default="c",
+	                       help="backend; rust arrives in phase 11")
+	build_cmd.add_argument("--prefix", default="situ",
+	                       help="identifier prefix for generated symbols")
 
 	map_cmd = sub.add_parser("map", help="emit the capability map")
 	map_cmd.add_argument("schema", type=Path)
@@ -105,6 +113,21 @@ def cmd_map(args: argparse.Namespace) -> int:
 		sys.stdout.write(capmap.summary(resolved))
 	else:
 		sys.stdout.write(capmap.render(schema, resolved, source.path))
+
+	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
+	return 0
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+	from situc.codegen.c import generate
+
+	source, resolved, outcomes = analyse(args.schema)
+	generated = generate(parse(source), resolved, args.schema.stem, args.prefix)
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	for name, text in generated.files().items():
+		(args.out / name).write_text(text, encoding="ascii")
+		print(f"situc: wrote {args.out / name}", file=sys.stderr)
 
 	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
 	return 0
@@ -169,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
 	commands = {
 		"dump-ast": cmd_dump_ast,
 		"map":      cmd_map,
+		"build":    cmd_build,
 		"explain":  cmd_explain,
 	}
 

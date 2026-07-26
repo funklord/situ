@@ -115,6 +115,196 @@ static inline situ_err_t situ_bounds_check(situ_view_t view, uint32_t off, uint3
 
 #endif /* SITU_CHECKED */
 
+/* ------------------------------------------------------------------------
+ * Byte-order access
+ *
+ * Generated accessors go through these rather than casting a pointer, which
+ * would be both an alignment fault and a strict-aliasing violation on the
+ * targets that matter. Every one of them compiles to a load plus a byte swap
+ * on a machine that has one.
+ * ------------------------------------------------------------------------ */
+
+static inline uint16_t situ_get_be16(const uint8_t *p)
+{
+	return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
+}
+
+static inline uint32_t situ_get_be32(const uint8_t *p)
+{
+	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
+	     | ((uint32_t)p[2] <<  8) | ((uint32_t)p[3]);
+}
+
+static inline uint64_t situ_get_be64(const uint8_t *p)
+{
+	return ((uint64_t)situ_get_be32(p) << 32) | (uint64_t)situ_get_be32(p + 4);
+}
+
+static inline uint16_t situ_get_le16(const uint8_t *p)
+{
+	return (uint16_t)(((uint16_t)p[1] << 8) | (uint16_t)p[0]);
+}
+
+static inline uint32_t situ_get_le32(const uint8_t *p)
+{
+	return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16)
+	     | ((uint32_t)p[1] <<  8) | ((uint32_t)p[0]);
+}
+
+static inline uint64_t situ_get_le64(const uint8_t *p)
+{
+	return ((uint64_t)situ_get_le32(p + 4) << 32) | (uint64_t)situ_get_le32(p);
+}
+
+static inline void situ_put_be16(uint8_t *p, uint16_t v)
+{
+	p[0] = (uint8_t)(v >> 8);
+	p[1] = (uint8_t)(v);
+}
+
+static inline void situ_put_be32(uint8_t *p, uint32_t v)
+{
+	p[0] = (uint8_t)(v >> 24);
+	p[1] = (uint8_t)(v >> 16);
+	p[2] = (uint8_t)(v >>  8);
+	p[3] = (uint8_t)(v);
+}
+
+static inline void situ_put_be64(uint8_t *p, uint64_t v)
+{
+	situ_put_be32(p,     (uint32_t)(v >> 32));
+	situ_put_be32(p + 4, (uint32_t)(v));
+}
+
+static inline void situ_put_le16(uint8_t *p, uint16_t v)
+{
+	p[0] = (uint8_t)(v);
+	p[1] = (uint8_t)(v >> 8);
+}
+
+static inline void situ_put_le32(uint8_t *p, uint32_t v)
+{
+	p[0] = (uint8_t)(v);
+	p[1] = (uint8_t)(v >>  8);
+	p[2] = (uint8_t)(v >> 16);
+	p[3] = (uint8_t)(v >> 24);
+}
+
+static inline void situ_put_le64(uint8_t *p, uint64_t v)
+{
+	situ_put_le32(p,     (uint32_t)(v));
+	situ_put_le32(p + 4, (uint32_t)(v >> 32));
+}
+
+/* ------------------------------------------------------------------------
+ * Bit-field access
+ *
+ * Offsets are bit-valued because the solver's are (project.md section 26.2).
+ * `off` is measured in bits from the start of the view, and `width` runs 1 to
+ * 64. Straddling fields are handled by the same code as contained ones, which
+ * is why there is no separate path for them.
+ *
+ * The two bit orders differ in how a byte's bits are numbered, and therefore
+ * in which byte holds a multi-byte field's most significant bits:
+ *
+ *   msb_first  fills from bit 7 of each byte downward, so the byte stream
+ *              reads as one big-endian bit string.
+ *   lsb_first  fills from bit 0 upward, so an earlier byte holds the *less*
+ *              significant bits.
+ * ------------------------------------------------------------------------ */
+
+static inline uint64_t situ_bits_get_msb(const uint8_t *base, uint32_t off, uint32_t width)
+{
+	uint32_t first = off / 8u;
+	uint32_t last  = (off + width - 1u) / 8u;
+	uint32_t skip  = off - first * 8u;
+	uint64_t acc   = 0;
+	uint32_t i;
+
+	for (i = first; i <= last; i++) {
+		acc = (acc << 8) | (uint64_t)base[i];
+	}
+
+	/* The accumulator holds (last - first + 1) whole bytes; drop the bits
+	 * below the field and mask off the ones above it. */
+	acc >>= ((last - first + 1u) * 8u) - skip - width;
+	return width == 64u ? acc : acc & (((uint64_t)1 << width) - 1u);
+}
+
+static inline void situ_bits_set_msb(uint8_t *base, uint32_t off, uint32_t width, uint64_t v)
+{
+	uint32_t first = off / 8u;
+	uint32_t last  = (off + width - 1u) / 8u;
+	uint32_t skip  = off - first * 8u;
+	uint32_t span  = (last - first + 1u) * 8u;
+	uint64_t mask  = width == 64u ? ~(uint64_t)0 : (((uint64_t)1 << width) - 1u);
+	uint64_t acc   = 0;
+	uint32_t i;
+
+	for (i = first; i <= last; i++) {
+		acc = (acc << 8) | (uint64_t)base[i];
+	}
+
+	acc &= ~(mask << (span - skip - width));
+	acc |= (v & mask) << (span - skip - width);
+
+	for (i = last + 1u; i > first; i--) {
+		base[i - 1u] = (uint8_t)(acc & 0xFFu);
+		acc >>= 8;
+	}
+}
+
+static inline uint64_t situ_bits_get_lsb(const uint8_t *base, uint32_t off, uint32_t width)
+{
+	uint32_t first = off / 8u;
+	uint32_t last  = (off + width - 1u) / 8u;
+	uint32_t skip  = off - first * 8u;
+	uint64_t acc   = 0;
+	uint32_t i;
+
+	/* Earlier bytes carry the less significant bits, so assemble downward. */
+	for (i = last + 1u; i > first; i--) {
+		acc = (acc << 8) | (uint64_t)base[i - 1u];
+	}
+
+	acc >>= skip;
+	return width == 64u ? acc : acc & (((uint64_t)1 << width) - 1u);
+}
+
+static inline void situ_bits_set_lsb(uint8_t *base, uint32_t off, uint32_t width, uint64_t v)
+{
+	uint32_t first = off / 8u;
+	uint32_t last  = (off + width - 1u) / 8u;
+	uint32_t skip  = off - first * 8u;
+	uint64_t mask  = width == 64u ? ~(uint64_t)0 : (((uint64_t)1 << width) - 1u);
+	uint64_t acc   = 0;
+	uint32_t i;
+
+	for (i = last + 1u; i > first; i--) {
+		acc = (acc << 8) | (uint64_t)base[i - 1u];
+	}
+
+	acc &= ~(mask << skip);
+	acc |= (v & mask) << skip;
+
+	for (i = first; i <= last; i++) {
+		base[i] = (uint8_t)(acc & 0xFFu);
+		acc >>= 8;
+	}
+}
+
+/* Sign-extend a value of `width` bits held in the low bits of `raw`. */
+static inline int64_t situ_sign_extend(uint64_t raw, uint32_t width)
+{
+	if (width >= 64u) {
+		return (int64_t)raw;
+	}
+	{
+		uint64_t sign = (uint64_t)1 << (width - 1u);
+		return (int64_t)((raw ^ sign) - sign);
+	}
+}
+
 /* Human-readable name for a code, for tests and diagnostics. Never NULL. */
 const char *situ_err_str(situ_err_t err);
 

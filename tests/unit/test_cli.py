@@ -44,7 +44,6 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(("command", "phase"), [
-	("build",	4),
 	("gen-tests",	4),
 	("advise",	9),
 	("diff",	9),
@@ -105,6 +104,18 @@ def test_explain_on_a_struct(capsys: pytest.CaptureFixture[str]) -> None:
 def test_explain_on_an_unknown_path(capsys: pytest.CaptureFixture[str]) -> None:
 	assert main(["explain", HEADER, "Header.nope"]) == 1
 	assert "unknown path" in capsys.readouterr().err
+
+
+def test_build_writes_the_generated_pair(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	assert main(["build", HEADER, "--out", str(tmp_path)]) == 0
+
+	header = (tmp_path / "header.h").read_text(encoding="ascii")
+	source = (tmp_path / "header.c").read_text(encoding="ascii")
+	assert "#define SITU_HEADER_SIZE_FIXED 9u" in header
+	assert '#include "header.h"' in source
+	assert "wrote" in capsys.readouterr().err
 
 
 def test_map_command_emits_the_map(capsys: pytest.CaptureFixture[str]) -> None:
