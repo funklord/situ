@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from situc.codegen.c import generate
-from situc.diagnostics import Source
+from situc.diagnostics import Source, SituError
 from situc.layout import solve
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
@@ -322,3 +322,159 @@ def test_nested_struct_is_emitted_before_its_container() -> None:
 	alphabetical order would emit a forward reference C cannot resolve."""
 	header, _ = emit("struct Outer { u8 a; Zebra z; } struct Zebra { u16 x; }")
 	assert header.index("SITU_ZEBRA_SIZE_FIXED 2u") < header.index("situ_Outer_z_view")
+
+
+# -- gen-fuzz ---------------------------------------------------------------
+
+
+def fuzz_source(body: str, preamble: str = PREAMBLE, name: str = "unit") -> str:
+	from situc.codegen.c import fuzz
+
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	return fuzz.generate(schema, resolved, name)
+
+
+def test_fuzz_harness_has_the_libfuzzer_entry_point() -> None:
+	text = fuzz_source("struct S { u32 a; }")
+	assert "int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)" in text
+
+
+def test_fuzz_harness_covers_every_struct() -> None:
+	"""A harness with a hand-maintained list is a harness that goes stale."""
+	text = fuzz_source("struct A { u8 x; } struct B { u16 y; }")
+	assert "fuzz_A(" in text
+	assert "fuzz_B(" in text
+	assert "data[0] % 2u" in text
+
+
+def test_fuzz_harness_reads_every_accessor() -> None:
+	text = fuzz_source("struct S { u32 a; u8 b; u3 c; u5 d; }")
+	for field in ("a", "b", "c", "d"):
+		assert f"situ_S_{field}_get(view)" in text
+
+
+def test_fuzz_harness_calls_validate() -> None:
+	"""Validation is the first thing a parser runs on attacker-controlled bytes."""
+	assert "situ_S_validate(view)" in fuzz_source("struct S { u8 a [must_eq = 1]; }")
+
+
+def test_fuzz_harness_refuses_short_input() -> None:
+	text = fuzz_source("struct S { u32 a; }")
+	assert "if (size < SITU_S_SIZE_FIXED) {" in text
+
+
+def test_fuzz_sink_is_declared_before_use() -> None:
+	"""C is one-pass; the sink has to precede the harnesses that call it."""
+	text = fuzz_source("struct S { u32 a; }")
+	assert text.index("static void situ_fuzz_sink") < text.index("situ_fuzz_sink((uint64_t)")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_fuzz_harness_compiles_and_runs(tmp_path: Path) -> None:
+	"""Built standalone, so a harness nobody can compile cannot go unnoticed."""
+	body = "struct S { u32 a; u8 b[4]; u3 c; u5 d; }"
+	header, source = emit(body)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "unit_fuzz.c").write_text(fuzz_source(body), encoding="ascii")
+
+	binary = tmp_path / "fuzz"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, "-DSITU_FUZZ_STANDALONE",
+		 f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "unit_fuzz.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	for payload in (b"", b"\x00", b"\x00" * 64, bytes(range(64))):
+		run = subprocess.run([str(binary)], input=payload, capture_output=True)
+		assert run.returncode == 0, run.stderr
+
+
+# -- gen-tests --------------------------------------------------------------
+
+
+def vector_source(body: str, vectors: str, preamble: str = PREAMBLE) -> str:
+	from situc.codegen.c import vectors as vec
+
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	cases    = vec.parse_vectors(Source("<vectors>", vectors))
+	return vec.generate(schema, resolved, cases, "unit")
+
+
+def test_vectors_parse() -> None:
+	from situc.codegen.c import vectors as vec
+
+	cases = vec.parse_vectors(Source("<v>", "S basic 01 02\n\ta = 1\n"))
+	assert len(cases) == 1
+	assert cases[0].struct == "S"
+	assert cases[0].data == b"\x01\x02"
+	assert cases[0].expectations == [("a", "1")]
+
+
+def test_vectors_accept_unspaced_hex() -> None:
+	from situc.codegen.c import vectors as vec
+
+	assert vec.parse_vectors(Source("<v>", "S basic 0102\n"))[0].data == b"\x01\x02"
+
+
+def test_vectors_reject_odd_hex() -> None:
+	from situc.codegen.c import vectors as vec
+
+	with pytest.raises(SituError, match="odd number of digits"):
+		vec.parse_vectors(Source("<v>", "S basic 010\n"))
+
+
+def test_vectors_reject_an_orphan_expectation() -> None:
+	from situc.codegen.c import vectors as vec
+
+	with pytest.raises(SituError, match="expectation before any vector"):
+		vec.parse_vectors(Source("<v>", "\ta = 1\n"))
+
+
+def test_vectors_reject_a_wrong_length() -> None:
+	"""A vector of the wrong size is the commonest way one goes stale."""
+	with pytest.raises(ValueError, match="is 1 bytes, but `S` is 4"):
+		vector_source("struct S { u32 a; }", "S basic 01\n")
+
+
+def test_vectors_reject_an_unknown_struct() -> None:
+	with pytest.raises(ValueError, match="unknown struct `Nope`"):
+		vector_source("struct S { u8 a; }", "Nope basic 01\n")
+
+
+def test_vectors_reject_an_unknown_field() -> None:
+	with pytest.raises(ValueError, match="unknown field `S.nope`"):
+		vector_source("struct S { u8 a; }", "S basic 01\n\tnope = 1\n")
+
+
+def test_generated_vector_test_asserts_the_expectations() -> None:
+	text = vector_source("struct S { u32 a; }", "S basic 00 00 00 2A\n\ta = 42\n")
+	assert "assert_int_equal(situ_S_a_get(view), 42);" in text
+	assert "situ_S_validate(view)" in text
+
+
+def test_generated_vector_test_round_trips() -> None:
+	text = vector_source("struct S { u32 a; }", "S basic 00 00 00 2A\n")
+	assert "situ_S_a_set(view, situ_S_a_get(view));" in text
+	assert "assert_memory_equal(buf, vector_basic, sizeof(buf));" in text
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_generated_vector_test_compiles(tmp_path: Path) -> None:
+	body = "struct S { u32 a; u16 b; }"
+	header, source = emit(body)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "unit_vectors.c").write_text(
+		vector_source(body, "S basic 00 00 00 2A 01 F4\n\ta = 42\n\tb = 500\n"),
+		encoding="ascii")
+
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 "-c", str(tmp_path / "unit_vectors.c"), "-o", str(tmp_path / "v.o")],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr

@@ -23,8 +23,6 @@ from situc.unparse import unparse
 # Subcommands named in section 21 but not yet built, with the phase that adds
 # each one. Listed so `situc advise` says "phase 9" rather than "invalid choice".
 FUTURE_COMMANDS = {
-	"gen-tests":		4,
-	"gen-fuzz":		4,
 	"advise":		9,
 	"diff":			9,
 	"doc":			9,
@@ -57,6 +55,17 @@ def build_parser() -> argparse.ArgumentParser:
 	                       help="backend; rust arrives in phase 11")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
+
+	tests_cmd = sub.add_parser("gen-tests", help="generate golden-vector tests")
+	tests_cmd.add_argument("schema", type=Path)
+	tests_cmd.add_argument("vectors", type=Path)
+	tests_cmd.add_argument("--out", type=Path, default=Path("."))
+	tests_cmd.add_argument("--prefix", default="situ")
+
+	fuzz_cmd = sub.add_parser("gen-fuzz", help="generate a fuzz harness")
+	fuzz_cmd.add_argument("schema", type=Path)
+	fuzz_cmd.add_argument("--out", type=Path, default=Path("."))
+	fuzz_cmd.add_argument("--prefix", default="situ")
 
 	map_cmd = sub.add_parser("map", help="emit the capability map")
 	map_cmd.add_argument("schema", type=Path)
@@ -133,6 +142,44 @@ def cmd_build(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_gen_tests(args: argparse.Namespace) -> int:
+	from situc.codegen.c import vectors
+
+	source, resolved, outcomes = analyse(args.schema)
+	cases = vectors.parse_vectors(read_source(args.vectors))
+
+	name = args.schema.stem
+	try:
+		text = vectors.generate(parse(source), resolved, cases, name, args.prefix)
+	except ValueError as exc:
+		print(f"situc: {exc}", file=sys.stderr)
+		return 1
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	target = args.out / f"{name}_vectors.c"
+	target.write_text(text, encoding="ascii")
+	print(f"situc: wrote {target} ({len(cases)} vectors)", file=sys.stderr)
+
+	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
+	return 0
+
+
+def cmd_gen_fuzz(args: argparse.Namespace) -> int:
+	from situc.codegen.c import fuzz
+
+	source, resolved, outcomes = analyse(args.schema)
+	name = args.schema.stem
+	text = fuzz.generate(parse(source), resolved, name, args.prefix)
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	target = args.out / f"{name}_fuzz.c"
+	target.write_text(text, encoding="ascii")
+	print(f"situc: wrote {target}", file=sys.stderr)
+
+	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
+	return 0
+
+
 def cmd_explain(args: argparse.Namespace) -> int:
 	"""`situc explain Message.recs[].value` -- one field's full vector plus the
 	blame chain for every axis not at its strongest value (section 18.2)."""
@@ -193,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
 		"dump-ast": cmd_dump_ast,
 		"map":      cmd_map,
 		"build":    cmd_build,
+		"gen-fuzz": cmd_gen_fuzz,
+		"gen-tests": cmd_gen_tests,
 		"explain":  cmd_explain,
 	}
 

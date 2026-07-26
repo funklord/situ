@@ -44,7 +44,6 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(("command", "phase"), [
-	("gen-tests",	4),
 	("advise",	9),
 	("diff",	9),
 	("import-proto", 13),
@@ -104,6 +103,36 @@ def test_explain_on_a_struct(capsys: pytest.CaptureFixture[str]) -> None:
 def test_explain_on_an_unknown_path(capsys: pytest.CaptureFixture[str]) -> None:
 	assert main(["explain", HEADER, "Header.nope"]) == 1
 	assert "unknown path" in capsys.readouterr().err
+
+
+def test_gen_fuzz_writes_a_harness(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	assert main(["gen-fuzz", HEADER, "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_fuzz.c").read_text(encoding="ascii")
+	assert "LLVMFuzzerTestOneInput" in text
+	assert "wrote" in capsys.readouterr().err
+
+
+def test_gen_tests_writes_a_vector_suite(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	vectors = str(Path(HEADER).with_suffix(".vectors"))
+	assert main(["gen-tests", HEADER, vectors, "--out", str(tmp_path)]) == 0
+
+	text = (tmp_path / "header_vectors.c").read_text(encoding="ascii")
+	assert "cmocka_run_group_tests" in text
+	assert "4 vectors" in capsys.readouterr().err
+
+
+def test_gen_tests_reports_a_stale_vector(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	bad = tmp_path / "bad.vectors"
+	bad.write_text("Header short 01 02\n", encoding="ascii")
+
+	assert main(["gen-tests", HEADER, str(bad), "--out", str(tmp_path)]) == 1
+	assert "is 2 bytes, but `Header` is 9" in capsys.readouterr().err
 
 
 def test_build_writes_the_generated_pair(

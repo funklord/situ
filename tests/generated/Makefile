@@ -47,9 +47,16 @@ GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))
 GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
 GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 
+# Generated golden-vector suites and fuzz harnesses, built alongside the
+# hand-written tests. The vector suites run under cmocka; the fuzz harness is
+# built standalone so a harness nobody can compile cannot go unnoticed.
+VECTOR_SCHEMAS	:= header
+VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
+FUZZ_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
+
 .PHONY: all test clean generate
 
-all: $(BINS)
+all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS)
 
 generate: $(GEN_HEADERS)
 
@@ -88,10 +95,40 @@ $(BUILD_DIR)/runtime/libsitu.a:
 
 # BUILD_DIR may be absolute (parent) or relative (standalone), so resolve the
 # invocation rather than blindly prefixing './'.
+$(GEN_DIR)/%_vectors.c: $(REPO_ROOT)/tests/schemas/%.situ \
+		$(REPO_ROOT)/tests/schemas/%.vectors
+	@mkdir -p '$(GEN_DIR)'
+	cd '$(REPO_ROOT)' && $(SITUC) gen-tests 'tests/schemas/$*.situ' \
+		'tests/schemas/$*.vectors' --out '$(abspath $(GEN_DIR))'
+
+$(GEN_DIR)/%_fuzz.c: $(REPO_ROOT)/tests/schemas/%.situ
+	@mkdir -p '$(GEN_DIR)'
+	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz 'tests/schemas/$*.situ' \
+		--out '$(abspath $(GEN_DIR))'
+
+$(BUILD_DIR)/%_vectors: $(GEN_DIR)/%_vectors.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
+	@mkdir -p '$(@D)'
+	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+
+$(BUILD_DIR)/%_fuzz: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
+	@mkdir -p '$(@D)'
+	$(CC) $(CFLAGS) -DSITU_FUZZ_STANDALONE -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) -o $@
+
 test: all
-	@for t in $(BINS); do \
+	@for t in $(BINS) $(VECTOR_BINS); do \
 		echo "--- $$t"; \
 		case "$$t" in /*) "$$t";; *) "./$$t";; esac || exit 1; \
+	done
+	@# The fuzz harnesses get a handful of inputs each, enough to catch a
+	@# harness that no longer runs. Real fuzzing is a CI job, not a test run.
+	@for t in $(FUZZ_BINS); do \
+		echo "--- $$t (smoke)"; \
+		for i in 0 1 2 3 4 5 6 7; do \
+			head -c 32 /dev/urandom | { case "$$t" in /*) "$$t";; *) "./$$t";; esac; } \
+				|| exit 1; \
+		done; \
 	done
 
 clean:
