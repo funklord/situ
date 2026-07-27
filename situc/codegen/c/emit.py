@@ -146,7 +146,16 @@ class Emitter:
 
 	def _struct_header(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
-		lines  = ["", f"/* ---- struct {struct.name} ---- */", ""]
+
+		# A register is a bus transaction rather than bytes in a buffer, so it
+		# gets an entirely different API (section 15.1). Everything before this
+		# point -- the solver, the lattice, the map -- treated it as a struct,
+		# which is the whole reason one lattice answers both.
+		if layout.register is not None:
+			from situc.codegen.c.mmio import RegisterEmitter
+			return RegisterEmitter(self.resolved, self.prefix).register(struct)
+
+		lines = ["", f"/* ---- struct {struct.name} ---- */", ""]
 
 		if not layout.is_byte_sized:
 			lines.append(f"/* {struct.name} is {layout.size_bits} bits, not a whole")

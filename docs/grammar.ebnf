@@ -27,6 +27,13 @@ strictness	= "strict" | "lenient" ;
 (* One level only; nesting is rejected naming its phase. See
  * docs/decisions/0012-namespaces.md. *)
 namespace_decl	= "namespace" ident "{" { decl } "}" ;
+
+(* A register lowers to a struct carrying its bus facts; `register_block`
+ * declares the settings once and disappears. See section 15.2. *)
+register_decl	= "register" ident [ "@" number ] "{" { reg_setting | member } "}" ;
+register_block_decl = "register_block" ident "{" { reg_setting | register_decl } "}" ;
+reg_setting	= ( "width" | "access_width" ) "=" number ";"
+	| ( "volatile" | "no_rmw" ) ";" ;
 qualified	= [ ident "::" ] ident ;
 
 decl		= namespace_decl
@@ -35,7 +42,8 @@ decl		= namespace_decl
 	| struct_decl
 	| endian_marker_decl
 	| codec_decl			(* PHASE 7 *)
-	| register_decl			(* PHASE 10 *)
+	| register_decl
+	| register_block_decl
 	| requirement ;
 
 const_decl	= "const" ident "=" expr ";" ;

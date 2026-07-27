@@ -122,7 +122,21 @@ def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
 	layout  = struct.layout
 	size    = f"{layout.size_bytes}" if layout.is_byte_sized else f"{layout.size_bits}bit"
 
-	lines = [f"struct {name} size={size} {_axes(struct.vector, core=False)}".rstrip()]
+	# A register's address and access width belong in the map: they are what
+	# decides every mutate value under it, so a reader asking why a setter is
+	# missing should not have to open the schema to find them.
+	kind = "struct"
+	extra = ""
+	if layout.register is not None:
+		register = layout.register
+		kind  = "register"
+		where = ("" if register.address is None
+		         else f" @ 0x{register.address:02X}")
+		extra = (f"{where} access_width={register.access_width}"
+		         f"{' no_rmw' if register.no_rmw else ''}")
+
+	lines = [f"{kind} {name}{extra} size={size} "
+	         f"{_axes(struct.vector, core=False)}".rstrip()]
 	for entry in struct.entries:
 		lines.append(_entry(entry.placement.path, entry.vector))
 	return lines

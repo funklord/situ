@@ -316,6 +316,12 @@ def test_reachable_rows_are_all_tested() -> None:
 		"allow-unverified-read",
 		"tag-field",
 		"strictness-lenient",
+		# Phase 10. Exercised in test_registers.py, which keeps the MMIO rows
+		# beside the diagnostics and the generated API that read them.
+		"register-partial-word",
+		"register-read-only",
+		"register-rmw-unsafe",
+		"register-side-effect",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 

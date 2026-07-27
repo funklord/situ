@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from collections.abc import Callable
 from typing import TypeVar
 
 from situc import ast, namespaces, wellformed
@@ -72,10 +73,24 @@ def evaluate_literal(expr: ast.Expr) -> int | None:
 
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
-FUTURE_CONSTRUCTS = {
-	"register":		(10, "`register`"),
-	"register_block":	(10, "`register_block`"),
-}
+FUTURE_CONSTRUCTS: dict[str, tuple[int, str]] = {}
+
+# The settings a register or a register block may declare, from section 15.2.
+REGISTER_SETTINGS = frozenset({"width", "access_width", "volatile", "no_rmw"})
+
+
+@dataclass
+class _RegisterDefaults:
+	"""Scoped defaults, which a `register_block` sets once for what it holds."""
+
+	width: int | None        = None
+	access_width: int | None = None
+	volatile: bool           = True		# implicit under `target mmio` (15.1)
+	no_rmw: bool             = False
+
+	def copy(self) -> _RegisterDefaults:
+		return _RegisterDefaults(self.width, self.access_width,
+		                        self.volatile, self.no_rmw)
 
 # The attribute vocabulary is closed and fixed by the language, which is what
 # makes `[` decidable: see disambiguate_bracket and
@@ -135,6 +150,9 @@ class Parser:
 		# binding reach the same place.
 		self._pending_extern: tuple[str, Span] | None = None
 		self._dispatch_cases: tuple[int, ...] = ()
+		# A `register_block` lowers to several declarations; the rest are
+		# handed back one at a time here.
+		self._pending_block: list[ast.Decl] = []
 
 	# -- token access ---------------------------------------------------
 
@@ -198,7 +216,10 @@ class Parser:
 	def parse(self) -> ast.Schema:
 		schema = ast.Schema(Span(self.source, 0, len(self.source.text)))
 
-		while self.current.kind is not TokenKind.EOF:
+		while self.current.kind is not TokenKind.EOF or self._pending_block:
+			if self._pending_block:
+				schema.decls.append(self._pending_block.pop(0))
+				continue
 			schema.decls.append(self.parse_decl())
 			if self._pending_extern is not None:
 				name, span = self._pending_extern
@@ -225,8 +246,15 @@ class Parser:
 			phase, described = future
 			raise not_yet_implemented(described, token.span, phase)
 
-		handlers = {
+		if token.text == "register_block":
+			# The one declaration that lowers to several, so it cannot go in
+			# the table below.
+			self._pending_block = self.parse_register_block()
+			return self._pending_block.pop(0)
+
+		handlers: dict[str, Callable[[], ast.Decl]] = {
 			"namespace":	self.parse_namespace,
+			"register":	self.parse_register,
 			"target":	self.parse_target,
 			"endian":	self.parse_endian,
 			"bit_order":	self.parse_bit_order,
@@ -282,6 +310,131 @@ class Parser:
 			)
 		self.expect_symbol(";", "after the endian directive")
 		return ast.EndianDirective(self.span_from(start), endian)
+
+	def parse_register(self, defaults: _RegisterDefaults | None = None
+			) -> ast.StructDecl:
+		"""`register ctrl @ 0x00 { width = 32; ... bit enable [rw]; }`
+
+		Lowered straight to a `StructDecl` carrying a `RegisterInfo`. A register
+		*is* a struct -- a fixed-width container of fields at an offset -- so
+		the layout solver, the lattice and the capability map all work on one
+		unchanged, and only the backend needs to know it is emitting bus
+		transactions (section 15.1).
+		"""
+		start   = self.advance()
+		name    = self.expect_ident("a register name")
+		address = None
+
+		if self.accept_symbol("@") is not None:
+			token   = self.current
+			address = evaluate_literal(self.parse_expr())
+			if address is None or address < 0:
+				raise error("a register address must be a literal", token.span,
+				            label="expected a number such as `0x00`")
+
+		self.expect_symbol("{", "to open the register body")
+
+		settings = _RegisterDefaults() if defaults is None else defaults.copy()
+		members: list[ast.Member] = []
+
+		while not self.current.is_symbol("}"):
+			if self.current.kind is TokenKind.EOF:
+				raise error("unexpected end of file inside a register",
+				            self.current.span, label="expected `}`")
+			if self._is_register_setting():
+				self.parse_register_setting(settings)
+				continue
+			members.append(self.parse_member())
+
+		self.expect_symbol("}", "to close the register body")
+		span = self.span_from(start)
+
+		if settings.width is None:
+			raise error(f"register `{name.text}` declares no `width`", span,
+			            label="expected `width = N;` in the body",
+			            notes=["a register's width is the size of the object on "
+			                   "the bus, and nothing else implies it"])
+		if settings.access_width is None:
+			raise error(f"register `{name.text}` declares no `access_width`", span,
+			            label="expected `access_width = N;` in the body",
+			            notes=["`target mmio` makes it mandatory (section 15.1): "
+			                   "it decides whether a narrow field can be written "
+			                   "without touching its neighbours",
+			                   f"`access_width = {settings.width};` forbids partial "
+			                   "access, which is the common case"])
+
+		return ast.StructDecl(
+			span     = span,
+			name     = name.text,
+			members  = tuple(members),
+			register = ast.RegisterInfo(
+				address      = address,
+				width        = settings.width,
+				access_width = settings.access_width,
+				volatile     = settings.volatile,
+				no_rmw       = settings.no_rmw,
+			),
+		)
+
+	def parse_register_block(self) -> list[ast.Decl]:
+		"""`register_block dma { width = 32; register a @ 0 { ... } }`
+
+		Scoped defaults and nothing else (section 15.2): the block declares
+		`width`, `access_width` and the flags once, and the registers inside
+		inherit them. It is not a namespace and not a layout -- it disappears
+		here, leaving the registers it contained.
+		"""
+		start = self.advance()
+		self.expect_ident("a register block name")
+		self.expect_symbol("{", "to open the register block")
+
+		settings = _RegisterDefaults()
+		found: list[ast.Decl] = []
+
+		while not self.current.is_symbol("}"):
+			if self.current.kind is TokenKind.EOF:
+				raise error("unexpected end of file inside a register block",
+				            self.current.span, label="expected `}`")
+			if self._is_register_setting():
+				self.parse_register_setting(settings)
+			elif self.current.is_ident("register"):
+				found.append(self.parse_register(settings))
+			else:
+				raise error(
+					f"expected a register or a default, found "
+					f"{self.current.describe()}",
+					self.current.span,
+					label = "a register block holds registers and scoped defaults",
+					notes = ["`width`, `access_width`, `volatile` and `no_rmw` may "
+					         "be declared once for every register in the block "
+					         "(project.md section 15.2)"],
+				)
+
+		self.expect_symbol("}", "to close the register block")
+
+		if not found:
+			raise error("a register block declares no registers",
+			            self.span_from(start), label="nothing to scope")
+		return found
+
+	def _is_register_setting(self) -> bool:
+		return (self.current.kind is TokenKind.IDENT
+		        and self.current.text in REGISTER_SETTINGS)
+
+	def parse_register_setting(self, settings: _RegisterDefaults) -> None:
+		token = self.advance()
+
+		if token.text in ("volatile", "no_rmw"):
+			setattr(settings, token.text, True)
+		else:
+			self.expect_symbol("=", f"after `{token.text}`")
+			where = self.current
+			value = evaluate_literal(self.parse_expr())
+			if value is None or value <= 0:
+				raise error(f"`{token.text}` needs a positive literal", where.span)
+			setattr(settings, token.text, value)
+
+		self.expect_symbol(";", f"after `{token.text}`")
 
 	def parse_namespace(self) -> ast.NamespaceDecl:
 		"""`namespace outer { struct Header { ... } }`

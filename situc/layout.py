@@ -118,6 +118,13 @@ class Placement:
 	# The tags covering these bytes. Written after the whole struct is placed,
 	# because a tag is usually declared after the regions it covers.
 	covered_by: tuple[str, ...]	= ()
+	# Set on a field of a `register`: how the bus lets it be reached, and what
+	# touching it does besides move a value (section 15.2).
+	access_mode: ast.AccessMode | None	= None
+	on_read: ast.SideEffect			= ast.SideEffect.NONE
+	on_write: ast.SideEffect		= ast.SideEffect.NONE
+	# The register this field belongs to, if any.
+	register: ast.RegisterInfo | None	= None
 
 	@property
 	def is_fixed_size(self) -> bool:
@@ -147,6 +154,8 @@ class StructLayout:
 	# None means unbounded. A struct is a frame exactly when these differ:
 	# some member's size is not known until parse time (section 9.1).
 	size_max_bits: int | None	= None
+	# Set when this struct was written as a `register` (section 15.2).
+	register: ast.RegisterInfo | None = None
 
 	@property
 	def is_frame(self) -> bool:
@@ -386,7 +395,8 @@ class Solver:
 
 		decl   = self.structs[name]
 		scope  = self.scopes[name].narrow(decl.attrs, self.result.env)
-		layout = StructLayout(name=name, size_bits=0, span=decl.span)
+		layout = StructLayout(name=name, size_bits=0, span=decl.span,
+		                      register=decl.register)
 
 		# `fields` accumulates as the walk proceeds, so a size expression can
 		# only ever name a field declared before it. That is the
@@ -1106,6 +1116,10 @@ class Solver:
 			bit_position   = position,
 			frame_relative = False,
 			sized_by       = self.sizing_field(member),
+			access_mode    = _access_mode(member, decl),
+			on_read        = _side_effect(member.attrs, "on_read"),
+			on_write       = _side_effect(member.attrs, "on_write"),
+			register       = decl.register,
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
@@ -1472,6 +1486,14 @@ class Solver:
 		cursor = extent.lo
 		width  = element.lo
 
+		# Both checks below are about buffers, where the byte is the unit of
+		# access and a field crossing one costs a read-modify-write. A register
+		# is reached as a single access of `access_width` bits, so every field
+		# in it is a bit range within one word: starting mid-byte costs nothing,
+		# and crossing a byte boundary costs nothing either.
+		if decl.register is not None:
+			return
+
 		if not packed and cursor % BITS_PER_BYTE != 0:
 			stray = cursor % BITS_PER_BYTE
 			raise error(
@@ -1696,6 +1718,43 @@ def _scopes(schema: ast.Schema) -> dict[str, Scope]:
 			scopes[decl.name] = Scope(endian, bit_order)
 
 	return scopes
+
+
+ACCESS_MODES = {mode.value: mode for mode in ast.AccessMode}
+SIDE_EFFECTS = {effect.value: effect for effect in ast.SideEffect}
+
+
+def _access_mode(member: ast.Field | ast.Reserved,
+		decl: ast.StructDecl) -> ast.AccessMode | None:
+	"""The access mode written on a register field.
+
+	`rw` where a register field says nothing: it is the mode that claims least
+	about the hardware, and a field the schema does not describe is one the
+	compiler should not assume is special. Outside a register there is no mode
+	at all -- bytes in a buffer are not reached over a bus.
+	"""
+	if decl.register is None or isinstance(member, ast.Reserved):
+		return None
+
+	for attr in member.attrs:
+		mode = ACCESS_MODES.get(attr.name)
+		if mode is not None:
+			return mode
+	return ast.AccessMode.RW
+
+
+def _side_effect(attrs: tuple[ast.Attr, ...], name: str) -> ast.SideEffect:
+	for attr in attrs:
+		if attr.name != name:
+			continue
+		if isinstance(attr.value, ast.NameRef):
+			effect = SIDE_EFFECTS.get(attr.value.name)
+			if effect is not None:
+				return effect
+		raise error(f"`{name}` needs one of "
+		            f"{', '.join(sorted(SIDE_EFFECTS))}",
+		            attr.span, label="not a side effect")
+	return ast.SideEffect.NONE
 
 
 def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:

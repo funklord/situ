@@ -1,7 +1,5 @@
 // project.md example 15.2: memory-mapped registers.
 //
-// STATUS: needs phase 10. `register` is rejected until then.
-//
 // The other half of the thesis. SystemRDL and CMSIS-SVD already have a mature
 // vocabulary for access modes and side effects; what nobody did was unify it
 // with wire-protocol description so that one capability lattice answers both.
@@ -20,7 +18,7 @@ target mmio;
 endian little;
 bit_order lsb_first;
 
-register CtrlReg @ 0x00 {
+register ctrl_reg @ 0x00 {
 	width        = 32;
 	access_width = 32;          // partial access forbidden implicitly
 	volatile;
@@ -34,7 +32,7 @@ register CtrlReg @ 0x00 {
 	reserved  u25     [preserve];
 }
 
-register StatusReg @ 0x04 {
+register status_reg @ 0x04 {
 	width        = 32;
 	access_width = 32;
 	volatile;
@@ -46,12 +44,26 @@ register StatusReg @ 0x04 {
 	reserved  u21         [preserve];
 }
 
-// Fails, and the message is the product:
-//   cannot synthesize single-bit write: access_width=32 and no_rmw on CtrlReg
-require in_place(CtrlReg.enable);
+// THE HEADLINE. This fails, and the message is the product: it names both
+// facts that combined, because either one alone would have been fine.
+//
+//   the field is 1 of 32 bits, so writing it alone would need a
+//   read-modify-write, and `no_rmw` is declared
+//
+// Stated as an `assert` so this file still builds while demonstrating the
+// refusal as a warning (section 16). The `require` form and the exact text of
+// its diagnostic are pinned in tests/unit/test_registers.py.
+assert in_place(ctrl_reg.enable);
+
+// What the field can do instead: it is composed into a word and written once.
+require immutable(status_reg.ready);
+require immutable(status_reg.fill_level);
+
+// The whole register is reachable as a word, which is the operation the bus
+// actually offers.
+require size(ctrl_reg) == 4;
+require size(status_reg) == 4;
 
 // `w1c` generates clear_error() rather than set_error(false), because the write
-// semantics are not assignment.
-// `wo` fields generate no getter; `ro` fields generate no setter.
-// `volatile` reads must not be cached or reordered.
-assert immutable(StatusReg.ready);
+// semantics are not assignment. `wo` fields generate no getter; `ro` fields
+// generate no setter. `volatile` reads must not be cached or reordered.

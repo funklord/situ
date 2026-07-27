@@ -225,8 +225,34 @@ def _enum_lines(decl: ast.EnumDecl) -> list[str]:
 
 
 def _struct_lines(decl: ast.StructDecl) -> list[str]:
+	if decl.register is not None:
+		return _register_lines(decl, decl.register)
+
 	header = f"struct {decl.name}{_attrs_to_source(decl.attrs)} {{"
 	lines  = [header]
+	lines.extend(member_lines(decl.members, depth=1))
+	lines.append("}")
+	return lines
+
+
+def _register_lines(decl: ast.StructDecl, register: ast.RegisterInfo) -> list[str]:
+	"""A register renders as one, not as the struct it lowered to.
+
+	A `register_block` does not come back: it declares scoped defaults and
+	nothing else, so its registers reparse identically with the defaults
+	written out on each. The round-trip property is over the tree.
+	"""
+	where = "" if register.address is None else f" @ 0x{register.address:02X}"
+	lines = [f"register {decl.name}{where} {{",
+	         f"	width        = {register.width};",
+	         f"	access_width = {register.access_width};"]
+
+	if register.volatile:
+		lines.append("	volatile;")
+	if register.no_rmw:
+		lines.append("	no_rmw;")
+
+	lines.append("")
 	lines.extend(member_lines(decl.members, depth=1))
 	lines.append("}")
 	return lines

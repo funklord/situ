@@ -676,12 +676,74 @@ class MarkerField(Member):
 	attrs: tuple[Attr, ...] = ()
 
 
+class AccessMode(Enum):
+	"""SystemRDL's vocabulary, borrowed rather than reinvented (section 15.2)."""
+
+	RW       = "rw"
+	RO       = "ro"
+	WO       = "wo"
+	W1C      = "w1c"
+	W0C      = "w0c"
+	W1S      = "w1s"
+	W0S      = "w0s"
+	RC       = "rc"		# read-to-clear
+	RS       = "rs"		# read-to-set
+	WO_ONCE  = "wo_once"
+	RSVD     = "rsvd"
+
+	@property
+	def readable(self) -> bool:
+		return self not in (AccessMode.WO, AccessMode.WO_ONCE, AccessMode.RSVD)
+
+	@property
+	def writable(self) -> bool:
+		return self not in (AccessMode.RO, AccessMode.RSVD)
+
+	@property
+	def is_assignment(self) -> bool:
+		"""Whether a write means "store this value".
+
+		A `w1c` field is written with a 1 to clear it, so `set(false)` would be
+		a lie about what the bus does. Section 15.3 asks for `clear_error()`
+		instead, and this is what decides that.
+		"""
+		return self in (AccessMode.RW, AccessMode.WO, AccessMode.WO_ONCE)
+
+
+class SideEffect(Enum):
+	NONE    = "none"
+	CLEAR   = "clear"
+	POP     = "pop"
+	TRIGGER = "trigger"
+
+
+@dataclass(frozen=True)
+class RegisterInfo:
+	"""What makes a struct a register rather than a buffer layout (15.2).
+
+	A register is a struct: a fixed-width container of fields at an offset, and
+	the same solver places it and the same lattice costs it. What it adds is an
+	address, a bus access width, and the fact that reaching it is a
+	transaction rather than a memory access.
+	"""
+
+	address: int | None
+	width: int
+	access_width: int
+	volatile: bool = True		# implicit under `target mmio` (15.1)
+	no_rmw: bool   = False
+
+
 @dataclass(frozen=True)
 class StructDecl(Decl):
 	span: Span
 	name: str
 	members: tuple[Member, ...]
 	attrs: tuple[Attr, ...] = ()
+	# Set when this was written as a `register`. Everything else about a struct
+	# holds; codegen reads this to decide it is emitting bus transactions
+	# rather than buffer accessors.
+	register: RegisterInfo | None = None
 
 
 class RequirementKind(Enum):

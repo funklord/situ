@@ -122,11 +122,12 @@ def test_parse_error_points_at_the_offending_token() -> None:
 
 def test_not_yet_implemented_names_its_phase() -> None:
 	with pytest.raises(Exception) as caught:
-		parse_text("struct S {\n\tregister ctrl @ 0x00 { }\n}\n", path="s.situ")
+		parse_text("namespace a {\n\tnamespace b { struct s { u8 x; } }\n}\n",
+		           path="s.situ")
 
 	rendered = caught.value.diagnostic.render()	# type: ignore[attr-defined]
-	assert "`register` is not yet implemented" in rendered
-	assert "planned for phase 10" in rendered
+	assert "a nested `namespace` is not yet implemented" in rendered
+	assert "planned for phase 12" in rendered
 	assert "--> s.situ:2:2" in rendered
 
 

@@ -63,15 +63,17 @@ def test_schema_is_named_after_its_directory() -> None:
 		assert path.stem == path.parent.name
 
 
-def test_both_groups_are_populated() -> None:
-	"""Both halves of the convention stay exercised.
+def test_every_example_builds() -> None:
+	"""The future group is empty, and that is the milestone it records.
 
-	Only one example is still waiting on a phase -- `registers`, for phase 10 --
-	so the future group is down to one. It has to stay populated: when it
-	empties, the phase-gating behaviour it pins stops being tested at all.
+	Every example that was waiting on a phase has had its phase land, so the
+	`// STATUS: needs phase N.` convention currently pins nothing. It stays
+	documented and tested here because the next construct to be gated will use
+	it again; what pins the phase-gating machinery in the meantime is the
+	nested-namespace test in test_namespaces.py.
 	"""
-	assert len(CURRENT) >= 10
-	assert len(FUTURE) >= 1
+	assert len(CURRENT) >= 12
+	assert FUTURE == []
 
 
 @pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))

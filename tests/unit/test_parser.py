@@ -402,16 +402,6 @@ def test_unclosed_parenthesis_rejected() -> None:
 # -- constructs belonging to later phases -----------------------------------
 
 
-@pytest.mark.parametrize(("source", "phase"), [
-	("register CtrlReg { width = 32; }",			10),
-	("register_block Block { }",				10),
-])
-def test_future_declarations_name_their_phase(source: str, phase: int) -> None:
-	with pytest.raises(SituError, match="not yet implemented") as caught:
-		parse_text(source)
-	assert f"phase {phase}" in caught.value.diagnostic.render()
-
-
 def test_remaining_array_size_parses() -> None:
 	field = first_field("struct S { u8 trailer[remaining]; }")
 	assert field.array is not None

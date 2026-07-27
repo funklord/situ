@@ -30,16 +30,14 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
 | [protobuf](protobuf/) | The language's hardest conformance test: the worst case on every axis, and five independent causes of non-canonicity. project.md section 9.7. |
 | [packet](packet/) | The security position: the doom principle as a stage gate, and tag coverage against in-place mutation. project.md example 5.3. |
+| [registers](registers/) | The MMIO target, where a missing setter is the deliverable: `access_width` plus `no_rmw` makes setting one bit a compile error. project.md example 15.2. |
 
 ## Waiting on later phases
 
-These are rejected today with a diagnostic naming the phase that will accept
-them. They are kept in the tree because they pin that behaviour, and they
-become live as each phase lands.
-
-| Example | Needs | Demonstrates |
-|---|---|---|
-| [registers](registers/) | phase 10 | MMIO: where a missing setter is the deliverable. project.md example 15.2. |
+None: every example that was gated on a phase has had its phase land. The
+`// STATUS: needs phase N.` convention stays documented here because the next
+construct to be gated will use it, and the test suite still enforces it for any
+example that carries the marker.
 
 ## Reading them
 

@@ -323,6 +323,14 @@ decl          = const_decl | enum_decl | struct_decl | codec_decl
    docs/decisions/0012-namespaces.md *)
 namespace_decl = "namespace" ident "{" { decl } "}" ;
 
+(* Section 15.2. A register lowers to a struct carrying its bus facts; a
+   register_block declares the settings once and disappears. *)
+register_decl  = "register" ident [ "@" number ] "{" { reg_setting | member } "}" ;
+register_block_decl
+               = "register_block" ident "{" { reg_setting | register_decl } "}" ;
+reg_setting    = ( "width" | "access_width" ) "=" number ";"
+               | ( "volatile" | "no_rmw" ) ";" ;
+
 qualified     = [ ident "::" ] ident ;
 
 const_decl    = "const" ident "=" expr ";" ;
@@ -2199,6 +2207,27 @@ uncommitted capability change; `diff` correctly identifies a regression from
 `InPlaceFixed` to `Shifting`.
 
 ### 26.10 Phase 10: MMIO target
+
+**Status: complete.** A register lowers to a `StructDecl` carrying a
+`RegisterInfo`, so the solver places it, the lattice costs it and the map
+renders it with no change at all -- which is the unification 15 exists to
+demonstrate. Only the backend knows it is emitting bus transactions, in
+`situc/codegen/c/mmio.py`.
+
+Three things the section did not spell out and the implementation had to
+decide, all recorded in `docs/decisions/0015-register-access-modes.md`:
+
+- **A field getter takes a word, never the register.** A read is an event, so
+  it happens once and is decoded as many times as there are fields. An API that
+  read per field would drain a FIFO to decode a status word under
+  `on_read = pop`, which is a correctness question rather than a performance
+  one.
+- **The byte is not the unit inside a register.** The alignment and straddle
+  rules of 8.2 and 8.4 are about buffers; a register is one access of
+  `access_width` bits and every field in it is a bit range within that word, so
+  a `u8` three bits in is ordinary rather than an error.
+- **An access mode shapes which operations exist; the lattice costs the ones
+  that do.** `wo` generating no getter is not a fourteenth axis.
 
 `target mmio`, `register`, `register_block`, access modes, side effects, scoped
 defaults, and the capability interactions in 15.3.

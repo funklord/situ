@@ -52,6 +52,7 @@ def check(schema: ast.Schema) -> None:
 	check_codec_bindings(schema)
 	check_tag_coverage(schema)
 	check_nonce_references(schema)
+	check_registers(schema)
 	check_no_recursive_types(schema)
 
 
@@ -610,6 +611,133 @@ def _flatten(members: tuple[ast.Member, ...]) -> list[ast.Member]:
 		else:
 			found.append(member)
 	return found
+
+
+# ---------------------------------------------------------------------------
+# Registers (section 15)
+# ---------------------------------------------------------------------------
+
+
+def check_registers(schema: ast.Schema) -> None:
+	"""The rules of 15.1 and 15.2 that need only names and numbers.
+
+	A schema is one target or the other. Section 15.1 says so and means it: the
+	surface API looks the same and the codegen is entirely different, so a file
+	that mixed them would generate two kinds of accessor with no way for a
+	reader to tell which model a given struct follows.
+	"""
+	target    = _target_of(schema)
+	registers = [decl for decl in schema.structs() if decl.register is not None]
+	buffers   = [decl for decl in schema.structs() if decl.register is None]
+
+	if registers and target is not ast.TargetKind.MMIO:
+		raise error(
+			f"`register {registers[0].name}` needs `target mmio`",
+			registers[0].span,
+			label = "a register is a bus transaction, not bytes in a buffer",
+			notes = ["`target mmio` makes `volatile` implicit and `access_width` "
+			         "mandatory, and changes what in-place mutation means "
+			         "(project.md section 15.1)"],
+		)
+
+	if target is ast.TargetKind.MMIO and buffers:
+		raise error(
+			f"`struct {buffers[0].name}` is a buffer layout under `target mmio`",
+			buffers[0].span,
+			label = "a schema may not mix the two targets",
+			notes = ["the surface API looks the same and the generated code is "
+			         "entirely different, so which model applies has to be a "
+			         "property of the file (project.md section 15.1)",
+			         "put the buffer layouts in their own schema and `import` "
+			         "the type definitions"],
+		)
+
+	for decl in registers:
+		_check_one_register(decl)
+
+
+def _target_of(schema: ast.Schema) -> ast.TargetKind | None:
+	for decl in schema.decls:
+		if isinstance(decl, ast.TargetDirective):
+			return decl.kind
+	return None
+
+
+def _check_one_register(decl: ast.StructDecl) -> None:
+	register = decl.register
+	assert register is not None
+
+	if register.access_width > register.width:
+		raise error(
+			f"register `{decl.name}` is narrower than its access width",
+			decl.span,
+			label = f"width = {register.width}, access_width = "
+			        f"{register.access_width}",
+			notes = ["the bus cannot reach more of the register than there is"],
+		)
+
+	for member in decl.members:
+		if isinstance(member, ast.Field):
+			_check_register_field(decl, member)
+		elif not isinstance(member, ast.Reserved):
+			raise error(
+				f"a register holds fields, not {type(member).__name__.lower()}",
+				member.span,
+				label = "not a register field",
+				notes = ["a register is a fixed-width word of bit fields "
+				         "(project.md section 15.2)"],
+			)
+
+
+def _check_register_field(decl: ast.StructDecl, member: ast.Field) -> None:
+	modes = [attr for attr in member.attrs if attr.name in _ACCESS_MODE_NAMES]
+
+	if len(modes) > 1:
+		raise _redeclaration("access mode", modes[1].name, modes[0], modes[1], [
+			"a field is reached one way; two modes have no combined meaning",
+		])
+
+	if member.array is not None:
+		raise error(
+			f"register field `{member.name}` may not be an array",
+			member.span,
+			label = "arrays are not addressable over a bus",
+			notes = ["a register is one word; declare several registers, or a "
+			         "`register_block`, instead"],
+		)
+
+	mode = next((ACCESS_MODES[attr.name] for attr in modes), ast.AccessMode.RW)
+	on_read = _side_effect_attr(member, "on_read")
+
+	if on_read is not None and not mode.readable:
+		raise error(
+			f"`{member.name}` is `{mode.value}` but declares `on_read`",
+			on_read.span,
+			label = "the bus does not let this field be read",
+			notes = ["an effect on an access that cannot happen describes "
+			         "nothing"],
+		)
+
+	on_write = _side_effect_attr(member, "on_write")
+	if on_write is not None and not mode.writable:
+		raise error(
+			f"`{member.name}` is `{mode.value}` but declares `on_write`",
+			on_write.span,
+			label = "the bus does not let this field be written",
+			notes = ["an effect on an access that cannot happen describes "
+			         "nothing"],
+		)
+
+
+ACCESS_MODES = {mode.value: mode for mode in ast.AccessMode}
+_ACCESS_MODE_NAMES = frozenset(ACCESS_MODES)
+
+
+def _side_effect_attr(member: ast.Field, name: str) -> ast.Attr | None:
+	for attr in member.attrs:
+		if attr.name == name:
+			return attr
+	return None
 
 
 # ---------------------------------------------------------------------------

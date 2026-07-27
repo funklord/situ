@@ -468,6 +468,75 @@ def _is_lenient(context: Context) -> bool:
 	return context.lenient
 
 
+# -- the MMIO target (section 15.3) -----------------------------------------
+
+
+def _register_of(context: Context) -> ast.RegisterInfo | None:
+	return context.placement.register
+
+
+def _needs_rmw(context: Context) -> bool:
+	"""A field narrower than the bus access that reaches it.
+
+	Writing it means reading the word, changing some bits and writing it back.
+	Whether that is *safe* is a separate question, which the two rows below
+	answer; this only says the read is necessary.
+	"""
+	register = _register_of(context)
+	if register is None or context.placement.kind == "reserved":
+		return False
+	return context.placement.size_bits < register.access_width
+
+
+def _reads_have_effects(context: Context) -> bool:
+	placement = context.placement
+	register  = _register_of(context)
+	if register is None:
+		return False
+	return register.no_rmw or placement.on_read is not ast.SideEffect.NONE
+
+
+def _rmw_is_unsafe(context: Context) -> bool:
+	"""Section 15.3's headline interaction, and the reason for the chapter.
+
+	`access_width = 32` plus a one-bit field means a single-bit write needs a
+	read-modify-write; `no_rmw` or a read with side effects means that read is
+	not something the generated code may perform. Together they make the field
+	`RewriteRequired`, so no setter is generated and the caller composes the
+	whole word.
+	"""
+	return _needs_rmw(context) and _reads_have_effects(context)
+
+
+def _is_partial_word(context: Context) -> bool:
+	"""A register field that is not the whole bus access.
+
+	The memory here is a bus word, and a narrower field is shifted and masked
+	out of one. So the value is not the bytes however wide the field is: a `u8`
+	at bit 3 of a 32-bit register is as converted as a `u3` is, which the
+	buffer rules would not have said.
+	"""
+	register  = _register_of(context)
+	placement = context.placement
+	if register is None:
+		return False
+	return (placement.size_bits != register.access_width
+	        or placement.offset_bits is None
+	        or placement.offset_bits % register.access_width != 0)
+
+
+def _is_read_only(context: Context) -> bool:
+	mode = context.placement.access_mode
+	return mode is not None and not mode.writable
+
+
+def _register_effect(context: Context) -> bool:
+	placement = context.placement
+	return (placement.register is not None
+	        and (placement.on_read is not ast.SideEffect.NONE
+	             or placement.on_write is not ast.SideEffect.NONE))
+
+
 def _is_host_dependent(context: Context) -> bool:
 	scalar = context.scalar
 	return (context.placement.endian is ast.Endian.NATIVE
@@ -1001,6 +1070,56 @@ TABLE: tuple[Row, ...] = (
 	),
 	Row(
 		rule = Rule(
+			name      = "register-partial-word",
+			construct = "a register field narrower than the bus access",
+			effects   = (
+				Effect(Axis.REPR, Value("ValueConverted"),
+				       "the value is shifted and masked out of a bus word, so "
+				       "it is not the memory and no pointer to it exists"),
+				Effect(Axis.ATOMIC, Value("NonAtomic"),
+				       "the word arrives in one transaction, but isolating the "
+				       "field from it does not"),
+			),
+			remedy    = "a field occupying the whole `access_width` is read and "
+			            "written as one transaction with no masking at all",
+		),
+		applies = _is_partial_word,
+	),
+	Row(
+		rule = Rule(
+			name      = "register-read-only",
+			construct = "a register field the bus does not let you write",
+			effects   = (Effect(Axis.MUTATE, Value("Immutable"),
+			                    "the hardware drives this field; a write to it "
+			                    "either does nothing or does something else"),),
+			remedy    = "",
+		),
+		applies = _is_read_only,
+	),
+	Row(
+		rule = Rule(
+			name      = "register-rmw-unsafe",
+			construct = "a partial-width field in a register whose reads are "
+			            "not free",
+			effects   = (),		# costed per placement; see _rmw_effects
+			remedy    = "compose the whole word and write it once, which the "
+			            "generated builder does; or widen `access_width` to the "
+			            "field if the bus allows a narrower transaction",
+		),
+		applies = _rmw_is_unsafe,
+	),
+	Row(
+		rule = Rule(
+			name      = "register-side-effect",
+			construct = "a register field whose access has a side effect",
+			effects   = (),		# named per placement; see _effect_effects
+			remedy    = "a field with `on_read` other than `none` cannot be read "
+			            "twice for the same value; read it once and keep it",
+		),
+		applies = _register_effect,
+	),
+	Row(
+		rule = Rule(
 			name      = "secret-field",
 			construct = "a `[secret]` field",
 			effects   = (Effect(Axis.SECRECY, Value("Secret"),
@@ -1051,6 +1170,10 @@ def apply(context: Context) -> Resolved:
 			effects = _unbounded_effects(context)
 		elif row.rule.name == "covered-by-tag":
 			effects = _coverage_effects(context)
+		elif row.rule.name == "register-rmw-unsafe":
+			effects = _rmw_effects(context)
+		elif row.rule.name == "register-side-effect":
+			effects = _effect_effects(context)
 
 		for effect in effects:
 			effect  = _parameterise(effect, context.placement)
@@ -1072,6 +1195,45 @@ def apply(context: Context) -> Resolved:
 			))
 
 	return Resolved(placement=placement, vector=vector, weakenings=weakenings)
+
+
+def _rmw_effects(context: Context) -> tuple[Effect, ...]:
+	"""Say which two facts combined, because either alone would be fine.
+
+	A narrow field in a wide access is ordinary; a register whose reads have
+	side effects is ordinary. It is the pair that removes the setter, and a
+	diagnostic naming only one of them would send the reader to change the
+	wrong thing.
+	"""
+	placement = context.placement
+	register  = placement.register
+	assert register is not None
+
+	why = ("`no_rmw` is declared" if register.no_rmw
+	       else f"`on_read = {placement.on_read.value}` makes the read destructive")
+
+	return (Effect(Axis.MUTATE, Value("RewriteRequired"),
+	                f"the field is {placement.size_bits} of "
+	                f"{register.access_width} bits, so writing it alone would "
+	                f"need a read-modify-write, and {why}"),)
+
+
+def _effect_effects(context: Context) -> tuple[Effect, ...]:
+	placement = context.placement
+	reads     = placement.on_read is not ast.SideEffect.NONE
+	writes    = placement.on_write is not ast.SideEffect.NONE
+
+	if reads and writes:
+		value, detail = "EffectBoth", (f"reading it {placement.on_read.value}s and "
+		                               f"writing it {placement.on_write.value}s")
+	elif reads:
+		value, detail = "EffectOnRead", f"reading it {placement.on_read.value}s"
+	else:
+		value, detail = "EffectOnWrite", f"writing it {placement.on_write.value}s"
+
+	return (Effect(Axis.EFFECT, Value(value),
+	               f"{detail}, so the access is not a pure load or store and "
+	               "may not be repeated, reordered or elided"),)
 
 
 def _coverage_effects(context: Context) -> tuple[Effect, ...]:
