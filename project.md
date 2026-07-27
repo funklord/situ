@@ -1779,6 +1779,7 @@ value:
 | Artifact | Command | Why |
 |---|---|---|
 | golden-vector tests | `situc gen-tests` | schema + hex vectors -> cmocka test cases; the only reliable way to know a layout change broke the wire format |
+| capability conformance | `situc gen-checks` | schema alone -> cmocka test cases holding the accessors to what the map claims; a map the generated code contradicts is worse than no map |
 | fuzz harness | `situc gen-fuzz` | libFuzzer/AFL entry point per parseable struct; parse safety is the top risk in a protocol parser |
 | byte-layout diagram | `situc doc --format=ascii` | RFC-style packet diagrams straight from the schema; what protocol documentation always needs |
 | Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff |
@@ -1792,6 +1793,7 @@ value:
 situc build   <schema>            generate code
 situc map     <schema>            emit capability map
 situc map --check <schema>        compare against committed map, fail on diff
+situc gen-checks <schema>         tests holding the accessors to the map
 situc advise  <schema>            ranked design suggestions with costs
 situc explain <schema> <path>     one field's capability vector and blame chains
 situc diff    <old> <new>         capability regressions between revisions
@@ -1818,6 +1820,7 @@ Global flags: `--target=c|rust`, `--out=DIR`, `--diagnostics=text|json`,
 | requirement discharge | pytest | every predicate in Section 16, passing and failing, with expected blame chain |
 | canonicity | pytest | one test per source of non-canonicity in 14.4 |
 | codegen golden | pytest + file compare | generated C compared against committed expected output |
+| capability conformance | generated cmocka | the accessors are held to the map they were generated beside: a field must occupy exactly the bytes claimed, a write must move nothing else, a constraint must refuse what it forbids. Generated from the schema alone, so it costs nothing to run over every example and a new construct is covered the day it lands |
 | generated code behavior | cmocka | compile generated C and exercise it; use `--wrap` for syscall-level mocking where needed |
 | offset constancy | cmocka + disassembly check | verify view field access compiles to constant offsets |
 | round-trip | pytest + hex vectors | parse then re-emit must be byte-identical for canonical schemas |

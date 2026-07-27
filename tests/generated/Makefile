@@ -43,8 +43,20 @@ GEN_DIR		:= $(BUILD_DIR)/gen
 
 # Schemas are named by their path relative to the repository root, so an
 # example can be exercised where it lives rather than copied here to drift.
-SCHEMAS		:= tests/schemas/header.situ examples/tiff/tiff.situ \
-		   examples/message/message.situ examples/packet/packet.situ
+#
+# Every example is here, not a sample: `gen-checks` derives its suite from the
+# schema, so adding one costs nothing to maintain and buys executed generated
+# code for whatever construct it uses. Before this, half the constructs in the
+# language had generated code that compiled and had never run.
+SCHEMAS		:= tests/schemas/header.situ \
+		   examples/arp/arp.situ examples/bmp/bmp.situ \
+		   examples/dns/dns.situ examples/ethernet/ethernet.situ \
+		   examples/icmp/icmp.situ examples/ipv4/ipv4.situ \
+		   examples/message/message.situ examples/ntp/ntp.situ \
+		   examples/packet/packet.situ examples/protobuf/protobuf.situ \
+		   examples/registers/registers.situ examples/tcp/tcp.situ \
+		   examples/telemetry/telemetry.situ examples/tiff/tiff.situ \
+		   examples/udp/udp.situ
 GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))
 GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
 GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
@@ -55,6 +67,10 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 VECTOR_SCHEMAS	:= header
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 FUZZ_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
+
+# The capability-conformance suites, one per schema, generated from the schema
+# alone. These are what hold the emitted accessors to what the map claims.
+CHECK_BINS	:= $(GEN_NAMES:%=$(BUILD_DIR)/%_checks)
 
 # The conformance harness generated from the standard signature library. It is
 # compiled but not run: it needs implementations, and shipping those is the
@@ -74,7 +90,7 @@ OBJS_test_packet	:= $(GEN_DIR)/packet.o
 
 .PHONY: all test clean generate
 
-all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CODEC_SUITE)
+all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE)
 
 generate: $(GEN_HEADERS)
 
@@ -84,14 +100,25 @@ generate: $(GEN_HEADERS)
 # relative (standalone), so it is resolved before the directory change.
 define situ_generate
 $$(GEN_DIR)/$(notdir $(basename $(1))).h $$(GEN_DIR)/$(notdir $(basename $(1))).c: \
-		$$(REPO_ROOT)/$(1)
+		$$(REPO_ROOT)/$(1) $$(SITUC_SOURCES)
 	@mkdir -p '$$(GEN_DIR)'
 	cd '$$(REPO_ROOT)' && $$(SITUC) build '$(1)' --out '$$(abspath $$(GEN_DIR))'
 endef
 
 REPO_ROOT	:= $(abspath ../..)
 
+# Generated code depends on the generator, which make cannot see from the
+# schema alone. Without this a codegen change leaves the whole suite running
+# against stale output and passing -- which is exactly how the validator bug
+# below survived a full `make test` after it was fixed.
+SITUC_SOURCES	:= $(wildcard $(REPO_ROOT)/situc/*.py) \
+		   $(wildcard $(REPO_ROOT)/situc/codegen/c/*.py)
+
 $(foreach schema,$(SCHEMAS),$(eval $(call situ_generate,$(schema))))
+
+# Which schema each generated name came from, so the checks rule can find it.
+$(foreach schema,$(SCHEMAS),\
+	$(eval SCHEMA_$(notdir $(basename $(schema))) := $(schema)))
 
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
@@ -114,12 +141,12 @@ $(BUILD_DIR)/runtime/libsitu.a:
 # BUILD_DIR may be absolute (parent) or relative (standalone), so resolve the
 # invocation rather than blindly prefixing './'.
 $(GEN_DIR)/%_vectors.c: $(REPO_ROOT)/tests/schemas/%.situ \
-		$(REPO_ROOT)/tests/schemas/%.vectors
+		$(REPO_ROOT)/tests/schemas/%.vectors $(SITUC_SOURCES)
 	@mkdir -p '$(GEN_DIR)'
 	cd '$(REPO_ROOT)' && $(SITUC) gen-tests 'tests/schemas/$*.situ' \
 		'tests/schemas/$*.vectors' --out '$(abspath $(GEN_DIR))'
 
-$(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ
+$(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ $(SITUC_SOURCES)
 	@mkdir -p '$(GEN_DIR)'
 	cd '$(REPO_ROOT)' && $(SITUC) gen-codec-tests std/codecs.situ \
 		--out '$(abspath $(GEN_DIR))'
@@ -127,10 +154,19 @@ $(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ
 $(GEN_DIR)/codecs_codec_tests.o: $(GEN_DIR)/codecs_codec_tests.c
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
-$(GEN_DIR)/%_fuzz.c: $(REPO_ROOT)/tests/schemas/%.situ
+$(GEN_DIR)/%_fuzz.c: $(REPO_ROOT)/tests/schemas/%.situ $(SITUC_SOURCES)
 	@mkdir -p '$(GEN_DIR)'
 	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz 'tests/schemas/$*.situ' \
 		--out '$(abspath $(GEN_DIR))'
+
+$(GEN_DIR)/%_checks.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
+	cd '$(REPO_ROOT)' && $(SITUC) gen-checks '$(SCHEMA_$*)' \
+		--out '$(abspath $(GEN_DIR))'
+
+$(BUILD_DIR)/%_checks: $(GEN_DIR)/%_checks.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
+	@mkdir -p '$(@D)'
+	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
 
 $(BUILD_DIR)/%_vectors: $(GEN_DIR)/%_vectors.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
@@ -143,7 +179,7 @@ $(BUILD_DIR)/%_fuzz: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) -o $@
 
 test: all
-	@for t in $(BINS) $(VECTOR_BINS); do \
+	@for t in $(BINS) $(VECTOR_BINS) $(CHECK_BINS); do \
 		echo "--- $$t"; \
 		case "$$t" in /*) "$$t";; *) "./$$t";; esac || exit 1; \
 	done

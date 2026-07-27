@@ -66,6 +66,13 @@ def build_parser() -> argparse.ArgumentParser:
 	codec_cmd.add_argument("--out", type=Path, default=Path("."))
 	codec_cmd.add_argument("--prefix", default="situ")
 
+	checks_cmd = sub.add_parser(
+		"gen-checks",
+		help="generate tests holding the accessors to the capability map")
+	checks_cmd.add_argument("schema", type=Path)
+	checks_cmd.add_argument("--out", type=Path, default=Path("."))
+	checks_cmd.add_argument("--prefix", default="situ")
+
 	fuzz_cmd = sub.add_parser("gen-fuzz", help="generate a fuzz harness")
 	fuzz_cmd.add_argument("schema", type=Path)
 	fuzz_cmd.add_argument("--out", type=Path, default=Path("."))
@@ -303,6 +310,29 @@ def cmd_gen_codec_tests(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_gen_checks(args: argparse.Namespace) -> int:
+	"""Emit the tests that would falsify the compiler's own output.
+
+	`gen-codec-tests` does this for a codec signature, on the grounds that a
+	property nobody can check is one nobody should trust. The backend is no
+	more trustworthy than anybody else's algorithm, and the capability map is a
+	far larger claim than a codec signature.
+	"""
+	from situc.codegen.c import checks
+
+	source, resolved, outcomes = analyse(args.schema)
+	name = args.schema.stem
+	text = checks.generate(parse(source), resolved, name, args.prefix)
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	target = args.out / f"{name}_checks.c"
+	target.write_text(text, encoding="ascii")
+	print(f"situc: wrote {target}", file=sys.stderr)
+
+	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
+	return 0
+
+
 def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 	from situc.codegen.c import fuzz
 
@@ -384,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
 		"map":      cmd_map,
 		"build":    cmd_build,
 		"gen-fuzz": cmd_gen_fuzz,
+		"gen-checks": cmd_gen_checks,
 		"gen-tests": cmd_gen_tests,
 		"gen-codec-tests": cmd_gen_codec_tests,
 		"explain":  cmd_explain,

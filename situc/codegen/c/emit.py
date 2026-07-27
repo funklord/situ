@@ -1480,10 +1480,16 @@ class Emitter:
 		for entry in struct.entries:
 			checks.extend(self._checks_for(struct, entry))
 
-		if not checks:
+		# A check may be a comment and nothing else -- an array of structs is
+		# noted rather than walked -- and a body of comments still leaves the
+		# parameter unused, which is an error under the project's own flags.
+		reads_view = any(
+			line.strip() and not line.strip().startswith(("/*", "*", "//"))
+			for line in checks)
+
+		if not reads_view:
 			lines.append("\t(void)view;")
-		else:
-			lines.extend(checks)
+		lines.extend(checks)
 
 		lines.extend(["\treturn SITU_OK;", "}", ""])
 		return lines
@@ -1491,6 +1497,15 @@ class Emitter:
 	def _checks_for(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
+
+		# A struct-typed member carries its own constraints, and they are not
+		# this function's to restate: delegate to the type's own validator.
+		# Without this the enclosing struct validated nothing at all, so a
+		# `Packet` whose `hdr.version` was wrong parsed clean -- which is the
+		# bug `gen-checks` found on its first run.
+		if scalar is None and placement.type_name in self.structs:
+			return self._nested_validation(struct, placement)
+
 		if scalar is None or placement.array_count is not None:
 			return []
 		if placement.kind == "marker":
@@ -1532,6 +1547,55 @@ class Emitter:
 			])
 
 		return lines
+
+	def _nested_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Validate a struct-typed member through its own validator.
+
+		Only a single member, not an array of them: validating every element of
+		a counted array is a loop whose cost is not obvious from the call, and
+		`validate` is called on every parse. An array of structs with
+		constraints inside is worth saying out loud rather than quietly paying
+		for.
+		"""
+		if "." in placement.path[len(struct.name) + 1 :]:
+			return []		# reached through its parent, not directly
+		if placement.kind != "field":
+			# Only a plain member has a sub-view accessor to delegate through.
+			# An element describes a whole array at once, and a region -- an
+			# `indexed` table, an `opaque` span -- is reached by machinery that
+			# is not a sub-view.
+			return []
+
+		local  = c_name(self._local(struct, placement))
+		nested = placement.type_name
+
+		# The same predicate the accessors use: an array is a placement with an
+		# element entry beside it, which is not the same as one with a count.
+		if self._is_array(placement):
+			return [
+				f"\t/* {placement.path} is an array of `{nested}`. Its elements are",
+				"\t * not validated here: that is a loop on every parse, and a",
+				"\t * caller who wants it should walk the elements and call",
+				f"\t * {ident(self.prefix, nested, 'validate')}() on each. */",
+			]
+
+		return [
+			f"\t/* {placement.path} : {nested} -- its own constraints */",
+			"\t{",
+			"\t\tsitu_view_t nested;",
+			f"\t\tsitu_err_t err = {ident(self.prefix, struct.name, local, 'view')}"
+			"(view, &nested);",
+			"",
+			"\t\tif (err != SITU_OK) {",
+			"\t\t\treturn err;",
+			"\t\t}",
+			f"\t\terr = {ident(self.prefix, nested, 'validate')}(nested);",
+			"\t\tif (err != SITU_OK) {",
+			"\t\t\treturn err;",
+			"\t\t}",
+			"\t}",
+		]
 
 	# -- helpers --------------------------------------------------------
 

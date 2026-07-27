@@ -47,6 +47,7 @@ situc map      examples/ipv4/ipv4.situ
 situc map --format=summary examples/ntp/ntp.situ
 situc map --check examples/ipv4/ipv4.situ    # fails if the committed map drifted
 situc advise   examples/message/message.situ # ranked, costed suggestions
+situc gen-checks examples/tcp/tcp.situ       # tests that hold the accessors to the map
 situc explain  examples/message/message.situ message.recs[].value
 ```
 
@@ -81,9 +82,10 @@ Three jobs, in order of how much they matter:
 2. **Test material.** Every schema here is parsed by the test suite, the
    buildable ones are checked to round-trip, their committed maps are
    regenerated and compared, and their generated C is compiled warning-clean
-   on host and aarch64. `tiff` and `message` are exercised end to end under cmocka,
-   from their schemas straight out of this directory, so they cannot drift from
-   a copy.
+   on host and aarch64. Every one of them then has a `gen-checks` suite built
+   and run against its own accessors, so every construct in the language has
+   generated code that is executed rather than merely compiled -- which was not
+   true before that command existed.
 3. **A place to put generated code.** Each directory holds its schema and its
    capability map; generated `.h`/`.c` land in the build tree rather than being
    committed, so a codegen change cannot leave a stale copy behind.
