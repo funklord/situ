@@ -26,6 +26,7 @@ from situc.capability import Axis
 from situc.diagnostics import Span
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
+from situc.traverse import own_entries
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 
@@ -132,10 +133,7 @@ def _members(struct: ResolvedStruct) -> list[Resolved]:
 	struct, an element entry describes a whole array at once, and an
 	`authenticated` region names bytes its members already account for.
 	"""
-	prefix = len(struct.name) + 1
-	return [entry for entry in struct.entries
-	        if entry.placement.kind not in ("element", "authenticated")
-	        and "." not in entry.placement.path[prefix:]]
+	return own_entries(struct)
 
 
 def _is_dynamic_size(placement: Placement) -> bool:

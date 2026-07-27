@@ -1763,12 +1763,31 @@ never be one; Situ can express layouts protobuf cannot represent.
 
 ### 20.1 Backends
 
-- **C (C11) is the primary backend.** Target is embedded: no allocation, no
-  libc dependency beyond `<stdint.h>` and `<string.h>`, no recursion, bounded
-  stack, no VLAs, MISRA-friendly where it does not conflict with clarity.
-- **Rust is the second backend.** It expresses the capability system far better
-  (typestate as distinct types, invalidation as borrows) and should be built
-  once the C backend has proven the lattice. Do not start it before phase 11.
+**situ targets every language its users write in.** The schema describes the
+bytes; what a caller reaches them from is not the schema's business. The
+backends are planned in order of how many people need them, not of how
+pleasant they are to write:
+
+1. **C (C11)** -- done. Target is embedded: no allocation, no libc dependency
+   beyond `<stdint.h>` and `<string.h>`, no recursion, bounded stack, no VLAs,
+   MISRA-friendly where it does not conflict with clarity.
+2. **C++** -- the largest population after C, and the one that can express
+   parts of the lattice C cannot: a view can be a type with a destructor, the
+   stage gate a distinct type rather than a convention, `repr` a
+   `std::span` where the bytes really are the value.
+3. **Rust** -- expresses the capability system most naturally of all: typestate
+   as distinct types, view invalidation as borrows, `zerocopy`-style traits
+   where `repr` permits. Expect it to expose places the C backend papered over.
+4. **Python** -- and after it, whatever the users are writing.
+
+**A backend implements the features it can and reports the rest.** No language
+expresses all thirteen axes; C already enforces several by convention and a
+runtime check where Rust would enforce them in the type system, and Python will
+manage fewer still. That is a fact about the language, and the way situ handles
+facts is to state them. A backend that cannot enforce an axis says so in the
+generated code and in the capability map -- it does not quietly emit an
+accessor that looks like the C one and guarantees less. This is invariant 5
+applied to backends rather than to requirements: never silently downgrade.
 
 ### 20.2 Generated C API shape
 
@@ -1845,7 +1864,8 @@ situc gen-codec-tests <schema>    property tests from codec signatures
 situc import-proto <proto> -o <schema>   [--accept-lossy]
 ```
 
-Global flags: `--target=c|rust`, `--out=DIR`, `--diagnostics=text|json`,
+Global flags: `--target=c|cpp|rust|python`, `--out=DIR`,
+`--diagnostics=text|json`,
 `--strict`, `--prefix=NAME`.
 
 ---
@@ -1904,7 +1924,9 @@ situ/
     advise.py                 suggestion catalog and cost model; phase 9
     codegen/
       c/                      emit, vectors, fuzz harnesses, codec tests
+      cpp/                    the second backend
       rust/                   phase 11
+      python/                 the fourth backend
     cli.py
   runtime/
     c/

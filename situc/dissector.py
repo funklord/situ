@@ -32,11 +32,11 @@ from __future__ import annotations
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.traverse import byte_span, container_bits, local_name, own_members
 
-#: Widths Wireshark has a `ProtoField.uintN` for. A field is read through the
-#: smallest one that covers its bytes.
+#: Widths Wireshark has a `ProtoField.uintN` for. Unlike C it has a 24-bit one,
+#: so a three-byte scalar is read whole here and bit-assembled there.
 FIELD_WIDTHS = (8, 16, 24, 32, 64)
-
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str) -> str:
@@ -120,7 +120,7 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 		"",
 	]
 
-	members = _members(struct)
+	members = own_members(struct)
 	fields  = [_field(resolved, struct, placement) for placement in members]
 	fields  = [line for line in fields if line]
 
@@ -133,16 +133,6 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	lines.extend(_dissector(resolved, struct, members))
 	lines.append("")
 	return lines
-
-
-def _members(struct: ResolvedStruct) -> list[Placement]:
-	"""The struct's own members. An `authenticated` region names bytes its
-	members already own, so dissecting it would show them twice."""
-	return [
-		entry.placement for entry in struct.entries
-		if entry.placement.kind not in ("element", "authenticated")
-		and "." not in entry.placement.path[len(struct.name) + 1:]
-	]
 
 
 def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
@@ -161,7 +151,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if scalar is None:
 		return ""
 
-	width = _container_bits(placement)
+	width = container_bits(placement, FIELD_WIDTHS)
 	if width is None:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
@@ -192,42 +182,6 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 def _enum_names(resolved: ResolvedSchema) -> frozenset[str]:
 	return frozenset(resolved.layout.env.enums)
-
-
-def _byte_span(placement: Placement) -> tuple[int, int] | None:
-	"""The bytes a member touches: (first, count).
-
-	This is the unit Wireshark reads in. A bit-packed field is read through the
-	whole bytes it lives in and masked, so its span is those bytes and not the
-	zero bytes its own width rounds down to -- which is what dropped every
-	bit-packed field from the tree in the first version of this.
-	"""
-	if placement.offset_bits is None or not placement.size_bits:
-		return None
-
-	first = placement.offset_bits // BITS_PER_BYTE
-	last  = (placement.offset_bits + placement.size_bits - 1) // BITS_PER_BYTE
-	return first, last - first + 1
-
-
-def _container_bits(placement: Placement) -> int | None:
-	"""The width Wireshark reads, which is the bytes the field touches.
-
-	A bit-packed field is read through the whole bytes it lives in and masked;
-	that is how ProtoField bitmasks work, and it is why the mask has to be
-	computed against this width rather than the field's own.
-	"""
-	if placement.offset_bits is None:
-		return None
-
-	first = placement.offset_bits // BITS_PER_BYTE
-	last  = (placement.offset_bits + placement.size_bits - 1) // BITS_PER_BYTE
-	span  = (last - first + 1) * BITS_PER_BYTE
-
-	for width in FIELD_WIDTHS:
-		if span <= width:
-			return width
-	return None
 
 
 def _bitmask(placement: Placement, width: int) -> int | None:
@@ -312,7 +266,7 @@ def _member(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.sized_by is not None or placement.array_count is not None:
 		return _repeated(resolved, struct, placement, field, seek)
 
-	span = _byte_span(placement)
+	span = byte_span(placement)
 	if span is None:
 		return [f"\t-- {placement.path}: no bytes of its own"]
 
@@ -476,7 +430,7 @@ def _registration(resolved: ResolvedSchema, names: list[str]) -> list[str]:
 def _local(struct: ResolvedStruct, placement: Placement) -> str:
 	"""The member's name, with the synthetic brackets a reserved field carries
 	stripped: `<reserved0>` is not a name Wireshark accepts in an abbrev."""
-	return placement.path[len(struct.name) + 1:].strip("<>")
+	return local_name(struct, placement).strip("<>")
 
 
 def _lua(name: str) -> str:

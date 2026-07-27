@@ -29,6 +29,7 @@ from situc.codegen.c.names import (
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
+from situc.traverse import own_members
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.types import ScalarKind, ScalarType
 
@@ -994,11 +995,7 @@ class Emitter:
 		double every offset after it. A `sealed` region stays, because its
 		members are the codec's output and are not in this list.
 		"""
-		return [
-			entry.placement for entry in struct.entries
-			if entry.placement.kind not in ("element", "authenticated")
-			and "." not in entry.placement.path[len(struct.name) + 1 :]
-		]
+		return own_members(struct)
 
 	def _offset_function(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

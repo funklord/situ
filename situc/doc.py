@@ -25,6 +25,7 @@ from collections.abc import Callable
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.traverse import local_name, own_members
 from situc.unparse import expr_to_source
 
 #: The RFC convention. Everything below assumes two characters to a bit; the
@@ -132,21 +133,8 @@ def _register_note(struct: ResolvedStruct) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _members(struct: ResolvedStruct) -> list[Placement]:
-	"""The struct's own members: what the diagram has boxes for.
-
-	An `authenticated` region names bytes its members already own, so drawing
-	it would draw them twice.
-	"""
-	return [
-		entry.placement for entry in struct.entries
-		if entry.placement.kind not in ("element", "authenticated")
-		and "." not in entry.placement.path[len(struct.name) + 1:]
-	]
-
-
 def _label(struct: ResolvedStruct, placement: Placement) -> str:
-	local = placement.path[len(struct.name) + 1:]
+	local = local_name(struct, placement)
 	if placement.kind == "reserved":
 		return "reserved"
 	if placement.array_count is not None:
@@ -163,7 +151,7 @@ def _diagram(struct: ResolvedStruct) -> list[str]:
 	is full, because a row is one line however many fields share it -- which is
 	the entire point of drawing bit-packed fields this way.
 	"""
-	members = [placement for placement in _members(struct)
+	members = [placement for placement in own_members(struct)
 	           if placement.offset_bits is not None]
 	if not members:
 		return []

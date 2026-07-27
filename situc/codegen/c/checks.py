@@ -32,6 +32,7 @@ from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.traverse import own_members
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -154,20 +155,6 @@ INSTANCE_COUNT = 2
 INSTANCE_TAIL = 8
 
 
-def _top_level(struct: ResolvedStruct) -> list[Placement]:
-	"""The struct's own members, in order, partitioning its bytes exactly.
-
-	The same rule the emitter uses: an `authenticated` region names bytes its
-	members already account for, so counting it would double every offset after
-	it.
-	"""
-	return [
-		entry.placement for entry in struct.entries
-		if entry.placement.kind not in ("element", "authenticated")
-		and "." not in entry.placement.path[len(struct.name) + 1:]
-	]
-
-
 def _element_bytes(resolved: ResolvedSchema, placement: Placement) -> int | None:
 	"""How many bytes one element of an array member takes."""
 	if placement.scalar is not None:
@@ -217,7 +204,7 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	run time. Two different routes to the same number, which is what makes
 	disagreement mean something.
 	"""
-	members = _top_level(struct)
+	members = own_members(struct)
 	drivers = sorted({placement.sized_by for placement in members
 	                  if placement.sized_by and placement.sized_by != "remaining"})
 
