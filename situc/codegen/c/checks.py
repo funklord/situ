@@ -910,6 +910,87 @@ def _ctype(scalar: object) -> str:
 	return f"{'int' if signed else 'uint'}{width}_t"
 
 
+def _reserved_policy(placement: Placement) -> str | None:
+	"""`must_be_zero` (the default) or `must_be_one`, for a reserved field."""
+	if placement.kind != "reserved":
+		return None
+	for attr in placement.attrs:
+		if attr.name in ("must_be_zero", "must_be_one"):
+			return attr.name
+		if attr.name in ("preserve", "unknown"):
+			return None		# not a constraint: the bits are carried, not checked
+	return "must_be_zero"
+
+
+def _required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> int | None:
+	"""The value this member must hold for the struct to validate, if any."""
+	policy = _reserved_policy(placement)
+	if policy == "must_be_one":
+		return (1 << placement.size_bits) - 1
+	if policy == "must_be_zero":
+		return 0
+
+	# `must_eq` pins the value; `min` is the smallest that satisfies it, and
+	# satisfies any `max` alongside it too. A field with only `max` is happy at
+	# zero, which is where the buffer starts.
+	from situc.expr import evaluate
+
+	for name in ("must_eq", "min"):
+		for attr in placement.attrs:
+			if attr.name != name or attr.value is None:
+				continue
+			try:
+				return int(evaluate(attr.value, resolved.layout.env))
+			except Exception:	# noqa: BLE001 - not foldable, so not satisfiable
+				return None
+	return None
+
+
+def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
+		extent: int) -> list[str] | None:
+	"""Statements making the buffer satisfy every constraint the struct has.
+
+	Without this a constraint check can only show that a wrong value is
+	refused, which for `must_be_one` is vacuous -- a zeroed buffer already
+	breaks it, so the check would pass against a validator that did nothing.
+	Establishing that the *right* value is accepted first is what gives the
+	refusal meaning.
+
+	`None` when some constraint cannot be satisfied from here, because a
+	baseline that is not actually valid would make every check built on it
+	assert the wrong thing.
+	"""
+	writes: list[str] = []
+
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.offset_bits is None or not placement.size_bits:
+			continue
+		if placement.array_count is not None or placement.sized_by is not None:
+			continue
+		if "[]" in placement.path:
+			continue		# an array element; see _reserved_checks
+
+		value = _required_pattern(resolved, struct, placement)
+		if value in (None, 0):
+			continue		# nothing to write: the buffer starts zeroed
+		assert value is not None
+
+		placed = _placed_bytes(placement.offset_bits, placement.size_bits, value,
+		                       placement.endian, placement.bit_order,
+		                       bool(placement.scalar and placement.scalar.is_bit_packed))
+		if placed is None:
+			return None
+		if max(placed) >= extent:
+			return None
+
+		writes.extend(f"\tbuf[{at}u] |= {placed[at]:#04x}u;"
+		              for at in sorted(placed) if placed[at])
+
+	return writes
+
+
 def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 		prefix: str, extent: int) -> None:
 	"""Each declared constraint must actually refuse a buffer that breaks it.
@@ -921,6 +1002,10 @@ def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 	from situc.expr import evaluate
 
 	env = resolved.layout.env
+
+	baseline = _baseline(resolved, struct, extent)
+	if baseline is not None:
+		_reserved_checks(suite, resolved, struct, prefix, extent, baseline)
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -958,6 +1043,75 @@ def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			 " * does not admit has to be refused on parse. */"])
 
 
+def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
+		prefix: str, extent: int, baseline: list[str]) -> None:
+	"""Reserved bits are a constraint, and section 8.8 says why.
+
+	They are malleability control: a receiver that ignores them lets a sender
+	vary bytes the format says are fixed, which is a signature-bypass primitive
+	in anything authenticated. Nothing generated checked them, and `must_be_one`
+	in particular had a validator that had never run against a valid buffer.
+	"""
+	validate = ident(prefix, struct.name, "validate")
+
+	for entry in struct.entries:
+		placement = entry.placement
+		policy    = _reserved_policy(placement)
+
+		if policy is None or placement.offset_bits is None or not placement.size_bits:
+			continue
+
+		# A field inside an array element is not validated by the enclosing
+		# struct, deliberately: walking every element on every parse is a cost
+		# the caller should choose, so `validate` on the element type is where
+		# that check lives. Demanding it here would fail a design decision
+		# rather than a bug.
+		if "[]" in placement.path:
+			continue
+		if placement.offset_bits + placement.size_bits > extent * BITS_PER_BYTE:
+			continue
+
+		# Break exactly this field: the bits it owns, flipped away from what the
+		# policy demands. Everything else stays at the baseline, so a refusal
+		# can only be about this one.
+		wrong  = 0 if policy == "must_be_one" else (1 << placement.size_bits) - 1
+		placed = _placed_bytes(placement.offset_bits, placement.size_bits, wrong,
+		                       placement.endian, placement.bit_order,
+		                       bool(placement.scalar and placement.scalar.is_bit_packed))
+		if placed is None:
+			continue
+
+		mask = _placed_bytes(placement.offset_bits, placement.size_bits,
+		                     (1 << placement.size_bits) - 1,
+		                     placement.endian, placement.bit_order,
+		                     bool(placement.scalar and placement.scalar.is_bit_packed))
+		assert mask is not None
+
+		body = [*_acquire(struct, prefix, extent), ""]
+		if baseline:
+			body.append("\t/* Every constraint satisfied, so a refusal below is")
+			body.append("\t * about the field this check breaks and nothing else. */")
+			body.extend(baseline)
+			body.append("")
+		body.append(f"\tassert_int_equal({validate}(view), SITU_OK);")
+		body.append("")
+		body.append(f"\t/* {placement.path} declares {policy}. */")
+		for at in sorted(mask):
+			body.append(f"\tbuf[{at}u] = (uint8_t)((buf[{at}u] & "
+			            f"(uint8_t)~{mask[at]:#04x}u) | {placed[at]:#04x}u);")
+		body.append(f"\tassert_int_equal({validate}(view), SITU_ERR_CONSTRAINT);")
+
+		suite.add(
+			f"check_{c_name(placement.path)}_{policy}_is_enforced",
+			body,
+			[f"/* {placement.path} is reserved [{policy}].",
+			 " *",
+			 " * Section 8.8: reserved bits are malleability control, not",
+			 " * pedantry. A receiver that ignores them lets a sender vary bytes",
+			 " * the format calls fixed, which is a bypass primitive in anything",
+			 " * authenticated. */"])
+
+
 def _coverage_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 		extent: int) -> None:
 	"""`auth = Covered(t)` is a claim that writing marks `t` stale."""
@@ -983,7 +1137,10 @@ def _coverage_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 	tag    = tags[0].name
 	ctype  = _ctype(entry.placement.scalar)
 
-	_span_check(suite, struct, prefix, extent, tag)
+	for held in tags:
+		_span_check(suite, struct, prefix, extent, held.name)
+
+	_dirty_mask_check(suite, struct, tags, prefix, extent)
 
 	suite.add(
 		f"check_{c_name(struct.name)}_covered_write_marks_{c_name(tag)}",
@@ -1006,6 +1163,44 @@ def _coverage_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 		 " * transmittable until finalize puts it right. */"])
 
 
+def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,
+		tags: list[Placement], prefix: str, extent: int) -> None:
+	"""`DIRTY_MASK` names every tag this struct carries, and only those.
+
+	It is a constant for callers rather than something generated code consumes,
+	the way `SIZE_FIXED` is -- a message may hold several structs, and
+	`situ_msg_transmittable` answers for all of them at once, so asking about
+	one struct's tags means masking. Nothing tested that the mask covered the
+	right bits, and a deliberate off-by-one in it went unnoticed.
+	"""
+	if not tags:
+		return
+
+	mask = macro(prefix, struct.name, "DIRTY_MASK")
+	bits = [macro(prefix, struct.name, c_name(placement.name), "DIRTY")
+	        for placement in tags]
+
+	body = [*_acquire(struct, prefix, extent), ""]
+	body.append(f"\t/* Every one of this struct's {len(tags)} tag(s) is in the mask. */")
+	for bit in bits:
+		body.append(f"\tassert_int_equal({mask} & {bit}, {bit});")
+	body.extend([
+		"",
+		"\t/* And nothing else is: marking them all makes the message exactly",
+		"\t * as dirty as the mask says it can be. */",
+	])
+	for bit in bits:
+		body.append(f"\tsitu_msg_mark_dirty(&msg, {bit});")
+	body.append(f"\tassert_int_equal(msg.dirty, {mask});")
+
+	suite.add(
+		f"check_{c_name(struct.name)}_dirty_mask_names_every_tag",
+		body,
+		[f"/* {struct.name} carries {len(tags)} tag(s), and DIRTY_MASK is how a",
+		 " * caller asks about them together. A message may hold several",
+		 " * structs, so `situ_msg_transmittable` is too broad a question. */"])
+
+
 def _span_check(suite: Suite, struct: ResolvedStruct, prefix: str,
 		extent: int, tag: str) -> None:
 	"""What the tag's algorithm actually runs over.
@@ -1021,8 +1216,11 @@ def _span_check(suite: Suite, struct: ResolvedStruct, prefix: str,
 	that whatever the expansion turns out to be. Mutation testing found a region
 	ending at its own start with nothing generated to notice.
 	"""
+	# Only what *this* tag covers. A struct may carry several, each over its
+	# own region, and asking one of them to span another's bytes is a demand
+	# the schema never made.
 	known = [entry.placement for entry in struct.entries
-	         if entry.placement.covered_by
+	         if tag in entry.placement.covered_by
 	         and entry.placement.offset_bits is not None
 	         and entry.placement.size_bits
 	         and entry.placement.kind != "authenticated"]

@@ -40,9 +40,12 @@ def c_name(path: str) -> str:
 	"""A path rendered as a C identifier fragment.
 
 	Namespace separators and nested paths both flatten to underscores, and the
-	synthesised names of reserved regions are dropped: they have no accessor.
+	brackets situ puts around a synthesised name come off: `<reserved0>` is the
+	compiler's own label for a field the schema did not name, and it is not an
+	identifier anywhere.
 	"""
-	return path.replace("::", "_").replace(".", "_").replace("[]", "")
+	return (path.replace("::", "_").replace(".", "_")
+	            .replace("[]", "").replace("<", "").replace(">", ""))
 
 
 @dataclass(frozen=True)

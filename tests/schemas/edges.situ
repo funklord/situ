@@ -37,3 +37,28 @@ struct edges [allow_straddle] {
 require size(edges) == 19;
 require in_place(edges.trim);
 require in_place(edges.channel);
+
+// Two tags in one struct, which is what makes a per-struct dirty mask mean
+// anything. With one tag the mask equals that tag's own bit, so nothing needs
+// it and nothing noticed when a deliberate off-by-one made it wrong.
+//
+// Also the only `must_be_one` in the tree. `must_be_zero` is the default and
+// every example uses it; the other policy shares its code path and had never
+// executed.
+struct two_tags {
+	u8  hop;
+
+	authenticated inner {
+		u8        kind;
+		reserved  u4  [must_be_one];
+		u4        flags;
+	}
+	tag u8[16] covers(inner);
+
+	authenticated outer {
+		u16  sequence;
+	}
+	checksum u8[2] covers(outer);
+}
+
+require size(two_tags) == 23;

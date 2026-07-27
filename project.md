@@ -2496,6 +2496,25 @@ fails that whatever the expansion is.
 stream. It has no fixed layout at any instance, so there is no offset to
 assert, and the emitted file says so.
 
+**A second round found the constructs no example reached.** Mutating the
+reserved-field and tag-mask paths showed both surviving, not because the checks
+were weak but because nothing in the tree exercised them: `must_be_one` was
+supported and unused, and `DIRTY_MASK` only means anything with more than one
+tag in a struct. Adding both to `tests/schemas/edges.situ` made the gaps
+visible, and closing them turned up two real defects.
+
+Reserved fields had no generated check at all -- section 8.8 calls them
+malleability control, and a receiver ignoring them lets a sender vary bytes the
+format calls fixed without disturbing a tag. Worse, `reserved u8[3]` was not
+validated even by the emitter: arrays were skipped, and `packet.situ` puts
+exactly that inside an authenticated region.
+
+Checking a reserved policy needs a buffer that is otherwise valid, or the check
+is vacuous -- a zeroed buffer already breaks `must_be_one`, so asserting that a
+wrong value is refused would pass against a validator that did nothing. The
+baseline satisfies every `must_eq`, `min` and reserved policy first and asserts
+the struct validates, then breaks one field.
+
 ### 26.14 Beyond
 
 LSP; the built-in codec set below; the C++, Rust and Python backends (20.1).

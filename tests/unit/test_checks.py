@@ -381,3 +381,66 @@ def test_a_covered_span_that_collapsed_is_caught(tmp_path: Path) -> None:
 
 	assert result.returncode != 0, "a collapsed coverage span went unnoticed"
 	assert "covers_what_it_claims" in result.stdout
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_reserved_field_that_stops_being_enforced_is_caught(tmp_path: Path) -> None:
+	"""Section 8.8: reserved bits are malleability control, not pedantry. A
+	receiver that ignores them lets a sender vary bytes the format calls fixed,
+	which is a bypass primitive in anything authenticated -- and nothing
+	generated checked them at all."""
+	# Loosened rather than deleted, and in a way that still compiles cleanly
+	# under the project's own flags: the validator reads the field and accepts
+	# what the schema forbids, which is the shape this goes wrong in.
+	result = build(tmp_path, "struct s { u8 v; reserved u8 [must_be_zero]; }",
+		corrupt=("(uint8_t)(view.base)[1u] != 0",
+		         "(uint8_t)(view.base)[1u] != 0 && view.limit == 0u"))
+
+	assert result.returncode != 0, "a dropped reserved check went unnoticed"
+	assert "must_be_zero_is_enforced" in result.stdout
+
+
+def test_the_baseline_satisfies_every_constraint_first() -> None:
+	"""Without it the check is vacuous for `must_be_one`: a zeroed buffer
+	already breaks that policy, so asserting a wrong value is refused would pass
+	against a validator that did nothing. Establishing that the right value is
+	accepted is what gives the refusal meaning."""
+	source = emit("""struct s {
+		u8        version  [must_eq = 4];
+		u4        ihl      [min = 5];
+		reserved  u4       [must_be_one];
+	}
+	""")
+
+	body = source[source.index("check_s_reserved0_must_be_one_is_enforced"):]
+	assert "SITU_OK" in body[:body.index("SITU_ERR_CONSTRAINT")], \
+		"the baseline must be shown valid before it is broken"
+
+
+def test_a_reserved_array_is_validated() -> None:
+	"""`reserved u8[3]` was skipped entirely, in the one example where it
+	matters most: those bytes sit inside an authenticated region."""
+	schema   = parse_text(PREAMBLE + "struct s { u8 v; reserved u8[3]; }\n")
+	resolved = resolve(schema, solve(schema))
+	emitted  = generate(schema, resolved, "unit").source
+
+	assert "reserved u8[3] [must_be_zero]" in emitted
+	assert "SITU_ERR_CONSTRAINT" in emitted
+
+
+def test_the_dirty_mask_is_checked_against_its_tags() -> None:
+	"""It is a constant for callers, like SIZE_FIXED, and nothing generated
+	consumes it -- so an off-by-one in it went unnoticed until it was tested as
+	the API it is."""
+	source = emit("""struct s {
+		u8 hop;
+		authenticated inner { u8 a; }
+		tag u8[16] covers(inner);
+		authenticated outer { u8 b; }
+		checksum u8[2] covers(outer);
+	}
+	""")
+
+	assert "check_s_dirty_mask_names_every_tag" in source
+	assert "SITU_S_DIRTY_MASK & SITU_S_TAG_DIRTY" in source
+	assert "SITU_S_DIRTY_MASK & SITU_S_CHECKSUM_DIRTY" in source

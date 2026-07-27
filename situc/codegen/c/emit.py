@@ -1599,6 +1599,17 @@ class Emitter:
 		if scalar is None and placement.type_name in self.structs:
 			return self._nested_validation(struct, placement)
 
+		# A reserved array is still a constraint. Skipping it left `reserved
+		# u8[3]` unchecked in the one example where it matters most: those
+		# three bytes sit inside an authenticated region, so a receiver that
+		# ignores them lets a sender vary bytes the format calls fixed without
+		# disturbing the tag. Section 8.8 calls that malleability control and
+		# it is the reason reserved fields are a constraint rather than a
+		# comment.
+		if scalar is not None and placement.array_count is not None \
+				and placement.kind == "reserved":
+			return self._reserved_array_check(struct, placement, scalar)
+
 		if scalar is None or placement.array_count is not None:
 			return []
 		if placement.kind == "marker":
@@ -1652,6 +1663,32 @@ class Emitter:
 			])
 
 		return lines
+
+	def _reserved_array_check(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""Every element of a reserved array must hold the required pattern."""
+		policy = _reserved_policy(placement.attrs)
+		if policy not in ("must_be_zero", "must_be_one"):
+			return []
+		if placement.offset_bits is None or scalar.bits != BITS_PER_BYTE:
+			return []
+
+		count  = placement.array_count or 0
+		expect = "0u" if policy == "must_be_zero" else "0xFFu"
+		base   = placement.offset_bytes
+
+		return [
+			f"\t/* reserved {placement.type_name}[{count}] [{policy}] */",
+			"\t{",
+			"\t\tuint32_t i;",
+			"",
+			f"\t\tfor (i = 0; i < {count}u; i++) {{",
+			f"\t\t\tif ((view.base)[{base}u + i] != {expect}) {{",
+			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _nested_validation(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
