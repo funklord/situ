@@ -453,3 +453,145 @@ def test_the_kernel_library_covers_every_family() -> None:
 	            if decl.kernel is not None}
 
 	assert families == set(ast.KernelFamily)
+
+
+# -- the remaining four families (26.12) ------------------------------------
+
+
+REMAINING = """codec inter    { kernel = permutation(rows = 4, columns = 8); }
+codec hamming  { kernel = linear_block(n = 7, k = 4, standard_form,
+                                       code = hamming_7_4); }
+codec additive { kernel = shift_register(taps = 0xB400, width = 16,
+                                         seed = 0xACE1, feedback = input); }
+codec selfsync { kernel = shift_register(taps = 0x8810, width = 16,
+                                         seed = 0xFFFF, feedback = output); }
+codec cobs     { kernel = stuffing(worst_case = 255, per = 254, code = cobs); }
+codec hdlc     { kernel = stuffing(worst_case = 6, per = 5, unit = bit,
+                                   code = hdlc); }
+
+impl inter derived;
+impl hamming derived;
+impl additive derived;
+impl selfsync derived;
+impl cobs derived;
+impl hdlc derived;
+
+struct s { u8 a; }
+"""
+
+
+def test_every_family_generates_an_implementation() -> None:
+	emitted = derived.generate(parse_text("endian big;\n" + REMAINING), "unit")
+
+	for name in ("situ_inter_encode", "situ_hamming_encode",
+	             "situ_additive_encode", "situ_selfsync_encode",
+	             "situ_cobs_encode", "situ_hdlc_encode"):
+		assert f"{name}(" in emitted, f"{name} was not generated"
+
+
+def test_the_two_scramblers_differ_in_the_generated_code() -> None:
+	"""The same family and the same shape of kernel, and opposite code.
+
+	An additive scrambler is its own inverse, so its decoder calls its encoder.
+	A multiplicative one is not, so it has a decoder of its own that shifts in
+	what it received rather than what it produced.
+	"""
+	emitted = derived.generate(parse_text("endian big;\n" + REMAINING), "unit")
+
+	assert "return situ_additive_encode(in, len, out);" in emitted
+	assert "Its own inverse" in emitted
+	assert "Not its own inverse" in emitted
+	assert "makes a receiver self-synchronising" in emitted
+
+
+def test_an_interleaver_without_a_shape_derives_but_does_not_generate() -> None:
+	"""`span` says how far a permutation reaches, not which permutation it is.
+
+	Enough for the properties, not enough for the code -- and saying so beats
+	generating an identity that silently interleaves nothing.
+	"""
+	emitted = derived.generate(parse_text(
+		"endian big;\n"
+		"codec inter { kernel = permutation(span = 16); }\n"
+		"impl inter derived;\nstruct s { u8 a; }\n"), "unit")
+
+	assert "No implementation for `inter`" in emitted
+
+
+def test_an_interleaver_of_one_row_is_refused() -> None:
+	assert "an interleaver of one row is the identity" in refusal(
+		"codec i { kernel = permutation(rows = 1, columns = 8); }")
+
+
+def test_the_hamming_syndrome_table_is_computed_not_transcribed() -> None:
+	"""Every syndrome accuses a different bit, which is what makes the code
+	correcting rather than merely detecting. Checked here because a transcribed
+	table is exactly the kind of thing that is wrong in one entry."""
+	emitted = derived.generate(parse_text("endian big;\n" + REMAINING), "unit")
+	body    = emitted.partition("situ_hamming_syndrome[8] = {")[2]
+	line    = body.partition("};")[0]
+
+	accused = [int(part.strip().rstrip("u")) for part in line.split(",")
+	           if part.strip().rstrip("u").isdigit()]
+
+	# Seven bit positions plus the no-error entry, each named once.
+	assert sorted(accused) == sorted(list(range(7)) + [7])
+
+
+def test_a_two_family_pipeline_composes_conservatively() -> None:
+	"""26.12's third acceptance criterion, per family.
+
+	Interleaving then stuffing: the interleaver is permuted and the stuffing is
+	not seekable at all, so the pipeline is not seekable. The expansion becomes
+	the stuffing's bounded ratio, because a bounded stage anywhere makes the
+	product bounded.
+	"""
+	found = codecs("""codec inter { kernel = permutation(rows = 4, columns = 4); }
+	codec cobs { kernel = stuffing(worst_case = 255, per = 254, code = cobs); }
+	codec framed = inter |> cobs;
+	""")["framed"]
+
+	assert found.seekable is ast.Seekable.NONE
+	assert found.expansion is ast.Expansion.RATIO_BOUNDED
+	assert found.ratio == (255, 254)
+	assert not found.systematic
+	assert found.invertible
+
+
+def test_a_hamming_and_interleaver_pipeline_keeps_the_ratio() -> None:
+	"""The pairing this exists for: a block code spreads by an exact ratio and
+	an interleaver moves the bytes without adding any, so the codeword
+	expansion survives and only the seekability weakens."""
+	found = codecs("""codec hamming { kernel = linear_block(n = 7, k = 4,
+		standard_form, code = hamming_7_4); }
+	codec inter { kernel = permutation(rows = 4, columns = 4); }
+	codec coded = hamming |> inter;
+	""")["coded"]
+
+	assert found.expansion is ast.Expansion.RATIO_EXACT
+	assert found.ratio == (7, 4)
+	assert found.seekable is ast.Seekable.PERMUTED
+	assert not found.systematic	# the interleaver moves the data bits
+
+
+def test_the_kernel_library_binds_every_family_it_can_generate() -> None:
+	"""A family that generates and is not bound anywhere is a generator nobody
+	has ever run over a real description."""
+	auto  = _library(ROOT / "std" / "kernels.situ")
+	bound = {decl.name for decl in auto.values()}
+
+	emitted = derived.generate(
+		parse((ROOT / "std" / "kernels.situ")), "kernels")
+
+	for name in ("crc32", "manchester", "cobs", "hamming_7_4",
+	             "interleave_16", "scrambler_additive",
+	             "scrambler_multiplicative", "hdlc_bit_stuffing"):
+		assert name in bound
+		assert f"situ_{name}" in emitted, f"{name} is bound but generates nothing"
+
+
+def parse(path: Path):		# type: ignore[no-untyped-def]
+	from situc.diagnostics import Source
+	from situc.parser import parse as parse_source
+
+	return parse_source(Source(str(path), path.read_text(encoding="ascii")))

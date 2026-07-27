@@ -106,6 +106,8 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				f"uint32_t {ident(prefix, decl.name, 'decode')}"
 				"(const uint8_t *in, uint32_t bits, uint8_t *out);",
 			])
+		else:
+			lines.extend(_byte_declarations(decl, prefix))
 
 	return lines
 
@@ -118,7 +120,13 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.TABLE:
 		return _table(decl, prefix)
-	return None
+	if kernel.family is ast.KernelFamily.PERMUTATION:
+		return _permutation(decl, prefix)
+	if kernel.family is ast.KernelFamily.LINEAR:
+		return _linear_block(decl, prefix)
+	if kernel.family is ast.KernelFamily.SHIFT:
+		return _shift_register(decl, prefix)
+	return _stuffing(decl, prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -381,3 +389,589 @@ NAMED_CODES: dict[str, list[int]] = {
 		0b11010, 0b11011, 0b11100, 0b11101,
 	],
 }
+
+
+def _byte_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
+	"""Prototypes for the families that work over whole bytes.
+
+	One shape for four families, because the interface a caller wants is the
+	same one every time: bytes in, bytes out, and a count. What differs is
+	whether the count can change, which the expansion property already says.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	if kernel.family is ast.KernelFamily.PERMUTATION:
+		if kernel.argument("rows") is None:
+			return []
+		return [
+			"",
+			f"/* `{decl.name}`: a block interleaver. Length-preserving, and the",
+			" * input length must be a whole number of blocks. */",
+			f"#define {macro(prefix, decl.name, 'BLOCK')} "
+			f"{_number(decl, 'rows') * _number(decl, 'columns')}u",
+			f"uint32_t {ident(prefix, decl.name, 'encode')}"
+			"(const uint8_t *in, uint32_t len, uint8_t *out);",
+			f"uint32_t {ident(prefix, decl.name, 'decode')}"
+			"(const uint8_t *in, uint32_t len, uint8_t *out);",
+		]
+
+	if kernel.family is ast.KernelFamily.LINEAR:
+		if _named_code(decl) != "hamming_7_4":
+			return []
+		return [
+			"",
+			f"/* `{decl.name}`: Hamming(7, 4) in standard form. One nibble in,",
+			" * one seven-bit codeword out, and single-error correction on the",
+			" * way back -- which is what a linear block code is for. */",
+			f"uint8_t {ident(prefix, decl.name, 'encode')}(uint8_t nibble);",
+			f"uint8_t {ident(prefix, decl.name, 'decode')}"
+			"(uint8_t codeword, int *corrected);",
+		]
+
+	if kernel.family is ast.KernelFamily.SHIFT:
+		return [
+			"",
+			f"/* `{decl.name}`: a scrambler. Length-preserving, and its own",
+			" * inverse where the feedback comes from the input. */",
+			f"uint32_t {ident(prefix, decl.name, 'encode')}"
+			"(const uint8_t *in, uint32_t len, uint8_t *out);",
+			f"uint32_t {ident(prefix, decl.name, 'decode')}"
+			"(const uint8_t *in, uint32_t len, uint8_t *out);",
+		]
+
+	if kernel.family is ast.KernelFamily.STUFFING:
+		code = _named_code(decl)
+		if code not in ("cobs", "hdlc"):
+			return []
+		return [
+			"",
+			f"/* `{decl.name}`: stuffing. The output length depends on the",
+			" * content, which is why interior addressing does not survive it",
+			" * and why real protocols apply it only at the outermost layer. */",
+			f"uint32_t {ident(prefix, decl.name, 'encode')}"
+			"(const uint8_t *in, uint32_t len, uint8_t *out);",
+			f"uint32_t {ident(prefix, decl.name, 'decode')}"
+			"(const uint8_t *in, uint32_t len, uint8_t *out);",
+		]
+
+	return []
+
+
+def _named_code(decl: ast.CodecDecl) -> str | None:
+	kernel = decl.kernel
+	assert kernel is not None
+	value = kernel.argument("code")
+	return value.name if isinstance(value, ast.NameRef) else None
+
+
+# ---------------------------------------------------------------------------
+# Permutation: block interleavers
+# ---------------------------------------------------------------------------
+
+
+def _permutation(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""Write the block in rows, read it back in columns.
+
+	The classic block interleaver, and the reason `seekable = permuted` exists
+	as a value distinct from `linear` and `none`: every byte is still
+	reachable, so random access survives, but not in order, so a sequential
+	prefetch does not.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	if kernel.argument("rows") is None:
+		return None
+
+	rows    = _number(decl, "rows")
+	columns = _number(decl, "columns")
+	block   = rows * columns
+	name    = ident(prefix, decl.name)
+
+	return [
+		"",
+		f"/* {decl.name}: a {rows} x {columns} block interleaver.",
+		" *",
+		" * Written in rows and read in columns, so a burst of adjacent bytes in",
+		f" * the output lands {columns} apart in the input -- which is what puts a",
+		" * burst error across codewords rather than inside one.",
+		" */",
+		f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		f"\tconst uint32_t block = {block}u;",
+		"\tuint32_t at;",
+		"",
+		"\t/* Whole blocks only: a partial one has no defined permutation. */",
+		"\tif (len % block != 0u) {",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		"\tfor (at = 0; at < len; at += block) {",
+		"\t\tuint32_t row;",
+		"\t\tuint32_t column;",
+		"",
+		f"\t\tfor (row = 0; row < {rows}u; row++) {{",
+		f"\t\t\tfor (column = 0; column < {columns}u; column++) {{",
+		f"\t\t\t\tout[at + column * {rows}u + row] =",
+		f"\t\t\t\t\tin[at + row * {columns}u + column];",
+		"\t\t\t}",
+		"\t\t}",
+		"\t}",
+		"",
+		"\treturn len;",
+		"}",
+		"",
+		f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		f"\tconst uint32_t block = {block}u;",
+		"\tuint32_t at;",
+		"",
+		"\tif (len % block != 0u) {",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		"\tfor (at = 0; at < len; at += block) {",
+		"\t\tuint32_t row;",
+		"\t\tuint32_t column;",
+		"",
+		f"\t\tfor (row = 0; row < {rows}u; row++) {{",
+		f"\t\t\tfor (column = 0; column < {columns}u; column++) {{",
+		f"\t\t\t\tout[at + row * {columns}u + column] =",
+		f"\t\t\t\t\tin[at + column * {rows}u + row];",
+		"\t\t\t}",
+		"\t\t}",
+		"\t}",
+		"",
+		"\treturn len;",
+		"}",
+	]
+
+
+# ---------------------------------------------------------------------------
+# Linear block: Hamming(7, 4)
+# ---------------------------------------------------------------------------
+
+# The standard systematic generator. Data bits d0..d3 occupy positions 0..3 of
+# the codeword and the three parity bits follow, each covering the subset of
+# the data bits its row names. Taken from the code's definition rather than
+# from a table somebody transcribed.
+_HAMMING_PARITY = (0b1101, 0b1011, 0b0111)
+
+
+def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""Hamming(7, 4), with the syndrome table computed from the parity rows.
+
+	Systematic, so the four data bits sit verbatim in the low positions and a
+	reader that trusts the codeword can take them without decoding at all --
+	which is exactly what the `systematic` property promises, and what makes it
+	worth deriving rather than declaring.
+	"""
+	if _named_code(decl) != "hamming_7_4":
+		return None
+
+	name = ident(prefix, decl.name)
+
+	# Syndrome -> the bit position it accuses, or 7 for "no error".
+	syndrome = [7] * 8
+	for position in range(7):
+		codeword = 1 << position
+		value = 0
+		for row, mask in enumerate(_HAMMING_PARITY):
+			bits = (codeword & 0xF) & mask
+			parity = bin(bits).count("1") & 1
+			parity ^= (codeword >> (4 + row)) & 1
+			value |= parity << row
+		syndrome[value] = position
+
+	encode = []
+	for nibble in range(16):
+		word = nibble
+		for row, mask in enumerate(_HAMMING_PARITY):
+			word |= (bin(nibble & mask).count("1") & 1) << (4 + row)
+		encode.append(word)
+
+	return [
+		"",
+		f"/* {decl.name}: Hamming(7, 4), systematic.",
+		" *",
+		" * The four data bits sit verbatim in the low positions, which is what",
+		" * `systematic` promises: a reader that trusts the codeword can take",
+		" * them without decoding. The three parity bits correct any single-bit",
+		" * error, which is what the syndrome table below is for.",
+		" */",
+		f"static const uint8_t {name}_encode_table[16] = {{",
+		"\t" + ", ".join(f"0x{word:02X}u" for word in encode),
+		"};",
+		"",
+		f"/* Syndrome to the bit it accuses; 7 means no error. */",
+		f"static const uint8_t {name}_syndrome[8] = {{",
+		"\t" + ", ".join(f"{position}u" for position in syndrome),
+		"};",
+		"",
+		f"uint8_t {name}_encode(uint8_t nibble)",
+		"{",
+		f"\treturn {name}_encode_table[nibble & 0x0Fu];",
+		"}",
+		"",
+		f"uint8_t {name}_decode(uint8_t codeword, int *corrected)",
+		"{",
+		"\tuint8_t value = (uint8_t)(codeword & 0x7Fu);",
+		"\tuint8_t check = 0u;",
+		"\tuint8_t row;",
+		"",
+		"\tfor (row = 0u; row < 3u; row++) {",
+		"\t\tstatic const uint8_t masks[3] = { 0x0Du, 0x0Bu, 0x07u };",
+		"\t\tuint8_t bits = (uint8_t)(value & masks[row]);",
+		"\t\tuint8_t parity = 0u;",
+		"",
+		"\t\twhile (bits) {",
+		"\t\t\tparity ^= (uint8_t)(bits & 1u);",
+		"\t\t\tbits = (uint8_t)(bits >> 1);",
+		"\t\t}",
+		"\t\tparity ^= (uint8_t)((value >> (4u + row)) & 1u);",
+		"\t\tcheck = (uint8_t)(check | (uint8_t)(parity << row));",
+		"\t}",
+		"",
+		"\tif (check != 0u) {",
+		f"\t\tuint8_t at = {name}_syndrome[check];",
+		"",
+		"\t\tif (at < 7u) {",
+		"\t\t\tvalue = (uint8_t)(value ^ (uint8_t)(1u << at));",
+		"\t\t\tif (corrected != NULL) {",
+		"\t\t\t\t*corrected = 1;",
+		"\t\t\t}",
+		"\t\t}",
+		"\t} else if (corrected != NULL) {",
+		"\t\t*corrected = 0;",
+		"\t}",
+		"",
+		"\treturn (uint8_t)(value & 0x0Fu);",
+		"}",
+	]
+
+
+# ---------------------------------------------------------------------------
+# Shift register: scramblers
+# ---------------------------------------------------------------------------
+
+
+def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""An LFSR, and where its feedback comes from decides everything.
+
+	Additive: the register runs on its own state and the data is XORed with the
+	keystream. Startable anywhere, its own inverse, and a corrupt bit spoils
+	only itself.
+
+	Multiplicative: the register is fed from the scrambled output, so a
+	receiver synchronises itself without being told the state -- and pays for it
+	with error propagation, because a corrupt bit stays in the register and
+	spoils the next few too.
+
+	Both are here because the pair is the point: the same family, the same taps
+	and opposite properties, worked out from one word of the description.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	taps  = _number(decl, "taps")
+	width = _number(decl, "width", 16)
+	seed  = _number(decl, "seed", (1 << width) - 1)
+
+	if not taps or width not in (8, 16, 32):
+		return None
+
+	source = kernel.argument("feedback")
+	additive = isinstance(source, ast.NameRef) and source.name == "input"
+	name  = ident(prefix, decl.name)
+	word  = f"uint{width}_t"
+
+	shared = [
+		"",
+		f"/* {decl.name}: a {width}-bit LFSR, taps 0x{taps:X}, seed 0x{seed:X}.",
+		" *",
+		(" * Additive: the register runs on its own state, so this is startable"
+		 if additive else
+		 " * Multiplicative: the register is fed from the scrambled output, so a"),
+		(" * anywhere and is its own inverse, and a corrupt bit spoils only itself."
+		 if additive else
+		 " * receiver synchronises without being told the state -- and pays for it"),
+		(" */" if additive else
+		 " * with error propagation, which the signature reports.\n */"),
+	]
+
+	if additive:
+		body = [
+			f"static {word} {name}_step({word} state)",
+			"{",
+			f"\t{word} bit = ({word})(state & 1u);",
+			"",
+			f"\tstate = ({word})(state >> 1);",
+			"\tif (bit) {",
+			f"\t\tstate = ({word})(state ^ ({word})0x{taps:X}u);",
+			"\t}",
+			"\treturn state;",
+			"}",
+			"",
+			f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+			"{",
+			f"\t{word} state = ({word})0x{seed:X}u;",
+			"\tuint32_t at;",
+			"\tuint32_t bit;",
+			"",
+			"\tfor (at = 0; at < len; at++) {",
+			"\t\tuint8_t key = 0u;",
+			"",
+			"\t\tfor (bit = 0; bit < 8u; bit++) {",
+			"\t\t\tkey = (uint8_t)(key | (uint8_t)((state & 1u) << bit));",
+			f"\t\t\tstate = {name}_step(state);",
+			"\t\t}",
+			"\t\tout[at] = (uint8_t)(in[at] ^ key);",
+			"\t}",
+			"",
+			"\treturn len;",
+			"}",
+			"",
+			"/* Its own inverse: the keystream does not depend on the data. */",
+			f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+			"{",
+			f"\treturn {name}_encode(in, len, out);",
+			"}",
+		]
+	else:
+		body = [
+			f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+			"{",
+			f"\t{word} state = ({word})0x{seed:X}u;",
+			"\tuint32_t at;",
+			"\tuint32_t bit;",
+			"",
+			"\tfor (at = 0; at < len; at++) {",
+			"\t\tuint8_t coded = 0u;",
+			"",
+			"\t\tfor (bit = 0; bit < 8u; bit++) {",
+			"\t\t\tuint8_t plain = (uint8_t)((in[at] >> bit) & 1u);",
+			f"\t\t\tuint8_t feedback = (uint8_t)({name}_parity("
+			f"({word})(state & ({word})0x{taps:X}u)));",
+			"\t\t\tuint8_t output = (uint8_t)(plain ^ feedback);",
+			"",
+			"\t\t\tcoded = (uint8_t)(coded | (uint8_t)(output << bit));",
+			f"\t\t\t/* The scrambled bit goes into the register: that is what",
+			"\t\t\t * makes a receiver self-synchronising. */",
+			f"\t\t\tstate = ({word})(({word})(state << 1) | output);",
+			"\t\t}",
+			"\t\tout[at] = coded;",
+			"\t}",
+			"",
+			"\treturn len;",
+			"}",
+			"",
+			"/* Not its own inverse: the register is fed from the scrambled side,",
+			" * so decoding shifts in what it received rather than what it made. */",
+			f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+			"{",
+			f"\t{word} state = ({word})0x{seed:X}u;",
+			"\tuint32_t at;",
+			"\tuint32_t bit;",
+			"",
+			"\tfor (at = 0; at < len; at++) {",
+			"\t\tuint8_t plain = 0u;",
+			"",
+			"\t\tfor (bit = 0; bit < 8u; bit++) {",
+			"\t\t\tuint8_t coded = (uint8_t)((in[at] >> bit) & 1u);",
+			f"\t\t\tuint8_t feedback = (uint8_t)({name}_parity("
+			f"({word})(state & ({word})0x{taps:X}u)));",
+			"",
+			"\t\t\tplain = (uint8_t)(plain | (uint8_t)"
+			"((uint8_t)(coded ^ feedback) << bit));",
+			f"\t\t\tstate = ({word})(({word})(state << 1) | coded);",
+			"\t\t}",
+			"\t\tout[at] = plain;",
+			"\t}",
+			"",
+			"\treturn len;",
+			"}",
+		]
+		body = [
+			f"static uint8_t {name}_parity({word} value)",
+			"{",
+			"\tuint8_t bits = 0u;",
+			"",
+			"\twhile (value) {",
+			"\t\tbits ^= (uint8_t)(value & 1u);",
+			f"\t\tvalue = ({word})(value >> 1);",
+			"\t}",
+			"\treturn bits;",
+			"}",
+			"",
+		] + body
+
+	return shared + body
+
+
+# ---------------------------------------------------------------------------
+# Stuffing: COBS and HDLC
+# ---------------------------------------------------------------------------
+
+
+def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	code = _named_code(decl)
+	if code == "cobs":
+		return _cobs(decl, prefix)
+	if code == "hdlc":
+		return _hdlc(decl, prefix)
+	return None
+
+
+def _cobs(decl: ast.CodecDecl, prefix: str) -> list[str]:
+	"""Consistent Overhead Byte Stuffing, as Cheshire and Baker defined it.
+
+	Every zero byte is removed from the payload and replaced by a pointer to
+	the next one, so a zero can be used as an unambiguous frame delimiter. The
+	overhead is one byte per 254, which is where `ratio_bounded(255, 254)`
+	comes from -- and the reason it is *bounded* rather than exact is that how
+	many bytes it adds depends entirely on the content.
+	"""
+	name = ident(prefix, decl.name)
+
+	return [
+		"",
+		f"/* {decl.name}: COBS (Cheshire and Baker).",
+		" *",
+		" * A zero byte becomes a pointer to the next one, so no zero survives in",
+		" * the body and a zero can delimit the frame. The output length depends",
+		" * on the content, which is exactly why interior addressing does not",
+		" * survive this and why it belongs at the outermost layer.",
+		" *",
+		" * `out` needs len + len/254 + 2 bytes. Returns the length written.",
+		" */",
+		f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"\tuint32_t read = 0;",
+		"\tuint32_t code_at = 0;",
+		"\tuint32_t written = 1;",
+		"\tuint8_t  code = 1;",
+		"",
+		"\tfor (read = 0; read < len; read++) {",
+		"\t\tif (in[read] != 0u) {",
+		"\t\t\tout[written++] = in[read];",
+		"\t\t\tcode++;",
+		"\t\t\t/* A full group is flushed only when more input follows. At",
+		"\t\t\t * the very end there is nothing for a new group to hold, and",
+		"\t\t\t * opening one would spend a second overhead byte -- which is",
+		"\t\t\t * the one thing COBS promises not to do. */",
+		"\t\t\tif (code != 0xFFu || read + 1u >= len) {",
+		"\t\t\t\tcontinue;",
+		"\t\t\t}",
+		"\t\t}",
+		"",
+		"\t\tout[code_at] = code;",
+		"\t\tcode_at = written++;",
+		"\t\tcode = 1;",
+		"\t}",
+		"",
+		"\tout[code_at] = code;",
+		"\tout[written++] = 0u;\t\t/* the delimiter */",
+		"\treturn written;",
+		"}",
+		"",
+		f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"\tuint32_t read = 0;",
+		"\tuint32_t written = 0;",
+		"",
+		"\twhile (read < len) {",
+		"\t\tuint8_t code = in[read];",
+		"\t\tuint8_t at;",
+		"",
+		"\t\tif (code == 0u) {",
+		"\t\t\tbreak;\t\t/* the delimiter ends the frame */",
+		"\t\t}",
+		"\t\tread++;",
+		"",
+		"\t\tfor (at = 1u; at < code; at++) {",
+		"\t\t\tif (read >= len) {",
+		"\t\t\t\treturn 0;\t/* truncated: a code ran past the end */",
+		"\t\t\t}",
+		"\t\t\tout[written++] = in[read++];",
+		"\t\t}",
+		"",
+		"\t\tif (code != 0xFFu && read < len && in[read] != 0u) {",
+		"\t\t\tout[written++] = 0u;",
+		"\t\t}",
+		"\t}",
+		"",
+		"\treturn written;",
+		"}",
+	]
+
+
+def _hdlc(decl: ast.CodecDecl, prefix: str) -> list[str]:
+	"""HDLC bit stuffing: after five ones in a row, insert a zero.
+
+	Which is what stops the flag sequence 0x7E appearing inside a frame. The
+	worst case is six bits out for five in, and how close to it any particular
+	frame gets depends on the data.
+	"""
+	name = ident(prefix, decl.name)
+
+	return [
+		"",
+		f"/* {decl.name}: HDLC bit stuffing.",
+		" *",
+		" * After five consecutive ones a zero is inserted, so the flag sequence",
+		" * cannot appear inside a frame. Six bits out for five in, worst case,",
+		" * and where a frame lands in that range depends on its content.",
+		" *",
+		" * Lengths are in bits. `out` needs len + len / 5 + 1 bits.",
+		" */",
+		f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"\tuint32_t at;",
+		"\tuint32_t written = 0;",
+		"\tuint32_t ones = 0;",
+		"",
+		"\tfor (at = 0; at < len; at++) {",
+		"\t\tuint32_t bit = (uint32_t)situ_bits_get_msb(in, at, 1u);",
+		"",
+		"\t\tsitu_bits_set_msb(out, written++, 1u, bit);",
+		"",
+		"\t\tif (bit) {",
+		"\t\t\tones++;",
+		"\t\t\tif (ones == 5u) {",
+		"\t\t\t\tsitu_bits_set_msb(out, written++, 1u, 0u);",
+		"\t\t\t\tones = 0;",
+		"\t\t\t}",
+		"\t\t} else {",
+		"\t\t\tones = 0;",
+		"\t\t}",
+		"\t}",
+		"",
+		"\treturn written;",
+		"}",
+		"",
+		f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"\tuint32_t at;",
+		"\tuint32_t written = 0;",
+		"\tuint32_t ones = 0;",
+		"",
+		"\tfor (at = 0; at < len; at++) {",
+		"\t\tuint32_t bit = (uint32_t)situ_bits_get_msb(in, at, 1u);",
+		"",
+		"\t\tif (ones == 5u) {",
+		"\t\t\t/* A stuffed zero, which the encoder put there. */",
+		"\t\t\tones = 0;",
+		"\t\t\tif (bit) {",
+		"\t\t\t\treturn 0;\t/* six ones is a flag, not data */",
+		"\t\t\t}",
+		"\t\t\tcontinue;",
+		"\t\t}",
+		"",
+		"\t\tsitu_bits_set_msb(out, written++, 1u, bit);",
+		"\t\tones = bit ? ones + 1u : 0u;",
+		"\t}",
+		"",
+		"\treturn written;",
+		"}",
+	]

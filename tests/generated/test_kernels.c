@@ -1,0 +1,258 @@
+/* test_kernels.c -- the derived implementations, against published vectors.
+ *
+ * Section 26.12 asks for "vectors from an independent reference implementation"
+ * per family, and that is what these are: the COBS examples from Cheshire and
+ * Baker, Hamming(7, 4)'s defining property that it corrects any single-bit
+ * error, HDLC's rule that a zero follows five ones. None of them is a value
+ * situ computed and then wrote down as its own expectation, which is the only
+ * way to tell an implementation of COBS from an implementation of whatever this
+ * file happens to do.
+ *
+ * The codecs under test come from std/kernels.situ, so they are the ones a user
+ * gets rather than a fixture written to be easy on the generator.
+ */
+
+#include <setjmp.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include <cmocka.h>
+
+#include "kernels.h"
+
+/* -- COBS (Cheshire and Baker) --------------------------------------------- */
+
+static void test_cobs_matches_the_published_examples(void **state)
+{
+	static const struct {
+		uint32_t len;
+		uint8_t  in[8];
+		uint32_t encoded;
+		uint8_t  want[10];
+	} cases[] = {
+		{ 1, {0x00},                3, {0x01, 0x01, 0x00} },
+		{ 2, {0x00, 0x00},          4, {0x01, 0x01, 0x01, 0x00} },
+		{ 4, {0x11, 0x22, 0x00, 0x33},
+		                            6, {0x03, 0x11, 0x22, 0x02, 0x33, 0x00} },
+		{ 4, {0x11, 0x22, 0x33, 0x44},
+		                            6, {0x05, 0x11, 0x22, 0x33, 0x44, 0x00} },
+		{ 4, {0x11, 0x00, 0x00, 0x00},
+		                            6, {0x02, 0x11, 0x01, 0x01, 0x01, 0x00} },
+	};
+	uint8_t  out[16];
+	uint8_t  back[16];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		uint32_t written = situ_cobs_encode(cases[i].in, cases[i].len, out);
+
+		assert_int_equal(written, cases[i].encoded);
+		assert_memory_equal(out, cases[i].want, written);
+
+		assert_int_equal(situ_cobs_decode(out, written, back), cases[i].len);
+		assert_memory_equal(back, cases[i].in, cases[i].len);
+	}
+}
+
+static void test_cobs_spends_one_byte_per_254(void **state)
+{
+	/* The boundary the code exists to get right, and the promise its name
+	 * makes: consistent overhead. A full group takes the code 0xFF with no
+	 * implicit zero after it, so 254 bytes cost exactly two -- one code and one
+	 * delimiter. Opening a second group at the end would spend a third. */
+	uint8_t  in[254];
+	uint8_t  out[300];
+	uint8_t  back[300];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < 254; i++) {
+		in[i] = (uint8_t)(i + 1);
+	}
+
+	assert_int_equal(situ_cobs_encode(in, 254, out), 256);
+	assert_int_equal(out[0], 0xFF);
+	assert_int_equal(out[255], 0x00);
+
+	assert_int_equal(situ_cobs_decode(out, 256, back), 254);
+	assert_memory_equal(back, in, 254);
+}
+
+/* -- Hamming(7, 4) --------------------------------------------------------- */
+
+static void test_hamming_is_systematic(void **state)
+{
+	/* What `systematic` promises: the data bits sit verbatim at computable
+	 * positions, so a reader that trusts the codeword takes them with no decode
+	 * at all. Deriving that from the matrix rather than declaring it is the
+	 * reason the linear-block kernel exists. */
+	uint8_t nibble;
+
+	(void)state;
+
+	for (nibble = 0; nibble < 16; nibble++) {
+		assert_int_equal(situ_hamming_7_4_encode(nibble) & 0x0Fu, nibble);
+	}
+}
+
+static void test_hamming_corrects_any_single_bit_error(void **state)
+{
+	/* The defining property of the code, and an independent one: true of
+	 * Hamming(7, 4) whoever implements it. */
+	uint8_t nibble;
+	uint8_t bit;
+
+	(void)state;
+
+	for (nibble = 0; nibble < 16; nibble++) {
+		uint8_t word      = situ_hamming_7_4_encode(nibble);
+		int     corrected = 1;
+
+		assert_int_equal(situ_hamming_7_4_decode(word, &corrected), nibble);
+		assert_int_equal(corrected, 0);
+
+		for (bit = 0; bit < 7; bit++) {
+			uint8_t damaged = (uint8_t)(word ^ (uint8_t)(1u << bit));
+
+			corrected = 0;
+			assert_int_equal(situ_hamming_7_4_decode(damaged, &corrected), nibble);
+			assert_int_equal(corrected, 1);
+		}
+	}
+}
+
+/* -- scramblers ------------------------------------------------------------ */
+
+static void test_the_additive_scrambler_is_its_own_inverse(void **state)
+{
+	/* Which is what feedback from the input buys, and why the derivation calls
+	 * it seekable: the keystream does not depend on the data, so the register
+	 * can be wound to any position. */
+	static const uint8_t plain[5] = { 'h', 'e', 'l', 'l', 'o' };
+	uint8_t coded[5];
+	uint8_t back[5];
+
+	(void)state;
+
+	assert_int_equal(situ_scrambler_additive_encode(plain, 5, coded), 5);
+	assert_memory_not_equal(coded, plain, 5);
+
+	assert_int_equal(situ_scrambler_additive_decode(coded, 5, back), 5);
+	assert_memory_equal(back, plain, 5);
+}
+
+static void test_the_multiplicative_scrambler_is_not_an_involution(void **state)
+{
+	/* Feedback from the output: a receiver synchronises itself without being
+	 * told the state, and pays for it with error propagation. Running the
+	 * encoder twice does not undo it, which is the observable difference from
+	 * the additive one and why they derive opposite properties. */
+	static const uint8_t plain[6] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06 };
+	uint8_t coded[6];
+	uint8_t back[6];
+	uint8_t twice[6];
+
+	(void)state;
+
+	assert_int_equal(situ_scrambler_multiplicative_encode(plain, 6, coded), 6);
+	assert_int_equal(situ_scrambler_multiplicative_decode(coded, 6, back), 6);
+	assert_memory_equal(back, plain, 6);
+
+	situ_scrambler_multiplicative_encode(coded, 6, twice);
+	assert_memory_not_equal(twice, plain, 6);
+}
+
+/* -- block interleaver ----------------------------------------------------- */
+
+static void test_the_interleaver_spreads_adjacent_bytes(void **state)
+{
+	/* Written in rows and read in columns, which is what puts a burst error
+	 * across codewords instead of inside one. A 4 x 4 block emits byte 0, then
+	 * byte 4, then byte 8. */
+	uint8_t in[16];
+	uint8_t out[16];
+	uint8_t back[16];
+	uint8_t i;
+
+	(void)state;
+
+	for (i = 0; i < 16; i++) {
+		in[i] = i;
+	}
+
+	assert_int_equal(situ_interleave_16_encode(in, 16, out), 16);
+	assert_int_equal(out[0], 0);
+	assert_int_equal(out[1], 4);
+	assert_int_equal(out[2], 8);
+	assert_int_equal(out[3], 12);
+	assert_int_equal(out[4], 1);
+
+	assert_int_equal(situ_interleave_16_decode(out, 16, back), 16);
+	assert_memory_equal(back, in, 16);
+}
+
+static void test_the_interleaver_refuses_a_partial_block(void **state)
+{
+	/* A partial block has no defined permutation, and inventing one would make
+	 * the decoder disagree with the encoder about where a byte went. */
+	uint8_t in[16] = { 0 };
+	uint8_t out[16];
+
+	(void)state;
+
+	assert_int_equal(situ_interleave_16_encode(in, 15, out), 0);
+}
+
+/* -- HDLC bit stuffing ----------------------------------------------------- */
+
+static void test_hdlc_inserts_a_zero_after_five_ones(void **state)
+{
+	/* Which is what stops the flag sequence appearing inside a frame. Sixteen
+	 * ones take three inserted zeros, so nineteen bits come out. */
+	static const uint8_t ones[2] = { 0xFF, 0xFF };
+	uint8_t out[4]  = { 0, 0, 0, 0 };
+	uint8_t back[4] = { 0, 0, 0, 0 };
+
+	(void)state;
+
+	assert_int_equal(situ_hdlc_bit_stuffing_encode(ones, 16, out), 19);
+	assert_int_equal(situ_hdlc_bit_stuffing_decode(out, 19, back), 16);
+	assert_int_equal(back[0], 0xFF);
+	assert_int_equal(back[1], 0xFF);
+}
+
+static void test_hdlc_refuses_six_ones(void **state)
+{
+	/* Six consecutive ones is a flag, not data: an encoder cannot have produced
+	 * them, so a decoder that accepted them would be taking a corrupted frame
+	 * for a valid one. */
+	static const uint8_t flag[1] = { 0xFC };	/* 111111.. */
+	uint8_t out[4];
+
+	(void)state;
+
+	assert_int_equal(situ_hdlc_bit_stuffing_decode(flag, 8, out), 0);
+}
+
+int main(void)
+{
+	const struct CMUnitTest tests[] = {
+		cmocka_unit_test(test_cobs_matches_the_published_examples),
+		cmocka_unit_test(test_cobs_spends_one_byte_per_254),
+		cmocka_unit_test(test_hamming_is_systematic),
+		cmocka_unit_test(test_hamming_corrects_any_single_bit_error),
+		cmocka_unit_test(test_the_additive_scrambler_is_its_own_inverse),
+		cmocka_unit_test(test_the_multiplicative_scrambler_is_not_an_involution),
+		cmocka_unit_test(test_the_interleaver_spreads_adjacent_bytes),
+		cmocka_unit_test(test_the_interleaver_refuses_a_partial_block),
+		cmocka_unit_test(test_hdlc_inserts_a_zero_after_five_ones),
+		cmocka_unit_test(test_hdlc_refuses_six_ones),
+	};
+
+	return cmocka_run_group_tests(tests, NULL, NULL);
+}

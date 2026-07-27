@@ -261,7 +261,23 @@ def _permutation(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	`seekable = permuted` exists to say. Random access survives; sequential
 	prefetch does not.
 	"""
-	_positive(kernel, "span", decl)
+	# `rows` and `columns` describe a block interleaver, which is the form the
+	# implementation can be generated from; a bare `span` describes the extent
+	# of some permutation without saying which, which is enough for the
+	# properties and not enough for the code.
+	if kernel.argument("rows") is not None:
+		rows = _positive(kernel, "rows", decl)
+		_positive(kernel, "columns", decl)
+		if rows < 2:
+			raise error(
+				f"`{decl.name}` interleaves over one row",
+				kernel.span,
+				label = "an interleaver of one row is the identity",
+				notes = ["the point of interleaving is to spread a burst across "
+				         "codewords; one row spreads it across one"],
+			)
+	else:
+		_positive(kernel, "span", decl)
 
 	return Derived(
 		expansion     = ast.Expansion.PRESERVING,

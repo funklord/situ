@@ -31,7 +31,7 @@ CMOCKA_LIBS	?= -lcmocka
 # Every test is compiled twice: the checked build exercises the bounds and
 # generation assertions, the release build proves they compile out cleanly.
 TESTS		:= test_runtime test_header test_tiff test_message test_protobuf \
-		   test_packet
+		   test_packet test_kernels
 BINS		:= $(TESTS:%=$(BUILD_DIR)/%) $(TESTS:%=$(BUILD_DIR)/%_checked)
 
 # Schemas whose generated accessors are exercised here. The code is generated
@@ -56,7 +56,7 @@ SCHEMAS		:= tests/schemas/header.situ \
 		   examples/packet/packet.situ examples/protobuf/protobuf.situ \
 		   examples/registers/registers.situ examples/tcp/tcp.situ \
 		   examples/telemetry/telemetry.situ examples/tiff/tiff.situ \
-		   examples/udp/udp.situ
+		   examples/udp/udp.situ std/kernels.situ
 GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))
 GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
 GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
@@ -87,6 +87,13 @@ OBJS_test_tiff		:= $(GEN_DIR)/tiff.o
 OBJS_test_message	:= $(GEN_DIR)/message.o
 OBJS_test_protobuf	:=
 OBJS_test_packet	:= $(GEN_DIR)/packet.o
+OBJS_test_kernels	:= $(GEN_DIR)/kernels.o $(GEN_DIR)/kernels_derived.o
+
+# The per-test object lists are named after the target, so the prerequisites
+# have to be expanded a second time to see them. Without this a test linking a
+# generated object nobody else needs fails at the linker rather than building
+# it (which is how test_kernels first failed).
+.SECONDEXPANSION:
 
 .PHONY: all test clean generate
 
@@ -123,12 +130,12 @@ $(foreach schema,$(SCHEMAS),\
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
-$(BUILD_DIR)/%_checked: %.c $(RUNTIME_LIB) $(GEN_OBJS)
+$(BUILD_DIR)/%_checked: %.c $(RUNTIME_LIB) $(GEN_OBJS) $$(OBJS_$$*)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -DSITU_CHECKED -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
 
-$(BUILD_DIR)/%: %.c $(RUNTIME_LIB) $(GEN_OBJS)
+$(BUILD_DIR)/%: %.c $(RUNTIME_LIB) $(GEN_OBJS) $$(OBJS_$$*)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
@@ -158,6 +165,16 @@ $(GEN_DIR)/%_fuzz.c: $(REPO_ROOT)/tests/schemas/%.situ $(SITUC_SOURCES)
 	@mkdir -p '$(GEN_DIR)'
 	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz 'tests/schemas/$*.situ' \
 		--out '$(abspath $(GEN_DIR))'
+
+# The derived implementations, generated beside the accessors from the same
+# kernel descriptions. That they come from one source is the whole point of
+# tier 2, so they are built from one command run.
+$(GEN_DIR)/%_derived.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
+	cd '$(REPO_ROOT)' && $(SITUC) gen-derived '$(SCHEMA_$*)' \
+		--out '$(abspath $(GEN_DIR))'
+
+$(GEN_DIR)/%_derived.o: $(GEN_DIR)/%_derived.c
+	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
 $(GEN_DIR)/%_checks.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 	cd '$(REPO_ROOT)' && $(SITUC) gen-checks '$(SCHEMA_$*)' \

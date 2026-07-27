@@ -2255,10 +2255,20 @@ soundness gap.
 
 ### 26.12 Phase 12: transforms, tier 2 (derived codecs)
 
-**Status: partial.** All six kernel families derive their signatures, pipelines
-compose, and `situc/kernels.py` holds both. Implementations generate for the
-first two families of the recommended order below -- polynomial and table --
-and the rest derive properties while binding `extern` for the code.
+**Status: complete except Reed-Solomon.** All six kernel families derive their
+signatures and generate implementations, and pipelines compose;
+`situc/kernels.py` holds the derivation and `situc/codegen/c/derived.py` the
+generation. Item 7 of the order below -- Reed-Solomon and BCH over GF(2^m) --
+is not done: it is the largest single item, needs field arithmetic and real
+performance work, and the section says to consult libfec and ISA-L before
+writing anything.
+
+Every family is exercised against published vectors rather than against situ's
+own output: the CRC catalogue's check values, IEEE 802.3's Manchester
+encoding, Cheshire and Baker's COBS examples, Hamming(7, 4)'s single-error
+correction, HDLC's five-ones rule. Generating COBS turned up a real bug on the
+254-byte boundary -- a full group opened a second one at end of input, spending
+the extra overhead byte the code is named for not spending.
 
 The invariant held: no propagation rule changed, and
 `test_no_propagation_rule_reads_a_kernel` fails if one ever reaches past the

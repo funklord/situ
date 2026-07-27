@@ -63,39 +63,47 @@ codec code_4b5b {
 impl code_4b5b derived;
 
 // ---------------------------------------------------------------------------
-// The families whose properties derive but whose code does not yet generate.
+// The remaining four families.
 //
-// A signature here is worth as much as one in std/codecs.situ and costs less
-// to trust: it was computed. Binding `extern` supplies the implementation.
+// The pair of scramblers is the point: the same family and the same taps, and
+// opposite properties, worked out from one word of the description.
 // ---------------------------------------------------------------------------
 
 // Feedback from the output, so neither seekable nor self-synchronising --
 // which the derivation works out rather than being told.
 codec scrambler_multiplicative {
-	kernel = shift_register(taps = 0x8810, feedback = output);
+	kernel = shift_register(taps = 0x8810, width = 16, seed = 0xFFFF,
+	                        feedback = output);
 }
+impl scrambler_multiplicative derived;
 
 // Feedback from the input: startable anywhere, and a corrupt bit spoils only
 // itself. The same family, and the opposite properties.
 codec scrambler_additive {
-	kernel = shift_register(taps = 0x8810, feedback = input);
+	kernel = shift_register(taps = 0xB400, width = 16, seed = 0xACE1,
+	                        feedback = input);
 }
+impl scrambler_additive derived;
 
 codec hamming_7_4 {
-	kernel = linear_block(n = 7, k = 4, standard_form);
+	kernel = linear_block(n = 7, k = 4, standard_form, code = hamming_7_4);
 }
+impl hamming_7_4 derived;
 
 codec interleave_16 {
-	kernel = permutation(span = 16);
+	kernel = permutation(rows = 4, columns = 4);
 }
+impl interleave_16 derived;
 
 codec cobs {
-	kernel = stuffing(worst_case = 255, per = 254);
+	kernel = stuffing(worst_case = 255, per = 254, code = cobs);
 }
+impl cobs derived;
 
 codec hdlc_bit_stuffing {
-	kernel = stuffing(worst_case = 6, per = 5, unit = bit);
+	kernel = stuffing(worst_case = 6, per = 5, unit = bit, code = hdlc);
 }
+impl hdlc_bit_stuffing derived;
 
 // ---------------------------------------------------------------------------
 // A pipeline, composing pointwise and conservatively.
