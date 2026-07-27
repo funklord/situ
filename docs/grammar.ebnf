@@ -16,11 +16,13 @@ schema		= { directive | decl } ;
 directive	= "target" target_kind ";"
 	| "endian" endian ";"
 	| "bit_order" bitorder ";"
+	| "strictness" "=" strictness ";"
 	| "import" string ";" ;
 
 target_kind	= "buffer" | "mmio" ;
 endian		= "big" | "little" | "native" ;
 bitorder	= "msb_first" | "lsb_first" ;
+strictness	= "strict" | "lenient" ;
 
 decl		= const_decl
 	| enum_decl
@@ -41,11 +43,17 @@ member		= field | reserved | marker_field | block | variant | tag_field ;
 
 field		= type_ref ident [ array_spec ] [ pin ] [ attrs ] ";" ;
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
-tag_field	= "tag" scalar_type array_spec [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
+(* The name is optional and defaults to the keyword, so an unnamed tag is
+ * `tag` and an unnamed sealed region is `sealed` -- which is what lets
+ * `require verify_gated(Packet.sealed)` resolve in example 5.3. See
+ * docs/decisions/0010-region-and-tag-names.md. *)
+tag_field	= ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
+		  [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
 
 block		= "positional" "{" { member } "}"
-	| "authenticated" "{" { member } "}"				(* PHASE 8 *)
-	| "sealed" "(" codec_args ")" "{" { member } "}"		(* PHASE 8 *)
+	| "authenticated" [ ident ] [ attrs ] "{" { member } "}"
+	| "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
+	| "coded" ident "(" codec_args ")" [ attrs ] "{" { member } "}"
 	| "indexed" "(" index_args ")" "{" { member } "}"		(* PHASE 6 *)
 	| "opaque" ident "[" size_expr "]" [ attrs ] ";"		(* PHASE 6 *)
 	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;			(* PHASE 6 *)

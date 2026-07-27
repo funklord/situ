@@ -6,7 +6,7 @@ build alongside its schema as the phases land.
 Each schema is annotated with what it demonstrates and what it costs. They are
 meant to be read in roughly this order.
 
-## Buildable now (phase 1 static subset)
+## Buildable now
 
 | Example | Demonstrates |
 |---|---|
@@ -23,6 +23,7 @@ meant to be read in roughly this order.
 | [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
 | [protobuf](protobuf/) | The language's hardest conformance test: the worst case on every axis, and five independent causes of non-canonicity. project.md section 9.7. |
+| [packet](packet/) | The security position: the doom principle as a stage gate, and tag coverage against in-place mutation. project.md example 5.3. |
 
 ## Waiting on later phases
 
@@ -32,7 +33,6 @@ become live as each phase lands.
 
 | Example | Needs | Demonstrates |
 |---|---|---|
-| [packet](packet/) | phase 8 | The doom principle as a stage gate; tag coverage against in-place mutation. project.md example 5.3. |
 | [registers](registers/) | phase 10 | MMIO: where a missing setter is the deliverable. project.md example 15.2. |
 
 ## Reading them
@@ -56,8 +56,11 @@ python3 -m situc.cli map examples/ipv4/ipv4.situ > examples/ipv4/ipv4.situ.map
 ```
 
 Requirements the current build cannot decide are reported rather than passed
-over. Today that means the capability predicates, which need the lattice from
-phase 3; `situc map` names them and the phase that will check them.
+over, with the phase that will decide them. A failing `assert` is reported as a
+warning and the build continues, which is what `packet` uses to demonstrate the
+conflict between in-place mutation and tag coverage without failing its own
+build; the `require` form of the same check, and the exact text of its
+diagnostic, are pinned in `tests/unit/test_crypto.py`.
 
 ## What they are for
 

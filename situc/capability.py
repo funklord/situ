@@ -41,9 +41,10 @@ class Axis(Enum):
 # `stage` is the one axis that increases rather than weakens, so it is listed
 # in the direction of less usable and treated uniformly with the rest.
 #
-# `auth` is not truly ordered -- it is a set-valued tag identity -- but meet
-# needs some order, and Covered is the more constrained of the two: mutating
-# covered bytes marks a tag dirty. Phase 8 owns the real treatment.
+# `auth` is not ordered: it is a set-valued tag identity (docs/capability-axes).
+# Meet still needs a direction, and Covered is the more constrained of the two,
+# since mutating covered bytes marks a tag dirty. Where both sides are Covered
+# the parameters are unioned rather than picked between -- see SET_VALUED.
 DOMAINS: dict[Axis, tuple[str, ...]] = {
 	Axis.SIZE:	("Fixed", "Bounded", "Unbounded"),
 	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "Dynamic"),
@@ -65,6 +66,12 @@ DOMAINS: dict[Axis, tuple[str, ...]] = {
 # stronger than `Aligned(2)`; `AbsoluteStatic(0x04)` is not stronger or weaker
 # than `AbsoluteStatic(0x08)`, it is simply a different offset.
 NUMERIC_STRENGTH = frozenset({Axis.ALIGN})
+
+# Axes whose parameters are a set. Meeting two values at the same base unions
+# them rather than choosing: a struct spanning two tags is covered by both, and
+# reporting one of them would lose the other -- which is exactly the information
+# a caller needs to know what goes stale (section 14.2).
+SET_VALUED = frozenset({Axis.AUTH})
 
 
 @dataclass(frozen=True)
@@ -116,6 +123,10 @@ def meet_values(axis: Axis, left: Value, right: Value) -> Value:
 
 	if axis in NUMERIC_STRENGTH and left.params and right.params:
 		return left if int(left.params[0]) <= int(right.params[0]) else right
+
+	if axis in SET_VALUED and (left.params or right.params):
+		merged = tuple(dict.fromkeys(left.params + right.params))
+		return Value(left.base, merged)
 
 	return left
 

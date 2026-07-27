@@ -25,17 +25,37 @@ from situc.resolve import ResolvedSchema
 # the value it demands. Data rather than branches, for the same reason the
 # propagation table is.
 @dataclass(frozen=True)
+class Demand:
+	"""One axis a predicate reads, and the value it insists on."""
+
+	axis: Axis
+	required: Value
+	# Most demands are lower bounds: `in_place` is satisfied by anything at
+	# least as strong as InPlaceSlack. A few name a value exactly, because they
+	# ask for a *weak* property -- `immutable` is not satisfied by a field that
+	# happens to be freely writable, and `verify_gated` is not satisfied by a
+	# field that was never behind a gate.
+	exact: bool = False
+
+
+@dataclass(frozen=True)
 class Predicate:
 	name: str
 	axis: Axis
 	required: Value
 	summary: str
 	takes_argument: bool = False
-	# Most predicates are lower bounds: `in_place` is satisfied by anything at
-	# least as strong as InPlaceSlack. A few name a value exactly, because they
-	# ask for a *weak* property -- `immutable` is not satisfied by a field that
-	# happens to be freely writable.
 	exact: bool = False
+	# Further axes that must hold, beyond the primary one. A predicate is a
+	# question, and some questions are about two axes at once: section 14.2
+	# turns on `in_place` asking both "can this be written where it sits" and
+	# "does writing it leave a tag stale", because the answers differ and the
+	# difference is the whole design pressure.
+	extra: tuple[Demand, ...] = ()
+
+	@property
+	def demands(self) -> tuple[Demand, ...]:
+		return (Demand(self.axis, self.required, self.exact),) + self.extra
 
 
 PREDICATES: dict[str, Predicate] = {
@@ -54,7 +74,20 @@ PREDICATES: dict[str, Predicate] = {
 		takes_argument=True),
 	"in_place": Predicate(
 		"in_place", Axis.MUTATE, Value("InPlaceSlack"),
-		"the field can be written without moving anything else"),
+		"the field can be written without moving anything else, and writing it "
+		"leaves no tag stale",
+		extra = (Demand(Axis.AUTH, Value("Uncovered"), exact=True),)),
+	"in_place_dirty": Predicate(
+		"in_place_dirty", Axis.MUTATE, Value("InPlaceSlack"),
+		"the field can be written without moving anything else, accepting that "
+		"a tag covering it must then be recomputed"),
+	"no_tag_invalidation": Predicate(
+		"no_tag_invalidation", Axis.AUTH, Value("Uncovered"),
+		"writing the field invalidates no authentication tag", exact=True),
+	"verify_gated": Predicate(
+		"verify_gated", Axis.STAGE, Value("VerifyGated"),
+		"no view into these bytes can be obtained before the tag verifies",
+		exact=True),
 	"immutable": Predicate(
 		"immutable", Axis.MUTATE, Value("Immutable"),
 		"the field cannot be written at all", exact=True),
@@ -88,10 +121,7 @@ PREDICATES: dict[str, Predicate] = {
 
 # Predicates whose axis exists but which need a construct from a later phase.
 DEFERRED_PREDICATES = {
-	"in_place_dirty":	8,
 	"deterministic":	7,
-	"no_tag_invalidation":	8,
-	"verify_gated":		8,
 	"no_alloc":		4,
 	"bounded_stack":	4,
 	"no_realloc":		5,
@@ -179,12 +209,11 @@ def _discharge_capability(requirement: ast.Requirement, call: ast.Call,
 			label = "expected a name such as `Header` or `Header.seq`",
 		)
 
-	required = _required_value(predicate, call)
-	entry    = resolved.find(path)
+	entry  = resolved.find(path)
+	struct = None
 
 	if entry is not None:
 		vector = entry.vector
-		blame  = entry.blame(predicate.axis)
 	else:
 		struct = resolved.find_struct(path)
 		if struct is None:
@@ -195,27 +224,52 @@ def _discharge_capability(requirement: ast.Requirement, call: ast.Call,
 				notes = [f"known paths: {_nearby(resolved, path)}"],
 			)
 		vector = struct.vector
+
+	# The first demand that fails is the one reported. Predicates are ordered
+	# with the primary axis first, so a field that fails on both reads the way
+	# its name does; and where only the secondary one fails -- a writable field
+	# under a tag -- the diagnostic is about the tag, which is the thing the
+	# author has to decide about.
+	failed  = None
+	primary = _required_value(predicate, call)
+
+	for demand in predicate.demands:
+		required = primary if demand.axis is predicate.axis else demand.required
+		actual   = vector.get(demand.axis)
+
+		if predicate.name == "max_size":
+			satisfied, actual = _within_max_size(actual, required)
+		elif demand.exact:
+			satisfied = actual.base == required.base
+		else:
+			satisfied = is_at_least(demand.axis, actual, required)
+
+		if not satisfied:
+			failed = (demand, actual, required)
+			break
+
+	if failed is None:
+		return Outcome(requirement, satisfied=True,
+		               detail=f"{predicate.axis.value}({path}) is "
+		                      f"{vector.get(predicate.axis).render()}")
+
+	demand, actual, required = failed
+
+	if entry is not None:
+		blame = entry.blame(demand.axis)
+	else:
 		# A struct's vector is the meet of its members', so the blame for a
 		# struct-level failure lives in whichever members caused it.
-		blame = _member_blame(struct.entries, predicate.axis, required)
+		assert struct is not None
+		blame = _member_blame(struct.entries, demand.axis, required)
 
-	actual = vector.get(predicate.axis)
-
-	if predicate.name == "max_size":
-		satisfied, actual = _within_max_size(actual, required)
-	elif predicate.exact:
-		satisfied = actual.base == required.base
-	else:
-		satisfied = is_at_least(predicate.axis, actual, required)
-
-	detail  = (f"{predicate.axis.value}({path}) is {actual.render()}, "
+	detail  = (f"{demand.axis.value}({path}) is {actual.render()}, "
 	           f"required {required.render()}")
-	outcome = Outcome(requirement, satisfied=satisfied, detail=detail)
-
-	if not satisfied:
-		outcome.blame = [f"{w.rule.name}: {w.effect.because}" for w in blame]
-		outcome.diagnostic = _capability_failure(
-			requirement, call, predicate, path, actual, required, resolved, blame)
+	outcome = Outcome(requirement, satisfied=False, detail=detail)
+	outcome.blame = [f"{w.rule.name}: {w.effect.because}" for w in blame]
+	outcome.diagnostic = _capability_failure(
+		requirement, call, predicate, path, demand.axis, actual, required,
+		resolved, blame)
 
 	return outcome
 
@@ -270,11 +324,12 @@ def _required_value(predicate: Predicate, call: ast.Call) -> Value:
 
 
 def _capability_failure(requirement: ast.Requirement, call: ast.Call,
-		predicate: Predicate, path: str, actual: Value, required: Value,
-		resolved: ResolvedSchema, blame: list[Weakening]) -> Diagnostic:
+		predicate: Predicate, path: str, axis: Axis, actual: Value,
+		required: Value, resolved: ResolvedSchema,
+		blame: list[Weakening]) -> Diagnostic:
 	"""The section 17 report: what failed, why, how far it spread, what to do."""
 	notes = [
-		f"{predicate.axis.value}({path}) is {actual.render()}, "
+		f"{axis.value}({path}) is {actual.render()}, "
 		f"required {required.render()}",
 		f"`{predicate.name}` asks that {predicate.summary}",
 	]
@@ -288,7 +343,7 @@ def _capability_failure(requirement: ast.Requirement, call: ast.Call,
 	if not blame:
 		notes.append("caused by: the declaration itself; nothing upstream weakened it")
 
-	radius = _blast_radius(resolved, predicate.axis, required, path)
+	radius = _blast_radius(resolved, axis, required, path)
 	if radius:
 		listed = ", ".join(radius[:4]) + (", ..." if len(radius) > 4 else "")
 		notes.append(f"{len(radius)} other field(s) share this weakness: {listed}")
@@ -300,7 +355,7 @@ def _capability_failure(requirement: ast.Requirement, call: ast.Call,
 	return Diagnostic(
 		severity = _severity(requirement),
 		message  = "requirement not satisfied",
-		primary  = Label(call.span, f"{predicate.axis.value} is {actual.render()}"),
+		primary  = Label(call.span, f"{axis.value} is {actual.render()}"),
 		labels   = labels,
 		notes    = notes,
 	)

@@ -81,6 +81,7 @@ class Emitter:
 		self.structs  = {decl.name: decl for decl in schema.structs()}
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.markers  = {decl.name: decl for decl in schema.markers()}
+		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 
 	# -- header ---------------------------------------------------------
 
@@ -157,14 +158,322 @@ class Emitter:
 			return lines
 
 		lines.extend(self._size_constants(struct))
+		lines.extend(self._tag_constants(struct))
 		lines.extend(self._view_acquisition(struct))
 
 		for entry in struct.entries:
 			lines.extend(self._field(struct, entry))
 
 		lines.extend(self._shifting_setters(struct))
+		lines.extend(self._covered_setters(struct))
 		lines.extend(self._validate_decl(struct))
 		return lines
+
+	# -- the cryptographic model (section 14) ---------------------------
+
+	def _tags(self, struct: ResolvedStruct) -> list[Placement]:
+		return [entry.placement for entry in struct.entries
+		        if entry.placement.kind in ("tag", "checksum")]
+
+	def _tag_bit(self, struct: ResolvedStruct, name: str) -> str:
+		return macro(self.prefix, struct.name, name, "DIRTY")
+
+	def _tag_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""One bit per tag, plus the mask of all of them.
+
+		The bits are what a covered setter ORs into the message. Ordered as the
+		tags are declared, so the numbering is stable across a rebuild and a
+		caller may store one.
+		"""
+		tags = self._tags(struct)
+		if not tags:
+			return []
+
+		lines = ["/* Tag dirty bits (section 14.2). A covered write sets one; the",
+		         " * message refuses to be transmittable until it is cleared. */"]
+
+		for index, placement in enumerate(tags):
+			lines.append(f"#define {self._tag_bit(struct, placement.name)} "
+			             f"{hex(1 << index)}u")
+
+		mask = (1 << len(tags)) - 1
+		lines.append(f"#define {macro(self.prefix, struct.name, 'DIRTY_MASK')} "
+		             f"{hex(mask)}u")
+		lines.append("")
+		return lines
+
+	def _tag_support(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""What a tag needs beyond its bytes: its coverage, and finalize.
+
+		The algorithm is the caller's -- a signature says what a transform does,
+		never how (section 13.1) -- so what the compiler contributes is the one
+		thing only it knows: which bytes are covered, and whether they are
+		currently stale.
+		"""
+		placement = entry.placement
+		local     = c_name(self._local(struct, placement))
+		name      = placement.name
+		covers    = ", ".join(f"`{region}`" for region in placement.tag_covers)
+		spans     = self._covered_spans(struct, placement)
+
+		lines = [
+			f"/* {name} covers {covers or 'nothing'}.",
+			" *",
+			" * The span below is what the algorithm runs over. Write the result",
+			f" * through {ident(self.prefix, struct.name, local, 'ptr')}() and then",
+			f" * call {ident(self.prefix, struct.name, local, 'finalize')}(), which",
+			" * clears the dirty bit. Until then the message is not transmittable. */",
+		]
+
+		if spans is None:
+			lines.extend([
+				f"/* No covered-span accessor for `{name}`: the regions it covers are",
+				" * not contiguous in this struct, so there is no single range to",
+				" * hand out. Cover a contiguous run of regions instead. */",
+			])
+		else:
+			first, last = spans
+			lines.extend([
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'covered')}"
+				"(situ_view_t view, uint32_t *offset, uint32_t *len)",
+				"{",
+				f"\tuint32_t start = {first};",
+				f"\tuint32_t end   = {last};",
+				"",
+				"\tif (end < start || !situ_in_bounds(view, start, end - start)) {",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"",
+				"\t*offset = start;",
+				"\t*len    = end - start;",
+				"\treturn SITU_OK;",
+				"}",
+			])
+
+		lines.extend([
+			f"static inline int "
+			f"{ident(self.prefix, struct.name, local, 'is_dirty')}"
+			"(const situ_msg_t *msg)",
+			"{",
+			f"\treturn (msg->dirty & {self._tag_bit(struct, name)}) != 0u;",
+			"}",
+			f"static inline void "
+			f"{ident(self.prefix, struct.name, local, 'finalize')}(situ_msg_t *msg)",
+			"{",
+			f"\tsitu_msg_clear_dirty(msg, {self._tag_bit(struct, name)});",
+			"}",
+		])
+
+		return lines
+
+	def _covered_spans(self, struct: ResolvedStruct,
+			tag: Placement) -> tuple[str, str] | None:
+		"""The byte range a tag authenticates, as two C expressions.
+
+		Only a contiguous run has one. Nested coverage is contiguous by
+		construction and disjoint coverage of adjacent regions usually is, but
+		nothing guarantees it, so a gap is reported rather than papered over
+		with a range that covers bytes the tag does not.
+		"""
+		regions = [entry.placement for entry in struct.entries
+		           if entry.placement.name in tag.tag_covers
+		           and entry.placement.kind in ("authenticated", "sealed")]
+		if not regions:
+			return None
+
+		ordered = sorted(regions, key=lambda p: struct.layout.placements.index(p))
+
+		for earlier, later in zip(ordered, ordered[1:]):
+			if not self._is_adjacent(struct, earlier, later):
+				return None
+
+		return self._base_expression(struct, ordered[0]), self._region_end(struct,
+		                                                                  ordered[-1])
+
+	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
+		"""Where a region stops, as a C expression.
+
+		Taken from where the next member starts rather than by summing the
+		region's own contents. A region's extent is its interior put through a
+		codec's expansion, and reconstructing that in C would duplicate the
+		solver -- badly, since the interior is not addressable from outside the
+		gate. The member after it already knows, and if nothing follows, the
+		region runs to the end of the view.
+		"""
+		if region.is_fixed_size and region.offset_bits is not None:
+			return f"{region.offset_bytes + region.size_bits // BITS_PER_BYTE}u"
+
+		members = self._top_level(struct)
+		index   = next(i for i, held in enumerate(members)
+		               if held.path == region.path)
+
+		if index + 1 < len(members):
+			return self._base_expression(struct, members[index + 1])
+		return "view.limit"
+
+	def _is_adjacent(self, struct: ResolvedStruct, earlier: Placement,
+			later: Placement) -> bool:
+		"""Whether one region ends exactly where the next begins."""
+		if (earlier.offset_bits is None or later.offset_bits is None
+				or not earlier.is_fixed_size):
+			return False
+		return earlier.offset_bits + earlier.size_bits == later.offset_bits
+
+	def _sealed_gate(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""The stage gate of 14.3, as a type C will not let a caller around.
+
+		The interior accessors take `<struct>_<region>_t` and nothing produces
+		one but the open function below, which demands the verification result.
+		A caller holding a plain `situ_view_t` cannot reach a single interior
+		field -- not by convention, but because the program does not compile.
+
+		The gate wraps the enclosing frame's view rather than a sub-view, so an
+		interior field stays the same constant offset it has everywhere else and
+		the gate costs nothing at run time.
+		"""
+		placement = entry.placement
+		local     = c_name(self._local(struct, placement))
+		gate      = ident(self.prefix, struct.name, local, "t")
+		tags      = ", ".join(placement.covered_by) or "its tag"
+
+		if placement.unverified_ok:
+			return [
+				f"/* `{placement.name}` is `[allow_unverified_read]`: the stage gate",
+				" * of section 14.3 is waived, and the interior accessors below take",
+				" * an ordinary view. They run on bytes nobody has authenticated.",
+				" *",
+				" * This is the loud spelling on purpose. Removing the attribute",
+				" * makes the interior unreachable before verification, which is the",
+				" * single highest-value security property in the design. */",
+			]
+
+		return [
+			f"/* A verified view into `{placement.name}`.",
+			" *",
+			" * Every accessor for the interior takes this type, and the only thing",
+			f" * that produces one is {ident(self.prefix, struct.name, local, 'open')}(),",
+			f" * which will not hand one out until {tags} has verified. Parsing",
+			" * attacker-controlled plaintext before authenticating it is therefore",
+			" * not discouraged here; it does not compile. */",
+			f"typedef struct {gate} {{",
+			"\tsitu_view_t view;",
+			f"}} {gate};",
+			"",
+			f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'open')}"
+			f"(situ_view_t view, int verified, {gate} *out)",
+			"{",
+			"\tif (!verified) {",
+			"\t\treturn SITU_ERR_TAG;",
+			"\t}",
+			"",
+			"\tout->view = view;",
+			"\treturn SITU_OK;",
+			"}",
+		]
+
+	def _gate_type(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		"""The gated view type an interior field's accessors take, if gated."""
+		if placement.sealed_by is None or placement.unverified_ok:
+			return None
+		return ident(self.prefix, struct.name, c_name(placement.sealed_by), "t")
+
+	def _covered_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""Setters that mark a tag dirty, for the fields under one.
+
+		These take the message, as the shifting setters do and for the same
+		reason: the cost of the write shows up in the signature rather than in a
+		comment somebody may not read. A field under a tag cannot be written
+		without acknowledging that the tag now has to be recomputed.
+		"""
+		# Scalars only. An array's bytes are reached through its pointer
+		# accessor, and a setter that wrote one element of it would be a worse
+		# API than the pointer plus an explicit mark.
+		covered = [entry for entry in struct.entries
+		           if entry.placement.covered_by
+		           and entry.placement.scalar is not None
+		           and entry.placement.kind == "field"
+		           and entry.placement.array_count is None
+		           and entry.placement.sized_by is None
+		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
+		                                                      "InPlaceSlack")]
+		if not covered:
+			return []
+
+		lines = ["", "/* Writing any of these leaves an authentication tag stale, so each",
+		         " * one takes the message and marks the tag dirty. The message then",
+		         " * refuses to be transmittable until the tag is recomputed and",
+		         " * finalized (section 14.2). */"]
+
+		for entry in covered:
+			placement = entry.placement
+			scalar    = placement.scalar
+			assert scalar is not None
+
+			local = c_name(self._local(struct, placement))
+			ctype = self._field_ctype(placement)
+			mask  = " | ".join(self._tag_bit(struct, tag)
+			                   for tag in placement.covered_by)
+			gate  = self._gate_type(struct, placement)
+			view  = f"{gate} gate" if gate else "situ_view_t view"
+			base  = self._value_base(struct, placement, gated=gate is not None)
+
+			lines.extend([
+				f"static inline void "
+				f"{ident(self.prefix, struct.name, local, 'set')}"
+				f"(situ_msg_t *msg, {view}, {ctype} value)",
+				"{",
+				f"\t{self._store_statement(scalar, placement, base, 'value', offset=self._value_offset(placement))}",
+				f"\tsitu_msg_mark_dirty(msg, {mask});",
+				"}",
+			])
+
+		return lines
+
+	def _covered_pointer_note(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A pointer into covered bytes cannot mark anything by itself.
+
+		The scalar setters take the message and do it for the caller; a pointer
+		hands over the bytes and leaves the obligation with them, so the header
+		says which bit to set rather than leaving it to be inferred.
+		"""
+		if not placement.covered_by:
+			return []
+
+		mask = " | ".join(self._tag_bit(struct, tag) for tag in placement.covered_by)
+		return [
+			f"/* COVERAGE: writing through this pointer leaves "
+			f"{', '.join(placement.covered_by)} stale.",
+			f" * Call situ_msg_mark_dirty(msg, {mask}) after doing so; there is no",
+			" * setter that can do it here, because a pointer write is not a call. */",
+		]
+
+	def _secret_note(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""No debug accessor, and a way to erase it (section 14.6)."""
+		placement = entry.placement
+		local     = c_name(self._local(struct, placement))
+		gate      = self._gate_type(struct, placement)
+		taken     = f"{gate} gate" if gate else "situ_view_t view"
+		held      = "gate.view" if gate else "view"
+		length    = self._length_expression(struct, placement, held)
+
+		return [
+			f"/* `{placement.name}` is `[secret]`. No debug or format accessor is",
+			" * generated for it at all: that is the most common way key material",
+			" * reaches a log. The accessors that do exist branch on nothing they",
+			" * read, so the access pattern does not depend on the value.",
+			" *",
+			" * The erase goes through a volatile pointer, so it is observable",
+			" * behaviour the compiler may not drop as a dead store. */",
+			f"static inline void "
+			f"{ident(self.prefix, struct.name, local, 'zeroize')}({taken})",
+			"{",
+			f"\tsitu_zeroize({held}.base + "
+			f"{self._base_expression(struct, placement, gated=gate is not None)}, "
+			f"{length});",
+			"}",
+		]
 
 	def _size_constants(self, struct: ResolvedStruct) -> list[str]:
 		"""So callers can size static buffers without running the compiler.
@@ -339,15 +648,37 @@ class Emitter:
 			return []
 
 		# A nested struct's members are emitted under their own struct, so only
-		# the aggregate itself gets an accessor here. Checked before the
-		# reserved case, or a nested reserved region would be noted twice.
-		if "." in placement.path[len(struct.name) + 1 :]:
+		# the aggregate itself gets an accessor here. The interior of a sealed
+		# region is the exception: its accessors take the gated view type, which
+		# belongs to this struct, and the region's own type is a codec rather
+		# than something with a section of its own. Checked before the reserved
+		# case, or a nested reserved region would be noted twice.
+		nested = "." in placement.path[len(struct.name) + 1 :]
+		if nested and placement.sealed_by is None:
 			return []
 
 		if placement.kind == "reserved":
 			return self._reserved_note(placement)
 
 		lines = ["", *self._field_comment(entry)]
+
+		if placement.kind in ("tag", "checksum"):
+			# A tag lands after everything it covers, so its own offset is
+			# usually dynamic and has to be resolved before either its bytes or
+			# its covered span can be reached.
+			if placement.offset_bits is None:
+				lines.extend(self._offset_function(struct, placement))
+			lines.extend(self._array(struct, entry))
+			lines.extend(self._tag_support(struct, entry))
+			return lines
+
+		if placement.kind == "sealed":
+			lines.extend(self._sealed_gate(struct, entry))
+			return lines
+
+		if placement.kind == "authenticated":
+			lines.extend(self._authenticated_note(struct, entry))
+			return lines
 
 		if placement.kind == "marker":
 			lines.extend(self._marker(struct, placement))
@@ -379,11 +710,37 @@ class Emitter:
 
 		if placement.array_count is not None or placement.sized_by is not None:
 			lines.extend(self._array(struct, entry))
+			lines.extend(self._covered_pointer_note(struct, placement))
+			if _has_attr(placement.attrs, "secret"):
+				lines.extend(self._secret_note(struct, entry))
 			return lines
 
 		lines.extend(self._scalar_get(struct, entry))
 		lines.extend(self._scalar_set(struct, entry))
+		if _has_attr(placement.attrs, "secret"):
+			lines.extend(self._secret_note(struct, entry))
 		return lines
+
+	def _authenticated_note(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""A region with no accessor of its own, and a warning that matters.
+
+		Its members keep their own accessors at their own offsets -- the block
+		moves nothing. What it changes is the cost of writing them, and where a
+		member is reached through a sub-view of another type that cost is not
+		visible in that type's accessors, so it is said here.
+		"""
+		placement = entry.placement
+		tags      = ", ".join(f"`{tag}`" for tag in placement.covered_by)
+
+		return [
+			f"/* COVERAGE: the bytes of `{placement.name}` are authenticated by",
+			f" * {tags or 'no tag'}. Writing any of them through this struct's",
+			" * coverage-aware setters marks the tag dirty; writing them through a",
+			" * sub-view of another struct type does not, because that type has no",
+			" * coverage of its own. Prefer the setters at the end of this",
+			" * struct's section. */",
+		]
 
 	def _field_comment(self, entry: Resolved) -> list[str]:
 		placement = entry.placement
@@ -528,17 +885,23 @@ class Emitter:
 			"}",
 		]
 
-	def _value_base(self, struct: ResolvedStruct, placement: Placement) -> str:
+	def _value_base(self, struct: ResolvedStruct, placement: Placement,
+			gated: bool = False) -> str:
 		"""The pointer a scalar accessor loads from.
 
 		A statically placed field reads from the view base at a constant
 		displacement. A dynamically placed one has its offset resolved first,
 		so the displacement folds into the pointer and the load itself stays a
 		single access.
+
+		A gated accessor reads through the wrapper's view, which is the same
+		frame view: the gate is a compile-time obligation, not a different base,
+		so the load is still `base + K`.
 		"""
+		base = "gate.view.base" if gated else "view.base"
 		if placement.offset_bits is not None:
-			return "view.base"
-		return f"(view.base + {self._base_expression(struct, placement)})"
+			return base
+		return f"({base} + {self._base_expression(struct, placement, gated)})"
 
 	def _value_offset(self, placement: Placement) -> int | None:
 		return None if placement.offset_bits is not None else 0
@@ -546,18 +909,26 @@ class Emitter:
 	def _is_array(self, placement: Placement) -> bool:
 		return self.resolved.find(placement.path + "[]") is not None
 
-	def _base_expression(self, struct: ResolvedStruct, placement: Placement) -> str:
+	def _base_expression(self, struct: ResolvedStruct, placement: Placement,
+			gated: bool = False) -> str:
 		"""Where this member starts, in bytes, as a C expression."""
 		if placement.offset_bits is not None:
 			return f"{placement.offset_bytes}u"
-		local = c_name(self._local(struct, placement))
-		return f"{ident(self.prefix, struct.name, local, 'offset')}(view)"
+		local    = c_name(self._local(struct, placement))
+		argument = "gate.view" if gated else "view"
+		return f"{ident(self.prefix, struct.name, local, 'offset')}({argument})"
 
 	def _top_level(self, struct: ResolvedStruct) -> list[Placement]:
-		"""The struct's own members, without absorbed nested ones."""
+		"""The struct's own members, in order, partitioning its bytes exactly.
+
+		An `authenticated` region is left out: it consumes no bytes of its own,
+		it names bytes its members already account for, and counting both would
+		double every offset after it. A `sealed` region stays, because its
+		members are the codec's output and are not in this list.
+		"""
 		return [
 			entry.placement for entry in struct.entries
-			if entry.placement.kind != "element"
+			if entry.placement.kind not in ("element", "authenticated")
 			and "." not in entry.placement.path[len(struct.name) + 1 :]
 		]
 
@@ -571,46 +942,137 @@ class Emitter:
 		because a size expression may only name a field declared before it and
 		everything before the first dynamic member is statically placed.
 		"""
-		local = c_name(self._local(struct, placement))
-		lines = [
-			f"static inline uint32_t "
-			f"{ident(self.prefix, struct.name, local, 'offset')}(situ_view_t view)",
-			"{",
-		]
-
+		local    = c_name(self._local(struct, placement))
 		constant = 0
 		terms    = []
+
 		for other in self._top_level(struct):
 			if other.path == placement.path:
 				break
 			if other.is_fixed_size:
 				constant += other.size_bits // BITS_PER_BYTE
-			else:
-				terms.append(self._length_expression(struct, other))
+				continue
+			if not self._has_length(struct, other):
+				return self._unresolvable_offset(placement, other)
+			terms.append(self._length_expression(struct, other))
 
-		lines.append(f"\tuint32_t offset = {constant}u;")
+		lines = [
+			f"static inline uint32_t "
+			f"{ident(self.prefix, struct.name, local, 'offset')}(situ_view_t view)",
+			"{",
+			f"\tuint32_t offset = {constant}u;",
+		]
 		for term in terms:
 			lines.append(f"\toffset = offset + ({term});")
+
+		if not terms:
+			lines.append("\t(void)view;")
+
 		lines.extend(["", "\treturn offset;", "}"])
 		return lines
 
-	def _length_expression(self, struct: ResolvedStruct,
-			placement: Placement) -> str:
-		"""How many bytes a variable-length member occupies, at runtime."""
+	def _unresolvable_offset(self, placement: Placement,
+			blocker: Placement) -> list[str]:
+		"""No offset function, and the reason, where it will be looked for.
+
+		A region whose codec expands by a bounded ratio or without bound has no
+		length until it is decoded, so nothing after it has an offset either.
+		Emitting arithmetic that ignored that would put every later accessor on
+		the wrong bytes, which is the one failure mode worse than a missing
+		accessor.
+		"""
+		return [
+			f"/* No accessor for `{placement.name}`: it starts after "
+			f"`{blocker.name}`, whose",
+			f" * codec `{blocker.type_name}` has no closed-form expansion, so how many",
+			" * bytes it occupies is not known until it has been decoded.",
+			" *",
+			" * A `length_preserving` codec, or one with a fixed or exact-ratio",
+			" * expansion, keeps the members after it addressable. */",
+		]
+
+	def _length_expression(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "view") -> str:
+		"""How many bytes a variable-length member occupies, at runtime.
+
+		`held` names the view in scope, which is `gate.view` inside a sealed
+		region: the length is read from a plaintext field at the same offsets,
+		through whichever view the caller holds.
+		"""
+		gated = held != "view"
+
+		if placement.kind in ("coded", "sealed"):
+			length = self._region_length(struct, placement, held)
+			assert length is not None, "callers check _has_length first"
+			return length
+
 		if placement.kind == "opaque":
 			# An opaque region's size expression is already a byte count; there
 			# are no elements to multiply by.
-			return f"(uint32_t){self._count_expression(struct, placement)}"
+			return f"(uint32_t){self._count_expression(struct, placement, held)}"
 
 		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
 
 		if placement.sized_by == "remaining":
-			return f"view.limit - {self._base_expression(struct, placement)}"
+			return (f"{held}.limit - "
+			        f"{self._base_expression(struct, placement, gated)}")
 
-		count = self._count_expression(struct, placement)
+		count = self._count_expression(struct, placement, held)
 		return f"(uint32_t){count}" if element == 1 else f"(uint32_t){count} * {element}u"
 
-	def _count_expression(self, struct: ResolvedStruct, placement: Placement) -> str:
+	def _region_length(self, struct: ResolvedStruct, region: Placement,
+			held: str = "view") -> str | None:
+		"""How many bytes a coded or sealed region occupies, at runtime.
+
+		Its interior extent put through the codec's expansion, which is the
+		same rule the solver applies and the only one available: the region's
+		bytes are the transform's output, so nothing in them can be read to find
+		out how many there are.
+
+		None where the expansion has no closed form -- a bounded ratio or an
+		unbounded one -- because then the length genuinely is not computable
+		without decoding, and a wrong number here would silently misplace every
+		member after it.
+		"""
+		codec = self.codecs.get(region.type_name)
+		if codec is None:
+			return None
+
+		prefix   = region.path + "."
+		interior = [entry.placement for entry in struct.entries
+		            if entry.placement.path.startswith(prefix)
+		            and "." not in entry.placement.path[len(prefix):]
+		            and entry.placement.kind != "element"]
+
+		constant = 0
+		terms    = []
+		for member in interior:
+			if member.is_fixed_size:
+				constant += member.size_bits // BITS_PER_BYTE
+			else:
+				terms.append(self._length_expression(struct, member, held))
+
+		inner = " + ".join([f"{constant}u", *(f"({term})" for term in terms)])
+
+		if codec.expansion is ast.Expansion.PRESERVING:
+			return inner
+		if codec.expansion is ast.Expansion.FIXED_ADD:
+			return f"({inner}) + {codec.expansion_add}u"
+		if codec.expansion is ast.Expansion.RATIO_EXACT:
+			assert codec.ratio is not None
+			out, into = codec.ratio
+			return f"(({inner}) * {out}u) / {into}u"
+
+		return None
+
+	def _has_length(self, struct: ResolvedStruct, placement: Placement) -> bool:
+		"""Whether a member's runtime extent has a closed form."""
+		if placement.kind not in ("coded", "sealed"):
+			return True
+		return self._region_length(struct, placement) is not None
+
+	def _count_expression(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "view") -> str:
 		"""Read the field that drives a member's length.
 
 		Usually a constant-offset load, but not always: the driving field has to
@@ -628,7 +1090,7 @@ class Emitter:
 
 		loaded = self._load_expression(
 			target.placement.scalar, target.placement,
-			self._value_base(struct, target.placement),
+			self._value_base(struct, target.placement, gated=held != "view"),
 			offset=self._value_offset(target.placement))
 		return f"({loaded})"
 
@@ -692,6 +1154,10 @@ class Emitter:
 		count     = placement.array_count
 		assert scalar is not None
 
+		gate  = self._gate_type(struct, placement)
+		taken = f"{gate} gate" if gate else "situ_view_t view"
+		held  = "gate.view" if gate else "view"
+
 		lines = []
 		if count is not None:
 			lines.append(
@@ -701,9 +1167,9 @@ class Emitter:
 			# and `remaining` measures to the end of the view.
 			lines.extend([
 				f"static inline uint32_t "
-				f"{ident(self.prefix, struct.name, local, 'len')}(situ_view_t view)",
+				f"{ident(self.prefix, struct.name, local, 'len')}({taken})",
 				"{",
-				f"\treturn {self._length_expression(struct, placement)};",
+				f"\treturn {self._length_expression(struct, placement, held)};",
 				"}",
 			])
 
@@ -713,9 +1179,10 @@ class Emitter:
 			lines.extend(self._address_note(entry))
 			lines.extend([
 				f"static inline uint8_t *"
-				f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
+				f"{ident(self.prefix, struct.name, local, 'ptr')}({taken})",
 				"{",
-				f"\treturn view.base + {self._base_expression(struct, placement)};",
+				f"\treturn {held}.base + "
+				f"{self._base_expression(struct, placement, gated=gate is not None)};",
 				"}",
 			])
 			return lines
@@ -756,12 +1223,14 @@ class Emitter:
 		local  = c_name(self._local(struct, placement))
 		ctype  = self._field_ctype(placement)
 		getter = ident(self.prefix, struct.name, local, "get")
-		base   = self._value_base(struct, placement)
+		gate   = self._gate_type(struct, placement)
+		taken  = f"{gate} gate" if gate else "situ_view_t view"
+		base   = self._value_base(struct, placement, gated=gate is not None)
 		load   = self._load_expression(scalar, placement, base,
 		                               offset=self._value_offset(placement))
 
 		lines = [
-			f"static inline {ctype} {getter}(situ_view_t view)",
+			f"static inline {ctype} {getter}({taken})",
 			"{",
 			f"\treturn ({ctype})({load});",
 			"}",
@@ -776,10 +1245,11 @@ class Emitter:
 			lines.extend(self._address_note(entry))
 			lines.extend([
 				f"static inline {self._ctype(scalar)} *"
-				f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
+				f"{ident(self.prefix, struct.name, local, 'ptr')}({taken})",
 				"{",
-				f"\treturn ({self._ctype(scalar)} *)(view.base + "
-				f"{self._base_expression(struct, placement)});",
+				f"\treturn ({self._ctype(scalar)} *)"
+				f"({'gate.view.base' if gate else 'view.base'} + "
+				f"{self._base_expression(struct, placement, gated=gate is not None)});",
 				"}",
 			])
 
@@ -805,6 +1275,18 @@ class Emitter:
 				" * start, so writing it must invalidate outstanding views. Use",
 				f" * {ident(self.prefix, struct.name, c_name(local_path), 'set')}(),",
 				" * which takes the message and bumps its generation. */",
+			]
+
+		# A field under a tag gets one setter, not two: writing it leaves the tag
+		# stale, so it has to mark the message dirty. The coverage-aware setter
+		# at the end of this struct's section is that one.
+		if placement.covered_by:
+			return [
+				f"/* No plain setter: `{placement.name}` is covered by "
+				f"{', '.join(placement.covered_by)}, so",
+				" * writing it leaves the tag stale. Use",
+				f" * {ident(self.prefix, struct.name, c_name(self._local(struct, placement)), 'set')}(),",
+				" * which takes the message and marks the tag dirty. */",
 			]
 
 		local = c_name(self._local(struct, placement))
@@ -1087,6 +1569,10 @@ def _storage_width(bits: int) -> int:
 
 def _all_ones(bits: int) -> str:
 	return f"0x{(1 << bits) - 1:X}u"
+
+
+def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:
+	return any(attr.name == name for attr in attrs)
 
 
 def _reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:

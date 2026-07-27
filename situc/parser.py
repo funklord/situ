@@ -73,10 +73,6 @@ def evaluate_literal(expr: ast.Expr) -> int | None:
 # Constructs recognised but not yet accepted, mapped to the phase that adds
 # them (project.md section 26). Keyed by the keyword that introduces one.
 FUTURE_CONSTRUCTS = {
-	"authenticated":	(8,  "`authenticated`"),
-	"sealed":		(8,  "`sealed`"),
-	"tag":			(8,  "`tag`"),
-	"checksum":		(8,  "`checksum`"),
 	"register":		(10, "`register`"),
 	"register_block":	(10, "`register_block`"),
 }
@@ -105,6 +101,7 @@ ATTRIBUTE_NAMES = frozenset({
 })
 
 TARGET_KINDS	= {kind.value: kind for kind in ast.TargetKind}
+STRICTNESS	= {level.value: level for level in ast.Strictness}
 ENDIANS		= {endian.value: endian for endian in ast.Endian}
 BIT_ORDERS	= {order.value: order for order in ast.BitOrder}
 ENUM_DEFAULTS	= {default.value: default for default in ast.EnumDefault}
@@ -231,6 +228,7 @@ class Parser:
 			"target":	self.parse_target,
 			"endian":	self.parse_endian,
 			"bit_order":	self.parse_bit_order,
+			"strictness":	self.parse_strictness,
 			"import":	self.parse_import,
 			"const":	self.parse_const,
 			"enum":		self.parse_enum,
@@ -282,6 +280,29 @@ class Parser:
 			)
 		self.expect_symbol(";", "after the endian directive")
 		return ast.EndianDirective(self.span_from(start), endian)
+
+	def parse_strictness(self) -> ast.StrictnessDirective:
+		"""`strictness = lenient;` (section 14.5).
+
+		Spelled with `=` because it is a policy rather than a property of the
+		data: `endian big` describes the bytes, `strictness = lenient` describes
+		what the parser will put up with.
+		"""
+		start = self.advance()
+		self.expect_symbol("=", "after `strictness`")
+		token = self.expect_ident("a strictness")
+		level = STRICTNESS.get(token.text)
+		if level is None:
+			raise error(
+				f"unknown strictness `{token.text}`",
+				token.span,
+				label = "expected `strict` or `lenient`",
+				notes = ["`strict` is the default and needs no directive; "
+				         "`lenient` sets `canonical = NonCanonical` for the schema "
+				         "(project.md section 14.5)"],
+			)
+		self.expect_symbol(";", "after the strictness directive")
+		return ast.StrictnessDirective(self.span_from(start), level)
 
 	def parse_bit_order(self) -> ast.BitOrderDirective:
 		start = self.advance()
@@ -739,6 +760,12 @@ class Parser:
 				return self.parse_tlv()
 			if token.text == "coded":
 				return self.parse_coded()
+			if token.text == "authenticated":
+				return self.parse_authenticated()
+			if token.text == "sealed":
+				return self.parse_sealed()
+			if token.text in ("tag", "checksum"):
+				return self.parse_tag_field()
 
 		return self.parse_field()
 
@@ -813,6 +840,117 @@ class Parser:
 
 		return ast.Coded(self.span_from(start), name.text, codec.text,
 		                 tuple(args), members, attrs)
+
+	def parse_authenticated(self) -> ast.Authenticated:
+		"""`authenticated { ... }`, or `authenticated header { ... }`.
+
+		The name is optional and defaults to the keyword, which is what makes
+		`covers(authenticated)` and the map entry addressable in the common case
+		of one such region per struct. See
+		docs/decisions/0010-region-and-tag-names.md.
+		"""
+		start = self.advance()
+		name  = self.optional_region_name("authenticated")
+		attrs = self.parse_attrs()
+		self.expect_symbol("{", "to open the authenticated block")
+		members = self.parse_members()
+		self.expect_symbol("}", "to close the authenticated block")
+
+		return ast.Authenticated(self.span_from(start), name, members, attrs)
+
+	def parse_sealed(self) -> ast.Sealed:
+		"""`sealed(aes_gcm_128, nonce = nonce) { u16 inner_kind; }`
+
+		The same shape as `coded`, because it is `coded` plus authentication
+		(decision 0009). The region name is optional here as it is not for
+		`coded`: 5.3 writes `sealed(...)` with no name and then addresses the
+		region as `Packet.sealed`.
+		"""
+		start = self.advance()
+		name  = self.optional_region_name("sealed")
+		self.expect_symbol("(", "before the codec name")
+		codec = self.expect_ident("a codec name")
+
+		args: list[ast.Attr] = []
+		while self.accept_symbol(",") is not None:
+			args.append(self.parse_attr())
+
+		self.expect_symbol(")", "after the codec arguments")
+		attrs = self.parse_attrs()
+		self.expect_symbol("{", "to open the sealed region")
+		members = self.parse_members()
+		self.expect_symbol("}", "to close the sealed region")
+
+		return ast.Sealed(self.span_from(start), name, codec.text,
+		                  tuple(args), members, attrs)
+
+	def parse_tag_field(self) -> ast.TagField:
+		"""`tag u8[16] covers(hdr, body);` and the same for `checksum`.
+
+		`covers` is a bare clause rather than an attribute because the grammar
+		of section 7 puts it there, and because a coverage list is not a flag on
+		the field -- it is the thing the field is for.
+		"""
+		start = self.advance()
+		kind  = (ast.TagKind.TAG if start.text == "tag" else ast.TagKind.CHECKSUM)
+
+		type_ref = self.parse_type_ref()
+		name     = self.optional_region_name(start.text)
+		array    = self.parse_array_spec()
+
+		if array is None:
+			raise error(
+				f"`{start.text}` needs a length",
+				self.current.span,
+				label = f"expected `[N]` after the type",
+				notes = [f"a {start.text} is a byte string, so its width is part of "
+				         "the declaration: `tag u8[16];`"],
+			)
+
+		covers = self.parse_covers()
+		attrs  = self.parse_attrs()
+		self.expect_symbol(";", f"after the {start.text} declaration")
+
+		return ast.TagField(self.span_from(start), name, type_ref, array,
+		                    covers, kind, attrs)
+
+	def parse_covers(self) -> tuple[str, ...]:
+		"""`covers(a, b)`, or nothing at all, which means inference."""
+		if not (self.current.kind is TokenKind.IDENT
+				and self.current.text == "covers"):
+			return ()
+
+		self.advance()
+		self.expect_symbol("(", "before the covered regions")
+
+		names: list[str] = []
+		while not self.current.is_symbol(")"):
+			names.append(self.expect_ident("a region name").text)
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol(")", "after the covered regions")
+
+		if not names:
+			raise error(
+				"`covers()` covers nothing",
+				self.span_from(self.tokens[self.pos - 1]),
+				label = "expected at least one region name",
+				notes = ["omit the clause entirely to cover every authenticated "
+				         "and sealed region in the struct (project.md section 14.1)"],
+			)
+
+		return tuple(names)
+
+	def optional_region_name(self, default: str) -> str:
+		"""A name where the grammar allows one to be left out.
+
+		Unambiguous by construction: what follows an unnamed region is `(` or
+		`{` or `[`, never an identifier.
+		"""
+		if self.current.kind is TokenKind.IDENT and self.current.text != "covers":
+			return self.advance().text
+		return default
 
 	def parse_tlv(self) -> ast.Tlv:
 		"""`tlv options (tag_type = u8, known = { ... }, unknown = error);`

@@ -265,7 +265,9 @@ struct Packet {
     sealed(aes_gcm_128, nonce = nonce) {
         u16  inner_kind;
         u32  inner_seq;
-        u8   body[remaining];
+        u8   body[hdr.length];  // not `[remaining]`: something follows this
+                                // region, and `remaining` runs to the end of
+                                // the frame, so it would swallow the tag
     }
 
     tag u8[16];                 // coverage inferred: all authenticated
@@ -277,6 +279,11 @@ require in_place(Packet.hdr.seq);              // outside tag coverage? no --
                                                // will fail; see 14.2
 require verify_gated(Packet.sealed);           // no parse before verify
 ```
+
+The regions and the tag are unnamed here, which means they take their keyword
+as their name -- which is what lets `require verify_gated(Packet.sealed)`
+resolve. A struct with two regions of a kind names them:
+`docs/decisions/0010-region-and-tag-names.md`.
 
 ---
 
@@ -296,14 +303,16 @@ require verify_gated(Packet.sealed);           // no parse before verify
 ```ebnf
 schema        = { directive | decl } ;
 
-directive     = "target"    target_kind ";"
-              | "endian"    endian ";"
-              | "bit_order" bitorder ";"
-              | "import"    string ";" ;
+directive     = "target"     target_kind ";"
+              | "endian"     endian ";"
+              | "strictness" "=" strictness ";"
+              | "bit_order"  bitorder ";"
+              | "import"     string ";" ;
 
 target_kind   = "buffer" | "mmio" ;
 endian        = "big" | "little" | "native" ;
 bitorder      = "msb_first" | "lsb_first" ;
+strictness    = "strict" | "lenient" ;
 
 decl          = const_decl | enum_decl | struct_decl | codec_decl
               | register_decl | requirement ;
@@ -319,12 +328,13 @@ member        = field | reserved | block | variant | tag_field ;
 
 field         = type_ref ident [ array_spec ] [ pin ] [ attrs ] ";" ;
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
-tag_field     = "tag" scalar_type array_spec [ "covers" "(" ref_list ")" ]
-                [ attrs ] ";" ;
+tag_field     = ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
+                [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
 
 block         = "positional"    "{" { member } "}"
-              | "authenticated" "{" { member } "}"
-              | "sealed" "(" codec_args ")" "{" { member } "}"
+              | "authenticated" [ ident ] [ attrs ] "{" { member } "}"
+              | "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
+              | "coded"  ident   "(" codec_args ")" [ attrs ] "{" { member } "}"
               | "indexed" "(" index_args ")" "{" { member } "}"
               | "opaque" ident "[" size_expr "]" [ attrs ] ";"
               | "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
@@ -1250,6 +1260,15 @@ Coverage inference: an omitted `covers` clause means "every `authenticated` and
 covers a disjoint or nested set of regions, and overlapping non-nested coverage
 is an error (it makes recomputation order ambiguous).
 
+Nested coverage recomputes **innermost first**, which is the only order that
+terminates: an outer tag covers the inner tag's own bytes, so writing the inner
+one afterwards would leave the outer one stale again
+(`docs/decisions/0011-nested-tag-coverage.md`).
+
+A region no tag covers is an error. `authenticated { }` states that these bytes
+are covered; with no tag in the struct that statement is false, and a construct
+whose meaning is silently nothing is what 14.5 refuses.
+
 ### 14.2 Tag coverage and the dirty bit
 
 This is the sharpest capability interaction in the language: **in-place
@@ -1268,6 +1287,15 @@ Rules:
   fields outside coverage. The compiler makes that design pressure visible.
 - `require no_tag_invalidation(expr)` is statically checkable: it passes only
   if the mutated field is `Uncovered`.
+
+**Coverage weakens `auth` and leaves `mutate` alone.** Writing a covered field
+is still a store to the same bytes at the same offset; what it costs is a tag
+recomputation, and that obligation is what the `auth` axis records. Conflating
+the two would leave nothing able to express the difference, which is the whole
+of what this section is about. `in_place` therefore reads both axes -- writable
+where it sits, *and* no tag left stale -- and `in_place_dirty` reads only the
+first. That is why the same field passes one and fails the other, and why the
+diagnostic can say "possible, and here is what it costs" rather than a flat no.
 
 The example in 5.3 deliberately contains a failing requirement:
 `require in_place(Packet.hdr.seq)` where `hdr` is inside `authenticated { }`.
@@ -1342,6 +1370,12 @@ non-security schemas, but `strict` is the default and `lenient` sets
 `pad_to(n)` and `pad_random(min, max)` for traffic-analysis resistance. Padding
 content policy is explicit (`zero`, `random`, `preserve`), and `zero` is
 required for `require canonical`.
+
+Not in phase 8: 26.8's acceptance criteria do not reach these constructs, and
+the canonicity item they contribute -- padding whose content is unconstrained
+-- is already covered by `reserved [unknown]`, which is the same freedom under
+a name that exists. They belong with the schema-evolution work of section 19,
+whichever phase takes that.
 
 ---
 
@@ -1866,7 +1900,7 @@ into an embedded build environment (Section 22).
 Phases carry a **Status** line until they are reached; keeping those current is
 how this document doubles as the record of where the work is. A phase is
 complete when its acceptance criteria pass, not when its code looks finished.
-Phase 9 onward have not been started.
+Phases 0 through 8 are complete; phase 9 onward have not been started.
 
 Phases 0 through 8 are ordered by dependency, and 9 onward are largely
 independent of each other. Do not implement ahead of the plan.
@@ -2052,10 +2086,26 @@ the generated conformance tests for every property in the 13.1 table.
 
 ### 26.8 Phase 8: cryptographic model
 
-**Status: next.** The transform half already exists and is tested (decision
-0009), so this phase adds the tag, the coverage inference and the stage gate,
-not a second transform mechanism. The stage gate of 14.3 is the highest-value
-property in the design and must not be weakened for convenience.
+**Status: complete.** The transform half already existed and was tested
+(decision 0009), so this phase added the tag, the coverage inference and the
+stage gate rather than a second transform mechanism.
+
+The stage gate is a generated view type: interior accessors take
+`situ_<Struct>_<region>_t`, nothing produces one but the open function, and the
+open function demands the verification result. A caller holding an ordinary
+view cannot reach an interior field because the program does not compile, which
+is what "unrepresentable rather than discouraged" has to mean in C. Both halves
+are tested, the compile-refusal one by compiling the attempt and requiring it
+to fail.
+
+Two decisions came out of it: `docs/decisions/0010-region-and-tag-names.md` for
+the surface syntax the grammar left out, and
+`docs/decisions/0011-nested-tag-coverage.md`, which resolves open question 2.
+
+Two things this phase found in earlier work, both fixed here: a region
+placement was counted twice in the offset arithmetic of anything after it, and
+a coded region had no runtime length expression at all, so a member following
+one landed on the wrong bytes.
 
 `authenticated`, `sealed`, `tag` with coverage inference, `nonce`, `secret`.
 Tag-dirty tracking. `VerifyGated` staging with no unverified interior access.
@@ -2169,9 +2219,12 @@ that depends on it.
 
 1. **`until`-delimited arrays.** Genuinely useful for existing protocols,
    but sequential-only and awkward to bound. Phase 6 or later; may be dropped.
-2. **Multiple tags with nested coverage.** Disjoint coverage is clearly fine.
-   Nested (an inner tag over a subrange of an outer tag's range) is coherent but
-   the recomputation order matters. Decide before phase 8.
+2. ~~**Multiple tags with nested coverage.**~~ **RESOLVED.** Nested coverage is
+   permitted and recomputes innermost first, which is the only order that
+   terminates: an outer tag covers the inner tag's own bytes, so writing the
+   inner one afterwards would leave the outer one stale again. Innermost is
+   narrowest, since coverage is disjoint or nested by 14.1, so the sizes of two
+   coverage sets order them. `docs/decisions/0011-nested-tag-coverage.md`.
 3. **Cross-field invariants.** `invariant len == size(payload);` is attractive
    -- checked on parse, maintained automatically on mutation. Where does the
    maintenance obligation live in the generated API? Deferred.

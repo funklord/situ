@@ -251,8 +251,8 @@ def test_failure_with_no_upstream_cause_says_so() -> None:
 
 
 def test_later_phase_predicates_are_deferred_not_passed() -> None:
-	outcome = discharge("struct S { u8 a; }\nrequire verify_gated(S);")[0]
-	assert outcome.deferred == 8
+	outcome = discharge("struct S { u8 a; }\nrequire no_realloc(S);")[0]
+	assert outcome.deferred == 5
 	assert not outcome.is_error
 
 
@@ -260,15 +260,15 @@ def test_deferrals_are_grouped_by_phase() -> None:
 	outcomes = discharge(
 		"struct S { u8 a; }\n"
 		"require no_alloc(S);\n"
-		"require verify_gated(S);\n")
+		"require no_realloc(S);\n")
 	report = "\n".join(note.render() for note in requirements.deferrals(outcomes))
 	assert "needs phase 4" in report
-	assert "needs phase 8" in report
+	assert "needs phase 5" in report
 
 
 def test_a_requirement_reports_the_latest_phase_it_needs() -> None:
-	outcome = discharge("struct S { u8 a; }\nrequire no_alloc(S) && verify_gated(S);")[0]
-	assert outcome.deferred == 8
+	outcome = discharge("struct S { u8 a; }\nrequire no_alloc(S) && no_realloc(S);")[0]
+	assert outcome.deferred == 5
 
 
 # -- JSON diagnostics -------------------------------------------------------

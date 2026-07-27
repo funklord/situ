@@ -102,6 +102,22 @@ class Placement:
 	tlv_wire_types: tuple[int, ...]	= ()
 	# The codec transforming this region, or the one whose region contains it.
 	codec: str | None		= None
+	# The authenticated and sealed regions this member sits inside, outermost
+	# first, plus the region itself when it is one. Coverage is resolved from
+	# this: a tag covers a region, and a member is covered when one of the
+	# regions it sits in is (section 14.1).
+	regions: tuple[str, ...]	= ()
+	# Set on a member inside a sealed region, naming it. What makes the
+	# interior VerifyGated -- the stage gate of section 14.3.
+	sealed_by: str | None		= None
+	# The region carries `[allow_unverified_read]`, which is the loud, greppable
+	# way out of the stage gate rather than a quiet one.
+	unverified_ok: bool		= False
+	# For a tag or checksum placement: the regions it covers, after inference.
+	tag_covers: tuple[str, ...]	= ()
+	# The tags covering these bytes. Written after the whole struct is placed,
+	# because a tag is usually declared after the regions it covers.
+	covered_by: tuple[str, ...]	= ()
 
 	@property
 	def is_fixed_size(self) -> bool:
@@ -323,6 +339,13 @@ class Walk:
 	# to one gets the decidability diagnostic of section 13.3 rather than a
 	# bare "not in scope".
 	behind_codec: dict[str, str] = field(default_factory=dict)
+	# The authenticated and sealed regions enclosing the members being placed,
+	# outermost first.
+	regions: tuple[str, ...] = ()
+	# The innermost sealed region, if any, and whether it opted out of the
+	# stage gate.
+	sealed_by: str | None = None
+	unverified_ok: bool   = False
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +394,7 @@ class Solver:
 		# rather than by a check.
 		state  = Walk(fields={}, cursor=Extent(0, 0))
 		self.place_members(decl, decl.members, scope, layout, name, state)
+		self.resolve_coverage(decl, layout)
 
 		layout.size_bits     = state.cursor.lo
 		layout.size_max_bits = state.cursor.hi
@@ -402,8 +426,12 @@ class Solver:
 				self.place_opaque(member, scope, layout, prefix, state)
 			elif isinstance(member, ast.Tlv):
 				self.place_tlv(member, scope, layout, prefix, state)
-			elif isinstance(member, ast.Coded):
+			elif isinstance(member, (ast.Coded, ast.Sealed)):
 				self.place_coded(decl, member, scope, layout, prefix, state)
+			elif isinstance(member, ast.Authenticated):
+				self.place_authenticated(decl, member, scope, layout, prefix, state)
+			elif isinstance(member, ast.TagField):
+				self.place_tag(member, scope, layout, prefix, state)
 			elif isinstance(member, ast.Indexed):
 				self.place_indexed(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.MarkerField):
@@ -450,15 +478,20 @@ class Solver:
 
 		state.cursor = cursor.advance(bits)
 
-	def place_coded(self, decl: ast.StructDecl, region: ast.Coded, scope: Scope,
-			layout: StructLayout, prefix: str, state: Walk) -> None:
+	def place_coded(self, decl: ast.StructDecl, region: ast.Coded | ast.Sealed,
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
 		"""A region whose bytes are the output of a transform (section 13.5).
 
 		The interior is laid out as though untransformed, because that is what
 		it is once decoded; the region's own extent is the interior's extent put
 		through the codec's expansion. The lattice reads the property signature
 		and nothing else -- this function never learns what the algorithm does.
+
+		`sealed` comes here too: it is `coded` plus authentication (decision
+		0009), and the transform half is identical down to this function. What
+		it adds is the coverage stamp and the stage gate below.
 		"""
+		sealed = isinstance(region, ast.Sealed)
 		codec = self.codecs.get(region.codec)
 		assert codec is not None, "wellformed rejects an unknown codec"
 
@@ -489,7 +522,7 @@ class Solver:
 		layout.placements.insert(slot, Placement(
 			path          = f"{prefix}.{region.name}",
 			name          = region.name,
-			kind          = "coded",
+			kind          = "sealed" if sealed else "coded",
 			type_name     = region.codec,
 			offset_bits   = cursor.lo if cursor.is_exact else None,
 			size_bits     = extent.lo,
@@ -511,10 +544,181 @@ class Solver:
 			held = layout.placements[index]
 			layout.placements[index] = replace(held, codec=region.codec)
 
+		if sealed:
+			# The region's own placement is stamped along with its interior: a
+			# tag covers the sealed bytes, and the region is those bytes.
+			self.stamp_region(layout, slot, region.name,
+			                  sealed_by     = region.name,
+			                  unverified_ok = _has_attr(region.attrs,
+			                                            "allow_unverified_read"))
+
 		if state.cause is None and extent.hi != extent.lo:
 			state.cause = (region.name, region.span, _render_extent(extent))
 
 		state.cursor = cursor.advance(extent)
+
+	def place_authenticated(self, decl: ast.StructDecl, region: ast.Authenticated,
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
+		"""Plaintext covered by a tag (section 14.1).
+
+		The block transforms nothing and opens no scope: its members accumulate
+		into the enclosing struct at the offsets they would have had anyway, and
+		keep the struct's namespace. All it contributes is a name for a span of
+		bytes, so that a tag can say it covers them.
+		"""
+		cursor = state.cursor
+		slot   = len(layout.placements)
+
+		self.place_members(decl, region.members, scope, layout, prefix, state)
+
+		size_lo = state.cursor.lo - cursor.lo
+		size_hi = (None if state.cursor.hi is None or cursor.hi is None
+		           else state.cursor.hi - cursor.hi)
+
+		layout.placements.insert(slot, Placement(
+			path          = f"{prefix}.{region.name}",
+			name          = region.name,
+			kind          = "authenticated",
+			type_name     = "authenticated",
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = size_lo,
+			size_max_bits = size_hi,
+			scalar        = None,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = region.span,
+			attrs         = region.attrs,
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+		))
+
+		self.stamp_region(layout, slot, region.name)
+
+	def stamp_region(self, layout: StructLayout, start: int, name: str,
+			sealed_by: str | None = None, unverified_ok: bool = False) -> None:
+		"""Record which regions a run of placements sits inside.
+
+		Prepended rather than assigned, so nesting comes out outermost-first:
+		the inner region has already stamped itself by the time the outer one
+		runs. The innermost sealed region wins the stage gate for the same
+		reason.
+		"""
+		for index in range(start, len(layout.placements)):
+			held = layout.placements[index]
+			layout.placements[index] = replace(
+				held,
+				regions       = (name,) + held.regions,
+				sealed_by     = held.sealed_by or sealed_by,
+				unverified_ok = held.unverified_ok or unverified_ok,
+			)
+
+	def resolve_coverage(self, decl: ast.StructDecl, layout: StructLayout) -> None:
+		"""Join tags to the bytes they cover, once the whole struct is placed.
+
+		Deferred to here because a tag is normally declared after the regions it
+		covers -- 5.3 puts it last -- so at the moment the regions are placed
+		there is nothing yet to join them to.
+
+		Well-formedness has already established that every named region exists
+		and that coverage is disjoint or nested, so this only has to apply what
+		those checks allowed.
+		"""
+		from situc.wellformed import auth_regions, coverage_of, tag_fields
+
+		regions = auth_regions(decl.members)
+		if not regions:
+			return
+
+		# region name -> the tags covering it. A region may appear under more
+		# than one tag when coverage nests (decision 0011).
+		covering: dict[str, list[str]] = {}
+		# Innermost first is narrowest first: coverage is disjoint or nested, so
+		# a tag covering fewer regions is the inner one. That is the order the
+		# generated code must recompute in, because an inner tag's own bytes are
+		# input to the outer one.
+		order: dict[str, tuple[int, int]] = {}
+
+		for position, tag in enumerate(tag_fields(decl.members)):
+			covers = coverage_of(tag, regions)
+			order[tag.name] = (len(covers), position)
+			for region in covers:
+				covering.setdefault(region, []).append(tag.name)
+
+		for index, held in enumerate(layout.placements):
+			tags = {name for region in held.regions
+			        for name in covering.get(region, ())}
+			if not tags:
+				continue
+
+			layout.placements[index] = replace(
+				held, covered_by=tuple(sorted(tags, key=lambda name: order[name])))
+
+		for index, held in enumerate(layout.placements):
+			if held.kind not in ("tag", "checksum"):
+				continue
+			tag = next(field for field in tag_fields(decl.members)
+			           if field.name == held.name)
+			layout.placements[index] = replace(
+				held, tag_covers=coverage_of(tag, regions))
+
+	def place_tag(self, member: ast.TagField, scope: Scope, layout: StructLayout,
+			prefix: str, state: Walk) -> None:
+		"""An authentication tag or a checksum (section 14.1).
+
+		Laid out as the byte string it is. What makes it a tag rather than an
+		array is its coverage, which is resolved once the whole struct is placed
+		-- a tag is normally declared after the regions it covers, so it cannot
+		be resolved here.
+		"""
+		env    = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		cursor = state.cursor
+		scalar = member.type_ref.scalar
+
+		if scalar is None or scalar.is_bit_packed:
+			raise error(
+				f"a {member.kind.value} must be a whole-byte scalar type",
+				member.type_ref.span,
+				label = f"`{member.type_ref.name}` is not",
+				notes = ["a tag is a byte string produced by an algorithm, so it "
+				         "has no bit-level structure to describe",
+				         "`tag u8[16];` for a 128-bit tag"],
+			)
+
+		count = interval_of(member.array.size, env) if member.array.size else Interval(0, 0)
+		if not count.is_point or count.lo <= 0:
+			raise error(
+				f"a {member.kind.value} needs a constant length",
+				member.array.span,
+				label = f"length is {count.render()}",
+				notes = ["the algorithm fixes the tag width, so a data-dependent "
+				         "one describes no algorithm at all"],
+			)
+
+		bits = count.lo * scalar.bits
+
+		layout.placements.append(Placement(
+			path          = f"{prefix}.{member.name}",
+			name          = member.name,
+			kind          = member.kind.value,
+			type_name     = member.type_ref.name,
+			offset_bits   = cursor.lo if cursor.is_exact else None,
+			size_bits     = bits,
+			size_max_bits = bits,
+			scalar        = scalar,
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = member.span,
+			attrs         = member.attrs,
+			array_count   = count.lo,
+			element_bits  = scalar.bits,
+			regions       = state.regions,
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+		))
+
+		state.cursor = cursor.advance(Interval(bits, bits))
 
 	def place_tlv(self, member: ast.Tlv, scope: Scope, layout: StructLayout,
 			prefix: str, state: Walk) -> None:

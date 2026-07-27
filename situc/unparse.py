@@ -47,7 +47,8 @@ def unparse(schema: ast.Schema) -> str:
 
 def _group(decl: ast.Decl) -> str:
 	if isinstance(decl, (ast.TargetDirective, ast.EndianDirective,
-	                     ast.BitOrderDirective, ast.ImportDirective)):
+	                     ast.BitOrderDirective, ast.ImportDirective,
+	                     ast.StrictnessDirective)):
 		return "directive"
 	if isinstance(decl, ast.ConstDecl):
 		return "const"
@@ -68,6 +69,9 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 
 	if isinstance(decl, ast.ImportDirective):
 		return [f'import "{_escape(decl.path)}";']
+
+	if isinstance(decl, ast.StrictnessDirective):
+		return [f"strictness = {decl.strictness.value};"]
 
 	if isinstance(decl, ast.ConstDecl):
 		return [f"const {decl.name} = {expr_to_source(decl.value)};"]
@@ -97,10 +101,66 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 			"}",
 		]
 
+	if isinstance(decl, ast.CodecDecl):
+		return _codec_lines(decl)
+
+	if isinstance(decl, ast.ImplDecl):
+		if decl.kind is ast.ImplKind.EXTERN:
+			return [f'impl {decl.codec} extern "{_escape(decl.symbol or "")}";']
+		return [f"impl {decl.codec} derived;"]
+
 	if isinstance(decl, ast.Requirement):
 		return [f"{decl.kind.value} {expr_to_source(decl.expr)};"]
 
 	raise TypeError(f"cannot unparse {type(decl).__name__}")
+
+
+def _codec_lines(decl: ast.CodecDecl) -> list[str]:
+	"""A property signature, rendered as the section 13.2 vocabulary.
+
+	Every property is written out, including the ones that were defaulted. A
+	signature is the entire interface to the lattice, so a round-tripped one
+	that dropped a silent default would say something different from what it
+	came from.
+	"""
+	lines = [f"codec {decl.name} {{", f"\t{codec_expansion(decl)};",
+	         f"\tgranularity = {codec_granularity(decl)};"]
+
+	if decl.seekable is ast.Seekable.NONE:
+		lines.append("\tnot seekable;")
+	else:
+		lines.append(f"\tseekable = {decl.seekable.value};")
+
+	for flag in ("systematic", "authenticated", "invertible", "deterministic",
+	             "error_propagating"):
+		if getattr(decl, flag):
+			lines.append(f"\t{flag};")
+
+	lines.append("}")
+	return lines
+
+
+def codec_expansion(decl: ast.CodecDecl) -> str:
+	if decl.expansion is ast.Expansion.PRESERVING:
+		return "length_preserving"
+	if decl.expansion is ast.Expansion.FIXED_ADD:
+		return f"expansion = +{decl.expansion_add}"
+	if decl.expansion is ast.Expansion.UNBOUNDED:
+		return "expansion = unbounded"
+
+	assert decl.ratio is not None
+	return f"expansion = {decl.expansion.value}({decl.ratio[0]}, {decl.ratio[1]})"
+
+
+def codec_granularity(decl: ast.CodecDecl) -> str:
+	"""`block(16)`, or the bare form.
+
+	`block(any)` carries no size, so it renders as `block` and reparses to the
+	same signature. The round-trip property is over the tree, not the text.
+	"""
+	if decl.granularity_size is None:
+		return decl.granularity.value
+	return f"{decl.granularity.value}({decl.granularity_size})"
 
 
 def _enum_lines(decl: ast.EnumDecl) -> list[str]:
@@ -134,6 +194,24 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 			lines.append(f"{indent}indexed({_args_to_source(member.args)}) {{")
 			lines.extend(member_lines(member.members, depth + 1))
 			lines.append(f"{indent}}}")
+		elif isinstance(member, ast.Coded):
+			lines.append(f"{indent}coded {member.name}"
+			             f"({_codec_args(member.codec, member.args)})"
+			             f"{_attrs_to_source(member.attrs)} {{")
+			lines.extend(member_lines(member.members, depth + 1))
+			lines.append(f"{indent}}}")
+		elif isinstance(member, ast.Sealed):
+			lines.append(f"{indent}sealed{_region_name(member.name, 'sealed')}"
+			             f"({_codec_args(member.codec, member.args)})"
+			             f"{_attrs_to_source(member.attrs)} {{")
+			lines.extend(member_lines(member.members, depth + 1))
+			lines.append(f"{indent}}}")
+		elif isinstance(member, ast.Authenticated):
+			lines.append(f"{indent}authenticated"
+			             f"{_region_name(member.name, 'authenticated')}"
+			             f"{_attrs_to_source(member.attrs)} {{")
+			lines.extend(member_lines(member.members, depth + 1))
+			lines.append(f"{indent}}}")
 		elif isinstance(member, ast.Variant):
 			lines.extend(_variant_lines(member, depth))
 		else:
@@ -165,7 +243,27 @@ def member_to_source(member: ast.Member) -> str:
 		return (f"reserved {member.type_ref.name}{_array_to_source(member.array)}"
 		        f"{_attrs_to_source(member.attrs)};")
 
+	if isinstance(member, ast.TagField):
+		return (f"{member.kind.value} {member.type_ref.name}"
+		        f"{_region_name(member.name, member.kind.value)}"
+		        f"{_array_to_source(member.array)}{_covers_to_source(member.covers)}"
+		        f"{_attrs_to_source(member.attrs)};")
+
 	raise TypeError(f"cannot unparse {type(member).__name__}")
+
+
+def _region_name(name: str, default: str) -> str:
+	"""A region's name, omitted where it is the one the parser would infer."""
+	return "" if name == default else f" {name}"
+
+
+def _covers_to_source(covers: tuple[str, ...]) -> str:
+	return f" covers({', '.join(covers)})" if covers else ""
+
+
+def _codec_args(codec: str, args: tuple[ast.Attr, ...]) -> str:
+	rendered = _args_to_source(args)
+	return f"{codec}, {rendered}" if rendered else codec
 
 
 def _variant_lines(variant: ast.Variant, depth: int) -> list[str]:

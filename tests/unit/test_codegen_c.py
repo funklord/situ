@@ -632,3 +632,146 @@ def test_an_indexed_region_says_insertion_is_not_an_operation() -> None:
 ])
 def test_phase_six_constructs_compile_warning_clean(tmp_path: Path, body: str) -> None:
 	compile_generated(tmp_path, body)
+
+
+# -- the cryptographic model (section 14) -----------------------------------
+
+CRYPTO = PREAMBLE + """codec aead {
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	authenticated;
+	invertible;
+	deterministic;
+}
+"""
+
+SEALED = """struct S {
+	u8  hop;
+	authenticated { u32 seq; }
+	sealed(aead) { u32 inner; }
+	tag u8[16];
+}
+"""
+
+
+def test_the_sealed_interior_takes_a_gated_view_type() -> None:
+	header, _ = emit(SEALED, preamble=CRYPTO)
+
+	assert "typedef struct situ_S_sealed_t {" in header
+	assert "situ_S_sealed_open(situ_view_t view, int verified, situ_S_sealed_t *out)" in header
+	assert "situ_S_sealed_inner_get(situ_S_sealed_t gate)" in header
+
+
+def test_a_covered_field_gets_a_setter_that_takes_the_message() -> None:
+	header, _ = emit(SEALED, preamble=CRYPTO)
+
+	assert "situ_S_seq_set(situ_msg_t *msg, situ_view_t view, uint32_t value)" in header
+	assert "situ_msg_mark_dirty(msg, SITU_S_TAG_DIRTY);" in header
+	# And no plain one, or the obligation could be sidestepped by accident.
+	assert "situ_S_seq_set(situ_view_t view" not in header
+
+
+def test_an_uncovered_field_keeps_its_plain_setter() -> None:
+	header, _ = emit(SEALED, preamble=CRYPTO)
+	assert "situ_S_hop_set(situ_view_t view, uint8_t value)" in header
+
+
+def test_a_tag_carries_its_covered_span_and_its_dirty_bit() -> None:
+	header, _ = emit(SEALED, preamble=CRYPTO)
+
+	assert "#define SITU_S_TAG_DIRTY 0x1u" in header
+	assert "situ_S_tag_covered(situ_view_t view, uint32_t *offset, uint32_t *len)" in header
+	assert "situ_S_tag_is_dirty(const situ_msg_t *msg)" in header
+	assert "situ_S_tag_finalize(situ_msg_t *msg)" in header
+
+
+def test_allow_unverified_read_generates_no_gate_and_says_so() -> None:
+	header, _ = emit(SEALED.replace("sealed(aead) {",
+	                                "sealed(aead) [allow_unverified_read] {"),
+	                 preamble=CRYPTO)
+
+	assert "typedef struct situ_S_sealed_t" not in header
+	assert "bytes nobody has authenticated" in header
+	assert "situ_S_sealed_inner_get(situ_view_t view)" in header
+
+
+def test_a_region_whose_codec_expands_without_bound_stops_addressing() -> None:
+	"""Nothing after it has an offset, and the header says why.
+
+	Emitting arithmetic that ignored the expansion would put every later
+	accessor on the wrong bytes, which is worse than no accessor at all.
+	"""
+	header, _ = emit("""struct S {
+		coded body(squash) { u32 inner; }
+		u32 trailer;
+	}
+	""", preamble=PREAMBLE + "codec squash { expansion = unbounded; not seekable; "
+	                         "invertible; deterministic; }\n")
+
+	assert "No accessor for `trailer`" in header
+	assert "not known until it has been decoded" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_crypto_constructs_compile_warning_clean(tmp_path: Path) -> None:
+	compile_generated(tmp_path, SEALED, preamble=CRYPTO)
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_stage_gate_is_a_compile_error_not_a_convention(tmp_path: Path) -> None:
+	"""The other half of 14.3, which cannot be tested at run time.
+
+	A caller holding an ordinary view cannot reach a single field of the sealed
+	interior -- not by discipline, but because the program does not build. That
+	is what makes "parse attacker-controlled plaintext before authenticating it"
+	unrepresentable rather than discouraged, so it is asserted here by compiling
+	the attempt and requiring it to fail.
+	"""
+	header, source = emit(SEALED, preamble=CRYPTO)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text(
+		'#include "unit.h"\n'
+		"uint32_t peek(situ_view_t view);\n"
+		"uint32_t peek(situ_view_t view)\n"
+		"{\n"
+		"\treturn situ_S_inner_get(view);\n"
+		"}\n", encoding="ascii")
+
+	result = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}", "-c",
+		 str(tmp_path / "probe.c")],
+		cwd=tmp_path, capture_output=True, text=True)
+
+	assert result.returncode != 0, (
+		"an unverified read of the sealed interior compiled; the stage gate of "
+		"section 14.3 is not holding")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_passing_a_plain_view_to_a_gated_accessor_is_refused(tmp_path: Path) -> None:
+	"""The same gate, approached by the name that does exist.
+
+	`situ_S_sealed_inner_get` is a real function; what it will not accept is a
+	view nobody verified. C's struct types are not interchangeable, so the
+	refusal is the type system's rather than a check that could be skipped.
+	"""
+	header, source = emit(SEALED, preamble=CRYPTO)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text(
+		'#include "unit.h"\n'
+		"uint32_t peek(situ_view_t view);\n"
+		"uint32_t peek(situ_view_t view)\n"
+		"{\n"
+		"\treturn situ_S_sealed_inner_get(view);\n"
+		"}\n", encoding="ascii")
+
+	result = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}", "-c",
+		 str(tmp_path / "probe.c")],
+		cwd=tmp_path, capture_output=True, text=True)
+
+	assert result.returncode != 0, (
+		"a plain view was accepted where a verified one is required")

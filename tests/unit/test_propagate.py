@@ -308,6 +308,14 @@ def test_reachable_rows_are_all_tested() -> None:
 		"codec-whole-region-rewrite",
 		"codec-block-granularity",
 		"codec-permuted",
+		# Phase 8. Exercised in test_crypto.py, which keeps the cryptographic
+		# model's rows beside the requirements and diagnostics that read them.
+		"codec-not-deterministic",
+		"covered-by-tag",
+		"verify-gated",
+		"allow-unverified-read",
+		"tag-field",
+		"strictness-lenient",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 

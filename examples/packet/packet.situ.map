@@ -1,0 +1,36 @@
+# situ capability map v1
+# schema: packet.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec aes_gcm_128 trusted length_preserving seekable=linear granularity=byte authenticated invertible deterministic
+
+struct Header size=8 repr=ValueConverted
+  Header.version                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  Header.type                            offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  Header.length                          offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  Header.seq                             offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct Packet size=62 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated auth=Covered(tag) secrecy=Secret
+  Packet.hop                             offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  Packet.<reserved0>                     offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  Packet.authenticated                   offset=AbsoluteStatic(0x04) size=Fixed(20) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic auth=Covered(tag)
+  Packet.hdr                             offset=AbsoluteStatic(0x04) size=Fixed(8) align=Aligned(4) repr=ValueConverted atomic=NonAtomic auth=Covered(tag)
+  Packet.hdr.version                     offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord auth=Covered(tag)
+  Packet.hdr.type                        offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(tag)
+  Packet.hdr.length                      offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(tag)
+  Packet.hdr.seq                         offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(tag)
+  Packet.nonce                           offset=AbsoluteStatic(0x0C) size=Fixed(12) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic auth=Covered(tag)
+  Packet.sealed                          offset=AbsoluteStatic(0x18) size=Bounded(22, 1046) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(tag)
+  Packet.sealed.inner_kind               offset=AbsoluteStatic(0x18) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord stage=VerifyGated auth=Covered(tag)
+  Packet.sealed.inner_seq                offset=AbsoluteStatic(0x1A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic stage=VerifyGated auth=Covered(tag)
+  Packet.sealed.session_key              offset=AbsoluteStatic(0x1E) size=Fixed(16) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic stage=VerifyGated auth=Covered(tag) secrecy=Secret
+  Packet.sealed.body                     offset=AbsoluteStatic(0x2E) size=Bounded(0, 1024) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting stage=VerifyGated auth=Covered(tag)
+  Packet.tag                             offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable

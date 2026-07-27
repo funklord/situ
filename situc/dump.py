@@ -37,6 +37,9 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.ImportDirective):
 		return [_indent(depth, f"import {decl.path!r}")]
 
+	if isinstance(decl, ast.StrictnessDirective):
+		return [_indent(depth, f"strictness {decl.strictness.value}")]
+
 	if isinstance(decl, ast.ConstDecl):
 		return [_indent(depth, f"const {decl.name} = {expr_to_source(decl.value)}")]
 
@@ -60,10 +63,39 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 			_indent(depth + 1, f"big = {expr_to_source(decl.big)}"),
 		]
 
+	if isinstance(decl, ast.CodecDecl):
+		return _codec(decl, depth)
+
+	if isinstance(decl, ast.ImplDecl):
+		symbol = f" {decl.symbol!r}" if decl.symbol is not None else ""
+		return [_indent(depth, f"impl {decl.codec} {decl.kind.value}{symbol}")]
+
 	if isinstance(decl, ast.Requirement):
 		return [_indent(depth, f"{decl.kind.value} {expr_to_source(decl.expr)}")]
 
 	raise TypeError(f"cannot dump {type(decl).__name__}")
+
+
+def _codec(decl: ast.CodecDecl, depth: int) -> list[str]:
+	"""Every property, including the defaulted ones.
+
+	The signature is the entire interface between an algorithm and the lattice
+	(section 13.1), so the dump shows all of it: a property that is absent
+	because it defaulted is exactly as load-bearing as one that was written.
+	"""
+	from situc.unparse import codec_expansion, codec_granularity
+
+	flags = [flag for flag in ("systematic", "authenticated", "invertible",
+	                           "deterministic", "error_propagating")
+	         if getattr(decl, flag)]
+
+	return [
+		_indent(depth, f"codec {decl.name}"),
+		_indent(depth + 1, f"expansion = {codec_expansion(decl)}"),
+		_indent(depth + 1, f"granularity = {codec_granularity(decl)}"),
+		_indent(depth + 1, f"seekable = {decl.seekable.value}"),
+		_indent(depth + 1, f"flags = {', '.join(flags) or 'none'}"),
+	]
 
 
 def _enum(decl: ast.EnumDecl, depth: int) -> list[str]:
@@ -144,7 +176,43 @@ def _member(member: ast.Member, depth: int) -> list[str]:
 		lines.extend(_attrs(member.attrs, depth + 1))
 		return lines
 
+	if isinstance(member, ast.Coded):
+		lines = [_indent(depth, f"coded {member.name} codec={member.codec}")]
+		lines.extend(_attrs(member.attrs, depth + 1))
+		lines.extend(_members(member.members, depth + 1))
+		return lines
+
+	if isinstance(member, ast.Sealed):
+		lines = [_indent(depth, f"sealed{_named(member.name, 'sealed')} "
+		                        f"codec={member.codec}")]
+		lines.extend(_attrs(member.attrs, depth + 1))
+		lines.extend(_members(member.members, depth + 1))
+		return lines
+
+	if isinstance(member, ast.Authenticated):
+		lines = [_indent(depth, f"authenticated{_named(member.name, 'authenticated')}")]
+		lines.extend(_attrs(member.attrs, depth + 1))
+		lines.extend(_members(member.members, depth + 1))
+		return lines
+
+	if isinstance(member, ast.TagField):
+		# Inferred coverage is shown as what it infers rather than as absence:
+		# the dump is read to answer "which bytes does this cover", and
+		# "covers=" would leave that question with the reader.
+		covers = ", ".join(member.covers) if member.covers else "<inferred>"
+		head   = (f"{member.kind.value}{_named(member.name, member.kind.value)}"
+		          f" : {member.type_ref.name}"
+		          f"{_array(member.array)} covers={covers}")
+		lines  = [_indent(depth, head)]
+		lines.extend(_attrs(member.attrs, depth + 1))
+		return lines
+
 	raise TypeError(f"cannot dump {type(member).__name__}")
+
+
+def _named(name: str, default: str) -> str:
+	"""A region's name, left out where it is the one the parser infers."""
+	return "" if name == default else f" {name}"
 
 
 def _array(array: ast.ArraySpec | None) -> str:

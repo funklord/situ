@@ -107,6 +107,8 @@ class Context:
 	# lattice reads properties and nothing else (section 13.3): no rule below
 	# may learn what an algorithm actually does.
 	codec: ast.CodecDecl | None = None
+	# The schema declared `strictness = lenient` (section 14.5).
+	lenient: bool = False
 
 
 def _align_value(placement: Placement) -> Value:
@@ -334,6 +336,18 @@ def _needs_decode_first(context: Context) -> bool:
 	        and codec.expansion is not ast.Expansion.PRESERVING)
 
 
+def _not_deterministic(context: Context) -> bool:
+	"""A transform that may encode the same input more than one way.
+
+	Section 14.4 lists this among the sources of non-canonicity, and it is the
+	one that arrives from a property signature rather than from a construct: no
+	amount of positional layout around the region makes up for a codec that can
+	produce two outputs for one input.
+	"""
+	codec = context.codec
+	return codec is not None and not codec.deterministic
+
+
 def _is_systematic(context: Context) -> bool:
 	codec = context.codec
 	return _inside_codec(context) and codec is not None and codec.systematic
@@ -414,6 +428,35 @@ def _is_indexed(context: Context) -> bool:
 def _has_unequal_arms(context: Context) -> bool:
 	sizes = {size for _, size in context.placement.arm_sizes}
 	return len(sizes) > 1
+
+
+def _is_covered(context: Context) -> bool:
+	"""Bytes some tag authenticates (section 14.2).
+
+	The tag itself is excluded: well-formedness has already established it sits
+	outside its own coverage, and a tag that reported itself covered would make
+	finalize look like it invalidated its own output.
+	"""
+	return (bool(context.placement.covered_by)
+	        and context.placement.kind not in ("tag", "checksum"))
+
+
+def _is_verify_gated(context: Context) -> bool:
+	placement = context.placement
+	return placement.sealed_by is not None and not placement.unverified_ok
+
+
+def _reads_unverified(context: Context) -> bool:
+	placement = context.placement
+	return placement.sealed_by is not None and placement.unverified_ok
+
+
+def _is_tag(context: Context) -> bool:
+	return context.placement.kind in ("tag", "checksum")
+
+
+def _is_lenient(context: Context) -> bool:
+	return context.lenient
 
 
 def _is_host_dependent(context: Context) -> bool:
@@ -866,6 +909,86 @@ TABLE: tuple[Row, ...] = (
 	),
 	Row(
 		rule = Rule(
+			name      = "codec-not-deterministic",
+			construct = "a codec that is not `deterministic`",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "the same input may encode more than one way, so "
+			                    "the bytes do not follow from the value"),),
+			remedy    = "declare `deterministic;` on the codec if it is, which "
+			            "`require canonical` needs; a randomised or padded mode "
+			            "is genuinely not canonical and cannot be made so from "
+			            "the schema side",
+		),
+		applies = _not_deterministic,
+	),
+	Row(
+		rule = Rule(
+			name      = "covered-by-tag",
+			construct = "bytes covered by an authentication tag",
+			effects   = (),		# named per placement; see _coverage_effects
+			remedy    = "move the field outside the covering region if it has to "
+			            "stay freely writable -- which is why real protocols put "
+			            "routing headers and hop counters outside coverage -- or "
+			            "accept the recomputation and assert it with "
+			            "`require in_place_dirty(...)`",
+		),
+		applies = _is_covered,
+	),
+	Row(
+		rule = Rule(
+			name      = "verify-gated",
+			construct = "the interior of a sealed region",
+			effects   = (Effect(Axis.STAGE, Value("VerifyGated"),
+			                    "no view into the interior exists until the tag "
+			                    "verifies, so parsing attacker-controlled "
+			                    "plaintext before authenticating it is "
+			                    "unrepresentable rather than discouraged"),),
+			remedy    = "",
+		),
+		applies = _is_verify_gated,
+	),
+	Row(
+		rule = Rule(
+			name      = "allow-unverified-read",
+			construct = "`sealed(...) [allow_unverified_read]`",
+			effects   = (Effect(Axis.STAGE, Value("TransformTime"),
+			                    "the stage gate of section 14.3 is waived here: "
+			                    "the interior is reachable before the tag "
+			                    "verifies, on attacker-controlled bytes"),),
+			remedy    = "drop `[allow_unverified_read]` unless the protocol "
+			            "genuinely cannot verify first; it is the single "
+			            "highest-value security property in the design",
+		),
+		applies = _reads_unverified,
+	),
+	Row(
+		rule = Rule(
+			name      = "tag-field",
+			construct = "an authentication tag or checksum",
+			effects   = (Effect(Axis.MUTATE, Value("Immutable"),
+			                    "its value is whatever the algorithm computes "
+			                    "over the bytes it covers, so it is written by "
+			                    "finalize and by nothing else"),),
+			remedy    = "",
+		),
+		applies = _is_tag,
+	),
+	Row(
+		rule = Rule(
+			name      = "strictness-lenient",
+			construct = "`strictness = lenient`",
+			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
+			                    "the parser accepts what the schema does not "
+			                    "describe, so more than one byte sequence "
+			                    "carries the same value"),),
+			remedy    = "`strictness = strict`, which is the default, and a "
+			            "version discriminant where the format has to grow "
+			            "(project.md section 19)",
+		),
+		applies = _is_lenient,
+	),
+	Row(
+		rule = Rule(
 			name      = "secret-field",
 			construct = "a `[secret]` field",
 			effects   = (Effect(Axis.SECRECY, Value("Secret"),
@@ -914,6 +1037,8 @@ def apply(context: Context) -> Resolved:
 			effects = _variant_effects(context)
 		elif row.rule.name == "unbounded-size":
 			effects = _unbounded_effects(context)
+		elif row.rule.name == "covered-by-tag":
+			effects = _coverage_effects(context)
 
 		for effect in effects:
 			effect  = _parameterise(effect, context.placement)
@@ -935,6 +1060,31 @@ def apply(context: Context) -> Resolved:
 			))
 
 	return Resolved(placement=placement, vector=vector, weakenings=weakenings)
+
+
+def _coverage_effects(context: Context) -> tuple[Effect, ...]:
+	"""Name the tags, because "covered" without them is not actionable.
+
+	Only the `auth` axis moves. Writing a covered field is still a store to the
+	same bytes at the same offset, so nothing about `mutate` changes -- what
+	changes is that a tag now has to be recomputed, and that obligation is what
+	this axis records. Section 14.2 turns on the distinction: in-place mutation
+	is *possible* and it *invalidates coverage*, and a design that conflated the
+	two would have nothing left to say about the difference.
+	"""
+	tags   = context.placement.covered_by
+	listed = ", ".join(f"`{tag}`" for tag in tags)
+
+	if len(tags) == 1:
+		subject = f"tag {listed} authenticates"
+		stale   = "the tag"
+	else:
+		subject = f"tags {listed} authenticate"
+		stale   = "them"
+
+	return (Effect(Axis.AUTH, Value("Covered", tags),
+	               f"{subject} these bytes, so writing them leaves {stale} stale "
+	               "until finalize recomputes it"),)
 
 
 def _unbounded_effects(context: Context) -> tuple[Effect, ...]:

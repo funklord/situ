@@ -55,15 +55,17 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 	structs = {decl.name: decl for decl in schema.structs()}
 	enums   = {decl.name: decl for decl in schema.enums()}
 	codecs  = {decl.name: decl for decl in schema.codecs()}
+	lenient = schema.strictness is ast.Strictness.LENIENT
 	result  = ResolvedSchema(layout=layout)
 
 	for name, struct_layout in layout.structs.items():
 		decl = structs[name]
 		_check_host_dependence(decl, struct_layout)
 		_check_required_alignment(decl, struct_layout)
+		_check_secret_is_not_layout_bearing(decl, struct_layout)
 
 		entries = [
-			apply(_context(placement, decl, structs, enums, codecs))
+			apply(_context(placement, decl, structs, enums, codecs, lenient))
 			for placement in struct_layout.placements
 		]
 		_meet_aggregates(entries, structs)
@@ -141,7 +143,8 @@ def _struct_vector(layout: StructLayout, entries: list[Resolved]) -> Vector:
 def _context(placement: Placement, decl: ast.StructDecl,
 		structs: dict[str, ast.StructDecl],
 		enums: dict[str, ast.EnumDecl],
-		codecs: dict[str, ast.CodecDecl]) -> Context:
+		codecs: dict[str, ast.CodecDecl],
+		lenient: bool) -> Context:
 	enum = enums.get(placement.type_name)
 
 	return Context(
@@ -154,6 +157,7 @@ def _context(placement: Placement, decl: ast.StructDecl,
 		reserved_unknown  = (placement.kind == "reserved"
 		                     and _has_attr(placement.attrs, "unknown")),
 		codec             = codecs.get(placement.codec or ""),
+		lenient           = lenient,
 	)
 
 
@@ -186,6 +190,39 @@ def _check_host_dependence(decl: ast.StructDecl, layout: StructLayout) -> None:
 					"an `endian_marker` (project.md section 8.3)",
 				],
 			)
+
+
+def _check_secret_is_not_layout_bearing(decl: ast.StructDecl,
+		layout: StructLayout) -> None:
+	"""A `[secret]` field may not decide where anything is (section 14.6).
+
+	A length or a discriminant read from secret material leaks it: the extent of
+	the message is visible to anyone counting bytes, whatever the encryption
+	does. This is a side channel the schema can rule out entirely, so it does.
+	"""
+	secret = {placement.name for placement in layout.placements
+	          if _has_attr(placement.attrs, "secret")}
+	if not secret:
+		return
+
+	for placement in layout.placements:
+		driver = placement.sized_by
+		if driver is None or driver.partition(".")[0] not in secret:
+			continue
+
+		raise error(
+			f"`{placement.name}` takes its size from the secret field "
+			f"`{driver}`",
+			placement.span,
+			label = "layout depends on secret material",
+			notes = [
+				"the encoded length is visible to anyone counting bytes, so a "
+				"secret-dependent length leaks the secret however strong the "
+				"cipher is",
+				f"drop `[secret]` from `{driver}` if it is not really secret, or "
+				"size this member from a public field",
+			],
+		)
 
 
 def _check_required_alignment(decl: ast.StructDecl, layout: StructLayout) -> None:

@@ -36,13 +36,39 @@ typedef enum situ_err {
 } situ_err_t;
 
 /* A message: the caller's buffer plus the generation counter that detects
- * views outliving a mutation that shifted layout (section 12.3). The caller
- * owns the buffer; this structure never takes a copy. */
+ * views outliving a mutation that shifted layout (section 12.3), and the set
+ * of authentication tags currently stale (section 14.2). The caller owns the
+ * buffer; this structure never takes a copy. */
 typedef struct situ_msg {
 	uint8_t	 *base;
 	uint32_t  size;
 	uint32_t  generation;
+	/* One bit per tag or checksum declared in the struct, set when a covered
+	 * field is written and cleared when that tag is recomputed. Thirty-two is
+	 * a generous ceiling: coverage must be disjoint or nested, so a schema
+	 * with more tags than this has other problems. */
+	uint32_t  dirty;
 } situ_msg_t;
+
+/* Mark tags stale. Generated setters for covered fields call this; the mask is
+ * the OR of the tag bits declared in the generated header. */
+static inline void situ_msg_mark_dirty(situ_msg_t *msg, uint32_t tags)
+{
+	msg->dirty |= tags;
+}
+
+static inline void situ_msg_clear_dirty(situ_msg_t *msg, uint32_t tags)
+{
+	msg->dirty &= ~tags;
+}
+
+/* Whether the buffer is fit to transmit. A stale tag means the bytes no longer
+ * authenticate, so handing them out would produce a message the receiver
+ * rejects -- or worse, one it accepts because the tag was never checked. */
+static inline situ_err_t situ_msg_transmittable(const situ_msg_t *msg)
+{
+	return msg->dirty == 0u ? SITU_OK : SITU_ERR_TAG;
+}
 
 /* A view: a resolved frame base plus a bounds limit, passed by value. Field
  * access inside a view is a constant offset from base, with the bounds check
@@ -500,6 +526,16 @@ static inline const uint8_t *situ_tlv_value(const situ_tlv_iter_t *it)
 {
 	return it->view.base + it->value_off;
 }
+
+/* ------------------------------------------------------------------------
+ * Secret material
+ * ------------------------------------------------------------------------ */
+
+/* Overwrite a buffer so the compiler may not elide the store (section 14.6).
+ * A plain memset over storage that is about to die is dead code by the
+ * standard's rules, and compilers do remove it; the volatile pointer is what
+ * keeps this one. */
+void situ_zeroize(void *buf, uint32_t len);
 
 /* Human-readable name for a code, for tests and diagnostics. Never NULL. */
 const char *situ_err_str(situ_err_t err);

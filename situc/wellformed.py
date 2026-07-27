@@ -18,6 +18,27 @@ from situc.types import is_scalar_name
 
 Structs = dict[str, ast.StructDecl]
 
+# Members that hold other members, and whether their interior shares the
+# enclosing struct's namespace. A `positional` block and an `authenticated` one
+# are transparent: they assert something about members that still belong to the
+# struct. A region introduced by a codec is not, because its interior is the
+# transform's output rather than the struct's bytes.
+TRANSPARENT_BLOCKS = (ast.PositionalBlock, ast.Authenticated)
+OPAQUE_BLOCKS      = (ast.Coded, ast.Sealed, ast.Indexed)
+
+
+def nested(member: ast.Member) -> tuple[ast.Member, ...]:
+	"""The members a member contains, whatever kind of container it is.
+
+	One place knows this, so adding a container means changing one function
+	rather than every recursion in this file.
+	"""
+	if isinstance(member, TRANSPARENT_BLOCKS + OPAQUE_BLOCKS):
+		return member.members
+	if isinstance(member, ast.Variant):
+		return tuple(member.members_of())
+	return ()
+
 
 def check(schema: ast.Schema) -> None:
 	"""Run every whole-schema check, raising on the first failure."""
@@ -29,6 +50,8 @@ def check(schema: ast.Schema) -> None:
 	check_types_resolve(schema)
 	check_variant_exhaustiveness(schema)
 	check_codec_bindings(schema)
+	check_tag_coverage(schema)
+	check_nonce_references(schema)
 	check_no_recursive_types(schema)
 
 
@@ -142,7 +165,10 @@ def check_unique_member_names(schema: ast.Schema) -> None:
 
 	A `positional` block does not open a scope: it is a staticness assertion
 	over members that still belong to the enclosing struct (section 9.2), so
-	its members share the struct's namespace.
+	its members share the struct's namespace. `authenticated` is transparent for
+	the same reason -- it asserts coverage over members that stay where they
+	were, which is why 5.3 addresses `Packet.hdr.seq` rather than naming the
+	block.
 	"""
 	for decl in schema.structs():
 		seen: dict[str, ast.Field] = {}
@@ -151,11 +177,10 @@ def check_unique_member_names(schema: ast.Schema) -> None:
 
 def _collect_member_names(members: tuple[ast.Member, ...], seen: dict[str, ast.Field]) -> None:
 	for member in members:
-		if isinstance(member, ast.PositionalBlock):
-			_collect_member_names(member.members, seen)
-		elif isinstance(member, ast.Variant):
-			for arm in member.members_of():
-				_collect_member_names((arm,), seen)
+		# Only the transparent blocks are walked: a coded or sealed region's
+		# interior is its own namespace, so a name may repeat across the seam.
+		if isinstance(member, TRANSPARENT_BLOCKS + (ast.Variant,)):
+			_collect_member_names(nested(member), seen)
 		elif isinstance(member, ast.Field):
 			previous = seen.get(member.name)
 			if previous is not None:
@@ -180,10 +205,9 @@ def check_unique_attributes(schema: ast.Schema) -> None:
 
 def _check_member_attrs(members: tuple[ast.Member, ...]) -> None:
 	for member in members:
-		if isinstance(member, ast.PositionalBlock):
-			_check_member_attrs(member.members)
-		elif isinstance(member, (ast.Field, ast.Reserved)):
+		if isinstance(member, (ast.Field, ast.Reserved, ast.TagField)):
 			_check_attr_list(member.attrs)
+		_check_member_attrs(nested(member))
 
 
 def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:
@@ -222,10 +246,9 @@ def check_types_resolve(schema: ast.Schema) -> None:
 
 def _check_member_types(members: tuple[ast.Member, ...], declared: set[str]) -> None:
 	for member in members:
-		if isinstance(member, ast.PositionalBlock):
-			_check_member_types(member.members, declared)
-			continue
-		if not isinstance(member, (ast.Field, ast.Reserved)):
+		_check_member_types(nested(member), declared)
+
+		if not isinstance(member, (ast.Field, ast.Reserved, ast.TagField)):
 			continue
 
 		type_ref = member.type_ref
@@ -318,14 +341,274 @@ def check_codec_bindings(schema: ast.Schema) -> None:
 				)
 
 
-def _coded_regions(members: tuple[ast.Member, ...]) -> list[ast.Coded]:
-	found: list[ast.Coded] = []
+def _coded_regions(members: tuple[ast.Member, ...]) -> list[ast.Coded | ast.Sealed]:
+	"""Every region carrying a codec. `sealed` is one of them (decision 0009)."""
+	found: list[ast.Coded | ast.Sealed] = []
 	for member in members:
-		if isinstance(member, ast.Coded):
+		if isinstance(member, (ast.Coded, ast.Sealed)):
 			found.append(member)
-			found.extend(_coded_regions(member.members))
-		elif isinstance(member, ast.PositionalBlock):
-			found.extend(_coded_regions(member.members))
+		found.extend(_coded_regions(nested(member)))
+	return found
+
+
+# ---------------------------------------------------------------------------
+# Tag coverage
+# ---------------------------------------------------------------------------
+
+
+def auth_regions(members: tuple[ast.Member, ...]
+		) -> list[ast.Authenticated | ast.Sealed]:
+	"""Every authenticated and sealed region, in declaration order.
+
+	Declaration order is load-bearing: it is what an omitted `covers` clause
+	means (section 14.1), so it is the order the tag's coverage is built in and
+	the order the generated recomputation runs in.
+	"""
+	found: list[ast.Authenticated | ast.Sealed] = []
+	for member in members:
+		if isinstance(member, (ast.Authenticated, ast.Sealed)):
+			found.append(member)
+		found.extend(auth_regions(nested(member)))
+	return found
+
+
+def tag_fields(members: tuple[ast.Member, ...]) -> list[ast.TagField]:
+	found: list[ast.TagField] = []
+	for member in members:
+		if isinstance(member, ast.TagField):
+			found.append(member)
+		found.extend(tag_fields(nested(member)))
+	return found
+
+
+def coverage_of(tag: ast.TagField, regions: list[ast.Authenticated | ast.Sealed]
+		) -> tuple[str, ...]:
+	"""Which regions a tag covers, with inference applied (section 14.1)."""
+	if tag.covers:
+		return tag.covers
+	return tuple(region.name for region in regions)
+
+
+def check_tag_coverage(schema: ast.Schema) -> None:
+	"""Every rule of section 14.1 that needs only names and structure.
+
+	Coverage is the thing the whole chapter turns on: which bytes go stale when
+	a field is written. Getting it wrong silently would make the dirty bit a
+	decoration, so each way of getting it wrong is an error here rather than a
+	surprise at run time.
+	"""
+	for struct in schema.structs():
+		regions = auth_regions(struct.members)
+		tags    = tag_fields(struct.members)
+
+		_check_region_names(regions)
+		_check_regions_are_covered(struct, regions, tags)
+
+		by_name = {region.name: region for region in regions}
+		spread: list[tuple[ast.TagField, set[str]]] = []
+
+		for tag in tags:
+			covers = coverage_of(tag, regions)
+			_check_covers_resolve(tag, covers, by_name)
+			_check_tag_is_outside_its_coverage(tag, covers, by_name)
+			spread.append((tag, set(covers)))
+
+		_check_coverage_is_disjoint_or_nested(spread)
+
+
+def _check_region_names(regions: list[ast.Authenticated | ast.Sealed]) -> None:
+	seen: dict[str, ast.Member] = {}
+	for region in regions:
+		previous = seen.get(region.name)
+		if previous is not None:
+			raise _redeclaration("region", region.name, previous, region, [
+				"a `covers` clause names regions, so two of them cannot share "
+				"a name",
+				"name them: `sealed inner(codec) { ... }`",
+			])
+		seen[region.name] = region
+
+
+def _check_regions_are_covered(struct: ast.StructDecl,
+		regions: list[ast.Authenticated | ast.Sealed],
+		tags: list[ast.TagField]) -> None:
+	"""A region no tag covers is a region that authenticates nothing.
+
+	`authenticated { }` states that these bytes are covered by a tag. With no
+	tag in the struct the statement is false, and a construct whose meaning is
+	silently nothing is exactly what section 14.5 refuses.
+	"""
+	if not regions or tags:
+		return
+
+	region = regions[0]
+	kind   = "sealed" if isinstance(region, ast.Sealed) else "authenticated"
+
+	raise error(
+		f"`{kind} {region.name}` is covered by no tag",
+		region.span,
+		label = f"struct `{struct.name}` declares no `tag` or `checksum`",
+		notes = [
+			"coverage is what makes the region mean anything: without a tag "
+			"there is nothing to go stale and nothing to verify",
+			"add `tag u8[16];` to the struct, whose coverage is then inferred "
+			"as every authenticated and sealed region in it "
+			"(project.md section 14.1)",
+		],
+	)
+
+
+def _check_covers_resolve(tag: ast.TagField, covers: tuple[str, ...],
+		by_name: dict[str, ast.Authenticated | ast.Sealed]) -> None:
+	for name in covers:
+		if name in by_name:
+			continue
+
+		known = ", ".join(sorted(by_name)) or "none in this struct"
+		raise error(
+			f"`{tag.name}` covers unknown region `{name}`",
+			tag.span,
+			label = "no such authenticated or sealed region",
+			notes = [f"regions in this struct: {known}",
+			         "a `covers` clause names regions, not fields: coverage is "
+			         "over a contiguous span of bytes, and a region is what "
+			         "gives one a name"],
+		)
+
+
+def _check_tag_is_outside_its_coverage(tag: ast.TagField, covers: tuple[str, ...],
+		by_name: dict[str, ast.Authenticated | ast.Sealed]) -> None:
+	"""A tag may not sit inside the bytes it authenticates.
+
+	Computing it would need its own value as input. Nothing about this is
+	recoverable at run time, so it is an error here.
+	"""
+	for name in covers:
+		region = by_name.get(name)
+		if region is not None and any(held is tag for held in tag_fields(region.members)):
+			raise error(
+				f"`{tag.name}` is inside the region it covers",
+				tag.span,
+				label = f"declared inside `{name}`",
+				notes = ["computing it would take its own bytes as input",
+				         f"move it out of `{name}`, or narrow its `covers` "
+				         "clause to regions that do not contain it"],
+			)
+
+
+def _check_coverage_is_disjoint_or_nested(
+		spread: list[tuple[ast.TagField, set[str]]]) -> None:
+	"""Section 14.1: disjoint or nested coverage only.
+
+	Two tags whose coverage overlaps without one containing the other have no
+	defensible recomputation order -- each covers bytes the other has yet to
+	write. Nested coverage does have one, and
+	docs/decisions/0011-nested-tag-coverage.md fixes it as innermost first.
+	"""
+	for index, (tag, covers) in enumerate(spread):
+		for other_tag, other in spread[:index]:
+			shared = covers & other
+			if not shared or covers <= other or other <= covers:
+				continue
+
+			listed = ", ".join(sorted(shared))
+			raise SituError(Diagnostic(
+				severity = Severity.ERROR,
+				message  = f"`{tag.name}` and `{other_tag.name}` overlap without "
+				           "nesting",
+				primary  = Label(tag.span, f"also covers {listed}"),
+				labels   = [Label(other_tag.span, "covered here too")],
+				notes    = [
+					"each tag covers bytes the other does not, so neither can be "
+					"computed first: whichever runs second invalidates the one "
+					"before it",
+					"make the coverage disjoint, or make one a subset of the "
+					"other, which recomputes innermost first "
+					"(project.md section 14.1)",
+				],
+			))
+
+
+def check_nonce_references(schema: ast.Schema) -> None:
+	"""`sealed(codec, nonce = ref)` must name a field the reader has already.
+
+	A nonce read from inside the region it seeds is unusable: the decoder needs
+	it before it can decode anything. This is the same rule as the discriminant
+	of a variant, for the same reason.
+	"""
+	for struct in schema.structs():
+		for region in auth_regions(struct.members):
+			if not isinstance(region, ast.Sealed):
+				continue
+
+			reference = _argument(region.args, "nonce")
+			if reference is None:
+				continue
+
+			name = _reference_name(reference)
+			if name is None:
+				raise error(
+					"a nonce must name a field",
+					reference.span,
+					label = "expected a field name",
+					notes = ["`nonce = counter` or `nonce = hdr.counter`"],
+				)
+
+			available = [field.name for field in _fields(_before(struct.members, region))]
+			if name in available:
+				continue
+
+			raise error(
+				f"unknown nonce field `{name}`",
+				reference.span,
+				label = "not a field declared before this region",
+				notes = [
+					f"fields available here: {', '.join(available) or 'none'}",
+					"the decoder needs the nonce before it can decode, so it has "
+					"to be parsed strictly earlier -- a nonce inside the sealed "
+					"region cannot be read without the key it helps derive",
+				],
+			)
+
+
+def _argument(args: tuple[ast.Attr, ...], name: str) -> ast.Expr | None:
+	for arg in args:
+		if arg.name == name:
+			return arg.value
+	return None
+
+
+def _reference_name(expr: ast.Expr) -> str | None:
+	"""The head of a field reference: `counter` or `hdr.counter`."""
+	if isinstance(expr, ast.NameRef):
+		return expr.name
+	if isinstance(expr, ast.Access):
+		return _reference_name(expr.base)
+	return None
+
+
+def _before(members: tuple[ast.Member, ...], target: ast.Member) -> tuple[ast.Member, ...]:
+	"""Members declared before `target`, flattening the transparent blocks.
+
+	Flattened first and sliced second, because the target may be nested: a
+	sealed region inside an `authenticated` block is still preceded by whatever
+	came before that block.
+	"""
+	flat = _flatten(members)
+	for index, member in enumerate(flat):
+		if member is target:
+			return tuple(flat[:index])
+	return tuple(flat)
+
+
+def _flatten(members: tuple[ast.Member, ...]) -> list[ast.Member]:
+	found: list[ast.Member] = []
+	for member in members:
+		if isinstance(member, TRANSPARENT_BLOCKS):
+			found.append(member)
+			found.extend(_flatten(nested(member)))
+		else:
+			found.append(member)
 	return found
 
 
@@ -354,8 +637,7 @@ def _variants(members: tuple[ast.Member, ...]) -> list[ast.Variant]:
 	for member in members:
 		if isinstance(member, ast.Variant):
 			found.append(member)
-		elif isinstance(member, ast.PositionalBlock):
-			found.extend(_variants(member.members))
+		found.extend(_variants(nested(member)))
 	return found
 
 
@@ -424,12 +706,18 @@ def _case_member(arm: ast.VariantArm, enum: ast.EnumDecl) -> str | None:
 
 
 def _fields(members: tuple[ast.Member, ...]) -> list[ast.Field]:
+	"""Fields in the enclosing struct's own namespace.
+
+	Deliberately does not cross into a coded or sealed region: a discriminant or
+	a length may not name a value the transform produces (section 13.3), so a
+	field in there is not a candidate for anything asked of this list.
+	"""
 	found: list[ast.Field] = []
 	for member in members:
 		if isinstance(member, ast.Field):
 			found.append(member)
-		elif isinstance(member, ast.PositionalBlock):
-			found.extend(_fields(member.members))
+		elif isinstance(member, TRANSPARENT_BLOCKS + (ast.Variant,)):
+			found.extend(_fields(nested(member)))
 	return found
 
 
@@ -472,10 +760,9 @@ def _find_cycle(name: str, structs: Structs, path: list[str]) -> list[str] | Non
 def _referenced_structs(members: tuple[ast.Member, ...], structs: Structs) -> list[str]:
 	names: list[str] = []
 	for member in members:
-		if isinstance(member, ast.PositionalBlock):
-			names.extend(_referenced_structs(member.members, structs))
-		elif isinstance(member, ast.Field) and member.type_ref.name in structs:
+		if isinstance(member, ast.Field) and member.type_ref.name in structs:
 			names.append(member.type_ref.name)
+		names.extend(_referenced_structs(nested(member), structs))
 	return names
 
 

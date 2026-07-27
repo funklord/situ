@@ -61,7 +61,7 @@ def test_json_diagnostics_are_emitted(
 	"""Machine-readable diagnostics so CI and editors need not parse prose."""
 	schema = tmp_path / "d.situ"
 	schema.write_text(
-		"endian big;\nstruct S { u8 a; }\nrequire verify_gated(S);\n",
+		"endian big;\nstruct S { u8 a; }\nrequire no_realloc(S);\n",
 		encoding="ascii")
 
 	assert main(["--diagnostics=json", "map", str(schema)]) == 0
@@ -69,7 +69,7 @@ def test_json_diagnostics_are_emitted(
 	payload = json.loads(capsys.readouterr().err)
 	assert len(payload["diagnostics"]) == 1
 	assert payload["diagnostics"][0]["severity"] == "note"
-	assert "phase 8" in payload["diagnostics"][0]["message"]
+	assert "phase 5" in payload["diagnostics"][0]["message"]
 
 
 def test_json_diagnostics_on_failure(

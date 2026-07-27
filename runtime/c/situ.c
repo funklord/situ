@@ -7,6 +7,10 @@ void situ_msg_init(situ_msg_t *msg, uint8_t *buf, uint32_t size)
 	msg->base	= buf;
 	msg->size	= size;
 	msg->generation	= 1u;
+	/* Clean: a freshly bound buffer holds whatever tags it arrived with, and
+	 * they are correct for the bytes that are there. Marking it dirty would
+	 * make every parse demand a recomputation it does not need. */
+	msg->dirty	= 0u;
 }
 
 void situ_msg_touch(situ_msg_t *msg)
@@ -42,6 +46,18 @@ situ_err_t situ_view_sub(situ_view_t view, uint32_t offset, uint32_t extent, sit
 	out->limit	= extent;
 	out->generation	= view.generation;
 	return SITU_OK;
+}
+
+void situ_zeroize(void *buf, uint32_t len)
+{
+	/* Through a volatile pointer, so the writes are observable behaviour the
+	 * compiler may not discard as dead stores to storage about to die. */
+	volatile uint8_t *p = (volatile uint8_t *)buf;
+	uint32_t i;
+
+	for (i = 0; i < len; i++) {
+		p[i] = 0u;
+	}
 }
 
 const char *situ_err_str(situ_err_t err)

@@ -412,18 +412,6 @@ def test_future_declarations_name_their_phase(source: str, phase: int) -> None:
 	assert f"phase {phase}" in caught.value.diagnostic.render()
 
 
-@pytest.mark.parametrize(("member", "phase"), [
-	("authenticated { u8 a; }",			8),
-	("sealed(aes) { u8 a; }",			8),
-	("tag u8[16];",					8),
-	("checksum u32[1];",				8),
-])
-def test_future_members_name_their_phase(member: str, phase: int) -> None:
-	with pytest.raises(SituError, match="not yet implemented") as caught:
-		parse_text(f"struct S {{ {member} }}")
-	assert f"phase {phase}" in caught.value.diagnostic.render()
-
-
 def test_remaining_array_size_parses() -> None:
 	field = first_field("struct S { u8 trailer[remaining]; }")
 	assert field.array is not None

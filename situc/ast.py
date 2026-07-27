@@ -340,6 +340,73 @@ class Coded(Member):
 
 
 @dataclass(frozen=True)
+class Authenticated(Member):
+	"""`authenticated { ... }`: plaintext covered by a tag (section 14.1).
+
+	The block transforms nothing: its members are laid out exactly where they
+	would have been without it, and they stay in the enclosing struct's
+	namespace, which is why 5.3 addresses `Packet.hdr.seq` and not
+	`Packet.authenticated.hdr.seq`. All the block does is name a region a tag
+	can cover, which is why it carries a name at all.
+	"""
+
+	span: Span
+	name: str
+	members: tuple[Member, ...]
+	attrs: tuple[Attr, ...] = ()
+
+
+@dataclass(frozen=True)
+class Sealed(Member):
+	"""`sealed(codec, nonce = ref) { ... }`: encrypted and covered.
+
+	`coded` plus authentication, exactly as decision 0009 planned it: the
+	transform half is shared with `Coded` down to the layout function, and this
+	construct adds tag coverage and the `VerifyGated` stage of section 14.3.
+	Unlike `authenticated`, the interior is a region with its own namespace --
+	the bytes there are the codec's output, not the struct's.
+	"""
+
+	span: Span
+	name: str
+	codec: str
+	args: tuple[Attr, ...]
+	members: tuple[Member, ...]
+	attrs: tuple[Attr, ...] = ()
+
+
+class TagKind(Enum):
+	TAG      = "tag"
+	CHECKSUM = "checksum"
+
+
+@dataclass(frozen=True)
+class TagField(Member):
+	"""`tag u8[16] covers(a, b);` (section 14.1).
+
+	`checksum` is the same construct with a non-cryptographic algorithm: it
+	shares the entire coverage and dirty-bit mechanism, because the question
+	"which bytes does this field have to be recomputed for" does not depend on
+	whether the answer is a MAC or a CRC.
+
+	An empty `covers` is inference, not absence: every authenticated and sealed
+	region in the enclosing struct, in declaration order.
+	"""
+
+	span: Span
+	name: str
+	type_ref: TypeRef
+	array: ArraySpec
+	covers: tuple[str, ...]		= ()
+	kind: TagKind			= TagKind.TAG
+	attrs: tuple[Attr, ...]		= ()
+
+	@property
+	def infers_coverage(self) -> bool:
+		return not self.covers
+
+
+@dataclass(frozen=True)
 class PositionalBlock(Member):
 	"""`positional { ... }`: a locally-checked staticness guarantee.
 
@@ -399,6 +466,25 @@ class BitOrderDirective(Decl):
 class ImportDirective(Decl):
 	span: Span
 	path: str
+
+
+class Strictness(Enum):
+	STRICT  = "strict"
+	LENIENT = "lenient"
+
+
+@dataclass(frozen=True)
+class StrictnessDirective(Decl):
+	"""`strictness = lenient;` (section 14.5).
+
+	`strict` is the default and needs no directive; the whole point of the
+	construct is that relaxing has to be written down. `lenient` sets
+	`canonical = NonCanonical` for the schema, because accepting what the schema
+	does not describe means more than one byte sequence encodes a value.
+	"""
+
+	span: Span
+	strictness: Strictness
 
 
 @dataclass(frozen=True)
@@ -622,3 +708,11 @@ class Schema(Node):
 
 	def impls(self) -> list[ImplDecl]:
 		return [decl for decl in self.decls if isinstance(decl, ImplDecl)]
+
+	@property
+	def strictness(self) -> Strictness:
+		"""Strict unless the schema says otherwise (section 14.5)."""
+		for decl in self.decls:
+			if isinstance(decl, StrictnessDirective):
+				return decl.strictness
+		return Strictness.STRICT
