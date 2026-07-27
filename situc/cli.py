@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from situc import capmap, requirements
+from situc import ast, capmap, requirements
 from situc.diagnostics import Diagnostic, Source, SituError
 from situc.dump import dump
 from situc.layout import solve
@@ -65,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
 	codec_cmd.add_argument("schema", type=Path)
 	codec_cmd.add_argument("--out", type=Path, default=Path("."))
 	codec_cmd.add_argument("--prefix", default="situ")
+
+	derived_cmd = sub.add_parser(
+		"gen-derived", help="generate implementations from kernel descriptions")
+	derived_cmd.add_argument("schema", type=Path)
+	derived_cmd.add_argument("--out", type=Path, default=Path("."))
+	derived_cmd.add_argument("--prefix", default="situ")
 
 	checks_cmd = sub.add_parser(
 		"gen-checks",
@@ -310,6 +316,31 @@ def cmd_gen_codec_tests(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_gen_derived(args: argparse.Namespace) -> int:
+	"""Emit the code a kernel description implies (section 26.12).
+
+	The properties in the capability map and the implementation here come from
+	one description, which is the entire difference between the two codec
+	tiers: a tier-1 signature is a promise nobody checked, and a tier-2 one is
+	computed from the same source as the code.
+	"""
+	from situc.codegen.c import derived
+
+	source = read_source(args.schema)
+	schema = parse(source)
+	name   = args.schema.stem
+	text   = derived.generate(schema, name, args.prefix)
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	target = args.out / f"{name}_derived.c"
+	target.write_text(text, encoding="ascii")
+
+	count = sum(1 for impl in schema.impls()
+	            if impl.kind is ast.ImplKind.DERIVED)
+	print(f"situc: wrote {target} ({count} derived binding(s))", file=sys.stderr)
+	return 0
+
+
 def cmd_gen_checks(args: argparse.Namespace) -> int:
 	"""Emit the tests that would falsify the compiler's own output.
 
@@ -415,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
 		"build":    cmd_build,
 		"gen-fuzz": cmd_gen_fuzz,
 		"gen-checks": cmd_gen_checks,
+		"gen-derived": cmd_gen_derived,
 		"gen-tests": cmd_gen_tests,
 		"gen-codec-tests": cmd_gen_codec_tests,
 		"explain":  cmd_explain,

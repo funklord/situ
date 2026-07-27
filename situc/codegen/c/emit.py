@@ -95,6 +95,9 @@ class Emitter:
 			"#endif",
 		]
 
+		from situc.codegen.c.derived import declarations
+		lines.extend(declarations(self.schema, self.prefix))
+
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
 

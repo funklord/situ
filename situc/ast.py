@@ -599,6 +599,47 @@ class Expansion(Enum):
 	UNBOUNDED      = "unbounded"
 
 
+class KernelFamily(Enum):
+	"""The section 13.4 families.
+
+	The reassuring result of that survey: essentially every line code, FEC,
+	scrambler and framing code in practical use is one of these or a pipeline
+	of them, which is what bounds the tier-2 design.
+	"""
+
+	TABLE       = "table"
+	POLYNOMIAL  = "polynomial"
+	LINEAR      = "linear_block"
+	SHIFT       = "shift_register"
+	PERMUTATION = "permutation"
+	STUFFING    = "stuffing"
+
+
+@dataclass(frozen=True)
+class Kernel(Node):
+	"""A description an implementation and a signature are both derived from.
+
+	Held as the arguments the author wrote. What each family means is
+	`situc/kernels.py`'s to decide, and what it implies about capabilities is
+	derived there rather than declared here -- a kernel the compiler generates
+	the code for is a kernel whose properties it can compute, which is the
+	entire difference between tier 1 and tier 2 (section 13.1).
+	"""
+
+	span: Span
+	family: KernelFamily
+	args: tuple[Attr, ...] = ()
+
+	def argument(self, name: str) -> Expr | None:
+		for arg in self.args:
+			if arg.name == name:
+				return arg.value
+		return None
+
+	def flag(self, name: str) -> bool:
+		return any(arg.name == name and arg.value is None for arg in self.args)
+
+
 @dataclass(frozen=True)
 class CodecDecl(Decl):
 	"""A transform's property signature (section 13.2).
@@ -627,6 +668,13 @@ class CodecDecl(Decl):
 	deterministic: bool		= False
 	error_propagating: bool		= False
 	has_kernel: bool		= False
+	# The tier-2 description, when there is one. A codec with a kernel has its
+	# properties derived rather than declared, and anything the author also
+	# wrote must agree with what the kernel implies.
+	kernel: Kernel | None		= None
+	# `a |> b |> c`: the stages, in order. Properties compose pointwise and
+	# conservatively (section 13.4).
+	pipeline: tuple[str, ...]	= ()
 
 
 class ImplKind(Enum):

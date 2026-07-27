@@ -16,7 +16,7 @@ from enum import Enum
 from collections.abc import Callable
 from typing import TypeVar
 
-from situc import ast, namespaces, wellformed
+from situc import ast, kernels, namespaces, wellformed
 from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
 from situc.types import WidthError, lookup
@@ -46,6 +46,8 @@ class _CodecProperties:
 	deterministic: bool		= False
 	error_propagating: bool		= False
 	has_kernel: bool		= False
+	kernel: ast.Kernel | None	= None
+	pipeline: tuple[str, ...]	= ()
 
 	def build(self, span: Span, name: str) -> ast.CodecDecl:
 		return ast.CodecDecl(
@@ -63,6 +65,8 @@ class _CodecProperties:
 			deterministic     = self.deterministic,
 			error_propagating = self.error_propagating,
 			has_kernel        = self.has_kernel,
+			kernel            = self.kernel,
+			pipeline          = self.pipeline,
 		)
 
 
@@ -115,6 +119,7 @@ ATTRIBUTE_NAMES = frozenset({
 	"on_read", "on_write", "volatile", "no_rmw",
 })
 
+KERNEL_FAMILIES	= {family.value: family for family in ast.KernelFamily}
 TARGET_KINDS	= {kind.value: kind for kind in ast.TargetKind}
 STRICTNESS	= {level.value: level for level in ast.Strictness}
 ENDIANS		= {endian.value: endian for endian in ast.Endian}
@@ -228,6 +233,7 @@ class Parser:
 				self._pending_extern = None
 
 		namespaces.flatten(schema)
+		kernels.resolve_signatures(schema)
 		wellformed.check(schema)
 		return schema
 
@@ -592,6 +598,12 @@ class Parser:
 		start = self.advance()
 		name  = self.expect_ident("a codec name")
 
+		# `codec framed = rs |> interleave |> manchester;` -- a pipeline, whose
+		# properties compose from its stages rather than being declared
+		# (section 13.4).
+		if self.accept_symbol("=") is not None:
+			return self.parse_pipeline(start, name)
+
 		# `codec X extern { ... }` is the section 13.2 spelling; the binding it
 		# implies is recorded as a separate impl so both spellings converge.
 		external = self.accept_ident("extern") is not None
@@ -610,6 +622,43 @@ class Parser:
 
 		self._pending_extern = (name.text, span) if external else None
 		return properties.build(span, name.text)
+
+	def parse_pipeline(self, start: Token, name: Token) -> ast.CodecDecl:
+		"""`codec framed = rs_255_223 |> interleave(16) |> manchester;`
+
+		The stages are named here and resolved later: a pipeline may name a
+		codec declared below it, and requiring otherwise would make the order
+		of a file carry meaning it does not have.
+		"""
+		stages = [self.expect_ident("a codec name").text]
+		self._skip_stage_arguments()
+
+		while self.accept_symbol("|>") is not None:
+			stages.append(self.expect_ident("a codec name").text)
+			self._skip_stage_arguments()
+
+		self.expect_symbol(";", "after the pipeline")
+
+		if len(stages) < 2:
+			raise error(
+				f"`{name.text}` is a pipeline of one stage",
+				self.span_from(start),
+				label = "expected `a |> b`",
+				notes = ["a pipeline of one is the codec it names; say that "
+				         "instead"],
+			)
+
+		return ast.CodecDecl(self.span_from(start), name.text,
+		                     pipeline=tuple(stages))
+
+	def _skip_stage_arguments(self) -> None:
+		"""`interleave(16)`: a stage may be parameterised.
+
+		The arguments belong to the stage's own kernel, which already has them;
+		what a pipeline needs is the order of the stages.
+		"""
+		if self.current.is_symbol("("):
+			self._skip_balanced("(", ")")
 
 	def parse_codec_property(self, properties: _CodecProperties,
 			seen: set[str]) -> None:
@@ -640,7 +689,7 @@ class Parser:
 				ast.Granularity, "granularity", properties, size=True)
 		elif token.text == "kernel":
 			self.expect_symbol("=", "after `kernel`")
-			self._skip_call()
+			properties.kernel = self.parse_kernel()
 			properties.has_kernel = True
 		elif token.text in ("systematic", "authenticated", "invertible",
 		                    "deterministic", "error_propagating"):
@@ -717,11 +766,40 @@ class Parser:
 		raise error(f"unknown {described} `{token.text}`", token.span,
 		            label = f"expected one of {options}")
 
-	def _skip_call(self) -> None:
-		"""Consume a `name(...)` clause whose interior a later phase owns."""
-		self.expect_ident("a kernel family")
-		if self.current.is_symbol("("):
-			self._skip_balanced("(", ")")
+	def parse_kernel(self) -> ast.Kernel:
+		"""`kernel = polynomial(width = 32, poly = 0x04C11DB7, reflect);`
+
+		The family decides which arguments mean what; this only reads them.
+		What a kernel implies about capabilities is derived in
+		`situc/kernels.py`, because a description the compiler can generate an
+		implementation from is one whose properties it can compute rather than
+		take on trust (section 13.1).
+		"""
+		start  = self.current
+		token  = self.expect_ident("a kernel family")
+		family = KERNEL_FAMILIES.get(token.text)
+
+		if family is None:
+			options = ", ".join(f"`{name}`" for name in sorted(KERNEL_FAMILIES))
+			raise error(
+				f"unknown kernel family `{token.text}`",
+				token.span,
+				label = "not one of the section 13.4 families",
+				notes = [f"expected one of {options}",
+				         "essentially every line code, FEC, scrambler and "
+				         "framing code in practical use is one of these or a "
+				         "pipeline of them"],
+			)
+
+		args: list[ast.Attr] = []
+		if self.accept_symbol("(") is not None:
+			while not self.current.is_symbol(")"):
+				args.append(self.parse_attr())
+				if self.accept_symbol(",") is None:
+					break
+			self.expect_symbol(")", "after the kernel arguments")
+
+		return ast.Kernel(self.span_from(start), family, tuple(args))
 
 	def parse_impl(self) -> ast.ImplDecl:
 		"""`impl crc32 derived;` or `impl crc32 extern "my_fast_crc32";`"""

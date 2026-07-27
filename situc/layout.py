@@ -1655,11 +1655,17 @@ def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
 	if codec.expansion is ast.Expansion.UNBOUNDED:
 		return Interval(interior.lo, None)
 
+	# A ratio may carry an addend as well, which only a pipeline produces: a
+	# stage that appends parity followed by one that expands scales the parity
+	# too. The form stays the ratio, because the form is what decides whether
+	# interior positions survive, and the addend rides along in the arithmetic
+	# (docs/decisions/0016-composed-expansion.md).
 	assert codec.ratio is not None
 	numerator, denominator = codec.ratio
+	added = codec.expansion_add * BITS_PER_BYTE
 
 	def scale(bits: int) -> int:
-		return -(-bits * numerator // denominator)	# ceil
+		return -(-bits * numerator // denominator) + added	# ceil, then the addend
 
 	if codec.expansion is ast.Expansion.RATIO_EXACT:
 		return Interval(scale(interior.lo),

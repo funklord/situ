@@ -1,0 +1,108 @@
+// Standard kernel descriptions (project.md section 13.4).
+//
+// The tier-2 counterpart of std/codecs.situ. Every signature there is
+// hand-written, trusted and unverified; every signature here is *derived* from
+// the description beside it, and so is the implementation. The properties in
+// the capability map and the code in the object file come from one source, so
+// they cannot disagree -- which is the whole difference between the tiers.
+//
+// A `codec` here needs no property declared at all. Where one is written
+// anyway it has to match what the kernel implies, so it is a check rather than
+// a claim.
+
+// ---------------------------------------------------------------------------
+// Polynomial: every CRC variant
+//
+// Parameters are the CRC catalogue's, and the table is computed from them.
+// A variant nobody has written down works exactly as well as a famous one.
+// ---------------------------------------------------------------------------
+
+codec crc32 {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF, reflect);
+}
+impl crc32 derived;
+
+codec crc32c {
+	kernel = polynomial(width = 32, poly = 0x1EDC6F41, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF, reflect);
+}
+impl crc32c derived;
+
+codec crc16_ccitt {
+	kernel = polynomial(width = 16, poly = 0x1021, init = 0xFFFF);
+}
+impl crc16_ccitt derived;
+
+codec crc16_modbus {
+	kernel = polynomial(width = 16, poly = 0x8005, init = 0xFFFF, reflect);
+}
+impl crc16_modbus derived;
+
+codec crc8_smbus {
+	kernel = polynomial(width = 8, poly = 0x07);
+}
+impl crc8_smbus derived;
+
+// ---------------------------------------------------------------------------
+// Table: line codes
+//
+// The ratio is exact, which is what keeps an interior position a linear
+// function of an input position. Not systematic: the input symbols do not
+// appear verbatim in the output, so nothing can be read without decoding.
+// ---------------------------------------------------------------------------
+
+codec manchester {
+	kernel = table(input_bits = 1, output_bits = 2, code = manchester);
+}
+impl manchester derived;
+
+codec code_4b5b {
+	kernel = table(input_bits = 4, output_bits = 5, code = fddi_4b5b);
+}
+impl code_4b5b derived;
+
+// ---------------------------------------------------------------------------
+// The families whose properties derive but whose code does not yet generate.
+//
+// A signature here is worth as much as one in std/codecs.situ and costs less
+// to trust: it was computed. Binding `extern` supplies the implementation.
+// ---------------------------------------------------------------------------
+
+// Feedback from the output, so neither seekable nor self-synchronising --
+// which the derivation works out rather than being told.
+codec scrambler_multiplicative {
+	kernel = shift_register(taps = 0x8810, feedback = output);
+}
+
+// Feedback from the input: startable anywhere, and a corrupt bit spoils only
+// itself. The same family, and the opposite properties.
+codec scrambler_additive {
+	kernel = shift_register(taps = 0x8810, feedback = input);
+}
+
+codec hamming_7_4 {
+	kernel = linear_block(n = 7, k = 4, standard_form);
+}
+
+codec interleave_16 {
+	kernel = permutation(span = 16);
+}
+
+codec cobs {
+	kernel = stuffing(worst_case = 255, per = 254);
+}
+
+codec hdlc_bit_stuffing {
+	kernel = stuffing(worst_case = 6, per = 5, unit = bit);
+}
+
+// ---------------------------------------------------------------------------
+// A pipeline, composing pointwise and conservatively.
+//
+// Seekable only if every stage is, systematic only if every stage is, and the
+// expansion is the product -- so this one is 2:1 with 32 bytes of parity
+// doubled to 64, and permuted rather than linear because the interleaver is.
+// ---------------------------------------------------------------------------
+
+codec framed = crc32 |> interleave_16 |> manchester;

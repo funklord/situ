@@ -1217,6 +1217,12 @@ Property composition is pointwise and conservative -- the pipeline is seekable
 only if every stage is, systematic only if every stage is, and the expansion is
 the product of the stages' expansions.
 
+That last one needs the vocabulary above widened, and this example is what
+shows it: Reed-Solomon appends 32 bytes and Manchester then doubles all of it,
+which is `ratio_exact(2, 1)` *and* `+64` at once. A composed signature may
+carry both; a hand-written one still gives one form
+(`docs/decisions/0016-composed-expansion.md`).
+
 **Bit phase.** Sub-byte granularity codes force a change in the layout solver:
 a region may begin at a bit offset rather than a byte offset, and its length may
 not be a whole number of bytes. Manchester over an odd number of input bits
@@ -1794,6 +1800,7 @@ situc build   <schema>            generate code
 situc map     <schema>            emit capability map
 situc map --check <schema>        compare against committed map, fail on diff
 situc gen-checks <schema>         tests holding the accessors to the map
+situc gen-derived <schema>        implementations from kernel descriptions
 situc advise  <schema>            ranked design suggestions with costs
 situc explain <schema> <path>     one field's capability vector and blame chains
 situc diff    <old> <new>         capability regressions between revisions
@@ -2247,6 +2254,25 @@ most naturally, and it will expose any place where the C backend papered over a
 soundness gap.
 
 ### 26.12 Phase 12: transforms, tier 2 (derived codecs)
+
+**Status: partial.** All six kernel families derive their signatures, pipelines
+compose, and `situc/kernels.py` holds both. Implementations generate for the
+first two families of the recommended order below -- polynomial and table --
+and the rest derive properties while binding `extern` for the code.
+
+The invariant held: no propagation rule changed, and
+`test_no_propagation_rule_reads_a_kernel` fails if one ever reaches past the
+signature to a kernel.
+
+`std/kernels.situ` describes as kernels the same codes `std/codecs.situ`
+declares by hand, and a test requires all nine properties to agree for every
+code in both. That is the acceptance criterion, and it earned its keep
+immediately: it caught three families deriving the wrong granularity and one
+claiming an error propagation a block code does not have.
+
+Composing the section 13.4 example needed the expansion vocabulary widened --
+`rs |> interleave |> manchester` is a ratio *and* an addend, which 13.2 offers
+only as alternatives. See `docs/decisions/0016-composed-expansion.md`.
 
 Generate codec implementations from kernel descriptions and derive property
 signatures from them (Section 13.4). Because the property signature is the only

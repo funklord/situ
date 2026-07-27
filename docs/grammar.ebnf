@@ -101,7 +101,18 @@ codec_prop	= "length_preserving"
 	| "expansion" "=" ( "+" digits | "unbounded" | ratio )
 	| "granularity" "=" ( "byte" | "block" "(" digits ")" | "stream" )
 	| [ "not" ] "seekable"
-	| "authenticated" | "invertible" | "deterministic" ;
+	| "authenticated" | "invertible" | "deterministic"
+	| "kernel" "=" kernel ;
+
+(* Section 13.4. A kernel derives both the signature and the implementation,
+ * which is the whole difference between the two codec tiers. *)
+kernel		= kernel_family [ "(" [ attr { "," attr } ] ")" ] ;
+kernel_family	= "table" | "polynomial" | "linear_block"
+	| "shift_register" | "permutation" | "stuffing" ;
+
+(* Properties compose pointwise and conservatively. *)
+pipeline_decl	= "codec" ident "=" stage { "|>" stage } ";" ;
+stage		= ident [ "(" { ? any ? } ")" ] ;
 
 requirement	= ( "require" | "assert" ) capability_expr ";" ;
 
