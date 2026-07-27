@@ -8,45 +8,45 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct Flags size=1 repr=ValueConverted atomic=NonAtomic
-  Flags.urgent                           offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Flags.ack                              offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Flags.priority                         offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Flags.<reserved0>                      offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+struct flags size=1 repr=ValueConverted atomic=NonAtomic
+  flags.urgent                           offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  flags.ack                              offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  flags.priority                         offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  flags.<reserved0>                      offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
 
-struct Header size=11 repr=ValueConverted atomic=NonAtomic
-  Header.version                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  Header.type                            offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  Header.flags                           offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  Header.flags.urgent                    offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Header.flags.ack                       offset=AbsoluteStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Header.flags.priority                  offset=AbsoluteStatic(0x02:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Header.flags.<reserved0>               offset=AbsoluteStatic(0x02:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Header.length                          offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  Header.rec_count                       offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  Header.seq                             offset=AbsoluteStatic(0x07) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+struct header size=11 repr=ValueConverted atomic=NonAtomic
+  header.version                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  header.type                            offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  header.flags                           offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  header.flags.urgent                    offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  header.flags.ack                       offset=AbsoluteStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  header.flags.priority                  offset=AbsoluteStatic(0x02:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  header.flags.<reserved0>               offset=AbsoluteStatic(0x02:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  header.length                          offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  header.rec_count                       offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  header.seq                             offset=AbsoluteStatic(0x07) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
 
-struct Message size=11 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
-  Message.hdr                            offset=AbsoluteStatic(0x00) size=Fixed(11) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  Message.hdr.version                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  Message.hdr.type                       offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  Message.hdr.flags                      offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  Message.hdr.flags.urgent               offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Message.hdr.flags.ack                  offset=AbsoluteStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Message.hdr.flags.priority             offset=AbsoluteStatic(0x02:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Message.hdr.flags.<reserved0>          offset=AbsoluteStatic(0x02:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Message.hdr.length                     offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  Message.hdr.rec_count                  offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  Message.hdr.seq                        offset=AbsoluteStatic(0x07) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  Message.opts                           offset=AbsoluteStatic(0x0B) size=Bounded(0, 1500) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  Message.recs                           offset=Dynamic size=Bounded(0, 524280) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
-  Message.recs[]                         offset=FrameStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic address=FrameStable
-  Message.recs[].id                      offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
-  Message.recs[].kind                    offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
-  Message.recs[].value                   offset=FrameStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
-  Message.trailer                        offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+struct message size=11 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  message.hdr                            offset=AbsoluteStatic(0x00) size=Fixed(11) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  message.hdr.version                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  message.hdr.type                       offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  message.hdr.flags                      offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  message.hdr.flags.urgent               offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  message.hdr.flags.ack                  offset=AbsoluteStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  message.hdr.flags.priority             offset=AbsoluteStatic(0x02:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  message.hdr.flags.<reserved0>          offset=AbsoluteStatic(0x02:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  message.hdr.length                     offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  message.hdr.rec_count                  offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  message.hdr.seq                        offset=AbsoluteStatic(0x07) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  message.opts                           offset=AbsoluteStatic(0x0B) size=Bounded(0, 1500) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  message.recs                           offset=Dynamic size=Bounded(0, 524280) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  message.recs[]                         offset=FrameStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic address=FrameStable
+  message.recs[].id                      offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  message.recs[].kind                    offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  message.recs[].value                   offset=FrameStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  message.trailer                        offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
 
-struct Record size=8 repr=ValueConverted
-  Record.id                              offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  Record.kind                            offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  Record.value                           offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+struct record size=8 repr=ValueConverted
+  record.id                              offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  record.kind                            offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  record.value                           offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

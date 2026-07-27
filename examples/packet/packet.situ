@@ -31,15 +31,15 @@ codec aes_gcm_128 {
 
 impl aes_gcm_128 extern "my_aes_gcm_128";
 
-enum MsgType : u8 {
+enum msg_type : u8 {
 	hello = 0x01,
 	data  = 0x02,
 	close = 0x03,
 }
 
-struct Header {
+struct header {
 	u8       version  [must_eq = 1];
-	MsgType  type;
+	msg_type  type;
 	// Sizes the sealed payload. The `max` is what makes the whole packet
 	// statically allocatable: without it the sealed region is Unbounded and no
 	// caller can size a buffer for one.
@@ -47,7 +47,7 @@ struct Header {
 	u32      seq;
 }
 
-struct Packet {
+struct packet {
 	// Outside every covered region, and deliberately so: a hop counter is
 	// rewritten at every forwarder, and putting it under the tag would mean
 	// re-authenticating the packet at each one. The capability map is where
@@ -61,7 +61,7 @@ struct Packet {
 	reserved u8[3];
 
 	authenticated {
-		Header  hdr;
+		header  hdr;
 		u8      nonce[12]  [nonce];
 	}
 
@@ -94,17 +94,17 @@ struct Packet {
 // Positional layout means exactly one encoding of a given value, which is what
 // makes this format signable at all. Protobuf cannot do this for five
 // independent reasons (project.md section 9.7).
-require canonical(Packet);
+require canonical(packet);
 
 // No parse before verify.
-require verify_gated(Packet.sealed);
+require verify_gated(packet.sealed);
 
 // CTR-mode seekability survives the seal: writing an interior field
 // re-encrypts that byte range and moves nothing. Coverage still applies, so it
 // is `in_place_dirty` rather than `in_place` -- which is the point. Every byte
 // under the tag costs a recomputation, and the compiler will not let that be
 // forgotten.
-require in_place_dirty(Packet.sealed.inner_seq);
+require in_place_dirty(packet.sealed.inner_seq);
 
 // `hdr` is inside `authenticated { }`, so mutating `hdr.seq` is possible but
 // invalidates the tag. `in_place` asks for both -- writable where it sits, and
@@ -114,13 +114,13 @@ require in_place_dirty(Packet.sealed.inner_seq);
 // Stated as an `assert` so this file still builds while demonstrating the
 // conflict as a warning (section 16). The `require` form and the exact text of
 // its diagnostic are pinned in tests/unit/test_crypto.py.
-assert in_place(Packet.hdr.seq);
+assert in_place(packet.hdr.seq);
 
 // The second fix, spelled out. This one passes: in-place mutation is possible,
 // with the tag going dirty and finalize putting it right.
-require in_place_dirty(Packet.hdr.seq);
+require in_place_dirty(packet.hdr.seq);
 
 // The first fix, spelled out. `hop` sits outside every covered region, which is
 // exactly why real protocols put mutable routing fields there.
-require no_tag_invalidation(Packet.hop);
-require in_place(Packet.hop);
+require no_tag_invalidation(packet.hop);
+require in_place(packet.hop);

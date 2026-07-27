@@ -5,23 +5,23 @@
 # round-trips every field back through its setter and requires the buffer
 # unchanged.
 
-Header  basic  01 02 E8 05 DC DE AD BE EF
+header  basic  01 02 E8 05 DC DE AD BE EF
 	version = 1
-	type    = SITU_MSGTYPE_DATA
+	type    = SITU_MSG_TYPE_DATA
 	length  = 1500
 	seq     = 0xDEADBEEFu
 
-Header  minimum  01 01 00 00 00 00 00 00 00
+header  minimum  01 01 00 00 00 00 00 00 00
 	version = 1
-	type    = SITU_MSGTYPE_HELLO
+	type    = SITU_MSG_TYPE_HELLO
 	length  = 0
 	seq     = 0
 
-Header  max_length  01 03 F8 05 DC FF FF FF FF
+header  max_length  01 03 F8 05 DC FF FF FF FF
 	length  = 1500
 	seq     = 0xFFFFFFFFu
 
-Flags   flags_all_set  F8
+flags   flags_all_set  F8
 	urgent   = 1
 	ack      = 1
 	priority = 7

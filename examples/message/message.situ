@@ -3,16 +3,16 @@
 // This is the example the whole frame-relative staticness design exists for,
 // and its expected capability map is the phase 5 acceptance criterion:
 //
-//   Message.hdr           offset=AbsoluteStatic(0)  size=Fixed(11)  mutate=InPlaceFixed
-//   Message.hdr.seq       offset=AbsoluteStatic(7)  repr=ValueConverted
-//   Message.opts          offset=AbsoluteStatic(11) size=Bounded(0,1500) mutate=Shifting
-//   Message.recs          offset=Dynamic            access=Random
-//   Message.recs[]        offset=FrameStatic(0)     size=Fixed(8)   address=FrameStable
-//   Message.recs[].value  offset=FrameStatic(6)     mutate=InPlaceFixed
-//   Message.trailer       offset=Dynamic            size=Bounded(0,...)
+//   message.hdr           offset=AbsoluteStatic(0)  size=Fixed(11)  mutate=InPlaceFixed
+//   message.hdr.seq       offset=AbsoluteStatic(7)  repr=ValueConverted
+//   message.opts          offset=AbsoluteStatic(11) size=Bounded(0,1500) mutate=Shifting
+//   message.recs          offset=Dynamic            access=Random
+//   message.recs[]        offset=FrameStatic(0)     size=Fixed(8)   address=FrameStable
+//   message.recs[].value  offset=FrameStatic(6)     mutate=InPlaceFixed
+//   message.trailer       offset=Dynamic            size=Bounded(0,...)
 //
 // The point: `opts` is variable length, so everything after it loses
-// AbsoluteStatic. But `Record` is fully static once its base is resolved, so
+// AbsoluteStatic. But `record` is fully static once its base is resolved, so
 // the elements keep fixed interior offsets relative to the frame. That is the
 // island of staticness, and it is the common case in real protocols rather
 // than an exception.
@@ -23,53 +23,53 @@ bit_order msb_first;
 
 const MAX_PAYLOAD = 1500;
 
-enum MsgType : u8 {
+enum msg_type : u8 {
 	hello = 0x01,
 	data  = 0x02,
 	close = 0x03,
 }
 
-struct Flags {
+struct flags {
 	bit       urgent;
 	bit       ack;
 	u3        priority;
 	reserved  u3  [must_be_zero];
 }
 
-struct Header {
+struct header {
 	u8       version  [must_eq = 1];
-	MsgType  type;
-	Flags    flags;
+	msg_type  type;
+	flags    flags;
 	u16      length   [max = MAX_PAYLOAD];
 	u16      rec_count;
 	u32      seq;
 }
 
-struct Record {
+struct record {
 	u32  id;
 	u16  kind;
 	u16  value;
 }
 
-struct Message {
-	Header   hdr;
+struct message {
+	header   hdr;
 	u8       opts[hdr.length];        // dynamic: shifts everything after it
-	Record   recs[hdr.rec_count];     // frame-relative static elements
+	record   recs[hdr.rec_count];     // frame-relative static elements
 	u8       trailer[remaining];
 }
 
-require size(Record) == 8;
+require size(record) == 8;
 
-// Passes: Record is fully static once its base is resolved.
-require frame_static(Message.recs[]);
-require in_place(Message.recs[].value);
-require random_access(Message.recs);
+// Passes: record is fully static once its base is resolved.
+require frame_static(message.recs[]);
+require in_place(message.recs[].value);
+require random_access(message.recs);
 
 // Fails, deliberately, and the diagnostic is the deliverable. Expected blame:
 //
 //   error: requirement not satisfied
-//     = offset(Message.recs) is Dynamic, required AbsoluteStatic
-//     = caused by: Message.opts has size Bounded(0,1500)
+//     = offset(message.recs) is Dynamic, required AbsoluteStatic
+//     = caused by: message.opts has size Bounded(0,1500)
 //     = 2 further members lost absolute addressing: recs, trailer
 //     = remedy: move `opts` after `recs` and `trailer`
 //               cost: 0 bytes; restores AbsoluteStatic for 2 members
@@ -78,9 +78,9 @@ require random_access(Message.recs);
 //
 // assert rather than require, so the schema keeps building while it documents
 // the known cost.
-assert absolute_static(Message.recs);
+assert absolute_static(message.recs);
 
 // Nothing bounds the trailer, so the frame has no worst case and cannot be
 // statically allocated. Recorded rather than required, because for this format
 // that is the intent.
-assert max_size(Message, 2048);
+assert max_size(message, 2048);

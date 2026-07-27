@@ -61,46 +61,46 @@ static void test_header(void)
 	memcpy(buf, HEADER_VECTOR, sizeof(buf));
 	situ_msg_init(&msg, buf, sizeof(buf));
 
-	check("Header view", situ_Header_view(&msg, 0, &view), SITU_OK);
-	check("Header validate", situ_Header_validate(view), SITU_OK);
+	check("header view", situ_header_view(&msg, 0, &view), SITU_OK);
+	check("header validate", situ_header_validate(view), SITU_OK);
 
 	/* The values must be identical on every architecture: that is what
 	 * declaring a byte order buys. */
-	check("version", situ_Header_version_get(view), 1);
-	check("type", situ_Header_type_get(view), SITU_MSGTYPE_DATA);
-	check("length", situ_Header_length_get(view), 1500);
+	check("version", situ_header_version_get(view), 1);
+	check("type", situ_header_type_get(view), SITU_MSG_TYPE_DATA);
+	check("length", situ_header_length_get(view), 1500);
 
 	/* seq sits at offset 5 and length at 3, both odd, so these are unaligned
 	 * multi-byte loads relative to the view base. That is the case most likely
 	 * to differ between architectures, and the reason this probe exists. */
-	check("seq", situ_Header_seq_get(view), 0xDEADBEEFu);
+	check("seq", situ_header_seq_get(view), 0xDEADBEEFu);
 
-	check("flags view", situ_Header_flags_view(view, &flags), SITU_OK);
-	check("urgent", situ_Flags_urgent_get(flags), 1);
-	check("ack", situ_Flags_ack_get(flags), 1);
-	check("priority", situ_Flags_priority_get(flags), 5);
+	check("flags view", situ_header_flags_view(view, &flags), SITU_OK);
+	check("urgent", situ_flags_urgent_get(flags), 1);
+	check("ack", situ_flags_ack_get(flags), 1);
+	check("priority", situ_flags_priority_get(flags), 5);
 
-	situ_Header_seq_set(view, 0x01020304u);
-	check("seq after set", situ_Header_seq_get(view), 0x01020304u);
+	situ_header_seq_set(view, 0x01020304u);
+	check("seq after set", situ_header_seq_get(view), 0x01020304u);
 	check("seq byte 0", buf[5], 0x01);
 	check("seq byte 3", buf[8], 0x04);
 
-	situ_Flags_priority_set(flags, 2);
-	check("priority after set", situ_Flags_priority_get(flags), 2);
+	situ_flags_priority_set(flags, 2);
+	check("priority after set", situ_flags_priority_get(flags), 2);
 	check("neighbouring bits kept", buf[2], 0xD0);
 }
 
-static const uint8_t TIFF_LITTLE[SITU_TIFFHEADER_SIZE_FIXED] = {
+static const uint8_t TIFF_LITTLE[SITU_TIFF_HEADER_SIZE_FIXED] = {
 	0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,
 };
 
-static const uint8_t TIFF_BIG[SITU_TIFFHEADER_SIZE_FIXED] = {
+static const uint8_t TIFF_BIG[SITU_TIFF_HEADER_SIZE_FIXED] = {
 	0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08,
 };
 
 static void test_tiff(void)
 {
-	uint8_t buf[SITU_TIFFHEADER_SIZE_FIXED];
+	uint8_t buf[SITU_TIFF_HEADER_SIZE_FIXED];
 	situ_msg_t msg;
 	situ_view_t view;
 	unsigned i;
@@ -112,27 +112,27 @@ static void test_tiff(void)
 	for (i = 0; i < 2u; i++) {
 		memcpy(buf, vectors[i], sizeof(buf));
 		situ_msg_init(&msg, buf, sizeof(buf));
-		check("Tiff view", situ_TiffHeader_view(&msg, 0, &view), SITU_OK);
+		check("Tiff view", situ_tiff_header_view(&msg, 0, &view), SITU_OK);
 
 		/* Both orders decode to the same values on every host: the branch is
 		 * on the marker in the buffer, never on the build. */
-		check("tiff magic", situ_TiffHeader_magic_get(view), 42);
-		check("tiff ifd", situ_TiffHeader_ifd_offset_get(view), 8);
+		check("tiff magic", situ_tiff_header_magic_get(view), 42);
+		check("tiff ifd", situ_tiff_header_ifd_offset_get(view), 8);
 
-		situ_TiffHeader_magic_set(view, 42);
-		situ_TiffHeader_ifd_offset_set(view, 8);
+		situ_tiff_header_magic_set(view, 42);
+		situ_tiff_header_ifd_offset_set(view, 8);
 		check_bytes("tiff round-trip", buf, vectors[i], sizeof(buf));
 	}
 
 	/* And the host constant follows the build, not the data. */
 	memset(buf, 0, sizeof(buf));
 	situ_msg_init(&msg, buf, sizeof(buf));
-	check("Tiff view", situ_TiffHeader_view(&msg, 0, &view), SITU_OK);
-	situ_TiffHeader_byte_order_set_host(view);
-	situ_TiffHeader_magic_set(view, 42);
-	situ_TiffHeader_ifd_offset_set(view, 8);
+	check("Tiff view", situ_tiff_header_view(&msg, 0, &view), SITU_OK);
+	situ_tiff_header_byte_order_set_host(view);
+	situ_tiff_header_magic_set(view, 42);
+	situ_tiff_header_ifd_offset_set(view, 8);
 
-	if (situ_TiffHeader_byte_order_is_little(view)) {
+	if (situ_tiff_header_byte_order_is_little(view)) {
 		check_bytes("host writer little", buf, TIFF_LITTLE, sizeof(buf));
 	} else {
 		check_bytes("host writer big", buf, TIFF_BIG, sizeof(buf));

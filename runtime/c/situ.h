@@ -142,12 +142,39 @@ static inline situ_err_t situ_bounds_check(situ_view_t view, uint32_t off, uint3
 #endif /* SITU_CHECKED */
 
 /* ------------------------------------------------------------------------
+ * Host byte order
+ *
+ * Decided by the compiler building this translation unit, and deliberately not
+ * by whatever machine ran situc. Those are different machines whenever anyone
+ * cross-compiles, and a generator that baked its own order into the output
+ * would produce code that reads the wrong bytes on the target while compiling
+ * without a murmur.
+ *
+ * Where it cannot be determined, this refuses rather than assuming little
+ * endian. A wrong guess here is undetectable until the bytes are on the wire.
+ * ------------------------------------------------------------------------ */
+
+#ifndef SITU_HOST_BIG
+#  if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
+#    define SITU_HOST_BIG (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+#  elif defined(_WIN32)
+#    define SITU_HOST_BIG 0
+#  else
+#    error "situ cannot determine the host byte order; define SITU_HOST_BIG to 0 or 1"
+#  endif
+#endif
+
+/* ------------------------------------------------------------------------
  * Byte-order access
  *
  * Generated accessors go through these rather than casting a pointer, which
  * would be both an alignment fault and a strict-aliasing violation on the
  * targets that matter. Every one of them compiles to a load plus a byte swap
  * on a machine that has one.
+ *
+ * The `ne` forms are host order. `SITU_HOST_BIG` is a compile-time constant, so
+ * the branch folds away and the call costs exactly what the fixed-order one
+ * does.
  * ------------------------------------------------------------------------ */
 
 static inline uint16_t situ_get_be16(const uint8_t *p)
@@ -220,6 +247,48 @@ static inline void situ_put_le64(uint8_t *p, uint64_t v)
 {
 	situ_put_le32(p,     (uint32_t)(v));
 	situ_put_le32(p + 4, (uint32_t)(v >> 32));
+}
+
+static inline uint16_t situ_get_ne16(const uint8_t *p)
+{
+	return SITU_HOST_BIG ? situ_get_be16(p) : situ_get_le16(p);
+}
+
+static inline uint32_t situ_get_ne32(const uint8_t *p)
+{
+	return SITU_HOST_BIG ? situ_get_be32(p) : situ_get_le32(p);
+}
+
+static inline uint64_t situ_get_ne64(const uint8_t *p)
+{
+	return SITU_HOST_BIG ? situ_get_be64(p) : situ_get_le64(p);
+}
+
+static inline void situ_put_ne16(uint8_t *p, uint16_t v)
+{
+	if (SITU_HOST_BIG) {
+		situ_put_be16(p, v);
+	} else {
+		situ_put_le16(p, v);
+	}
+}
+
+static inline void situ_put_ne32(uint8_t *p, uint32_t v)
+{
+	if (SITU_HOST_BIG) {
+		situ_put_be32(p, v);
+	} else {
+		situ_put_le32(p, v);
+	}
+}
+
+static inline void situ_put_ne64(uint8_t *p, uint64_t v)
+{
+	if (SITU_HOST_BIG) {
+		situ_put_be64(p, v);
+	} else {
+		situ_put_le64(p, v);
+	}
 }
 
 /* ------------------------------------------------------------------------
@@ -316,6 +385,22 @@ static inline void situ_bits_set_lsb(uint8_t *base, uint32_t off, uint32_t width
 	for (i = first; i <= last; i++) {
 		base[i] = (uint8_t)(acc & 0xFFu);
 		acc >>= 8;
+	}
+}
+
+static inline uint64_t situ_bits_get_ne(const uint8_t *base, uint32_t off, uint32_t width)
+{
+	return SITU_HOST_BIG ? situ_bits_get_msb(base, off, width)
+	                     : situ_bits_get_lsb(base, off, width);
+}
+
+static inline void situ_bits_set_ne(uint8_t *base, uint32_t off, uint32_t width,
+		uint64_t v)
+{
+	if (SITU_HOST_BIG) {
+		situ_bits_set_msb(base, off, width, v);
+	} else {
+		situ_bits_set_lsb(base, off, width, v);
 	}
 }
 

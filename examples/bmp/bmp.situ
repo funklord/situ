@@ -15,7 +15,7 @@
 target buffer;
 endian little;
 
-struct BitmapFileHeader {
+struct bitmap_file_header {
 	// "BM". A byte array rather than a u16, because it is a marker, not a
 	// number, and giving it a numeric type would make its value depend on
 	// endianness for no reason.
@@ -26,20 +26,20 @@ struct BitmapFileHeader {
 	u32       pixel_offset;
 }
 
-enum Compression : u32 {
+enum compression : u32 {
 	rgb              = 0,
 	rle8             = 1,
 	rle4             = 2,
 	bitfields        = 3,
 }
 
-struct BitmapInfoHeader {
+struct bitmap_info_header {
 	u32          header_size  [must_eq = 40];
 	i32          width;
 	i32          height;
 	u16          planes  [must_eq = 1];
 	u16          bits_per_pixel;
-	Compression  compression;
+	compression  compression;
 	u32          image_size;
 	i32          x_pixels_per_meter;
 	i32          y_pixels_per_meter;
@@ -47,25 +47,25 @@ struct BitmapInfoHeader {
 	u32          important_colours;
 }
 
-require size(BitmapFileHeader) == 14;
-require size(BitmapInfoHeader) == 40;
-require absolute_static(BitmapFileHeader);
-require absolute_static(BitmapInfoHeader);
+require size(bitmap_file_header) == 14;
+require size(bitmap_info_header) == 40;
+require absolute_static(bitmap_file_header);
+require absolute_static(bitmap_info_header);
 
 // The signature is two plain bytes, so it is aligned and addressable.
-require aligned(BitmapFileHeader.signature, 1);
+require aligned(bitmap_file_header.signature, 1);
 
 // `file_size` is at offset 2. Asserted rather than required, so the schema
 // records the misalignment as a known property of the format instead of
 // failing a build over something the format's authors decided in 1990.
-assert aligned(BitmapFileHeader.file_size, 4);
+assert aligned(bitmap_file_header.file_size, 4);
 
 // A field that genuinely must be aligned would carry [require_aligned], which
 // turns the misalignment into an error instead of a note.
 
 // On a little-endian host these are the bytes, so pointer access is safe.
-require in_place(BitmapInfoHeader.width);
-require stable_address(BitmapInfoHeader.width);
+require in_place(bitmap_info_header.width);
+require stable_address(bitmap_info_header.width);
 
 // PHASE 5: the pixel array is `u8 pixels[image_size];` starting at
 // `pixel_offset`, which is a field-driven base rather than a running offset.

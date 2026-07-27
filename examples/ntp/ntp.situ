@@ -13,14 +13,14 @@ target buffer;
 endian big;
 bit_order msb_first;
 
-enum LeapIndicator : u2 {
+enum leap_indicator : u2 {
 	none              = 0,
 	last_minute_61    = 1,
 	last_minute_59    = 2,
 	unsynchronised    = 3,
 }
 
-enum Mode : u3 {
+enum mode : u3 {
 	reserved_mode     = 0,
 	symmetric_active  = 1,
 	symmetric_passive = 2,
@@ -34,15 +34,15 @@ enum Mode : u3 {
 // NTP timestamps are a 32.32 fixed-point count of seconds since 1900. Situ has
 // no fixed-point type yet (project.md section 8.1 defers it), so the two halves
 // are named rather than pretending a u64 is a scalar quantity.
-struct Timestamp {
+struct timestamp {
 	u32  seconds;
 	u32  fraction;
 }
 
-struct NtpPacket {
-	LeapIndicator  leap;
+struct ntp_packet {
+	leap_indicator  leap;
 	u3             version  [must_eq = 4];
-	Mode           mode;
+	mode           mode;
 
 	u8             stratum;
 	i8             poll;
@@ -52,25 +52,25 @@ struct NtpPacket {
 	u32            root_dispersion;
 	u32            reference_id;
 
-	Timestamp      reference  @ 0x10;
-	Timestamp      origin;
-	Timestamp      receive;
-	Timestamp      transmit;
+	timestamp      reference  @ 0x10;
+	timestamp      origin;
+	timestamp      receive;
+	timestamp      transmit;
 }
 
-require size(Timestamp) == 8;
-require size(NtpPacket) == 48;
-require absolute_static(NtpPacket);
-require canonical(NtpPacket);
+require size(timestamp) == 8;
+require size(ntp_packet) == 48;
+require absolute_static(ntp_packet);
+require canonical(ntp_packet);
 
 // The first byte packs 2 + 3 + 3 bits and closes exactly, so nothing straddles.
-require in_place(NtpPacket.mode);
+require in_place(ntp_packet.mode);
 
 // Every timestamp is 8-byte aligned, which is why NTP is cheap to handle on
 // targets that fault on unaligned access.
-require aligned(NtpPacket.transmit, 8);
-require aligned(NtpPacket.root_delay, 4);
+require aligned(ntp_packet.transmit, 8);
+require aligned(ntp_packet.root_delay, 4);
 
 // Big endian on a little-endian host means these are ValueConverted: the value
 // is not the memory. Getters return by value, never by pointer.
-require in_place(NtpPacket.transmit.seconds);
+require in_place(ntp_packet.transmit.seconds);

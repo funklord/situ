@@ -857,7 +857,7 @@ class Emitter:
 			"/* The host's own order, resolved at compile time. A writer stores",
 			" * this rather than picking an order, so the writer is deterministic",
 			" * even though the format admits both. */",
-			"#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__",
+			"#if SITU_HOST_BIG",
 			f"#define {base}_HOST {base}_BIG",
 			"#else",
 			f"#define {base}_HOST {base}_LITTLE",
@@ -1356,9 +1356,7 @@ class Emitter:
 			cast = self._ctype(scalar)
 			return f"({cast})({base})[{offset}u]"
 
-		suffix = "le" if placement.endian is ast.Endian.LITTLE else "be"
-		if placement.endian is ast.Endian.NATIVE:
-			suffix = "le" if _host_is_little() else "be"
+		suffix = _order_suffix(placement.endian)
 
 		width = scalar.bits
 		if width in WORD_WIDTHS:
@@ -1367,9 +1365,8 @@ class Emitter:
 
 		# Non-word whole-byte widths (u24, u48) go through the bit path, which
 		# handles any width without a special case.
-		raw = f"situ_bits_get_msb({base}, {placement.offset_bits}u, {width}u)"
-		if placement.endian is ast.Endian.LITTLE:
-			raw = f"situ_bits_get_lsb({base}, {placement.offset_bits}u, {width}u)"
+		assembly = _bit_assembly(placement.endian)
+		raw = f"situ_bits_get_{assembly}({base}, {placement.offset_bits}u, {width}u)"
 		if scalar.signed:
 			return f"({self._ctype(scalar)})situ_sign_extend({raw}, {width}u)"
 		return f"({self._ctype(scalar)}){raw}"
@@ -1429,17 +1426,15 @@ class Emitter:
 		if scalar.bits == BITS_PER_BYTE:
 			return f"({base})[{offset}u] = (uint8_t){value};"
 
-		suffix = "le" if placement.endian is ast.Endian.LITTLE else "be"
-		if placement.endian is ast.Endian.NATIVE:
-			suffix = "le" if _host_is_little() else "be"
+		suffix = _order_suffix(placement.endian)
 
 		width = scalar.bits
 		if width in WORD_WIDTHS:
 			return (f"situ_put_{suffix}{width}({base} + {offset}u, "
 			        f"(uint{width}_t){value});")
 
-		order = "lsb" if placement.endian is ast.Endian.LITTLE else "msb"
-		return (f"situ_bits_set_{order}({base}, {placement.offset_bits}u, "
+		assembly = _bit_assembly(placement.endian)
+		return (f"situ_bits_set_{assembly}({base}, {placement.offset_bits}u, "
 		        f"{width}u, (uint64_t){value});")
 
 	# -- validation -----------------------------------------------------
@@ -1583,6 +1578,21 @@ def _reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:
 	return "must_be_zero"
 
 
-def _host_is_little() -> bool:
-	import sys
-	return sys.byteorder == "little"
+def _order_suffix(endian: ast.Endian | None) -> str:
+	"""Which byte-order helper a scalar accessor calls.
+
+	`native` resolves to `ne`, whose host-order branch the *C* compiler folds.
+	It deliberately does not resolve here: situc runs on the machine building
+	the code, which is not the machine running it, and baking one order into
+	the output would be wrong for every cross build without saying so.
+	"""
+	if endian is ast.Endian.NATIVE:
+		return "ne"
+	return "le" if endian is ast.Endian.LITTLE else "be"
+
+
+def _bit_assembly(endian: ast.Endian | None) -> str:
+	"""The same choice for widths that are not a word: u24, u48."""
+	if endian is ast.Endian.NATIVE:
+		return "ne"
+	return "lsb" if endian is ast.Endian.LITTLE else "msb"

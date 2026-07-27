@@ -11,7 +11,7 @@
 target buffer;
 endian big;
 
-enum IcmpType : u8 {
+enum icmp_type : u8 {
 	echo_reply              = 0,
 	destination_unreachable = 3,
 	redirect                = 5,
@@ -20,17 +20,17 @@ enum IcmpType : u8 {
 	parameter_problem       = 12,
 }
 
-struct IcmpEcho {
-	IcmpType  type  [must_eq = IcmpType.echo_request];
+struct icmp_echo {
+	icmp_type  type  [must_eq = icmp_type.echo_request];
 	u8        code  [must_be_zero];
 	u16       checksum;
 	u16        identifier;
 	u16       sequence;
 }
 
-require size(IcmpEcho) == 8;
-require absolute_static(IcmpEcho);
-require in_place(IcmpEcho.sequence);
+require size(icmp_echo) == 8;
+require absolute_static(icmp_echo);
+require in_place(icmp_echo.sequence);
 
 // The checksum covers the whole message including the payload, so mutating
 // `sequence` invalidates it. Modelled as a plain field here, which means the
@@ -44,8 +44,8 @@ require in_place(IcmpEcho.sequence);
 
 // PHASE 6: the body is
 //     variant body switch (type) {
-//         case IcmpType.echo_request: EchoBody echo;
-//         case IcmpType.time_exceeded: UnusedThenDatagram exceeded;
+//         case icmp_type.echo_request: echo_body echo;
+//         case icmp_type.time_exceeded: unused_then_datagram exceeded;
 //         default: error;
 //     }
 // All the arms are four bytes, so unusually for a variant this one costs

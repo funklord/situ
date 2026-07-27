@@ -8,7 +8,7 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct TiffHeader size=8 repr=ConditionallyConverted(byte_order) canonical=CanonicalGiven(byte_order)
-  TiffHeader.byte_order                  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  TiffHeader.magic                       offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ConditionallyConverted(byte_order) atomic=AtomicWord canonical=CanonicalGiven(byte_order)
-  TiffHeader.ifd_offset                  offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ConditionallyConverted(byte_order) atomic=AtomicWord canonical=CanonicalGiven(byte_order)
+struct tiff_header size=8 repr=ConditionallyConverted(byte_order) canonical=CanonicalGiven(byte_order)
+  tiff_header.byte_order                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  tiff_header.magic                      offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ConditionallyConverted(byte_order) atomic=AtomicWord canonical=CanonicalGiven(byte_order)
+  tiff_header.ifd_offset                 offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ConditionallyConverted(byte_order) atomic=AtomicWord canonical=CanonicalGiven(byte_order)

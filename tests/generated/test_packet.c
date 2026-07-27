@@ -62,7 +62,7 @@ static situ_view_t view_of(situ_msg_t *msg, uint8_t *buf)
 
 	memcpy(buf, VECTOR, VECTOR_LEN);
 	situ_msg_init(msg, buf, VECTOR_LEN);
-	assert_int_equal(situ_Packet_view(msg, 0, VECTOR_LEN, &view), SITU_OK);
+	assert_int_equal(situ_packet_view(msg, 0, VECTOR_LEN, &view), SITU_OK);
 	return view;
 }
 
@@ -73,12 +73,12 @@ static void test_the_gate_refuses_before_verification(void **state)
 	uint8_t buf[VECTOR_LEN];
 	situ_msg_t msg;
 	situ_view_t view = view_of(&msg, buf);
-	situ_Packet_sealed_t gate;
+	situ_packet_sealed_t gate;
 
 	(void)state;
 
 	memset(&gate, 0, sizeof gate);
-	assert_int_equal(situ_Packet_sealed_open(view, 0, &gate), SITU_ERR_TAG);
+	assert_int_equal(situ_packet_sealed_open(view, 0, &gate), SITU_ERR_TAG);
 	assert_null(gate.view.base);
 }
 
@@ -87,13 +87,13 @@ static void test_the_gate_opens_once_the_tag_verifies(void **state)
 	uint8_t buf[VECTOR_LEN];
 	situ_msg_t msg;
 	situ_view_t view = view_of(&msg, buf);
-	situ_Packet_sealed_t gate;
+	situ_packet_sealed_t gate;
 
 	(void)state;
 
-	assert_int_equal(situ_Packet_sealed_open(view, 1, &gate), SITU_OK);
-	assert_int_equal(situ_Packet_sealed_inner_kind_get(gate), 9u);
-	assert_int_equal(situ_Packet_sealed_inner_seq_get(gate), 5u);
+	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
+	assert_int_equal(situ_packet_sealed_inner_kind_get(gate), 9u);
+	assert_int_equal(situ_packet_sealed_inner_seq_get(gate), 5u);
 }
 
 static void test_the_gate_costs_nothing_at_run_time(void **state)
@@ -103,14 +103,14 @@ static void test_the_gate_costs_nothing_at_run_time(void **state)
 	uint8_t buf[VECTOR_LEN];
 	situ_msg_t msg;
 	situ_view_t view = view_of(&msg, buf);
-	situ_Packet_sealed_t gate;
+	situ_packet_sealed_t gate;
 
 	(void)state;
 
-	assert_int_equal(situ_Packet_sealed_open(view, 1, &gate), SITU_OK);
+	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
 	assert_ptr_equal(gate.view.base, view.base);
-	assert_int_equal(situ_Packet_sealed_body_len(gate), 4u);
-	assert_ptr_equal(situ_Packet_sealed_body_ptr(gate), view.base + 46u);
+	assert_int_equal(situ_packet_sealed_body_len(gate), 4u);
+	assert_ptr_equal(situ_packet_sealed_body_ptr(gate), view.base + 46u);
 }
 
 /* -- tag coverage and the dirty bit (14.2) -------------------------------- */
@@ -124,7 +124,7 @@ static void test_a_fresh_message_is_transmittable(void **state)
 	(void)view_of(&msg, buf);
 
 	assert_int_equal(situ_msg_transmittable(&msg), SITU_OK);
-	assert_false(situ_Packet_tag_is_dirty(&msg));
+	assert_false(situ_packet_tag_is_dirty(&msg));
 }
 
 static void test_writing_a_covered_field_marks_the_tag_dirty(void **state)
@@ -135,9 +135,9 @@ static void test_writing_a_covered_field_marks_the_tag_dirty(void **state)
 
 	(void)state;
 
-	situ_Packet_hdr_seq_set(&msg, view, 0xAABBCCDDu);
+	situ_packet_hdr_seq_set(&msg, view, 0xAABBCCDDu);
 
-	assert_true(situ_Packet_tag_is_dirty(&msg));
+	assert_true(situ_packet_tag_is_dirty(&msg));
 	assert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);
 }
 
@@ -151,17 +151,17 @@ static void test_finalize_clears_the_dirty_bit(void **state)
 
 	(void)state;
 
-	situ_Packet_hdr_seq_set(&msg, view, 0xAABBCCDDu);
+	situ_packet_hdr_seq_set(&msg, view, 0xAABBCCDDu);
 	assert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);
 
 	/* What a caller does between the two: recompute over the covered span and
 	 * write the result. The algorithm is theirs; the span is the compiler's. */
-	assert_int_equal(situ_Packet_tag_covered(view, &offset, &len), SITU_OK);
-	memset(situ_Packet_tag_ptr(view), 0x5A, SITU_PACKET_TAG_COUNT);
+	assert_int_equal(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
+	memset(situ_packet_tag_ptr(view), 0x5A, SITU_PACKET_TAG_COUNT);
 
-	situ_Packet_tag_finalize(&msg);
+	situ_packet_tag_finalize(&msg);
 
-	assert_false(situ_Packet_tag_is_dirty(&msg));
+	assert_false(situ_packet_tag_is_dirty(&msg));
 	assert_int_equal(situ_msg_transmittable(&msg), SITU_OK);
 }
 
@@ -175,13 +175,13 @@ static void test_the_covered_span_is_the_authenticated_and_sealed_bytes(void **s
 
 	(void)state;
 
-	assert_int_equal(situ_Packet_tag_covered(view, &offset, &len), SITU_OK);
+	assert_int_equal(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
 
 	/* From the start of the authenticated block to the end of the sealed
 	 * region: the hop counter in front is outside, and so is the tag itself. */
 	assert_int_equal(offset, 4u);
 	assert_int_equal(len, TAG_OFFSET - 4u);
-	assert_ptr_equal(situ_Packet_tag_ptr(view), view.base + TAG_OFFSET);
+	assert_ptr_equal(situ_packet_tag_ptr(view), view.base + TAG_OFFSET);
 }
 
 static void test_the_covered_span_follows_the_length_field(void **state)
@@ -197,10 +197,10 @@ static void test_the_covered_span_follows_the_length_field(void **state)
 	/* A shorter body moves the tag and shrinks what it covers. The length
 	 * field is itself covered, so writing it marks the tag dirty -- which is
 	 * exactly right: the bytes it authenticates just changed. */
-	situ_Packet_hdr_length_set(&msg, view, 2u);
+	situ_packet_hdr_length_set(&msg, view, 2u);
 
-	assert_true(situ_Packet_tag_is_dirty(&msg));
-	assert_int_equal(situ_Packet_tag_covered(view, &offset, &len), SITU_OK);
+	assert_true(situ_packet_tag_is_dirty(&msg));
+	assert_int_equal(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
 	assert_int_equal(len, (TAG_OFFSET - 2u) - 4u);
 }
 
@@ -214,10 +214,10 @@ static void test_an_uncovered_field_stays_freely_mutable(void **state)
 
 	/* No message argument, and nothing goes stale: a hop counter is rewritten
 	 * at every forwarder, which is why it is outside coverage. */
-	situ_Packet_hop_set(view, 8u);
+	situ_packet_hop_set(view, 8u);
 
-	assert_int_equal(situ_Packet_hop_get(view), 8u);
-	assert_false(situ_Packet_tag_is_dirty(&msg));
+	assert_int_equal(situ_packet_hop_get(view), 8u);
+	assert_false(situ_packet_tag_is_dirty(&msg));
 	assert_int_equal(situ_msg_transmittable(&msg), SITU_OK);
 }
 
@@ -226,15 +226,15 @@ static void test_writing_through_the_gate_marks_the_tag_too(void **state)
 	uint8_t buf[VECTOR_LEN];
 	situ_msg_t msg;
 	situ_view_t view = view_of(&msg, buf);
-	situ_Packet_sealed_t gate;
+	situ_packet_sealed_t gate;
 
 	(void)state;
 
-	assert_int_equal(situ_Packet_sealed_open(view, 1, &gate), SITU_OK);
-	situ_Packet_sealed_inner_seq_set(&msg, gate, 0x99u);
+	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
+	situ_packet_sealed_inner_seq_set(&msg, gate, 0x99u);
 
-	assert_int_equal(situ_Packet_sealed_inner_seq_get(gate), 0x99u);
-	assert_true(situ_Packet_tag_is_dirty(&msg));
+	assert_int_equal(situ_packet_sealed_inner_seq_get(gate), 0x99u);
+	assert_true(situ_packet_tag_is_dirty(&msg));
 }
 
 /* -- secrets (14.6) ------------------------------------------------------- */
@@ -244,22 +244,22 @@ static void test_zeroize_erases_secret_bytes(void **state)
 	uint8_t buf[VECTOR_LEN];
 	situ_msg_t msg;
 	situ_view_t view = view_of(&msg, buf);
-	situ_Packet_sealed_t gate;
+	situ_packet_sealed_t gate;
 	uint32_t i;
 
 	(void)state;
 
-	assert_int_equal(situ_Packet_sealed_open(view, 1, &gate), SITU_OK);
-	assert_int_equal(situ_Packet_sealed_session_key_ptr(gate)[0], 0xC0u);
+	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
+	assert_int_equal(situ_packet_sealed_session_key_ptr(gate)[0], 0xC0u);
 
-	situ_Packet_sealed_session_key_zeroize(gate);
+	situ_packet_sealed_session_key_zeroize(gate);
 
 	for (i = 0; i < SITU_PACKET_SEALED_SESSION_KEY_COUNT; i++) {
-		assert_int_equal(situ_Packet_sealed_session_key_ptr(gate)[i], 0u);
+		assert_int_equal(situ_packet_sealed_session_key_ptr(gate)[i], 0u);
 	}
 
 	/* Only the secret bytes, and nothing either side of them. */
-	assert_int_equal(situ_Packet_sealed_inner_seq_get(gate), 5u);
+	assert_int_equal(situ_packet_sealed_inner_seq_get(gate), 5u);
 	assert_int_equal(buf[KEY_OFFSET - 1u], 0x05u);
 	assert_int_equal(buf[KEY_OFFSET + 16u], 0xDEu);
 }

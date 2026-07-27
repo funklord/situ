@@ -321,12 +321,12 @@ def test_example_5_1_map_is_exact() -> None:
 	schema, resolved = example()
 	text = capmap.render(schema, resolved, "header.situ")	# type: ignore[arg-type]
 
-	assert "struct Header size=9" in text
+	assert "struct header size=9" in text
 
 	# Hand-computed: 1 + 1 + 1 + 2 = 5, so seq lands at 0x05 and the header is
 	# 9 bytes. Reaching project.md's 0x06 and 10 would need a padding byte, and
 	# section 8.4 inserts none.
-	seq = next(line for line in text.splitlines() if "Header.seq" in line)
+	seq = next(line for line in text.splitlines() if "header.seq" in line)
 	assert "offset=AbsoluteStatic(0x05)" in seq
 	assert "size=Fixed(4)" in seq
 	# A u32 at an odd offset is neither naturally aligned nor atomic.
@@ -342,7 +342,7 @@ def test_example_5_1_requirements_discharge() -> None:
 
 def test_example_5_1_axes() -> None:
 	_, resolved = example()
-	seq = resolved.find("Header.seq")
+	seq = resolved.find("header.seq")
 	assert seq is not None
 	assert seq.vector.get(Axis.OFFSET).params == ("0x05",)
 	assert seq.vector.get(Axis.REPR).base == "ValueConverted"

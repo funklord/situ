@@ -97,8 +97,8 @@ endif
 $(GEN_DIR)/be_check.c: | $(GEN_HEADERS)
 	@mkdir -p '$(GEN_DIR)'
 	@printf '#include "tiff.h"\n' > $@
-	@printf '_Static_assert(SITU_TIFFHEADER_BYTE_ORDER_HOST ==\n' >> $@
-	@printf '               SITU_TIFFHEADER_BYTE_ORDER_BIG,\n' >> $@
+	@printf '_Static_assert(SITU_TIFF_HEADER_BYTE_ORDER_HOST ==\n' >> $@
+	@printf '               SITU_TIFF_HEADER_BYTE_ORDER_BIG,\n' >> $@
 	@printf '    "a big-endian build must select the big marker");\n' >> $@
 
 ifeq ($(HAVE_A64),)

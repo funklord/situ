@@ -87,7 +87,7 @@ def test_json_diagnostics_on_failure(
 
 
 def test_explain_prints_a_vector_and_blame(capsys: pytest.CaptureFixture[str]) -> None:
-	assert main(["explain", HEADER, "Header.seq"]) == 0
+	assert main(["explain", HEADER, "header.seq"]) == 0
 
 	out = capsys.readouterr().out
 	assert "offset     AbsoluteStatic(0x05)" in out
@@ -96,12 +96,12 @@ def test_explain_prints_a_vector_and_blame(capsys: pytest.CaptureFixture[str]) -
 
 
 def test_explain_on_a_struct(capsys: pytest.CaptureFixture[str]) -> None:
-	assert main(["explain", HEADER, "Header"]) == 0
-	assert "struct Header" in capsys.readouterr().out
+	assert main(["explain", HEADER, "header"]) == 0
+	assert "struct header" in capsys.readouterr().out
 
 
 def test_explain_on_an_unknown_path(capsys: pytest.CaptureFixture[str]) -> None:
-	assert main(["explain", HEADER, "Header.nope"]) == 1
+	assert main(["explain", HEADER, "header.nope"]) == 1
 	assert "unknown path" in capsys.readouterr().err
 
 
@@ -129,10 +129,10 @@ def test_gen_tests_reports_a_stale_vector(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
 	bad = tmp_path / "bad.vectors"
-	bad.write_text("Header short 01 02\n", encoding="ascii")
+	bad.write_text("header short 01 02\n", encoding="ascii")
 
 	assert main(["gen-tests", HEADER, str(bad), "--out", str(tmp_path)]) == 1
-	assert "is 2 bytes, but `Header` is 9" in capsys.readouterr().err
+	assert "is 2 bytes, but `header` is 9" in capsys.readouterr().err
 
 
 def test_build_writes_the_generated_pair(
@@ -154,7 +154,7 @@ def test_map_command_emits_the_map(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_map_summary_format(capsys: pytest.CaptureFixture[str]) -> None:
 	assert main(["map", "--format=summary", HEADER]) == 0
-	assert "Header: 9 bytes" in capsys.readouterr().out
+	assert "header: 9 bytes" in capsys.readouterr().out
 
 
 def test_unknown_command_is_an_argparse_error() -> None:

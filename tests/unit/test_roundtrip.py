@@ -25,28 +25,28 @@ schema
 	endian big
 	bit_order msb_first
 	const MAX_PAYLOAD = 1500
-	enum MsgType : u8 default=error
+	enum msg_type : u8 default=error
 		hello = 0x01
 		data = 0x02
 		close = 0x03
-	struct Flags
+	struct flags
 		field urgent : bit
 		field ack : bit
 		field priority : u3
 		reserved u3
 			attr must_be_zero
-	struct Header
+	struct header
 		field version : u8
 			attr must_eq = 1
-		field type : MsgType
-		field flags : Flags
+		field type : msg_type
+		field flags : flags
 		field length : u16
 			attr max = MAX_PAYLOAD
 		field seq : u32
 			pin 0x05
-	require size(Header) == 9
-	require absolute_static(Header)
-	require in_place(Header.seq)
+	require size(header) == 9
+	require absolute_static(header)
+	require in_place(header.seq)
 """
 
 

@@ -36,7 +36,7 @@ def resolved() -> ResolvedSchema:
 
 
 def canonical_blame(resolved: ResolvedSchema) -> list[Weakening]:
-	entry = resolved.find("ProtoMessage.fields")
+	entry = resolved.find("proto_message.fields")
 	assert entry is not None
 	return entry.blame(Axis.CANONICAL)
 
@@ -45,32 +45,32 @@ def canonical_blame(resolved: ResolvedSchema) -> list[Weakening]:
 
 
 def test_the_region_is_unbounded(resolved: ResolvedSchema) -> None:
-	entry = resolved.find("ProtoMessage.fields")
+	entry = resolved.find("proto_message.fields")
 	assert entry is not None
 	assert entry.vector.get(Axis.SIZE) == Value("Unbounded")
 
 
 def test_the_region_starts_where_it_starts(resolved: ResolvedSchema) -> None:
 	"""The one thing protobuf does keep, and situ says so."""
-	entry = resolved.find("ProtoMessage.fields")
+	entry = resolved.find("proto_message.fields")
 	assert entry is not None
 	assert entry.vector.get(Axis.OFFSET) == Value("AbsoluteStatic", ("0x00",))
 
 
 def test_access_is_sequential(resolved: ResolvedSchema) -> None:
-	entry = resolved.find("ProtoMessage.fields")
+	entry = resolved.find("proto_message.fields")
 	assert entry is not None
 	assert entry.vector.get(Axis.ACCESS) == Value("Sequential")
 
 
 def test_addresses_are_unstable(resolved: ResolvedSchema) -> None:
-	entry = resolved.find("ProtoMessage.fields")
+	entry = resolved.find("proto_message.fields")
 	assert entry is not None
 	assert entry.vector.get(Axis.ADDRESS) == Value("Unstable")
 
 
 def test_the_region_is_not_canonical(resolved: ResolvedSchema) -> None:
-	entry = resolved.find("ProtoMessage.fields")
+	entry = resolved.find("proto_message.fields")
 	assert entry is not None
 	assert entry.vector.get(Axis.CANONICAL) == Value("NonCanonical")
 

@@ -184,10 +184,15 @@ def _check_host_dependence(decl: ast.StructDecl, layout: StructLayout) -> None:
 					"host-order encoding makes the struct non-canonical: the "
 					"same value has a different byte sequence on a machine of "
 					"the other order",
+					"`native` is the order of the machine the generated code is "
+					"compiled for, which is not necessarily the peer's: a server "
+					"writing frames for a weaker client wants the client's order "
+					"named outright, not its own",
 					f"add `[allow_host_dependent]` to `struct {decl.name}` if "
 					"this format never leaves the machine",
 					"otherwise declare `endian big` or `endian little`, or use "
-					"an `endian_marker` (project.md section 8.3)",
+					"an `endian_marker` so the order travels with the data "
+					"(project.md section 8.3)",
 				],
 			)
 

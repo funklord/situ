@@ -8,17 +8,17 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct DnsHeader size=12 repr=ValueConverted atomic=NonAtomic
-  DnsHeader.id                           offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  DnsHeader.is_response                  offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.opcode                       offset=AbsoluteStatic(0x02:1) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.authoritative                offset=AbsoluteStatic(0x02:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.truncated                    offset=AbsoluteStatic(0x02:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.recursion_desired            offset=AbsoluteStatic(0x02:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.recursion_available          offset=AbsoluteStatic(0x03) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.<reserved0>                  offset=AbsoluteStatic(0x03:1) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.response_code                offset=AbsoluteStatic(0x03:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  DnsHeader.question_count               offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  DnsHeader.answer_count                 offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  DnsHeader.authority_count              offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  DnsHeader.additional_count             offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+struct dns_header size=12 repr=ValueConverted atomic=NonAtomic
+  dns_header.id                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  dns_header.is_response                 offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.opcode                      offset=AbsoluteStatic(0x02:1) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.authoritative               offset=AbsoluteStatic(0x02:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.truncated                   offset=AbsoluteStatic(0x02:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.recursion_desired           offset=AbsoluteStatic(0x02:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.recursion_available         offset=AbsoluteStatic(0x03) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.<reserved0>                 offset=AbsoluteStatic(0x03:1) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.response_code               offset=AbsoluteStatic(0x03:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dns_header.question_count              offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  dns_header.answer_count                offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  dns_header.authority_count             offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  dns_header.additional_count            offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

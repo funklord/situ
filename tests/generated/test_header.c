@@ -20,7 +20,7 @@
 
 #include "header.h"
 
-/* A hand-assembled Header, byte by byte:
+/* A hand-assembled header, byte by byte:
  *
  *   00        version  = 1
  *   01        type     = data (2)
@@ -38,7 +38,7 @@ static situ_view_t view_of(situ_msg_t *msg, uint8_t *buf, uint32_t size)
 	situ_view_t view;
 
 	situ_msg_init(msg, buf, size);
-	assert_int_equal(situ_Header_view(msg, 0, &view), SITU_OK);
+	assert_int_equal(situ_header_view(msg, 0, &view), SITU_OK);
 	return view;
 }
 
@@ -64,10 +64,10 @@ static void test_scalar_getters(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(situ_Header_version_get(view), 1);
-	assert_int_equal(situ_Header_type_get(view), SITU_MSGTYPE_DATA);
-	assert_int_equal(situ_Header_length_get(view), 1500);
-	assert_int_equal(situ_Header_seq_get(view), 0xDEADBEEFu);
+	assert_int_equal(situ_header_version_get(view), 1);
+	assert_int_equal(situ_header_type_get(view), SITU_MSG_TYPE_DATA);
+	assert_int_equal(situ_header_length_get(view), 1500);
+	assert_int_equal(situ_header_seq_get(view), 0xDEADBEEFu);
 }
 
 static void test_big_endian_is_decoded_not_aliased(void **state)
@@ -85,7 +85,7 @@ static void test_big_endian_is_decoded_not_aliased(void **state)
 	 * exactly why no pointer accessor is generated for this field. */
 	assert_int_equal(buf[3], 0x05);
 	assert_int_equal(buf[4], 0xDC);
-	assert_int_equal(situ_Header_length_get(view), 1500);
+	assert_int_equal(situ_header_length_get(view), 1500);
 }
 
 static void test_bit_fields_through_a_sub_view(void **state)
@@ -99,13 +99,13 @@ static void test_bit_fields_through_a_sub_view(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(situ_Header_flags_view(view, &flags), SITU_OK);
+	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
 	assert_ptr_equal(flags.base, buf + 2);
 
 	/* 0xE8 = 1110 1000, msb_first: urgent=1, ack=1, priority=101b, rsvd=0 */
-	assert_int_equal(situ_Flags_urgent_get(flags), 1);
-	assert_int_equal(situ_Flags_ack_get(flags), 1);
-	assert_int_equal(situ_Flags_priority_get(flags), 5);
+	assert_int_equal(situ_flags_urgent_get(flags), 1);
+	assert_int_equal(situ_flags_ack_get(flags), 1);
+	assert_int_equal(situ_flags_priority_get(flags), 5);
 }
 
 static void test_bit_field_write_touches_only_its_own_bits(void **state)
@@ -118,16 +118,16 @@ static void test_bit_field_write_touches_only_its_own_bits(void **state)
 	(void)state;
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_Header_flags_view(view, &flags), SITU_OK);
+	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
 
-	situ_Flags_priority_set(flags, 2);
+	situ_flags_priority_set(flags, 2);
 
 	/* 1 1 010 000 = 0xD0. The neighbouring fields and the reserved bits are
 	 * unchanged, which is what a read-modify-write has to guarantee. */
 	assert_int_equal(buf[2], 0xD0);
-	assert_int_equal(situ_Flags_urgent_get(flags), 1);
-	assert_int_equal(situ_Flags_ack_get(flags), 1);
-	assert_int_equal(situ_Flags_priority_get(flags), 2);
+	assert_int_equal(situ_flags_urgent_get(flags), 1);
+	assert_int_equal(situ_flags_ack_get(flags), 1);
+	assert_int_equal(situ_flags_priority_get(flags), 2);
 }
 
 static void test_round_trip_is_byte_identical(void **state)
@@ -138,7 +138,7 @@ static void test_round_trip_is_byte_identical(void **state)
 	situ_view_t flags;
 
 	uint8_t version;
-	situ_MsgType_t type;
+	situ_msg_type_t type;
 	uint16_t length;
 	uint32_t seq;
 	uint8_t urgent;
@@ -148,26 +148,26 @@ static void test_round_trip_is_byte_identical(void **state)
 	(void)state;
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_Header_flags_view(view, &flags), SITU_OK);
+	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
 
-	version  = situ_Header_version_get(view);
-	type     = situ_Header_type_get(view);
-	length   = situ_Header_length_get(view);
-	seq      = situ_Header_seq_get(view);
-	urgent   = situ_Flags_urgent_get(flags);
-	ack      = situ_Flags_ack_get(flags);
-	priority = situ_Flags_priority_get(flags);
+	version  = situ_header_version_get(view);
+	type     = situ_header_type_get(view);
+	length   = situ_header_length_get(view);
+	seq      = situ_header_seq_get(view);
+	urgent   = situ_flags_urgent_get(flags);
+	ack      = situ_flags_ack_get(flags);
+	priority = situ_flags_priority_get(flags);
 
 	/* Scribble, then write every value back. */
 	memset(buf, 0xA5, sizeof(buf));
 
-	situ_Header_version_set(view, version);
-	situ_Header_type_set(view, type);
-	situ_Header_length_set(view, length);
-	situ_Header_seq_set(view, seq);
-	situ_Flags_urgent_set(flags, urgent);
-	situ_Flags_ack_set(flags, ack);
-	situ_Flags_priority_set(flags, priority);
+	situ_header_version_set(view, version);
+	situ_header_type_set(view, type);
+	situ_header_length_set(view, length);
+	situ_header_seq_set(view, seq);
+	situ_flags_urgent_set(flags, urgent);
+	situ_flags_ack_set(flags, ack);
+	situ_flags_priority_set(flags, priority);
 
 	/* The reserved bits were scribbled over and no accessor can restore them,
 	 * which is the point of them being reserved: they carry no information.
@@ -188,9 +188,9 @@ static void test_validate_accepts_the_vector(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(situ_Header_validate(view), SITU_OK);
-	assert_int_equal(situ_Header_flags_view(view, &flags), SITU_OK);
-	assert_int_equal(situ_Flags_validate(flags), SITU_OK);
+	assert_int_equal(situ_header_validate(view), SITU_OK);
+	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
+	assert_int_equal(situ_flags_validate(flags), SITU_OK);
 }
 
 static void test_validate_rejects_a_wrong_must_eq(void **state)
@@ -203,8 +203,8 @@ static void test_validate_rejects_a_wrong_must_eq(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	situ_Header_version_set(view, 2);
-	assert_int_equal(situ_Header_validate(view), SITU_ERR_CONSTRAINT);
+	situ_header_version_set(view, 2);
+	assert_int_equal(situ_header_validate(view), SITU_ERR_CONSTRAINT);
 }
 
 static void test_validate_rejects_a_length_over_max(void **state)
@@ -217,8 +217,8 @@ static void test_validate_rejects_a_length_over_max(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	situ_Header_length_set(view, 1501);
-	assert_int_equal(situ_Header_validate(view), SITU_ERR_CONSTRAINT);
+	situ_header_length_set(view, 1501);
+	assert_int_equal(situ_header_validate(view), SITU_ERR_CONSTRAINT);
 }
 
 static void test_validate_rejects_dirty_reserved_bits(void **state)
@@ -231,12 +231,12 @@ static void test_validate_rejects_dirty_reserved_bits(void **state)
 	(void)state;
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_Header_flags_view(view, &flags), SITU_OK);
+	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
 
 	/* Section 14.5: every ignored bit is a malleability surface, so reserved
 	 * bits are rejected on parse rather than preserved. */
 	buf[2] |= 0x01u;
-	assert_int_equal(situ_Flags_validate(flags), SITU_ERR_CONSTRAINT);
+	assert_int_equal(situ_flags_validate(flags), SITU_ERR_CONSTRAINT);
 }
 
 static void test_view_refuses_a_short_buffer(void **state)
@@ -247,7 +247,7 @@ static void test_view_refuses_a_short_buffer(void **state)
 
 	(void)state;
 	situ_msg_init(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_Header_view(&msg, 0, &view), SITU_ERR_BOUNDS);
+	assert_int_equal(situ_header_view(&msg, 0, &view), SITU_ERR_BOUNDS);
 }
 
 static void test_pointer_accessor_for_byte_fields(void **state)
@@ -261,9 +261,9 @@ static void test_pointer_accessor_for_byte_fields(void **state)
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
 	/* version is MemoryIdentical, so a pointer is safe and is offered. */
-	assert_ptr_equal(situ_Header_version_ptr(view), buf);
-	*situ_Header_version_ptr(view) = 7;
-	assert_int_equal(situ_Header_version_get(view), 7);
+	assert_ptr_equal(situ_header_version_ptr(view), buf);
+	*situ_header_version_ptr(view) = 7;
+	assert_int_equal(situ_header_version_get(view), 7);
 }
 
 int main(void)

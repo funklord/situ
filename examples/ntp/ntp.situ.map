@@ -8,29 +8,29 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct NtpPacket size=48 repr=ValueConverted atomic=NonAtomic
-  NtpPacket.leap                         offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  NtpPacket.version                      offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  NtpPacket.mode                         offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  NtpPacket.stratum                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  NtpPacket.poll                         offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
-  NtpPacket.precision                    offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  NtpPacket.root_delay                   offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.root_dispersion              offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.reference_id                 offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.reference                    offset=AbsoluteStatic(0x10) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  NtpPacket.reference.seconds            offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.reference.fraction           offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.origin                       offset=AbsoluteStatic(0x18) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  NtpPacket.origin.seconds               offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.origin.fraction              offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.receive                      offset=AbsoluteStatic(0x20) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  NtpPacket.receive.seconds              offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.receive.fraction             offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.transmit                     offset=AbsoluteStatic(0x28) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  NtpPacket.transmit.seconds             offset=AbsoluteStatic(0x28) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  NtpPacket.transmit.fraction            offset=AbsoluteStatic(0x2C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+struct ntp_packet size=48 repr=ValueConverted atomic=NonAtomic
+  ntp_packet.leap                        offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ntp_packet.version                     offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ntp_packet.mode                        offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ntp_packet.stratum                     offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ntp_packet.poll                        offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  ntp_packet.precision                   offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ntp_packet.root_delay                  offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.root_dispersion             offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.reference_id                offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.reference                   offset=AbsoluteStatic(0x10) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_packet.reference.seconds           offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.reference.fraction          offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.origin                      offset=AbsoluteStatic(0x18) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_packet.origin.seconds              offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.origin.fraction             offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.receive                     offset=AbsoluteStatic(0x20) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_packet.receive.seconds             offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.receive.fraction            offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.transmit                    offset=AbsoluteStatic(0x28) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_packet.transmit.seconds            offset=AbsoluteStatic(0x28) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_packet.transmit.fraction           offset=AbsoluteStatic(0x2C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
-struct Timestamp size=8 repr=ValueConverted
-  Timestamp.seconds                      offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  Timestamp.fraction                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+struct timestamp size=8 repr=ValueConverted
+  timestamp.seconds                      offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  timestamp.fraction                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord

@@ -13,7 +13,7 @@ target buffer;
 endian big;
 bit_order msb_first;
 
-enum Opcode : u4 {
+enum opcode : u4 {
 	query  = 0,
 	iquery = 1,
 	status = 2,
@@ -21,7 +21,7 @@ enum Opcode : u4 {
 	update = 5,
 }
 
-enum ResponseCode : u4 {
+enum response_code : u4 {
 	no_error        = 0,
 	format_error    = 1,
 	server_failure  = 2,
@@ -30,12 +30,12 @@ enum ResponseCode : u4 {
 	refused         = 5,
 }
 
-struct DnsHeader {
+struct dns_header {
 	u16           id;
 
 	// One byte: response flag, opcode, three one-bit flags.
 	bit           is_response;
-	Opcode        opcode;
+	opcode        opcode;
 	bit           authoritative;
 	bit           truncated;
 	bit           recursion_desired;
@@ -43,7 +43,7 @@ struct DnsHeader {
 	// One byte: the recursion flag, three unused bits, the response code.
 	bit           recursion_available;
 	reserved      u3    [must_be_zero];
-	ResponseCode  response_code;
+	response_code  response_code;
 
 	u16           question_count;
 	u16           answer_count;
@@ -51,18 +51,18 @@ struct DnsHeader {
 	u16           additional_count;
 }
 
-require size(DnsHeader) == 12;
-require absolute_static(DnsHeader);
+require size(dns_header) == 12;
+require absolute_static(dns_header);
 
 // Both packed bytes are exactly eight bits wide, so nothing straddles and no
 // [allow_straddle] is needed. The 4-bit enums sit inside one byte each.
-require in_place(DnsHeader.response_code);
-require in_place(DnsHeader.answer_count);
+require in_place(dns_header.response_code);
+require in_place(dns_header.answer_count);
 
 // The reserved bits are rejected on parse rather than preserved. Section 14.5
 // is deliberate about this: every ignored bit is a malleability surface, and
 // DNS responses are a well-known covert channel.
-require canonical(DnsHeader);
+require canonical(dns_header);
 
 // OUT OF SCOPE: the question and answer sections. A DNS name is a chain of
 // length-prefixed labels which may terminate in a two-byte pointer to an

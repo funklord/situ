@@ -16,7 +16,7 @@ target buffer;
 endian big;
 bit_order msb_first;
 
-enum Protocol : u8 {
+enum protocol : u8 {
 	icmp = 1,
 	igmp = 2,
 	tcp  = 6,
@@ -26,11 +26,11 @@ enum Protocol : u8 {
 	ah   = 51,
 }
 
-struct IPv4Address {
+struct ipv4_address {
 	u8  octets[4];
 }
 
-struct IPv4Header [allow_straddle] {
+struct ipv4_header [allow_straddle] {
 	u4        version  [must_eq = 4];
 	u4        ihl      [min = 5];
 	u6        dscp;
@@ -45,24 +45,24 @@ struct IPv4Header [allow_straddle] {
 	u13       fragment_offset;
 
 	u8        time_to_live;
-	Protocol  protocol;
+	protocol  protocol;
 	u16       header_checksum;
-	IPv4Address  source       @ 0x0C;
-	IPv4Address  destination  @ 0x10;
+	ipv4_address  source       @ 0x0C;
+	ipv4_address  destination  @ 0x10;
 }
 
-require size(IPv4Header) == 20;
-require absolute_static(IPv4Header);
+require size(ipv4_header) == 20;
+require absolute_static(ipv4_header);
 
 // The addresses are byte arrays at byte-aligned offsets, so they keep the
 // strongest representation despite the bit packing above them.
-require aligned(IPv4Header.source, 4);
-require in_place(IPv4Header.time_to_live);
+require aligned(ipv4_header.source, 4);
+require in_place(ipv4_header.time_to_live);
 
 // `fragment_offset` straddles, so writing it is a read-modify-write of two
 // bytes and it can never be atomic. Asserted rather than required so the
 // schema documents the cost without failing the build.
-assert atomic(IPv4Header.fragment_offset);
+assert atomic(ipv4_header.fragment_offset);
 
 // PHASE 5: the variable part. Once counted arrays land this becomes
 //     u8 options[(ihl - 5) * 4];

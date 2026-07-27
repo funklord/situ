@@ -76,11 +76,11 @@ is rare and now diagnosed properly.
 weaker option anyway: the collision check is what actually prevents the failure,
 and a style rule would prevent nothing while forbidding schemas that are fine.
 
-**Keep PascalCase as the house style for the examples.** Rejected in part:
-`examples/telemetry/` is snake_case throughout, as the working demonstration
-that it is genuinely supported. The rest are left as they are, since converting
-them would churn their committed maps and, for `message` and `packet`, diverge
-from the worked examples in project.md sections 5.2 and 5.3 that they mirror.
+**Keep PascalCase as the house style for the examples.** Rejected: every schema
+in the tree is snake_case, including the worked examples in project.md sections
+5.1, 5.2, 5.3 and 9.7 that three of them mirror. One convention in the tree is
+worth more than the churn, and the conversion needed no compiler change at all
+-- which is the evidence that casing was already free.
 
 ## Note
 

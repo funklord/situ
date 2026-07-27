@@ -25,7 +25,7 @@ varint_type pb_varint {
 	max_bits = 64;
 }
 
-struct ProtoMessage {
+struct proto_message {
 	tlv fields (
 		tag_type       = pb_varint,
 		tag_decode     = { field = tag >> 3, wire = tag & 0x7 },
@@ -48,17 +48,17 @@ struct ProtoMessage {
 
 // The expected outcome, which the compiler must produce and explain:
 //
-//   ProtoMessage           size=Unbounded  offset=AbsoluteStatic(0)
-//   ProtoMessage.fields    access=Sequential  address=Unstable
+//   proto_message           size=Unbounded  offset=AbsoluteStatic(0)
+//   proto_message.fields    access=Sequential  address=Unstable
 //   canonical = NonCanonical
 //
-// `situc explain ProtoMessage.fields` must enumerate the causes with source
+// `situc explain proto_message.fields` must enumerate the causes with source
 // locations. Asserted rather than required, because every one of them is a
 // true statement about protobuf that the schema exists to record.
-assert canonical(ProtoMessage);
-assert random_access(ProtoMessage.fields);
-assert stable_address(ProtoMessage.fields);
+assert canonical(proto_message);
+assert random_access(proto_message.fields);
+assert stable_address(proto_message.fields);
 
 // These do hold, and are the useful half: the region starts where it starts,
 // and situ can say so even about a format this hostile.
-require absolute_static(ProtoMessage.fields);
+require absolute_static(proto_message.fields);

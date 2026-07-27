@@ -186,36 +186,36 @@ bit_order msb_first;
 
 const MAX_PAYLOAD = 1500;
 
-enum MsgType : u8 {
+enum msg_type : u8 {
     hello = 0x01,
     data  = 0x02,
     close = 0x03,
 }
 
-struct Flags {
+struct flags {
     bit  urgent;
     bit  ack;
     u3   priority;
     reserved u3 [must_be_zero];
 }
 
-struct Header {
-    u8       version  [must_eq = 1];
-    MsgType  type;
-    Flags    flags;
-    u16      length   [max = MAX_PAYLOAD];
-    u32      seq      @ 0x05;          // pin: assert solver agrees
+struct header {
+    u8        version  [must_eq = 1];
+    msg_type  type;
+    flags     flags;
+    u16       length   [max = MAX_PAYLOAD];
+    u32       seq      @ 0x05;         // pin: assert solver agrees
 }
 
-require size(Header) == 9;
-require absolute_static(Header);
-require in_place(Header.seq);
+require size(header) == 9;
+require absolute_static(header);
+require in_place(header.seq);
 ```
 
 ### 5.2 Dynamic frame with static islands
 
 ```situ
-struct Record {
+struct record {
     u32  id;
     u16  kind;
     u16  value;
@@ -223,25 +223,25 @@ struct Record {
 
 // The header of 5.1 plus the element count this message needs, which makes it
 // 11 bytes with `seq` at 0x07.
-struct Header {
-    u8       version  [must_eq = 1];
-    MsgType  type;
-    Flags    flags;
-    u16      length   [max = MAX_PAYLOAD];
-    u16      rec_count;
-    u32      seq      @ 0x07;
+struct header {
+    u8        version  [must_eq = 1];
+    msg_type  type;
+    flags     flags;
+    u16       length   [max = MAX_PAYLOAD];
+    u16       rec_count;
+    u32       seq      @ 0x07;
 }
 
-struct Message {
-    Header          hdr;
-    u8              opts[hdr.length];   // dynamic: shifts everything after
-    Record          recs[hdr.rec_count];// frame-relative static elements
-    u8              trailer[remaining];
+struct message {
+    header  hdr;
+    u8      opts[hdr.length];      // dynamic: shifts everything after
+    record  recs[hdr.rec_count];   // frame-relative static elements
+    u8      trailer[remaining];
 }
 
-// Record is fully static once its base is resolved. Assert that:
-require frame_static(Message.recs[]);
-require in_place(Message.recs[].value);
+// A record is fully static once its base is resolved. Assert that:
+require frame_static(message.recs[]);
+require in_place(message.recs[].value);
 ```
 
 ### 5.3 Sealed packet
@@ -256,9 +256,9 @@ codec aes_gcm_128 {
     deterministic;
 }
 
-struct Packet {
+struct packet {
     authenticated {
-        Header  hdr;
+        header  hdr;
         u8      nonce[12];
     }
 
@@ -274,14 +274,14 @@ struct Packet {
                                 // and sealed regions in this struct
 }
 
-require canonical(Packet);
-require in_place(Packet.hdr.seq);              // outside tag coverage? no --
+require canonical(packet);
+require in_place(packet.hdr.seq);              // outside tag coverage? no --
                                                // will fail; see 14.2
-require verify_gated(Packet.sealed);           // no parse before verify
+require verify_gated(packet.sealed);           // no parse before verify
 ```
 
 The regions and the tag are unnamed here, which means they take their keyword
-as their name -- which is what lets `require verify_gated(Packet.sealed)`
+as their name -- which is what lets `require verify_gated(packet.sealed)`
 resolve. A struct with two regions of a kind names them:
 `docs/decisions/0010-region-and-tag-names.md`.
 
@@ -318,7 +318,7 @@ decl          = const_decl | enum_decl | struct_decl | codec_decl
               | register_decl | requirement ;
 
 (* One level; nesting is rejected naming its phase. A declaration inside is
-   named `outer::Header`, and an unqualified reference within the same
+   named `outer::header`, and an unqualified reference within the same
    namespace resolves there and nowhere else.
    docs/decisions/0012-namespaces.md *)
 namespace_decl = "namespace" ident "{" { decl } "}" ;
@@ -467,8 +467,11 @@ is free and restores static offsets for everything after it.
 
 ### 8.3 Endianness and bit order
 
-- Both are scoped: file-level directive, overridable per struct via
-  `[endian = little]`, overridable per field.
+- Both are scoped, and the scope is **positional**: a directive applies to the
+  declarations that follow it and to nothing before it. A second directive
+  changes the scope from that point on rather than rewriting what came before,
+  which is what lets one file describe a protocol whose layers disagree about
+  byte order. Overridable per struct via `[endian = little]`, and per field.
 - Endianness applies to multi-byte scalars only.
 There are three distinct endianness situations, and conflating them was an
 error in an earlier draft of this document. They are separate constructs:
@@ -483,6 +486,21 @@ same-machine IPC formats where host order is the point. Sets
 depends on the host. Requires `[allow_host_dependent]` on the struct so it
 cannot be reached by accident.
 
+*Whose* host is the question this construct invites and does not answer well.
+`native` means the machine the generated code is compiled for, resolved by the
+C compiler through `SITU_HOST_BIG` and never by situc -- those are different
+machines on every cross build, and a generator that baked in its own order
+would emit code that reads the wrong bytes on the target while compiling
+cleanly. But that still leaves `native` describing the *writer's* order, and a
+writer is not always the machine that matters: a server producing frames for a
+weaker client wants the client's order, which is not its own.
+
+So `native` is the wrong tool whenever the bytes leave the machine. Name the
+order outright when it is known -- a schema that says `endian little` because
+the client is little-endian is describing the format rather than the builder --
+and use a marker when it is not. That is what the requirement for
+`[allow_host_dependent]` is for: it makes reaching for `native` deliberate.
+
 **3. Runtime-resolved endianness via a byte-order marker.** This is the TIFF
 `II`/`MM` pattern, and it is a first-class construct:
 
@@ -492,7 +510,7 @@ endian_marker byte_order : u16 {
     big    = 0x4D4D,        // "MM"
 }
 
-struct TiffHeader [endian = from(byte_order)] {
+struct tiff_header [endian = from(byte_order)] {
     endian_marker byte_order;
     u16 magic  [must_eq = 42];
     u32 ifd_offset;                 // interpreted per byte_order
@@ -620,7 +638,7 @@ An offset table followed by elements, FlatBuffers style:
 
 ```situ
 indexed(offset_type = u16, count = hdr.n, base = table_start) {
-    Record entries[];
+    record entries[];
 }
 ```
 
@@ -694,9 +712,9 @@ Discriminated union selected by an expression over an already-parsed field:
 
 ```situ
 variant body switch (hdr.type) {
-    case MsgType.hello: Hello hello;
-    case MsgType.data:  Data  data;
-    case MsgType.close: Close close;
+    case msg_type.hello: Hello hello;
+    case msg_type.data:  Data  data;
+    case msg_type.close: Close close;
     default: error;
 }
 ```
@@ -722,7 +740,7 @@ varint_type pb_varint {
     // no `minimal`: the protobuf wire format accepts non-minimal encodings
 }
 
-struct ProtoMessage {
+struct proto_message {
     tlv fields (
         tag_type       = pb_varint,
         tag_decode     = { field = tag >> 3, wire = tag & 0x7 },
@@ -747,9 +765,9 @@ struct ProtoMessage {
 The expected capability outcome, which the compiler must produce and explain:
 
 ```
-ProtoMessage           size=Unbounded  offset=AbsoluteStatic(0)
-ProtoMessage.fields    access=Sequential  address=Unstable  mutate=RewriteRequired
-ProtoMessage.fields[*] offset=Dynamic
+proto_message           size=Unbounded  offset=AbsoluteStatic(0)
+proto_message.fields    access=Sequential  address=Unstable  mutate=RewriteRequired
+proto_message.fields[*] offset=Dynamic
 canonical = NonCanonical, five independent causes:
   - non-minimal varint encodings accepted (pb_varint has no `minimal`)
   - duplicate_tags = allowed with no ordering rule
@@ -758,7 +776,7 @@ canonical = NonCanonical, five independent causes:
   - packed and unpacked repeated encodings both legal
 ```
 
-**This is the acceptance test.** `situc explain ProtoMessage` must enumerate all
+**This is the acceptance test.** `situc explain proto_message` must enumerate all
 five causes with source locations. A schema language that can describe protobuf
 and then tell you precisely why protobuf cannot be canonically encoded has
 demonstrated that its capability reasoning is real rather than decorative.
@@ -912,20 +930,20 @@ rediscovered.
 
 ### 11.4 Worked example
 
-For 5.2 `Message`:
+For 5.2 `message`:
 
 ```
-Message.hdr              offset=AbsoluteStatic(0)  size=Fixed(11)   mutate=InPlaceFixed
-Message.hdr.seq          offset=AbsoluteStatic(7)  repr=ValueConverted (big endian)
-Message.opts             offset=AbsoluteStatic(11) size=Bounded(0,1500) mutate=Shifting
-Message.recs             offset=Dynamic            access=Random
-Message.recs[]           offset=FrameStatic(0)     size=Fixed(8)    address=FrameStable
-Message.recs[].value     offset=FrameStatic(6)     mutate=InPlaceFixed
-Message.trailer          offset=Dynamic            size=Bounded(0,...)
+message.hdr              offset=AbsoluteStatic(0)  size=Fixed(11)   mutate=InPlaceFixed
+message.hdr.seq          offset=AbsoluteStatic(7)  repr=ValueConverted (big endian)
+message.opts             offset=AbsoluteStatic(11) size=Bounded(0,1500) mutate=Shifting
+message.recs             offset=Dynamic            access=Random
+message.recs[]           offset=FrameStatic(0)     size=Fixed(8)    address=FrameStable
+message.recs[].value     offset=FrameStatic(6)     mutate=InPlaceFixed
+message.trailer          offset=Dynamic            size=Bounded(0,...)
 ```
 
-`require in_place(Message.recs[].value)` passes. `require absolute_static(Message.recs)`
-fails with blame on `Message.opts`.
+`require in_place(message.recs[].value)` passes. `require absolute_static(message.recs)`
+fails with blame on `message.opts`.
 
 ---
 
@@ -1306,7 +1324,7 @@ first. That is why the same field passes one and fails the other, and why the
 diagnostic can say "possible, and here is what it costs" rather than a flat no.
 
 The example in 5.3 deliberately contains a failing requirement:
-`require in_place(Packet.hdr.seq)` where `hdr` is inside `authenticated { }`.
+`require in_place(packet.hdr.seq)` where `hdr` is inside `authenticated { }`.
 The correct diagnostic explains that in-place mutation is *possible* but
 invalidates tag coverage, and points at the two fixes (move the field out of
 coverage, or accept recomputation and use `require in_place_dirty(...)`).
@@ -1539,11 +1557,11 @@ Required format:
 error: requirement not satisfied
   --> packet.situ:41:1
    |
-41 | require absolute_static(Message.recs);
+41 | require absolute_static(message.recs);
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = offset(Message.recs) is Dynamic, required AbsoluteStatic
-   = caused by: Message.opts has size Bounded(0,1500)
+   = offset(message.recs) is Dynamic, required AbsoluteStatic
+   = caused by: message.opts has size Bounded(0,1500)
   --> packet.situ:28:5
    |
 28 |     u8 opts[hdr.length];
@@ -1596,7 +1614,7 @@ case.
 | convert `tlv` to `positional` for known-common tags | hot tags in a TLV region | O(1) access instead of O(n) scan |
 
 `situc advise schema.situ` runs the catalog and prints ranked suggestions.
-`situc explain Message.recs[].value` prints one field's full vector plus the
+`situc explain message.recs[].value` prints one field's full vector plus the
 blame chain for every axis that is not at its strongest value.
 
 ### 18.3 Revision diff
@@ -2043,8 +2061,8 @@ generation counters, invalidation rules. Capability propagation for the dynamic
 constructs.
 
 **Acceptance:** example 5.2 produces the map in Section 11.4 exactly;
-`require frame_static(Message.recs[])` passes and
-`require absolute_static(Message.recs)` fails with blame on `opts`; a cmocka
+`require frame_static(message.recs[])` passes and
+`require absolute_static(message.recs)` fails with blame on `opts`; a cmocka
 test proves a stale view is caught in `SITU_CHECKED` and that mutation of a
 preceding length field increments the generation.
 
@@ -2073,7 +2091,7 @@ non-`minimal` varint sets `NonCanonical` with the right reason; every row of the
 
 **Gate acceptance -- the protobuf conformance test.** The schema in Section 9.7
 must compile, parse real protobuf-encoded hex vectors correctly (generate them
-with `protoc` and a reference implementation), and `situc explain ProtoMessage`
+with `protoc` and a reference implementation), and `situc explain proto_message`
 must enumerate all five causes of non-canonicity with source locations. Do not
 proceed to phase 7 until this passes. It is the sharpest single test of whether
 the capability system is real.
@@ -2226,10 +2244,15 @@ fixed-point and BCD types; LSP.
    reference a transform result.
 7. Offsets are tracked in bits and reported in bytes only where byte-aligned
    (26.2). Retrofitting bit phase into a byte-based solver is a rewrite.
-8. Ambiguity is an error (17.0). Situ never guesses and never takes a silent
+8. **Nothing about the machine running `situc` may reach the generated code.**
+   The generator and the target are different machines on every cross build, so
+   a decision taken here that belongs there is correct only by coincidence and
+   silent when it is not. Byte order is the instance that got this wrong
+   (`docs/decisions/0014-positional-directives.md`); it will not be the last.
+9. Ambiguity is an error (17.0). Situ never guesses and never takes a silent
    default where the wrong choice is undetectable at runtime. Where a default
    does exist, the safe option is silent and the unsafe option is loud.
-9. Diagnostic quality is the product, not a finishing touch. The exact text is
+10. Diagnostic quality is the product, not a finishing touch. The exact text is
    snapshot-tested, and a regression in message quality is a real regression.
 
 ---

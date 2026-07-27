@@ -370,7 +370,7 @@ class Solver:
 		self.markers = {decl.name: decl for decl in schema.markers()}
 		self.varints = {decl.name: decl for decl in schema.varints()}
 		self.codecs  = {decl.name: decl for decl in schema.codecs()}
-		self.file_scope = _file_scope(schema)
+		self.scopes  = _scopes(schema)
 
 	def run(self) -> None:
 		# Recursion is already rejected, so a plain post-order walk terminates.
@@ -385,7 +385,7 @@ class Solver:
 			return existing
 
 		decl   = self.structs[name]
-		scope  = self.file_scope.narrow(decl.attrs, self.result.env)
+		scope  = self.scopes[name].narrow(decl.attrs, self.result.env)
 		layout = StructLayout(name=name, size_bits=0, span=decl.span)
 
 		# `fields` accumulates as the walk proceeds, so a size expression can
@@ -1670,17 +1670,32 @@ def _multiply(element: Interval, count: Interval) -> Interval:
 	return Interval(element.lo * count.lo, element.hi * count.hi)
 
 
-def _file_scope(schema: ast.Schema) -> Scope:
-	endian: ast.Endian | None       = None
-	bit_order: ast.BitOrder | None  = None
+def _scopes(schema: ast.Schema) -> dict[str, Scope]:
+	"""The byte and bit order in force at each struct, by declaration position.
+
+	A directive applies to what follows it and to nothing before it, which is
+	what anyone reading top to bottom assumes. It used to apply to the whole
+	file with the last one winning, so `endian native;` on line 3 silently
+	rewrote the struct on line 2 -- a wrong answer that no diagnostic could
+	reach, since both readings produce a valid layout.
+
+	Positional scoping is also what lets one file describe a protocol whose
+	layers disagree about byte order, without giving every struct in it an
+	`[endian = ...]` attribute.
+	"""
+	endian: ast.Endian | None      = None
+	bit_order: ast.BitOrder | None = None
+	scopes: dict[str, Scope]       = {}
 
 	for decl in schema.decls:
 		if isinstance(decl, ast.EndianDirective):
 			endian = decl.endian
 		elif isinstance(decl, ast.BitOrderDirective):
 			bit_order = decl.bit_order
+		elif isinstance(decl, ast.StructDecl):
+			scopes[decl.name] = Scope(endian, bit_order)
 
-	return Scope(endian, bit_order)
+	return scopes
 
 
 def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:

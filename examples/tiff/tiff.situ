@@ -21,14 +21,14 @@ endian_marker byte_order : u16 {
 	big    = 0x4D4D,        // "MM"
 }
 
-struct TiffHeader [endian = from(byte_order)] {
+struct tiff_header [endian = from(byte_order)] {
 	endian_marker  byte_order;
 	u16            magic       [must_eq = 42];
 	u32            ifd_offset;
 }
 
-require size(TiffHeader) == 8;
-require absolute_static(TiffHeader);
+require size(tiff_header) == 8;
+require absolute_static(tiff_header);
 
 // This is the distinction section 11.1 insists on. The format admits two
 // encodings of the same value, so it is not canonical; but exactly one encoding
@@ -37,9 +37,9 @@ require absolute_static(TiffHeader);
 //
 // The consequence, stated as a rule: verify over received bytes, never over
 // re-encoded bytes.
-require deterministic_writer(TiffHeader);
-assert canonical(TiffHeader);           // reports CanonicalGiven(byte_order)
-require in_place(TiffHeader.ifd_offset);
+require deterministic_writer(tiff_header);
+assert canonical(tiff_header);           // reports CanonicalGiven(byte_order)
+require in_place(tiff_header.ifd_offset);
 
 // The generated header carries, per marker, the two literals, a host-order
 // constant resolved at compile time, and the accessors a writer needs:

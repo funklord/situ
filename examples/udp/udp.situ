@@ -7,23 +7,23 @@
 target buffer;
 endian big;
 
-struct UdpHeader {
+struct udp_header {
 	u16  source_port;
 	u16  destination_port;
 	u16  length  [min = 8];
 	u16  checksum;
 }
 
-require size(UdpHeader) == 8;
-require absolute_static(UdpHeader);
-require canonical(UdpHeader);
-require aligned(UdpHeader.length, 2);
+require size(udp_header) == 8;
+require absolute_static(udp_header);
+require canonical(udp_header);
+require aligned(udp_header.length, 2);
 
 // Every field is freely mutable: nothing here is covered by an authentication
 // tag, and the UDP checksum is not modelled as one because it is optional over
 // IPv4. A schema that wanted the checksum maintained automatically would
 // declare it `checksum` and gain the dirty-tracking of section 14.2.
-require in_place(UdpHeader.checksum);
+require in_place(udp_header.checksum);
 
 // PHASE 5: the payload is `u8 payload[length - 8];`, which makes nothing after
 // it static -- but there is nothing after it, so UDP pays no price for being

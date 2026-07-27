@@ -10,28 +10,28 @@ endian big;
 // Network byte order is big endian, so on a little-endian host every multi-byte
 // field here is repr = ValueConverted. The 48-bit address is not: it is a byte
 // array, so it stays MemoryIdentical and a caller may take a pointer to it.
-struct MacAddress {
+struct mac_address {
 	u8  octets[6];
 }
 
-enum EtherType : u16 {
+enum ether_type : u16 {
 	ipv4      = 0x0800,
 	arp       = 0x0806,
 	vlan      = 0x8100,
 	ipv6      = 0x86DD,
 }
 
-struct EthernetHeader {
-	MacAddress  destination;
-	MacAddress  source;
-	EtherType   ethertype;
+struct ethernet_header {
+	mac_address  destination;
+	mac_address  source;
+	ether_type   ethertype;
 }
 
-require size(MacAddress) == 6;
-require size(EthernetHeader) == 14;
-require absolute_static(EthernetHeader);
-require canonical(EthernetHeader);
+require size(mac_address) == 6;
+require size(ethernet_header) == 14;
+require absolute_static(ethernet_header);
+require canonical(ethernet_header);
 
 // Every field is reachable in place: nothing before them is dynamic.
-require in_place(EthernetHeader.ethertype);
-require stable_address(EthernetHeader.source);
+require in_place(ethernet_header.ethertype);
+require stable_address(ethernet_header.source);
