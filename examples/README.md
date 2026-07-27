@@ -19,7 +19,7 @@ meant to be read in roughly this order.
 | [dns](dns/) | Sub-byte enums, and an honest boundary where the format stops being a layout. |
 | [ntp](ntp/) | A format designed with alignment in mind, and where `repr` starts to matter. |
 | [bmp](bmp/) | Little endian, and the canonical misaligned layout. |
-| [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |
+| [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. Also the snake_case example: type names follow no house style, and the compiler has no opinion. |
 | [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
 | [protobuf](protobuf/) | The language's hardest conformance test: the worst case on every axis, and five independent causes of non-canonicity. project.md section 9.7. |

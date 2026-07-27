@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass, field
 
 from situc import ast
-from situc.codegen.c.emit import c_name, ident, macro
+from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
 from situc.resolve import ResolvedSchema, ResolvedStruct
 

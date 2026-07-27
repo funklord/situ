@@ -8,41 +8,41 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct Reading size=4 repr=ValueConverted atomic=NonAtomic
-  Reading.value                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  Reading.status                         offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  Reading.status.calibrated              offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Reading.status.self_test_passed        offset=AbsoluteStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Reading.status.power_good              offset=AbsoluteStatic(0x02:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Reading.status.over_temperature        offset=AbsoluteStatic(0x02:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Reading.status.quality                 offset=AbsoluteStatic(0x02:4) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Reading.status.<reserved0>             offset=AbsoluteStatic(0x02:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Reading.channel                        offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+struct reading size=4 repr=ValueConverted atomic=NonAtomic
+  reading.value                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  reading.status                         offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  reading.status.calibrated              offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  reading.status.self_test_passed        offset=AbsoluteStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  reading.status.power_good              offset=AbsoluteStatic(0x02:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  reading.status.over_temperature        offset=AbsoluteStatic(0x02:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  reading.status.quality                 offset=AbsoluteStatic(0x02:4) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  reading.status.<reserved0>             offset=AbsoluteStatic(0x02:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  reading.channel                        offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
 
-struct Status size=1 repr=ValueConverted atomic=NonAtomic
-  Status.calibrated                      offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Status.self_test_passed                offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Status.power_good                      offset=AbsoluteStatic(0x00:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Status.over_temperature                offset=AbsoluteStatic(0x00:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Status.quality                         offset=AbsoluteStatic(0x00:4) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  Status.<reserved0>                     offset=AbsoluteStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+struct status size=1 repr=ValueConverted atomic=NonAtomic
+  status.calibrated                      offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  status.self_test_passed                offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  status.power_good                      offset=AbsoluteStatic(0x00:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  status.over_temperature                offset=AbsoluteStatic(0x00:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  status.quality                         offset=AbsoluteStatic(0x00:4) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  status.<reserved0>                     offset=AbsoluteStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
 
-struct TelemetryFrame size=56 repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.version                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  TelemetryFrame.kind                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  TelemetryFrame.sequence                offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  TelemetryFrame.timestamp_high          offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  TelemetryFrame.timestamp_low           offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  TelemetryFrame.device_id               offset=AbsoluteStatic(0x0C) size=Fixed(8) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
-  TelemetryFrame.readings                offset=AbsoluteStatic(0x14) size=Fixed(32) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
-  TelemetryFrame.readings[]              offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].value        offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  TelemetryFrame.readings[].status       offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].status.calibrated offset=FrameStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].status.self_test_passed offset=FrameStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].status.power_good offset=FrameStatic(0x02:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].status.over_temperature offset=FrameStatic(0x02:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].status.quality offset=FrameStatic(0x02:4) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].status.<reserved0> offset=FrameStatic(0x02:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  TelemetryFrame.readings[].channel      offset=FrameStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  TelemetryFrame.checksum                offset=AbsoluteStatic(0x34) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+struct telemetry_frame size=56 repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.version                offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  telemetry_frame.kind                   offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  telemetry_frame.sequence               offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  telemetry_frame.timestamp_high         offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  telemetry_frame.timestamp_low          offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  telemetry_frame.device_id              offset=AbsoluteStatic(0x0C) size=Fixed(8) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  telemetry_frame.readings               offset=AbsoluteStatic(0x14) size=Fixed(32) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  telemetry_frame.readings[]             offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].value       offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  telemetry_frame.readings[].status      offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].status.calibrated offset=FrameStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].status.self_test_passed offset=FrameStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].status.power_good offset=FrameStatic(0x02:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].status.over_temperature offset=FrameStatic(0x02:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].status.quality offset=FrameStatic(0x02:4) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].status.<reserved0> offset=FrameStatic(0x02:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  telemetry_frame.readings[].channel     offset=FrameStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  telemetry_frame.checksum               offset=AbsoluteStatic(0x34) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord

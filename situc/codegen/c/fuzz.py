@@ -14,7 +14,7 @@ plain compiler -- a harness nobody can build is the other way this rots.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.c.emit import c_name, ident, macro
+from situc.codegen.c.names import c_name, ident, macro
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 

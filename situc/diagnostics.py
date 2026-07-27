@@ -186,15 +186,18 @@ def error(message: str, span: Span, label: str = "", notes: list[str] | None = N
 	))
 
 
-def not_yet_implemented(construct: str, span: Span, phase: int) -> SituError:
+def not_yet_implemented(construct: str, span: Span, phase: int,
+		notes: list[str] | None = None) -> SituError:
 	"""Reject a construct the current phase does not accept.
 
 	project.md section 26.1 requires the phase number in the message, so a user
-	meeting one of these knows whether to wait or to rewrite the schema.
+	meeting one of these knows whether to wait or to rewrite the schema. Extra
+	notes go after that, for a construct whose partial form is supported and
+	where saying which part is the useful half of the message.
 	"""
 	return error(
 		f"{construct} is not yet implemented",
 		span,
 		label = "not accepted by this build",
-		notes = [f"planned for phase {phase} (project.md section 26)"],
+		notes = [f"planned for phase {phase} (project.md section 26)", *(notes or [])],
 	)

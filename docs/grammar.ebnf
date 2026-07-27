@@ -24,7 +24,13 @@ endian		= "big" | "little" | "native" ;
 bitorder	= "msb_first" | "lsb_first" ;
 strictness	= "strict" | "lenient" ;
 
-decl		= const_decl
+(* One level only; nesting is rejected naming its phase. See
+ * docs/decisions/0012-namespaces.md. *)
+namespace_decl	= "namespace" ident "{" { decl } "}" ;
+qualified	= [ ident "::" ] ident ;
+
+decl		= namespace_decl
+	| const_decl
 	| enum_decl
 	| struct_decl
 	| endian_marker_decl

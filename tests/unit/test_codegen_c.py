@@ -775,3 +775,19 @@ def test_passing_a_plain_view_to_a_gated_accessor_is_refused(tmp_path: Path) -> 
 
 	assert result.returncode != 0, (
 		"a plain view was accepted where a verified one is required")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_namespaced_schema_compiles_warning_clean(tmp_path: Path) -> None:
+	"""Two types of the same name in one file, and one header holding both."""
+	compile_generated(tmp_path, """namespace outer {
+		struct header { u8 version; u16 length; }
+	}
+	namespace inner {
+		struct header { u32 seq; }
+	}
+	struct packet {
+		outer::header out;
+		inner::header in;
+	}
+	""")

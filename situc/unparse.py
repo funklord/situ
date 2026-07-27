@@ -11,7 +11,7 @@ starting point for `situc doc`.
 
 from __future__ import annotations
 
-from situc import ast
+from situc import ast, namespaces
 
 # Loosest first, matching parser.PRECEDENCE. A child is parenthesised only when
 # it binds more loosely than its parent, so the output stays readable and still
@@ -30,19 +30,70 @@ _ATOM_BINDING  = 99
 
 
 def unparse(schema: ast.Schema) -> str:
+	"""Render a schema as source that reparses to the same tree.
+
+	Namespaces were flattened away at parse time, so they are reconstructed
+	here from the qualified names: a run of declarations sharing one becomes a
+	block again, with the qualification stripped back off inside it. That is
+	what keeps the round-trip property true for a namespaced schema rather than
+	true only for a flat one.
+	"""
 	lines: list[str] = []
 	previous: str | None = None
 
-	for decl in schema.decls:
-		group = _group(decl)
-		# One-line declarations of the same kind cluster; blocks always stand
-		# apart, and so does a change of kind.
-		if previous is not None and (group != previous or group == "block"):
-			lines.append("")
-		lines.extend(decl_lines(decl))
-		previous = group
+	for namespace, decls in _by_namespace(schema.decls):
+		if namespace:
+			if lines:
+				lines.append("")
+			lines.append(f"namespace {namespace} {{")
+			lines.extend(_indent(_render(
+				[namespaces.unqualify(decl, namespace) for decl in decls])))
+			lines.append("}")
+			previous = "block"
+			continue
+
+		for decl in decls:
+			group = _group(decl)
+			# One-line declarations of the same kind cluster; blocks always
+			# stand apart, and so does a change of kind.
+			if previous is not None and (group != previous or group == "block"):
+				lines.append("")
+			lines.extend(decl_lines(decl))
+			previous = group
 
 	return "\n".join(lines) + "\n"
+
+
+def _render(decls: list[ast.Decl]) -> list[str]:
+	lines: list[str] = []
+	for index, decl in enumerate(decls):
+		if index:
+			lines.append("")
+		lines.extend(decl_lines(decl))
+	return lines
+
+
+def _indent(lines: list[str]) -> list[str]:
+	return [f"\t{line}" if line else line for line in lines]
+
+
+def _by_namespace(decls: list[ast.Decl]) -> list[tuple[str, list[ast.Decl]]]:
+	"""Consecutive declarations grouped by the namespace they were written in.
+
+	Consecutive, not gathered: a schema that opened a namespace twice wrote two
+	blocks, and rendering them as one would change the source it came from more
+	than it has to.
+	"""
+	grouped: list[tuple[str, list[ast.Decl]]] = []
+
+	for decl in decls:
+		namespace = namespaces.namespace_of(getattr(decl, "name", ""))
+		if grouped and grouped[-1][0] == namespace:
+			grouped[-1][1].append(decl)
+		else:
+			grouped.append((namespace, [decl]))
+
+	return grouped
 
 
 def _group(decl: ast.Decl) -> str:

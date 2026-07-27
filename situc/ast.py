@@ -468,6 +468,24 @@ class ImportDirective(Decl):
 	path: str
 
 
+@dataclass(frozen=True)
+class NamespaceDecl(Decl):
+	"""`namespace outer { ... }` (docs/decisions/0012-namespaces.md).
+
+	A namespace scopes type names and nothing else. It is not a struct: a
+	struct is a byte layout, so wrapping declarations in one would change the
+	wire format, and the whole point here is to organise names without touching
+	bytes.
+
+	Flattened away immediately after parsing -- every declaration inside comes
+	out with a qualified name, and no later pass learns that namespaces exist.
+	"""
+
+	span: Span
+	name: str
+	decls: list[Decl]
+
+
 class Strictness(Enum):
 	STRICT  = "strict"
 	LENIENT = "lenient"

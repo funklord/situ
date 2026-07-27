@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeVar
 
-from situc import ast, wellformed
+from situc import ast, namespaces, wellformed
 from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
 from situc.types import WidthError, lookup
@@ -206,6 +206,7 @@ class Parser:
 					ast.ImplDecl(span, name, ast.ImplKind.EXTERN, None))
 				self._pending_extern = None
 
+		namespaces.flatten(schema)
 		wellformed.check(schema)
 		return schema
 
@@ -225,6 +226,7 @@ class Parser:
 			raise not_yet_implemented(described, token.span, phase)
 
 		handlers = {
+			"namespace":	self.parse_namespace,
 			"target":	self.parse_target,
 			"endian":	self.parse_endian,
 			"bit_order":	self.parse_bit_order,
@@ -280,6 +282,39 @@ class Parser:
 			)
 		self.expect_symbol(";", "after the endian directive")
 		return ast.EndianDirective(self.span_from(start), endian)
+
+	def parse_namespace(self) -> ast.NamespaceDecl:
+		"""`namespace outer { struct Header { ... } }`
+
+		A block rather than a positional directive, deliberately. A repeated
+		positional form would have to answer what a second one does to the
+		declarations before it, and `endian` already answers that question the
+		other way -- the last one wins, file-wide. Braces make the scope visible
+		instead of arguable, and they are what the word means to anyone who has
+		met C++. See docs/decisions/0012-namespaces.md.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a namespace name")
+		self.expect_symbol("{", "to open the namespace")
+
+		decls: list[ast.Decl] = []
+		while not self.current.is_symbol("}"):
+			if self.current.kind is TokenKind.EOF:
+				raise error(
+					"unexpected end of file inside a namespace",
+					self.current.span,
+					label = "expected `}`",
+				)
+			if self.current.is_ident("namespace"):
+				raise not_yet_implemented(
+					"a nested `namespace`", self.current.span, 12,
+					notes = ["one level is supported; nesting needs the path "
+					         "resolution rules of a later phase",
+					         "a qualified name is written `outer::Header`"])
+			decls.append(self.parse_decl())
+
+		self.expect_symbol("}", "to close the namespace")
+		return ast.NamespaceDecl(self.span_from(start), name.text, decls)
 
 	def parse_strictness(self) -> ast.StrictnessDirective:
 		"""`strictness = lenient;` (section 14.5).
@@ -1166,8 +1201,30 @@ class Parser:
 		self.expect_symbol(";", "after the field declaration")
 		return ast.Field(self.span_from(start), name.text, type_ref, array, pin, attrs)
 
+	def parse_qualification(self, head: Token) -> str:
+		"""`outer::Header`, from the `::` at the cursor.
+
+		One level, matching what `namespace` accepts. A second `::` gets the
+		same diagnostic the nested declaration does, so the two halves of the
+		restriction say the same thing.
+		"""
+		self.expect_symbol("::", "in a qualified name")
+		tail = self.expect_ident("a name after `::`")
+
+		if self.current.is_symbol("::"):
+			raise not_yet_implemented(
+				"a nested qualified name", self.current.span, 12,
+				notes = ["one level is supported: `outer::Header`"])
+
+		return f"{head.text}::{tail.text}"
+
 	def parse_type_ref(self) -> ast.TypeRef:
 		token = self.expect_ident("a type name")
+
+		if self.current.is_symbol("::"):
+			qualified = self.parse_qualification(token)
+			return ast.TypeRef(self.span_from(token), qualified)
+
 		try:
 			scalar = lookup(token.text)
 		except WidthError as exc:
@@ -1324,6 +1381,9 @@ class Parser:
 				return ast.Remaining(token.span)
 			if self.current.is_symbol("("):
 				return self.parse_call(token)
+			if self.current.is_symbol("::"):
+				qualified = self.parse_qualification(token)
+				return ast.NameRef(self.span_from(token), qualified)
 			return ast.NameRef(token.span, token.text)
 
 		raise error(

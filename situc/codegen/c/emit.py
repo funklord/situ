@@ -20,10 +20,13 @@ Principles that shape every line emitted here:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
+from situc.codegen.c.names import (
+	c_name, check_collisions, ident, macro)
+from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -34,11 +37,12 @@ WORD_WIDTHS = (8, 16, 32, 64)
 
 @dataclass
 class Generated:
-	"""The two files a schema compiles to."""
+	"""The two files a schema compiles to, and what it had to say about them."""
 
 	header: str
 	source: str
 	basename: str
+	warnings: list[Diagnostic] = field(default_factory=list)
 
 	def files(self) -> dict[str, str]:
 		return {f"{self.basename}.h": self.header, f"{self.basename}.c": self.source}
@@ -46,29 +50,21 @@ class Generated:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> Generated:
+	# Before anything is emitted: two constructs that flatten to one C
+	# identifier would otherwise surface as a redefinition error in generated
+	# code, naming a function nobody wrote.
+	warnings = check_collisions(resolved, prefix, [
+		*(("struct", decl.name, decl.span) for decl in schema.structs()),
+		*(("enum", decl.name, decl.span) for decl in schema.enums()),
+	])
+
 	emitter = Emitter(schema, resolved, basename, prefix)
 	return Generated(
 		header   = emitter.header(),
 		source   = emitter.source(),
 		basename = basename,
+		warnings = warnings,
 	)
-
-
-def ident(*parts: str) -> str:
-	return "_".join(part for part in parts if part)
-
-
-def macro(*parts: str) -> str:
-	return "_".join(part for part in parts if part).upper()
-
-
-def c_name(path: str) -> str:
-	"""A path rendered as a C identifier fragment.
-
-	Nested paths flatten with underscores, and the synthesised names of
-	reserved regions are dropped: they have no accessor.
-	"""
-	return path.replace(".", "_").replace("[]", "")
 
 
 class Emitter:

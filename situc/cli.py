@@ -143,7 +143,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 		(args.out / name).write_text(text, encoding="ascii")
 		print(f"situc: wrote {args.out / name}", file=sys.stderr)
 
-	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
+	_report(args, generated.warnings + requirements.warnings(outcomes)
+	        + requirements.deferrals(outcomes))
 	return 0
 
 

@@ -16,14 +16,14 @@ const PROTOCOL_VERSION = 2;
 const CHANNEL_COUNT    = 8;
 const DEVICE_ID_BYTES  = 8;
 
-enum FrameKind : u8 {
+enum frame_kind : u8 {
 	sample      = 0x01,
 	heartbeat   = 0x02,
 	fault       = 0x03,
 	calibration = 0x04,
 }
 
-enum Quality : u2 {
+enum quality : u2 {
 	good        = 0,
 	degraded    = 1,
 	stale       = 2,
@@ -33,27 +33,27 @@ enum Quality : u2 {
 // One byte of status. The bits are grouped so the whole byte closes exactly:
 // nothing straddles, so no [allow_straddle] and every write is a single-byte
 // read-modify-write.
-struct Status {
+struct status {
 	bit      calibrated;
 	bit      self_test_passed;
 	bit      power_good;
 	bit      over_temperature;
-	Quality  quality;
+	quality  quality;
 	reserved u2  [must_be_zero];
 }
 
 // A fixed-size reading. Deliberately not a varint: a varint would cost two
 // bytes across most of this range anyway, and would make every channel after
 // the first one dynamically positioned. See the note at the bottom.
-struct Reading {
+struct reading {
 	i16      value;
-	Status   status;
+	status   status;
 	u8       channel;
 }
 
-struct TelemetryFrame {
+struct telemetry_frame {
 	u8         version  [must_eq = PROTOCOL_VERSION];
-	FrameKind  kind;
+	frame_kind  kind;
 	u16        sequence;
 
 	// A 64-bit monotonic microsecond counter, split so the schema does not
@@ -65,35 +65,42 @@ struct TelemetryFrame {
 
 	// The readings array is a compile-time constant length, which is what
 	// keeps `checksum` at a fixed offset. A device with fewer live channels
-	// sends Quality.invalid rather than a shorter frame.
-	Reading    readings[CHANNEL_COUNT]  @ 0x14;
+	// sends quality.invalid rather than a shorter frame.
+	reading    readings[CHANNEL_COUNT]  @ 0x14;
 
 	u32        checksum;
 }
 
-require size(Status) == 1;
-require size(Reading) == 4;
-require size(TelemetryFrame) == 56;
+require size(status) == 1;
+require size(reading) == 4;
+require size(telemetry_frame) == 56;
 
 // The budget. These are `require` rather than `assert` on purpose: they are a
 // build-time gate, so inserting a variable-length field above `readings` fails
 // the build rather than silently costing the fleet its in-place updates.
-require absolute_static(TelemetryFrame);
-require canonical(TelemetryFrame);
-require in_place(TelemetryFrame.readings[].value);
-require stable_address(TelemetryFrame.device_id);
-require aligned(TelemetryFrame.timestamp_high, 4);
-require random_access(TelemetryFrame.readings);
+require absolute_static(telemetry_frame);
+require canonical(telemetry_frame);
+require in_place(telemetry_frame.readings[].value);
+require stable_address(telemetry_frame.device_id);
+require aligned(telemetry_frame.timestamp_high, 4);
+require random_access(telemetry_frame.readings);
 
 // Reordering note: `checksum` is last so that everything it covers precedes
 // it. Putting it in the header, as many protocols do, would mean computing it
 // over bytes that come after it -- legal, but it forces a two-pass writer.
 
-// PHASE 8: `checksum u32 [covers(version, ..., readings)]` gives this field the
-// tag-dirty machinery, so mutating any covered byte marks it stale and the
-// generated API refuses to hand out a transmittable buffer until it is
-// recomputed. That is the whole reason to model a CRC as a tag rather than a
-// plain field (project.md section 13.4).
+// The checksum is a plain `u32` here rather than the `checksum` construct,
+// which phase 8 added and which would give it the tag-dirty machinery: mutating
+// any covered byte would mark it stale, and the generated API would refuse to
+// hand out a transmittable buffer until it was recomputed. That is the whole
+// reason to model a CRC as a tag rather than a plain field (section 13.4).
+//
+// Adopting it means wrapping everything it covers in `authenticated { }`, since
+// coverage names regions rather than fields, and it changes this frame's budget:
+// the readings become Covered, so `require in_place(...)` on one becomes
+// `require in_place_dirty(...)`. That is the honest cost of a checksum over a
+// field somebody rewrites in place, and it is left visible here rather than
+// hidden by keeping the field plain.
 
 // THE TRADE, stated explicitly. A compact encoding of this frame would use a
 // varint sequence, elide absent channels, and pack the channel number into the

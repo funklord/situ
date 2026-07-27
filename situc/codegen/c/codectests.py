@@ -21,7 +21,7 @@ the signature.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.c.emit import ident
+from situc.codegen.c.names import ident
 
 # Input sizes the length tests sweep. Chosen to straddle block boundaries and
 # to include the degenerate cases, which is where a length claim usually breaks.

@@ -317,6 +317,14 @@ strictness    = "strict" | "lenient" ;
 decl          = const_decl | enum_decl | struct_decl | codec_decl
               | register_decl | requirement ;
 
+(* One level; nesting is rejected naming its phase. A declaration inside is
+   named `outer::Header`, and an unqualified reference within the same
+   namespace resolves there and nowhere else.
+   docs/decisions/0012-namespaces.md *)
+namespace_decl = "namespace" ident "{" { decl } "}" ;
+
+qualified     = [ ident "::" ] ident ;
+
 const_decl    = "const" ident "=" expr ";" ;
 
 enum_decl     = "enum" ident ":" scalar_type "{" enum_body "}" ;
@@ -1685,7 +1693,15 @@ never be one; Situ can express layouts protobuf cannot represent.
 
 Per schema, emit `<name>.h` and `<name>.c`.
 
-Naming: `situ_<Struct>_<field>_get`, `_set`, `_view`. Prefix configurable.
+Naming: `<prefix>_<namespace>_<Type>_<field>_get`, `_set`, `_view`. The prefix
+defaults to `situ` and stacks *outside* any namespace the schema declares, so
+`--prefix` prefixes rather than replaces. Generated types carry `_t`, which
+keeps them clear of the accessor namespace.
+
+Two constructs whose paths flatten to one C identifier are an error naming
+both, because the flattening is not injective -- `A.b_c` and `A_b.c` reach the
+same name -- and the alternative is a redefinition error in generated code with
+no schema location in it (`docs/decisions/0013-identifier-conventions.md`).
 
 Principles:
 
@@ -1889,6 +1905,12 @@ into an embedded build environment (Section 22).
 - Line length: soft 100 columns; do not sacrifice clarity to it.
 - Every module has a docstring stating its single responsibility. If a module
   needs two sentences joined by "and", split the module.
+- **Identifier casing in a schema is the author's.** snake_case and PascalCase
+  are both first-class and may be mixed; nothing in the compiler reads casing.
+  What the compiler does check is that two constructs never generate the same C
+  identifier, which is a property of flattening a path rather than of how
+  either name is spelled (`docs/decisions/0013-identifier-conventions.md`).
+  `examples/telemetry/` is snake_case throughout, as the working proof.
 - Single source of truth: the AST is built once from the source text and all
   passes read it. Never re-parse generated output. Never mutate a file
   in a second pass without full knowledge of the first pass's state.
