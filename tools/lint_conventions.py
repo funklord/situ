@@ -16,7 +16,9 @@ from pathlib import Path
 # its list continuation and code-fence indentation is space-based by
 # specification, and fighting that would make the documents wrong.
 INDENT_SUFFIXES = frozenset({".py", ".c", ".h", ".situ", ".ebnf"})
-INDENT_NAMES = frozenset({"Makefile"})
+# `bin/situc` is Python without the suffix, because it is a command rather
+# than a module. The conventions still apply to it.
+INDENT_NAMES = frozenset({"Makefile", "situc"})
 
 # Capability maps are generated, and indented with spaces so their columns line
 # up; they get the ASCII and whitespace checks but not the tab rule.
@@ -55,13 +57,25 @@ def leading_whitespace(line: str) -> str:
 	return line[: len(line) - len(line.lstrip(" \t"))]
 
 
+def is_python(path: Path) -> bool:
+	"""Python by suffix, or by shebang for a command that has no suffix."""
+	if path.suffix == ".py":
+		return True
+	try:
+		with path.open("rb") as handle:
+			first = handle.readline(64)
+	except OSError:
+		return False
+	return first.startswith(b"#!") and b"python" in first
+
+
 def literal_lines(path: Path) -> frozenset[int]:
 	"""Lines inside multi-line Python string literals.
 
 	Their leading whitespace is content, not indentation: the golden diagnostic
 	texts of section 17 have a space gutter that the tab rule must not touch.
 	"""
-	if path.suffix != ".py":
+	if not is_python(path):
 		return frozenset()
 
 	covered: set[int] = set()

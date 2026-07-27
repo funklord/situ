@@ -209,3 +209,18 @@ def test_recursion_survives_the_other_checks() -> None:
 	report = rendered("struct A { B b; } struct B { C c; } struct C { A a; }")
 	assert "recursive" in report
 	assert "non-terminating" in report
+
+
+def test_a_text_attribute_that_does_nothing_is_refused() -> None:
+	"""Section 8.6 gives text `[encoding]` and `[nul_terminated]`. Neither is
+	implemented, and both used to parse and be dropped on the floor -- so a
+	schema could say its field was ASCII and the generated code would neither
+	check it nor record it. Silence is the wrong answer for an unimplemented
+	feature; the parser still knows the names, because bracket disambiguation
+	depends on them.
+	"""
+	for attr in ("encoding = ascii", "nul_terminated"):
+		message = rendered(f"struct s {{ u8 name[8] [{attr}]; }}")
+
+		assert "is not implemented" in message
+		assert "section 8.6" in message

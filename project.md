@@ -583,6 +583,23 @@ strictness is enabled, and a `[nul_terminated]` flag. Length-prefixed text is
 just a `u8[]` with a size expression. This avoids inventing string semantics
 the underlying protocol may not have.
 
+**Status: neither attribute is implemented.** Both are refused rather than
+accepted, because they used to parse and be dropped: a schema could declare a
+field ASCII and the generated code would neither validate it nor record it.
+The names stay in `ATTRIBUTE_NAMES` because bracket disambiguation depends on
+them (decision 0006). The layout they annotate is already correct -- only the
+validation is missing.
+
+Note what this section does *not* claim. Fixed-extent text inside a binary
+frame is covered, because it is a byte array with a length. Genuinely
+text-based protocols -- HTTP, SMTP, SIP, anything framed by CRLF and parsed by
+delimiter -- are **not** covered and are not a near-term goal. They need
+`T x[] until (cond)` (open question 1), and their fields are delimited rather
+than placed, which is the opposite of what the capability lattice is built to
+reason about: there is no offset to be static about. A protocol whose framing
+is textual but whose payload is binary can describe the payload here and the
+framing elsewhere.
+
 ### 8.7 Enums
 
 - Backing type mandatory: `enum E : u8 { ... }`.
@@ -1932,8 +1949,15 @@ make            build the C runtime
 make test       pytest, mypy strict, lint, cmocka, cross
 make cross      aarch64 build of the runtime
 make cross-test generated accessors run on aarch64 under emulation
+make install    situc, the runtime and its header under PREFIX
 make help       everything else
 ```
+
+`situc` itself is `bin/situc`: a launcher that finds its own package, works in
+place or symlinked into a PATH directory, and works again from
+`<prefix>/lib/situc` once installed. It is not a console entry point, because
+generating one needs an installer and the requirement below rules that out.
+`python3 -m situc` and `python3 -m situc.cli` both still work.
 
 `pytest` and `mypy` come from the system (`python3-pytest`, `python3-mypy`) and
 are used only to check the compiler. `situc` itself must run from a bare

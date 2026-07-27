@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""The situc command.
+
+Section 24 requires situc to run from a bare interpreter with nothing
+installed -- that is what lets the toolchain vendor into an embedded build
+environment, where `pip install` is not on the table and the build machine may
+have no network at all. So this is a script that finds its own package, rather
+than a console entry point an installer has to generate.
+
+It works from three places, checked in that order:
+
+  * the source tree, run in place or symlinked into a PATH directory
+  * an installed prefix, where `make install` puts the package in
+    <prefix>/lib/situc and this script in <prefix>/bin
+  * anywhere at all, if situc is already importable
+
+Symlinks are resolved first, so a link in ~/.local/bin still finds the tree it
+points into.
+"""
+
+import os
+import sys
+
+
+def package_root() -> str | None:
+	"""The directory to put on sys.path so that `import situc` works."""
+	here   = os.path.dirname(os.path.realpath(__file__))
+	parent = os.path.dirname(here)
+
+	# In the tree this is <tree>/bin/situc and the package is <tree>/situc.
+	# Installed it is <prefix>/bin/situc and the package is <prefix>/lib/situc.
+	for candidate in (parent, os.path.join(parent, "lib")):
+		if os.path.isfile(os.path.join(candidate, "situc", "cli.py")):
+			return candidate
+	return None
+
+
+def main() -> int:
+	root = package_root()
+	if root is not None and root not in sys.path:
+		sys.path.insert(0, root)
+
+	try:
+		from situc.cli import main as run
+	except ImportError as exc:
+		sys.stderr.write(
+			f"situc: cannot find the situc package ({exc}).\n"
+			"       Run it from the source tree, `make install` it, or put the\n"
+			"       directory containing situc/ on PYTHONPATH.\n")
+		return 2
+
+	return run()
+
+
+if __name__ == "__main__":
+	sys.exit(main())
