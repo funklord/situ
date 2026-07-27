@@ -239,6 +239,136 @@ static void test_hdlc_refuses_six_ones(void **state)
 	assert_int_equal(situ_hdlc_bit_stuffing_decode(flag, 8, out), 0);
 }
 
+/* -- Reed-Solomon ---------------------------------------------------------- */
+
+/* A small deterministic generator, so a failure is reproducible. The point is
+ * to cover many error placements rather than to be unpredictable. */
+static uint32_t rs_seed = 12345u;
+
+static uint32_t rs_random(void)
+{
+	rs_seed = rs_seed * 1103515245u + 12345u;
+	return (rs_seed >> 16) & 0x7FFFu;
+}
+
+static void test_reed_solomon_is_systematic(void **state)
+{
+	/* Section 13.2 calls `systematic` the highest-value property: the message
+	 * sits verbatim at computable positions, so a field under the code can be
+	 * read with no decode at all. */
+	uint8_t  data[223];
+	uint8_t  block[255];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < 223; i++) {
+		data[i] = (uint8_t)(i * 7u + 1u);
+	}
+	memcpy(block, data, 223);
+
+	assert_int_equal(situ_reed_solomon_255_223_encode(data, 223, block + 223), 32);
+	assert_memory_equal(block, data, 223);
+}
+
+static void test_an_undamaged_block_needs_no_correction(void **state)
+{
+	uint8_t  data[223];
+	uint8_t  block[255];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < 223; i++) {
+		data[i] = (uint8_t)(i * 7u + 1u);
+	}
+	memcpy(block, data, 223);
+	situ_reed_solomon_255_223_encode(data, 223, block + 223);
+
+	assert_int_equal(situ_reed_solomon_255_223_decode(block, 255), 0);
+}
+
+static void test_reed_solomon_corrects_up_to_sixteen_errors(void **state)
+{
+	/* The defining property of RS(255, 223), and an independent one: it is
+	 * true of the code whoever implements it. Errors are placed anywhere in
+	 * the block, including in the parity, because the code does not privilege
+	 * the message half. */
+	uint8_t  data[223];
+	uint8_t  clean[255];
+	uint8_t  block[255];
+	unsigned i;
+	unsigned trial;
+
+	(void)state;
+
+	for (i = 0; i < 223; i++) {
+		data[i] = (uint8_t)(i * 7u + 1u);
+	}
+	memcpy(clean, data, 223);
+	situ_reed_solomon_255_223_encode(data, 223, clean + 223);
+
+	for (trial = 0; trial < 100u; trial++) {
+		unsigned errors = 1u + rs_random() % 16u;
+		unsigned placed = 0;
+
+		memcpy(block, clean, 255);
+
+		while (placed < errors) {
+			unsigned at = rs_random() % 255u;
+
+			if (block[at] == clean[at]) {
+				block[at] = (uint8_t)(block[at] ^ (uint8_t)(1u + rs_random() % 255u));
+				placed++;
+			}
+		}
+
+		assert_int_equal(situ_reed_solomon_255_223_decode(block, 255),
+		                 (int)errors);
+		assert_memory_equal(block, clean, 255);
+	}
+}
+
+static void test_a_shortened_code_works_the_same_way(void **state)
+{
+	/* The tables and the generator polynomial come from the parameters, so a
+	 * code nobody has standardised encodes exactly as well as CCSDS's. */
+	uint8_t  data[56];
+	uint8_t  clean[64];
+	uint8_t  block[64];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < 56; i++) {
+		data[i] = (uint8_t)(i * 13u + 5u);
+	}
+	memcpy(clean, data, 56);
+
+	assert_int_equal(situ_reed_solomon_64_56_encode(data, 56, clean + 56), 8);
+	memcpy(block, clean, 64);
+	assert_int_equal(situ_reed_solomon_64_56_decode(block, 64), 0);
+
+	/* Four errors is the capacity of eight parity symbols. */
+	block[3]  = (uint8_t)(block[3] ^ 0xFFu);
+	block[20] = (uint8_t)(block[20] ^ 0x01u);
+	block[58] = (uint8_t)(block[58] ^ 0x7Fu);
+	block[63] = (uint8_t)(block[63] ^ 0xA5u);
+
+	assert_int_equal(situ_reed_solomon_64_56_decode(block, 64), 4);
+	assert_memory_equal(block, clean, 64);
+}
+
+static void test_a_block_of_the_wrong_length_is_refused(void **state)
+{
+	uint8_t block[255] = { 0 };
+
+	(void)state;
+
+	assert_int_equal(situ_reed_solomon_255_223_decode(block, 254), -1);
+	assert_int_equal(situ_reed_solomon_255_223_encode(block, 222, block), 0);
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
@@ -252,6 +382,11 @@ int main(void)
 		cmocka_unit_test(test_the_interleaver_refuses_a_partial_block),
 		cmocka_unit_test(test_hdlc_inserts_a_zero_after_five_ones),
 		cmocka_unit_test(test_hdlc_refuses_six_ones),
+		cmocka_unit_test(test_reed_solomon_is_systematic),
+		cmocka_unit_test(test_an_undamaged_block_needs_no_correction),
+		cmocka_unit_test(test_reed_solomon_corrects_up_to_sixteen_errors),
+		cmocka_unit_test(test_a_shortened_code_works_the_same_way),
+		cmocka_unit_test(test_a_block_of_the_wrong_length_is_refused),
 	};
 
 	return cmocka_run_group_tests(tests, NULL, NULL);

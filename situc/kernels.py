@@ -162,6 +162,14 @@ def _polynomial(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	the form is systematic and the expansion is a fixed number of bytes -- which
 	is what lets a field under one be read with no decode at all.
 	"""
+	# A polynomial over an extension field is a Reed-Solomon or BCH code, not
+	# a CRC: the parity is symbols rather than a digest, and it comes back --
+	# so the code is invertible where a CRC is not, and it corrects rather than
+	# merely detecting, which is what makes a burst beyond its capacity
+	# propagate.
+	if kernel.argument("field") is not None:
+		return _reed_solomon(decl, kernel)
+
 	width = _positive(kernel, "width", decl)
 	if width % 8:
 		raise error(
@@ -182,6 +190,64 @@ def _polynomial(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 		invertible       = False,		# a digest cannot be undone
 		deterministic    = True,
 	)
+
+
+def _reed_solomon(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
+	"""A polynomial code over GF(2^m): Reed-Solomon, and BCH by the same route.
+
+	Systematic, so the message symbols sit verbatim ahead of the parity and a
+	reader that trusts the block takes them with no decode at all -- which is
+	the property section 13.2 calls the highest-value one and the reason these
+	are worth describing rather than treating as opaque.
+	"""
+	field = _positive(kernel, "field", decl)
+	n     = _positive(kernel, "n", decl)
+	k     = _positive(kernel, "k", decl)
+
+	if field & (field - 1) or field < 4:
+		raise error(
+			f"`{decl.name}` has a field of {field} elements",
+			kernel.span,
+			label = "not a power of two",
+			notes = ["GF(2^m) has 2^m elements; `field = 256` is the byte-wide "
+			         "field every practical code uses"],
+		)
+
+	if k >= n:
+		raise error(
+			f"`{decl.name}` encodes {k} symbols into {n}",
+			kernel.span,
+			label = "a code with no parity corrects nothing",
+			notes = [f"`n` is the block length and `k` the message length; "
+			         f"n - k = {n - k} parity symbols correct {(n - k) // 2} "
+			         "errors"],
+		)
+
+	if n > field - 1:
+		raise error(
+			f"`{decl.name}` has a block of {n} symbols over GF({field})",
+			kernel.span,
+			label = f"the field has only {field - 1} non-zero elements",
+			notes = ["each symbol position needs a distinct field element, so "
+			         f"a block cannot exceed {field - 1}"],
+		)
+
+	symbol_bits = field.bit_length() - 1
+
+	return Derived(
+		expansion        = ast.Expansion.FIXED_ADD,
+		expansion_add    = (n - k) * symbol_bits // BITS_PER_SYMBOL,
+		seekable         = ast.Seekable.LINEAR,
+		granularity      = ast.Granularity.BLOCK,
+		granularity_size = n,
+		systematic       = True,
+		invertible       = True,	# the message comes back; a digest does not
+		deterministic    = True,
+		error_propagating = True,	# a burst past the capacity spoils the block
+	)
+
+
+BITS_PER_SYMBOL = 8
 
 
 def _linear_block(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:

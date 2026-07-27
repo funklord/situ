@@ -2255,13 +2255,9 @@ soundness gap.
 
 ### 26.12 Phase 12: transforms, tier 2 (derived codecs)
 
-**Status: complete except Reed-Solomon.** All six kernel families derive their
-signatures and generate implementations, and pipelines compose;
-`situc/kernels.py` holds the derivation and `situc/codegen/c/derived.py` the
-generation. Item 7 of the order below -- Reed-Solomon and BCH over GF(2^m) --
-is not done: it is the largest single item, needs field arithmetic and real
-performance work, and the section says to consult libfec and ISA-L before
-writing anything.
+**Status: complete.** All six kernel families derive their signatures and
+generate implementations, and pipelines compose; `situc/kernels.py` holds the
+derivation and `situc/codegen/c/derived.py` the generation.
 
 Every family is exercised against published vectors rather than against situ's
 own output: the CRC catalogue's check values, IEEE 802.3's Manchester
@@ -2306,6 +2302,23 @@ Recommended order within the phase, cheapest and highest-value first:
 7. **Reed-Solomon / BCH over GF(2^m).** The largest single item. Needs field
    arithmetic, table generation, and real performance work. Consult libfec and
    ISA-L before writing anything.
+
+   Done for RS. The polynomial kernel dispatches on `field`: a `width` is a CRC
+   over GF(2), a `field` is a code over GF(2^m), and the derivation says how
+   they differ -- RS is `invertible` because the message comes back where a
+   digest does not, and `error_propagating` because a burst past the capacity
+   spoils the whole block. `codec c { kernel = polynomial(field = 256, n = 255,
+   k = 223); }` derives exactly the hand-written `reed_solomon_255_223`
+   signature.
+
+   The generated decoder is the standard chain -- syndromes, Berlekamp-Massey,
+   Chien search, Forney -- over tables computed at generation time from the
+   primitive polynomial. Nothing here is specific to the famous code: the tests
+   cover RS(255, 223), RS(255, 239) and a shortened RS(64, 56), all from the
+   same generator.
+
+   No performance work yet. The arithmetic is table-driven but scalar, and
+   §26.14 still owes the constant-time question raised in §26.16.
 
 **Acceptance per family:** derived properties match a hand-written signature for
 a known code; generated implementation passes vectors from an independent

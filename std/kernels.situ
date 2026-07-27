@@ -44,6 +44,25 @@ codec crc8_smbus {
 }
 impl crc8_smbus derived;
 
+// The same family over an extension field is a Reed-Solomon code rather than a
+// CRC, and the derivation says so: the parity is symbols rather than a digest,
+// it comes back, and it corrects rather than merely detecting -- so the code is
+// invertible where a CRC is not, and a burst past its capacity propagates.
+//
+// CCSDS's (255, 223): 32 parity symbols correcting any 16 errors in the block.
+codec reed_solomon_255_223 {
+	kernel = polynomial(field = 256, n = 255, k = 223, primitive = 0x11D);
+}
+impl reed_solomon_255_223 derived;
+
+// A shortened block, to make the point that the generation is not specific to
+// the famous code: the tables and the generator polynomial come from the
+// parameters.
+codec reed_solomon_64_56 {
+	kernel = polynomial(field = 256, n = 64, k = 56);
+}
+impl reed_solomon_64_56 derived;
+
 // ---------------------------------------------------------------------------
 // Table: line codes
 //

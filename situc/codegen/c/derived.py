@@ -87,6 +87,10 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 			continue
 
 		if decl.kernel.family is ast.KernelFamily.POLYNOMIAL:
+			if decl.kernel.argument("field") is not None:
+				lines.extend(_rs_declarations(decl, prefix))
+				continue
+
 			width = _width(decl)
 			if width is None:
 				continue
@@ -117,6 +121,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	assert kernel is not None
 
 	if kernel.family is ast.KernelFamily.POLYNOMIAL:
+		if kernel.argument("field") is not None:
+			return _reed_solomon(decl, prefix)
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.TABLE:
 		return _table(decl, prefix)
@@ -389,6 +395,22 @@ NAMED_CODES: dict[str, list[int]] = {
 		0b11010, 0b11011, 0b11100, 0b11101,
 	],
 }
+
+
+def _rs_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
+	n = _number(decl, "n")
+	k = _number(decl, "k")
+	if _number(decl, "field") != 256 or not n or not k:
+		return []
+
+	return [
+		"",
+		f"/* `{decl.name}`: Reed-Solomon({n}, {k}). Systematic, so the message",
+		f" * sits verbatim ahead of the {n - k} parity symbols. */",
+		f"uint32_t {ident(prefix, decl.name, 'encode')}"
+		"(const uint8_t *data, uint32_t len, uint8_t *parity);",
+		f"int {ident(prefix, decl.name, 'decode')}(uint8_t *block, uint32_t len);",
+	]
 
 
 def _byte_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
@@ -973,5 +995,376 @@ def _hdlc(decl: ast.CodecDecl, prefix: str) -> list[str]:
 		"\t}",
 		"",
 		"\treturn written;",
+		"}",
+	]
+
+
+# ---------------------------------------------------------------------------
+# Reed-Solomon over GF(2^m)
+#
+# Section 26.12 calls this the largest single item in the phase and it is: the
+# encoder is a polynomial division like a CRC's, and the decoder is four
+# separate algorithms in a row. What is written below is the standard
+# construction -- syndromes, Berlekamp-Massey, Chien search, Forney -- rather
+# than anything novel, because a novel error-correcting code is the last thing
+# anybody wants.
+#
+# The tables are computed here rather than copied. A transcribed log table is
+# exactly the kind of artefact that is wrong in one entry and produces a codec
+# that works on most inputs.
+# ---------------------------------------------------------------------------
+
+
+def _gf_tables(field: int, primitive: int) -> tuple[list[int], list[int]]:
+	"""Antilog and log for GF(2^m), generated from the primitive polynomial.
+
+	The antilog table is doubled so a product of two logs can be looked up
+	without a modulo, which is the usual trick and the reason the generated
+	multiply is two loads and an add.
+	"""
+	size   = field - 1
+	exp    = [0] * (2 * field)
+	log    = [0] * field
+	value  = 1
+
+	for power in range(size):
+		exp[power] = value
+		log[value] = power
+		value <<= 1
+		if value & field:
+			value ^= primitive
+
+	for power in range(size, 2 * size):
+		exp[power] = exp[power - size]
+
+	return exp, log
+
+
+def _reed_solomon(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	field = _number(decl, "field")
+	n     = _number(decl, "n")
+	k     = _number(decl, "k")
+
+	if field != 256 or not n or not k:
+		return None
+
+	primitive  = _number(decl, "primitive", 0x11D)
+	first_root = _number(decl, "first_root", 0)
+	nroots     = n - k
+	size       = field - 1
+
+	exp, log = _gf_tables(field, primitive)
+
+	# Constant term first. The division loop below indexes from the low end,
+	# which is the standard formulation and the one every reference uses;
+	# multiplying the roots out produces it leading-first.
+	generator = list(reversed(
+		_rs_generator_coefficients(nroots, first_root, exp, log, size)))
+	name = ident(prefix, decl.name)
+
+	return [
+		"",
+		f"/* {decl.name}: Reed-Solomon({n}, {k}) over GF({field}).",
+		" *",
+		f" * {nroots} parity symbols, correcting up to {nroots // 2} symbol errors",
+		" * anywhere in the block. Systematic: the message sits verbatim ahead of",
+		" * the parity, so a reader that trusts the block takes it with no decode",
+		" * at all.",
+		" *",
+		f" * Primitive polynomial 0x{primitive:X}, first root alpha^{first_root}.",
+		" * Every table below is computed from those two numbers rather than",
+		" * copied, so a code nobody has standardised works as well as one that",
+		" * has -- and no transcription can be wrong in one entry.",
+		" */",
+		f"#define {macro(prefix, decl.name, 'BLOCK')}  {n}u",
+		f"#define {macro(prefix, decl.name, 'DATA')}   {k}u",
+		f"#define {macro(prefix, decl.name, 'PARITY')} {nroots}u",
+		"",
+		*_gf_arithmetic(name, exp, log, size),
+		*_rs_encoder(name, generator, nroots, k),
+		*_rs_decoder(name, n, nroots, first_root, size),
+	]
+
+
+def _rs_generator_coefficients(nroots: int, first_root: int, exp: list[int],
+		log: list[int], size: int) -> list[int]:
+	"""Multiply out (x - alpha^(first_root + i)) for each root."""
+	poly = [1]
+
+	for root in range(nroots):
+		alpha = exp[(first_root + root) % size]
+		shifted = poly + [0]
+
+		for at in range(len(poly)):
+			if poly[at] and alpha:
+				shifted[at + 1] ^= exp[(log[poly[at]] + log[alpha]) % size]
+
+		poly = shifted
+
+	return poly
+
+
+def _gf_arithmetic(name: str, exp: list[int], log: list[int],
+		size: int) -> list[str]:
+	rows = []
+	for start in range(0, len(exp), 16):
+		rows.append("\t" + ", ".join(f"0x{value:02X}u"
+		                             for value in exp[start:start + 16]) + ",")
+
+	log_rows = []
+	for start in range(0, len(log), 16):
+		log_rows.append("\t" + ", ".join(f"0x{value:02X}u"
+		                                 for value in log[start:start + 16]) + ",")
+
+	return [
+		f"/* Antilog, doubled so a product of logs needs no modulo. */",
+		f"static const uint8_t {name}_exp[{len(exp)}] = {{",
+		*rows,
+		"};",
+		"",
+		f"static const uint8_t {name}_log[{len(log)}] = {{",
+		*log_rows,
+		"};",
+		"",
+		f"static uint8_t {name}_mul(uint8_t a, uint8_t b)",
+		"{",
+		"\tif (a == 0u || b == 0u) {",
+		"\t\treturn 0u;",
+		"\t}",
+		f"\treturn {name}_exp[(uint32_t){name}_log[a] + (uint32_t){name}_log[b]];",
+		"}",
+		"",
+		f"static uint8_t {name}_inv(uint8_t a)",
+		"{",
+		f"\treturn {name}_exp[{size}u - (uint32_t){name}_log[a]];",
+		"}",
+		"",
+		f"/* alpha raised to a power, with the exponent reduced first. */",
+		f"static uint8_t {name}_pow(uint32_t power)",
+		"{",
+		f"\treturn {name}_exp[power % {size}u];",
+		"}",
+		"",
+	]
+
+
+def _rs_encoder(name: str, generator: list[int], nroots: int,
+		k: int) -> list[str]:
+	rows = "\t" + ", ".join(f"0x{value:02X}u" for value in generator) + ","
+
+	return [
+		"/* The generator polynomial, multiplied out from its roots. */",
+		f"static const uint8_t {name}_generator[{len(generator)}] = {{",
+		rows,
+		"};",
+		"",
+		"/* Systematic encode: the message is left alone and the parity is the",
+		" * remainder of dividing it, shifted, by the generator. */",
+		f"uint32_t {name}_encode(const uint8_t *data, uint32_t len, uint8_t *parity)",
+		"{",
+		f"\tuint32_t at;",
+		f"\tuint32_t j;",
+		"",
+		f"\tif (len != {k}u) {{",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		f"\tfor (at = 0; at < {nroots}u; at++) {{",
+		"\t\tparity[at] = 0u;",
+		"\t}",
+		"",
+		"\tfor (at = 0; at < len; at++) {",
+		"\t\tuint8_t feedback = (uint8_t)(data[at] ^ parity[0]);",
+		"",
+		f"\t\tfor (j = 0; j + 1u < {nroots}u; j++) {{",
+		"\t\t\tparity[j] = (uint8_t)(parity[j + 1] ^",
+		f"\t\t\t\t{name}_mul(feedback, {name}_generator[{nroots}u - 1u - j]));",
+		"\t\t}",
+		f"\t\tparity[{nroots}u - 1u] = {name}_mul(feedback, "
+		f"{name}_generator[0]);",
+		"\t}",
+		"",
+		f"\treturn {nroots}u;",
+		"}",
+		"",
+	]
+
+
+def _rs_decoder(name: str, n: int, nroots: int, first_root: int,
+		size: int) -> list[str]:
+	"""The standard four steps, in the standard order.
+
+	Syndromes say whether anything is wrong; Berlekamp-Massey finds the error
+	locator polynomial from them; a Chien search finds its roots, which are the
+	error positions; Forney gives the magnitude at each. Nothing here is novel,
+	deliberately: a novel error-correcting code is the last thing anybody
+	wants, and the value situ adds is that the properties in the capability map
+	were derived from the same description as this code.
+	"""
+	half = nroots // 2
+
+	return [
+		"/* Decode in place. Returns the number of symbols corrected, or -1 if",
+		" * the block holds more errors than the code can correct -- which it",
+		" * detects rather than guessing at, because a miscorrection is worse",
+		" * than a refusal. */",
+		f"int {name}_decode(uint8_t *block, uint32_t len)",
+		"{",
+		f"\tuint8_t syndrome[{nroots}u];",
+		f"\tuint8_t lambda[{half + 1}u];",
+		f"\tuint8_t previous[{half + 1}u];",
+		f"\tuint8_t scratch[{half + 1}u];",
+		f"\tuint8_t omega[{nroots}u];",
+		f"\tuint8_t position[{half}u];",
+		"\tuint32_t at;",
+		"\tuint32_t j;",
+		"\tuint32_t found = 0;",
+		"\tuint32_t degree = 0;",
+		"\tuint32_t shift = 1;",
+		"\tuint8_t  discrepancy_last = 1;",
+		"\tint      wrong = 0;",
+		"",
+		f"\tif (len != {n}u) {{",
+		"\t\treturn -1;",
+		"\t}",
+		"",
+		"\t/* 1. Syndromes: the block evaluated at each root. All zero means",
+		"\t *    nothing is wrong, which is the common case and the cheap one. */",
+		f"\tfor (at = 0; at < {nroots}u; at++) {{",
+		"\t\tuint8_t value = 0u;",
+		f"\t\tuint8_t root = {name}_pow({first_root}u + at);",
+		"",
+		"\t\tfor (j = 0; j < len; j++) {",
+		f"\t\t\tvalue = (uint8_t)(block[j] ^ {name}_mul(value, root));",
+		"\t\t}",
+		"\t\tsyndrome[at] = value;",
+		"\t\tif (value) {",
+		"\t\t\twrong = 1;",
+		"\t\t}",
+		"\t}",
+		"",
+		"\tif (!wrong) {",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		"\t/* 2. Berlekamp-Massey: the shortest register that makes the",
+		"\t *    syndromes, whose connection polynomial locates the errors. */",
+		f"\tfor (at = 0; at <= {half}u; at++) {{",
+		"\t\tlambda[at] = 0u;",
+		"\t\tprevious[at] = 0u;",
+		"\t}",
+		"\tlambda[0] = 1u;",
+		"\tprevious[0] = 1u;",
+		"",
+		f"\tfor (at = 0; at < {nroots}u; at++) {{",
+		"\t\tuint8_t discrepancy = syndrome[at];",
+		"",
+		"\t\tfor (j = 1; j <= degree; j++) {",
+		"\t\t\tdiscrepancy = (uint8_t)(discrepancy ^",
+		f"\t\t\t\t{name}_mul(lambda[j], syndrome[at - j]));",
+		"\t\t}",
+		"",
+		"\t\tif (discrepancy == 0u) {",
+		"\t\t\tshift++;",
+		"\t\t\tcontinue;",
+		"\t\t}",
+		"",
+		f"\t\tfor (j = 0; j <= {half}u; j++) {{",
+		"\t\t\tscratch[j] = lambda[j];",
+		"\t\t}",
+		f"\t\tfor (j = shift; j <= {half}u; j++) {{",
+		"\t\t\tlambda[j] = (uint8_t)(lambda[j] ^",
+		f"\t\t\t\t{name}_mul({name}_mul(discrepancy, "
+		f"{name}_inv(discrepancy_last)),",
+		"\t\t\t\t             previous[j - shift]));",
+		"\t\t}",
+		"",
+		"\t\tif (2u * degree <= at) {",
+		"\t\t\tdegree = at + 1u - degree;",
+		f"\t\t\tfor (j = 0; j <= {half}u; j++) {{",
+		"\t\t\t\tprevious[j] = scratch[j];",
+		"\t\t\t}",
+		"\t\t\tdiscrepancy_last = discrepancy;",
+		"\t\t\tshift = 1;",
+		"\t\t} else {",
+		"\t\t\tshift++;",
+		"\t\t}",
+		"\t}",
+		"",
+		f"\tif (degree > {half}u || degree == 0u) {{",
+		"\t\treturn -1;\t\t/* more errors than the code can locate */",
+		"\t}",
+		"",
+		"\t/* 3. Chien search: every position whose evaluation vanishes is an",
+		"\t *    error. Exhaustive over the block, which is what makes the cost",
+		"\t *    of decoding proportional to the block and not to the errors. */",
+		"\tfor (at = 0; at < len; at++) {",
+		"\t\tuint8_t value = 1u;\t/* lambda[0] is always 1 */",
+		f"\t\tuint8_t x = {name}_pow({size}u - ((len - 1u - at) % {size}u));",
+		"\t\tuint8_t term = 1u;",
+		"",
+		"\t\tfor (j = 1; j <= degree; j++) {",
+		f"\t\t\tterm = {name}_mul(term, x);",
+		f"\t\t\tvalue = (uint8_t)(value ^ {name}_mul(lambda[j], term));",
+		"\t\t}",
+		"",
+		"\t\tif (value == 0u) {",
+		"\t\t\tif (found >= degree) {",
+		"\t\t\t\treturn -1;",
+		"\t\t\t}",
+		"\t\t\tposition[found++] = (uint8_t)at;",
+		"\t\t}",
+		"\t}",
+		"",
+		"\tif (found != degree) {",
+		"\t\treturn -1;\t\t/* the locator has roots outside the block */",
+		"\t}",
+		"",
+		"\t/* 4. Forney: the magnitude at each located position, from the error",
+		"\t *    evaluator over the formal derivative of the locator. */",
+		f"\tfor (at = 0; at < {nroots}u; at++) {{",
+		"\t\tuint8_t value = 0u;",
+		"",
+		"\t\tfor (j = 0; j <= at && j <= degree; j++) {",
+		"\t\t\tvalue = (uint8_t)(value ^",
+		f"\t\t\t\t{name}_mul(lambda[j], syndrome[at - j]));",
+		"\t\t}",
+		"\t\tomega[at] = value;",
+		"\t}",
+		"",
+		"\tfor (at = 0; at < found; at++) {",
+		f"\t\tuint8_t x = {name}_pow((len - 1u - position[at]) % {size}u);",
+		f"\t\tuint8_t inverse = {name}_inv(x);",
+		"\t\tuint8_t top = 0u;",
+		"\t\tuint8_t bottom = 0u;",
+		"\t\tuint8_t term = 1u;",
+		"",
+		f"\t\tfor (j = 0; j < {nroots}u; j++) {{",
+		f"\t\t\ttop = (uint8_t)(top ^ {name}_mul(omega[j], term));",
+		f"\t\t\tterm = {name}_mul(term, inverse);",
+		"\t\t}",
+		"",
+		"\t\t/* The formal derivative over GF(2) keeps only the odd terms. */",
+		"\t\tterm = 1u;",
+		"\t\tfor (j = 1; j <= degree; j += 2u) {",
+		f"\t\t\tbottom = (uint8_t)(bottom ^ {name}_mul(lambda[j], term));",
+		f"\t\t\tterm = {name}_mul({name}_mul(term, inverse), inverse);",
+		"\t\t}",
+		"",
+		"\t\tif (bottom == 0u) {",
+		"\t\t\treturn -1;",
+		"\t\t}",
+		"",
+		"\t\t{",
+		f"\t\t\tuint8_t magnitude = {name}_mul(top, {name}_inv(bottom));",
+		"",
+		f"\t\t\tif ({first_root} == 0) {{",
+		f"\t\t\t\tmagnitude = {name}_mul(magnitude, x);",
+		"\t\t\t}",
+		"\t\t\tblock[position[at]] = (uint8_t)(block[position[at]] ^ magnitude);",
+		"\t\t}",
+		"\t}",
+		"",
+		"\treturn (int)found;",
 		"}",
 	]
