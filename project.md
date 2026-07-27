@@ -1821,7 +1821,8 @@ situc gen-derived <schema>        implementations from kernel descriptions
 situc advise  <schema>            ranked design suggestions with costs
 situc explain <schema> <path>     one field's capability vector and blame chains
 situc diff    <old> <new>         capability regressions between revisions
-situc doc     <schema>            byte-layout documentation
+situc doc     <schema>            byte-layout diagrams and a field reference
+                                  [--format=ascii|markdown] [--out DIR]
 situc gen-tests   <schema> <vectors>
 situc gen-fuzz    <schema>
 situc gen-dissector <schema>
@@ -2446,8 +2447,32 @@ assert, and the emitted file says so.
 
 ### 26.14 Beyond
 
-Documentation generation; Wireshark dissector; `until`-delimited arrays;
-fixed-point and BCD types; LSP.
+Wireshark dissector; fixed-point and BCD types; LSP.
+
+**Documentation generation is done.** `situc doc` renders RFC-style byte-layout
+diagrams and a field reference, in plain text or markdown. The diagrams come
+from the same placements the accessors are generated from, which is the whole
+argument for generating them: a drawn diagram is a second description of the
+layout, and second descriptions drift. `situc doc examples/udp/udp.situ`
+reproduces RFC 768, and the IPv4 header reproduces RFC 791 including its
+bit-packed first row.
+
+Rows are 32 bits by the RFC convention, narrowing to 16 or 8 for a struct that
+is smaller than that -- a one-byte register drawn across four bytes of row
+reads as a four-byte one. Nested structs are drawn as a single box under their
+own name, the way RFC 791 draws `Source Address` rather than four octets, and
+get their own diagram further down. Variable-length members take the rest of
+the row they start in and continue in the slanted form RFCs use.
+
+**Text-based protocols are folded out of the roadmap, not scheduled.** Text of
+a fixed extent inside a binary frame is already covered -- it is a byte array
+with a length -- and that is the case that shows up inside the protocols situ
+targets. Delimiter-framed protocols (HTTP, SMTP, SIP) are a different problem:
+their fields have no offsets to be static about, so the capability lattice has
+nothing to say about them, and `until`-delimited arrays (open question 1) are
+only the entry price. Deciding whether the lattice should model delimited data
+at all comes before any of the work, and that decision has not been taken. See
+section 8.6 for what is and is not claimed today.
 
 ### Invariants to hold across all phases
 
@@ -2483,6 +2508,10 @@ that depends on it.
 
 1. **`until`-delimited arrays.** Genuinely useful for existing protocols,
    but sequential-only and awkward to bound. Phase 6 or later; may be dropped.
+   **Folded out of the roadmap** with text-protocol support (26.14): the real
+   question underneath is whether the capability lattice should model
+   delimiter-framed data, where no field has an offset, and answering that
+   comes before the construct.
 2. ~~**Multiple tags with nested coverage.**~~ **RESOLVED.** Nested coverage is
    permitted and recomputes innermost first, which is the only order that
    terminates: an outer tag covers the inner tag's own bytes, so writing the

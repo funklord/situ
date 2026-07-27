@@ -9,6 +9,8 @@ import pytest
 
 from situc.cli import main
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+
 SCHEMAS = Path(__file__).resolve().parents[1] / "schemas"
 HEADER  = str(SCHEMAS / "header.situ")
 
@@ -43,7 +45,7 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 	assert "cannot read" in str(caught.value)
 
 
-@pytest.mark.parametrize("command", ["doc", "gen-dissector"])
+@pytest.mark.parametrize("command", ["gen-dissector"])
 def test_commands_beyond_the_plan_say_where_they_are(
 	command: str, capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -315,3 +317,23 @@ def test_diff_describes_a_revision_whose_budget_is_blown(
 
 	assert main(["diff", str(old), str(new)]) == 0
 	assert "+ r.b" in capsys.readouterr().out
+
+
+def test_doc_writes_a_file(tmp_path: Path) -> None:
+	"""`--out` names a directory; the format decides the suffix."""
+	schema = ROOT / "examples" / "udp" / "udp.situ"
+
+	assert main(["doc", str(schema), "--out", str(tmp_path)]) == 0
+	assert (tmp_path / "udp.txt").read_text(encoding="ascii").count("+-+-+") > 0
+
+	assert main(["doc", str(schema), "--out", str(tmp_path),
+	             "--format", "markdown"]) == 0
+	assert (tmp_path / "udp.md").read_text(encoding="ascii").startswith("# udp.situ")
+
+
+def test_doc_is_no_longer_a_future_command() -> None:
+	from situc.cli import FUTURE_COMMANDS
+
+	assert "doc" not in FUTURE_COMMANDS
+	assert "gen-dissector" in FUTURE_COMMANDS, \
+		"the remaining one still has to explain itself rather than 400"

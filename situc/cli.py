@@ -24,8 +24,7 @@ from situc.unparse import unparse
 # Subcommands named in section 21 but not yet built, with the phase that adds
 # each one. Listed so `situc advise` says "phase 9" rather than "invalid choice".
 FUTURE_COMMANDS = {
-	"doc":			26,	# section 26.14, "Beyond"
-	"gen-dissector":	26,
+	"gen-dissector":	26,	# section 26.14, "Beyond"
 }
 
 
@@ -85,6 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
 	checks_cmd.add_argument("schema", type=Path)
 	checks_cmd.add_argument("--out", type=Path, default=Path("."))
 	checks_cmd.add_argument("--prefix", default="situ")
+
+	doc_cmd = sub.add_parser(
+		"doc", help="RFC-style byte-layout diagrams and a field reference")
+	doc_cmd.add_argument("schema", type=Path)
+	doc_cmd.add_argument("--format", choices=("ascii", "markdown"), default="ascii",
+	                     help="plain text, or markdown with fenced diagrams")
+	doc_cmd.add_argument("--out", type=Path, default=None,
+	                     help="write to a file in this directory instead of stdout")
 
 	fuzz_cmd = sub.add_parser("gen-fuzz", help="generate a fuzz harness")
 	fuzz_cmd.add_argument("schema", type=Path)
@@ -417,6 +424,31 @@ def cmd_gen_checks(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_doc(args: argparse.Namespace) -> int:
+	"""`situc doc schema.situ` -- the layout as documentation (section 20.3).
+
+	A hand-drawn packet diagram is a second description of the layout, and
+	second descriptions drift. This one is rendered from the placements the
+	accessors are generated from, so it cannot.
+	"""
+	from situc import doc
+
+	source, resolved, _ = analyse(args.schema)
+	name = args.schema.stem
+	text = doc.render(parse(source), resolved, name, args.format)
+
+	if args.out is None:
+		sys.stdout.write(text)
+		return 0
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	suffix = ".md" if args.format == "markdown" else ".txt"
+	target = args.out / f"{name}{suffix}"
+	target.write_text(text, encoding="ascii")
+	print(f"situc: wrote {target}")
+	return 0
+
+
 def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 	from situc.codegen.c import fuzz
 
@@ -504,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
 		"gen-tests": cmd_gen_tests,
 		"gen-codec-tests": cmd_gen_codec_tests,
 		"explain":  cmd_explain,
+		"doc":      cmd_doc,
 	}
 
 	handler = commands.get(args.command)
