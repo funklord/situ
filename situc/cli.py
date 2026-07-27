@@ -23,9 +23,11 @@ from situc.unparse import unparse
 
 # Subcommands named in section 21 but not yet built, with the phase that adds
 # each one. Listed so `situc advise` says "phase 9" rather than "invalid choice".
-FUTURE_COMMANDS = {
-	"gen-dissector":	26,	# section 26.14, "Beyond"
-}
+#: Subcommands named in section 21 but not yet built, with the phase that adds
+#: each one. Every one of them has now landed; the mechanism stays because the
+#: parser needs a name to be a choice before it can explain itself, and the
+#: next command to be planned will want it.
+FUTURE_COMMANDS: dict[str, int] = {}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,6 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
 	                     help="plain text, or markdown with fenced diagrams")
 	doc_cmd.add_argument("--out", type=Path, default=None,
 	                     help="write to a file in this directory instead of stdout")
+
+	dissector_cmd = sub.add_parser(
+		"gen-dissector", help="generate a Wireshark dissector in Lua")
+	dissector_cmd.add_argument("schema", type=Path)
+	dissector_cmd.add_argument("--out", type=Path, default=None,
+	                           help="write to a file in this directory instead of stdout")
 
 	fuzz_cmd = sub.add_parser("gen-fuzz", help="generate a fuzz harness")
 	fuzz_cmd.add_argument("schema", type=Path)
@@ -449,6 +457,30 @@ def cmd_doc(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_gen_dissector(args: argparse.Namespace) -> int:
+	"""`situc gen-dissector schema.situ` -- a Wireshark dissector (section 20.3).
+
+	A hand-written dissector is a third description of the layout, after the
+	schema and the accessors, and the one nobody remembers to update. This one
+	comes from the placements, so it cannot drift from the parser.
+	"""
+	from situc import dissector
+
+	source, resolved, _ = analyse(args.schema)
+	name = args.schema.stem
+	text = dissector.generate(parse(source), resolved, name)
+
+	if args.out is None:
+		sys.stdout.write(text)
+		return 0
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	target = args.out / f"{name}.lua"
+	target.write_text(text, encoding="ascii")
+	print(f"situc: wrote {target}")
+	return 0
+
+
 def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 	from situc.codegen.c import fuzz
 
@@ -537,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
 		"gen-codec-tests": cmd_gen_codec_tests,
 		"explain":  cmd_explain,
 		"doc":      cmd_doc,
+		"gen-dissector": cmd_gen_dissector,
 	}
 
 	handler = commands.get(args.command)

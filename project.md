@@ -1825,7 +1825,7 @@ situc doc     <schema>            byte-layout diagrams and a field reference
                                   [--format=ascii|markdown] [--out DIR]
 situc gen-tests   <schema> <vectors>
 situc gen-fuzz    <schema>
-situc gen-dissector <schema>
+situc gen-dissector <schema>      Wireshark dissector in Lua [--out DIR]
 situc dump-ast <schema>           debugging aid, phase 1 deliverable
 situc gen-codec-tests <schema>    property tests from codec signatures
 situc import-proto <proto> -o <schema>   [--accept-lossy]
@@ -2447,7 +2447,32 @@ assert, and the emitted file says so.
 
 ### 26.14 Beyond
 
-Wireshark dissector; fixed-point and BCD types; LSP.
+Fixed-point and BCD types; LSP.
+
+**The Wireshark dissector is done.** `situc gen-dissector` emits Lua: a `Proto`
+per struct, a `ProtoField` per member with the bitmask where it is bit-packed
+and the value string where its type is an enum, and a dissector that walks the
+members in order. Nested structs get their own subtree; struct arrays are
+dissected element by element rather than shown as a run of bytes; a
+variable-length member's length is read back out of the buffer with the same
+arithmetic the generated C offset functions use.
+
+Lua rather than C because a Lua dissector is a file a user drops in a plugins
+directory, where a C one has to be compiled against the headers of whatever
+Wireshark they happen to run.
+
+Registers are deliberately not dissected -- a register is a bus transaction and
+does not appear on a wire -- and the emitted file says so. Nothing is bound to
+a port or EtherType automatically, because the schema does not say which one
+and guessing would be wrong; the file shows how to bind it and the hint names
+the outermost struct rather than an inner one.
+
+**Not executed by the test suite.** There is no Lua interpreter or Wireshark in
+the build environment, so the tests check that the emitted Lua balances its
+blocks, uses valid identifiers, and that every `tvb(first, count)` in it is a
+span some member actually occupies. That last one is the claim worth holding: a
+dissector that loads and shows the wrong bytes is worse than one that fails to
+load.
 
 **Documentation generation is done.** `situc doc` renders RFC-style byte-layout
 diagrams and a field reference, in plain text or markdown. The diagrams come

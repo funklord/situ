@@ -45,17 +45,12 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 	assert "cannot read" in str(caught.value)
 
 
-@pytest.mark.parametrize("command", ["gen-dissector"])
-def test_commands_beyond_the_plan_say_where_they_are(
-	command: str, capsys: pytest.CaptureFixture[str],
-) -> None:
-	"""Every phase-numbered command has landed.
-
-	What is left is section 26.14's "Beyond" list, and a command there should
-	say so rather than report a phase number that will never come round.
-	"""
-	assert main([command, HEADER]) == 2
-	assert "Beyond" in capsys.readouterr().err
+def test_an_unplanned_command_is_refused() -> None:
+	"""FUTURE_COMMANDS is empty now, so the mechanism it feeds has nothing to
+	explain. What must still hold is that a name nobody defined is an error
+	rather than a traceback."""
+	with pytest.raises(SystemExit):
+		main(["gen-telepathy", HEADER])
 
 
 def test_json_diagnostics_are_emitted(
@@ -331,9 +326,18 @@ def test_doc_writes_a_file(tmp_path: Path) -> None:
 	assert (tmp_path / "udp.md").read_text(encoding="ascii").startswith("# udp.situ")
 
 
-def test_doc_is_no_longer_a_future_command() -> None:
+def test_every_planned_command_has_landed() -> None:
+	"""Section 21 named the CLI surface up front. Nothing on it is pending."""
 	from situc.cli import FUTURE_COMMANDS
 
-	assert "doc" not in FUTURE_COMMANDS
-	assert "gen-dissector" in FUTURE_COMMANDS, \
-		"the remaining one still has to explain itself rather than 400"
+	assert FUTURE_COMMANDS == {}
+
+
+def test_gen_dissector_writes_lua(tmp_path: Path) -> None:
+	schema = ROOT / "examples" / "udp" / "udp.situ"
+
+	assert main(["gen-dissector", str(schema), "--out", str(tmp_path)]) == 0
+	lua = (tmp_path / "udp.lua").read_text(encoding="ascii")
+
+	assert 'Proto("udp_header"' in lua
+	assert "ProtoField.uint16" in lua
