@@ -1613,7 +1613,25 @@ case.
 | move a mutable field out of tag coverage | frequent mutation of a covered field | eliminates tag recomputation per mutation |
 | convert `tlv` to `positional` for known-common tags | hot tags in a TLV region | O(1) access instead of O(n) scan |
 
-`situc advise schema.situ` runs the catalog and prints ranked suggestions.
+Two of those triggers are not decidable from a schema and are implemented as
+what the compiler can actually supply:
+
+- **"frequent mutation of a covered field"** -- a schema does not say which
+  fields are hot. The advisor reports one suggestion per tag rather than one
+  per field, listing the candidates and pricing a write in bytes
+  re-authenticated, and leaves the choice of which are frequent to the person
+  who knows. A field inside a sealed region is not a candidate at all: moving
+  it out of coverage means taking it out of the seal.
+- **"unaligned members with padding present"** -- triggered off the weakening
+  the lattice already recorded, because `Aligned(1)` is a weakened align axis
+  even though its base is not `Unaligned`, and the rule that noticed is the one
+  that knows.
+
+`situc advise schema.situ` runs the catalog and prints ranked suggestions, and
+exits 0 whatever it finds: a suggestion is advice about a design rather than a
+verdict on one, and a build that failed on advice would teach people to stop
+reading it. `situc diff` is the opposite -- it exits non-zero on a regression,
+because that is what makes it useful in CI.
 `situc explain message.recs[].value` prints one field's full vector plus the
 blame chain for every axis that is not at its strongest value.
 
@@ -2158,6 +2176,19 @@ mutating a covered field marks the tag dirty and finalize recomputes it;
 14.4 checklist has a test.
 
 ### 26.9 Phase 9: advisor
+
+**Status: complete.** `situc/advise.py` holds the 18.2 catalog as data and
+`situc/revision.py` the 18.3 diff. `situc explain` already existed from phase 3.
+
+Two rows needed reinterpreting, and the reinterpretation is in 18.2 above:
+"frequent mutation of a covered field" is not a property of a schema, and the
+alignment row triggers off the weakening the lattice recorded rather than
+recomputing the offset arithmetic beside it.
+
+The diff found a bug in the propagation table on its first real run: a
+multi-byte scalar with a dynamic offset kept `atomic = AtomicWord`, because the
+alignment row skipped anything whose offset it could not see. An offset that is
+not known is not an aligned one, and the row says so now.
 
 Suggestion catalog, cost model with typical and worst case, `situc advise`,
 `situc explain`, `situc map --check`, `situc diff`.

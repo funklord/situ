@@ -175,11 +175,20 @@ def _straddles(context: Context) -> bool:
 
 
 def _is_unaligned_multibyte(context: Context) -> bool:
+	"""A multi-byte scalar the compiler cannot promise is on its boundary.
+
+	Either it is known to be misaligned, or its offset is not known at all --
+	and an unknown offset is not an aligned one. `_align_value` already reports
+	Unaligned for a dynamic offset; this is the same fact reaching the atomic
+	axis, which it did not before, so a field that moved behind a
+	variable-length member kept a single-instruction access it can no longer be
+	guaranteed.
+	"""
 	scalar = context.scalar
 	if scalar is None or scalar.is_bit_packed or scalar.bits <= BITS_PER_BYTE:
 		return False
 	if context.placement.offset_bits is None:
-		return False
+		return True
 	width_bytes = scalar.bits // BITS_PER_BYTE
 	return alignment_of(context.placement.offset_bits) < min(width_bytes, MAX_ALIGN)
 
@@ -524,12 +533,15 @@ TABLE: tuple[Row, ...] = (
 	Row(
 		rule = Rule(
 			name      = "unaligned-multi-byte-scalar",
-			construct = "a multi-byte scalar at an offset below its natural alignment",
+			construct = "a multi-byte scalar not known to be on its boundary",
 			effects   = (Effect(Axis.ATOMIC, Value("NonAtomic"),
 			                    "an unaligned word access faults on some targets "
-			                    "and is split on others"),),
+			                    "and is split on others, and an offset that is "
+			                    "not known cannot be known to be aligned"),),
 			remedy    = "reorder the preceding fields, or insert `reserved` "
-			            "padding, to land this field on its natural boundary",
+			            "padding, to land this field on its natural boundary; "
+			            "where the offset itself is dynamic, move the field "
+			            "ahead of the variable-length member instead",
 		),
 		applies = _is_unaligned_multibyte,
 	),

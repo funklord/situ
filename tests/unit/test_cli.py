@@ -44,8 +44,6 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(("command", "phase"), [
-	("advise",	9),
-	("diff",	9),
 	("import-proto", 13),
 ])
 def test_future_commands_name_their_phase(
@@ -160,3 +158,157 @@ def test_map_summary_format(capsys: pytest.CaptureFixture[str]) -> None:
 def test_unknown_command_is_an_argparse_error() -> None:
 	with pytest.raises(SystemExit):
 		main(["nonsense", HEADER])
+
+
+# -- the advisor (phase 9) --------------------------------------------------
+
+
+BADLY_ORDERED = ("endian big;\n"
+	"struct bad { u16 n [max = 8]; u8 opts[n]; u32 seq; }\n")
+
+
+def test_advise_prints_ranked_suggestions(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	schema = tmp_path / "bad.situ"
+	schema.write_text(BADLY_ORDERED, encoding="ascii")
+
+	assert main(["advise", str(schema)]) == 0
+
+	out = capsys.readouterr().out
+	assert "highest yield first" in out
+	assert "bad.opts: move this variable-length member after the fixed ones" in out
+	assert "cost: nothing" in out
+
+
+def test_advise_never_fails_the_build(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""A suggestion is advice about a design, not a verdict on one.
+
+	A build that failed on advice would teach people to stop reading it.
+	"""
+	schema = tmp_path / "bad.situ"
+	schema.write_text(BADLY_ORDERED, encoding="ascii")
+
+	assert main(["advise", str(schema)]) == 0
+	capsys.readouterr()
+
+
+def test_advise_emits_json(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	schema = tmp_path / "bad.situ"
+	schema.write_text(BADLY_ORDERED, encoding="ascii")
+
+	assert main(["advise", str(schema), "--format=json"]) == 0
+
+	payload = json.loads(capsys.readouterr().out)
+	first   = payload["suggestions"][0]
+	assert first["rule"] == "move-dynamic-to-tail"
+	assert first["cost"]["worst"] == 0
+
+
+def test_advise_says_so_when_there_is_nothing_to_say(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	schema = tmp_path / "fine.situ"
+	schema.write_text("endian big;\nstruct fine { u32 a; u16 b; }\n", encoding="ascii")
+
+	assert main(["advise", str(schema)]) == 0
+	assert "No suggestions" in capsys.readouterr().out
+
+
+# -- map --check (section 18.1) ---------------------------------------------
+
+
+def _with_map(tmp_path: Path, body: str) -> Path:
+	schema = tmp_path / "s.situ"
+	schema.write_text(body, encoding="ascii")
+	main(["map", str(schema)])
+	return schema
+
+
+def test_map_check_passes_on_a_current_map(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	schema = _with_map(tmp_path, "endian big;\nstruct s { u32 a; }\n")
+	(tmp_path / "s.situ.map").write_text(capsys.readouterr().out, encoding="ascii")
+
+	assert main(["map", str(schema), "--check"]) == 0
+	assert "is current" in capsys.readouterr().err
+
+
+def test_map_check_fails_on_an_uncommitted_capability_change(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""The point of committing the map: a regression is a reviewable diff at
+	the moment of editing rather than a surprise months later."""
+	schema = _with_map(tmp_path, "endian big;\nstruct s { u32 a; }\n")
+	(tmp_path / "s.situ.map").write_text(capsys.readouterr().out, encoding="ascii")
+
+	schema.write_text("endian big;\nstruct s { u32 a; u16 b; }\n", encoding="ascii")
+
+	assert main(["map", str(schema), "--check"]) == 1
+
+	captured = capsys.readouterr()
+	assert "the capability map of s.situ has changed" in captured.err
+	assert "+  s.b " in captured.out or "+  s.b" in captured.out
+
+
+def test_map_check_says_what_to_do_when_no_map_is_committed(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	schema = tmp_path / "s.situ"
+	schema.write_text("endian big;\nstruct s { u32 a; }\n", encoding="ascii")
+
+	assert main(["map", str(schema), "--check"]) == 1
+	assert "no committed map" in capsys.readouterr().err
+
+
+# -- diff (section 18.3) ----------------------------------------------------
+
+
+def test_diff_exits_non_zero_on_a_regression(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	old = tmp_path / "old.situ"
+	new = tmp_path / "new.situ"
+	old.write_text("endian big;\nstruct r { u16 n [max = 8]; u8 body[8]; }\n",
+	               encoding="ascii")
+	new.write_text("endian big;\nstruct r { u16 n [max = 8]; u8 body[n]; }\n",
+	               encoding="ascii")
+
+	assert main(["diff", str(old), str(new)]) == 1
+	assert "mutate InPlaceFixed -> Shifting" in capsys.readouterr().out
+
+
+def test_diff_exits_zero_when_nothing_regressed(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	old = tmp_path / "old.situ"
+	new = tmp_path / "new.situ"
+	old.write_text("endian big;\nstruct r { u32 a; }\n", encoding="ascii")
+	new.write_text("endian big;\nstruct r { u32 a; u32 b; }\n", encoding="ascii")
+
+	assert main(["diff", str(old), str(new)]) == 0
+	capsys.readouterr()
+
+
+def test_diff_describes_a_revision_whose_budget_is_blown(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""Requirements are not discharged for a diff.
+
+	A revision that broke its budget is exactly the one worth diffing, and
+	refusing to describe it would withhold the explanation when it is wanted.
+	"""
+	old = tmp_path / "old.situ"
+	new = tmp_path / "new.situ"
+	old.write_text("endian big;\nstruct r { u32 a; }\nrequire size(r) == 4;\n",
+	               encoding="ascii")
+	new.write_text("endian big;\nstruct r { u32 a; u16 b; }\nrequire size(r) == 4;\n",
+	               encoding="ascii")
+
+	assert main(["diff", str(old), str(new)]) == 0
+	assert "+ r.b" in capsys.readouterr().out

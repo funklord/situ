@@ -47,6 +47,9 @@ become live as each phase lands.
 situc dump-ast examples/ipv4/ipv4.situ
 situc map      examples/ipv4/ipv4.situ
 situc map --format=summary examples/ntp/ntp.situ
+situc map --check examples/ipv4/ipv4.situ    # fails if the committed map drifted
+situc advise   examples/message/message.situ # ranked, costed suggestions
+situc explain  examples/message/message.situ message.recs[].value
 ```
 
 Each buildable example carries a committed `*.situ.map` beside its schema. That

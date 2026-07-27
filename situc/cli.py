@@ -8,6 +8,7 @@ unimplemented command reports its phase rather than an argparse error.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import sys
 from pathlib import Path
@@ -23,10 +24,8 @@ from situc.unparse import unparse
 # Subcommands named in section 21 but not yet built, with the phase that adds
 # each one. Listed so `situc advise` says "phase 9" rather than "invalid choice".
 FUTURE_COMMANDS = {
-	"advise":		9,
-	"diff":			9,
-	"doc":			9,
-	"gen-dissector":	9,
+	"doc":			26,	# section 26.14, "Beyond"
+	"gen-dissector":	26,
 	"import-proto":		13,
 }
 
@@ -72,10 +71,22 @@ def build_parser() -> argparse.ArgumentParser:
 	fuzz_cmd.add_argument("--out", type=Path, default=Path("."))
 	fuzz_cmd.add_argument("--prefix", default="situ")
 
+	advise_cmd = sub.add_parser("advise", help="ranked, costed schema suggestions")
+	advise_cmd.add_argument("schema", type=Path)
+	advise_cmd.add_argument("--format", choices=("text", "json"), default="text")
+
+	diff_cmd = sub.add_parser("diff", help="capability changes between two revisions")
+	diff_cmd.add_argument("old", type=Path)
+	diff_cmd.add_argument("new", type=Path)
+	diff_cmd.add_argument("--format", choices=("text", "json"), default="text")
+
 	map_cmd = sub.add_parser("map", help="emit the capability map")
 	map_cmd.add_argument("schema", type=Path)
 	map_cmd.add_argument("--format", choices=("text", "summary"), default="text",
 	                     help="the committable map, or a per-struct digest")
+	map_cmd.add_argument("--check", action="store_true",
+	                     help="compare against the committed *.situ.map and fail "
+	                          "if it differs")
 
 	explain_cmd = sub.add_parser(
 		"explain", help="one path's capability vector and its blame chains")
@@ -123,6 +134,10 @@ def cmd_map(args: argparse.Namespace) -> int:
 	# budget is blown should fail rather than emit a map recording the breach.
 	outcomes = requirements.discharge(schema, resolved)
 
+	if args.check:
+		return _check_map(args, capmap.render(schema, resolved, source.path),
+		                  outcomes)
+
 	if args.format == "summary":
 		sys.stdout.write(capmap.summary(resolved))
 	else:
@@ -130,6 +145,101 @@ def cmd_map(args: argparse.Namespace) -> int:
 
 	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
 	return 0
+
+
+def _check_map(args: argparse.Namespace, current: str,
+		outcomes: list[requirements.Outcome]) -> int:
+	"""Compare against the committed map (section 18.1).
+
+	The point of committing the map is that a capability regression arrives as
+	a reviewable diff at the moment of editing rather than as a performance
+	surprise months later. That only works if something fails when the two
+	disagree, so this is the something.
+	"""
+	committed = args.schema.with_suffix(".situ.map")
+
+	if not committed.exists():
+		print(f"situc: no committed map at {committed}", file=sys.stderr)
+		print(f"situc: create it with `situc map {args.schema} > {committed}`",
+		      file=sys.stderr)
+		return 1
+
+	expected = committed.read_text(encoding="ascii")
+	if expected == current:
+		print(f"situc: {committed} is current", file=sys.stderr)
+		_report(args, requirements.warnings(outcomes)
+		        + requirements.deferrals(outcomes))
+		return 0
+
+	difference = difflib.unified_diff(
+		expected.splitlines(keepends=True), current.splitlines(keepends=True),
+		fromfile=str(committed), tofile="(this build)")
+	sys.stdout.writelines(difference)
+
+	print(f"situc: the capability map of {args.schema.name} has changed",
+	      file=sys.stderr)
+	print("situc: review the diff above, then run "
+	      f"`situc map {args.schema} > {committed}`", file=sys.stderr)
+	return 1
+
+
+def cmd_advise(args: argparse.Namespace) -> int:
+	"""`situc advise schema.situ` -- the section 18.2 catalog, ranked and costed.
+
+	Exit status stays 0 whatever it finds. A suggestion is advice about a
+	design, not a verdict on one: a schema may have excellent reasons for every
+	construct the catalog would change, and a build that failed on advice would
+	teach people to stop reading it.
+	"""
+	from situc import advise
+
+	_, resolved, outcomes = analyse(args.schema)
+	suggestions = advise.suggest(resolved)
+
+	if args.format == "json":
+		payload = {"suggestions": [advise.to_dict(item) for item in suggestions]}
+		json.dump(payload, sys.stdout, indent=2)
+		sys.stdout.write("\n")
+	else:
+		sys.stdout.write(advise.render(suggestions))
+
+	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
+	return 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+	"""`situc diff old.situ new.situ` -- what a revision cost (section 18.3).
+
+	Exits non-zero on a regression, and only on a regression: this is meant for
+	code review and CI, where the useful signal is "this edit took something
+	away" rather than "these files differ".
+	"""
+	from situc import revision
+
+	old = _resolve_for_diff(args.old)
+	new = _resolve_for_diff(args.new)
+	changes = revision.compare(old, new)
+
+	if args.format == "json":
+		payload = {"changes": [revision.to_dict(change) for change in changes]}
+		json.dump(payload, sys.stdout, indent=2)
+		sys.stdout.write("\n")
+	else:
+		sys.stdout.write(revision.render(changes))
+
+	return 1 if any(change.is_regression for change in changes) else 0
+
+
+def _resolve_for_diff(path: Path) -> ResolvedSchema:
+	"""Resolve without discharging requirements.
+
+	A revision whose budget is blown is exactly the one worth diffing, and
+	refusing to describe it would withhold the explanation at the moment it is
+	wanted.
+	"""
+	source = read_source(path)
+	schema = parse(source)
+	return resolve(schema, solve(schema))
 
 
 def cmd_build(args: argparse.Namespace) -> int:
@@ -261,12 +371,16 @@ def main(argv: list[str] | None = None) -> int:
 
 	if args.command in FUTURE_COMMANDS:
 		phase = FUTURE_COMMANDS[args.command]
+		where = ("section 26.14, \"Beyond\"" if phase == 26
+		         else f"phase {phase} (project.md section 26)")
 		print(f"situc: `{args.command}` is not yet implemented; "
-		      f"planned for phase {phase} (project.md section 26)", file=sys.stderr)
+		      f"planned for {where}", file=sys.stderr)
 		return 2
 
 	commands = {
 		"dump-ast": cmd_dump_ast,
+		"advise":   cmd_advise,
+		"diff":     cmd_diff,
 		"map":      cmd_map,
 		"build":    cmd_build,
 		"gen-fuzz": cmd_gen_fuzz,

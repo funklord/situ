@@ -171,7 +171,7 @@ def test_canonical_fails_and_names_its_cause() -> None:
 def test_atomic_failure_blames_the_alignment() -> None:
 	report = failure("struct S { u8 pad; u32 c; }\nrequire atomic(S.c);")
 	assert "atomic(S.c) is NonAtomic, required AtomicWord" in report
-	assert "caused by: a multi-byte scalar at an offset below its natural alignment" in report
+	assert "caused by: a multi-byte scalar not known to be on its boundary" in report
 	assert "remedy: reorder the preceding fields" in report
 
 
