@@ -24,7 +24,10 @@ TEXT_SUFFIXES = INDENT_SUFFIXES | frozenset({
 	".md", ".json", ".toml", ".cfg", ".clangd", ".map",
 })
 
-SKIP_DIRS = frozenset({".git", "build", "__pycache__", ".mypy_cache", ".pytest_cache"})
+# Build products and caches. Dot-directories are skipped wholesale rather than
+# named one at a time: they hold tool state, never project sources, and a new
+# tool should not be able to break the lint by arriving.
+SKIP_DIRS = frozenset({"build", "__pycache__"})
 
 
 class Problem:
@@ -126,7 +129,8 @@ def check_file(path: Path, root: Path) -> list[Problem]:
 def iter_sources(root: Path) -> list[Path]:
 	found = []
 	for path in sorted(root.rglob("*")):
-		if any(part in SKIP_DIRS for part in path.parts):
+		parts = path.relative_to(root).parts
+		if any(part in SKIP_DIRS or part.startswith(".") for part in parts):
 			continue
 		if path.is_file() and wants_text_check(path):
 			found.append(path)

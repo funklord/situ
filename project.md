@@ -881,6 +881,17 @@ frame, and of nothing else. It does not weaken members of parent frames before
 it, and it does not weaken its own interior. This locality is what makes
 islands of staticness work.
 
+**Row precedence on the `mutate` axis.** The generic size rows -- the ones that
+cost a bounded or unbounded size in the abstract -- must not fire for a
+construct that owns a row of its own. Both rows land on `mutate`, the meet
+takes the weaker, and the generic reason then wins the axis and buries the
+specific one: a varint reports "size is bounded" where it should report the
+slack it actually has, and the blame chain leads nowhere useful. Every
+construct with its own row is therefore listed as owning `mutate`, and the
+generic rows skip it. This has been got wrong four separate times -- varints,
+variants, `tlv`, `opaque` -- so it is stated here rather than left to be
+rediscovered.
+
 ### 11.4 Worked example
 
 For 5.2 `Message`:
@@ -957,6 +968,12 @@ bug class most likely to bite users, so it must not be implicit.
 Do not skip the generation counter as an optimization. It is the only thing
 standing between a user and silent memory corruption, and it costs one
 comparison in debug builds.
+
+A consequence for the generated C signatures: **a setter that can shift layout
+takes the message, not just the view**, because it has to bump the generation.
+The cost shows up in the signature, where the caller cannot miss it; a comment
+would not be enough. A field that drives a length gets that setter and no
+other, so there is no way to write it without paying for the invalidation.
 
 ---
 
@@ -1731,37 +1748,50 @@ situ/
     decisions/                append-only numbered decision records
     grammar.ebnf              extracted, kept in sync with Section 7
     capability-axes.md        normative axis definitions
-  situc/
+  situc/                      the compiler; Python 3.11+, stdlib only, mypy strict
     __init__.py
     lexer.py
     parser.py
     ast.py
+    wellformed.py             whole-schema checks: duplicate names, unresolvable
+                              types, recursion, constant/attribute collision
     types.py                  scalar type table
     expr.py                   expression evaluation and interval arithmetic
     layout.py                 the layout solver
     capability.py             axes, lattice, meet
     propagate.py              the 11.3 table, data-driven
+    resolve.py                the seam joining layout to the table
     requirements.py           predicate evaluation and discharge
+    capmap.py                 capability map construction
     diagnostics.py            diagnostic construction, blame chains, rendering
-    advise.py                 suggestion catalog and cost model
+    dump.py, unparse.py       `dump-ast` and round-tripping
+    advise.py                 suggestion catalog and cost model; phase 9
     codegen/
-      c/
+      c/                      emit, vectors, fuzz harnesses, codec tests
       rust/                   phase 11
     cli.py
   runtime/
     c/
       situ.h                  minimal runtime: views, bounds, generation
       situ.c
+  std/
+    codecs.situ               signatures for the standard codecs
+  tools/
+    lint_conventions.py       the formatting enforcer; `make lint`
   tests/
-    unit/
-    propagation/
-    golden/
+    unit/                     compiler tests (pytest), one file per module
     generated/                cmocka tests over generated C
+    cross/                    behavioural checks on aarch64 under emulation
     schemas/                  example schemas including the three in Section 5
-  examples/
-    packet.situ               the encrypted protocol from 5.3
-    registers.situ            the MMIO example from 15.2
+  examples/                   one directory per protocol, name matching its
+                              `.situ` file, each with at least one `require`
 ```
+
+Every example is parsed by the test suite, and every buildable one has a
+committed `.situ.map` that the suite regenerates and compares. An example
+marked `// STATUS: needs phase N.` is asserted to be *rejected*, naming a phase
+no later than N; those pin the phase-gating behaviour and go live as phases
+land.
 
 ## 24. Build system
 
@@ -1791,6 +1821,21 @@ usable entry points.
   and runtime must build clean for a Cortex-A55 target with
   `-Wall -Wextra -Werror -Wconversion -Wsign-conversion`.
 
+The top-level entry points:
+
+```
+make            build the C runtime
+make test       pytest, mypy strict, lint, cmocka, cross
+make cross      aarch64 build of the runtime
+make cross-test generated accessors run on aarch64 under emulation
+make help       everything else
+```
+
+`pytest` and `mypy` come from the system (`python3-pytest`, `python3-mypy`) and
+are used only to check the compiler. `situc` itself must run from a bare
+interpreter with nothing installed, which is what makes the toolchain vendor
+into an embedded build environment (Section 22).
+
 ## 25. Conventions
 
 - **ASCII only** in all source, comments, and docstrings. Non-ASCII belongs
@@ -1800,7 +1845,13 @@ usable entry points.
   column. If lines are short enough to merge, merge rather than align.
 - No prescriptive tab width anywhere in the codebase or in generated output.
   Elastic tabstops are the model: the viewer decides width.
-- Generated C follows the same tab/space rule.
+- Generated C follows the same tab/space rule, and so does the Python.
+- **No autoformatter.** `black` and `ruff format` rewrite tabs to spaces
+  unconditionally and cannot be configured out of it, so `tools/lint_conventions.py`
+  under `make lint` is the enforcement instead. See
+  `docs/decisions/0003-source-formatting.md`.
+- Lowercase filenames unless there is a reason otherwise, and `snake_case` over
+  `camelCase` in every language.
 - Line length: soft 100 columns; do not sacrifice clarity to it.
 - Every module has a docstring stating its single responsibility. If a module
   needs two sentences joined by "and", split the module.
@@ -1812,7 +1863,17 @@ usable entry points.
 
 ## 26. Implementation plan
 
+Phases carry a **Status** line until they are reached; keeping those current is
+how this document doubles as the record of where the work is. A phase is
+complete when its acceptance criteria pass, not when its code looks finished.
+Phase 9 onward have not been started.
+
+Phases 0 through 8 are ordered by dependency, and 9 onward are largely
+independent of each other. Do not implement ahead of the plan.
+
 ### 26.0 Phase 0: scaffolding
+
+**Status: complete.**
 
 - Repo layout per Section 23; CMake and Make both building an empty target.
 - pytest and mypy strict running in CI; cmocka wired up and running one trivial
@@ -1822,7 +1883,15 @@ usable entry points.
 **Acceptance:** `make test` and `cmake --build . --target test` both pass with
 zero warnings on host and aarch64 cross.
 
+Delivered with GNU Make only; CMake is deferred and recorded in
+`docs/decisions/0002-build-system.md`, so the acceptance criterion above stands
+against `make test` alone until CMake lands.
+
 ### 26.1 Phase 1: front end, static subset
+
+**Status: complete.** `situc/wellformed.py` holds the whole-schema checks --
+duplicate names, unresolvable types, recursion, and the constant/attribute
+collision that decision 0006 left open.
 
 Lexer, parser, AST for: directives, `const`, `enum`, `struct`, scalar fields,
 fixed arrays, `reserved`, bit fields, endian/bit_order scoping, offset pins,
@@ -1834,6 +1903,9 @@ type declarations are rejected with a clear error. 40+ parser tests including
 malformed input.
 
 ### 26.2 Phase 2: layout solver, static subset
+
+**Status: complete.** `situc map` emits the capability map, and every buildable
+example carries a committed `.situ.map` the test suite regenerates and compares.
 
 Compute size, offset, alignment, bit positions for the static subset. Evaluate
 offset pins and `size()` requirements as assertions. Emit the capability map for
@@ -1851,6 +1923,17 @@ offset is reported as such rather than silently truncated.
 
 ### 26.3 Phase 3: capability lattice
 
+**Status: complete.** All thirteen axes with their domains as data
+(`capability.py`), the 11.3 table as rows rather than conditionals
+(`propagate.py`), the seam joining layout to table (`resolve.py`), blame chains
+through to a costed remedy, `situc explain`, and `--diagnostics=json`.
+
+`requirements.PREDICATES` is the predicate table, and `DEFERRED_PREDICATES`
+lists the rest against the phase that will discharge them. A deferred
+requirement is reported on every run rather than silently passing, and that
+must stay true: a predicate that quietly succeeds because nothing implements it
+yet is worse than one that fails.
+
 Implement axes, meet, and the propagation table as data. Implement `require`
 and `assert` for the static subset predicates. Implement blame chains and the
 full diagnostic renderer plus JSON output.
@@ -1861,6 +1944,18 @@ the correct root cause; `--diagnostics=json` output validates against a
 committed schema.
 
 ### 26.4 Phase 4: C backend, static subset
+
+**Status: complete.** Accessors are `static inline` and compile to `base + K`,
+verified by disassembly rather than assumed; `gen-tests` and `gen-fuzz` derive
+from the layout rather than a hand-maintained list.
+
+One caveat to carry forward, recorded in
+`docs/decisions/0007-aarch64-testing.md`: the big-endian aarch64 build is
+compile-only, because no big-endian glibc is available. That is sound only
+while every multi-byte access is explicit byte indexing rather than a cast. A
+`memcpy` fast path for `MemoryIdentical` fields -- the obvious future
+optimisation -- would break the argument and needs the decision revisited
+first.
 
 Generate `.h`/`.c` for the static subset: getters, setters where permitted,
 endianness conversion, bit-field RMW, size constants, `SITU_CHECKED` checks.
@@ -1884,6 +1979,8 @@ passes.
 
 ### 26.5 Phase 5: expressions and dynamic layout
 
+**Status: complete.** `examples/message/` reproduces the 11.4 map exactly.
+
 Expression language with interval arithmetic. Counted arrays, length-driven
 sizes, `remaining`. Frame detection and frame-relative staticness. Views,
 generation counters, invalidation rules. Capability propagation for the dynamic
@@ -1896,6 +1993,13 @@ test proves a stale view is caught in `SITU_CHECKED` and that mutation of a
 preceding length field increments the generation.
 
 ### 26.6 Phase 6: variants, opaque, TLV, indexed, varints
+
+**Status: complete**, including both halves of the protobuf gate below and the
+17.0 ambiguity table audited row by row -- which is where `[require_aligned]`
+turned out to be in the attribute vocabulary while checking nothing.
+
+Two checks belong to a later phase, now that expressions evaluate: an enum
+value that does not fit its backing type, and a duplicate enum value.
 
 `variant switch`, exhaustiveness checking, `opaque`, `tlv` in both the simple and
 general forms (composite `tag_decode`, dispatched `value_size`,
@@ -1920,6 +2024,15 @@ the capability system is real.
 
 ### 26.7 Phase 7: transforms, tier 1 (extern codecs)
 
+**Status: complete.** `situc gen-codec-tests` output was checked against four
+deliberately lying implementations. `coded(C) { ... }` is the general transform
+region this table needed and this document did not name;
+`docs/decisions/0009-coded-regions.md` records why, and phase 8's `sealed`
+becomes `coded` plus authentication rather than a second mechanism.
+
+The property held throughout: **the lattice reads property signatures and
+nothing else** (13.1). No rule in `propagate.py` knows what an algorithm does.
+
 `codec` signatures with the full property set of 13.2, separated from `impl`
 bindings. Staging. Propagation per the 13.5 table. Enforce the three prohibitions
 in 13.3. Mark extern codecs `trusted` in the capability map. Ship
@@ -1938,6 +2051,11 @@ byte of the capability map; a deliberately mismatched implementation is caught b
 the generated conformance tests for every property in the 13.1 table.
 
 ### 26.8 Phase 8: cryptographic model
+
+**Status: next.** The transform half already exists and is tested (decision
+0009), so this phase adds the tag, the coverage inference and the stage gate,
+not a second transform mechanism. The stage gate of 14.3 is the highest-value
+property in the design and must not be weakened for convenience.
 
 `authenticated`, `sealed`, `tag` with coverage inference, `nonce`, `secret`.
 Tag-dirty tracking. `VerifyGated` staging with no unverified interior access.
@@ -2034,6 +2152,13 @@ fixed-point and BCD types; LSP.
    as such. Never silently downgrade.
 6. The expression language stays total. No construct may make it possible to
    reference a transform result.
+7. Offsets are tracked in bits and reported in bytes only where byte-aligned
+   (26.2). Retrofitting bit phase into a byte-based solver is a rewrite.
+8. Ambiguity is an error (17.0). Situ never guesses and never takes a silent
+   default where the wrong choice is undetectable at runtime. Where a default
+   does exist, the safe option is silent and the unsafe option is loud.
+9. Diagnostic quality is the product, not a finishing touch. The exact text is
+   snapshot-tested, and a regression in message quality is a real regression.
 
 ---
 
