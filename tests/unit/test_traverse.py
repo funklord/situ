@@ -12,7 +12,7 @@ import pytest
 
 from situc.layout import solve
 from situc.parser import parse_text
-from situc.resolve import resolve
+from situc.resolve import ResolvedStruct, resolve
 from situc.traverse import (
 	byte_span, container_bits, is_own_member, local_name, own_members, span_bits,
 )
@@ -20,7 +20,7 @@ from situc.traverse import (
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
 
-def structs(body: str) -> dict:
+def structs(body: str) -> dict[str, ResolvedStruct]:
 	schema = parse_text(PREAMBLE + body)
 	return resolve(schema, solve(schema)).structs
 
@@ -90,7 +90,8 @@ def test_members_partition_the_struct() -> None:
 	("struct s { u4 a; u4 b; }",                  "s.a", (0, 1)),
 	("struct s { u4 a; u4 b; }",                  "s.b", (0, 1)),
 ])
-def test_byte_span_is_the_bytes_touched(body: str, field: str, want: tuple) -> None:
+def test_byte_span_is_the_bytes_touched(body: str, field: str,
+		want: tuple[int, int]) -> None:
 	"""Not the placement's own width. A four-bit field is zero bytes wide if you
 	divide, and dividing is what dropped every bit-packed field out of the
 	Wireshark dissector."""
