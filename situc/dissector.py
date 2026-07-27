@@ -167,7 +167,12 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
 	kind = ("int" if scalar.signed else "uint") + str(width)
-	base = "base.DEC"
+
+	# Wireshark has no BCD display, but hex is the right one anyway: the
+	# nibbles of a packed decimal field read as the digits they spell, so
+	# 0x12345678 is the number a reader wants to see. Decimal would show the
+	# integer the bytes happen to be, which is not a number anybody wrote.
+	base = "base.HEX" if scalar.is_bcd else "base.DEC"
 	args = [f"\"{abbrev}\"", f"\"{name}\"", base]
 
 	enum = placement.type_name if placement.type_name in _enum_names(resolved) else None

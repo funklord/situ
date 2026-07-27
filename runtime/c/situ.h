@@ -417,6 +417,59 @@ static inline int64_t situ_sign_extend(uint64_t raw, uint32_t width)
 }
 
 /* ------------------------------------------------------------------------
+ * Packed binary-coded decimal (section 8.1)
+ *
+ * Each nibble holds one decimal digit, most significant first, which is what
+ * RTC chips and financial formats put on the wire. The conversion lives here
+ * rather than in generated code because it is a loop, and because a loop that
+ * is written once and tested once is better than one emitted per field.
+ *
+ * A nibble above nine is a bit pattern that is not a number. Decoding cannot
+ * report that, so `situ_bcd_valid` exists to be asked first; the generated
+ * validator asks it.
+ * ------------------------------------------------------------------------ */
+
+/* Whether every nibble of `packed` below `digits` is a decimal digit. */
+static inline int situ_bcd_valid(uint64_t packed, uint32_t digits)
+{
+	uint32_t i;
+
+	for (i = 0; i < digits; i++) {
+		if (((packed >> (4u * i)) & 0xFu) > 9u) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* The number `packed` spells. Nibbles above nine contribute their value, so
+ * the result of decoding invalid input is unspecified but bounded; check with
+ * situ_bcd_valid first where that matters. */
+static inline uint64_t situ_bcd_decode(uint64_t packed, uint32_t digits)
+{
+	uint64_t value = 0;
+	uint32_t i;
+
+	for (i = digits; i > 0u; i--) {
+		value = value * 10u + ((packed >> (4u * (i - 1u))) & 0xFu);
+	}
+	return value;
+}
+
+/* The packed form of `value`, truncated to `digits` digits. */
+static inline uint64_t situ_bcd_encode(uint64_t value, uint32_t digits)
+{
+	uint64_t packed = 0;
+	uint32_t i;
+
+	for (i = 0; i < digits; i++) {
+		packed |= (value % 10u) << (4u * i);
+		value  /= 10u;
+	}
+	return packed;
+}
+
+/* ------------------------------------------------------------------------
  * Variable-length integers
  *
  * LEB128: base-128 groups, least significant first, with the top bit of each

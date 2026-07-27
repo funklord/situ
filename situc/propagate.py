@@ -169,6 +169,14 @@ def _is_bit_field(context: Context) -> bool:
 	return context.scalar is not None and context.scalar.is_bit_packed
 
 
+def _is_fixed_point(context: Context) -> bool:
+	return context.scalar is not None and context.scalar.is_fixed_point
+
+
+def _is_bcd(context: Context) -> bool:
+	return context.scalar is not None and context.scalar.is_bcd
+
+
 def _straddles(context: Context) -> bool:
 	position = context.placement.bit_position
 	return position is not None and position.straddles
@@ -565,6 +573,36 @@ TABLE: tuple[Row, ...] = (
 			remedy    = "",
 		),
 		applies = _is_marker_scoped,
+	),
+	Row(
+		rule = Rule(
+			name      = "fixed-point",
+			construct = "a fixed-point field",
+			effects   = (
+				Effect(Axis.REPR, Value("ValueConverted"),
+				       "the stored integer is the value scaled by a power of "
+				       "two, so reading the number it means is a shift"),
+			),
+			remedy    = "the accessors hand back the stored integer and the "
+			            "header carries the scale; no floating point is "
+			            "generated, because the target may have none",
+		),
+		applies = _is_fixed_point,
+	),
+	Row(
+		rule = Rule(
+			name      = "bcd",
+			construct = "a packed binary-coded decimal field",
+			effects   = (
+				Effect(Axis.REPR, Value("ValueConverted"),
+				       "each nibble is a decimal digit, so the value is "
+				       "decoded rather than read"),
+			),
+			remedy    = "use an integer field if the wire format allows one; "
+			            "BCD costs a decode on every access and can hold bit "
+			            "patterns that are not numbers",
+		),
+		applies = _is_bcd,
 	),
 	Row(
 		rule = Rule(

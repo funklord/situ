@@ -88,6 +88,61 @@ def test_bit_field_keeps_in_place_mutation() -> None:
 	       == Value("InPlaceFixed")
 
 
+# -- row: fixed point --------------------------------------------------------
+
+
+def test_fixed_point_converts() -> None:
+	"""The stored integer is the value scaled by 2^frac, so the number the
+	field means is not the number in memory."""
+	body = "struct S { q16_16 gain; }"
+	assert axis_of(body, "S.gain", Axis.REPR) == Value("ValueConverted")
+	assert "fixed-point" in rules_for(body, "S.gain", Axis.REPR)
+
+
+def test_fixed_point_keeps_its_other_axes() -> None:
+	"""It is an integer in memory, so a byte-aligned one addresses, aligns and
+	mutates exactly like the integer of the same width. Only `repr` moves."""
+	fixed   = "struct S { q16_16 a; }"
+	integer = "struct S { i32 a; }"
+
+	for axis in (Axis.OFFSET, Axis.SIZE, Axis.ALIGN, Axis.ATOMIC, Axis.MUTATE):
+		assert axis_of(fixed, "S.a", axis) == axis_of(integer, "S.a", axis), axis
+
+
+def test_a_bit_packed_fixed_point_field_pays_both_costs() -> None:
+	"""`q4_4` is a byte; `q3_5` is not, and packs like any other odd width."""
+	assert axis_of("struct S { q4_4 a; }", "S.a", Axis.ALIGN) \
+	       == axis_of("struct S { u8 a; }", "S.a", Axis.ALIGN)
+
+	packed = "struct S { q2_3 a; u3 b; }"
+	assert axis_of(packed, "S.a", Axis.ATOMIC) == Value("NonAtomic")
+	assert "bit-field" in rules_for(packed, "S.a", Axis.ATOMIC)
+
+
+# -- row: BCD ----------------------------------------------------------------
+
+
+def test_bcd_converts() -> None:
+	"""Each nibble is a decimal digit, so the value is decoded, not read."""
+	body = "struct S { bcd8 counter; }"
+	assert axis_of(body, "S.counter", Axis.REPR) == Value("ValueConverted")
+	assert "bcd" in rules_for(body, "S.counter", Axis.REPR)
+
+
+def test_bcd_is_not_byte_swapped_as_well() -> None:
+	"""A BCD field is a digit string, not a multi-byte integer: its bytes are
+	in digit order whatever the declared endianness, so the conversion it pays
+	for is the decode and not a swap."""
+	body = "struct S { bcd8 a; }"
+	assert "bcd" in rules_for(body, "S.a", Axis.REPR)
+
+
+def test_a_single_byte_bcd_field_stays_atomic() -> None:
+	"""Two digits are one byte, so nothing about the access is unusual."""
+	assert axis_of("struct S { bcd2 a; }", "S.a", Axis.ATOMIC) \
+	       == axis_of("struct S { u8 a; }", "S.a", Axis.ATOMIC)
+
+
 # -- row: straddling bit field ----------------------------------------------
 
 
@@ -277,6 +332,8 @@ def test_reachable_rows_are_all_tested() -> None:
 	"""
 	tested = {
 		"non-native-endian-scalar",
+		"fixed-point",
+		"bcd",
 		"bit-field",
 		"straddling-bit-field",
 		"unaligned-multi-byte-scalar",

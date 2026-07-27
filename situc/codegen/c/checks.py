@@ -743,6 +743,23 @@ def resolve_element_struct(placement: Placement) -> str | None:
 PROBE_BYTES = (0x81, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF)
 
 
+def _bcd_probe(digits: int) -> tuple[int, int]:
+	"""A BCD probe: (the bytes to write, the number they spell).
+
+	The generic pattern will not do here. Half its nibbles are above nine, and
+	a nibble above nine is not a digit -- what a decoder does with one is not
+	something a conformance check should be asserting.
+	"""
+	sequence = [(i % 9) + 1 for i in range(digits)]
+
+	raw   = 0
+	value = 0
+	for digit in sequence:
+		raw   = (raw << 4) | digit
+		value = value * 10 + digit
+	return raw, value
+
+
 def _probe_pattern(bits: int) -> int:
 	"""A raw bit pattern that differs from its own byte- and bit-reversal."""
 	if bits >= BITS_PER_BYTE and bits % BITS_PER_BYTE == 0:
@@ -832,7 +849,10 @@ def _encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		return
 
 	bits = scalar.bits
-	raw  = _probe_pattern(bits)
+	if scalar.is_bcd:
+		raw, decoded = _bcd_probe(scalar.digits)
+	else:
+		raw, decoded = _probe_pattern(bits), None
 	placed = _placed_bytes(placement.offset_bits, bits, raw,
 	                       placement.endian, placement.bit_order,
 	                       scalar.is_bit_packed)
@@ -844,6 +864,9 @@ def _encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	if scalar.signed:
 		want = f"(int64_t){_signed_value(raw, bits)}"
 		got  = f"(int64_t){_getter(struct, placement, prefix)}"
+	elif decoded is not None:
+		want = f"(uint64_t){decoded}u"		# BCD: the digits, not the nibbles
+		got  = f"(uint64_t){_getter(struct, placement, prefix)}"
 	else:
 		want = f"(uint64_t){raw:#x}u"
 		got  = f"(uint64_t){_getter(struct, placement, prefix)}"
@@ -877,6 +900,13 @@ def _boundary_values(scalar: object) -> list[str]:
 	bits   = getattr(scalar, "bits", 8)
 	signed = getattr(scalar, "signed", False)
 	ctype  = _ctype(scalar)
+
+	# A BCD field's range is decimal, not binary: `bcd2` holds 0 to 99, and
+	# writing 255 to it stores digits that are not 255. The setter would
+	# encode it, the getter would decode something else, and the round trip
+	# would fail for a reason that is the check's fault rather than the code's.
+	if getattr(scalar, "is_bcd", False):
+		return [f"({ctype})0", f"({ctype}){scalar.decimal_max}u"]	# type: ignore[attr-defined]
 
 	if signed:
 		high = (1 << (bits - 1)) - 1

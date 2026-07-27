@@ -1,0 +1,68 @@
+// A real-time clock's register image, and a sensor reading beside it.
+//
+// This is what fixed point and BCD are for, and the two live together here
+// because real devices put them together. An RTC chip holds the wall clock as
+// packed decimal, because the part was designed to drive a display and BCD is
+// what a seven-segment decoder wants. The calibration beside it is fixed point,
+// because the correction is fractional and the part has no floating-point unit
+// to spare.
+//
+// Both types cost the same axis and for different reasons, which is the point
+// worth reading the capability map for:
+//
+//   repr=ValueConverted on `seconds`  -- each nibble is a digit, so the value
+//                                        is decoded rather than read
+//   repr=ValueConverted on `trim_ppm` -- the stored integer is the value
+//                                        scaled by 2^-8
+//
+// Neither generates floating point. The scale is a header constant and the
+// caller does the arithmetic in whatever type it has, which on a part like
+// this is usually a long.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+// The clock, in the byte order the DS1307 family actually uses: seconds first,
+// each field packed decimal, each one its own byte.
+struct wall_clock {
+	bcd2  seconds  [max = 59];
+	bcd2  minutes  [max = 59];
+	bcd2  hours    [max = 23];
+	bcd2  day      [min = 1, max = 31];
+	bcd2  month    [min = 1, max = 12];
+	bcd2  year;                          // 00 to 99, which is the whole range
+}
+
+// Calibration and a reading. `q8_8` spends one bit on the sign, so the trim
+// runs from -128 to just under +128 parts per million in steps of 1/256.
+struct calibration {
+	q8_8    trim_ppm;
+	uq16_16 reference_hz;
+}
+
+struct rtc_frame {
+	u8           version  [must_eq = 1];
+	wall_clock   clock;
+	calibration  cal;
+	u16          checksum;
+}
+
+require size(wall_clock) == 6;
+require size(calibration) == 6;
+require size(rtc_frame) == 15;
+
+// BCD is byte-aligned here, so it keeps everything except its representation.
+require in_place(wall_clock.seconds);
+require aligned(wall_clock.seconds, 1);
+
+// And so does fixed point: it is an integer in memory, and only the meaning of
+// that integer differs.
+require in_place(calibration.trim_ppm);
+require absolute_static(rtc_frame.cal);
+
+// Recorded rather than required: both types convert on every access, and that
+// is the cost of describing the wire honestly rather than pretending the bytes
+// are the numbers.
+assert memory_identical(wall_clock.seconds);
+assert memory_identical(calibration.trim_ppm);

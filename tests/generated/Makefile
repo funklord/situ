@@ -54,7 +54,8 @@ SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   examples/icmp/icmp.situ examples/ipv4/ipv4.situ \
 		   examples/message/message.situ examples/ntp/ntp.situ \
 		   examples/packet/packet.situ examples/protobuf/protobuf.situ \
-		   examples/registers/registers.situ examples/tcp/tcp.situ \
+		   examples/registers/registers.situ examples/rtc/rtc.situ \
+		   examples/tcp/tcp.situ \
 		   examples/telemetry/telemetry.situ examples/tiff/tiff.situ \
 		   examples/udp/udp.situ std/kernels.situ
 GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))

@@ -18,6 +18,9 @@ class ScalarKind(Enum):
 	SINT	= "signed integer"
 	FLOAT	= "floating point"
 	BIT	= "bit"
+	SFIXED	= "signed fixed point"
+	UFIXED	= "unsigned fixed point"
+	BCD	= "packed binary-coded decimal"
 
 
 @dataclass(frozen=True)
@@ -28,9 +31,39 @@ class ScalarType:
 	kind: ScalarKind
 	bits: int
 
+	#: Fractional bits, for fixed point. Zero for everything else, which makes
+	#: `bits - frac_bits` the integer part for any type without a special case.
+	frac_bits: int = 0
+
+	#: Decimal digits, for BCD. Four bits each, so `digits * 4 == bits`.
+	digits: int = 0
+
 	@property
 	def signed(self) -> bool:
-		return self.kind is ScalarKind.SINT
+		return self.kind in (ScalarKind.SINT, ScalarKind.SFIXED)
+
+	@property
+	def is_fixed_point(self) -> bool:
+		return self.kind in (ScalarKind.SFIXED, ScalarKind.UFIXED)
+
+	@property
+	def is_bcd(self) -> bool:
+		return self.kind is ScalarKind.BCD
+
+	@property
+	def int_bits(self) -> int:
+		"""The integer part of a fixed-point type, sign bit included."""
+		return self.bits - self.frac_bits
+
+	@property
+	def scale(self) -> int:
+		"""What the stored integer is divided by to get the value it means."""
+		return 1 << self.frac_bits
+
+	@property
+	def decimal_max(self) -> int:
+		"""The largest value a BCD field can hold: all nines."""
+		return int(10 ** self.digits) - 1
 
 	@property
 	def is_bit_packed(self) -> bool:
@@ -70,6 +103,19 @@ NAMED_SCALARS = {
 
 WIDTH_SUFFIX = re.compile(r"\A([ui])([0-9]+)\Z")
 
+# Fixed point, in the Q notation section 8.1 names: `q16_16` is a signed value
+# with 16 integer bits (the sign among them) and 16 fractional, and `uq16_16`
+# is the unsigned one. The width is the sum, so the existing bit-packing rule
+# applies to it unchanged.
+FIXED_SUFFIX = re.compile(r"\A(u?)q([0-9]+)_([0-9]+)\Z")
+
+# Packed BCD: `bcd8` is eight decimal digits, a nibble each. Real hardware
+# counts digits rather than bits -- an RTC holds `bcd2` for seconds -- so that
+# is what the name says, and the width follows.
+BCD_SUFFIX = re.compile(r"\Abcd([0-9]+)\Z")
+
+BITS_PER_DIGIT = 4
+
 
 class WidthError(Exception):
 	"""A `uN`/`iN` name whose width is out of range or malformed."""
@@ -84,6 +130,14 @@ def lookup(name: str) -> ScalarType | None:
 	named = NAMED_SCALARS.get(name)
 	if named is not None:
 		return named
+
+	fixed = _fixed_point(name)
+	if fixed is not None:
+		return fixed
+
+	bcd = _bcd(name)
+	if bcd is not None:
+		return bcd
 
 	match = WIDTH_SUFFIX.match(name)
 	if match is None:
@@ -100,6 +154,56 @@ def lookup(name: str) -> ScalarType | None:
 
 	kind = ScalarKind.UINT if prefix == "u" else ScalarKind.SINT
 	return ScalarType(name, kind, width)
+
+
+def _digits_ok(name: str, digits: str, what: str) -> int:
+	if len(digits) > 1 and digits.startswith("0"):
+		raise WidthError(f"`{name}` has a leading zero in its {what}")
+	return int(digits)
+
+
+def _fixed_point(name: str) -> ScalarType | None:
+	"""`q<int>_<frac>`, or `uq<int>_<frac>` for the unsigned form."""
+	match = FIXED_SUFFIX.match(name)
+	if match is None:
+		return None
+
+	unsigned, integer, fraction = match.groups()
+	int_bits  = _digits_ok(name, integer, "integer width")
+	frac_bits = _digits_ok(name, fraction, "fractional width")
+	width     = int_bits + frac_bits
+
+	if int_bits < 1:
+		raise WidthError(f"`{name}` has no integer bits; a fixed-point type "
+		                 f"needs at least one, and a signed one spends it on "
+		                 f"the sign")
+	if frac_bits < 1:
+		raise WidthError(f"`{name}` has no fractional bits, so it is the "
+		                 f"integer type {'u' if unsigned else 'i'}{int_bits}")
+	if width > MAX_WIDTH:
+		raise WidthError(f"`{name}` is {width} bits; widths run from 1 to "
+		                 f"{MAX_WIDTH}")
+
+	kind = ScalarKind.UFIXED if unsigned else ScalarKind.SFIXED
+	return ScalarType(name, kind, width, frac_bits=frac_bits)
+
+
+def _bcd(name: str) -> ScalarType | None:
+	"""`bcd<digits>`: packed decimal, one nibble to a digit."""
+	match = BCD_SUFFIX.match(name)
+	if match is None:
+		return None
+
+	digits = _digits_ok(name, match.group(1), "digit count")
+	width  = digits * BITS_PER_DIGIT
+
+	if digits < 1:
+		raise WidthError(f"`{name}` has no digits")
+	if width > MAX_WIDTH:
+		raise WidthError(f"`{name}` is {digits} digits, which is {width} bits; "
+		                 f"widths run from 1 to {MAX_WIDTH}")
+
+	return ScalarType(name, ScalarKind.BCD, width, digits=digits)
 
 
 def is_scalar_name(name: str) -> bool:

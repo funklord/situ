@@ -421,8 +421,22 @@ requirement   = ( "require" | "assert" ) capability_expr ";" ;
   it always straddles and therefore always needs `[allow_straddle]`
   (Section 8.2). That is the intended gate: the cost is reported rather than the
   width being refused. See `docs/decisions/0005-integer-widths.md`.
-- OPEN: fixed-point (`q16_16`) and BCD. Deferred to a later phase; do not
-  implement in v0 but leave the type table extensible.
+- **Fixed point**: `q<int>_<frac>` signed, `uq<int>_<frac>` unsigned. `q16_16`
+  is 32 bits, sixteen of them fractional; `q1_15` is the audio convention. The
+  width is the sum, so the bit-packing rule above applies unchanged -- `q4_4`
+  is a byte and `q2_3` packs.
+- **BCD**: `bcd<digits>`, a nibble to a digit, most significant first. `bcd2`
+  is one byte and holds 0 to 99, which is what an RTC puts in a seconds
+  register. Twelve bits for `bcd3`, so an odd digit count packs.
+- Both cost `repr = ValueConverted`, for different reasons the map states: a
+  fixed-point field's stored integer is the value scaled by a power of two, and
+  a BCD field's nibbles are digits. Neither generates floating point -- the
+  target may have none, and the scale is exact, so the header carries
+  `_SCALE` and `_FRAC_BITS` and the caller does the arithmetic in whatever type
+  it has.
+- A BCD field can hold a bit pattern that is not a number: a nibble above nine.
+  The getter cannot report that, so the generated validator checks it, which is
+  the only type where reading and validating disagree about what is possible.
 
 ### 8.1.1 Variable-length integers
 
@@ -2447,7 +2461,23 @@ assert, and the emitted file says so.
 
 ### 26.14 Beyond
 
-Fixed-point and BCD types; LSP.
+LSP.
+
+**Fixed-point and BCD are done.** Section 8.1 called for the type table to be
+extensible and it was: both landed by adding kinds to `situc/types.py` and a
+row each to the propagation table, with no parser change at all. That is
+invariant 1 working as intended.
+
+`examples/rtc/rtc.situ` is the worked example, and it is the honest one -- a
+real-time clock holds BCD because the part drives a display, and its
+calibration is fixed point because the correction is fractional and the part
+has no FPU. Asking `memory_identical` of the trim field produces a blame chain
+naming both causes at once, the byte swap and the scale, which is what a
+multi-cause diagnostic is for.
+
+`memory_identical` is new. `repr` was one of the thirteen axes with no
+predicate, which left the question a caller most often has -- can I point at
+these bytes and read them as they are? -- unaskable.
 
 **The Wireshark dissector is done.** `situc gen-dissector` emits Lua: a `Proto`
 per struct, a `ProtoField` per member with the bitmask where it is bit-packed

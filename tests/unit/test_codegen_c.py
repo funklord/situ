@@ -791,3 +791,58 @@ def test_a_namespaced_schema_compiles_warning_clean(tmp_path: Path) -> None:
 		inner::header in;
 	}
 	""")
+
+
+# -- fixed point and BCD (section 8.1) ---------------------------------------
+
+
+def test_fixed_point_hands_back_the_stored_integer() -> None:
+	"""No floating point is generated. The target may have none, and the scale
+	is exact, so the header carries it and the caller does the arithmetic in
+	whatever type it has."""
+	header, _ = emit("struct s { q16_16 gain; }")
+
+	assert "int32_t situ_s_gain_get(situ_view_t view)" in header
+	assert "#define SITU_S_GAIN_FRAC_BITS 16u" in header
+	assert "#define SITU_S_GAIN_SCALE 65536" in header
+
+	# In the code, not the prose: the comment explaining that no floating point
+	# is generated contains the word "floating".
+	code = [line for line in header.splitlines()
+	        if line.strip() and not line.strip().startswith(("/*", "*", "//"))]
+	assert not [line for line in code if "float" in line or "double" in line]
+
+
+def test_the_unsigned_fixed_point_form_is_unsigned() -> None:
+	header, _ = emit("struct s { uq8_8 ratio; }")
+
+	assert "uint16_t situ_s_ratio_get(situ_view_t view)" in header
+	assert "#define SITU_S_RATIO_SCALE 256" in header
+
+
+def test_bcd_decodes_on_read_and_encodes_on_write() -> None:
+	"""Returning the packed nibbles would make BCD a u32 with a comment. The
+	point of the type is that the accessor knows what the nibbles mean."""
+	header, _ = emit("struct s { bcd8 serial; }")
+
+	assert "situ_bcd_decode(" in header
+	assert "situ_bcd_encode(" in header
+	assert "#define SITU_S_SERIAL_DIGITS 8u" in header
+	assert "#define SITU_S_SERIAL_MAX 99999999u" in header
+
+
+def test_a_bcd_field_is_validated_nibble_by_nibble() -> None:
+	"""A BCD field can hold a bit pattern that is not a number, and the getter
+	cannot report that -- it returns a number either way."""
+	_, source = emit("struct s { bcd2 seconds; }")
+
+	assert "situ_bcd_valid(" in source
+	assert "SITU_ERR_CONSTRAINT" in source
+
+
+def test_fixed_point_is_not_validated_at_all() -> None:
+	"""Every bit pattern is a valid fixed-point number, which is the difference
+	from BCD and the reason only one of them costs a check on parse."""
+	_, source = emit("struct s { q16_16 gain; }")
+
+	assert "situ_bcd_valid" not in source

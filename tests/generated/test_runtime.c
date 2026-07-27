@@ -167,6 +167,66 @@ static void test_err_str(void **state)
 	assert_non_null(situ_err_str((situ_err_t)99));
 }
 
+/* -- packed BCD (section 8.1) ---------------------------------------------- */
+
+static void test_bcd_round_trips_every_two_digit_value(void **state)
+{
+	/* Exhaustive at this width, which is what an RTC actually stores. */
+	unsigned value;
+
+	(void)state;
+
+	for (value = 0; value < 100u; value++) {
+		uint64_t packed = situ_bcd_encode(value, 2u);
+
+		assert_true(situ_bcd_valid(packed, 2u));
+		assert_int_equal(situ_bcd_decode(packed, 2u), value);
+	}
+}
+
+static void test_bcd_packs_a_digit_to_a_nibble(void **state)
+{
+	/* The property that makes BCD worth having: the hex reading of the bytes
+	 * is the decimal number, which is why a seven-segment decoder can take
+	 * them directly and why Wireshark shows the field in hex. */
+	(void)state;
+
+	assert_int_equal(situ_bcd_encode(59u, 2u), 0x59u);
+	assert_int_equal(situ_bcd_encode(1234u, 4u), 0x1234u);
+	assert_int_equal(situ_bcd_encode(12345678u, 8u), 0x12345678u);
+
+	assert_int_equal(situ_bcd_decode(0x59u, 2u), 59u);
+	assert_int_equal(situ_bcd_decode(0x12345678u, 8u), 12345678u);
+}
+
+static void test_a_nibble_above_nine_is_not_a_digit(void **state)
+{
+	/* A BCD field can hold a bit pattern that is not a number. The getter
+	 * cannot report that -- it returns a number either way -- so validation is
+	 * where it has to be caught, and this is what validation asks. */
+	(void)state;
+
+	assert_true(situ_bcd_valid(0x99u, 2u));
+	assert_false(situ_bcd_valid(0x9Au, 2u));
+	assert_false(situ_bcd_valid(0xA0u, 2u));
+	assert_false(situ_bcd_valid(0xFFFFu, 4u));
+
+	/* Only the digits in range are examined: rubbish above them is not this
+	 * field's business. */
+	assert_true(situ_bcd_valid(0xFF12u, 2u));
+}
+
+static void test_bcd_encode_truncates_rather_than_overflowing(void **state)
+{
+	/* Two digits cannot hold 100. Wrapping is the defined behaviour, and it is
+	 * the setter's caller who is out of range -- which `[max = 59]` on the
+	 * schema is there to catch first. */
+	(void)state;
+
+	assert_int_equal(situ_bcd_encode(100u, 2u), 0x00u);
+	assert_int_equal(situ_bcd_encode(123u, 2u), 0x23u);
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
@@ -180,6 +240,10 @@ int main(void)
 		cmocka_unit_test(test_stale_view),
 		cmocka_unit_test(test_zeroed_view_is_never_live),
 		cmocka_unit_test(test_err_str),
+		cmocka_unit_test(test_bcd_round_trips_every_two_digit_value),
+		cmocka_unit_test(test_bcd_packs_a_digit_to_a_nibble),
+		cmocka_unit_test(test_a_nibble_above_nine_is_not_a_digit),
+		cmocka_unit_test(test_bcd_encode_truncates_rather_than_overflowing),
 	};
 
 	return cmocka_run_group_tests(tests, NULL, NULL);

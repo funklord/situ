@@ -669,6 +669,7 @@ class Emitter:
 			return self._reserved_note(placement)
 
 		lines = ["", *self._field_comment(entry)]
+		lines.extend(self._scale_macros(struct, placement))
 
 		if placement.kind in ("tag", "checksum"):
 			# A tag lands after everything it covers, so its own offset is
@@ -750,6 +751,39 @@ class Emitter:
 			" * struct's section. */",
 		]
 
+	def _scale_macros(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Constants a caller needs to do the arithmetic situ will not do for it.
+
+		Emitting `_SCALE` rather than a conversion function is the whole
+		position on fixed point: the scale is exact and belongs in the header,
+		while the conversion needs a type situ cannot choose for an embedded
+		target.
+		"""
+		scalar = placement.scalar
+		if scalar is None or placement.kind != "field":
+			return []
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+
+		local = c_name(self._local(struct, placement))
+
+		if scalar.is_fixed_point:
+			return [
+				f"#define {macro(self.prefix, struct.name, local, 'FRAC_BITS')} "
+				f"{scalar.frac_bits}u",
+				f"#define {macro(self.prefix, struct.name, local, 'SCALE')} "
+				f"{scalar.scale}",
+			]
+		if scalar.is_bcd:
+			return [
+				f"#define {macro(self.prefix, struct.name, local, 'DIGITS')} "
+				f"{scalar.digits}u",
+				f"#define {macro(self.prefix, struct.name, local, 'MAX')} "
+				f"{scalar.decimal_max}u",
+			]
+		return []
+
 	def _field_comment(self, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		vector    = entry.vector
@@ -758,11 +792,37 @@ class Emitter:
 			f"{axis.value}={vector.get(axis).render()}"
 			for axis in (Axis.SIZE, Axis.ALIGN, Axis.REPR, Axis.ATOMIC, Axis.MUTATE))
 
-		return [
+		lines = [
 			f"/* {placement.path} : {placement.type_name}  at {offset}",
 			f" * {axes}",
-			" */",
 		]
+		lines.extend(self._scale_note(placement))
+		lines.append(" */")
+		return lines
+
+	def _scale_note(self, placement: Placement) -> list[str]:
+		"""What the stored integer means, for a type where that needs saying."""
+		scalar = placement.scalar
+		if scalar is None:
+			return []
+
+		if scalar.is_fixed_point:
+			return [" *",
+			        " * The accessors carry the stored integer; the value it"
+			        " means is that",
+			        f" * divided by {scalar.scale}"
+			        f" -- {scalar.frac_bits} fractional bits,"
+			        f" {scalar.int_bits} integer.",
+			        " * No floating point is generated: the target may have"
+			        " none, and the",
+			        " * scale is exact."]
+
+		if scalar.is_bcd:
+			return [" *",
+			        f" * {scalar.digits} packed decimal digits: the accessors"
+			        f" decode and encode,",
+			        f" * and the value runs from 0 to {scalar.decimal_max}."]
+		return []
 
 	def _region_note(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""An opaque or indexed region: bytes now, structure later.
@@ -1363,6 +1423,19 @@ class Emitter:
 
 	def _load_expression(self, scalar: ScalarType, placement: Placement,
 			base: str, offset: int | None = None) -> str:
+		"""The value the field means, which is not always the bits it holds.
+
+		BCD is the case where those differ by more than byte order: the nibbles
+		are digits, so reading the number is a decode. Everything else falls
+		through to the raw load unchanged.
+		"""
+		raw = self._raw_load(scalar, placement, base, offset)
+		if scalar.is_bcd:
+			return f"situ_bcd_decode((uint64_t){raw}, {scalar.digits}u)"
+		return raw
+
+	def _raw_load(self, scalar: ScalarType, placement: Placement,
+			base: str, offset: int | None = None) -> str:
 		offset = placement.offset_bytes if offset is None else offset
 
 		if placement.marker is not None and not scalar.is_bit_packed \
@@ -1419,6 +1492,13 @@ class Emitter:
 		return ident(self.prefix, owner, placement.marker or "", "is_little") + "(view)"
 
 	def _store_statement(self, scalar: ScalarType, placement: Placement,
+			base: str, value: str, offset: int | None = None) -> str:
+		"""Store the value the caller means, in the encoding the wire wants."""
+		if scalar.is_bcd:
+			value = f"situ_bcd_encode((uint64_t){value}, {scalar.digits}u)"
+		return self._raw_store(scalar, placement, base, value, offset)
+
+	def _raw_store(self, scalar: ScalarType, placement: Placement,
 			base: str, value: str, offset: int | None = None) -> str:
 		offset = placement.offset_bytes if offset is None else offset
 
@@ -1547,6 +1627,18 @@ class Emitter:
 
 		getter = ident(self.prefix, struct.name, local, "get")
 		env    = self.resolved.layout.env
+
+		# A BCD field can hold a bit pattern that is not a number: a nibble
+		# above nine. The getter cannot report that -- it returns a number
+		# either way -- so parsing is where it has to be caught.
+		if scalar.is_bcd:
+			raw = self._raw_load(scalar, placement, "view.base")
+			lines.extend([
+				f"\t/* {placement.path}: every nibble must be a decimal digit */",
+				f"\tif (!situ_bcd_valid((uint64_t){raw}, {scalar.digits}u)) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			])
 
 		for attr in placement.attrs:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:

@@ -330,6 +330,11 @@ def _size(placement: Placement) -> str:
 
 def _notes(placement: Placement) -> list[str]:
 	notes = []
+	scalar = placement.scalar
+	if scalar is not None and scalar.is_fixed_point:
+		notes.append(f"fixed point, /{scalar.scale}")
+	if scalar is not None and scalar.is_bcd:
+		notes.append(f"{scalar.digits} packed digits, 0 to {scalar.decimal_max}")
 	if placement.endian is not None and placement.size_bits > BITS_PER_BYTE:
 		notes.append(f"{placement.endian.value} endian")
 	for attr in placement.attrs:

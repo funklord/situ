@@ -111,3 +111,104 @@ def test_is_scalar_name_reports_invalid_widths_as_scalars() -> None:
 	rather than "unknown type"."""
 	assert is_scalar_name("u65")
 	assert not is_scalar_name("Header")
+
+
+# -- fixed point (section 8.1) ----------------------------------------------
+
+
+def test_q_notation_splits_into_integer_and_fractional_bits() -> None:
+	fixed = lookup("q16_16")
+
+	assert fixed is not None
+	assert fixed.bits == 32 and fixed.frac_bits == 16 and fixed.int_bits == 16
+	assert fixed.signed
+	assert fixed.scale == 65536
+
+
+def test_the_unsigned_form_is_uq() -> None:
+	unsigned = lookup("uq8_8")
+
+	assert unsigned is not None
+	assert not unsigned.signed
+	assert unsigned.bits == 16 and unsigned.scale == 256
+
+
+def test_q15_is_sixteen_bits() -> None:
+	"""The audio convention: one sign bit and fifteen fractional."""
+	q15 = lookup("q1_15")
+
+	assert q15 is not None
+	assert q15.bits == 16 and q15.frac_bits == 15
+
+
+def test_fixed_point_packs_by_the_same_rule_as_everything_else() -> None:
+	"""`q4_4` is a byte and `q2_3` is not. Nothing about the type changes the
+	rule in section 8.1: what decides is whether the width is whole bytes."""
+	aligned = lookup("q4_4")
+	packed  = lookup("q2_3")
+
+	assert aligned is not None and not aligned.is_bit_packed
+	assert packed is not None and packed.is_bit_packed
+
+
+@pytest.mark.parametrize("name,reason", [
+	("q0_16",  "no integer bits"),
+	("q16_0",  "no fractional bits"),
+	("q32_33", "65 bits"),
+])
+def test_a_malformed_fixed_point_name_says_why(name: str, reason: str) -> None:
+	with pytest.raises(WidthError) as caught:
+		lookup(name)
+
+	assert reason in str(caught.value)
+
+
+def test_q16_0_names_the_integer_type_it_should_have_been() -> None:
+	"""A diagnostic that only says no is half a diagnostic."""
+	with pytest.raises(WidthError) as caught:
+		lookup("q16_0")
+
+	assert "i16" in str(caught.value)
+
+
+# -- BCD (section 8.1) -------------------------------------------------------
+
+
+def test_bcd_counts_digits_not_bits() -> None:
+	"""Which is what hardware counts: an RTC holds `bcd2` for seconds."""
+	bcd = lookup("bcd8")
+
+	assert bcd is not None
+	assert bcd.digits == 8 and bcd.bits == 32
+	assert bcd.decimal_max == 99999999
+	assert bcd.is_bcd and not bcd.signed
+
+
+def test_two_digits_are_one_byte() -> None:
+	bcd = lookup("bcd2")
+
+	assert bcd is not None
+	assert bcd.bits == 8 and bcd.decimal_max == 99
+	assert not bcd.is_bit_packed
+
+
+def test_an_odd_digit_count_packs() -> None:
+	"""Three digits are twelve bits, which is not a whole number of bytes."""
+	bcd = lookup("bcd3")
+
+	assert bcd is not None
+	assert bcd.bits == 12 and bcd.is_bit_packed
+
+
+@pytest.mark.parametrize("name", ["bcd0", "bcd17"])
+def test_a_bcd_width_out_of_range_is_refused(name: str) -> None:
+	with pytest.raises(WidthError):
+		lookup(name)
+
+
+def test_the_new_types_do_not_shadow_ordinary_names() -> None:
+	"""`q` and `bcd` are prefixes, not keywords: a struct may still be called
+	`quality` and a field `bcdata`."""
+	assert lookup("quality") is None
+	assert lookup("bcdata") is None
+	assert lookup("qos") is None

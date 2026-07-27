@@ -103,6 +103,14 @@ PREDICATES: dict[str, Predicate] = {
 	"atomic": Predicate(
 		"atomic", Axis.ATOMIC, Value("AtomicWord"),
 		"the access fits in a single instruction"),
+	# `repr` is one of the thirteen axes and had no way to ask about it, which
+	# left the one question a caller most often has -- can I point at these
+	# bytes and read them as they are? -- unaskable. Byte order, bit packing,
+	# fixed point and BCD all answer no, for four different reasons.
+	"memory_identical": Predicate(
+		"memory_identical", Axis.REPR, Value("MemoryIdentical"),
+		"the bytes are the value: no swap, shift, scale or decode stands "
+		"between them", exact=True),
 	"uncovered": Predicate(
 		"uncovered", Axis.AUTH, Value("Uncovered"),
 		"no authentication tag covers these bytes"),
