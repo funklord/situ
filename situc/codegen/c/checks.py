@@ -132,7 +132,7 @@ def _struct_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruc
 
 	extent = _buffer_size(layout)
 	if extent is None:
-		suite.skip(struct.name, "unbounded, so no buffer can be sized for it")
+		_instance_checks(suite, resolved, struct, prefix)
 		return
 
 	_view_checks(suite, struct, prefix, extent)
@@ -143,6 +143,199 @@ def _struct_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruc
 	_validate_checks(suite, resolved, struct, prefix, extent)
 	_coverage_checks(suite, struct, prefix, extent)
 	_gate_checks(suite, struct, prefix, extent)
+
+
+#: What each dynamic member is given when an instance is synthesised. Two, so
+#: that a stride exists to be wrong about, and small enough that the whole
+#: instance stays a comfortable buffer.
+INSTANCE_COUNT = 2
+
+#: Bytes left over for a trailing `remaining` member, so it has somewhere to be.
+INSTANCE_TAIL = 8
+
+
+def _top_level(struct: ResolvedStruct) -> list[Placement]:
+	"""The struct's own members, in order, partitioning its bytes exactly.
+
+	The same rule the emitter uses: an `authenticated` region names bytes its
+	members already account for, so counting it would double every offset after
+	it.
+	"""
+	return [
+		entry.placement for entry in struct.entries
+		if entry.placement.kind not in ("element", "authenticated")
+		and "." not in entry.placement.path[len(struct.name) + 1:]
+	]
+
+
+def _element_bytes(resolved: ResolvedSchema, placement: Placement) -> int | None:
+	"""How many bytes one element of an array member takes."""
+	if placement.scalar is not None:
+		if placement.scalar.bits % BITS_PER_BYTE:
+			return None
+		return placement.scalar.bits // BITS_PER_BYTE
+	nested = resolved.structs.get(placement.type_name or "")
+	if nested is None or not nested.layout.is_fixed_size:
+		return None
+	return int(nested.layout.size_bytes)
+
+
+def _member_bytes(resolved: ResolvedSchema, placement: Placement,
+		chosen: dict[str, int]) -> int | None:
+	"""The size this member takes in the synthesised instance.
+
+	`None` means the walk cannot continue: something here has no size this code
+	knows how to pin down, and guessing would put every later member on an
+	offset the check would then assert with confidence.
+	"""
+	if placement.sized_by == "remaining":
+		return INSTANCE_TAIL
+	if placement.sized_by is not None:
+		each = _element_bytes(resolved, placement)
+		return None if each is None else each * chosen[placement.sized_by]
+	if placement.array_count is not None:
+		each = _element_bytes(resolved, placement)
+		return None if each is None else each * placement.array_count
+	if placement.size_bits is None or placement.size_bits % BITS_PER_BYTE:
+		return None
+	return placement.size_bits // BITS_PER_BYTE
+
+
+def _instance_checks(suite: Suite, resolved: ResolvedSchema,
+		struct: ResolvedStruct, prefix: str) -> None:
+	"""One concrete instance of a struct that has no worst case.
+
+	An unbounded struct got no checks at all, because no buffer can be sized for
+	the general case. But nothing forces the general case: pick a length for
+	every member that has one, and the layout that follows is arithmetic. That
+	is what a user does by hand, and it is the only thing that holds the offset
+	functions to account -- they are the whole reason the struct is unbounded,
+	and mutation testing found them checked by nothing.
+
+	The offsets asserted here are computed by walking the members and adding up
+	their chosen sizes. The accessors compute theirs by summing length fields at
+	run time. Two different routes to the same number, which is what makes
+	disagreement mean something.
+	"""
+	members = _top_level(struct)
+	drivers = sorted({placement.sized_by for placement in members
+	                  if placement.sized_by and placement.sized_by != "remaining"})
+
+	chosen  = {path: INSTANCE_COUNT for path in drivers}
+	setters = []
+	for path in drivers:
+		target = resolved.find(f"{struct.name}.{path}")
+		if target is None or target.placement.scalar is None:
+			suite.skip(struct.name, f"`{path}` sizes a member but has no setter")
+			return
+		setters.append(f"\t{ident(prefix, struct.name, c_name(path), 'set')}"
+		               f"(&msg, view, {INSTANCE_COUNT});")
+
+	# Walk the members, giving each the size the chosen values imply.
+	offsets: list[tuple[Placement, int]] = []
+	at = 0
+	for placement in members:
+		size = _member_bytes(resolved, placement, chosen)
+		if size is None:
+			suite.skip(struct.name,
+			           f"`{placement.path}` has no size this can pin down, so the"
+			           " members after it cannot be placed")
+			return
+		offsets.append((placement, at))
+		at += size
+
+	total = at
+	body  = [
+		f"\tuint8_t buf[{total}u];",
+		"\tsitu_msg_t msg;",
+		"\tsitu_view_t view;",
+		"",
+		"\tmemset(buf, 0, sizeof buf);",
+		"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
+		f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+		f"(&msg, 0, {total}u, &view), SITU_OK);",
+	]
+
+	if setters:
+		body.extend([
+			"",
+			f"\t/* Give every variable member {INSTANCE_COUNT} elements. Each of",
+			"\t * these bumps the generation, so the view is taken again after. */",
+			*setters,
+			"",
+			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"(&msg, 0, {total}u, &view), SITU_OK);",
+		])
+
+	asserted = 0
+	for placement, offset in offsets:
+		lines = _instance_assertions(struct, placement, prefix, offset, chosen)
+		if lines:
+			body.extend(["", *lines])
+			asserted += 1
+
+	if not asserted:
+		suite.skip(struct.name, "unbounded, and no member exposes where it starts")
+		return
+
+	suite.add(
+		f"check_{c_name(struct.name)}_places_its_members_in_one_instance",
+		body,
+		[f"/* {struct.name} has no worst case, so no buffer fits every instance.",
+		 " * This is one instance: every variable member given"
+		 f" {INSTANCE_COUNT} elements,",
+		 " * and each member asked where it starts.",
+		 " *",
+		 " * The expected offsets are added up from the chosen sizes; the",
+		 " * accessors sum length fields at run time. Two routes to the same",
+		 " * number, so a disagreement is a real one. */"])
+
+
+def _instance_assertions(struct: ResolvedStruct, placement: Placement,
+		prefix: str, offset: int, chosen: dict[str, int]) -> list[str]:
+	"""Ask one member where it starts, however it is willing to say."""
+	if placement.kind != "field":
+		return []
+
+	local = c_name(placement.path[len(struct.name) + 1:])
+	name  = placement.path
+	lines = [f"\t/* {name} starts at {offset}. */"]
+
+	if placement.sized_by is not None or placement.array_count is not None:
+		if placement.scalar is not None:
+			ptr = ident(prefix, struct.name, local, "ptr")
+			lines.append(f"\tassert_int_equal((uint32_t)({ptr}(view) - view.base),"
+			             f" {offset}u);")
+			if placement.sized_by and placement.sized_by != "remaining":
+				length = ident(prefix, struct.name, local, "len")
+				lines.append(f"\tassert_int_equal({length}(view),"
+				             f" {chosen[placement.sized_by]}u);")
+			return lines
+
+		at    = ident(prefix, struct.name, local, "at")
+		first = f"first_{local}"
+		lines.extend([
+			f"\tsitu_view_t {first};",
+			f"\tassert_int_equal({at}(view, 0u, &{first}), SITU_OK);",
+			f"\tassert_int_equal((uint32_t)({first}.base - view.base), {offset}u);",
+		])
+		if placement.sized_by and placement.sized_by != "remaining":
+			count = ident(prefix, struct.name, local, "count")
+			lines.append(f"\tassert_int_equal({count}(view),"
+			             f" {chosen[placement.sized_by]}u);")
+		return lines
+
+	if placement.scalar is None and placement.type_name:
+		inner = f"inner_{local}"
+		view  = ident(prefix, struct.name, local, "view")
+		lines.extend([
+			f"\tsitu_view_t {inner};",
+			f"\tassert_int_equal({view}(view, &{inner}), SITU_OK);",
+			f"\tassert_int_equal((uint32_t)({inner}.base - view.base), {offset}u);",
+		])
+		return lines
+
+	return []
 
 
 def _buffer_size(layout: object) -> int | None:
@@ -773,6 +966,8 @@ def _coverage_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 	tag    = tags[0].name
 	ctype  = _ctype(entry.placement.scalar)
 
+	_span_check(suite, struct, prefix, extent, tag)
+
 	suite.add(
 		f"check_{c_name(struct.name)}_covered_write_marks_{c_name(tag)}",
 		[
@@ -792,6 +987,65 @@ def _coverage_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 		[f"/* {entry.placement.path} is Covered({tag}). Section 14.2 says a write",
 		 " * to it leaves the tag stale and the message refuses to be",
 		 " * transmittable until finalize puts it right. */"])
+
+
+def _span_check(suite: Suite, struct: ResolvedStruct, prefix: str,
+		extent: int, tag: str) -> None:
+	"""What the tag's algorithm actually runs over.
+
+	The span is not recomputed here. A region's extent is its interior put
+	through a codec's expansion, and reconstructing that would duplicate the
+	solver -- which is exactly why the emitter takes the region's end from where
+	the next member starts instead.
+
+	But it can be bounded from the outside without the solver, and that is
+	enough: every member the map says is covered has to be inside the span. A
+	span that collapsed, or that started past the first covered byte, fails
+	that whatever the expansion turns out to be. Mutation testing found a region
+	ending at its own start with nothing generated to notice.
+	"""
+	known = [entry.placement for entry in struct.entries
+	         if entry.placement.covered_by
+	         and entry.placement.offset_bits is not None
+	         and entry.placement.size_bits
+	         and entry.placement.kind != "authenticated"]
+	if not known:
+		return
+
+	first = min(placement.offset_bits or 0 for placement in known)
+	last  = max((placement.offset_bits or 0) + placement.size_bits
+	            for placement in known)
+	if first % BITS_PER_BYTE or last % BITS_PER_BYTE:
+		return
+
+	begins = first // BITS_PER_BYTE
+	ends   = last // BITS_PER_BYTE
+
+	suite.add(
+		f"check_{c_name(struct.name)}_{c_name(tag)}_covers_what_it_claims",
+		[
+			*_acquire(struct, prefix, extent),
+			"",
+			"\tuint32_t offset = 0;",
+			"\tuint32_t len    = 0;",
+			"",
+			f"\tassert_int_equal({ident(prefix, struct.name, c_name(tag), 'covered')}"
+			"(view, &offset, &len), SITU_OK);",
+			"",
+			f"\t/* The map says bytes {begins}..{ends} are covered. The span may",
+			"\t * reach further -- a codec's expansion is its own business -- but",
+			"\t * it may not leave any of them out. */",
+			f"\tassert_true(offset <= {begins}u);",
+			f"\tassert_true(offset + len >= {ends}u);",
+			"",
+			"\t/* And it has to stay inside the message it is computed over. */",
+			"\tassert_true(offset + len <= view.limit);",
+		],
+		[f"/* {struct.name}.{tag} covers {ends - begins} bytes of named members.",
+		 " *",
+		 " * Bounded rather than recomputed: the extent of a coded region is its",
+		 " * interior through the codec's expansion, and duplicating that here",
+		 " * would just be a second solver to get wrong. */"])
 
 
 def _gate_checks(suite: Suite, struct: ResolvedStruct, prefix: str,

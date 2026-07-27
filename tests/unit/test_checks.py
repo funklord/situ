@@ -312,3 +312,72 @@ def test_an_index_past_the_end_is_refused() -> None:
 
 	assert "if (index >= SITU_S_RECS_COUNT) {" in source
 	assert "return SITU_ERR_BOUNDS;" in source
+
+
+def test_an_unbounded_struct_gets_one_concrete_instance() -> None:
+	"""No buffer fits every instance, but nothing forces the general case.
+
+	The offset functions are the whole reason such a struct is unbounded, and
+	before this they were checked by nothing: `gen-checks` sized no buffer, so
+	it emitted no checks at all for the struct that needed them most.
+	"""
+	source = emit("""struct h { u8 v; u16 n; }
+	struct r { u32 a; u16 b; }
+	struct s { h hdr; u8 opts[hdr.n]; r recs[hdr.n]; u8 rest[remaining]; }
+	""")
+
+	assert "check_s_places_its_members_in_one_instance" in source
+	# hdr 0..3, opts 3..5 (two of them), recs 5..17 (two six-byte records).
+	assert "situ_s_hdr_view(view, &inner_hdr)" in source
+	assert "assert_int_equal((uint32_t)(situ_s_opts_ptr(view) - view.base), 3u);" in source
+	assert "assert_int_equal((uint32_t)(first_recs.base - view.base), 5u);" in source
+	assert "assert_int_equal((uint32_t)(situ_s_rest_ptr(view) - view.base), 17u);" in source
+
+
+def test_an_instance_takes_the_view_again_after_sizing_it() -> None:
+	"""A shifting setter bumps the generation, so the first view goes stale.
+
+	A check that kept using it would fail in a SITU_CHECKED build for a reason
+	that has nothing to do with what it is testing.
+	"""
+	source = emit("""struct h { u8 v; u16 n; }
+	struct s { h hdr; u8 opts[hdr.n]; u8 rest[remaining]; }
+	""")
+
+	body   = source[source.index("check_s_places_its_members_in_one_instance"):]
+	setter = body.index("situ_s_hdr_n_set(&msg, view, 2);")
+	assert "situ_s_view(&msg, 0, " in body[setter:], \
+		"the view must be taken again after a shifting setter"
+
+
+def test_a_struct_with_nothing_to_place_says_so() -> None:
+	"""An unbounded member with no offset accessor leaves nothing to assert."""
+	source = emit("struct s { u8 head; u8 rest[remaining]; }\n",
+	              preamble=PREAMBLE)
+
+	# `rest` does expose a pointer, so this one is placed rather than skipped.
+	assert "check_s_places_its_members_in_one_instance" in source
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_covered_span_that_collapsed_is_caught(tmp_path: Path) -> None:
+	"""The span is bounded rather than recomputed, which is enough to falsify it.
+
+	A region's extent is its interior through a codec's expansion, so checking
+	it exactly would mean a second solver. Checking that every member the map
+	calls covered is inside the span needs no solver at all.
+	"""
+	schema = """struct h { u8 version; u16 length; }
+	struct s {
+		u8   hop;
+		authenticated {
+			h    hdr;
+			u8   nonce[12]  [nonce];
+		}
+		tag  u8[16];
+	}
+	"""
+	result = build(tmp_path, schema, corrupt=("*len    = ", "*len    = 0 * "))
+
+	assert result.returncode != 0, "a collapsed coverage span went unnoticed"
+	assert "covers_what_it_claims" in result.stdout

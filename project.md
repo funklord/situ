@@ -2361,15 +2361,15 @@ Each mutation was judged twice: against situ's own tests, and against what a
 *user* gets, which is the generated accessors plus `situc gen-checks` and
 nothing else.
 
-Four of the first seven survived the user-visible suite, and the diagnosis was
-the same for all of them. Every generated check was symmetric.
+Four of the first seven survived the user-visible suite, and the diagnosis
+was the same for all of them. Every generated check was symmetric.
 `occupies_its_claimed_bytes` asks which bytes a field reaches; a byte-swapped
 accessor reaches the same ones. `round_trips_in_place` asks whether the setter
 and the getter agree with each other; a swap in both keeps them agreeing. So a
 backend emitting little-endian loads for big-endian fields passed the entire
 generated suite -- for a language whose whole subject is byte order.
 
-Three check families closed it, all working from outside the accessor and all
+Five check families closed it, all working from outside the accessor and all
 deriving their expectations from the map rather than from the emitter:
 
 - `decodes_a_known_encoding` writes a byte pattern computed from the declared
@@ -2381,6 +2381,12 @@ deriving their expectations from the map rather than from the emitter:
 - `elements_are_one_stride_apart` and `element_lands_on_its_stride` measure
   element spacing. A drifting stride leaves element zero right and every other
   element quietly wrong.
+- `places_its_members_in_one_instance` synthesises a concrete instance of a
+  struct that has no worst case, and asks every member where it starts.
+- `covers_what_it_claims` bounds a tag's span by the members the map says are
+  inside it.
+
+All seven mutations are now caught by the user-visible suite alone.
 
 The array check found a real bug on its first run: `_at` bounded the index
 against the view rather than against the element count, so indexing one past
@@ -2392,13 +2398,27 @@ Two mutations survived because no schema reached the code at all -- signed
 bit-packed fields and arrays of converted scalars were generated and had never
 run. `tests/schemas/edges.situ` exists to reach them; it describes no protocol.
 
-**Known remaining gap.** A struct with no bounded size gets no generated checks
-at all: `gen-checks` cannot size a buffer for it, and says so in the emitted
-file rather than skipping quietly. `message` is the example, and it is exactly
-the interesting dynamic-layout case. Its fixed-size components are checked; the
-composition is not. Closing it needs `gen-checks` to synthesise a concrete
-instance -- to choose values for the sizing fields and compute the layout that
-follows -- which is a small interpreter and has not been written.
+A struct with no bounded size got no checks at all, which left the offset
+functions -- the whole reason such a struct is unbounded -- checked by nothing.
+No buffer fits every instance, but nothing forces the general case:
+`_instance_checks` gives every variable member two elements, walks the members
+adding up the sizes that implies, and asserts each one starts where that walk
+says. The accessors reach the same numbers by summing length fields at run
+time, so the two routes are independent and a disagreement means something.
+`message` is the example: `hdr` at 0, `opts` at 11, `recs` at 13, `trailer` at
+29.
+
+The last survivor was a coded region's extent. It is deliberately not
+recomputed -- a region's extent is its interior put through a codec's
+expansion, and reconstructing that would be a second solver to get wrong, which
+is why the emitter takes the region's end from where the next member starts.
+It can still be bounded from outside without any solver: every member the map
+calls covered has to be inside the span. A region that ended at its own start
+fails that whatever the expansion is.
+
+**One skip is left, and it is correct.** `proto_message` is a single TLV
+stream. It has no fixed layout at any instance, so there is no offset to
+assert, and the emitted file says so.
 
 ### 26.14 Beyond
 
