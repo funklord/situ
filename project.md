@@ -1780,6 +1780,21 @@ pleasant they are to write:
    where `repr` permits. Expect it to expose places the C backend papered over.
 4. **Python** -- and after it, whatever the users are writing.
 
+   C++ and Python are the ones that land first, and Rust is far enough out that
+   speculative work on it would be guesswork.
+
+**Codecs have one implementation, and it is the C one.** Accessors are native
+to every target -- they are shifts and offsets, and there is no algorithm to
+get wrong -- but a codec is a real algorithm, and one that is correct beats
+four that are each nearly correct. Every other backend binds the C
+implementation through its own FFI. A per-language plugin slot exists for a
+native implementation where somebody eventually wants one, and is empty:
+`impl crc32 derived for rust;`. See
+`docs/decisions/0017-codec-implementation-sourcing.md`, which also records what
+this costs -- generated Rust, C++ and Python that uses a codec links the C
+runtime, so "vendors trivially with no dependencies" stays true of situ's
+output only for the C target.
+
 **A backend implements the features it can and reports the rest.** No language
 expresses all thirteen axes; C already enforces several by convention and a
 runtime check where Rust would enforce them in the type system, and Python will
