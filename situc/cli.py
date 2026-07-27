@@ -26,7 +26,6 @@ from situc.unparse import unparse
 FUTURE_COMMANDS = {
 	"doc":			26,	# section 26.14, "Beyond"
 	"gen-dissector":	26,
-	"import-proto":		13,
 }
 
 
@@ -65,6 +64,14 @@ def build_parser() -> argparse.ArgumentParser:
 	codec_cmd.add_argument("schema", type=Path)
 	codec_cmd.add_argument("--out", type=Path, default=Path("."))
 	codec_cmd.add_argument("--prefix", default="situ")
+
+	proto_cmd = sub.add_parser(
+		"import-proto", help="import a .proto as a description of its wire format")
+	proto_cmd.add_argument("proto", type=Path)
+	proto_cmd.add_argument("-o", "--out", type=Path, required=True)
+	proto_cmd.add_argument("--accept-lossy", action="store_true",
+	                       help="take the schema anyway, with the fidelity "
+	                            "report as warnings")
 
 	derived_cmd = sub.add_parser(
 		"gen-derived", help="generate implementations from kernel descriptions")
@@ -316,6 +323,52 @@ def cmd_gen_codec_tests(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_import_proto(args: argparse.Namespace) -> int:
+	"""`situc import-proto foo.proto -o foo.situ` (section 19.2).
+
+	The fidelity report is the feature. An importer that silently produced a
+	plausible-looking schema would be worse than no importer, because the user
+	would trust it -- so anything with no expression in a byte layout is named
+	with its location, and the run fails unless the user says otherwise.
+	"""
+	from situc import proto
+
+	text     = args.proto.read_text(encoding="utf-8")
+	imported = proto.read(text)
+	name     = args.proto.name
+
+	if imported.lossy:
+		print(proto.report(imported, name), file=sys.stderr)
+		if not args.accept_lossy:
+			print(f"situc: refusing to write {args.out} from a lossy import",
+			      file=sys.stderr)
+			return 1
+
+	if not imported.messages:
+		print(f"situc: {name} declares no messages", file=sys.stderr)
+		return 1
+
+	schema = proto.translate(imported, name)
+	args.out.write_text(schema, encoding="ascii")
+
+	fields = sum(len(message.fields) for message in imported.messages)
+	print(f"situc: wrote {args.out} "
+	      f"({len(imported.messages)} message(s), {fields} field(s))",
+	      file=sys.stderr)
+
+	# Written, and then read back: an importer that emits a schema its own
+	# compiler rejects has produced nothing, and finding that out here is much
+	# cheaper than finding it out later.
+	try:
+		parse(read_source(args.out))
+	except SituError as exc:
+		print(f"situc: the imported schema does not compile", file=sys.stderr)
+		_report(args, [exc.diagnostic])
+		return 1
+
+	return 0
+
+
 def cmd_gen_derived(args: argparse.Namespace) -> int:
 	"""Emit the code a kernel description implies (section 26.12).
 
@@ -447,6 +500,7 @@ def main(argv: list[str] | None = None) -> int:
 		"gen-fuzz": cmd_gen_fuzz,
 		"gen-checks": cmd_gen_checks,
 		"gen-derived": cmd_gen_derived,
+		"import-proto": cmd_import_proto,
 		"gen-tests": cmd_gen_tests,
 		"gen-codec-tests": cmd_gen_codec_tests,
 		"explain":  cmd_explain,

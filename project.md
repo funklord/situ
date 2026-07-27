@@ -1810,7 +1810,7 @@ situc gen-fuzz    <schema>
 situc gen-dissector <schema>
 situc dump-ast <schema>           debugging aid, phase 1 deliverable
 situc gen-codec-tests <schema>    property tests from codec signatures
-situc import-proto <proto> -o <schema>
+situc import-proto <proto> -o <schema>   [--accept-lossy]
 ```
 
 Global flags: `--target=c|rust`, `--out=DIR`, `--diagnostics=text|json`,
@@ -2303,6 +2303,21 @@ reference implementation; a pipeline of two families composes properties
 correctly and conservatively.
 
 ### 26.13 Phase 13: `.proto` importer
+
+**Status: complete.** `situc/proto.py` reads the subset of `.proto` with a
+wire-format meaning and refuses the rest by name. The fidelity report is the
+feature, and the three acceptance criteria are tested: a translatable `.proto`
+produces a schema whose field numbers and wire types agree with what `protoc`
+actually emits, an untranslatable one exits non-zero with each construct and
+its line, and `--accept-lossy` downgrades to warnings and still writes a schema
+that compiles -- checked by parsing the output back before reporting success.
+
+Two things the section did not settle. A protobuf enum imports with an `i32`
+backing, since that is what the value is even though the wire encoding is a
+varint. And the scanner reads statements rather than lines, because
+`message M { optional int32 a = 1; }` is legal on one line and a line-based
+scanner would silently import an empty message -- which is exactly the silent
+partial success 26.13 warns about.
 
 Per Section 19.2. Deliberately after tier 2, because the importer is only useful
 once the language it targets is complete, and because it is the one component

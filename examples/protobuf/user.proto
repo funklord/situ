@@ -6,6 +6,12 @@
 // compiler has demonstrated nothing.
 //
 //   protoc --encode=User user.proto < case.txt > case.bin
+//
+// The schema beside this file was written by hand. `situc import-proto` now
+// reaches the same description of these bytes, and a test requires the two to
+// agree on every field number and wire type -- which is what decides whether
+// the vectors parse. What the hand-written one adds is the commentary about
+// the five causes of non-canonicity, which no importer would produce.
 
 syntax = "proto2";
 

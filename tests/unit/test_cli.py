@@ -43,14 +43,17 @@ def test_missing_file_reports_cleanly(tmp_path: Path) -> None:
 	assert "cannot read" in str(caught.value)
 
 
-@pytest.mark.parametrize(("command", "phase"), [
-	("import-proto", 13),
-])
-def test_future_commands_name_their_phase(
-	command: str, phase: int, capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize("command", ["doc", "gen-dissector"])
+def test_commands_beyond_the_plan_say_where_they_are(
+	command: str, capsys: pytest.CaptureFixture[str],
 ) -> None:
+	"""Every phase-numbered command has landed.
+
+	What is left is section 26.14's "Beyond" list, and a command there should
+	say so rather than report a phase number that will never come round.
+	"""
 	assert main([command, HEADER]) == 2
-	assert f"phase {phase}" in capsys.readouterr().err
+	assert "Beyond" in capsys.readouterr().err
 
 
 def test_json_diagnostics_are_emitted(
