@@ -2498,7 +2498,33 @@ assert, and the emitted file says so.
 
 ### 26.14 Beyond
 
-LSP.
+LSP; the built-in codec set below; the C++, Rust and Python backends (20.1).
+
+**Parsing most protocols should need nothing installed.** The long-term aim is
+that a schema for an ordinary protocol builds and runs against situ alone --
+that is what "batteries included" has to mean for a description language, since
+a user who must go and find three libraries before their schema compiles will
+write the parser by hand instead.
+
+The line between what ships and what does not is not popularity but whether
+situ can produce it honestly:
+
+- **Built in** -- anything a kernel description derives, or that is a few
+  hundred lines of dependency-free C. The six kernel families are already here,
+  and Reed-Solomon with them. Still missing and worth adding: the internet
+  checksum (RFC 1071), Fletcher and Adler-32, base64/base32/hex, UTF-8
+  validation. All small, all common, none of them needing anybody's library.
+- **Optional** -- anything needing a real implementation behind it. AEAD
+  ciphers, hashes, deflate, zstd, LZ4. These stay tier-1: declared by property
+  signature, trusted, supplied by the user.
+
+**And optional has to mean optional.** A schema pays for what it names and
+nothing else, or every user links a crypto library so that the few who seal a
+region can. This already holds and is now tested rather than assumed: generated
+code includes `situ.h` and its own header, and a schema that seals a region
+with `aes_gcm_128` has exactly the dependencies of one that does not -- none.
+The stage gate takes the verification result as a parameter, so situ guards the
+bytes and the caller runs the cipher.
 
 **Fixed-point and BCD are done.** Section 8.1 called for the type table to be
 extensible and it was: both landed by adding kinds to `situc/types.py` and a

@@ -846,3 +846,56 @@ def test_fixed_point_is_not_validated_at_all() -> None:
 	_, source = emit("struct s { q16_16 gain; }")
 
 	assert "situ_bcd_valid" not in source
+
+
+# -- what a schema costs that does not use it (section 13.1) -----------------
+
+
+def test_generated_code_includes_nothing_but_the_situ_runtime() -> None:
+	"""The property that makes optional dependencies actually optional.
+
+	situ ships the codecs it can generate and leaves the ones needing a real
+	library to `extern`. That split is only worth anything if a schema pays for
+	what it names and nothing else -- otherwise every user links a crypto
+	library so that the few who seal a region can.
+	"""
+	header, source = emit("struct s { u16 a; u32 b; }")
+	included = [line for line in (header + "\n" + source).splitlines()
+	            if line.startswith("#include")]
+
+	# The runtime, and the header the source belongs to. `<stdint.h>` and
+	# `<stddef.h>` arrive through situ.h; generated code names nothing else.
+	assert included == ['#include "situ.h"', '#include "unit.h"']
+
+
+def test_a_sealed_region_pulls_in_no_crypto() -> None:
+	"""`sealed(aes_gcm_128)` is the heaviest thing a schema can say, and it
+	still links nothing: the gate takes the verification result as a parameter,
+	so situ guards the bytes and the caller runs the cipher. A schema that seals
+	a region and one that does not have the same dependencies -- none."""
+	plain, _ = emit("struct s { u16 a; }")
+	sealed, _ = emit("""codec aes_gcm_128 {
+		granularity = byte;
+		length_preserving;
+		seekable;
+		authenticated;
+		invertible;
+		deterministic;
+	}
+	impl aes_gcm_128 extern "my_aes_gcm_128";
+
+	struct h { u8 v; u16 length; }
+	struct s {
+		u8   hop;
+		authenticated { h hdr; u8 nonce[12] [nonce]; }
+		sealed(aes_gcm_128, nonce = nonce) { u16 inner; }
+		tag  u8[16];
+	}
+	""")
+
+	def includes(text: str) -> set[str]:
+		return {line for line in text.splitlines() if line.startswith("#include")}
+
+	assert includes(sealed) == includes(plain)
+	for name in ("openssl", "sodium", "mbedtls", "aes.h"):
+		assert name not in sealed
