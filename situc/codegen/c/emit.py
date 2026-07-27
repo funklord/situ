@@ -1129,6 +1129,15 @@ class Emitter:
 				"}",
 			])
 
+		# The element count, not just the message extent. `situ_view_sub` bounds
+		# against the view, which is a weaker claim: an array that does not run
+		# to the end of its struct has bytes after it that are inside the view
+		# and are not elements. Indexing one step past the end used to land on
+		# whatever followed and report SITU_OK.
+		count = (macro(self.prefix, struct.name, local, "COUNT")
+		         if placement.array_count is not None
+		         else f"{ident(self.prefix, struct.name, local, 'count')}(view)")
+
 		lines.extend([
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'at')}"
@@ -1136,6 +1145,10 @@ class Emitter:
 			"{",
 			f"\tconst uint32_t stride = {macro(self.prefix, nested, 'SIZE_FIXED')};",
 			f"\tconst uint32_t base   = {base};",
+			"",
+			f"\tif (index >= {count}) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
 			"",
 			"\treturn situ_view_sub(view, base + index * stride, stride, out);",
 			"}",

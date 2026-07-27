@@ -253,3 +253,62 @@ def test_an_array_of_structs_says_it_is_not_walked() -> None:
 	assert "is an array of `r`" in source
 	assert "not validated here" in source
 	assert re.search(r"situ_r_validate\(\) on each", source)
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_swapped_byte_order_is_caught(tmp_path: Path) -> None:
+	"""The hole mutation testing found, and the reason `_encoding_check` exists.
+
+	Every other generated check is symmetric. `occupies_its_claimed_bytes` asks
+	which bytes a field reaches, and a byte-swapped accessor reaches the same
+	ones. `round_trips_in_place` asks whether the setter and the getter agree
+	with each other, and a swap in both keeps them agreeing. A generator
+	emitting little-endian loads for big-endian fields passed the entire
+	generated suite, which is a poor showing for a language whose whole subject
+	is byte order.
+	"""
+	result = build(tmp_path, SIMPLE,
+		corrupt=("situ_get_be32(view.base + 3u)",
+		         "situ_get_le32(view.base + 3u)"))
+
+	assert result.returncode != 0, "a byte-swapped getter went unnoticed"
+	assert "decodes_a_known_encoding" in result.stdout
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_nested_struct_placed_wrong_is_caught(tmp_path: Path) -> None:
+	"""A nested struct's interior is checked against its own base, not its parent's.
+
+	So every field inside it can agree with every other and the whole thing
+	still sit at the wrong offset. Only the parent's placement falsifies that.
+	"""
+	result = build(tmp_path, """struct inner { u16 a; u16 b; }
+	struct outer { u8 tag; inner nested; }
+	""", corrupt=("situ_view_sub(view, 1u", "situ_view_sub(view, 2u"))
+
+	assert result.returncode != 0, "a nested struct moved and no check noticed"
+	assert "starts_where_the_map_says" in result.stdout
+
+
+def test_an_element_past_the_first_is_checked() -> None:
+	"""A drifting stride leaves element zero right and the rest quietly wrong."""
+	source = emit("struct s { u8 n; u16 xs[4]; }\n")
+
+	assert "check_s_xs_element_lands_on_its_stride" in source
+	# The last element, because it is the furthest a wrong stride moves it.
+	assert "situ_s_xs_get(view, 3u)" in source
+
+
+def test_an_index_past_the_end_is_refused() -> None:
+	"""`situ_view_sub` bounds against the view, which is the weaker claim.
+
+	An array that stops before its struct does has bytes after it that are
+	inside the view and are not elements, so the count has to be checked too.
+	"""
+	schema   = parse_text(PREAMBLE + "struct r { u8 v; }\n"
+	                                 "struct s { r recs[4]; u32 trailer; }\n")
+	resolved = resolve(schema, solve(schema))
+	source   = generate(schema, resolved, "unit").header
+
+	assert "if (index >= SITU_S_RECS_COUNT) {" in source
+	assert "return SITU_ERR_BOUNDS;" in source

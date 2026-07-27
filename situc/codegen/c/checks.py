@@ -221,11 +221,16 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 		suite.skip(placement.path, "a varint has no fixed extent to check")
 		return
 
-	if placement.scalar is None or placement.array_count is not None \
-			or placement.sized_by is not None:
-		return		# arrays and aggregates: no scalar accessor to hold to account
+	if placement.array_count is not None or placement.sized_by is not None:
+		_array_checks(suite, struct, entry, prefix, extent)
+		return		# no scalar accessor; the elements are what there is to check
+	if placement.scalar is None:
+		_nested_placement_check(suite, struct, entry, prefix, extent)
+		return		# its interior is checked under its own struct's section
 	if placement.offset_bits is None:
-		return		# dynamic offsets are checked by _offset_checks
+		return		# a dynamic offset has no fixed extent to name here, and
+				# the structs that have one are unbounded, so no buffer can
+				# be sized for them either -- recorded as a skip, not checked
 	if placement.kind != "field":
 		return		# a marker has no plain getter; its own accessors are shaped
 				# by the byte order it carries
@@ -234,6 +239,7 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 
 	_extent_check(suite, struct, entry, prefix, extent)
 	_round_trip_check(suite, struct, entry, prefix, extent)
+	_encoding_check(suite, struct, entry, prefix, extent)
 
 
 def _outside(first: int, last: int) -> str:
@@ -373,6 +379,300 @@ def _round_trip_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		 " *",
 		 " * Every boundary value the type admits must survive a write and a",
 		 " * read, and the write must leave every other byte alone. */"])
+
+
+def _nested_placement_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str, extent: int) -> None:
+	"""Where a nested struct sits inside its parent.
+
+	Its interior is checked thoroughly, but under its own struct's section --
+	against a buffer where it starts at zero. That says nothing about where the
+	parent puts it, and mutation testing found the hole: moving every nested
+	member one byte late passed the whole generated suite, because each nested
+	field still agreed with every other nested field.
+	"""
+	placement = entry.placement
+
+	if placement.kind != "field":
+		return		# a region names bytes its members already own, and has no
+				# view of its own to locate
+	if placement.offset_bits is None or placement.array_count is not None:
+		return
+	if placement.sized_by is not None or placement.type_name is None:
+		return
+	if placement.offset_bits % BITS_PER_BYTE != 0:
+		return
+	if placement.sealed_by is not None:
+		return		# reached through the gate, which has its own checks
+
+	local  = c_name(placement.path[len(struct.name) + 1:])
+	getter = ident(prefix, struct.name, local, "view")
+	offset = placement.offset_bits // BITS_PER_BYTE
+
+	suite.add(
+		f"check_{c_name(placement.path)}_starts_where_the_map_says",
+		[
+			*_acquire(struct, prefix, extent),
+			"",
+			"\tsitu_view_t inner;",
+			"",
+			f"\tassert_int_equal({getter}(view, &inner), SITU_OK);",
+			"",
+			"\t/* The map's offset, measured from the parent rather than",
+			"\t * recomputed from it. */",
+			f"\tassert_int_equal((uint32_t)(inner.base - view.base), {offset}u);",
+		],
+		[f"/* {placement.path}: the map claims"
+		 f" {entry.vector.get(Axis.OFFSET).render()}.",
+		 " *",
+		 " * Its fields are checked under its own struct, where it begins at",
+		 " * zero. Only this says where the parent actually puts it. */"])
+
+
+def _array_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str, extent: int) -> None:
+	"""Element addressing: the stride, and the bound.
+
+	Arrays had no generated check at all. That is the gap mutation testing found
+	last: a stride one byte too wide made every element after the first read the
+	wrong bytes, and the whole suite -- generated and hand-written alike -- still
+	passed. Nothing else here indexes anything, so nothing else could notice.
+
+	Both checks work from outside the accessor. The stride is read as the
+	distance between two element bases, not recomputed from the map, so an
+	accessor and a check cannot agree by construction.
+	"""
+	placement = entry.placement
+	local     = c_name(placement.path[len(struct.name) + 1:])
+	count     = placement.array_count
+
+	if count is None or count < 2:
+		return		# `remaining`, or too short for a stride to exist
+
+	scalar = placement.scalar
+	if scalar is not None:
+		if scalar.bits == BITS_PER_BYTE:
+			return	# a byte array is handed out as a pointer, not indexed
+		_element_encoding_check(suite, struct, entry, prefix, extent, count)
+		return
+
+	nested = resolve_element_struct(placement)
+	if nested is None:
+		return
+
+	at = ident(prefix, struct.name, local, "at")
+	suite.add(
+		f"check_{c_name(placement.path)}_elements_are_one_stride_apart",
+		[
+			*_acquire(struct, prefix, extent),
+			"",
+			"\tsitu_view_t first;",
+			"\tsitu_view_t second;",
+			"",
+			f"\tassert_int_equal({at}(view, 0u, &first), SITU_OK);",
+			f"\tassert_int_equal({at}(view, 1u, &second), SITU_OK);",
+			"",
+			"\t/* The distance between consecutive elements is the element size,",
+			"\t * measured rather than recomputed. */",
+			"\tassert_int_equal((uint32_t)(second.base - first.base),",
+			f"\t                 {macro(prefix, nested, 'SIZE_FIXED')});",
+			"",
+			f"\t/* And the array ends where it says it does. */",
+			f"\tassert_int_not_equal({at}(view, {count}u, &second), SITU_OK);",
+		],
+		[f"/* {placement.path}: {count} elements, and the spacing between them.",
+		 " *",
+		 " * A stride that drifted puts every element after the first on the",
+		 " * wrong bytes while each one still reads and writes consistently, so",
+		 " * only the spacing itself falsifies it. */"])
+
+
+def _element_encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str, extent: int, count: int) -> None:
+	"""An element past the first, at the bytes its index puts it on.
+
+	Elements wider than a byte are reached by index rather than by pointer, and
+	the stride in that accessor was checked by nothing: widening it made every
+	element after the zeroth read the wrong bytes while still round-tripping
+	against itself. Writing the pattern at the offset the map implies and
+	demanding the value back falsifies it.
+	"""
+	placement = entry.placement
+	scalar    = placement.scalar
+	assert scalar is not None
+	assert placement.offset_bits is not None, "checked by the caller"
+
+	if placement.offset_bits % BITS_PER_BYTE or scalar.bits % BITS_PER_BYTE:
+		return
+	if placement.endian is ast.Endian.NATIVE:
+		return
+
+	index  = count - 1		# the last one: the furthest a drifting stride moves
+	stride = scalar.bits // BITS_PER_BYTE
+	at     = placement.offset_bits // BITS_PER_BYTE + index * stride
+	raw    = _probe_pattern(scalar.bits)
+	placed = _placed_bytes(at * BITS_PER_BYTE, scalar.bits, raw,
+	                       placement.endian, placement.bit_order, False)
+	if placed is None or at + stride > extent:
+		return
+
+	local  = c_name(placement.path[len(struct.name) + 1:])
+	getter = f"{ident(prefix, struct.name, local, 'get')}(view, {index}u)"
+	if scalar.signed:
+		want, got = f"(int64_t){_signed_value(raw, scalar.bits)}", f"(int64_t){getter}"
+	else:
+		want, got = f"(uint64_t){raw:#x}u", f"(uint64_t){getter}"
+
+	body = [*_acquire(struct, prefix, extent), ""]
+	body.append(f"\t/* element {index} of {count} sits {index} strides"
+	            f" ({index * stride} bytes) past the first. */")
+	body.extend(f"\tbuf[{byte}u] = {placed[byte]:#04x}u;" for byte in sorted(placed))
+	body.extend(["", f"\tassert_int_equal({got}, {want});"])
+
+	suite.add(
+		f"check_{c_name(placement.path)}_element_lands_on_its_stride",
+		body,
+		[f"/* {placement.path}[{index}]: the bytes its index puts it on.",
+		 " *",
+		 " * A stride that drifted leaves element zero right and every other",
+		 " * element quietly wrong, so only a later one can tell. */"])
+
+
+def resolve_element_struct(placement: Placement) -> str | None:
+	"""The struct name an array's elements have, or None if they are not one."""
+	name = placement.type_name
+	return name if name and placement.scalar is None else None
+
+
+#: Distinct bytes, top bit set in the first. Distinct so any permutation of the
+#: field's bytes is a different value; top bit set so a getter that forgot to
+#: sign-extend returns something else.
+PROBE_BYTES = (0x81, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF)
+
+
+def _probe_pattern(bits: int) -> int:
+	"""A raw bit pattern that differs from its own byte- and bit-reversal."""
+	if bits >= BITS_PER_BYTE and bits % BITS_PER_BYTE == 0:
+		value = 0
+		for byte in PROBE_BYTES[: bits // BITS_PER_BYTE]:
+			value = (value << BITS_PER_BYTE) | byte
+		return value
+	if bits == 1:
+		return 1
+	return (1 << bits) - 2		# 0b1...10: top bit set, and not a palindrome
+
+
+def _placed_bytes(offset_bits: int, bits: int, raw: int, endian: ast.Endian | None,
+		bit_order: ast.BitOrder | None, packed: bool) -> dict[int, int] | None:
+	"""Where `raw` lands in a zeroed buffer, from the map rather than the accessor.
+
+	This is the whole point of the check: the expected bytes are derived here,
+	from the offset and the declared order, by code that shares nothing with the
+	emitter. An accessor and a check that agree because they were generated from
+	the same expression would agree just as readily about a wrong answer.
+
+	`None` when the encoding is not a fixed pattern -- `native` order depends on
+	the machine that eventually runs the code, which is not knowable here.
+	"""
+	if endian is ast.Endian.NATIVE:
+		return None
+
+	if not packed:
+		if offset_bits % BITS_PER_BYTE != 0 or bits % BITS_PER_BYTE != 0:
+			return None
+		first  = offset_bits // BITS_PER_BYTE
+		count  = bits // BITS_PER_BYTE
+		chunks = [(raw >> (BITS_PER_BYTE * i)) & 0xFF for i in range(count)]
+		if endian is not ast.Endian.LITTLE:
+			chunks.reverse()	# big endian: most significant byte lowest
+		return {first + i: chunk for i, chunk in enumerate(chunks)}
+
+	# Bit-packed: assemble the whole bytes the field touches, then place the
+	# value within them the way the declared bit order numbers bits.
+	first = offset_bits // BITS_PER_BYTE
+	last  = (offset_bits + bits - 1) // BITS_PER_BYTE
+	span  = (last - first + 1) * BITS_PER_BYTE
+	skip  = offset_bits - first * BITS_PER_BYTE
+
+	if bit_order is ast.BitOrder.LSB_FIRST:
+		acc   = raw << skip
+		order = range(first, last + 1)			# earlier byte, lower bits
+	else:
+		acc   = raw << (span - skip - bits)
+		order = range(last, first - 1, -1)		# earlier byte, higher bits
+
+	placed = {}
+	for at in order:
+		placed[at] = acc & 0xFF
+		acc >>= BITS_PER_BYTE
+	return placed
+
+
+def _signed_value(raw: int, bits: int) -> int:
+	"""`raw` read as two's complement, which is what the getter must return."""
+	return raw - (1 << bits) if raw >= 1 << (bits - 1) else raw
+
+
+def _encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str, extent: int) -> None:
+	"""A concrete byte pattern, against the value the map says it encodes.
+
+	Without this every generated check is symmetric: `_extent_check` asks which
+	bytes a field reaches and `_round_trip_check` asks whether the setter and
+	the getter agree with each other. Swap the byte order in both and both still
+	pass, and byte order is the single thing situ exists to pin down. Mutation
+	testing found exactly that -- a generator emitting little-endian loads for
+	big-endian fields passed the entire generated suite.
+
+	So: write the bytes, and demand the number.
+	"""
+	placement = entry.placement
+	scalar    = placement.scalar
+	assert scalar is not None
+	assert placement.offset_bits is not None, "checked by the caller"
+
+	if placement.marker is not None:
+		return		# byte order chosen at runtime; no one fixed pattern
+	if placement.covered_by:
+		return		# reached through the coverage machinery, not a plain read
+	if placement.offset_bits + placement.size_bits > extent * BITS_PER_BYTE:
+		return
+
+	bits = scalar.bits
+	raw  = _probe_pattern(bits)
+	placed = _placed_bytes(placement.offset_bits, bits, raw,
+	                       placement.endian, placement.bit_order,
+	                       scalar.is_bit_packed)
+	if placed is None:
+		suite.skip(placement.path,
+		           "native byte order has no fixed encoding to check")
+		return
+
+	if scalar.signed:
+		want = f"(int64_t){_signed_value(raw, bits)}"
+		got  = f"(int64_t){_getter(struct, placement, prefix)}"
+	else:
+		want = f"(uint64_t){raw:#x}u"
+		got  = f"(uint64_t){_getter(struct, placement, prefix)}"
+
+	order = "bit-packed" if scalar.is_bit_packed else "byte-aligned"
+	body  = [*_acquire(struct, prefix, extent), ""]
+	body.append(f"\t/* {order}, {bits}-bit, "
+	            f"{(placement.endian.value if placement.endian else 'declared')}"
+	            f" order at bit {placement.offset_bits}. */")
+	for at in sorted(placed):
+		body.append(f"\tbuf[{at}u] = {placed[at]:#04x}u;")
+	body.append("")
+	body.append(f"\tassert_int_equal({got}, {want});")
+
+	suite.add(
+		f"check_{c_name(placement.path)}_decodes_a_known_encoding",
+		body,
+		[f"/* {placement.path}: these bytes, and therefore this value.",
+		 " *",
+		 " * The expected bytes are computed from the map's offset and declared",
+		 " * order, not from the accessor, so a getter that reads the right",
+		 " * bytes in the wrong order fails here and nowhere else. */"])
 
 
 def _constrained(placement: Placement) -> bool:

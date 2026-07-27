@@ -1,0 +1,39 @@
+// Constructs the example protocols happen not to use.
+//
+// Mutation testing found these by the only symptom they have: a deliberate bug
+// in the generator for each one changed nothing that any test compiled, because
+// no schema in the tree reached the code path at all. A construct the language
+// offers and nothing exercises is a construct whose generated code has never
+// run, so this file exists to reach them rather than to describe a protocol.
+//
+// Each member notes what it is here to keep honest.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct edges [allow_straddle] {
+	// A signed bit-packed field. Every signed field in the examples is a whole
+	// number of bytes, so `situ_sign_extend` on the bit-packed path was emitted
+	// and never executed: dropping it entirely left the suite green.
+	i5   trim;
+	u3   scale;
+
+	// A signed field spanning a byte boundary, where the sign bit and the low
+	// bits come from different bytes.
+	i12  offset;
+	u4   channel;
+
+	// Elements wider than a byte, which are ValueConverted and therefore
+	// reached by index rather than by pointer. The stride in that accessor was
+	// free to drift by any amount.
+	u16  samples[4];
+
+	// The same, signed, so element addressing and sign extension are exercised
+	// together rather than one masking the other.
+	i32  deltas[2];
+}
+
+require size(edges) == 19;
+require in_place(edges.trim);
+require in_place(edges.channel);
