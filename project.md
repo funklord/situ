@@ -1108,6 +1108,12 @@ Two consequences worth stating plainly:
 - **Tier-1 codecs can lie.** A declaration is trusted and unverified. Mark such
   codecs `trusted` in the capability map so a reviewer can see which properties
   rest on an assertion rather than a proof.
+- **Only tier 1 may seal.** A tier-2 implementation is generated, and generated
+  code is table driven -- over the plaintext of a sealed region that is a
+  cache-timing channel. The trust that makes tier 1 weaker on properties is
+  what makes it the right tier for timing: a supplier can state what situ
+  cannot derive. See 14.3 and
+  `docs/decisions/0019-sealing-requires-authentication.md`.
 - **Tier-2 codecs cannot lie.** Properties derived from a kernel description are
   sound by construction. Prefer tier 2 wherever a codec is expressible.
 
@@ -1421,6 +1427,25 @@ single highest-value security property in the design and it must not be
 weakened for convenience. If a user genuinely needs unverified access, they
 must declare `sealed(...) [allow_unverified_read]`, which is loud, greppable,
 and reported in the capability map.
+
+**Two things a codec must be before it may seal.** The gate is only worth what
+stands behind it, so both are checked when a region names its codec, and the
+diagnostic names the way out.
+
+- **It must declare `authenticated`.** A codec with no tag has nothing to
+  verify, so the gate would hand out the interior on a `verified` flag that
+  nothing had checked -- the ceremony of this section with none of its
+  substance. `coded(C)` remains for a transform that makes no security claim.
+- **Its implementation must be `extern`.** A generated implementation is table
+  driven, and a table indexed by the plaintext of a sealed region is the
+  cache-timing channel 14.6 forbids. Situ cannot promise constant time and
+  declines rather than pretending, so the timing properties are the supplier's
+  to state. This is the same position decision 0017 takes on codecs generally.
+
+`docs/decisions/0019-sealing-requires-authentication.md`. The second refusal is
+reachable only through a pipeline, since no kernel derives `authenticated`, and
+the case it catches is encrypt-then-code: `sealed(aead |> rs)` would otherwise
+emit a table-driven Reed-Solomon over sealed plaintext.
 
 ### 14.4 Canonical encoding
 
@@ -3173,6 +3198,14 @@ section 8.6 for what is and is not claimed today.
    enforced by nothing. It surfaced when a third backend made three answers
    comparable. Expect each new target to find something the existing ones
    agreed about only because they shared a code path.
+14. **Answering a question means reading the code it points at, even when the
+   answer is "nothing to do".** Open question 12 asked whether encrypt-then-code
+   and code-then-encrypt were both expressible. They were, and always had been,
+   because a pipeline says which stage runs first. But `sealed(C)` two lines
+   away had been accepting a codec that authenticates nothing, so the stage
+   gate of 14.3 would hand out a sealed interior on a flag nobody had checked.
+   The question was adjacent to the bug rather than about it. A settled
+   question is worth the read regardless of how it settles.
 
 ---
 
@@ -3185,6 +3218,11 @@ that depends on it.
 about, five by a decision record, two by concluding the question was not one,
 and one by deciding deliberately not to answer it yet. Where a resolution rests
 on something a reader can check, the check is named.
+
+Where settling one produced a rule, the rule lives in the normative section and
+this is the pointer: 11 and 12 are stated as language rules in 13.1 and 14.3,
+because a reader looking up what may seal a region should not have to find it
+in a log of questions.
 
 Kept in full rather than deleted. What a question turned out *not* to be is
 often the useful part -- 12 asked about ordering and the ordering was already
