@@ -719,7 +719,7 @@ class Parser:
 			properties.expansion = ast.Expansion.UNBOUNDED
 			return
 
-		if token.text in ("ratio_exact", "ratio_bounded"):
+		if token.text in ("ratio_exact", "ratio_padded", "ratio_bounded"):
 			self.expect_symbol("(", "before the ratio")
 			first = evaluate_literal(self.parse_expr())
 			self.expect_symbol(",", "between the ratio terms")
@@ -729,17 +729,19 @@ class Parser:
 			if first is None or second is None or first <= 0 or second <= 0:
 				raise error("a ratio needs two positive literals", token.span)
 
-			properties.expansion = (ast.Expansion.RATIO_EXACT
-			                        if token.text == "ratio_exact"
-			                        else ast.Expansion.RATIO_BOUNDED)
+			properties.expansion = {
+				"ratio_exact":   ast.Expansion.RATIO_EXACT,
+				"ratio_padded":  ast.Expansion.RATIO_PADDED,
+				"ratio_bounded": ast.Expansion.RATIO_BOUNDED,
+			}[token.text]
 			properties.ratio = (first, second)
 			return
 
 		raise error(
 			f"unknown expansion form `{token.text}`",
 			token.span,
-			label = "expected `+N`, `unbounded`, `ratio_exact(a, b)` or "
-			        "`ratio_bounded(a, b)`",
+			label = "expected `+N`, `unbounded`, `ratio_exact(a, b)`, "
+			        "`ratio_padded(a, b)` or `ratio_bounded(a, b)`",
 		)
 
 	def _named(self, enum: type[EnumT], described: str,

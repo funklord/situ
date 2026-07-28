@@ -299,6 +299,125 @@ static void test_base16_lower_is_a_different_code_not_an_alias(void **state)
 	assert_memory_equal(lower, "ab", 2);
 }
 
+/* -- base32 and base64 (RFC 4648) ------------------------------------------ */
+
+static void test_base64_matches_rfc_4648_vectors(void **state)
+{
+	/* The RFC's own table, which is what makes these somebody else's answer
+	 * rather than situ's. Every length mod 3 appears, because that is what
+	 * decides how much padding there is. */
+	static const struct { const char *in; const char *want; } cases[] = {
+		{ "",       ""         },
+		{ "f",      "Zg=="     },
+		{ "fo",     "Zm8="     },
+		{ "foo",    "Zm9v"     },
+		{ "foob",   "Zm9vYg==" },
+		{ "fooba",  "Zm9vYmE=" },
+		{ "foobar", "Zm9vYmFy" },
+	};
+	uint8_t  out[16];
+	uint8_t  back[16];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		uint32_t len     = (uint32_t)strlen(cases[i].in);
+		uint32_t written = situ_base64_encode((const uint8_t *)cases[i].in, len, out);
+
+		assert_int_equal(written, strlen(cases[i].want));
+		assert_memory_equal(out, cases[i].want, written);
+
+		assert_int_equal(situ_base64_decode(out, written, back), len);
+		assert_memory_equal(back, cases[i].in, len);
+	}
+}
+
+static void test_base32_matches_rfc_4648_vectors(void **state)
+{
+	static const struct { const char *in; const char *want; } cases[] = {
+		{ "",       ""                 },
+		{ "f",      "MY======"         },
+		{ "fo",     "MZXQ===="         },
+		{ "foo",    "MZXW6==="         },
+		{ "foob",   "MZXW6YQ="         },
+		{ "fooba",  "MZXW6YTB"         },
+		{ "foobar", "MZXW6YTBOI======" },
+	};
+	uint8_t  out[24];
+	uint8_t  back[16];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		uint32_t len     = (uint32_t)strlen(cases[i].in);
+		uint32_t written = situ_base32_encode((const uint8_t *)cases[i].in, len, out);
+
+		assert_int_equal(written, strlen(cases[i].want));
+		assert_memory_equal(out, cases[i].want, written);
+
+		assert_int_equal(situ_base32_decode(out, written, back), len);
+		assert_memory_equal(back, cases[i].in, len);
+	}
+}
+
+static void test_the_output_is_always_whole_groups(void **state)
+{
+	/* Which is what `ratio_padded` claims, and the reason the form had to be
+	 * added: an exact ratio would predict 2 characters for one byte of base64,
+	 * and the answer is 4. */
+	uint8_t  in[16];
+	uint8_t  out[64];
+	unsigned n;
+
+	(void)state;
+
+	for (n = 0; n <= 16u; n++) {
+		unsigned i;
+
+		for (i = 0; i < n; i++) {
+			in[i] = (uint8_t)(i * 37u + 5u);
+		}
+
+		assert_int_equal(situ_base64_encode(in, n, out), ((n + 2u) / 3u) * 4u);
+		assert_int_equal(situ_base32_encode(in, n, out), ((n + 4u) / 5u) * 8u);
+	}
+}
+
+static void test_base64url_is_a_different_code(void **state)
+{
+	/* The two alphabets differ only in their last two characters, so a value
+	 * exercising 62 and 63 is the only one that tells them apart -- and text
+	 * encoded with one and decoded with the other is wrong in exactly the
+	 * bytes that made somebody reach for it. */
+	static const uint8_t in[3] = { 0xFB, 0xFF, 0xBF };
+	uint8_t plain[8] = { 0 };
+	uint8_t safe[8]  = { 0 };
+
+	(void)state;
+
+	situ_base64_encode(in, 3, plain);
+	situ_base64url_encode(in, 3, safe);
+
+	assert_memory_equal(plain, "+/+/", 4);
+	assert_memory_equal(safe,  "-_-_", 4);
+}
+
+static void test_base64_refuses_what_it_did_not_encode(void **state)
+{
+	/* A length that is not whole groups, and a byte outside the alphabet.
+	 * Both are input somebody else produced, which is the only kind a decoder
+	 * ever sees. */
+	uint8_t back[16];
+
+	(void)state;
+
+	assert_int_equal(situ_base64_decode((const uint8_t *)"Zm9", 3, back), 0);
+	assert_int_equal(situ_base64_decode((const uint8_t *)"Zm9 ", 4, back), 0);
+	assert_int_equal(situ_base64_decode((const uint8_t *)"Zm9*", 4, back), 0);
+}
+
 /* -- Reed-Solomon ---------------------------------------------------------- */
 
 /* A small deterministic generator, so a failure is reproducible. The point is
@@ -442,6 +561,11 @@ int main(void)
 		cmocka_unit_test(test_the_interleaver_refuses_a_partial_block),
 		cmocka_unit_test(test_hdlc_inserts_a_zero_after_five_ones),
 		cmocka_unit_test(test_hdlc_refuses_six_ones),
+		cmocka_unit_test(test_base64_matches_rfc_4648_vectors),
+		cmocka_unit_test(test_base32_matches_rfc_4648_vectors),
+		cmocka_unit_test(test_the_output_is_always_whole_groups),
+		cmocka_unit_test(test_base64url_is_a_different_code),
+		cmocka_unit_test(test_base64_refuses_what_it_did_not_encode),
 		cmocka_unit_test(test_base16_encodes_to_ascii_hex),
 		cmocka_unit_test(test_base16_needs_no_padding_at_any_length),
 		cmocka_unit_test(test_base16_lower_is_a_different_code_not_an_alias),

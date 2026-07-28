@@ -20,8 +20,11 @@ happens to do.
 
 from __future__ import annotations
 
+from math import lcm
+
 from situc import ast
 from situc.codegen.c.names import ident, macro
+from situc.layout import BITS_PER_BYTE
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -286,6 +289,13 @@ def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	if mapping is None or inputs > 8 or outputs > 16:
 		return None
 
+	# A padded code emits whole groups and fills a partial one, which is a
+	# different shape of loop: symbol at a time cannot express it, because the
+	# last group's symbol count depends on how much input was left.
+	pad = kernel.argument("pad")
+	if isinstance(pad, ast.IntLiteral):
+		return _padded_table(decl, prefix, inputs, outputs, mapping, pad.value)
+
 	name = ident(prefix, decl.name)
 	size = 1 << inputs
 
@@ -353,6 +363,129 @@ def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	return lines
 
 
+def _padded_table(decl: ast.CodecDecl, prefix: str, inputs: int, outputs: int,
+		mapping: list[int], pad: int) -> list[str] | None:
+	"""A base-N code: whole groups, with a partial one filled out.
+
+	base32 and base64. A group is the smallest run of input that is both a
+	whole number of bytes and a whole number of symbols -- five bytes and three
+	respectively -- so an input that does not end on one has its last group
+	padded rather than truncated. That is the whole difference from base16,
+	where four bits divide a byte and the question never arises.
+
+	The arithmetic here was written against Python's `base64` module and agrees
+	with it at every input length, which matters more than usual: an encoder
+	that is wrong only for inputs of length 3n+1 looks right in casual testing.
+	"""
+	if outputs != BITS_PER_BYTE or inputs >= BITS_PER_BYTE:
+		return None
+
+	name       = ident(prefix, decl.name)
+	group_bits = lcm(BITS_PER_BYTE, inputs)
+	group_in   = group_bits // BITS_PER_BYTE		# input bytes per group
+	symbols    = group_bits // inputs			# output bytes per group
+	mask       = (1 << inputs) - 1
+
+	table   = ", ".join(f"0x{value:02X}u" for value in mapping)
+	reverse = [0xFF] * 256
+	for symbol, value in enumerate(mapping):
+		reverse[value] = symbol
+	inverse = ", ".join(f"0x{value:02X}u" for value in reverse)
+
+	return [
+		"",
+		f"/* {decl.name}: RFC 4648 base{1 << inputs}.",
+		" *",
+		f" * {group_in} input bytes make {symbols} output bytes. A shorter final"
+		f" group is",
+		f" * filled with 0x{pad:02X}, so the output is always a whole number of",
+		" * groups -- which is what `ratio_padded` in the capability map means.",
+		" */",
+		f"static const uint8_t {name}_alphabet[{len(mapping)}] = {{ {table} }};",
+		"",
+		f"/* Symbol for each byte, 0xFF where the byte is not in the alphabet. */",
+		f"static const uint8_t {name}_symbol[256] = {{ {inverse} }};",
+		"",
+		f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"	uint32_t written = 0;",
+		"	uint32_t start;",
+		"",
+		f"	for (start = 0; start < len; start += {group_in}u) {{",
+		f"		uint32_t have = len - start < {group_in}u ? len - start : {group_in}u;",
+		"		uint64_t acc  = 0;",
+		"		uint32_t full;",
+		"		uint32_t i;",
+		"",
+		f"		for (i = 0; i < {group_in}u; i++) {{",
+		"			acc = (acc << 8) | (i < have ? (uint64_t)in[start + i] : 0u);",
+		"		}",
+		"",
+		"		/* Symbols that carry data; the rest are padding. */",
+		f"		full = (have * 8u + {inputs - 1}u) / {inputs}u;",
+		"",
+		f"		for (i = 0; i < {symbols}u; i++) {{",
+		f"			uint32_t shift = {group_bits}u - {inputs}u * (i + 1u);",
+		"",
+		"			out[written + i] = i < full",
+		f"				? {name}_alphabet[(uint32_t)(acc >> shift) & 0x{mask:02X}u]",
+		f"				: (uint8_t)0x{pad:02X}u;",
+		"		}",
+		f"		written += {symbols}u;",
+		"	}",
+		"",
+		"	return written;",
+		"}",
+		"",
+		f"/* Returns the number of bytes decoded, or 0 for input that is not a",
+		f" * whole number of groups or carries a byte outside the alphabet. */",
+		f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"	uint32_t written = 0;",
+		"	uint32_t start;",
+		"",
+		f"	if ((len % {symbols}u) != 0u) {{",
+		"		return 0;",
+		"	}",
+		"",
+		f"	for (start = 0; start < len; start += {symbols}u) {{",
+		"		uint64_t acc  = 0;",
+		"		uint32_t kept = 0;",
+		"		uint32_t i;",
+		"",
+		f"		while (kept < {symbols}u && in[start + kept] != 0x{pad:02X}u) {{",
+		"			kept++;",
+		"		}",
+		"",
+		f"		for (i = 0; i < {symbols}u; i++) {{",
+		"			uint32_t symbol = 0;",
+		"",
+		"			if (i < kept) {",
+		f"				symbol = {name}_symbol[in[start + i]];",
+		"				if (symbol == 0xFFu) {",
+		"					return 0;",
+		"				}",
+		"			}",
+		f"			acc = (acc << {inputs}u) | symbol;",
+		"		}",
+		"",
+		"		{",
+		f"			uint32_t bytes = kept * {inputs}u / 8u;",
+		"",
+		f"			for (i = 0; i < bytes; i++) {{",
+		f"				uint32_t shift = {group_bits}u - 8u * (i + 1u);",
+		"",
+		"				out[written + i] = (uint8_t)((acc >> shift) & 0xFFu);",
+		"			}",
+		"			written += bytes;",
+		"		}",
+		"	}",
+		"",
+		"	return written;",
+		"}",
+	]
+
+
 def _symbol_map(decl: ast.CodecDecl, inputs: int, outputs: int
 		) -> list[int] | None:
 	"""The output symbol for every input symbol.
@@ -403,6 +536,16 @@ NAMED_CODES: dict[str, list[int]] = {
 	# and receives the other has received something it did not specify, and
 	# situ has no business deciding that does not matter.
 	"base16_lower": [ord(c) for c in "0123456789abcdef"],
+	# RFC 4648 base32 and base64. Unlike base16 these need padding, because a
+	# group is five bytes and three bytes respectively and an input rarely ends
+	# on one. The alphabets are the RFC's; base64url swaps the last two
+	# characters so the result survives a URL, which is a different code and
+	# not a rendering choice.
+	"base32": [ord(c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"],
+	"base64": [ord(c) for c in
+	           "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"],
+	"base64url": [ord(c) for c in
+	              "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"],
 }
 
 

@@ -20,6 +20,8 @@ the signature.
 
 from __future__ import annotations
 
+from math import lcm
+
 from situc import ast
 from situc.codegen.c.names import ident
 
@@ -139,6 +141,12 @@ def _expected_length(codec: ast.CodecDecl) -> str | None:
 		assert codec.ratio is not None
 		a, b = codec.ratio
 		return f"(in_len * {a}u + {b - 1}u) / {b}u"
+	if codec.expansion is ast.Expansion.RATIO_PADDED:
+		assert codec.ratio is not None
+		a, b     = codec.ratio
+		bytes_in = lcm(8, b) // 8
+		return (f"((in_len + {bytes_in - 1}u) / {bytes_in}u)"
+		        f" * {lcm(8, b) // b * a // 8}u")
 	return None
 
 

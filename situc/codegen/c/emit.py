@@ -20,6 +20,8 @@ Principles that shape every line emitted here:
 
 from __future__ import annotations
 
+from math import lcm
+
 from dataclasses import dataclass, field
 
 from situc import ast
@@ -1127,6 +1129,14 @@ class Emitter:
 			assert codec.ratio is not None
 			out, into = codec.ratio
 			return f"(({inner}) * {out}u) / {into}u"
+		if codec.expansion is ast.Expansion.RATIO_PADDED:
+			assert codec.ratio is not None
+			out, into  = codec.ratio
+			group_in   = lcm(BITS_PER_BYTE, into)
+			group_out  = group_in // into * out
+			# Whole groups only, so a partial one still costs a full group.
+			return (f"((({inner}) + {group_in // BITS_PER_BYTE - 1}u)"
+			        f" / {group_in // BITS_PER_BYTE}u) * {group_out // BITS_PER_BYTE}u")
 
 		return None
 

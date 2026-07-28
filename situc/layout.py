@@ -14,6 +14,8 @@ complain.
 
 from __future__ import annotations
 
+from math import lcm
+
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TypeVar
@@ -1670,6 +1672,20 @@ def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
 	if codec.expansion is ast.Expansion.RATIO_EXACT:
 		return Interval(scale(interior.lo),
 		                None if interior.hi is None else scale(interior.hi))
+
+	if codec.expansion is ast.Expansion.RATIO_PADDED:
+		# A group is the smallest run of input that is both a whole number of
+		# bytes and a whole number of symbols, so the group size follows from
+		# the ratio rather than being declared: base64's six-bit symbols give
+		# lcm(8, 6) = 24 input bits, and base32's five-bit ones give 40.
+		group_in  = lcm(BITS_PER_BYTE, denominator)
+		group_out = group_in // denominator * numerator
+
+		def pad(bits: int) -> int:
+			return -(-bits // group_in) * group_out + added
+
+		return Interval(pad(interior.lo),
+		                None if interior.hi is None else pad(interior.hi))
 
 	# ratio_bounded: worst case known, actual data-dependent.
 	return Interval(interior.lo,

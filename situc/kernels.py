@@ -23,6 +23,8 @@ and quietly preferring either would hide which.
 
 from __future__ import annotations
 
+from math import lcm
+
 from dataclasses import dataclass, replace
 
 from situc import ast
@@ -138,17 +140,29 @@ def _table(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	inputs  = _positive(kernel, "input_bits", decl)
 	outputs = _positive(kernel, "output_bits", decl)
 
+	# `pad` says the code emits whole groups: a group is the smallest run of
+	# input that is both a whole number of bytes and a whole number of symbols,
+	# so a partial one at the end is filled out rather than truncated. That is
+	# what base32 and base64 do and what base16 never has to, because four bits
+	# divide a byte exactly.
+	padded = kernel.argument("pad") is not None
+
 	# A single-bit input is a bit code; anything wider is a symbol code. That
 	# is the distinction the hand-written library draws -- Manchester is
 	# `bit(1)` and 4b5b is `symbol(4)` -- and it is the useful one: a symbol is
-	# a unit somebody has to align to.
+	# a unit somebody has to align to. A padded code is coarser still: the unit
+	# somebody has to align to is the group, not the symbol.
+	group = lcm(BITS_PER_SYMBOL, inputs)
+
 	return Derived(
-		expansion        = ast.Expansion.RATIO_EXACT,
+		expansion        = (ast.Expansion.RATIO_PADDED if padded
+		                    else ast.Expansion.RATIO_EXACT),
 		ratio            = (outputs, inputs),
 		seekable         = ast.Seekable.LINEAR,
-		granularity      = (ast.Granularity.BIT if inputs == 1
+		granularity      = (ast.Granularity.BLOCK if padded
+		                    else ast.Granularity.BIT if inputs == 1
 		                    else ast.Granularity.SYMBOL),
-		granularity_size = inputs,
+		granularity_size = group // BITS_PER_SYMBOL if padded else inputs,
 		systematic       = False,
 		invertible       = True,
 		deterministic    = True,

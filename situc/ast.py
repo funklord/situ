@@ -595,6 +595,7 @@ class Expansion(Enum):
 	PRESERVING     = "length_preserving"
 	FIXED_ADD      = "add"			# expansion = +N
 	RATIO_EXACT    = "ratio_exact"		# a:b exactly, so offsets stay linear
+	RATIO_PADDED   = "ratio_padded"		# a:b, rounded up to a whole group
 	RATIO_BOUNDED  = "ratio_bounded"	# worst case known, actual data-dependent
 	UNBOUNDED      = "unbounded"
 

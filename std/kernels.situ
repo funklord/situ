@@ -93,6 +93,31 @@ codec base16_lower {
 }
 impl base16_lower derived;
 
+// RFC 4648 base32 and base64. Unlike base16 these pad: a group is five bytes
+// and three bytes respectively, and an input that does not end on one has its
+// last group filled out rather than truncated. `pad = 0x3D` is `=`.
+//
+// That is what `ratio_padded` says in the capability map, and why granularity
+// is a block rather than a symbol -- the unit a reader has to align to is the
+// group, not the character.
+codec base32 {
+	kernel = table(input_bits = 5, output_bits = 8, code = base32, pad = 0x3D);
+}
+impl base32 derived;
+
+codec base64 {
+	kernel = table(input_bits = 6, output_bits = 8, code = base64, pad = 0x3D);
+}
+impl base64 derived;
+
+// The URL-safe alphabet swaps the last two characters. A different code, not a
+// rendering choice: text encoded with one and decoded with the other is wrong
+// in exactly the bytes that made somebody reach for it.
+codec base64url {
+	kernel = table(input_bits = 6, output_bits = 8, code = base64url, pad = 0x3D);
+}
+impl base64url derived;
+
 codec code_4b5b {
 	kernel = table(input_bits = 4, output_bits = 5, code = fddi_4b5b);
 }

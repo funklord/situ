@@ -595,3 +595,43 @@ def parse(path: Path):		# type: ignore[no-untyped-def]
 	from situc.parser import parse as parse_source
 
 	return parse_source(Source(str(path), path.read_text(encoding="ascii")))
+
+
+# -- ratio_padded (section 13.2) ---------------------------------------------
+
+
+def test_a_padded_table_derives_ratio_padded() -> None:
+	"""base64 is a table code whose group is three bytes, and an exact ratio
+	cannot say that: it would predict two characters for one byte, where the
+	answer is four."""
+	derived = only("""codec c {
+		kernel = table(input_bits = 6, output_bits = 8, code = base64, pad = 0x3D);
+	}
+	""")
+
+	assert derived.expansion is ast.Expansion.RATIO_PADDED
+	assert derived.ratio == (8, 6)
+	assert derived.granularity is ast.Granularity.BLOCK
+	assert derived.granularity_size == 3		# lcm(8, 6) bits = 3 bytes
+
+
+def test_the_group_follows_from_the_ratio() -> None:
+	"""It is not declared: a group is the smallest run of input that is both a
+	whole number of bytes and a whole number of symbols."""
+	base32 = only("""codec c {
+		kernel = table(input_bits = 5, output_bits = 8, code = base32, pad = 0x3D);
+	}
+	""")
+
+	assert base32.granularity_size == 5		# lcm(8, 5) bits = 5 bytes
+
+
+def test_an_unpadded_table_is_still_exact() -> None:
+	"""base16 needs no padding at any length, so nothing about it changes."""
+	derived = only("""codec c {
+		kernel = table(input_bits = 4, output_bits = 8, code = base16);
+	}
+	""")
+
+	assert derived.expansion is ast.Expansion.RATIO_EXACT
+	assert derived.granularity is ast.Granularity.SYMBOL

@@ -1172,7 +1172,7 @@ codec deflate extern {
 
 | Property | Domain | Meaning |
 |---|---|---|
-| length | `length_preserving` \| `expansion = +N` \| `expansion = ratio_exact(a,b)` \| `expansion = ratio_bounded(a,b)` \| `expansion = unbounded` | output extent as a function of input extent |
+| length | `length_preserving` \| `expansion = +N` \| `expansion = ratio_exact(a,b)` \| `expansion = ratio_padded(a,b)` \| `expansion = ratio_bounded(a,b)` \| `expansion = unbounded` | output extent as a function of input extent |
 | `seekable` | `linear` \| `permuted` \| `blockwise(N)` \| `none` | class of the output-position function |
 | `granularity` | `bit(N)` \| `symbol(N)` \| `byte` \| `block(N)` \| `stream` | minimum independently-transformable unit |
 | `systematic` | flag | input data appears verbatim in the output at computable positions |
@@ -1183,6 +1183,15 @@ codec deflate extern {
 
 Three of these are new relative to the first draft and each was forced by a real
 codec class:
+
+**`expansion = ratio_padded(a,b)`** is the exact ratio applied at group
+granularity: the output is always a whole number of groups, so a partial final
+group is filled out rather than truncated. The group follows from the ratio --
+`lcm(8, b)` bits, the smallest run of input that is both whole bytes and whole
+symbols -- rather than being declared, because the two numbers are not
+independent. base64 and base32 are the cases; base16 is not, because four bits
+divide a byte and the question never arises. See
+`docs/decisions/0018-padded-expansion.md`.
 
 **`expansion = ratio_exact(a,b)`** replaces the earlier blanket `ratio`. An
 exact integer ratio -- Manchester at 2:1, 4b5b at 5:4, 8b10b at 10:8 -- means
@@ -1236,7 +1245,7 @@ kernel families, or a pipeline of them. This bounds the tier-2 design.
 
 | Family | Description form | Covers | Derived properties |
 |---|---|---|---|
-| **table** | input symbol -> output symbol map | Manchester, 4b5b, 8b10b, NRZI, Gray, BCD | `ratio_exact` from symbol widths; `seekable = linear`; `granularity = symbol(N)`; `deterministic`; not `systematic` |
+| **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, 8b10b, NRZI, Gray, BCD, base16/32/64 | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
 | **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon, BCH | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 | **linear block** | generator or parity-check matrix over GF(2) | Hamming, extended Hamming, LDPC, arbitrary block codes | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
 | **shift register** | taps, feedback source, initial state | convolutional codes, additive and multiplicative scramblers, Miller | `length_preserving` or `ratio_exact`; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output |
@@ -2044,6 +2053,7 @@ keeping. They are referenced from the sections they bear on; this is the index.
 | 0015 | What a register adds to a struct, and what it does not |
 | 0016 | A composed expansion may carry both a ratio and an addend |
 | 0017 | One codec implementation, in C, with a per-language plugin slot |
+| 0018 | `ratio_padded(a, b)`, for codes that emit whole groups |
 
 0004 and 0007 look contradictory and are not. 0004 made aarch64 compile-only
 and deferred a revisit; 0007 closes that revisit once user-mode emulation was
@@ -2734,13 +2744,28 @@ that already has one, and a receiver accepting both accepts two byte sequences
 for one value. Every expectation is checked against Python's strict decoder.
 An encoding situ cannot validate is now an error rather than a silent nod.
 
-**Still open: base32 and base64.** Their ratios are exact -- 8:5 and 4:3 -- but
-padding makes the output length depend on the input length mod 5 or mod 3,
-which section 13.2's expansion vocabulary does not express. Decision 0016 is
-the precedent for widening the vocabulary rather than approximating, and this
-wants the same treatment. `nul_terminated` is in the same position: still
-parsed, still refused, and needing a decision about what a terminator does to
-a field's extent before it can mean anything.
+**base32 and base64 needed a sixth expansion form**, and got one. Their ratios
+are exact at the bit level but the output is always whole groups, so one byte
+of base64 input produces four characters rather than the two an exact ratio
+predicts. `ratio_padded(a, b)` says `ceil(input / group) * group_out`, where
+the group follows from the ratio rather than being declared -- `lcm(8, b)`
+bits, which is three bytes for base64 and five for base32. See
+`docs/decisions/0018-padded-expansion.md`, which also records why no
+propagation row changed.
+
+The encoders were written against Python's `base64` module and agree with it at
+every input length from 0 to 20, which matters more than usual here: an encoder
+wrong only for inputs of length 3n+1 looks right in casual testing. The
+committed tests are RFC 4648's own vectors, which cover every length mod 3 and
+mod 5 precisely because that is what decides the padding.
+
+`base64url` is a separate code rather than a flag. The alphabets differ only in
+their last two characters, so text encoded with one and decoded with the other
+is wrong in exactly the bytes that made somebody reach for it.
+
+**Still open: `nul_terminated`.** Parsed, refused, and needing a decision about
+what a terminator does to a field's extent -- whether the declared size is the
+capacity or the content -- before it can mean anything.
 
 **Parsing most protocols should need nothing installed.** The long-term aim is
 that a schema for an ordinary protocol builds and runs against situ alone --
