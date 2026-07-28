@@ -139,6 +139,24 @@ class Emitter:
 		lines.extend(f"\t{c_name(member.name)} = {values[member.name]},"
 		             for member in decl.members)
 		lines.append("};")
+
+		# Section 8.7 makes `default = error` the default and says unknown
+		# values are rejected on parse. Every backend emitted that as a comment
+		# and validated nothing until now.
+		name = c_name(decl.name)
+		lines.extend([
+			"",
+			f"/* Whether a value names a member of {decl.name} (section 8.7). */",
+			f"constexpr bool is_known({name} value) noexcept",
+			"{",
+			"\tswitch (value) {",
+			*[f"\tcase {name}::{c_name(member.name)}:" for member in decl.members],
+			"\t\treturn true;",
+			"\tdefault:",
+			"\t\treturn false;",
+			"\t}",
+			"}",
+		])
 		return lines
 
 	# -- structs -------------------------------------------------------
@@ -896,6 +914,17 @@ class Emitter:
 			return lines
 
 		name = c_name(local_name(struct, placement))
+
+		enum = self.enums.get(placement.type_name or "")
+		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
+			lines.extend([
+				f"\t\t/* {placement.path}: `{enum.name}` rejects unknown values"
+				f" (section 8.7) */",
+				f"\t\tif (!is_known({name}())) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			])
+
 		for attr in placement.attrs:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue

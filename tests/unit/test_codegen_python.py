@@ -337,3 +337,28 @@ int main(void)
 	               (h.version, h.ihl, h.total, h.flag, h.offset, h.proto, h.ttl)]
 
 	assert from_python == from_c, f"python {from_python} != c {from_c}"
+
+
+def test_an_enum_rejects_a_value_that_is_not_a_member(tmp_path: Path) -> None:
+	"""Section 8.7. The gap that only surfaced because a third backend forced
+	the comparison: C had never validated this either."""
+	module = load(tmp_path, 'enum k : u8 { one = 1, two = 2 }\nstruct s { k kind; u8 pad; }')
+	rt     = runtime()
+
+	for value, admitted in ((1, True), (2, True), (9, False)):
+		buf = bytearray([value, 0])
+		s   = module.s.at(rt.Message(buf))
+
+		if admitted:
+			s.validate()
+		else:
+			with pytest.raises(rt.ConstraintError):
+				s.validate()
+
+
+def test_default_pass_admits_what_it_says_it_admits(tmp_path: Path) -> None:
+	"""A schema that opts out of the rule is not second-guessed."""
+	module = load(tmp_path, 'enum k : u8 { one = 1, two = 2, default = pass }\nstruct s { k kind; u8 pad; }')
+	rt     = runtime()
+
+	module.s.at(rt.Message(bytearray([9, 0]))).validate()

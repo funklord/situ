@@ -148,7 +148,36 @@ class Emitter:
 			lines.append(f"\t{macro(self.prefix, decl.name, member.name)}"
 			             f" = {values[member.name]},")
 		lines.append(f"}} {ident(self.prefix, decl.name)}_t;")
+		lines.extend(self._enum_is_known(decl))
 		return lines
+
+	def _enum_is_known(self, decl: ast.EnumDecl) -> list[str]:
+		"""Whether a value names a member.
+
+		Section 8.7 makes `default = error` the default and says unknown values
+		are rejected on parse. Nothing enforced that: the backends emitted the
+		rule as a comment and validated nothing, so a field declared to admit
+		seven protocol numbers accepted all 256.
+
+		Emitted for both defaults, because a `pass` schema may still want to
+		ask -- what changes is whether `validate` calls it.
+		"""
+		name = ident(self.prefix, decl.name)
+		return [
+			"",
+			f"/* Whether a value names a member of {decl.name}"
+			f" (section 8.7). */",
+			f"static inline int {name}_is_known({name}_t value)",
+			"{",
+			"	switch (value) {",
+			*[f"	case {macro(self.prefix, decl.name, member.name)}:"
+			  for member in decl.members],
+			"		return 1;",
+			"	default:",
+			"		return 0;",
+			"	}",
+			"}",
+		]
 
 	def _struct_header(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
@@ -1659,6 +1688,19 @@ class Emitter:
 
 		getter = ident(self.prefix, struct.name, local, "get")
 		env    = self.resolved.layout.env
+
+		# An enum with `default = error` admits its members and nothing else.
+		# The declaration said so all along; this is what makes it true.
+		enum = self.enums.get(placement.type_name or "")
+		if enum is not None \
+				and enum.effective_default is ast.EnumDefault.ERROR:
+			lines.extend([
+				f"\t/* {placement.path}: `{enum.name}` rejects unknown values"
+				f" (section 8.7) */",
+				f"\tif (!{ident(self.prefix, enum.name)}_is_known({getter}(view))) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			])
 
 		# A BCD field can hold a bit pattern that is not a number: a nibble
 		# above nine. The getter cannot report that -- it returns a number

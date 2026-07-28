@@ -520,6 +520,16 @@ class Emitter:
 			]
 
 		lines: list[str] = []
+
+		enum = self.enums.get(placement.type_name or "")
+		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
+			lines.extend([
+				f"\t\tif not known_enum({c_name(enum.name)}, int(self.{name})):",
+				f"\t\t\traise ConstraintError("
+				f"f\"{placement.path} is {{int(self.{name})}}, not a"
+				f" {enum.name}\")",
+			])
+
 		for attr in placement.attrs:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue

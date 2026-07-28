@@ -443,3 +443,18 @@ def test_an_operation_the_mode_forbids_does_not_compile(
 	result = compiles(tmp_path, REGISTER, extra=main, preamble=MMIO)
 
 	assert result.returncode != 0, f"{expression} compiled and should not"
+
+
+def test_an_enum_rejects_a_value_that_is_not_a_member() -> None:
+	"""Section 8.7, and all three backends now agree on it."""
+	header = emit('enum k : u8 { one = 1, two = 2 }\nstruct s { k kind; u8 pad; }')
+
+	assert "constexpr bool is_known(k value) noexcept" in header
+	assert "if (!is_known(kind())) {" in header
+
+
+def test_default_pass_admits_what_it_says_it_admits() -> None:
+	header = emit('enum k : u8 { one = 1, two = 2, default = pass }\nstruct s { k kind; u8 pad; }')
+
+	assert "constexpr bool is_known(k value) noexcept" in header
+	assert "if (!is_known(kind()))" not in header

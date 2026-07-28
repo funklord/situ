@@ -633,6 +633,18 @@ framing elsewhere.
 - Backing type mandatory: `enum E : u8 { ... }`.
 - `default = error` (reject unknown values on parse) or `default = pass`
   (accept and preserve). Default is `error`, deliberately: see 14.5.
+
+  **Enforced in every backend**, which it was not until three of them existed
+  to be compared. Each emits an `is_known` predicate over the declared members
+  and calls it from `validate`, so a field declared to admit seven protocol
+  numbers no longer accepts all 256. `default = pass` still emits the
+  predicate, because a caller may want to ask, and does not call it -- a schema
+  that opts out of the rule is not second-guessed.
+
+  It had been a comment in the generated C since phase 4. The Python backend is
+  what surfaced it: writing a third implementation of the same schema meant
+  comparing three answers, and this was the one place they differed for a
+  reason that was nobody's intent.
 - Exhaustiveness of a `variant switch` over an enum is checked. A missing case
   without a `default` arm is an error.
 

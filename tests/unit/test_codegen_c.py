@@ -952,3 +952,21 @@ def test_a_plain_byte_array_gets_no_length_accessor() -> None:
 
 	assert "situ_s_name_len" not in header
 	assert "situ_s_name_ptr" in header
+
+
+def test_an_enum_rejects_a_value_that_is_not_a_member() -> None:
+	"""Section 8.7 makes `default = error` the default and says unknown values
+	are rejected on parse. Every backend emitted that as a comment and
+	validated nothing, so a field declared to admit two values took all 256."""
+	header, source = emit('enum k : u8 { one = 1, two = 2 }\nstruct s { k kind; u8 pad; }')
+
+	assert "int situ_k_is_known(situ_k_t value)" in header
+	assert "situ_k_is_known(situ_s_kind_get(view))" in source
+
+
+def test_default_pass_admits_what_it_says_it_admits() -> None:
+	"""The other half of 8.7: a schema that opts out is not second-guessed."""
+	header, source = emit('enum k : u8 { one = 1, two = 2, default = pass }\nstruct s { k kind; u8 pad; }')
+
+	assert "situ_k_is_known" in header		# still offered
+	assert "situ_k_is_known(situ_s_kind_get" not in source	# not demanded

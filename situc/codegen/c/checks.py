@@ -944,6 +944,12 @@ def _required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 				return int(evaluate(attr.value, resolved.layout.env))
 			except Exception:	# noqa: BLE001 - not foldable, so not satisfiable
 				return None
+
+	# An enum with `default = error` admits its members and nothing else, so a
+	# baseline that leaves one at zero is not valid unless zero is a member.
+	values = resolved.layout.env.enums.get(placement.type_name or "")
+	if values:
+		return None if 0 in values.values() else min(values.values())
 	return None
 
 
@@ -1006,6 +1012,7 @@ def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 	baseline = _baseline(resolved, struct, extent)
 	if baseline is not None:
 		_reserved_checks(suite, resolved, struct, prefix, extent, baseline)
+		_enum_checks(suite, resolved, struct, prefix, extent, baseline)
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -1041,6 +1048,59 @@ def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			[f"/* {placement.path} declares `must_eq`, which is malleability",
 			 " * control rather than pedantry (section 8.8): a value the schema",
 			 " * does not admit has to be refused on parse. */"])
+
+
+def _enum_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
+		prefix: str, extent: int, baseline: list[str]) -> None:
+	"""An enum field admits its members and, with `default = error`, nothing else.
+
+	Section 8.7 says so and every backend emitted it as a comment until three of
+	them were compared. This is what keeps it true.
+	"""
+	validate = ident(prefix, struct.name, "validate")
+
+	for entry in struct.entries:
+		placement = entry.placement
+		values    = resolved.layout.env.enums.get(placement.type_name or "")
+
+		if not values or placement.offset_bits is None or "[]" in placement.path:
+			continue
+		if placement.offset_bits % BITS_PER_BYTE or placement.size_bits != BITS_PER_BYTE:
+			continue
+		if placement.offset_bits // BITS_PER_BYTE >= extent:
+			continue
+
+		decl = next((held for held in resolved.layout.env.enums
+		             if held == placement.type_name), None)
+		if decl is None:
+			continue
+
+		# A value no member names. Walking up from zero finds one unless the
+		# enum covers the whole byte, in which case there is nothing to reject.
+		taken   = set(values.values())
+		unknown = next((v for v in range(256) if v not in taken), None)
+		if unknown is None:
+			continue
+
+		offset = placement.offset_bits // BITS_PER_BYTE
+		suite.add(
+			f"check_{c_name(placement.path)}_rejects_a_value_no_member_names",
+			[
+				*_acquire(struct, prefix, extent),
+				"",
+				*(["\t/* Every other constraint satisfied first. */", *baseline, ""]
+				  if baseline else []),
+				f"\tassert_int_equal({validate}(view), SITU_OK);",
+				"",
+				f"\t/* {unknown} names no member of `{placement.type_name}`. */",
+				f"\tbuf[{offset}u] = {unknown}u;",
+				f"\tassert_int_equal({validate}(view), SITU_ERR_CONSTRAINT);",
+			],
+			[f"/* {placement.path} is a `{placement.type_name}`, which rejects",
+			 " * unknown values (section 8.7). A field declared to admit a"
+			 f" handful",
+			 " * of values that takes all 256 is not the field the schema"
+			 " described. */"])
 
 
 def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
