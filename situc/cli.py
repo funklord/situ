@@ -49,7 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
 	build_cmd.add_argument("schema", type=Path)
 	build_cmd.add_argument("--out", type=Path, default=Path("."),
 	                       help="output directory (default: the current one)")
-	build_cmd.add_argument("--target", choices=("c", "cpp"), default="c",
+	build_cmd.add_argument("--target", choices=("c", "cpp", "python"),
+	                       default="c",
 	                       help="backend; rust arrives in phase 11")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
@@ -291,7 +292,14 @@ def cmd_build(args: argparse.Namespace) -> int:
 	files: dict[str, str]
 	warnings: list[Diagnostic]
 
-	if args.target == "cpp":
+	if args.target == "python":
+		from situc.codegen.python import generate as generate_py
+
+		emitted_py = generate_py(parse(source), resolved, args.schema.stem,
+		                         args.prefix)
+		files    = emitted_py.files()
+		warnings = emitted_py.warnings
+	elif args.target == "cpp":
 		cpp      = generate_cpp(parse(source), resolved, args.schema.stem,
 		                        args.prefix)
 		files    = cpp.files()

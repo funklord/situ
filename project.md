@@ -2915,19 +2915,46 @@ Codecs bind the C implementation (decision 0017), which for C++ costs nothing:
 
 ### 26.17 Python backend
 
-**Status: not started.** Reaches people who would otherwise not describe their
-format at all, which is the argument for it.
+**Status: complete except registers**, which are a bus transaction Python
+cannot make and say so. `situc build --target=python` emits one module per
+schema over `runtime/python/situ_runtime.py`.
 
-It will enforce the least of the lattice, and that is a fact to state rather
-than a reason to skip it: `memoryview` gives zero-copy reads, but nothing in
-Python stops a caller keeping a view past the write that invalidates it, and
-`repr` and `atomic` become documentation. Invariant 5 applied to backends
-(20.1) means the generated code and the capability map must say so.
+**The surface is properties**, not `get_x()` methods. A caller who has to write
+`packet.version()` writes the parser by hand instead, and a backend nobody uses
+enforces nothing at all. `validate()` raises rather than returning a code for
+the same reason: idiom is not a capability, and a return value a Python caller
+silently drops is worse than an exception they have to catch.
+
+**What Python does enforce**, which is more than expected going in:
+
+- Zero copy. A view is a `memoryview` over the caller's buffer; a write through
+  one is visible to whoever owns the bytes.
+- Bounds, once at acquisition, as in C.
+- **Invalidation (section 12.3), which is the one place Python is stronger than
+  release-build C.** Every access checks the generation, where the C check
+  compiles out. It costs an integer compare, which is not a cost worth avoiding
+  here.
+- A covered write is not spelled as an assignment. It leaves a tag stale, so
+  the plain setter is refused and `set_x(msg, value)` marks the tag dirty --
+  the same refusal C makes, because a schema that means one thing in C must not
+  mean another here.
+
+**What it does not**, said in the module header rather than left to be found:
+`atomic` means nothing, because Python has no single-instruction access and the
+GIL is not a statement about bus transactions. `repr` costs what the map says
+even though a property makes it look free.
+
+**The stage gate is weakest here.** It refuses to construct without a token
+only a verified open produces, which is a real run-time check -- but not the
+C++ guarantee, where forging one does not compile. Python has no access control
+and `object.__new__` will make a gate whatever the class says. The generated
+docstring states that outright, because a reader who has seen the C++ backend
+would otherwise assume the strength carried over.
 
 Codecs bind the C implementation, which costs Python a build step -- the
 friction Python users least expect. Decision 0017 records why a pure-Python
-second implementation is the wrong answer to that, and what the plugin slot is
-for if it proves untenable.
+second implementation is the wrong answer, and what the plugin slot is for if
+it proves untenable.
 
 ### 26.18 Rust backend
 
