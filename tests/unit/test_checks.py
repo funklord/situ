@@ -428,7 +428,7 @@ def test_a_reserved_array_is_validated() -> None:
 	assert "SITU_ERR_CONSTRAINT" in emitted
 
 
-def test_the_dirty_mask_is_checked_against_its_tags() -> None:
+def test_the_dirty_mask_is_checked_against_its_obligations() -> None:
 	"""It is a constant for callers, like SIZE_FIXED, and nothing generated
 	consumes it -- so an off-by-one in it went unnoticed until it was tested as
 	the API it is."""
@@ -441,6 +441,44 @@ def test_the_dirty_mask_is_checked_against_its_tags() -> None:
 	}
 	""")
 
-	assert "check_s_dirty_mask_names_every_tag" in source
+	assert "check_s_dirty_mask_names_every_obligation" in source
 	assert "SITU_S_DIRTY_MASK & SITU_S_TAG_DIRTY" in source
 	assert "SITU_S_DIRTY_MASK & SITU_S_CHECKSUM_DIRTY" in source
+
+
+def test_the_dirty_mask_covers_invariants_too() -> None:
+	"""Tags and invariants share the dirty word (section 16.1). A mask over the
+	tags alone leaves a struct able to be stale in a way its own mask cannot
+	express, which is the kind of gap a caller finds by trusting it."""
+	source = emit("""struct s {
+		u16 total;
+		u8  a;
+		authenticated inner { u8 b; }
+		tag u8[16] covers(inner);
+	}
+	invariant s.total == size(s.a);
+	""")
+
+	assert "SITU_S_DIRTY_MASK & SITU_S_TAG_DIRTY" in source
+	assert "SITU_S_DIRTY_MASK & SITU_S_TOTAL_STALE" in source
+
+
+def test_each_obligation_gets_its_own_coverage_check() -> None:
+	"""Pairing the first covered field with the first tag is right only while a
+	struct carries one obligation. With a tag and an invariant side by side it
+	wrote through a field the invariant covers and asserted the tag went dirty,
+	which passes for the wrong reason or fails for a confusing one."""
+	source = emit("""struct s {
+		u16 total;
+		u8  a;
+		authenticated inner { u8 b; }
+		tag u8[16] covers(inner);
+	}
+	invariant s.total == size(s.a);
+	""")
+
+	assert "check_s_covered_write_marks_tag" in source
+	assert "check_s_covered_write_marks_total" in source
+	# The discharge differs: a tag is finalized, a derived field recomputed.
+	assert "situ_s_tag_finalize(&msg);" in source
+	assert "situ_s_total_recompute(&msg, view);" in source

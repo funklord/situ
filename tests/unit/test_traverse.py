@@ -12,12 +12,13 @@ import pytest
 
 from pathlib import Path
 
+from situc.ast import Schema
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import ResolvedStruct, resolve
 from situc.traverse import (
 	Check, Member, byte_span, classify, classify_check, container_bits,
-	is_own_member, local_name, own_members, span_bits,
+	is_own_member, local_name, obligation, obligations, own_members, span_bits,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -237,3 +238,91 @@ def test_every_backend_uses_the_shared_order(target: str) -> None:
 	source = (ROOT / "situc" / "codegen" / target / "emit.py").read_text()
 	assert "classify(struct, placement, self.structs)" in source
 	assert "classify_check(struct, placement, self.structs)" in source
+
+
+# -- obligations ------------------------------------------------------------
+#
+# Two backends numbered these themselves, from two different lists, and gave
+# the same schema two answers. The bit a covered setter marks and the bit a
+# recompute clears have to be one bit.
+
+
+def schema_of(body: str) -> tuple[Schema, dict[str, ResolvedStruct]]:
+	parsed = parse_text(PREAMBLE + body)
+	return parsed, resolve(parsed, solve(parsed)).structs
+
+
+BOTH = """struct s {
+	u16 total;
+	u8  a;
+	authenticated inner { u8 b; }
+	tag u8[16] covers(inner);
+}
+invariant s.total == size(s.a);
+"""
+
+
+def test_tags_and_invariants_share_one_numbering() -> None:
+	parsed, found = schema_of(BOTH)
+
+	held = obligations(parsed, found["s"])
+
+	assert [one.bit for one in held] == [0, 1]
+	assert [one.kind for one in held] == ["tag", "invariant"]
+
+
+def test_tags_are_numbered_first() -> None:
+	"""Not alphabetically, and not in declaration order across both kinds. Tags
+	were numbered before invariants existed, and renumbering them would change
+	what an already-generated header means for a caller who stored a bit."""
+	parsed, found = schema_of(BOTH)
+
+	first = obligations(parsed, found["s"])[0]
+
+	assert first.kind == "tag"
+	assert first.bit == 0
+
+
+def test_an_obligations_label_is_not_its_identifier() -> None:
+	"""`covered_by` holds a phrase, because "covered by invariant total" is what
+	a diagnostic has to say. Pasting that where an identifier belongs produced
+	`SITU_S_INVARIANT TOTAL_DIRTY`, a macro name with a space in it, in a header
+	offered to a C compiler."""
+	parsed, found = schema_of(BOTH)
+
+	derived = next(one for one in obligations(parsed, found["s"])
+	               if one.kind == "invariant")
+
+	assert derived.label == "invariant total"
+	assert derived.name  == "total"
+	assert derived.name.isidentifier()
+
+
+def test_every_label_a_placement_carries_resolves() -> None:
+	"""The lookup is by label because that is what the layout solver recorded.
+	A label that resolves to nothing gets silently mis-numbered rather than
+	refused, so nothing may be left dangling."""
+	parsed, found = schema_of(BOTH)
+	held = found["s"]
+
+	for placement in held.entries:
+		for label in placement.placement.covered_by:
+			assert obligation(parsed, held, label) is not None, label
+
+
+def test_a_tag_is_dirty_and_a_derived_field_is_stale() -> None:
+	"""Different words for one bit, because they are different sentences: a tag
+	no longer matches the bytes, a field no longer equals its definition."""
+	parsed, found = schema_of(BOTH)
+	held = {one.kind: one.suffix for one in obligations(parsed, found["s"])}
+
+	assert held == {"tag": "DIRTY", "invariant": "STALE"}
+
+
+def test_an_invariant_belongs_only_to_its_own_struct() -> None:
+	"""Both halves are evaluated against one view, so an invariant over `s`
+	numbers nothing in `t` -- and a `t` that inherited the bit would collide
+	with its own first tag."""
+	parsed, found = schema_of(BOTH + "struct t { u8 x; }\n")
+
+	assert obligations(parsed, found["t"]) == []

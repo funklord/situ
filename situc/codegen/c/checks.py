@@ -32,7 +32,7 @@ from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import own_members
+from situc.traverse import Obligation, obligations, own_members
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -64,7 +64,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		if struct.layout.register is not None:
 			_register_checks(suite, struct, prefix)
 		else:
-			_struct_checks(suite, resolved, struct, prefix)
+			_struct_checks(suite, schema, resolved, struct, prefix)
 
 	return _render(suite, basename)
 
@@ -123,8 +123,8 @@ def _render(suite: Suite, basename: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _struct_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
-		prefix: str) -> None:
+def _struct_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
+		struct: ResolvedStruct, prefix: str) -> None:
 	layout = struct.layout
 
 	if not layout.is_byte_sized:
@@ -142,7 +142,7 @@ def _struct_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruc
 		_field_checks(suite, resolved, struct, entry, prefix, extent)
 
 	_validate_checks(suite, resolved, struct, prefix, extent)
-	_coverage_checks(suite, struct, prefix, extent)
+	_coverage_checks(suite, schema, struct, prefix, extent)
 	_gate_checks(suite, struct, prefix, extent)
 
 
@@ -1172,76 +1172,106 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			 " * authenticated. */"])
 
 
-def _coverage_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
-		extent: int) -> None:
-	"""`auth = Covered(t)` is a claim that writing marks `t` stale."""
-	tags = [entry.placement for entry in struct.entries
-	        if entry.placement.kind in ("tag", "checksum")]
-	if not tags:
+def _coverage_checks(suite: Suite, schema: ast.Schema, struct: ResolvedStruct,
+		prefix: str, extent: int) -> None:
+	"""`auth = Covered(o)` is a claim that writing marks `o` stale.
+
+	One check per obligation, not one per struct. The old version took the
+	first covered field and the first tag and paired them, which is right only
+	while a struct carries exactly one obligation -- with a tag and an
+	invariant side by side it wrote through a field the invariant covers and
+	then asserted the *tag* had gone dirty.
+	"""
+	held = obligations(schema, struct)
+	if not held:
 		return
 
-	covered = [entry for entry in struct.entries
-	           if entry.placement.covered_by
-	           and entry.placement.scalar is not None
-	           and entry.placement.kind == "field"
-	           and entry.placement.array_count is None
-	           and entry.placement.sized_by is None
-	           and entry.placement.sealed_by is None
-	           and entry.vector.get(Axis.MUTATE).base == "InPlaceFixed"]
-	if not covered:
-		return
+	for one in held:
+		if one.kind == "tag":
+			_span_check(suite, struct, prefix, extent, one.name)
 
-	entry  = covered[0]
-	local  = c_name(entry.placement.path[len(struct.name) + 1:])
-	setter = ident(prefix, struct.name, local, "set")
-	tag    = tags[0].name
-	ctype  = _ctype(entry.placement.scalar)
+	_dirty_mask_check(suite, struct, held, prefix, extent)
 
-	for held in tags:
-		_span_check(suite, struct, prefix, extent, held.name)
+	for one in held:
+		# A field this obligation covers, with a setter to write it through.
+		# An array or a nested struct is reached by pointer and marks nothing
+		# by itself, so there is no call here to make.
+		entry = next((entry for entry in struct.entries
+		              if one.label in entry.placement.covered_by
+		              and entry.placement.scalar is not None
+		              and entry.placement.kind == "field"
+		              and entry.placement.array_count is None
+		              and entry.placement.sized_by is None
+		              and entry.placement.sealed_by is None
+		              and entry.vector.get(Axis.MUTATE).base == "InPlaceFixed"),
+		             None)
+		if entry is None:
+			continue
 
-	_dirty_mask_check(suite, struct, tags, prefix, extent)
+		local  = c_name(entry.placement.path[len(struct.name) + 1:])
+		setter = ident(prefix, struct.name, local, "set")
+		ctype  = _ctype(entry.placement.scalar)
+		name   = c_name(one.name)
 
-	suite.add(
-		f"check_{c_name(struct.name)}_covered_write_marks_{c_name(tag)}",
-		[
-			*_acquire(struct, prefix, extent),
-			"",
-			"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_OK);",
-			"",
-			f"\t{setter}(&msg, view, ({ctype})1);",
-			"",
-			f"\tassert_true({ident(prefix, struct.name, c_name(tag), 'is_dirty')}"
-			"(&msg));",
-			"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);",
-			"",
-			f"\t{ident(prefix, struct.name, c_name(tag), 'finalize')}(&msg);",
-			"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_OK);",
-		],
-		[f"/* {entry.placement.path} is Covered({tag}). Section 14.2 says a write",
-		 " * to it leaves the tag stale and the message refuses to be",
-		 " * transmittable until finalize puts it right. */"])
+		if one.kind == "tag":
+			stale     = f"{ident(prefix, struct.name, name, 'is_dirty')}(&msg)"
+			discharge = f"{ident(prefix, struct.name, name, 'finalize')}(&msg);"
+			why       = ("Section 14.2 says a write to it leaves the tag stale "
+			             "and the\n\t * message refuses to be transmittable "
+			             "until finalize puts it right.")
+			# The recompute takes the view as well: it writes bytes, where
+			# finalize only reads them and stores a tag it was handed.
+		else:
+			stale     = f"{ident(prefix, struct.name, name, 'is_stale')}(&msg)"
+			discharge = f"{ident(prefix, struct.name, name, 'recompute')}(&msg, view);"
+			why       = ("Section 16.1 says a write to it leaves the derived "
+			             "field stale\n\t * and the message refuses to be "
+			             "transmittable until recompute puts it right.")
+
+		suite.add(
+			f"check_{c_name(struct.name)}_covered_write_marks_{name}",
+			[
+				*_acquire(struct, prefix, extent),
+				"",
+				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_OK);",
+				"",
+				f"\t{setter}(&msg, view, ({ctype})1);",
+				"",
+				f"\tassert_true({stale});",
+				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);",
+				"",
+				f"\t{discharge}",
+				f"\tassert_false({stale});",
+				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_OK);",
+			],
+			[f"/* {entry.placement.path} is Covered({one.label}).",
+			 f"\t * {why} */"])
 
 
 def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,
-		tags: list[Placement], prefix: str, extent: int) -> None:
-	"""`DIRTY_MASK` names every tag this struct carries, and only those.
+		held: list[Obligation], prefix: str, extent: int) -> None:
+	"""`DIRTY_MASK` names every obligation this struct carries, and only those.
 
 	It is a constant for callers rather than something generated code consumes,
 	the way `SIZE_FIXED` is -- a message may hold several structs, and
 	`situ_msg_transmittable` answers for all of them at once, so asking about
-	one struct's tags means masking. Nothing tested that the mask covered the
-	right bits, and a deliberate off-by-one in it went unnoticed.
+	one struct's obligations means masking. Nothing tested that the mask
+	covered the right bits, and a deliberate off-by-one in it went unnoticed.
+
+	Tags *and* invariants, because they share the dirty word. A mask over the
+	tags alone would leave a struct able to be stale in a way its own mask
+	cannot express.
 	"""
-	if not tags:
+	if not held:
 		return
 
 	mask = macro(prefix, struct.name, "DIRTY_MASK")
-	bits = [macro(prefix, struct.name, c_name(placement.name), "DIRTY")
-	        for placement in tags]
+	bits = [macro(prefix, struct.name, c_name(one.name), one.suffix)
+	        for one in held]
 
 	body = [*_acquire(struct, prefix, extent), ""]
-	body.append(f"\t/* Every one of this struct's {len(tags)} tag(s) is in the mask. */")
+	body.append(f"\t/* Every one of this struct's {len(held)} obligation(s)"
+	            " is in the mask. */")
 	for bit in bits:
 		body.append(f"\tassert_int_equal({mask} & {bit}, {bit});")
 	body.extend([
@@ -1253,12 +1283,14 @@ def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,
 		body.append(f"\tsitu_msg_mark_dirty(&msg, {bit});")
 	body.append(f"\tassert_int_equal(msg.dirty, {mask});")
 
+	kinds = ", ".join(sorted({one.kind for one in held}))
 	suite.add(
-		f"check_{c_name(struct.name)}_dirty_mask_names_every_tag",
+		f"check_{c_name(struct.name)}_dirty_mask_names_every_obligation",
 		body,
-		[f"/* {struct.name} carries {len(tags)} tag(s), and DIRTY_MASK is how a",
-		 " * caller asks about them together. A message may hold several",
-		 " * structs, so `situ_msg_transmittable` is too broad a question. */"])
+		[f"/* {struct.name} carries {len(held)} obligation(s) ({kinds}), and",
+		 "\t * DIRTY_MASK is how a caller asks about them together. A message may",
+		 "\t * hold several structs, so `situ_msg_transmittable` is too broad a",
+		 "\t * question. */"])
 
 
 def _span_check(suite: Suite, struct: ResolvedStruct, prefix: str,

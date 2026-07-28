@@ -84,3 +84,30 @@ require in_place(labelled.sequence);
 // capacity-sized string, and the remedy would be to zero them on write and
 // demand it on parse.
 assert canonical(labelled.name);
+
+// A derived field, in a struct that also carries a tag.
+//
+// Both kinds of obligation share one dirty word (section 16.1), and nothing
+// else in the tree carries both, so the two numberings were free to disagree
+// and did: the C backend counted invariants after its tags, the Python backend
+// numbered from a list of tags alone and fell back to bit 0 for anything else,
+// which is the tag's bit.
+//
+// `a` and `b` are scalars on purpose. The first invariant written derived from
+// a nested struct and an array, neither of which gets a setter, so the covered
+// setter path -- the one that pastes a `covered_by` entry into an identifier --
+// was never reached. It emitted `SITU_S_INVARIANT TOTAL_DIRTY`, a macro name
+// with a space in it, and no test compiled it.
+struct derived {
+	u16  total;
+	u8   a;
+	u32  b;
+
+	authenticated body {
+		u16  sequence;
+	}
+	tag u8[4] covers(body);
+}
+
+require size(derived) == 13;
+invariant derived.total == size(derived.a) + size(derived.b);

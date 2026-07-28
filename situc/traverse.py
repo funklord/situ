@@ -16,8 +16,10 @@ backend reads the same way.
 from __future__ import annotations
 
 from collections.abc import Container
+from dataclasses import dataclass
 from enum import Enum
 
+from situc.ast import Schema
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
@@ -179,6 +181,73 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 	if placement.kind != "field":
 		return Check.NOTHING
 	return Check.CONSTRAINED
+
+
+@dataclass(frozen=True)
+class Obligation:
+	"""Something that must be recomputed after a write, and its dirty bit.
+
+	Section 11.1 calls the `auth` axis "which obligation covers these bytes"
+	rather than "which tag", and there are two kinds: a tag over a region
+	(14.2), and an invariant that derives a field from other fields (16.1).
+	They differ only in the arithmetic behind them, so they share a dirty word
+	and this type.
+
+	The distinction that matters to a backend is `label` versus `name`.
+	`label` is what `Placement.covered_by` holds and what a diagnostic prints
+	-- "invariant total" reads correctly in a sentence. `name` is an
+	identifier. Emitting the label where an identifier belongs produced
+	`SITU_S_INVARIANT TOTAL_DIRTY`, a macro with a space in it, in generated C
+	that no compiler would accept: the two had been the same string for as
+	long as tags were the only obligation.
+	"""
+
+	#: "tag" or "invariant".
+	kind:  str
+	#: An identifier: the tag's member name, or the derived field's.
+	name:  str
+	#: What `covered_by` holds, and what a human reads.
+	label: str
+	#: Which bit of the message's dirty word. Position in `obligations()`.
+	bit:   int
+
+	@property
+	def suffix(self) -> str:
+		"""What a backend appends when naming the bit.
+
+		A tag is dirty; a derived field is stale. Different words for the same
+		bit, because they are different sentences: a tag no longer matches the
+		bytes, and a field no longer equals what it is defined to equal.
+		"""
+		return "DIRTY" if self.kind == "tag" else "STALE"
+
+
+def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:
+	"""Every obligation over this struct's bytes, in dirty-bit order.
+
+	Tags first, then invariants, because tags were numbered first and renaming
+	a bit would change what an already-generated header means. Backends must
+	not number these themselves -- C and Python each did, from different
+	lists, and a struct carrying both a tag and an invariant gave the two
+	backends different answers for the same schema.
+	"""
+	found = [Obligation("tag", entry.placement.name, entry.placement.name, bit)
+	         for bit, entry in enumerate(entry for entry in struct.entries
+	                                     if entry.placement.kind in ("tag", "checksum"))]
+
+	for decl in schema.invariants():
+		holder, _, field = decl.derived.partition(".")
+		if holder == struct.name:
+			found.append(Obligation("invariant", field, f"invariant {field}",
+			                        len(found)))
+	return found
+
+
+def obligation(schema: Schema, struct: ResolvedStruct,
+		label: str) -> Obligation | None:
+	"""The obligation a `covered_by` entry names, or None if it names none."""
+	return next((held for held in obligations(schema, struct)
+	             if held.label == label), None)
 
 
 def byte_span(placement: Placement) -> tuple[int, int] | None:

@@ -8,6 +8,14 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
+struct derived size=13 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(invariant total, tag)
+  derived.total                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord mutate=Immutable
+  derived.a                              offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord auth=Covered(invariant total)
+  derived.b                              offset=AbsoluteStatic(0x03) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(invariant total)
+  derived.body                           offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(tag)
+  derived.sequence                       offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(tag)
+  derived.tag                            offset=AbsoluteStatic(0x09) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
 struct edges size=19 repr=ValueConverted atomic=NonAtomic
   edges.trim                             offset=AbsoluteStatic(0x00) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   edges.scale                            offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic

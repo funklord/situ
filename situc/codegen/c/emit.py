@@ -31,7 +31,7 @@ from situc.codegen.c.names import (
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
-from situc.traverse import own_members
+from situc.traverse import obligation, obligations, own_members
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarKind, ScalarType
@@ -257,11 +257,9 @@ class Emitter:
 				"",
 				f"/* {decl.derived} == {unparse_expr(decl.expr)}",
 				" *",
-				" * Writing anything the right side reads sets the bit below,",
-				" * and the message refuses to be transmittable until this",
-				" * recomputes (section 14.2, the same machinery a tag uses). */",
-				f"#define {bit} {hex(1 << (len(self._tags(struct)) + held.index(decl)))}u",
-				"",
+				f" * Writing anything the right side reads sets {bit}, and the",
+				" * message refuses to be transmittable until this recomputes",
+				" * (section 14.2, the same machinery a tag uses). */",
 				f"static inline void {ident(self.prefix, struct.name, local, 'recompute')}"
 				f"(situ_msg_t *msg, situ_view_t view)",
 				"{",
@@ -343,28 +341,48 @@ class Emitter:
 		return [entry.placement for entry in struct.entries
 		        if entry.placement.kind in ("tag", "checksum")]
 
-	def _tag_bit(self, struct: ResolvedStruct, name: str) -> str:
-		return macro(self.prefix, struct.name, name, "DIRTY")
+	def _tag_bit(self, struct: ResolvedStruct, label: str) -> str:
+		"""The macro naming the bit a `covered_by` entry stands for.
+
+		`label` is what `covered_by` holds, which for an invariant is a phrase
+		rather than an identifier. Pasting it straight into a macro name gave
+		`SITU_S_INVARIANT TOTAL_DIRTY` -- a space inside an identifier, in a
+		header offered to a C compiler.
+		"""
+		held = obligation(self.schema, struct, label)
+		if held is None:
+			return macro(self.prefix, struct.name, label, "DIRTY")
+		return macro(self.prefix, struct.name, held.name, held.suffix)
 
 	def _tag_constants(self, struct: ResolvedStruct) -> list[str]:
-		"""One bit per tag, plus the mask of all of them.
+		"""One bit per obligation, plus the mask of all of them.
 
-		The bits are what a covered setter ORs into the message. Ordered as the
-		tags are declared, so the numbering is stable across a rebuild and a
-		caller may store one.
+		The bits are what a covered setter ORs into the message. Ordered as
+		`traverse.obligations` orders them -- tags as declared, then invariants
+		-- so the numbering is stable across a rebuild and a caller may store
+		one.
+
+		All of them are defined here, before any accessor, because the C
+		preprocessor is not a scope: a covered setter that ORs a bit defined
+		two hundred lines below it does not compile. The invariant bits used to
+		be defined beside their recompute, which is where a reader would look
+		for them and where the compiler would not.
 		"""
-		tags = self._tags(struct)
-		if not tags:
+		held = obligations(self.schema, struct)
+		if not held:
 			return []
 
-		lines = ["/* Tag dirty bits (section 14.2). A covered write sets one; the",
-		         " * message refuses to be transmittable until it is cleared. */"]
+		lines = ["/* Dirty bits (sections 14.2 and 16.1). A covered write sets one;",
+		         " * the message refuses to be transmittable until it is cleared.",
+		         " * A tag goes DIRTY, a derived field goes STALE: the same bit,",
+		         " * and two different things to say about it. */"]
 
-		for index, placement in enumerate(tags):
-			lines.append(f"#define {self._tag_bit(struct, placement.name)} "
-			             f"{hex(1 << index)}u")
+		for one in held:
+			lines.append(
+				f"#define {macro(self.prefix, struct.name, one.name, one.suffix)} "
+				f"{hex(1 << one.bit)}u")
 
-		mask = (1 << len(tags)) - 1
+		mask = (1 << len(held)) - 1
 		lines.append(f"#define {macro(self.prefix, struct.name, 'DIRTY_MASK')} "
 		             f"{hex(mask)}u")
 		lines.append("")
@@ -546,8 +564,24 @@ class Emitter:
 			return None
 		return ident(self.prefix, struct.name, c_name(placement.sealed_by), "t")
 
+	def _coverage_noun(self, struct: ResolvedStruct, placement: Placement) -> str:
+		"""What goes stale when these bytes are written.
+
+		A tag no longer matches the bytes; a derived field no longer equals
+		what it is defined to equal. Both are the `auth` axis and both set a
+		bit, but a header that calls an invariant "an authentication tag"
+		is telling a reader something that is not so.
+		"""
+		kinds = {held.kind for label in placement.covered_by
+		         if (held := obligation(self.schema, struct, label)) is not None}
+		if kinds == {"tag"}:
+			return "an authentication tag"
+		if kinds == {"invariant"}:
+			return "an invariant"
+		return "an obligation over these bytes"
+
 	def _covered_setters(self, struct: ResolvedStruct) -> list[str]:
-		"""Setters that mark a tag dirty, for the fields under one.
+		"""Setters that mark an obligation dirty, for the fields under one.
 
 		These take the message, as the shifting setters do and for the same
 		reason: the cost of the write shows up in the signature rather than in a
@@ -568,10 +602,12 @@ class Emitter:
 		if not covered:
 			return []
 
-		lines = ["", "/* Writing any of these leaves an authentication tag stale, so each",
-		         " * one takes the message and marks the tag dirty. The message then",
-		         " * refuses to be transmittable until the tag is recomputed and",
-		         " * finalized (section 14.2). */"]
+		noun  = self._coverage_noun(struct, covered[0].placement)
+		lines = ["", f"/* Writing any of these leaves {noun} stale, so each one",
+		         " * takes the message and marks the bit. The message then refuses",
+		         " * to be transmittable until that is discharged -- a tag by being",
+		         " * recomputed and finalized (section 14.2), a derived field by",
+		         " * its recompute (section 16.1). */"]
 
 		for entry in covered:
 			placement = entry.placement
@@ -1524,16 +1560,17 @@ class Emitter:
 				" * which takes the message and bumps its generation. */",
 			]
 
-		# A field under a tag gets one setter, not two: writing it leaves the tag
+		# A covered field gets one setter, not two: writing it leaves something
 		# stale, so it has to mark the message dirty. The coverage-aware setter
 		# at the end of this struct's section is that one.
 		if placement.covered_by:
 			return [
 				f"/* No plain setter: `{placement.name}` is covered by "
 				f"{', '.join(placement.covered_by)}, so",
-				" * writing it leaves the tag stale. Use",
+				f" * writing it leaves {self._coverage_noun(struct, placement)}"
+				" stale. Use",
 				f" * {ident(self.prefix, struct.name, c_name(self._local(struct, placement)), 'set')}(),",
-				" * which takes the message and marks the tag dirty. */",
+				" * which takes the message and marks the bit. */",
 			]
 
 		local = c_name(self._local(struct, placement))
