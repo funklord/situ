@@ -30,12 +30,15 @@ from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
+from situc.invariant import derived as derived_by
+from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, classify, classify_check, local_name, own_entries,
-	own_members,
+	Check, Member, classify, classify_check, local_name, obligation,
+	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType
+from situc.unparse import expr_to_source as unparse_expr
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -115,7 +118,7 @@ class Emitter:
 			"",
 			"#![allow(dead_code)]",
 			"",
-			"use crate::situ_rt::{self, Error, Result};",
+			"use crate::situ_rt::{self, Dirty, Error, Result};",
 			"",
 		]
 
@@ -226,9 +229,12 @@ class Emitter:
 			"\t}",
 		])
 
+		lines.extend(self._dirty_constants(struct))
+
 		for entry in own_entries(struct):
 			lines.extend(self._setter(struct, entry))
 
+		lines.extend(self._invariants(struct))
 		lines.extend(["}", ""])
 		return lines
 
@@ -766,6 +772,111 @@ class Emitter:
 
 	# -- writes --------------------------------------------------------
 
+	# -- obligations (sections 14.2 and 16.1) ---------------------------
+
+	def _dirty_bits(self, struct: ResolvedStruct, placement: Placement) -> str:
+		"""The bits every obligation over this field stands for, ORed.
+
+		Every one, not the first: a field under a tag *and* an invariant leaves
+		both stale, and marking one of the two is a buffer that reports itself
+		ready to send while a covered byte no longer matches what
+		authenticates it.
+		"""
+		names = [f"Self::DIRTY_{c_name(held.name).upper()}"
+		         for label in placement.covered_by
+		         if (held := obligation(self.schema, struct, label)) is not None]
+		return " | ".join(names) if names else "0"
+
+	def _dirty_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""One associated constant per obligation over this struct's bytes.
+
+		The numbering is `traverse.obligations`, shared with the other three
+		backends: a caller who reads a bit out of one language's generated code
+		and checks it against another's must find the same answer.
+		"""
+		held = obligations(self.schema, struct)
+		if not held:
+			return []
+
+		lines = ["",
+		         "\t/// Dirty bits. A covered write sets one; the buffer is not",
+		         "\t/// transmittable until it is cleared -- a tag by being",
+		         "\t/// recomputed and finalized, a derived field by its recompute."]
+		lines.extend(
+			f"\tpub const DIRTY_{c_name(one.name).upper()}: u32 = {hex(1 << one.bit)};"
+			for one in held)
+		lines.append(f"\tpub const DIRTY_MASK: u32 = {hex((1 << len(held)) - 1)};")
+		return lines
+
+	def _invariants(self, struct: ResolvedStruct) -> list[str]:
+		"""A derived field, and the one thing allowed to write it.
+
+		The lattice has already refused the plain setter -- `mutate` is
+		Immutable -- so without this the schema could state a relationship and
+		never satisfy it.
+		"""
+		lines: list[str] = []
+
+		for decl in derived_by(self.schema, struct):
+			field = decl.derived.partition(".")[2]
+			entry = next((e for e in struct.entries
+			              if e.placement.path == f"{struct.name}.{field}"), None)
+			if entry is None or entry.placement.scalar is None:
+				continue
+
+			base  = c_name(field)
+			value = invariant_expression(struct, decl.expr, self)
+			if value is None:
+				lines.extend([
+					"",
+					f"\t// No recompute_{base}(): this backend cannot evaluate",
+					f"\t// `{unparse_expr(decl.expr)}` at run time. The refusal to",
+					"\t// write the field directly still stands, so the invariant",
+					"\t// cannot be broken -- only left unsatisfiable here.",
+				])
+				continue
+
+			scalar = entry.placement.scalar
+			rtype  = self._field_type(entry.placement, writing=True)
+			bit    = f"Self::DIRTY_{base.upper()}"
+
+			lines.extend([
+				"",
+				f"\t/// `{decl.derived} == {unparse_expr(decl.expr)}`",
+				"\t///",
+				f"\t/// Writing anything the right side reads sets `{bit}`, and",
+				"\t/// the buffer is not transmittable until this recomputes",
+				"\t/// (section 16.1).",
+				f"\tpub fn {_ident(f'recompute_{base}')}(&mut self,"
+				" dirty: &mut Dirty) {",
+				f"\t\tlet value = ({value}) as {rtype};",
+				f"\t\t{self._store(entry.placement, scalar)}",
+				f"\t\tdirty.clear({bit});",
+				"\t}",
+			])
+
+		return lines
+
+	# -- invariant.Terms, in Rust ---------------------------------------
+
+	def literal(self, value: int) -> str:
+		return f"{value}usize"
+
+	def binary(self, op: str, left: str, right: str) -> str:
+		return f"({left} {op} {right})"
+
+	def offset(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return (f"{placement.offset_bytes}usize" if placement.offset_bits is not None
+		        else None)
+
+	def size(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		if placement.is_fixed_size:
+			return f"{placement.size_bits // BITS_PER_BYTE}usize"
+		return self._length_expression(struct, placement)
+
+	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return self._count_expression(struct, placement)
+
 	def _setter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
@@ -789,13 +900,26 @@ class Emitter:
 			return ["",
 			        f"\t// No {setter}(): mutate is"
 			        f" {entry.vector.get(Axis.MUTATE).render()}."]
-		if placement.covered_by:
-			tags = ", ".join(placement.covered_by)
-			return ["",
-			        f"\t// No {setter}(): writing it leaves {tags} stale, so",
-			        "\t// it is not an assignment. Recompute the tag after."]
-
 		rtype = self._field_type(placement, writing=True)
+
+		# A covered write takes the dirty word, because it has to mark a bit
+		# that outlives the view. This backend used to refuse the setter
+		# outright, which is sound but leaves a field the map calls writable
+		# with no way to write it -- and the schema then means something
+		# narrower in Rust than in the other three.
+		if placement.covered_by:
+			what = ", ".join(placement.covered_by)
+			return [
+				"",
+				f"\t/// Writing this leaves {what} stale, so it takes the dirty",
+				"\t/// word and marks the bit. The cost is in the signature",
+				"\t/// rather than in a comment somebody may not read.",
+				f"\tpub fn {setter}(&mut self, dirty: &mut Dirty, value: {rtype}) {{",
+				f"\t\t{self._store(placement, scalar)}",
+				f"\t\tdirty.mark({self._dirty_bits(struct, placement)});",
+				"\t}",
+			]
+
 		return [
 			"",
 			f"\tpub fn {setter}(&mut self, value: {rtype}) {{",
@@ -817,11 +941,11 @@ class Emitter:
 		if scalar.is_bit_packed:
 			msb = placement.bit_order is not ast.BitOrder.LSB_FIRST
 			return (f"situ_rt::write_bits(self.bytes, {placement.offset_bits},"
-			        f" {scalar.bits}, {str(msb).lower()}, {value})")
+			        f" {scalar.bits}, {str(msb).lower()}, {value});")
 
 		writer = "write_be" if big else "write_le"
 		return (f"situ_rt::{writer}(self.bytes, {at},"
-		        f" {scalar.bits // BITS_PER_BYTE}, {value})")
+		        f" {scalar.bits // BITS_PER_BYTE}, {value});")
 
 	# -- validation ----------------------------------------------------
 

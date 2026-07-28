@@ -163,6 +163,14 @@ def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	"struct s { q16_16 gain; bcd4 counter; }",
 	"struct s { u8 name[8] [nul_terminated, encoding = utf8]; }",
 	"struct s { u8 v [must_eq = 1]; reserved u8 [must_be_zero]; }",
+	# A covered write takes the message here now, where this backend used to
+	# emit the plain setter and mark nothing at all.
+	"struct s { u8 hop; authenticated { u16 seq; } tag u8[16]; }",
+	# An invariant, and a struct carrying both kinds of obligation at once --
+	# which is the only place the shared bit numbering can be wrong.
+	"struct s { u16 total; u8 a; u32 b; }\ninvariant s.total == size(s.a) + size(s.b);",
+	"struct s { u16 n; u8 a; authenticated { u16 q; } tag u8[4]; }"
+	"\ninvariant s.n == size(s.a);",
 ])
 def test_it_compiles_clean(tmp_path: Path, body: str) -> None:
 	result = compiles(tmp_path, body)

@@ -76,17 +76,22 @@ class Message:
 		self.dirty      = 0
 
 	def mark_dirty(self, bit: int) -> None:
-		"""A covered write happened; the tag it invalidates is now stale."""
+		"""A covered write happened; what it invalidates is now stale.
+
+		A tag or an invariant -- one word for both, because a message is
+		either ready to send or it is not, and section 11.1 calls the axis
+		"which obligation covers these bytes" for the same reason.
+		"""
 		self.dirty |= bit
 
 	def clear_dirty(self, bit: int) -> None:
 		self.dirty &= ~bit
 
 	def transmittable(self) -> None:
-		"""Raise unless every tag is current (section 14.2)."""
+		"""Raise unless every obligation is discharged (sections 14.2, 16.1)."""
 		if self.dirty:
 			raise TagError(
-				f"a covered write left tag bits {self.dirty:#x} stale; "
+				f"a covered write left obligation bits {self.dirty:#x} stale; "
 				f"recompute them before sending")
 
 	def touch(self) -> None:

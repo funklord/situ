@@ -33,11 +33,14 @@ from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.invariant import derived as derived_by
+from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, classify, classify_check, local_name, own_entries,
-	own_members,
+	Check, Member, classify, classify_check, local_name, obligation,
+	obligations, own_entries, own_members,
 )
 from situc.types import ScalarKind, ScalarType
+from situc.unparse import expr_to_source as unparse_expr
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -180,10 +183,12 @@ class Emitter:
 			f"\texplicit constexpr {name}(situ_view_t raw) noexcept"
 			f" : ::situ::rt::view(raw) {{}}",
 		])
+		lines.extend(self._dirty_constants(struct))
 
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
 		lines.append("};")
@@ -366,6 +371,109 @@ class Emitter:
 
 	def _ctype_for_bits(self, bits: int) -> str:
 		return f"std::uint{_storage_width(bits)}_t"
+
+	# -- obligations (sections 14.2 and 16.1) ---------------------------
+
+	def _dirty_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""One bit per obligation over this struct's bytes.
+
+		Scoped constants rather than the C backend's macros: the numbering is
+		shared with C (`traverse.obligations`) but the spelling need not be,
+		and a macro named after a member is exactly the sort of thing that
+		collides with a member somewhere else in a translation unit.
+		"""
+		held = obligations(self.schema, struct)
+		if not held:
+			return []
+
+		lines = ["",
+		         "\t/* Dirty bits. A covered write sets one; the message refuses",
+		         "\t * to be transmittable until it is cleared -- a tag by being",
+		         "\t * recomputed and finalized, a derived field by its recompute. */"]
+		lines.extend(
+			f"\tstatic constexpr std::uint32_t dirty_{c_name(one.name)}"
+			f" = {hex(1 << one.bit)}u;"
+			for one in held)
+		lines.append(
+			f"\tstatic constexpr std::uint32_t dirty_mask = {hex((1 << len(held)) - 1)}u;")
+		return lines
+
+	def _invariants(self, struct: ResolvedStruct) -> list[str]:
+		"""A derived field, and the one thing allowed to write it.
+
+		The lattice has already refused the plain setter -- `mutate` is
+		Immutable -- so without this the schema could state a relationship and
+		never satisfy it.
+
+		`recompute_x()` takes the message, as every covered write here does:
+		it clears a dirty bit, and the bit lives on the message rather than on
+		the view.
+		"""
+		lines: list[str] = []
+
+		for decl in derived_by(self.schema, struct):
+			field = decl.derived.partition(".")[2]
+			entry = next((e for e in struct.entries
+			              if e.placement.path == f"{struct.name}.{field}"), None)
+			if entry is None or entry.placement.scalar is None:
+				continue
+
+			name  = c_name(field)
+			value = invariant_expression(struct, decl.expr, self)
+			if value is None:
+				lines.extend([
+					"",
+					f"\t/* No recompute_{name}(): this backend cannot evaluate",
+					f"\t * `{unparse_expr(decl.expr)}` at run time. The refusal to",
+					"\t * write the field directly still stands, so the invariant",
+					"\t * cannot be broken -- only left unsatisfiable here. */",
+				])
+				continue
+
+			scalar = entry.placement.scalar
+			stored = f"static_cast<{self._ctype(scalar)}>({value})"
+
+			lines.extend([
+				"",
+				f"\t/* {decl.derived} == {unparse_expr(decl.expr)}",
+				"\t *",
+				f"\t * Writing anything the right side reads sets dirty_{name},",
+				"\t * and the message refuses to be transmittable until this",
+				"\t * recomputes (section 16.1). */",
+				f"\tvoid recompute_{name}(::situ::rt::message &msg) noexcept",
+				"\t{",
+				f"\t\t{self._store(scalar, entry.placement, stored)}",
+				f"\t\tmsg.clear_dirty(dirty_{name});",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] bool {name}_is_stale("
+				"const ::situ::rt::message &msg) const noexcept",
+				"\t{",
+				f"\t\treturn msg.is_stale(dirty_{name});",
+				"\t}",
+			])
+
+		return lines
+
+	# -- invariant.Terms, in C++ ----------------------------------------
+
+	def literal(self, value: int) -> str:
+		return f"{value}u"
+
+	def binary(self, op: str, left: str, right: str) -> str:
+		return f"({left} {op} {right})"
+
+	def offset(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return (f"{placement.offset_bytes}u" if placement.offset_bits is not None
+		        else None)
+
+	def size(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		if placement.is_fixed_size:
+			return f"{placement.size_bits // BITS_PER_BYTE}u"
+		return self._length_expression(struct, placement)
+
+	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return self._count_expression(struct, placement)
 
 	def _struct_comment(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
@@ -795,6 +903,27 @@ class Emitter:
 			backing = self._ctype(scalar)
 			stored  = f"static_cast<{backing}>(value)"
 
+		# A covered write takes the message, because it has to mark a bit that
+		# lives there. This backend used to emit the plain setter for these
+		# too, so a C++ caller could write a tag-covered byte and have
+		# `transmittable()` go on saying the message was ready to send -- the
+		# capability map's `auth = Covered(t)` is a claim that writing marks
+		# `t` stale, and here it was not true. C and Python both refuse it.
+		if placement.covered_by:
+			bits = self._dirty_bits(struct, placement)
+			what = ", ".join(placement.covered_by)
+			lines.extend([
+				f"\t/* Writing this leaves {what} stale, so it takes the message",
+				"\t * and marks the bit. The cost is in the signature rather than",
+				"\t * in a comment somebody may not read. */",
+				f"\tvoid set_{name}(::situ::rt::message &msg, {ctype} value) noexcept",
+				"\t{",
+				f"\t\t{self._store(scalar, placement, stored, offset)}",
+				f"\t\tmsg.mark_dirty({bits});",
+				"\t}",
+			])
+			return lines
+
 		lines.extend([
 			f"\tvoid set_{name}({ctype} value) noexcept",
 			"\t{",
@@ -802,6 +931,19 @@ class Emitter:
 			"\t}",
 		])
 		return lines
+
+	def _dirty_bits(self, struct: ResolvedStruct, placement: Placement) -> str:
+		"""The bits every obligation over this field stands for, ORed.
+
+		Every one, not the first: a field under a tag *and* an invariant leaves
+		both stale, and marking one of the two is a message that reports itself
+		ready to send while a covered byte no longer matches what
+		authenticates it.
+		"""
+		names = [f"dirty_{c_name(held.name)}"
+		         for label in placement.covered_by
+		         if (held := obligation(self.schema, struct, label)) is not None]
+		return " | ".join(names) if names else "0u"
 
 	def _load(self, scalar: ScalarType, placement: Placement,
 			offset: str | None = None) -> str:

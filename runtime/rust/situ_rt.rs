@@ -41,6 +41,63 @@ pub enum Error {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// The obligations outstanding over a buffer: tags that no longer match the
+/// bytes (section 14.2), and fields that no longer equal what they derive
+/// from (section 16.1). One word for both, because a message is either ready
+/// to send or it is not.
+///
+/// The other three backends hang this off a `message` that also owns the
+/// buffer. Here it is a separate value the caller holds and passes, because a
+/// message owning the bytes is the one thing this backend cannot have: a view
+/// *borrows* the caller's slice, and that borrow is how section 12.3's
+/// invalidation rule is enforced at compile time. Putting the buffer behind
+/// another object would mean handing out the borrow from inside it, and then
+/// the dirty word and the bytes would be borrowed together -- so marking a
+/// bit would conflict with holding the view that wrote it.
+///
+/// Passing it separately also makes the cost visible in the signature, which
+/// is what the message parameter buys in C.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Dirty(u32);
+
+impl Dirty {
+	#[inline]
+	pub const fn new() -> Self {
+		Self(0)
+	}
+
+	/// A covered write happened; what it invalidates is now stale.
+	#[inline]
+	pub fn mark(&mut self, bits: u32) {
+		self.0 |= bits;
+	}
+
+	#[inline]
+	pub fn clear(&mut self, bits: u32) {
+		self.0 &= !bits;
+	}
+
+	#[inline]
+	pub fn is_stale(&self, bits: u32) -> bool {
+		self.0 & bits != 0
+	}
+
+	#[inline]
+	pub const fn bits(&self) -> u32 {
+		self.0
+	}
+
+	/// `Err(Error::Tag)` unless every obligation has been discharged.
+	#[inline]
+	pub fn transmittable(&self) -> Result<()> {
+		if self.0 == 0 {
+			Ok(())
+		} else {
+			Err(Error::Tag)
+		}
+	}
+}
+
 /// A big-endian read of `width` bytes at `at`.
 #[inline]
 pub fn read_be(bytes: &[u8], at: usize, width: usize) -> u64 {

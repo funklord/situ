@@ -23,6 +23,7 @@ from typing import TypeVar
 from situc import ast
 from situc.diagnostics import SituError, Span, error
 from situc.expr import Env, Interval, build_env, evaluate, interval_of, scalar_interval
+from situc.invariant import paths_in
 from situc.types import ScalarType, lookup
 
 BITS_PER_BYTE = 8
@@ -640,7 +641,6 @@ class Solver:
 		into a refusal in every backend without any of them knowing what an
 		invariant is.
 		"""
-		from situc.wellformed import _paths_in
 
 		invariants = [held for held in self.schema.invariants()
 		              if held.derived.partition(".")[0] == decl.name]
@@ -654,7 +654,7 @@ class Solver:
 			field = held.derived.partition(".")[2]
 			name  = f"invariant {field}"
 			derived[field] = name
-			for path in _paths_in(held.expr):
+			for path in paths_in(held.expr):
 				read = path.partition(".")[2]
 				if read:
 					depends.setdefault(read, []).append(name)

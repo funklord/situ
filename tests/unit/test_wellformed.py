@@ -328,3 +328,35 @@ def test_an_invariant_may_not_derive_a_field_from_itself() -> None:
 
 	assert "derives from itself" in message
 	assert "circular" in message
+
+
+def test_an_invariant_may_only_ask_layout_questions() -> None:
+	"""`checksum(s.a)` used to reach the backends, which each declined it with
+	"this build cannot evaluate it" -- true of a dynamic offset on a target
+	that cannot resolve one, and misleading about a question that does not
+	exist anywhere. A reader told the build was at fault goes looking for a
+	better compiler."""
+	message = rendered("struct s { u16 total; u8 a; }\n"
+	                   "invariant s.total == checksum(s.a);")
+
+	assert "`checksum` is not something an invariant can ask" in message
+	assert "not a layout question" in message
+	assert "`count`, `offset`, `size`" in message
+
+
+def test_the_refusal_names_what_a_computed_value_actually_is() -> None:
+	"""A blame chain has to end in a remedy (section 17). Here the remedy is
+	not a different expression but a different construct: a value derived from
+	the bytes is a tag or a codec, and those have their own dirty bits."""
+	message = rendered("struct s { u16 total; u8 a; }\n"
+	                   "invariant s.total == crc32(s.a);")
+
+	assert "is a codec or a tag, not an invariant" in message
+
+
+def test_a_nested_call_is_refused_too() -> None:
+	"""The walk has to reach arguments, not just the outermost call."""
+	message = rendered("struct s { u16 total; u8 a; }\n"
+	                   "invariant s.total == size(s.a) + popcount(s.a);")
+
+	assert "`popcount` is not something an invariant can ask" in message

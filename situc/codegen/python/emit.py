@@ -27,10 +27,13 @@ from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.invariant import derived as derived_by
+from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, classify, classify_check, local_name, own_entries,
-	own_members,
+	Check, Member, classify, classify_check, local_name, obligation,
+	own_entries, own_members,
 )
+from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarType
 
 
@@ -147,10 +150,93 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
 		lines.append("")
 		return lines
+
+	# -- invariants (section 16.1) --------------------------------------
+
+	def _invariants(self, struct: ResolvedStruct) -> list[str]:
+		"""A derived field, and the one thing allowed to write it.
+
+		The property has no setter -- `mutate` is Immutable and the docstring
+		says which invariant decided that -- so without this the schema could
+		state a relationship and never satisfy it.
+
+		`recompute_x` rather than a `x.setter` on purpose. Assignment syntax
+		for something that also clears a dirty bit reads as though it were
+		free, and the C backend makes the same refusal for the same reason: a
+		schema that means one thing in C must not mean another here.
+		"""
+		lines: list[str] = []
+
+		for decl in derived_by(self.schema, struct):
+			field = decl.derived.partition(".")[2]
+			entry = next((e for e in struct.entries
+			              if e.placement.path == f"{struct.name}.{field}"), None)
+			if entry is None or entry.placement.scalar is None:
+				continue
+
+			name  = c_name(field)
+			value = invariant_expression(struct, decl.expr, self)
+			if value is None:
+				lines.extend([
+					"",
+					f"\t# No recompute_{name}: this backend cannot evaluate",
+					f"\t# `{unparse_expr(decl.expr)}` at run time. The refusal to",
+					"\t# write the field directly still stands, so the invariant",
+					"\t# cannot be broken -- only left unsatisfiable here.",
+				])
+				continue
+
+			held = obligation(self.schema, struct, f"invariant {field}")
+			assert held is not None, "the layout solver recorded this"
+			bit = 1 << held.bit
+
+			lines.extend([
+				"",
+				f"\tdef recompute_{name}(self) -> None:",
+				f'\t\t"""{decl.derived} == {unparse_expr(decl.expr)}.',
+				"",
+				"\t\tWriting anything the right side reads marks this stale, and",
+				"\t\t`Message.transmittable` refuses until this has run.",
+				'\t\t"""',
+				"\t\tself._check()",
+				f"\t\tvalue = {value}",
+				f"\t\t{self._store(entry.placement, entry.placement.scalar)}",
+				f"\t\tself._msg.clear_dirty({bit})",
+				"",
+				f"\tdef {name}_is_stale(self) -> bool:",
+				f"\t\treturn bool(self._msg.dirty & {bit})",
+			])
+
+		return lines
+
+	# -- invariant.Terms, in Python -------------------------------------
+
+	def literal(self, value: int) -> str:
+		return str(value)
+
+	def binary(self, op: str, left: str, right: str) -> str:
+		# `/` is float division in Python and integer division everywhere else
+		# situ emits. A size is a whole number of bytes in every backend, so
+		# this is the one place the same expression needs different spelling
+		# rather than a different meaning.
+		return f"({left} {'//' if op == '/' else op} {right})"
+
+	def offset(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return (str(placement.offset_bytes) if placement.offset_bits is not None
+		        else None)
+
+	def size(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		if placement.is_fixed_size:
+			return str(placement.size_bits // BITS_PER_BYTE)
+		return self._length_expression(struct, placement)
+
+	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return self._count_expression(struct, placement)
 
 	def _register(self, struct: ResolvedStruct) -> list[str]:
 		"""A register's word composition, without pretending to be a driver.
@@ -337,7 +423,7 @@ class Emitter:
 			lines.extend([
 				"",
 				f"\t# No {name} setter: writing it leaves {tags} stale.",
-				f"\t# Use set_{name}(msg, value), which marks the tag dirty.",
+				f"\t# Use set_{name}(msg, value), which marks the bit.",
 				"",
 				f"\tdef set_{name}(self, msg: Message, value: {hint}) -> None:",
 				f'\t\t"""Write {placement.path} and mark {tags} stale."""',
@@ -355,11 +441,24 @@ class Emitter:
 		return lines
 
 	def _tag_bit(self, struct: ResolvedStruct, placement: Placement) -> str:
-		"""The dirty bit for the first tag covering this field."""
-		tags = [entry.placement.name for entry in struct.entries
-		        if entry.placement.kind in ("tag", "checksum")]
-		first = placement.covered_by[0] if placement.covered_by else None
-		return str(1 << tags.index(first)) if first in tags else "1"
+		"""The bits every obligation over this field stands for, ORed.
+
+		Every one of them, not the first. A field under a tag *and* an
+		invariant leaves both stale when it is written, and marking one of the
+		two is a message that reports itself ready to send while a covered byte
+		no longer matches what authenticates it.
+
+		The numbering is `traverse.obligations`, which is also where C gets it.
+		This used to index a list of tags alone and fall back to bit 0 for
+		anything it did not find -- and bit 0 is the first tag's, so an
+		invariant marked the tag dirty and nothing else.
+		"""
+		bits = 0
+		for label in placement.covered_by:
+			held = obligation(self.schema, struct, label)
+			if held is not None:
+				bits |= 1 << held.bit
+		return str(bits or 1)
 
 	def _field_doc(self, entry: Resolved) -> list[str]:
 		"""What the property syntax hides, said where a reader will find it."""

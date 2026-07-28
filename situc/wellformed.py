@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
+from situc.invariant import BUILTINS, paths_in
 from situc.types import is_scalar_name
 
 Structs = dict[str, ast.StructDecl]
@@ -97,7 +98,7 @@ def check_invariants(schema: ast.Schema) -> None:
 				         f"exist, so nothing would keep it true"],
 			)
 
-		for path in _paths_in(invariant.expr):
+		for path in paths_in(invariant.expr):
 			other, _, name = path.partition(".")
 			if other != struct_name:
 				raise error(
@@ -119,7 +120,7 @@ def check_invariants(schema: ast.Schema) -> None:
 					         "not exist"],
 				)
 
-		if invariant.derived in _paths_in(invariant.expr):
+		if invariant.derived in paths_in(invariant.expr):
 			raise error(
 				f"`{invariant.derived}` derives from itself",
 				invariant.span,
@@ -127,6 +128,49 @@ def check_invariants(schema: ast.Schema) -> None:
 				notes = ["recomputing it would read the value it is about to "
 				         "write, so it would hold whatever it already held"],
 			)
+
+		_check_invariant_calls(invariant)
+
+
+def _check_invariant_calls(invariant: ast.Invariant) -> None:
+	"""Every call on the right side names something an invariant may ask.
+
+	Refused here rather than left to the backends. A backend that meets a call
+	it does not know emits no recompute and says the *build* cannot evaluate
+	it, which is the right thing to say about a dynamic offset this target
+	cannot resolve and the wrong thing to say about `checksum(s.a)` -- there
+	is no such question to answer, in this build or any other, and a reader
+	told otherwise goes looking for a better compiler.
+	"""
+	offered = ", ".join(f"`{name}`" for name in sorted(BUILTINS))
+
+	for call in _calls_in(invariant.expr):
+		if call.name in BUILTINS:
+			continue
+		raise error(
+			f"`{call.name}` is not something an invariant can ask",
+			call.span,
+			label = "not a layout question",
+			notes = [
+				f"an invariant derives a field from what the layout solver "
+				f"already knows: {offered}, and arithmetic over them",
+				"a value that has to be computed from the bytes is a codec or "
+				"a tag, not an invariant -- those have their own machinery and "
+				"their own dirty bits (section 14.2)",
+			],
+		)
+
+
+def _calls_in(expr: ast.Expr) -> list[ast.Call]:
+	if isinstance(expr, ast.Call):
+		return [expr, *[held for arg in expr.args for held in _calls_in(arg)]]
+	if isinstance(expr, ast.Binary):
+		return _calls_in(expr.left) + _calls_in(expr.right)
+	if isinstance(expr, ast.Unary):
+		return _calls_in(expr.operand)
+	if isinstance(expr, ast.Access):
+		return _calls_in(expr.base)
+	return []
 
 
 def _find_member(struct: ast.StructDecl, name: str) -> ast.Member | None:
@@ -142,26 +186,6 @@ def _walk_members(members: tuple[ast.Member, ...]) -> list[ast.Member]:
 		found.append(member)
 		found.extend(_walk_members(nested(member)))
 	return found
-
-
-def _paths_in(expr: ast.Expr) -> list[str]:
-	"""Every field path an expression names, dotted form.
-
-	`s.hdr` parses as an `Access` over a `NameRef`, not as one dotted name, so
-	the dots are put back here rather than assumed.
-	"""
-	if isinstance(expr, ast.Access):
-		base = _paths_in(expr.base)
-		return [f"{base[0]}.{expr.name}"] if base else [expr.name]
-	if isinstance(expr, ast.NameRef):
-		return [expr.name]
-	if isinstance(expr, ast.Call):
-		return [p for arg in expr.args for p in _paths_in(arg)]
-	if isinstance(expr, ast.Binary):
-		return _paths_in(expr.left) + _paths_in(expr.right)
-	if isinstance(expr, ast.Unary):
-		return _paths_in(expr.operand)
-	return []
 
 
 Notes = list[str] | None

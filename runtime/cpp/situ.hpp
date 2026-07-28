@@ -96,6 +96,28 @@ public:
 		return static_cast<err>(situ_msg_transmittable(&raw_));
 	}
 
+	/* The obligations over these bytes: a tag that no longer matches them
+	 * (section 14.2), or a field that no longer equals what it derives from
+	 * (section 16.1). One word for both, because a message is either ready
+	 * to send or it is not.
+	 *
+	 * These are not [[nodiscard]]: they return nothing, and the thing a
+	 * caller must not drop is `transmittable`, which is. */
+	void mark_dirty(std::uint32_t bits) noexcept
+	{
+		situ_msg_mark_dirty(&raw_, bits);
+	}
+
+	void clear_dirty(std::uint32_t bits) noexcept
+	{
+		situ_msg_clear_dirty(&raw_, bits);
+	}
+
+	[[nodiscard]] bool is_stale(std::uint32_t bits) const noexcept
+	{
+		return (raw_.dirty & bits) != 0u;
+	}
+
 	situ_msg_t       *raw()       noexcept { return &raw_; }
 	const situ_msg_t *raw() const noexcept { return &raw_; }
 

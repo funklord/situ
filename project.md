@@ -1666,15 +1666,44 @@ Three things follow, and none of them needed new machinery -- the tag model of
   `auth = Covered(invariant total)`, so `in_place` fails on them and
   `in_place_dirty` passes -- which is exactly right, since writing one leaves
   something stale.
-- **A recompute is generated**, taking the message as every covered write does,
-  because it clears a dirty bit and the bit lives on the message. Until it
-  runs, `situ_msg_transmittable` refuses.
+- **A recompute is generated**, taking whatever holds the dirty word, as every
+  covered write does. Until it runs, the message is not transmittable.
 
-The right side may use `size`, `count`, `offset` and arithmetic over them. An
-expression the backend cannot evaluate gets no recompute and says so; the
-refusal to write the field directly still stands, so the invariant cannot be
-broken, only left unsatisfiable. That is the honest half of not implementing
-something.
+The right side may use `size`, `count`, `offset` and arithmetic over them, and
+nothing else. A call to anything else is refused with a diagnostic, because
+the alternative is each backend declining it separately and reporting that
+*this build* cannot evaluate it -- true of a dynamic offset on a target that
+cannot resolve one, and misleading about a question that does not exist
+anywhere. A value that has to be computed from the bytes is a codec or a tag,
+which have their own machinery and their own bits.
+
+Where a backend genuinely cannot evaluate an admissible expression, it emits no
+recompute and says so. The refusal to write the field directly still stands, so
+the invariant cannot be broken, only left unsatisfiable. That is the honest
+half of not implementing something.
+
+**The dirty word is shared with tags, and numbered once.** `traverse.obligations`
+assigns the bits -- tags in declaration order, then invariants -- and every
+backend reads that rather than counting for itself. Two of them counted
+separately for one release and gave the same schema different bits; a caller
+who stores a bit from one language and checks it in another has to find the
+same answer. Tags keep bits 0..n-1 when an invariant is added, because
+renumbering them changes what an already-generated header means.
+
+Each of the four backends spells this its own way and means the same thing:
+
+| | recompute | dirty word |
+|---|---|---|
+| C | `situ_s_total_recompute(msg, view)` | `situ_msg_t` |
+| C++ | `s.recompute_total(msg)` | `situ::rt::message` |
+| Python | `s.recompute_total()` | `Message`, reached through the view |
+| Rust | `s.recompute_total(&mut dirty)` | `situ_rt::Dirty`, passed separately |
+
+Rust passes it separately because a message that owned the buffer is the one
+thing that backend cannot have: a view *borrows* the caller's slice, and that
+borrow is how 12.3's invalidation rule is enforced at compile time. Handing the
+borrow out from inside a message would tie the dirty word to the bytes, so
+marking a bit would conflict with holding the view that wrote it.
 
 **Both halves must be in the same struct.** An invariant is evaluated against
 one view, and a field of another struct is not reachable from it. A field

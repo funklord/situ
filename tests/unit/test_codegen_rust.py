@@ -115,12 +115,14 @@ def test_reads_and_writes_are_separate_types() -> None:
 	assert "pub struct SMut<'a> {\n\tbytes: &'a mut [u8]," in module
 
 
-def test_a_covered_write_gets_no_setter() -> None:
-	"""It leaves a tag stale, so it is not an assignment -- the same refusal
-	every other backend makes."""
+def test_a_covered_write_takes_the_dirty_word() -> None:
+	"""It used to be refused outright, which is sound and too narrow: the map
+	calls the field writable, and a schema that means something smaller in Rust
+	than in C is a schema that means two things."""
 	module = emit("struct s { u8 hop; authenticated { u16 seq; } tag u8[16]; }")
 
-	assert "No set_seq(): writing it leaves tag stale" in module
+	assert "pub fn set_seq(&mut self, dirty: &mut Dirty, value: u16) {" in module
+	assert "dirty.mark(Self::DIRTY_TAG);" in module
 
 
 # -- what it compiles to ----------------------------------------------------
@@ -136,6 +138,14 @@ def test_a_covered_write_gets_no_setter() -> None:
 	"struct s { u8 name[8] [nul_terminated, encoding = utf8]; }",
 	"struct s { u8 v [must_eq = 1]; reserved u8 [must_be_zero]; }",
 	"struct s { u8 type; u8 match; u8 move; }",
+	# A covered write emits two statements where there used to be one, and the
+	# first had no semicolon: it was a function's last expression until it
+	# stopped being the last thing in the function.
+	"struct s { u8 hop; authenticated { u16 seq; } tag u8[16]; }",
+	# An invariant, and a struct carrying both kinds of obligation at once.
+	"struct s { u16 total; u8 a; u32 b; }\ninvariant s.total == size(s.a) + size(s.b);",
+	"struct s { u16 n; u8 a; authenticated { u16 q; } tag u8[4]; }"
+	"\ninvariant s.n == size(s.a);",
 ])
 def test_it_compiles(tmp_path: Path, body: str) -> None:
 	result = build(tmp_path, body)
