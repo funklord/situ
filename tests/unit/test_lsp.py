@@ -1,0 +1,268 @@
+"""The language server (section 26.19).
+
+Two things are worth testing here and they are not the protocol plumbing. That
+a half-written schema still produces something useful -- an editor asks about a
+document in whatever state the user left it, and half-written is the normal
+state -- and that the answers are the ones `situc explain` and the blame chains
+already give, rather than a second, weaker computation of the same thing.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+from pathlib import Path
+from typing import Any
+
+from situc.lsp import Server, analyse_text, hover_at, symbols, to_lsp_diagnostic
+
+ROOT = Path(__file__).resolve().parents[2]
+URI  = "file:///tmp/unit.situ"
+
+SCHEMA = """target buffer;
+endian big;
+bit_order msb_first;
+
+enum protocol : u8 {
+	tcp = 6,
+	udp = 17,
+}
+
+struct header [allow_straddle] {
+	u4        version  [must_eq = 4];
+	u4        ihl;
+	u16       total;
+	bit       flag;
+	u15       offset;
+	protocol  proto;
+}
+"""
+
+
+def frame(message: dict[str, Any]) -> bytes:
+	body = json.dumps(message).encode()
+	return f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+
+
+def converse(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Run the server over a scripted session and collect what it said."""
+	out = io.BytesIO()
+	Server(io.BytesIO(b"".join(frame(m) for m in messages)), out).serve()
+
+	replies  = []
+	raw      = out.getvalue()
+	while raw:
+		header, _, rest = raw.partition(b"\r\n\r\n")
+		length = int(header.split(b":")[1])
+		replies.append(json.loads(rest[:length]))
+		raw = rest[length:]
+	return replies
+
+
+# -- analysis ---------------------------------------------------------------
+
+
+def test_a_broken_document_still_analyses() -> None:
+	"""An editor asks about whatever the user has left on screen, and a server
+	that raises on half a struct is a server nobody keeps running."""
+	analysis = analyse_text(URI, "target buffer;\nstruct s { u8 a")
+
+	assert analysis.diagnostics
+	assert analysis.resolved is None
+
+
+def test_an_empty_document_analyses() -> None:
+	analysis = analyse_text(URI, "")
+
+	assert analysis.resolved is not None or analysis.diagnostics
+
+
+def test_a_failing_requirement_is_a_diagnostic() -> None:
+	analysis = analyse_text(URI, SCHEMA + "\nrequire atomic(header.offset);\n")
+
+	assert any("atomic" in d.message or
+	           (d.primary and "atomic" in d.primary.message)
+	           for d in analysis.diagnostics)
+
+
+def test_the_blame_chain_survives_the_translation() -> None:
+	"""Section 17 makes the chain the product. Flattening it into the message
+	would lose it at the first newline, so it travels as related information
+	where an editor will show it."""
+	analysis = analyse_text(URI, SCHEMA + "\nrequire atomic(header.offset);\n")
+	failing  = [d for d in analysis.diagnostics if d.notes or d.labels]
+	assert failing, "expected a diagnostic carrying a chain"
+
+	converted = to_lsp_diagnostic(analysis.source, failing[0])
+
+	assert converted["source"] == "situ"
+	assert converted["relatedInformation"]
+	assert all("message" in item and "location" in item
+	           for item in converted["relatedInformation"])
+
+
+def test_positions_are_zero_based() -> None:
+	"""situ counts lines from one and the protocol counts from zero. Getting
+	that wrong puts every diagnostic one line off, which is worse than putting
+	it nowhere."""
+	analysis = analyse_text(URI, "target buffer;\nstruct s { u8 a")
+	converted = to_lsp_diagnostic(analysis.source, analysis.diagnostics[0])
+
+	assert converted["range"]["start"]["line"] == 1		# the second line
+
+
+# -- hover ------------------------------------------------------------------
+
+
+def line_of(text: str, needle: str) -> tuple[int, int]:
+	for number, line in enumerate(text.splitlines()):
+		if needle in line:
+			return number, line.index(needle) + 1
+	raise AssertionError(f"{needle!r} not in the schema")
+
+
+def test_hover_gives_the_capability_vector() -> None:
+	"""The reason to run a server rather than a linter: thirteen axes of
+	consequence the source text does not show."""
+	analysis = analyse_text(URI, SCHEMA)
+	line, col = line_of(SCHEMA, "u15       offset")
+
+	text = hover_at(analysis, line, col + 12)
+
+	assert text is not None
+	assert "header.offset" in text
+	assert "`atomic` = NonAtomic" in text
+	assert "`repr` = ValueConverted" in text
+
+
+def test_hover_separates_weakened_axes_from_the_rest() -> None:
+	"""Thirteen axes listed flat is a wall. What a reader wants is the ones
+	that cost something, which is what `situc explain` marks too."""
+	analysis = analyse_text(URI, SCHEMA)
+	line, col = line_of(SCHEMA, "u15       offset")
+
+	text = hover_at(analysis, line, col + 12)
+
+	assert text is not None
+	assert "Unweakened:" in text
+	assert text.index("`atomic` = NonAtomic") < text.index("Unweakened:")
+
+
+def test_hover_on_nothing_returns_nothing() -> None:
+	analysis = analyse_text(URI, SCHEMA)
+
+	assert hover_at(analysis, 0, 0) is None
+
+
+def test_hover_on_a_broken_document_returns_nothing() -> None:
+	"""Rather than raising. There is no vector to show, which is not an error."""
+	analysis = analyse_text(URI, "target buffer;\nstruct s { u8 a")
+
+	assert hover_at(analysis, 1, 12) is None
+
+
+# -- symbols ----------------------------------------------------------------
+
+
+def test_symbols_outline_the_schema() -> None:
+	analysis = analyse_text(URI, SCHEMA)
+	found    = symbols(analysis)
+
+	names = {item["name"]: item for item in found}
+	assert "protocol" in names and "header" in names
+	assert len(names["header"]["children"]) >= 6
+	assert any(child["name"] == "offset" for child in names["header"]["children"])
+
+
+# -- the protocol ------------------------------------------------------------
+
+
+def test_it_answers_initialize_and_exits() -> None:
+	replies = converse([
+		{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+		{"jsonrpc": "2.0", "method": "exit", "params": {}},
+	])
+
+	assert replies[0]["id"] == 1
+	assert replies[0]["result"]["capabilities"]["hoverProvider"] is True
+
+
+def test_opening_a_document_publishes_diagnostics() -> None:
+	replies = converse([
+		{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+		{"jsonrpc": "2.0", "method": "textDocument/didOpen",
+		 "params": {"textDocument": {"uri": URI, "text": "target buffer;\nstruct s { u8 a"}}},
+		{"jsonrpc": "2.0", "method": "exit", "params": {}},
+	])
+
+	published = [r for r in replies
+	             if r.get("method") == "textDocument/publishDiagnostics"]
+	assert published
+	assert published[0]["params"]["uri"] == URI
+	assert published[0]["params"]["diagnostics"]
+
+
+def test_a_fixed_document_clears_its_diagnostics() -> None:
+	"""The loop a user is actually in: break it, see the error, fix it, see the
+	error go. A server that only ever adds is a server that lies."""
+	replies = converse([
+		{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+		{"jsonrpc": "2.0", "method": "textDocument/didOpen",
+		 "params": {"textDocument": {"uri": URI, "text": "target buffer;\nstruct s { u8 a"}}},
+		{"jsonrpc": "2.0", "method": "textDocument/didChange",
+		 "params": {"textDocument": {"uri": URI},
+		            "contentChanges": [{"text": SCHEMA}]}},
+		{"jsonrpc": "2.0", "method": "exit", "params": {}},
+	])
+
+	published = [r["params"]["diagnostics"] for r in replies
+	             if r.get("method") == "textDocument/publishDiagnostics"]
+	assert len(published) == 2
+	assert published[0]        # broken
+	assert not published[1]    # fixed
+
+
+def test_an_unanswerable_request_still_gets_an_answer() -> None:
+	"""An editor that asked and was never told waits forever."""
+	replies = converse([
+		{"jsonrpc": "2.0", "id": 7, "method": "textDocument/codeLens", "params": {}},
+		{"jsonrpc": "2.0", "method": "exit", "params": {}},
+	])
+
+	assert any(r.get("id") == 7 for r in replies)
+
+
+def test_a_notification_gets_no_reply() -> None:
+	"""Answering one is a protocol error, not a courtesy."""
+	replies = converse([
+		{"jsonrpc": "2.0", "method": "initialized", "params": {}},
+		{"jsonrpc": "2.0", "method": "exit", "params": {}},
+	])
+
+	assert replies == []
+
+
+def test_hover_over_the_protocol() -> None:
+	replies = converse([
+		{"jsonrpc": "2.0", "method": "textDocument/didOpen",
+		 "params": {"textDocument": {"uri": URI, "text": SCHEMA}}},
+		{"jsonrpc": "2.0", "id": 3, "method": "textDocument/hover",
+		 "params": {"textDocument": {"uri": URI},
+		            "position": {"line": line_of(SCHEMA, "u15       offset")[0],
+		                         "character": 14}}},
+		{"jsonrpc": "2.0", "method": "exit", "params": {}},
+	])
+
+	answer = next(r for r in replies if r.get("id") == 3)
+	assert answer["result"]["contents"]["kind"] == "markdown"
+	assert "header.offset" in answer["result"]["contents"]["value"]
+
+
+def test_every_example_analyses_without_raising() -> None:
+	"""The server must survive whatever a user opens, including the schemas
+	this project ships that fail their own requirements on purpose."""
+	for path in sorted(ROOT.glob("examples/*/*.situ")):
+		analysis = analyse_text(f"file://{path}", path.read_text(encoding="ascii"))
+
+		assert analysis.source is not None
+		symbols(analysis)		# must not raise either

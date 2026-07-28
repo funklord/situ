@@ -96,6 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
 	doc_cmd.add_argument("--out", type=Path, default=None,
 	                     help="write to a file in this directory instead of stdout")
 
+	sub.add_parser(
+		"lsp", help="run a language server over stdio (section 26.19)")
+
 	dissector_cmd = sub.add_parser(
 		"gen-dissector", help="generate a Wireshark dissector in Lua")
 	dissector_cmd.add_argument("schema", type=Path)
@@ -483,6 +486,19 @@ def cmd_doc(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_lsp(args: argparse.Namespace) -> int:
+	"""`situc lsp` -- a language server over stdio (section 26.19).
+
+	The capability vector of the field under the cursor and the blame chain for
+	a failing requirement are already computed; this is them behind a door an
+	editor can open.
+	"""
+	from situc import lsp
+
+	del args
+	return lsp.main()
+
+
 def cmd_gen_dissector(args: argparse.Namespace) -> int:
 	"""`situc gen-dissector schema.situ` -- a Wireshark dissector (section 20.3).
 
@@ -596,6 +612,7 @@ def main(argv: list[str] | None = None) -> int:
 		"explain":  cmd_explain,
 		"doc":      cmd_doc,
 		"gen-dissector": cmd_gen_dissector,
+		"lsp":      cmd_lsp,
 	}
 
 	handler = commands.get(args.command)

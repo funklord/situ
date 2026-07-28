@@ -1936,6 +1936,7 @@ situc doc     <schema>            byte-layout diagrams and a field reference
 situc gen-tests   <schema> <vectors>
 situc gen-fuzz    <schema>
 situc gen-dissector <schema>      Wireshark dissector in Lua [--out DIR]
+situc lsp                         language server over stdio (26.19)
 situc dump-ast <schema>           debugging aid, phase 1 deliverable
 situc gen-codec-tests <schema>    property tests from codec signatures
 situc import-proto <proto> -o <schema>   [--accept-lossy]
@@ -2988,16 +2989,36 @@ that at the call site rather than bury it.
 
 ### 26.19 Language server
 
-**Status: not started.** The largest remaining item and the least like the rest
-of the codebase: a long-running process, incremental reparsing, and a protocol
-to speak, where everything so far has been a batch compiler that runs once and
-exits.
+**Status: diagnostics, hover and symbols work.** `situc lsp` speaks JSON-RPC
+over stdio, standard library only: the framing is a length header and a JSON
+body, and a dependency for that would be a poor trade against section 22's
+rule about vendoring.
 
-What it would carry that an editor cannot get elsewhere: the capability vector
-of the field under the cursor, the blame chain for a requirement that fails,
-and the advisor's costed suggestions as code actions. Those are already
-computed -- `situc explain` and `situc advise` are the same information behind
-a different door -- so the work is the server, not the analysis.
+What it carries that an editor cannot get elsewhere is not syntax colouring:
+
+- **Diagnostics**, with the blame chain intact. Section 17 makes the chain the
+  product, so it travels as `relatedInformation` rather than being flattened
+  into the message and lost at the first newline.
+- **Hover**, giving the capability vector of the field under the cursor, with
+  the weakened axes first and the rest listed compactly. This is `situc
+  explain` with a cursor instead of a path, and it is the reason to run a
+  server rather than a linter: thirteen axes of consequence the source text
+  does not show.
+- **Symbols**, outlining structs, their fields, and enums.
+
+**It never raises.** An editor asks about a document in whatever state the user
+has left it, and half-written is the normal state rather than the exceptional
+one. Every failure becomes a diagnostic; a document that will not parse still
+answers, with nothing to hover over rather than an exception.
+
+**Full-document sync, deliberately.** A schema is a few hundred lines and
+parsing one is microseconds. Incremental sync would be a cache to keep coherent
+in exchange for time nobody is waiting on.
+
+Not yet: the advisor's costed suggestions as code actions, and go-to-definition
+for a type name. Both are the same shape as what is here -- `situc advise`
+already computes the first -- and neither is what makes the server worth
+starting.
 
 ### 26.20 Folded out, not scheduled
 
