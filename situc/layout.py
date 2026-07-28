@@ -120,6 +120,9 @@ class Placement:
 	# The tags covering these bytes. Written after the whole struct is placed,
 	# because a tag is usually declared after the regions it covers.
 	covered_by: tuple[str, ...]	= ()
+	#: The invariant that maintains this field, if one does. Such a field
+	#: is not the author's to write: only a recompute may.
+	derived_by: str | None		= None
 	# Set on a field of a `register`: how the bus lets it be reached, and what
 	# touching it does besides move a value (section 15.2).
 	access_mode: ast.AccessMode | None	= None
@@ -407,6 +410,7 @@ class Solver:
 		state  = Walk(fields={}, cursor=Extent(0, 0))
 		self.place_members(decl, decl.members, scope, layout, name, state)
 		self.resolve_coverage(decl, layout)
+		self.resolve_invariants(decl, layout)
 
 		layout.size_bits     = state.cursor.lo
 		layout.size_max_bits = state.cursor.hi
@@ -624,6 +628,48 @@ class Solver:
 				sealed_by     = held.sealed_by or sealed_by,
 				unverified_ok = held.unverified_ok or unverified_ok,
 			)
+
+	def resolve_invariants(self, decl: ast.StructDecl,
+			layout: StructLayout) -> None:
+		"""Coverage, for a derived field rather than a tag (open question 3).
+
+		The shape is the tag's exactly. A field the expression reads is covered
+		by the invariant, so writing it leaves something stale and the same
+		dirty bit says so. The field the invariant maintains is not the
+		author's to write at all, which the `derived_by` marker below turns
+		into a refusal in every backend without any of them knowing what an
+		invariant is.
+		"""
+		from situc.wellformed import _paths_in
+
+		invariants = [held for held in self.schema.invariants()
+		              if held.derived.partition(".")[0] == decl.name]
+		if not invariants:
+			return
+
+		depends: dict[str, list[str]] = {}
+		derived: dict[str, str] = {}
+
+		for held in invariants:
+			field = held.derived.partition(".")[2]
+			name  = f"invariant {field}"
+			derived[field] = name
+			for path in _paths_in(held.expr):
+				read = path.partition(".")[2]
+				if read:
+					depends.setdefault(read, []).append(name)
+
+		for index, placed in enumerate(layout.placements):
+			local = placed.path.partition(".")[2]
+
+			if local in derived:
+				layout.placements[index] = replace(
+					placed, derived_by=derived[local])
+			elif local in depends:
+				layout.placements[index] = replace(
+					placed,
+					covered_by=tuple(sorted(set(placed.covered_by)
+					                        | set(depends[local]))))
 
 	def resolve_coverage(self, decl: ast.StructDecl, layout: StructLayout) -> None:
 		"""Join tags to the bytes they cover, once the whole struct is placed.

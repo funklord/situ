@@ -44,7 +44,8 @@ decl		= namespace_decl
 	| codec_decl			(* PHASE 7 *)
 	| register_decl
 	| register_block_decl
-	| requirement ;
+	| requirement
+	| invariant ;
 
 const_decl	= "const" ident "=" expr ";" ;
 
@@ -115,6 +116,12 @@ pipeline_decl	= "codec" ident "=" stage { "|>" stage } ";" ;
 stage		= ident [ "(" { ? any ? } ")" ] ;
 
 requirement	= ( "require" | "assert" ) capability_expr ";" ;
+
+(* One field, and what it derives from. The left side is a path rather than an
+ * expression: an invariant says which field situ maintains, and an equality
+ * nobody maintains is what `require` already is. See section 16.1. *)
+invariant	= "invariant" path "==" expr ";" ;
+path		= ident { "." ident } ;
 
 
 (* --------------------------------------------------------------------------

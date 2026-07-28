@@ -315,7 +315,7 @@ bitorder      = "msb_first" | "lsb_first" ;
 strictness    = "strict" | "lenient" ;
 
 decl          = const_decl | enum_decl | struct_decl | codec_decl
-              | register_decl | requirement ;
+              | register_decl | requirement | invariant ;
 
 (* One level; nesting is rejected naming its phase. A declaration inside is
    named `outer::header`, and an unqualified reference within the same
@@ -400,6 +400,12 @@ codec_prop    = "length_preserving"
               | "authenticated" | "invertible" | "deterministic" ;
 
 requirement   = ( "require" | "assert" ) capability_expr ";" ;
+
+(* One field, and what it derives from. The left side is a path rather
+   than an expression: an invariant says which field situ maintains, and
+   an equality nobody maintains is what `require` already is. *)
+invariant     = "invariant" path "==" expr ";" ;
+path          = ident { "." ident } ;
 ```
 
 `register_decl` is defined in Section 15.
@@ -904,7 +910,7 @@ weakening order. Constructs weaken axes; nothing strengthens them.
 | `atomic` | `AtomicWord` > `NonAtomic` | single-instruction access possible |
 | `canonical` | `Canonical` > `CanonicalGiven(f)` > `NonCanonical` | exactly one valid encoding |
 | `stage` | `CompileTime` < `ParseTime` < `TransformTime` < `VerifyGated` | when resolvable (later = more gated) |
-| `auth` | `Uncovered` / `Covered(tag)` | which tag covers these bytes |
+| `auth` | `Uncovered` / `Covered(obligation)` | which obligations cover these bytes: a tag (14.2), or an invariant that derives a value from them (16.1) |
 | `secrecy` | `Public` / `Secret` | affects generated API |
 | `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | MMIO side effects |
 
@@ -1635,6 +1641,49 @@ deferred to runtime. Silently downgrading a static check to a runtime one is
 not acceptable.
 
 ---
+
+### 16.1 Invariants
+
+An invariant names a field and what it derives from:
+
+```situ
+struct frame {
+	u16  total;
+	hdr  header;
+	u8   body[remaining];
+}
+
+invariant frame.total == size(frame.header) + size(frame.body);
+```
+
+Three things follow, and none of them needed new machinery -- the tag model of
+14.2 already had this shape, for a harder case:
+
+- **`total` loses its setter.** Its `mutate` is `Immutable`, and the header
+  says which invariant decided that. Writing it directly would make the
+  schema's own statement false.
+- **What the right side reads becomes covered.** `header` and `body` get
+  `auth = Covered(invariant total)`, so `in_place` fails on them and
+  `in_place_dirty` passes -- which is exactly right, since writing one leaves
+  something stale.
+- **A recompute is generated**, taking the message as every covered write does,
+  because it clears a dirty bit and the bit lives on the message. Until it
+  runs, `situ_msg_transmittable` refuses.
+
+The right side may use `size`, `count`, `offset` and arithmetic over them. An
+expression the backend cannot evaluate gets no recompute and says so; the
+refusal to write the field directly still stands, so the invariant cannot be
+broken, only left unsatisfiable. That is the honest half of not implementing
+something.
+
+**Both halves must be in the same struct.** An invariant is evaluated against
+one view, and a field of another struct is not reachable from it. A field
+cannot derive from itself, because recomputing it would read the value it is
+about to write.
+
+The `auth` axis is what carries this, and 11.1 states it as "which obligation
+covers these bytes" rather than "which tag": a tag and an invariant are the
+same obligation with different arithmetic behind them.
 
 ## 17. Diagnostics
 
@@ -3258,8 +3307,11 @@ about it.
    already set-valued and already means "these bytes have an obligation
    attached", and the dirty bit is already per-obligation rather than per-tag.
 
-   Not implemented -- no phase needed it -- but no longer open: the design is
-   the coverage machinery, and a schema construct that reuses it.
+   **Implemented.** `invariant s.total == size(s.hdr) + size(s.body);` is a
+   top-level declaration beside `require`. The left side names one field and
+   nothing else, because an invariant whose left side were an expression would
+   say what must be true without saying which field situ is to maintain -- and
+   a checked-but-unmaintained equality is what `require` already is. See 16.1.
 4. ~~**Slack tracking.**~~ **RESOLVED.** No field is added to the view. `limit`
    *is* the capacity, established once at acquisition; the used extent is read
    from the data rather than stored a second time, so slack is

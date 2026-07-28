@@ -293,3 +293,38 @@ def test_a_transform_that_does_not_authenticate_may_still_code() -> None:
 	"""`coded` is for exactly this: a transform with no security claim."""
 	parse_text(PLAIN + 'impl plain extern "p";\n'
 	           "struct s { u8 hop; coded body(plain) { u16 inner; } }\n")
+
+
+# -- invariants (open question 3) --------------------------------------------
+
+
+def test_an_invariant_must_name_a_field_that_exists() -> None:
+	message = rendered("struct s { u16 total; }\ninvariant s.nope == 1;")
+
+	assert "has no field `nope`" in message
+	assert "nothing would keep it true" in message
+
+
+def test_an_invariant_must_name_a_struct_that_exists() -> None:
+	message = rendered("struct s { u16 total; }\ninvariant other.total == 1;")
+
+	assert "unknown struct `other`" in message
+
+
+def test_an_invariant_may_not_reach_across_structs() -> None:
+	"""It is evaluated against one view, and a field of another struct is not
+	reachable from it."""
+	message = rendered("struct a { u16 n; }\nstruct s { u16 total; }\n"
+	                   "invariant s.total == size(a.n);")
+
+	assert "not a field of `s`" in message
+	assert "outside the struct this invariant maintains" in message
+
+
+def test_an_invariant_may_not_derive_a_field_from_itself() -> None:
+	"""Recomputing it would read the value it is about to write."""
+	message = rendered("struct s { u16 total; u8 body[4]; }\n"
+	                   "invariant s.total == s.total + 1;")
+
+	assert "derives from itself" in message
+	assert "circular" in message

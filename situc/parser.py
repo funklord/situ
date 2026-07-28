@@ -275,6 +275,7 @@ class Parser:
 			"impl":		self.parse_impl,
 			"require":	self.parse_requirement,
 			"assert":	self.parse_requirement,
+			"invariant":	self.parse_invariant,
 		}
 
 		handler = handlers.get(token.text)
@@ -284,7 +285,7 @@ class Parser:
 				token.span,
 				label = "not a declaration keyword",
 				notes = ["expected `target`, `endian`, `bit_order`, `import`, `const`, "
-				         "`enum`, `struct`, `require` or `assert`"],
+				         "`enum`, `struct`, `require`, `assert` or `invariant`"],
 			)
 
 		return handler()
@@ -1549,6 +1550,28 @@ class Parser:
 		expr = self.parse_expr()
 		self.expect_symbol(";", "after the requirement")
 		return ast.Requirement(self.span_from(start), kind, expr)
+
+	def parse_invariant(self) -> ast.Invariant:
+		"""`invariant s.total == size(s.hdr) + size(s.body);`
+
+		The left side is one field path and nothing else. An invariant whose
+		left side were an expression would say what must be true without saying
+		which field situ is to maintain, and maintaining it is the whole point
+		-- a checked-but-unmaintained equality is what `require` already is.
+		"""
+		start   = self.advance()
+		derived = self.parse_path("the field the invariant maintains")
+		self.expect_symbol("==", "after the field an invariant maintains")
+		expr = self.parse_expr()
+		self.expect_symbol(";", "after the invariant")
+		return ast.Invariant(self.span_from(start), derived, expr)
+
+	def parse_path(self, context: str) -> str:
+		"""A dotted field path, as text."""
+		parts = [self.expect_ident(context).text]
+		while self.accept_symbol("."):
+			parts.append(self.expect_ident("a field name").text)
+		return ".".join(parts)
 
 	# -- expressions ----------------------------------------------------
 

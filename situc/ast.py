@@ -807,6 +807,26 @@ class Requirement(Decl):
 	expr: Expr
 
 
+@dataclass(frozen=True)
+class Invariant(Decl):
+	"""`invariant s.total == size(s.hdr) + size(s.body);` (open question 3).
+
+	A derived field and what it derives from. The left side names one field,
+	which stops being the author's to write; the right side is an expression
+	over the same struct, which every field in it now has an obligation to.
+
+	That is deliberately the shape a tag already has (14.2). Writing a field a
+	tag covers leaves the tag stale; writing a field an invariant reads leaves
+	the invariant stale, and the same dirty bit, the same refusal to transmit
+	and the same explicit recompute serve both. The machinery was not built for
+	this and did not need changing to carry it.
+	"""
+
+	span: Span
+	derived: str			# the field the invariant maintains
+	expr: Expr			# what it equals
+
+
 @dataclass
 class Schema(Node):
 	"""One parsed source file."""
@@ -822,6 +842,9 @@ class Schema(Node):
 
 	def consts(self) -> list[ConstDecl]:
 		return [decl for decl in self.decls if isinstance(decl, ConstDecl)]
+
+	def invariants(self) -> list[Invariant]:
+		return [decl for decl in self.decls if isinstance(decl, Invariant)]
 
 	def requirements(self) -> list[Requirement]:
 		return [decl for decl in self.decls if isinstance(decl, Requirement)]

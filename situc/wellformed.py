@@ -54,6 +54,114 @@ def check(schema: ast.Schema) -> None:
 	check_nonce_references(schema)
 	check_registers(schema)
 	check_no_recursive_types(schema)
+	check_invariants(schema)
+
+
+def check_invariants(schema: ast.Schema) -> None:
+	"""An invariant names one field to maintain and what it derives from.
+
+	Both halves have to be real and both have to be in the same struct: an
+	invariant is a statement about one frame's bytes, and one that reached
+	across structs would have no view to evaluate itself against.
+	"""
+	structs = {decl.name: decl for decl in schema.structs()}
+
+	for invariant in schema.invariants():
+		struct_name, _, field = invariant.derived.partition(".")
+
+		if not field:
+			raise error(
+				f"`{invariant.derived}` is not a field path",
+				invariant.span,
+				label = "expected `struct.field`",
+				notes = ["an invariant maintains one field of one struct, so it "
+				         "names both: `invariant s.total == size(s.body);`"],
+			)
+
+		struct = structs.get(struct_name)
+		if struct is None:
+			raise error(
+				f"unknown struct `{struct_name}`",
+				invariant.span,
+				label = "no such struct",
+				notes = ["an invariant is evaluated against a view of one "
+				         "struct, so the field it maintains has to be in one"],
+			)
+
+		if _find_member(struct, field) is None:
+			raise error(
+				f"`{struct_name}` has no field `{field}`",
+				invariant.span,
+				label = "no such field",
+				notes = [f"the invariant would maintain a field that does not "
+				         f"exist, so nothing would keep it true"],
+			)
+
+		for path in _paths_in(invariant.expr):
+			other, _, name = path.partition(".")
+			if other != struct_name:
+				raise error(
+					f"`{path}` is not a field of `{struct_name}`",
+					invariant.span,
+					label = "outside the struct this invariant maintains",
+					notes = [
+						"an invariant is evaluated against one view, and a "
+						"field of another struct is not reachable from it",
+						f"every path in the expression must start `{struct_name}.`",
+					],
+				)
+			if name and _find_member(struct, name) is None:
+				raise error(
+					f"`{struct_name}` has no field `{name}`",
+					invariant.span,
+					label = "no such field",
+					notes = ["the invariant would depend on a field that does "
+					         "not exist"],
+				)
+
+		if invariant.derived in _paths_in(invariant.expr):
+			raise error(
+				f"`{invariant.derived}` derives from itself",
+				invariant.span,
+				label = "circular",
+				notes = ["recomputing it would read the value it is about to "
+				         "write, so it would hold whatever it already held"],
+			)
+
+
+def _find_member(struct: ast.StructDecl, name: str) -> ast.Member | None:
+	for member in _walk_members(struct.members):
+		if getattr(member, "name", None) == name:
+			return member
+	return None
+
+
+def _walk_members(members: tuple[ast.Member, ...]) -> list[ast.Member]:
+	found: list[ast.Member] = []
+	for member in members:
+		found.append(member)
+		found.extend(_walk_members(nested(member)))
+	return found
+
+
+def _paths_in(expr: ast.Expr) -> list[str]:
+	"""Every field path an expression names, dotted form.
+
+	`s.hdr` parses as an `Access` over a `NameRef`, not as one dotted name, so
+	the dots are put back here rather than assumed.
+	"""
+	if isinstance(expr, ast.Access):
+		base = _paths_in(expr.base)
+		return [f"{base[0]}.{expr.name}"] if base else [expr.name]
+	if isinstance(expr, ast.NameRef):
+		return [expr.name]
+	if isinstance(expr, ast.Call):
+		return [p for arg in expr.args for p in _paths_in(arg)]
+	if isinstance(expr, ast.Binary):
+		return _paths_in(expr.left) + _paths_in(expr.right)
+	if isinstance(expr, ast.Unary):
+		return _paths_in(expr.operand)
+	return []
 
 
 Notes = list[str] | None

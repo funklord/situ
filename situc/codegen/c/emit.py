@@ -33,6 +33,7 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.traverse import own_members
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarKind, ScalarType
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -206,8 +207,135 @@ class Emitter:
 
 		lines.extend(self._shifting_setters(struct))
 		lines.extend(self._covered_setters(struct))
+		lines.extend(self._invariants(struct))
 		lines.extend(self._validate_decl(struct))
 		return lines
+
+	# -- invariants (open question 3) -----------------------------------
+
+	def _invariants(self, struct: ResolvedStruct) -> list[str]:
+		"""A derived field, and the one thing allowed to write it.
+
+		The lattice has already refused the plain setter -- `mutate` is
+		Immutable and the header says why. What is missing without this is any
+		way to make the invariant true again, which would leave a schema that
+		can state a relationship and never satisfy it.
+
+		Recompute takes the message rather than the view, as every covered
+		write does: it clears a dirty bit, and the bit lives on the message.
+		"""
+		held = [decl for decl in self.schema.invariants()
+		        if decl.derived.partition(".")[0] == struct.name]
+		if not held:
+			return []
+
+		lines: list[str] = []
+
+		for decl in held:
+			field = decl.derived.partition(".")[2]
+			entry = next((e for e in struct.entries
+			              if e.placement.path == f"{struct.name}.{field}"), None)
+			if entry is None or entry.placement.scalar is None:
+				continue
+
+			value = self._invariant_expression(struct, decl.expr)
+			if value is None:
+				lines.extend([
+					"",
+					f"/* No {field} recompute: this build cannot evaluate",
+					f" * `{unparse_expr(decl.expr)}` at run time. The refusal to",
+					" * write the field directly still stands, so the invariant",
+					" * cannot be broken -- only left unsatisfiable here. */",
+				])
+				continue
+
+			local  = c_name(self._local(struct, entry.placement))
+			scalar = entry.placement.scalar
+			bit    = self._invariant_bit(struct, field)
+
+			lines.extend([
+				"",
+				f"/* {decl.derived} == {unparse_expr(decl.expr)}",
+				" *",
+				" * Writing anything the right side reads sets the bit below,",
+				" * and the message refuses to be transmittable until this",
+				" * recomputes (section 14.2, the same machinery a tag uses). */",
+				f"#define {bit} {hex(1 << (len(self._tags(struct)) + held.index(decl)))}u",
+				"",
+				f"static inline void {ident(self.prefix, struct.name, local, 'recompute')}"
+				f"(situ_msg_t *msg, situ_view_t view)",
+				"{",
+				f"	{self._store_statement(scalar, entry.placement, 'view.base', f'({value})')}",
+				f"	situ_msg_clear_dirty(msg, {bit});",
+				"}",
+				"",
+				f"static inline int {ident(self.prefix, struct.name, local, 'is_stale')}"
+				f"(const situ_msg_t *msg)",
+				"{",
+				f"	return (msg->dirty & {bit}) != 0u;",
+				"}",
+			])
+
+		return lines
+
+	def _invariant_bit(self, struct: ResolvedStruct, field: str) -> str:
+		return macro(self.prefix, struct.name, field, "STALE")
+
+	def _invariant_expression(self, struct: ResolvedStruct,
+			expr: ast.Expr) -> str | None:
+		"""The right-hand side, as a C expression over this view.
+
+		`size`, `count` and `offset` of a member, and arithmetic over them.
+		Anything else returns None and the field simply gets no recompute --
+		refusing to guess is the same answer the rest of the compiler gives.
+		"""
+		if isinstance(expr, ast.IntLiteral):
+			return f"{expr.value}u"
+
+		if isinstance(expr, ast.Binary):
+			left  = self._invariant_expression(struct, expr.left)
+			right = self._invariant_expression(struct, expr.right)
+			if left is None or right is None or expr.op not in "+-*/":
+				return None
+			return f"({left} {expr.op} {right})"
+
+		if isinstance(expr, ast.Call):
+			if len(expr.args) != 1:
+				return None
+			return self._invariant_builtin(struct, expr.name, expr.args[0])
+
+		return None
+
+	def _invariant_builtin(self, struct: ResolvedStruct, name: str,
+			arg: ast.Expr) -> str | None:
+		from situc.wellformed import _paths_in
+
+		paths = _paths_in(arg)
+		if len(paths) != 1:
+			return None
+
+		field = paths[0].partition(".")[2]
+		entry = next((e for e in struct.entries
+		              if e.placement.path == f"{struct.name}.{field}"), None)
+		if entry is None:
+			return None
+
+		placement = entry.placement
+
+		if name == "offset":
+			return (f"{placement.offset_bytes}u" if placement.offset_bits is not None
+			        else None)
+
+		if name == "size":
+			if placement.is_fixed_size:
+				return f"{placement.size_bits // BITS_PER_BYTE}u"
+			return self._length_expression(struct, placement) \
+				if self._has_length(struct, placement) else None
+
+		if name == "count":
+			return self._count_expression(struct, placement)
+
+		return None
 
 	# -- the cryptographic model (section 14) ---------------------------
 

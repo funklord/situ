@@ -88,6 +88,37 @@ def test_bit_field_keeps_in_place_mutation() -> None:
 	       == Value("InPlaceFixed")
 
 
+# -- row: derived field ------------------------------------------------------
+
+
+def test_a_field_an_invariant_maintains_cannot_be_written() -> None:
+	"""An invariant decides its value, so a direct write would make the
+	schema's own statement false. The remedy is the one the tag machinery
+	already offers: write what it derives from, then recompute."""
+	body = ("struct h { u8 v; }\nstruct s { u16 total; h hdr; }\n"
+	        "invariant s.total == size(s.hdr);")
+
+	assert axis_of(body, "s.total", Axis.MUTATE) == Value("Immutable")
+	assert "derived-field" in rules_for(body, "s.total", Axis.MUTATE)
+
+
+def test_what_an_invariant_reads_carries_the_obligation() -> None:
+	"""Writing it leaves the invariant stale, which is exactly what a covered
+	write does to a tag -- so it is the same axis and the same dirty bit."""
+	body = ("struct h { u8 v; }\nstruct s { u16 total; h hdr; }\n"
+	        "invariant s.total == size(s.hdr);")
+
+	assert axis_of(body, "s.hdr", Axis.AUTH) == Value("Covered", ("invariant total",))
+
+
+def test_a_field_no_invariant_touches_is_unaffected() -> None:
+	body = ("struct h { u8 v; }\nstruct s { u16 total; h hdr; u8 spare; }\n"
+	        "invariant s.total == size(s.hdr);")
+
+	assert axis_of(body, "s.spare", Axis.MUTATE) == Value("InPlaceFixed")
+	assert axis_of(body, "s.spare", Axis.AUTH) == Value("Uncovered")
+
+
 # -- row: nul terminated -----------------------------------------------------
 
 
@@ -356,6 +387,7 @@ def test_reachable_rows_are_all_tested() -> None:
 	"""
 	tested = {
 		"non-native-endian-scalar",
+		"derived-field",
 		"nul-terminated",
 		"fixed-point",
 		"bcd",

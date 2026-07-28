@@ -970,3 +970,57 @@ def test_default_pass_admits_what_it_says_it_admits() -> None:
 
 	assert "situ_k_is_known" in header		# still offered
 	assert "situ_k_is_known(situ_s_kind_get" not in source	# not demanded
+
+
+# -- invariants (open question 3) --------------------------------------------
+
+
+INVARIANT = (
+	"struct h { u8 v; u16 kind; }\n"
+	"struct s { u16 total; h hdr; u8 body[remaining]; }\n"
+	"invariant s.total == size(s.hdr) + size(s.body);\n"
+)
+
+
+def test_a_derived_field_gets_no_setter() -> None:
+	"""An invariant decides its value. A direct write would make the schema's
+	own statement false, so the lattice refuses it before the backend does."""
+	header, _ = emit(INVARIANT)
+
+	assert "situ_s_total_get" in header
+	assert "situ_s_total_set" not in header
+	assert "mutate=Immutable" in header
+
+
+def test_a_derived_field_gets_a_recompute() -> None:
+	"""Refusing the write without offering the recompute would leave a schema
+	that can state a relationship and never satisfy it."""
+	header, _ = emit(INVARIANT)
+
+	assert "void situ_s_total_recompute(situ_msg_t *msg, situ_view_t view)" in header
+	assert "situ_msg_clear_dirty(msg, SITU_S_TOTAL_STALE)" in header
+	assert "int situ_s_total_is_stale(const situ_msg_t *msg)" in header
+
+
+def test_the_recompute_evaluates_the_expression() -> None:
+	"""`size(hdr) + size(body)` over a 3-byte header and a `remaining` tail is
+	3 plus whatever the view has left."""
+	header, _ = emit(INVARIANT)
+
+	assert "(3u + view.limit - 5u)" in header
+
+
+def test_what_the_invariant_reads_is_marked_covered() -> None:
+	"""The same words a tag gets, because it is the same obligation."""
+	header, _ = emit(INVARIANT)
+
+	assert "writing through this pointer leaves invariant total stale" in header
+
+
+def test_an_expression_the_backend_cannot_evaluate_says_so() -> None:
+	"""And leaves the refusal to write standing, so the invariant cannot be
+	broken -- only left unsatisfiable, which is the honest half."""
+	header, _ = emit("struct s { u16 total; u8 body[4]; }\n"
+	                 "invariant s.total == size(s.body) * count(s.body) / 0;\n")
+
+	assert "situ_s_total_set" not in header

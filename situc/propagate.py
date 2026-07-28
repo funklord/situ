@@ -177,6 +177,10 @@ def _is_bcd(context: Context) -> bool:
 	return context.scalar is not None and context.scalar.is_bcd
 
 
+def _is_derived(context: Context) -> bool:
+	return context.placement.derived_by is not None
+
+
 def _is_nul_terminated(context: Context) -> bool:
 	return any(attr.name == "nul_terminated"
 	           for attr in context.placement.attrs)
@@ -578,6 +582,20 @@ TABLE: tuple[Row, ...] = (
 			remedy    = "",
 		),
 		applies = _is_marker_scoped,
+	),
+	Row(
+		rule = Rule(
+			name      = "derived-field",
+			construct = "a field an invariant maintains",
+			effects   = (
+				Effect(Axis.MUTATE, Value("Immutable"),
+				       "an invariant decides this field's value, so writing it "
+				       "directly would make the schema's own statement false"),
+			),
+			remedy    = "write what it derives from and call the generated "
+			            "recompute, which is the one thing that may set it",
+		),
+		applies = _is_derived,
 	),
 	Row(
 		rule = Rule(
