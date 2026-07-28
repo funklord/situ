@@ -127,12 +127,26 @@ PREDICATES: dict[str, Predicate] = {
 		"a writer always emits the same bytes for the same value"),
 }
 
-# Predicates whose axis exists but which need a construct from a later phase.
+#: Predicates the language names and this build cannot decide, with the reason.
+#:
+#: These were once keyed by the phase that would implement them. Every one of
+#: those phases has since landed without the predicate arriving with it, so the
+#: phase number had become a promise the schedule no longer backed -- a user
+#: reading "needs phase 7" would wait for something that already happened. What
+#: is true of each of them is a reason, so that is what is recorded.
 DEFERRED_PREDICATES = {
-	"deterministic":	7,
-	"no_alloc":		4,
-	"bounded_stack":	4,
-	"no_realloc":		5,
+	"deterministic":
+		"it asks about a codec's property signature rather than a field's "
+		"capability vector, and nothing connects a field to the codec above it",
+	"no_alloc":
+		"generated code never allocates (invariant 4), so this always holds "
+		"and the predicate would be a lint rather than a requirement",
+	"bounded_stack":
+		"it needs a stack-depth model of the generated code, which the "
+		"compiler does not build",
+	"no_realloc":
+		"it depends on a runtime value, so it is a SITU_CHECKED check rather "
+		"than a compile-time discharge, and that machinery is not wired",
 }
 
 
@@ -143,7 +157,7 @@ class Outcome:
 	requirement: ast.Requirement
 	satisfied: bool
 	detail: str
-	deferred: int | None		= None
+	deferred: str | None		= None
 	blame: list[str]		= field(default_factory=list)
 	diagnostic: Diagnostic | None	= None
 
@@ -170,10 +184,10 @@ def discharge(schema: ast.Schema, resolved: ResolvedSchema) -> list[Outcome]:
 
 def _discharge_one(requirement: ast.Requirement, resolved: ResolvedSchema,
 		env: Env) -> Outcome:
-	phase = pending_phase(requirement.expr)
-	if phase is not None:
-		return Outcome(requirement, satisfied=False, deferred=phase,
-		               detail=f"needs a construct from phase {phase}")
+	reason = pending_reason(requirement.expr)
+	if reason is not None:
+		return Outcome(requirement, satisfied=False, deferred=reason,
+		               detail=reason)
 
 	predicate_call = _capability_call(requirement.expr)
 	if predicate_call is not None:
@@ -408,26 +422,26 @@ def _arithmetic_detail(expr: ast.Expr, env: Env) -> str:
 	return "evaluates to false"
 
 
-def pending_phase(expr: ast.Expr) -> int | None:
-	"""The earliest phase that could decide this expression, or None if now."""
-	phases = _phases(expr)
-	return max(phases) if phases else None
+def pending_reason(expr: ast.Expr) -> str | None:
+	"""Why this expression cannot be decided, or None if it can be."""
+	reasons = _reasons(expr)
+	return reasons[0] if reasons else None
 
 
-def _phases(expr: ast.Expr) -> list[int]:
-	found: list[int] = []
+def _reasons(expr: ast.Expr) -> list[str]:
+	found: list[str] = []
 
 	if isinstance(expr, ast.Call):
-		phase = DEFERRED_PREDICATES.get(expr.name)
-		if phase is not None:
-			found.append(phase)
+		reason = DEFERRED_PREDICATES.get(expr.name)
+		if reason is not None:
+			found.append(reason)
 		for arg in expr.args:
-			found.extend(_phases(arg))
+			found.extend(_reasons(arg))
 	elif isinstance(expr, ast.Binary):
-		found.extend(_phases(expr.left))
-		found.extend(_phases(expr.right))
+		found.extend(_reasons(expr.left))
+		found.extend(_reasons(expr.right))
 	elif isinstance(expr, ast.Unary):
-		found.extend(_phases(expr.operand))
+		found.extend(_reasons(expr.operand))
 
 	return found
 
@@ -442,25 +456,25 @@ def warnings(outcomes: list[Outcome]) -> list[Diagnostic]:
 
 
 def deferrals(outcomes: list[Outcome]) -> list[Diagnostic]:
-	"""Requirements this build could not decide, grouped by phase."""
+	"""Requirements this build could not decide, grouped by why."""
 	from situc.unparse import expr_to_source
 
-	by_phase: dict[int, list[Outcome]] = {}
+	by_reason: dict[str, list[Outcome]] = {}
 	for outcome in outcomes:
 		if outcome.deferred is not None:
-			by_phase.setdefault(outcome.deferred, []).append(outcome)
+			by_reason.setdefault(outcome.deferred, []).append(outcome)
 
 	rendered = []
-	for phase in sorted(by_phase):
-		group  = by_phase[phase]
+	for reason in sorted(by_reason):
+		group  = by_reason[reason]
 		listed = ", ".join(
 			f"`{expr_to_source(outcome.requirement.expr)}`" for outcome in group)
 		rendered.append(Diagnostic(
 			severity = Severity.NOTE,
 			message  = f"{len(group)} requirement{'s' if len(group) != 1 else ''} "
-			           f"not checked by this build; needs phase {phase}",
+			           f"not checked by this build",
 			primary  = Label(group[0].requirement.span, "first of them here"),
-			notes    = [listed],
+			notes    = [listed, reason],
 		))
 
 	return rendered

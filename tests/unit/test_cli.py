@@ -67,7 +67,7 @@ def test_json_diagnostics_are_emitted(
 	payload = json.loads(capsys.readouterr().err)
 	assert len(payload["diagnostics"]) == 1
 	assert payload["diagnostics"][0]["severity"] == "note"
-	assert "phase 5" in payload["diagnostics"][0]["message"]
+	assert "not checked by this build" in payload["diagnostics"][0]["message"]
 
 
 def test_json_diagnostics_on_failure(

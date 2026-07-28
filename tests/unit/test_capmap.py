@@ -250,25 +250,34 @@ def test_failure_with_no_upstream_cause_says_so() -> None:
 # -- deferral ---------------------------------------------------------------
 
 
-def test_later_phase_predicates_are_deferred_not_passed() -> None:
+def test_an_undecidable_predicate_is_deferred_not_passed() -> None:
+	"""Never silently satisfied: a requirement the build cannot decide is
+	reported as undecided, which is invariant 5."""
 	outcome = discharge("struct S { u8 a; }\nrequire no_realloc(S);")[0]
-	assert outcome.deferred == 5
+
+	assert outcome.deferred is not None
 	assert not outcome.is_error
 
 
-def test_deferrals_are_grouped_by_phase() -> None:
+def test_a_deferral_says_why_rather_than_naming_a_phase() -> None:
+	"""These were once keyed by the phase that would implement them, and every
+	one of those phases landed without the predicate arriving. "needs phase 7"
+	then sent a reader to wait for something that had already happened."""
 	outcomes = discharge(
 		"struct S { u8 a; }\n"
 		"require no_alloc(S);\n"
 		"require no_realloc(S);\n")
 	report = "\n".join(note.render() for note in requirements.deferrals(outcomes))
-	assert "needs phase 4" in report
-	assert "needs phase 5" in report
+
+	assert "phase" not in report
+	assert "never allocates" in report		# no_alloc: true by construction
+	assert "runtime value" in report		# no_realloc: a SITU_CHECKED check
 
 
-def test_a_requirement_reports_the_latest_phase_it_needs() -> None:
+def test_a_compound_requirement_reports_one_of_its_reasons() -> None:
 	outcome = discharge("struct S { u8 a; }\nrequire no_alloc(S) && no_realloc(S);")[0]
-	assert outcome.deferred == 5
+
+	assert outcome.deferred is not None
 
 
 # -- JSON diagnostics -------------------------------------------------------

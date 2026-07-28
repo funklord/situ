@@ -1536,11 +1536,36 @@ size(X) == N            offset(X) == N          max_size(X) <= N
 absolute_static(X)      frame_static(X)         static(X)
 in_place(X)             in_place_dirty(X)       immutable(X)
 random_access(X)        stable_address(X)
-canonical(X)            deterministic(X)
-aligned(X, n)           atomic(X)
+canonical(X)            deterministic(X)        deterministic_writer(X)
+aligned(X, n)           atomic(X)               memory_identical(X)
 no_tag_invalidation(X)  verify_gated(X)         uncovered(X)
 no_alloc(X)             bounded_stack(X, n)
 ```
+
+`memory_identical(X)` asks the `repr` axis: are the bytes the value, with no
+swap, shift, scale or decode between them? It is the question a caller has
+before pointing at a field and reading it as it lies, and the axis had no
+predicate until fixed point and BCD gave it a third and fourth way to answer
+no -- byte order and bit packing being the first two. A field can fail it for
+several reasons at once, and the blame chain names each: `q8_8` in a
+big-endian schema is both byte-swapped and scaled.
+
+**Four of these the compiler names and cannot decide**, and it says which and
+why rather than passing them. They were once recorded against the phase that
+would implement them; every one of those phases landed without the predicate
+arriving with it, so `needs phase 7` had become a promise the schedule no
+longer backed -- a reader would wait for something that had already happened.
+What is true of each is a reason, so that is what the diagnostic gives:
+
+| Predicate | Why not |
+|---|---|
+| `deterministic(X)` | asks about a codec's property signature rather than a field's capability vector, and nothing connects a field to the codec above it |
+| `no_alloc(X)` | generated code never allocates (invariant 4), so it always holds; the predicate would be a lint, not a requirement |
+| `bounded_stack(X, n)` | needs a stack-depth model of the generated code, which the compiler does not build |
+| `no_realloc(expr)` | depends on a runtime value, so it is a `SITU_CHECKED` check rather than a compile-time discharge, and that machinery is not wired |
+
+None of them is silently satisfied, which is invariant 5: a requirement the
+build cannot decide is reported as undecided.
 
 Runtime-checked variants exist where the property depends on runtime values:
 `no_realloc(expr)` cannot be decided statically when the new value's size is
@@ -1915,47 +1940,72 @@ the semantics are settled. Do not add a dependency without recording a decision.
 ```
 situ/
   project.md                  this document
+  bin/
+    situc                     the command: a launcher that finds its own
+                              package, in the tree or under an install prefix
   docs/
     decisions/                append-only numbered decision records
     grammar.ebnf              extracted, kept in sync with Section 7
     capability-axes.md        normative axis definitions
   situc/                      the compiler; Python 3.11+, stdlib only, mypy strict
     __init__.py
+    __main__.py               so `python3 -m situc` works
     lexer.py
     parser.py
     ast.py
     wellformed.py             whole-schema checks: duplicate names, unresolvable
                               types, recursion, constant/attribute collision
-    types.py                  scalar type table
+    types.py                  scalar type table: integers, floats, fixed point, BCD
     expr.py                   expression evaluation and interval arithmetic
     layout.py                 the layout solver
     capability.py             axes, lattice, meet
     propagate.py              the 11.3 table, data-driven
     resolve.py                the seam joining layout to the table
+    traverse.py               the struct walk every backend and artifact shares:
+                              which entries are a struct's own members, and which
+                              bytes a placement occupies
     requirements.py           predicate evaluation and discharge
+    namespaces.py             `::` qualification and `--prefix`; decision 0012
     capmap.py                 capability map construction
     diagnostics.py            diagnostic construction, blame chains, rendering
     dump.py, unparse.py       `dump-ast` and round-tripping
     advise.py                 suggestion catalog and cost model; phase 9
+    revision.py               `situc diff`: capability regressions between two
+                              revisions of a schema
+    kernels.py                property signatures derived from kernel
+                              descriptions; phase 12
+    proto.py                  the `.proto` importer; phase 13
+    doc.py                    `situc doc`: RFC-style diagrams and a field table
+    dissector.py              `situc gen-dissector`: a Wireshark dissector in Lua
     codegen/
-      c/                      emit, vectors, fuzz harnesses, codec tests
+      c/                      emit, checks, vectors, fuzz harnesses, codec
+                              tests, derived codec implementations, MMIO
       cpp/                    the second backend
       rust/                   phase 11
       python/                 the fourth backend
     cli.py
   runtime/
     c/
-      situ.h                  minimal runtime: views, bounds, generation
+      situ.h                  minimal runtime: views, bounds, generation, bit
+                              access, varints, BCD, sign extension
       situ.c
+      Makefile                self-contained; `cd runtime/c && make` works
   std/
-    codecs.situ               signatures for the standard codecs
+    codecs.situ               signatures for the standard codecs, hand written
+    kernels.situ              the same codes as kernel descriptions, so the
+                              derivation can be checked against the declaration
   tools/
     lint_conventions.py       the formatting enforcer; `make lint`
   tests/
     unit/                     compiler tests (pytest), one file per module
     generated/                cmocka tests over generated C
     cross/                    behavioural checks on aarch64 under emulation
-    schemas/                  example schemas including the three in Section 5
+    golden/                   pinned diagnostic text; message quality is the
+                              product, so a regression in it is a regression
+    propagation/              the 11.3 table's own fixtures
+    schemas/                  header.situ, the three in Section 5, and
+                              edges.situ -- constructs no protocol here uses,
+                              which exists so their generated code runs at all
   examples/                   one directory per protocol, name matching its
                               `.situ` file, each with at least one `require`
 ```
@@ -1965,6 +2015,38 @@ committed `.situ.map` that the suite regenerates and compares. An example
 marked `// STATUS: needs phase N.` is asserted to be *rejected*, naming a phase
 no later than N; those pin the phase-gating behaviour and go live as phases
 land.
+
+### 23.1 Decision records
+
+Append-only, in `docs/decisions/`. A decision goes here when the reasoning
+would otherwise be lost -- when the obvious reading of this document is not
+what the code does, or when an alternative was rejected for a reason worth
+keeping. They are referenced from the sections they bear on; this is the index.
+
+| # | Decision |
+|---|---|
+| 0001 | `situc` is written in Python 3.11+, standard library only |
+| 0002 | GNU Make only; CMake deferred |
+| 0003 | Tabs for indent in every language, including Python; no autoformatter |
+| 0004 | aarch64 is a compile-only target |
+| 0005 | Widths that are a whole number of bytes are byte-aligned scalars |
+| 0006 | `[` is disambiguated by the closed attribute vocabulary |
+| 0007 | aarch64 is behaviourally tested under emulation |
+| 0008 | Slack needs no field in the view; the limit already carries it |
+| 0009 | `coded(C) { ... }` is the general transform region |
+| 0010 | Regions and tags may be named, and default to their keyword |
+| 0011 | Nested tag coverage recomputes innermost first |
+| 0012 | Namespaces are blocks, one level deep, qualified with `::` |
+| 0013 | Identifier casing is the author's, and collisions are the compiler's |
+| 0014 | `endian` and `bit_order` are positional, and `native` is the C compiler's |
+| 0015 | What a register adds to a struct, and what it does not |
+| 0016 | A composed expansion may carry both a ratio and an addend |
+| 0017 | One codec implementation, in C, with a per-language plugin slot |
+
+0004 and 0007 look contradictory and are not. 0004 made aarch64 compile-only
+and deferred a revisit; 0007 closes that revisit once user-mode emulation was
+available. Both stay, because the record of why the weaker position was taken
+first is part of what a decision log is for.
 
 ## 24. Build system
 
@@ -2047,12 +2129,48 @@ into an embedded build environment (Section 22).
 
 ---
 
+## 25.1 Where things stand
+
+A summary, so that the phase sections below do not have to be read end to end
+to answer "what works". Each claim here is the phase section's, condensed.
+
+**Complete.** Front end, layout solver, capability lattice, requirements and
+blame chains, the C backend, expressions and dynamic layout, variants, opaque
+regions, TLV, indexed tables, varints, both codec tiers, the cryptographic
+model, the advisor, the MMIO target, and the `.proto` importer. Every command
+section 21 names is implemented.
+
+**Not started.** The Rust backend (26.11), and section 26.14's list: the LSP,
+the remaining built-in codecs, and the C++ and Python backends.
+
+**The shape of the test suite**, because its size is the argument for trusting
+any of the above:
+
+| Layer | Count | What it holds |
+|---|---|---|
+| compiler tests | ~1160 | pytest over `situc/`, one file per module |
+| generated C checks | ~610 | cmocka, `gen-checks` output for every schema |
+| schemas exercised | 20 | 16 examples, `header.situ`, `edges.situ`, two std |
+| targets built | 3 | host, aarch64 under emulation, aarch64 big endian |
+
+Every one of those numbers is a floor rather than a target. The generated
+checks in particular are derived from the schemas, so adding an example adds
+coverage without anybody writing a test.
+
+**Diagnostics are snapshot-tested** in `tests/golden/`, because section 17
+makes message quality the product rather than a finish. A regression in the
+exact text of a blame chain fails the build.
+
 ## 26. Implementation plan
 
 Phases carry a **Status** line until they are reached; keeping those current is
 how this document doubles as the record of where the work is. A phase is
 complete when its acceptance criteria pass, not when its code looks finished.
-Phases 0 through 8 are complete; phase 9 onward have not been started.
+
+**Every phase is complete except 11, the Rust backend.** Phases 0 through 8 are
+ordered by dependency; 9, 10, 12 and 13 are largely independent of each other
+and are done. Every command section 21 names has landed, and `FUTURE_COMMANDS`
+in `situc/cli.py` is empty. What remains is section 26.14.
 
 Phases 0 through 8 are ordered by dependency, and 9 onward are largely
 independent of each other. Do not implement ahead of the plan.
@@ -2324,10 +2442,21 @@ emitted correctly and verified by disassembly; `ro`/`wo` asymmetry holds.
 
 ### 26.11 Phase 11: Rust backend
 
+**Status: not started, and deliberately not next.** Section 20.1 reorders the
+backends by how many people need them: C++ and Python land before Rust, which
+is far enough out that speculative work on it would be guesswork. The empty
+`situc/codegen/rust/` is the only thing in the tree that refers to it.
+
 Typestate for stages, borrows for view invalidation, `zerocopy`-style traits
 where the `repr` axis permits. This is where the capability system is expressed
 most naturally, and it will expose any place where the C backend papered over a
 soundness gap.
+
+One thing it will *introduce* rather than expose: decision 0017 binds codecs to
+the single C implementation, so a Rust program calling one goes through
+`extern "C"` and therefore through `unsafe`, in the backend whose argument is
+that the capability system becomes compile-time. The generated code must mark
+that at the call site rather than bury it.
 
 ### 26.12 Phase 12: transforms, tier 2 (derived codecs)
 
