@@ -457,3 +457,32 @@ def test_size_builtin_refuses_a_frame() -> None:
 	"""`size(X)` is a single number; a frame does not have one."""
 	solved = layout("struct S { u8 n; u8 v[n]; }")
 	assert solved.lookup("size", "S") is None
+
+
+def test_a_bit_packed_field_cannot_follow_a_dynamic_member() -> None:
+	"""The rule every backend leans on without saying so.
+
+	A bit phase across a dynamic boundary is not something the solver computes,
+	and a wrong bit offset is undetectable at run time -- so the construct is
+	refused here rather than guessed at anywhere downstream. Four backends
+	assert this rather than handle it; if it is ever relaxed, they fire.
+	"""
+	with pytest.raises(SituError) as caught:
+		layout("struct h { u8 v; u16 n; }\n"
+		       "struct s { h hdr; u8 opts[hdr.n]; u4 a; u4 b; }\n")
+
+	rendered = caught.value.diagnostic.render()
+	assert "bit-packed and cannot follow a dynamically sized member" in rendered
+	assert "move this field before the dynamic member" in rendered
+
+
+def test_the_same_field_is_fine_before_the_dynamic_member() -> None:
+	"""Which is the remedy the diagnostic names, so it has to work."""
+	solved = layout("struct h { u8 v; u16 n; }\n"
+	                "struct s { u4 a; u4 b; h hdr; u8 opts[hdr.n]; }\n")
+
+	packed = [p for p in solved.structs["s"].placements
+	          if p.scalar is not None and p.scalar.is_bit_packed]
+
+	assert packed
+	assert all(p.offset_bits is not None for p in packed)

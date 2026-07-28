@@ -2994,6 +2994,12 @@ other: its arithmetic is the struct's own walk, and only where the read is
 measured from differs. Its constraints are checked too, which is what the C
 backend always did and what the other three had quietly skipped.
 
+A *bit-packed* field cannot land there at all: section 8.2's solver refuses one
+that follows a dynamically sized member, because a bit phase across a dynamic
+boundary is not something it computes and a wrong bit offset is undetectable at
+run time. Every backend asserts that rule rather than handling it, so relaxing
+the rule fires an assertion instead of emitting wrong bytes.
+
 **The gate is a struct with a private field.** Rust's privacy is module-scoped,
 so no code outside the generated module can construct one, and the verified
 open is the only thing that does. A test asserts it by building the forgery and

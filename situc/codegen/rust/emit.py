@@ -295,9 +295,16 @@ class Emitter:
 		# measured from differs.
 		offset = (None if placement.offset_bits is not None
 		          else self._offset_expression(struct, placement))
-		if placement.offset_bits is None and (offset is None
-				or scalar.is_bit_packed):
-			return ["", f"\t// {placement.path}: this backend cannot place it."]
+
+		# The layout solver refuses a bit-packed field at a dynamic offset
+		# outright, so this asserts that rule rather than declaring a gap. If
+		# the rule is relaxed it fires here instead of emitting a wrong bit
+		# offset, which is undetectable at run time.
+		assert not (placement.offset_bits is None and scalar.is_bit_packed), \
+			f"{placement.path}: bit-packed at a dynamic offset"
+
+		if placement.offset_bits is None and offset is None:
+			return ["", f"\t// {placement.path}: its offset cannot be resolved."]
 
 		return [
 			"",
@@ -846,8 +853,10 @@ class Emitter:
 			# reads it the same way the getter does.
 			offset = (None if placement.offset_bits is not None
 			          else self._offset_expression(struct, placement))
-			if placement.offset_bits is None and (offset is None
-					or scalar.is_bit_packed):
+			assert not (placement.offset_bits is None
+			            and scalar.is_bit_packed), \
+				f"{placement.path}: bit-packed at a dynamic offset"
+			if placement.offset_bits is None and offset is None:
 				continue
 
 			if check is Check.RESERVED:

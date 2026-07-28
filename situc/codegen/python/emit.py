@@ -308,12 +308,13 @@ class Emitter:
 		offset = (None if placement.offset_bits is not None
 		          else self._offset_expression(struct, placement))
 
+		# The layout solver refuses a bit-packed field at a dynamic offset, so
+		# this asserts that rule rather than declaring a gap this backend has.
+		assert not (placement.offset_bits is None and scalar.is_bit_packed), \
+			f"{placement.path}: bit-packed at a dynamic offset"
+
 		if placement.offset_bits is None and offset is None:
-			return ["", f"\t# {placement.path}: its offset cannot be resolved",
-			        "\t# by this backend yet."]
-		if placement.offset_bits is None and scalar.is_bit_packed:
-			return ["", f"\t# {placement.path}: a bit-packed field at a dynamic",
-			        "\t# offset is not emitted by this backend yet."]
+			return ["", f"\t# {placement.path}: its offset cannot be resolved."]
 
 		lines = ["", "\t@property", f"\tdef {name}(self) -> {hint}:",
 		         *self._field_doc(entry),

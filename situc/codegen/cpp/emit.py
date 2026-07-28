@@ -755,13 +755,18 @@ class Emitter:
 		offset = (None if placement.offset_bits is not None
 		          else self._offset_expression(struct, placement))
 
-		if placement.offset_bits is None:
-			if offset is None:
-				return ["", f"\t/* {placement.path}: its offset cannot be"
-				        f" resolved. */"]
-			if scalar.is_bit_packed:
-				return ["", f"\t/* {placement.path}: a bit-packed field at a",
-				        "\t * dynamic offset is not emitted yet. */"]
+		# A bit-packed field cannot land at a dynamic offset: the layout
+		# solver refuses the construct outright, because a bit phase across a
+		# dynamic boundary is not something it computes (`layout.py`,
+		# check_alignment). This is an assertion of that rule rather than a gap
+		# in this backend -- if the rule is ever relaxed, it fires here instead
+		# of emitting a wrong bit offset, which is undetectable at run time.
+		assert not (placement.offset_bits is None and scalar.is_bit_packed), \
+			f"{placement.path}: bit-packed at a dynamic offset"
+
+		if placement.offset_bits is None and offset is None:
+			return ["", f"\t/* {placement.path}: its offset cannot be"
+			        f" resolved. */"]
 
 		name  = c_name(local_name(struct, placement))
 		ctype = self._field_ctype(placement)
