@@ -28,6 +28,9 @@ RUNTIME  = ROOT / "runtime"
 HOST_CXX = shutil.which("g++") or shutil.which("clang++")
 LIBSITU  = ROOT / "build" / "host" / "runtime" / "libsitu.a"
 
+CPP_USE = '#include "unit.hpp"\nint main()\n{\n\tstd::uint8_t buf[64] = {0};\n\tsitu::rt::message msg(buf, sizeof buf);\n\tsitu::s p;\n\tif (situ::s::at(msg, 0, p) != situ::rt::err::ok) { return 1; }\n\n\tstd::uint16_t seen = 0;\n\tif (p.with_sealed(true, [&](situ::s::sealed_gate g) {\n\t\tseen = g.inner_kind();\n\t}) != situ::rt::err::ok) { return 1; }\n\n\treturn seen == 0 ? 0 : 1;\n}\n'
+CPP_FORGE = '#include "unit.hpp"\nint main()\n{\n\tstd::uint8_t buf[64] = {0};\n\tsitu_view_t raw{buf, sizeof buf, 0};\n\tsitu::s::sealed_gate forged(raw);\n\treturn static_cast<int>(forged.inner_kind());\n}\n'
+
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
 WARNINGS = ["-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
@@ -111,14 +114,14 @@ def test_the_runtime_does_not_squat_on_schema_names() -> None:
 	assert "class view : public ::situ::rt::view {" in header
 
 
-def test_a_construct_outside_the_static_subset_says_so() -> None:
+def test_a_construct_outside_the_subset_says_so() -> None:
 	"""Rather than emitting something that looks complete. A reader has to be
 	able to tell a gap from a feature."""
-	header = emit("""struct h { u8 v; u16 n; }
-	struct s { h hdr; u8 opts[hdr.n]; }
-	""")
+	header = emit("register r @ 0x00 { width = 32; access_width = 32;"
+	              " bit enable [rw]; reserved u31 [preserve]; }",
+	              preamble="target mmio;\nendian little;\nbit_order lsb_first;\n")
 
-	assert "not fixed size" in header
+	assert "is a register" in header
 	assert "use the C header" in header
 
 
@@ -230,3 +233,103 @@ int main()
 	run = subprocess.run([str(tmp_path / "run")], capture_output=True,
 	                     text=True, check=False)
 	assert run.returncode == 0, f"backends disagree:\n{run.stdout}"
+
+
+# -- dynamic layout ---------------------------------------------------------
+
+
+def test_a_variable_struct_is_told_its_extent() -> None:
+	"""Nothing in the bytes says where the frame ends, so the caller supplies
+	it -- and that is the one bounds check everything else trusts."""
+	header = emit("struct h { u8 v; u16 n; }\nstruct s { h hdr; u8 opts[hdr.n]; }\n")
+
+	assert "std::uint32_t offset, std::uint32_t length, s &out" in header
+	assert "static constexpr std::uint32_t size_min = 3;" in header
+
+
+def test_a_dynamic_offset_sums_what_precedes_it() -> None:
+	"""The same walk the C backend does: constants for the fixed members, and
+	a runtime read for each variable one."""
+	header = emit("struct h { u8 v; u16 n; }\nstruct r { u32 id; }\n"
+	              "struct s { h hdr; u8 opts[hdr.n]; r recs[hdr.n]; }\n")
+
+	assert "std::uint32_t recs_offset() const noexcept" in header
+	assert "return 3 + (" in header
+
+
+def test_an_element_is_bounded_by_the_count_not_just_the_view() -> None:
+	"""Bytes after the array are inside the view and are not elements. The C
+	backend learned that the hard way; this one starts with it."""
+	header = emit("struct h { u8 v; u16 n; }\nstruct r { u32 id; }\n"
+	              "struct s { h hdr; r recs[hdr.n]; u32 trailer; }\n")
+
+	assert "if (index >= recs_count()) {" in header
+	assert "return ::situ::rt::err::bounds;" in header
+
+
+def test_remaining_runs_to_the_limit() -> None:
+	header = emit("struct s { u8 head; u8 rest[remaining]; }")
+
+	assert "(limit() - (1))" in header
+
+
+# -- the stage gate ---------------------------------------------------------
+
+
+SEALED = """codec aes_gcm_128 {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+impl aes_gcm_128 extern "my_aes_gcm_128";
+
+struct h { u8 v; u16 length; }
+struct s {
+	u8   hop;
+	authenticated { h hdr; u8 nonce[12] [nonce]; }
+	sealed(aes_gcm_128, nonce = nonce) {
+		u16  inner_kind;
+		u8   session_key[16] [secret];
+	}
+	tag  u8[16];
+}
+"""
+
+
+def test_the_gate_has_no_public_constructor() -> None:
+	"""Section 14.3 wants a sealed interior unreachable before its tag
+	verifies. C gets close, and anybody determined enough can fill the struct
+	in anyway; this cannot be written at all."""
+	header = emit(SEALED)
+
+	assert "class sealed_gate {" in header
+	assert "friend class s;" in header
+	assert "explicit constexpr sealed_gate(situ_view_t raw)" in header
+
+
+def test_a_secret_field_gets_no_accessor_even_inside_the_gate() -> None:
+	"""Section 14.6: no debug accessor is generated for it at all."""
+	header = emit(SEALED)
+
+	assert "session_key is [secret]" in header
+	assert "session_key() const" not in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_the_interior_is_reachable_through_the_check(tmp_path: Path) -> None:
+	result = compiles(tmp_path, SEALED, extra=CPP_USE)
+
+	assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_forging_a_gate_does_not_compile(tmp_path: Path) -> None:
+	"""The whole claim. If this ever starts compiling, the C++ backend has
+	stopped offering anything the C one does not."""
+	result = compiles(tmp_path, SEALED, extra=CPP_FORGE)
+
+	assert result.returncode != 0, "a gate was constructed without verifying"
+	assert "private" in result.stderr or "protected" in result.stderr

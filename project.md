@@ -2818,12 +2818,37 @@ bytes and the caller runs the cipher.
 
 ### 26.16 C++ backend
 
-**Status: the static subset works.** `situc build --target=cpp` emits one
-header per schema. Scalars, bit fields, straddling fields, enums, nested
-structs, byte arrays, fixed point, BCD and every constraint the C backend
-validates are covered. Not yet: dynamic layout, sealed regions and their gates,
-codecs, and registers -- each says so in the emitted header rather than being
-silently absent, because a reader has to be able to tell a gap from a feature.
+**Status: complete except registers.** `situc build --target=cpp` emits one
+header per schema, covering scalars, bit fields, straddling fields, enums,
+nested structs, byte arrays, fixed point, BCD, dynamic layout, sealed regions
+and every constraint the C backend validates. Registers say so in the emitted
+header rather than being silently absent, because a reader has to be able to
+tell a gap from a feature.
+
+**The stage gate is the reason this backend exists.** Section 14.3 asks that a
+sealed interior be unreachable before its tag verifies. C gets close: the
+accessors take a struct that only `_open` is supposed to fill in, and anybody
+determined enough fills it in anyway. C++ closes it. The gate has no public
+constructor and no public factory, and the only way to hold one is to be handed
+it inside a callback:
+
+```cpp
+err e = p.with_sealed(verified, [&](packet::sealed_gate g) {
+        kind = g.inner_kind();
+});
+```
+
+There is no expression a caller can write that names a gate outside that
+branch, so parsing attacker-controlled plaintext before authenticating it is
+not discouraged -- it does not compile. A test asserts exactly that, by trying
+to construct one and requiring the compile to fail. `[secret]` fields get no
+accessor even inside the gate (section 14.6).
+
+**Dynamic layout works the same way it does in C**, because it is the same
+walk: constants for the fixed members and a runtime read for each variable one.
+Element access is bounded by the count as well as the extent -- bytes after an
+array are inside the view and are not elements, which the C backend learned
+from a mutation that survived and this one started with.
 
 **There is no second runtime.** `runtime/cpp/situ.hpp` is a header over
 `situ.h`, whose functions are already `extern "C"`. A second implementation of

@@ -33,7 +33,7 @@ from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import local_name, own_entries
+from situc.traverse import local_name, own_entries, own_members
 from situc.types import ScalarKind, ScalarType
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -150,42 +150,339 @@ class Emitter:
 		if layout.register is not None:
 			return ["", f"/* {struct.name} is a register (section 15). The C++",
 			        " * backend does not emit those yet; use the C header. */"]
-		if not layout.is_fixed_size:
-			return ["", f"/* {struct.name} is not fixed size. The C++ backend",
-			        " * covers the static subset so far; use the C header. */"]
 
-		lines = [
+		lines = ["", *self._struct_comment(struct),
+		         f"class {name} : public ::situ::rt::view {{", "public:"]
+		lines.extend(self._acquire(struct))
+		lines.extend([
 			"",
-			f"/* struct {struct.name}: {layout.size_bytes} bytes, fixed. */",
-			f"class {name} : public ::situ::rt::view {{",
-			"public:",
-			f"\tstatic constexpr std::uint32_t size_bytes = {layout.size_bytes};",
+			f"\tconstexpr {name}() noexcept = default;",
+			f"\texplicit constexpr {name}(situ_view_t raw) noexcept"
+			f" : ::situ::rt::view(raw) {{}}",
+		])
+
+		for entry in own_entries(struct):
+			lines.extend(self._member(struct, entry))
+
+		lines.extend(self._validate(struct))
+		lines.extend(self._gates(struct))
+		lines.append("};")
+		return lines
+
+	def _struct_comment(self, struct: ResolvedStruct) -> list[str]:
+		layout = struct.layout
+		if layout.is_fixed_size:
+			return [f"/* struct {struct.name}: {layout.size_bytes} bytes, fixed. */"]
+
+		return [
+			f"/* struct {struct.name}: {layout.size_bytes} bytes and up, so its",
+			" * extent is the caller's to establish -- a length it knows from the",
+			" * frame this arrived in. That is the one bounds check, and",
+			" * everything below trusts it. */",
+		]
+
+	def _acquire(self, struct: ResolvedStruct) -> list[str]:
+		"""The factory. Fixed-size structs know their own extent; the rest are
+		told it, because nothing in the bytes says where the frame ends."""
+		layout = struct.layout
+		name   = c_name(struct.name)
+
+		if layout.is_fixed_size:
+			return [
+				f"\tstatic constexpr std::uint32_t size_bytes = {layout.size_bytes};",
+				"",
+				"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &msg,",
+				f"\t\t\tstd::uint32_t offset, {name} &out) noexcept",
+				"\t{",
+				"\t\tsitu_view_t raw;",
+				"\t\tconst situ_err_t e = situ_view_at(msg.raw(), offset,"
+				" size_bytes, &raw);",
+				"",
+				"\t\tif (e == SITU_OK) {",
+				f"\t\t\tout = {name}(raw);",
+				"\t\t}",
+				"\t\treturn static_cast<::situ::rt::err>(e);",
+				"\t}",
+			]
+
+		return [
+			f"\tstatic constexpr std::uint32_t size_min = {layout.size_bytes};",
 			"",
-			"\t/* The one bounds check. Everything below trusts it, which is why",
-			"\t * it is the only thing that can fail. */",
-			f"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &msg,",
-			f"\t\t\tstd::uint32_t offset, {name} &out) noexcept",
-						"\t{",
+			"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &msg,",
+			f"\t\t\tstd::uint32_t offset, std::uint32_t length,"
+			f" {name} &out) noexcept",
+			"\t{",
 			"\t\tsitu_view_t raw;",
 			"\t\tconst situ_err_t e = situ_view_at(msg.raw(), offset,"
-			" size_bytes, &raw);",
+			" length, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
 			f"\t\t\tout = {name}(raw);",
 			"\t\t}",
 			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",
-			"",
-			f"\tconstexpr {name}() noexcept = default;",
-			f"\texplicit constexpr {name}(situ_view_t raw) noexcept"
-			f" : ::situ::rt::view(raw) {{}}",
 		]
 
-		for entry in own_entries(struct):
-			lines.extend(self._member(struct, entry))
+	def _gates(self, struct: ResolvedStruct) -> list[str]:
+		"""Sealed regions, as a type that cannot be made without verifying.
 
-		lines.extend(self._validate(struct))
-		lines.append("};")
+		Section 14.3 asks that a sealed interior be unreachable before its tag
+		verifies. C gets close: the accessors take a struct nobody but `_open`
+		is supposed to fill in, and anybody determined enough can fill it in
+		anyway. C++ can close it.
+
+		The gate has no public constructor and no public factory. The only way
+		to obtain one is to be handed it, inside a callback that runs only on
+		the verified branch -- so there is no expression a caller can write
+		that names a gate object outside that branch. Not discouraged: absent.
+		"""
+		regions = [entry.placement for entry in struct.entries
+		           if entry.placement.kind == "sealed"]
+		if not regions:
+			return []
+
+		lines: list[str] = []
+		for region in regions:
+			lines.extend(self._gate(struct, region))
+		return lines
+
+	def _gate(self, struct: ResolvedStruct, region: Placement) -> list[str]:
+		name    = c_name(local_name(struct, region))
+		holder  = f"{name}_gate"
+		# Scalars only for now. A variable-length member inside a sealed region
+		# needs its length read through the gate's own view, which is the next
+		# piece rather than this one.
+		inside  = [entry for entry in struct.entries
+		           if entry.placement.sealed_by == region.name
+		           and entry.placement.kind == "field"
+		           and entry.placement.scalar is not None
+		           and entry.placement.offset_bits is not None
+		           and entry.placement.array_count is None
+		           and entry.placement.sized_by is None]
+
+		rest    = [entry.placement for entry in struct.entries
+		           if entry.placement.sealed_by == region.name
+		           and entry.placement.kind == "field"
+		           and (entry.placement.array_count is not None
+		                or entry.placement.sized_by is not None)]
+		secret  = [placement.path for placement in rest
+		           if any(attr.name == "secret" for attr in placement.attrs)]
+		skipped = [placement.path for placement in rest
+		           if placement.path not in secret]
+
+		lines = [
+			"",
+			f"\t/* {region.path}, sealed by {region.codec or 'a codec'}"
+			f" and covered by {', '.join(region.covered_by) or 'a tag'}.",
+			"\t *",
+			"\t * This type has no public constructor and no public factory. A",
+			f"\t * caller reaches the interior through with_{name}() below, which",
+			"\t * runs the callback only once the tag has verified -- so there is",
+			"\t * no expression that names one of these outside that branch.",
+			"\t * Parsing attacker-controlled plaintext before authenticating it",
+			"\t * is not discouraged here; it cannot be written. */",
+			f"\tclass {holder} {{",
+			"\tpublic:",
+		]
+
+		for entry in inside:
+			lines.extend(self._gated_accessor(entry))
+
+		if not inside:
+			lines.append("\t\t/* Nothing in this region has a scalar accessor. */")
+		for path in secret:
+			lines.extend(["",
+			              f"\t\t/* {path} is [secret]: no debug accessor is",
+			              "\t\t * generated for it at all (section 14.6). */"])
+		for path in skipped:
+			lines.extend(["",
+			              f"\t\t/* {path} is variable length. Reaching it needs",
+			              "\t\t * its length read through this view, which the C++",
+			              "\t\t * backend does not do yet; use the C gate. */"])
+
+		lines.extend([
+			"",
+			"\tprivate:",
+			f"\t\tfriend class {c_name(struct.name)};",
+			f"\t\texplicit constexpr {holder}(situ_view_t raw) noexcept"
+			f" : raw_(raw) {{}}",
+			"",
+			"\t\tsitu_view_t raw_;",
+			"\t};",
+			"",
+			f"\t/* Runs `fn` over the sealed interior, and only if `verified`.",
+			"\t *",
+			"\t * The result is whatever the callback needs it to be: it may",
+			"\t * capture. What it may not do is outlive the check, because the",
+			"\t * gate it is handed cannot be copied out of the namespace it has",
+			"\t * no constructor in. */",
+			"\ttemplate <typename F>",
+			f"\t[[nodiscard]] ::situ::rt::err with_{name}(bool verified,"
+			f" F &&fn) const",
+			"\t{",
+			"\t\tif (!verified) {",
+			"\t\t\treturn ::situ::rt::err::tag;",
+			"\t\t}",
+			"",
+			f"\t\tfn({holder}(raw()));",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		])
+		return lines
+
+	def _gated_accessor(self, entry: Resolved) -> list[str]:
+		placement = entry.placement
+		scalar    = placement.scalar
+		assert scalar is not None
+
+		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		ctype = self._field_ctype(placement)
+
+		if any(attr.name == "secret" for attr in placement.attrs):
+			return ["",
+			        f"\t\t/* {name} is [secret]: no debug accessor is generated"
+			        f" for it",
+			        "\t\t * at all (section 14.6). */"]
+
+		load = self._raw_load(scalar, placement, f"raw_.base + {placement.offset_bytes}")
+		load = load.replace("base()", "raw_.base")
+		if placement.type_name in self.enums:
+			load = f"static_cast<{ctype}>({load})"
+
+		return [
+			"",
+			f"\t\t[[nodiscard]] {ctype} {name}() const noexcept",
+			"\t\t{",
+			f"\t\t\treturn {load};",
+			"\t\t}",
+		]
+
+	def _offset_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""Where a member starts, as a C++ expression.
+
+		The same walk the C backend does: everything before the first
+		variable-length member contributes a constant, and each variable one
+		contributes its own length, read from the field that drives it. That
+		field always has a static offset, because a size expression may only
+		name a field declared before it.
+		"""
+		if placement.offset_bits is not None:
+			return str(placement.offset_bits // BITS_PER_BYTE)
+
+		constant = 0
+		terms: list[str] = []
+
+		for other in own_members(struct):
+			if other.path == placement.path:
+				break
+			if other.is_fixed_size:
+				constant += other.size_bits // BITS_PER_BYTE
+				continue
+			length = self._length_expression(struct, other)
+			if length is None:
+				return None
+			terms.append(length)
+
+		return " + ".join([str(constant), *terms])
+
+	def _length_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""How many bytes a variable-length member occupies, at run time."""
+		if placement.sized_by == "remaining":
+			start = self._offset_expression(struct, placement)
+			return None if start is None else f"(limit() - ({start}))"
+		if placement.sized_by is None:
+			return None
+
+		count = self._count_expression(struct, placement)
+		if count is None:
+			return None
+
+		element = self._element_bytes(placement)
+		if element is None:
+			return None
+		return f"({count})" if element == 1 else f"({count}) * {element}"
+
+	def _count_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""The value of the field that sizes a member, read at run time."""
+		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
+		if driver is None or driver.placement.scalar is None:
+			return None
+		if driver.placement.offset_bits is None:
+			return None
+
+		return (f"static_cast<std::uint32_t>("
+		        f"{self._raw_load(driver.placement.scalar, driver.placement, 'base() + '
+		        f'{driver.placement.offset_bytes}')})")
+
+	def _element_bytes(self, placement: Placement) -> int | None:
+		nested = self.resolved.structs.get(placement.type_name or "")
+		if nested is not None:
+			return (int(nested.layout.size_bytes)
+			        if nested.layout.is_fixed_size else None)
+		if placement.scalar is not None and placement.scalar.bits % BITS_PER_BYTE == 0:
+			return max(placement.scalar.bits // BITS_PER_BYTE, 1)
+		return None
+
+	def _variable(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""A member whose extent the data decides: a counted array, or the rest."""
+		name   = c_name(local_name(struct, placement))
+		start  = self._offset_expression(struct, placement)
+		length = self._length_expression(struct, placement)
+
+		if start is None or length is None:
+			return ["", f"\t/* {placement.path}: sized by"
+			        f" `{placement.sized_by}`, which this backend cannot resolve"
+			        f" yet. */"]
+
+		nested = self.resolved.structs.get(placement.type_name or "")
+		lines  = ["",
+		          f"\t/* {placement.path}: offset and extent both from the data. */",
+		          f"\t[[nodiscard]] std::uint32_t {name}_offset() const noexcept",
+		          "\t{",
+		          f"\t\treturn {start};",
+		          "\t}"]
+
+		if nested is None:
+			lines.extend([
+				f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
+				"\t{",
+				f"\t\treturn ::situ::rt::bytes(base() + {name}_offset(), {length});",
+				"\t}",
+			])
+			return lines
+
+		count = self._count_expression(struct, placement)
+		inner = f"::{self.namespace}::{c_name(placement.type_name or '')}"
+		lines.extend([
+			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+			"\t{",
+			f"\t\treturn {count};",
+			"\t}",
+			"",
+			f"\t/* Element `index`, or an error past the end. The count is",
+			"\t * checked as well as the extent: bytes after the array are",
+			"\t * inside the view and are not elements. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,",
+			f"\t\t\t{inner} &out) const noexcept",
+			"\t{",
+			f"\t\tif (index >= {name}_count()) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"",
+			"\t\tsitu_view_t raw;",
+			f"\t\tconst situ_err_t e = situ_view_sub(this->raw(),",
+			f"\t\t\t{name}_offset() + index * {inner}::size_bytes,",
+			f"\t\t\t{inner}::size_bytes, &raw);",
+			"",
+			"\t\tif (e == SITU_OK) {",
+			f"\t\t\tout = {inner}(raw);",
+			"\t\t}",
+			"\t\treturn static_cast<::situ::rt::err>(e);",
+			"\t}",
+		])
 		return lines
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
@@ -196,9 +493,13 @@ class Emitter:
 			        f"\t/* {placement.path} is reserved: no accessor, and"
 			        f" `validate` holds it to",
 			        "\t * the pattern the schema declares. */"]
+		# Checked before the offset: a member sized by the data usually has a
+		# dynamic offset too, and bailing on that first would skip it.
+		if placement.kind == "field" and placement.sized_by is not None:
+			return self._variable(struct, placement)
+
 		if placement.kind != "field" or placement.offset_bits is None:
 			return ["", f"\t/* {placement.path}: not in the static subset yet. */"]
-
 		if placement.type_name in self.structs:
 			return self._nested(struct, placement)
 		if placement.array_count is not None:
@@ -383,6 +684,12 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 
+		# An array of structs is not a nested struct: validating every element
+		# on every parse is a cost the caller should choose, which is the same
+		# call the C backend makes.
+		if placement.array_count is not None or placement.sized_by is not None:
+			return self._array_checks(struct, placement, scalar) if scalar else []
+
 		if placement.type_name in self.structs and scalar is None:
 			name = c_name(local_name(struct, placement))
 			return [
@@ -410,9 +717,6 @@ class Emitter:
 					"\t\t}",
 				])
 			return lines
-
-		if placement.array_count is not None:
-			return self._array_checks(struct, placement, scalar)
 
 		name = c_name(local_name(struct, placement))
 		for attr in placement.attrs:
