@@ -1574,7 +1574,7 @@ random_access(X)        stable_address(X)
 canonical(X)            deterministic(X)        deterministic_writer(X)
 aligned(X, n)           atomic(X)               memory_identical(X)
 no_tag_invalidation(X)  verify_gated(X)         uncovered(X)
-no_alloc(X)             bounded_stack(X, n)
+no_alloc(X)             bounded_stack(X, n)     no_realloc(expr)
 ```
 
 `memory_identical(X)` asks the `repr` axis: are the bytes the value, with no
@@ -1942,7 +1942,7 @@ situc gen-codec-tests <schema>    property tests from codec signatures
 situc import-proto <proto> -o <schema>   [--accept-lossy]
 ```
 
-Global flags: `--target=c|cpp|rust|python`, `--out=DIR`,
+Global flags: `--target=c|cpp|python|rust`, `--out=DIR`,
 `--diagnostics=text|json`,
 `--strict`, `--prefix=NAME`.
 
@@ -1963,6 +1963,14 @@ Global flags: `--target=c|cpp|rust|python`, `--out=DIR`,
 | round-trip | pytest + hex vectors | parse then re-emit must be byte-identical for canonical schemas |
 | fuzz | libFuzzer | generated harnesses run in CI for a bounded time |
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
+| backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
+| compiler mutation | by hand, recorded in 26.13a | deliberate bugs in the generator, judged by what a *user's* suite catches rather than situ's own. Not automated: choosing the mutation is the work, and a mutation nobody thought of is the gap that survives |
+
+**What the suite does not do**, stated because a reader would otherwise assume
+it: the emitted Lua is never executed (no Wireshark, no interpreter in the
+build environment), so `gen-dissector` is checked structurally and against the
+layout rather than against Wireshark's acceptance. And the aarch64 big-endian
+target is compile-only; only the little-endian one runs under emulation.
 
 Implementation language for `situc`: **Python 3.11+, standard library only**,
 with full type annotations checked by mypy in strict mode. Rationale: the
@@ -2017,19 +2025,34 @@ situ/
     proto.py                  the `.proto` importer; phase 13
     doc.py                    `situc doc`: RFC-style diagrams and a field table
     dissector.py              `situc gen-dissector`: a Wireshark dissector in Lua
+    lsp.py                    `situc lsp`: diagnostics, hover, symbols, code
+                              actions and definitions, over JSON-RPC on stdio
     codegen/
       c/                      emit, checks, vectors, fuzz harnesses, codec
                               tests, derived codec implementations, MMIO
       cpp/                    the second backend
-      rust/                   phase 11
-      python/                 the fourth backend
+      python/                 the third
+      rust/                   the fourth
     cli.py
-  runtime/
+  runtime/                    one per backend, and each is thin: the arithmetic
+                              lives once, in C
     c/
-      situ.h                  minimal runtime: views, bounds, generation, bit
-                              access, varints, BCD, sign extension
+      situ.h                  views, bounds, generation, bit access, varints,
+                              BCD, checksums, text validation, sign extension
       situ.c
       Makefile                self-contained; `cd runtime/c && make` works
+    cpp/
+      situ.hpp                a header over situ.h, whose functions are already
+                              `extern "C"`. Adds a span, scoped errors and the
+                              `situ::rt` namespace so generated code may use
+                              `situ` without colliding
+    python/
+      situ_runtime.py         views over `memoryview`, and the generation check
+                              of 12.3 -- the one place Python is stronger than
+                              release-build C
+    rust/
+      situ_rt.rs              `no_std`, allocation-free. Invalidation is the
+                              borrow checker, so no generation is carried
   std/
     codecs.situ               signatures for the standard codecs, hand written
     kernels.situ              the same codes as kernel descriptions, so the
@@ -2188,21 +2211,39 @@ point and BCD. Every command section 21 names has landed, and
 Phases 0 through 8 are ordered by dependency; everything after is largely
 independent of the rest.
 
-**What remains is 26.15 through 26.19**, in that order: the built-in codec set,
-the C++ backend, the Python backend, the Rust backend, and the language server.
-They were a "beyond" list until the phase numbering outlived the plan it
-described and the remaining work needed an order of its own. 26.20 records what
-is deliberately not scheduled, which is not the same as unfinished.
+**26.15 through 26.19 are complete too**: the built-in codec set, and the C++,
+Python and Rust backends, and the language server. **Nothing on the roadmap is
+outstanding.** 26.20 records what is deliberately not scheduled, which is not
+the same as unfinished.
+
+**Four backends over one layout**, and the claim that matters is that they
+agree. Each is tested against the C output on the same buffer, field by field,
+because four backends that disagreed would mean a schema means four things.
+What differs between them is not the bytes but how much of the lattice each
+language can enforce rather than document:
+
+| | C | C++ | Python | Rust |
+|---|---|---|---|---|
+| bounds | run time | run time | run time | run time |
+| invalidation (12.3) | generation, checked in `SITU_CHECKED` | as C | generation, always | **borrow checker** |
+| a length that cannot be lost | `_COUNT` macro | `span` | `memoryview` | slice |
+| an error that cannot be dropped | no | `[[nodiscard]]` | exception | `Result` |
+| the stage gate (14.3) | a struct anyone can fill in | **no public constructor** | a run-time token | **private field** |
+| `atomic`, `repr` | documented | documented | documented | documented |
+
+The two in bold are the ones a compiler refuses rather than a runtime reports,
+and they are the argument for having written those backends.
 
 **The shape of the test suite**, because its size is the argument for trusting
 any of the above:
 
 | Layer | Count | What it holds |
 |---|---|---|
-| compiler tests | ~1160 | pytest over `situc/`, one file per module |
-| generated C checks | ~610 | cmocka, `gen-checks` output for every schema |
+| compiler tests | ~1280 | pytest over `situc/`, one file per module |
+| generated C checks | ~670 | cmocka, `gen-checks` output for every schema |
 | schemas exercised | 20 | 16 examples, `header.situ`, `edges.situ`, two std |
 | targets built | 3 | host, aarch64 under emulation, aarch64 big endian |
+| backends compiled | 3 | every schema, as C++, Python and Rust, in the suite |
 
 Every one of those numbers is a floor rather than a target. The generated
 checks are derived from the schemas, so adding an example adds coverage without
@@ -2670,6 +2711,13 @@ wrong value is refused would pass against a validator that did nothing. The
 baseline satisfies every `must_eq`, `min` and reserved policy first and asserts
 the struct validates, then breaks one field.
 
+**The baseline has since been wrong twice more, both times the same way.** It
+left enum fields at zero once membership was enforced, and it does not satisfy
+constraints on fields it cannot place. A baseline that is not actually valid
+makes every check built on it assert the wrong thing, and it fails loudly -- so
+the pattern to watch for is a new constraint kind landing without the baseline
+learning to satisfy it.
+
 ### 26.14 Delivered after the plan ran out
 
 The plan ran to phase 13. Three things landed after it, and they are numbered
@@ -3107,6 +3155,23 @@ section 8.6 for what is and is not claimed today.
    does exist, the safe option is silent and the unsafe option is loud.
 10. Diagnostic quality is the product, not a finishing touch. The exact text is
    snapshot-tested, and a regression in message quality is a real regression.
+11. **A test that asserts absence has a shelf life; one that asserts behaviour
+   does not.** Five tests in this repository asserted that some construct was
+   unsupported, and every one of them became a false statement the day it was
+   implemented -- each failing for the good reason, but each needing rewriting
+   rather than deleting. Where a gap must be recorded, record it in the emitted
+   artifact where a *reader* sees it, and test the behaviour that exists.
+12. **A declared gap must be a real one.** Saying "this backend cannot do X" is
+   more useful than silence and worse than silence when X cannot arise: a
+   reader designs around a limit that is not there. Three backends declared
+   they could not place a bit-packed field at a dynamic offset; the layout
+   solver refuses the construct outright, so the declaration was fiction. They
+   assert the rule now, and fire if it is ever relaxed.
+13. **A second implementation is an audit of the first.** Enum membership was
+   specified in 8.7, emitted as a comment by the C backend since phase 4, and
+   enforced by nothing. It surfaced when a third backend made three answers
+   comparable. Expect each new target to find something the existing ones
+   agreed about only because they shared a code path.
 
 ---
 
