@@ -394,6 +394,15 @@ NAMED_CODES: dict[str, list[int]] = {
 		0b10010, 0b10011, 0b10110, 0b10111,
 		0b11010, 0b11011, 0b11100, 0b11101,
 	],
+	# RFC 4648 base16: a nibble to an ASCII hex digit, uppercase, which is what
+	# the RFC specifies. It needs no padding at any length -- every byte is
+	# exactly two nibbles -- which is what separates it from base32 and base64
+	# and why it is the one of the three that fits a table kernel unchanged.
+	"base16": [ord(c) for c in "0123456789ABCDEF"],
+	# The same code in lowercase. Not an alias: a protocol that specifies one
+	# and receives the other has received something it did not specify, and
+	# situ has no business deciding that does not matter.
+	"base16_lower": [ord(c) for c in "0123456789abcdef"],
 }
 
 

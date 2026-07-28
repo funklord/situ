@@ -2695,16 +2695,52 @@ the row they start in and continue in the slanted form RFCs use.
 
 ### 26.15 The built-in codec set
 
-**Status: not started.** The cheapest of the remaining work and the only piece
-with no open design question behind it -- every codec named below is derivable
-from a kernel family that already exists, so most would be a row in
-`std/kernels.situ` and a vector test rather than new machinery.
+**Status: partly done.** The checksums, base16 and text validation have
+landed. base32 and base64 have not, and the reason is a decision rather than
+effort -- see the end of this section.
 
-One exception worth knowing before starting: base64's ratio is exact (4:3) but
-its padding makes the output length depend on the input length mod 3, which
-section 13.2's expansion vocabulary does not express. That needs deciding, and
-decision 0016 is the precedent for widening the vocabulary rather than
-approximating.
+**Checksums are runtime primitives, not kernels.** A `checksum` field says
+which bytes are covered and when the value went stale; it does not compute
+anything, because the algorithm is not something the layout knows. So the four
+small enough to ship are `static inline` in `situ.h`, where a schema naming
+none of them emits none of them: `situ_checksum_internet` (RFC 1071),
+`situ_fletcher16`, `situ_fletcher32` and `situ_adler32`.
+
+Each is held to somebody else's answer rather than its own. Adler-32 is checked
+against Python's `zlib`, which is an independent implementation of RFC 1950.
+Fletcher's vectors are the published ones -- and pinned the word order, which
+is not a free choice: Fletcher-32 reads its words little-endian, and the
+big-endian reading gives a byte-swapped near-miss that looks entirely plausible
+until compared with somebody else's answer. The internet checksum is tested
+against RFC 1071's worked example and, more usefully, against the property the
+RFC states: a block carrying its own checksum sums to zero. A property holds
+for every input where a constant holds for one.
+
+**base16 needed no new machinery at all.** It is 4 bits in, 8 bits out, so it
+is a table code and the existing kernel generates it from an alphabet in
+`NAMED_CODES`. It needs no padding at any input length -- every byte is exactly
+two nibbles -- which is precisely what separates it from base32 and base64.
+`base16_lower` is a separate code rather than an alias: a protocol that
+specifies one and receives the other has received something it did not specify.
+
+**Text validation makes `[encoding]` mean something.** Section 8.6 offered
+`ascii` and `utf8` and both were parsed and dropped on the floor, so a schema
+could call a field ASCII and the generated code would neither check it nor
+record it. `situ_utf8_valid` is strict in the way RFC 3629 requires: overlong
+forms, surrogate halves, values above U+10FFFF and sequences running off the
+end of the field are all refused. That strictness is section 8.8's argument in
+different clothes -- an overlong encoding is a second spelling of a character
+that already has one, and a receiver accepting both accepts two byte sequences
+for one value. Every expectation is checked against Python's strict decoder.
+An encoding situ cannot validate is now an error rather than a silent nod.
+
+**Still open: base32 and base64.** Their ratios are exact -- 8:5 and 4:3 -- but
+padding makes the output length depend on the input length mod 5 or mod 3,
+which section 13.2's expansion vocabulary does not express. Decision 0016 is
+the precedent for widening the vocabulary rather than approximating, and this
+wants the same treatment. `nul_terminated` is in the same position: still
+parsed, still refused, and needing a decision about what a terminator does to
+a field's extent before it can mean anything.
 
 **Parsing most protocols should need nothing installed.** The long-term aim is
 that a schema for an ordinary protocol builds and runs against situ alone --

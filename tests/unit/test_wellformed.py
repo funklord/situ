@@ -212,15 +212,20 @@ def test_recursion_survives_the_other_checks() -> None:
 
 
 def test_a_text_attribute_that_does_nothing_is_refused() -> None:
-	"""Section 8.6 gives text `[encoding]` and `[nul_terminated]`. Neither is
-	implemented, and both used to parse and be dropped on the floor -- so a
-	schema could say its field was ASCII and the generated code would neither
-	check it nor record it. Silence is the wrong answer for an unimplemented
-	feature; the parser still knows the names, because bracket disambiguation
-	depends on them.
-	"""
-	for attr in ("encoding = ascii", "nul_terminated"):
-		message = rendered(f"struct s {{ u8 name[8] [{attr}]; }}")
+	"""Silence is the wrong answer for an unimplemented feature: a schema could
+	say its field was nul-terminated and the generated code would neither check
+	it nor record it. The parser still knows the name, because bracket
+	disambiguation depends on it."""
+	message = rendered("struct s { u8 name[8] [nul_terminated]; }")
 
-		assert "is not implemented" in message
-		assert "section 8.6" in message
+	assert "is not implemented" in message
+	assert "section 8.6" in message
+
+
+def test_an_encoding_situ_cannot_check_is_refused() -> None:
+	"""`ascii` and `utf8` are validated; anything else would be a claim the
+	generated code never tests, which is worse than declaring nothing."""
+	message = rendered("struct s { u8 name[8] [encoding = utf16]; }")
+
+	assert "not an encoding situ validates" in message
+	assert "`ascii` and `utf8`" in message

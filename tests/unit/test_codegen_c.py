@@ -899,3 +899,25 @@ def test_a_sealed_region_pulls_in_no_crypto() -> None:
 	assert includes(sealed) == includes(plain)
 	for name in ("openssl", "sodium", "mbedtls", "aes.h"):
 		assert name not in sealed
+
+
+def test_declared_text_encoding_is_validated() -> None:
+	"""Section 8.6 offers `[encoding]`; it used to parse and be dropped, so a
+	schema could call a field ASCII and the generated code would neither check
+	it nor record it."""
+	_, ascii_source = emit("struct s { u8 tag[4] [encoding = ascii]; }")
+	_, utf8_source  = emit("struct s { u8 name[8] [encoding = utf8]; }")
+
+	assert "situ_ascii_valid((view.base) + 0u, 4u)" in ascii_source
+	assert "situ_utf8_valid((view.base) + 0u, 8u)" in utf8_source
+	assert "SITU_ERR_CONSTRAINT" in utf8_source
+
+
+def test_text_without_an_encoding_is_not_validated() -> None:
+	"""The attribute is the claim. A plain byte array makes none, and paying
+	for a check nobody asked for would be the other way to get this wrong."""
+	_, source = emit("struct s { u8 name[8]; }")
+
+	# Named calls, not the substring: `situ_s_validate` contains "valid".
+	assert "situ_ascii_valid" not in source
+	assert "situ_utf8_valid" not in source

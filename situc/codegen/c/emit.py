@@ -1610,6 +1610,14 @@ class Emitter:
 				and placement.kind == "reserved":
 			return self._reserved_array_check(struct, placement, scalar)
 
+		# `[encoding]` is a claim about what the bytes are. Section 8.6 offers
+		# it, and it was accepted and dropped on the floor until now: a schema
+		# could declare a field ASCII and the generated code would neither
+		# check it nor record it.
+		if scalar is not None and placement.array_count is not None \
+				and _has_attr(placement.attrs, "encoding"):
+			return self._encoding_check(struct, placement, scalar)
+
 		if scalar is None or placement.array_count is not None:
 			return []
 		if placement.kind == "marker":
@@ -1663,6 +1671,35 @@ class Emitter:
 			])
 
 		return lines
+
+	def _encoding_check(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""Text declared as an encoding must actually be in it.
+
+		Strict, because RFC 3629 is: an overlong form or a surrogate half is a
+		second spelling of a character that already has one, and accepting both
+		means two byte sequences encode one value. That is the malleability
+		problem of section 8.8 wearing different clothes.
+		"""
+		encoding = next((attr for attr in placement.attrs
+		                 if attr.name == "encoding"), None)
+		if encoding is None or placement.offset_bits is None:
+			return []
+		if scalar.bits != BITS_PER_BYTE:
+			return []
+
+		named = getattr(encoding.value, "name", None)
+		if named not in ("ascii", "utf8"):
+			return []
+
+		count = placement.array_count or 0
+		return [
+			f"\t/* {placement.path} [encoding = {named}] */",
+			f"\tif (!situ_{named}_valid((view.base) + {placement.offset_bytes}u,"
+			f" {count}u)) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
 
 	def _reserved_array_check(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:

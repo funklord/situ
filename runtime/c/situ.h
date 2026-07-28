@@ -417,6 +417,172 @@ static inline int64_t situ_sign_extend(uint64_t raw, uint32_t width)
 }
 
 /* ------------------------------------------------------------------------
+ * Text validation (section 8.6)
+ *
+ * situ has no string type: text is `u8 name[N]`, and `[encoding]` says what
+ * the bytes are supposed to be. Saying it is only worth anything if something
+ * checks, so the generated validator calls these.
+ *
+ * Strict, in the sense RFC 3629 requires and for the reason it gives: an
+ * overlong encoding or a surrogate is a second spelling of a character that
+ * already has one, and a receiver that accepts both accepts two byte
+ * sequences for one value. That is the malleability problem reserved bits have
+ * (section 8.8), in a different costume.
+ * ------------------------------------------------------------------------ */
+
+static inline int situ_ascii_valid(const uint8_t *data, uint32_t len)
+{
+	uint32_t i;
+
+	for (i = 0; i < len; i++) {
+		if (data[i] > 0x7Fu) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static inline int situ_utf8_valid(const uint8_t *data, uint32_t len)
+{
+	uint32_t i = 0;
+
+	while (i < len) {
+		uint8_t  lead  = data[i];
+		uint32_t extra;
+		uint32_t code;
+		uint32_t least;
+		uint32_t k;
+
+		if (lead < 0x80u) {
+			i++;
+			continue;
+		}
+
+		if (lead >= 0xC2u && lead <= 0xDFu) {
+			extra = 1u; code = lead & 0x1Fu; least = 0x80u;
+		} else if (lead >= 0xE0u && lead <= 0xEFu) {
+			extra = 2u; code = lead & 0x0Fu; least = 0x800u;
+		} else if (lead >= 0xF0u && lead <= 0xF4u) {
+			extra = 3u; code = lead & 0x07u; least = 0x10000u;
+		} else {
+			return 0;	/* 0x80-0xC1 continuation or overlong lead, 0xF5+ */
+		}
+
+		if (i + extra >= len) {
+			return 0;	/* truncated: the sequence runs off the end */
+		}
+
+		for (k = 1u; k <= extra; k++) {
+			if ((data[i + k] & 0xC0u) != 0x80u) {
+				return 0;
+			}
+			code = (code << 6) | (uint32_t)(data[i + k] & 0x3Fu);
+		}
+
+		if (code < least) {
+			return 0;	/* overlong: a second spelling of a shorter form */
+		}
+		if (code >= 0xD800u && code <= 0xDFFFu) {
+			return 0;	/* a surrogate half, which UTF-8 may not carry */
+		}
+		if (code > 0x10FFFFu) {
+			return 0;
+		}
+
+		i += extra + 1u;
+	}
+	return 1;
+}
+
+/* ------------------------------------------------------------------------
+ * Checksums (section 26.15)
+ *
+ * A `checksum` field tells a caller which bytes are covered and when the value
+ * has gone stale; it does not compute anything, because the algorithm is not
+ * something the layout knows. These are the algorithms small enough to ship:
+ * a few lines each, no tables, no library. Anything needing a real
+ * implementation behind it -- a cryptographic hash, deflate -- stays tier-1
+ * and optional.
+ *
+ * They are `static inline`, so a schema that names none of them emits none of
+ * them. That is what makes the optional tier actually optional.
+ * ------------------------------------------------------------------------ */
+
+/* The internet checksum of RFC 1071: the one's complement of the one's
+ * complement sum of 16-bit big-endian words, with an odd trailing byte padded.
+ *
+ * Its defining property is that a block carrying its own checksum sums to
+ * zero, which is how a receiver verifies without recomputing separately. */
+static inline uint16_t situ_checksum_internet(const uint8_t *data, uint32_t len)
+{
+	uint32_t total = 0;
+	uint32_t i;
+
+	for (i = 0; i + 1u < len; i += 2u) {
+		total += ((uint32_t)data[i] << 8) | (uint32_t)data[i + 1u];
+	}
+	if ((len & 1u) != 0u) {
+		total += (uint32_t)data[len - 1u] << 8;	/* pad the odd byte low */
+	}
+
+	/* End-around carry, twice: folding can itself carry. */
+	total = (total & 0xFFFFu) + (total >> 16);
+	total = (total & 0xFFFFu) + (total >> 16);
+
+	return (uint16_t)(~total & 0xFFFFu);
+}
+
+/* Fletcher-16 over bytes, modulo 255. */
+static inline uint16_t situ_fletcher16(const uint8_t *data, uint32_t len)
+{
+	uint32_t a = 0;
+	uint32_t b = 0;
+	uint32_t i;
+
+	for (i = 0; i < len; i++) {
+		a = (a + (uint32_t)data[i]) % 255u;
+		b = (b + a) % 255u;
+	}
+	return (uint16_t)((b << 8) | a);
+}
+
+/* Fletcher-32 over 16-bit *little-endian* words, modulo 65535.
+ *
+ * The word order is not a free choice: the published test vectors only come
+ * out right this way, and reading the words big-endian gives a byte-swapped
+ * near-miss that looks plausible. */
+static inline uint32_t situ_fletcher32(const uint8_t *data, uint32_t len)
+{
+	uint32_t a = 0;
+	uint32_t b = 0;
+	uint32_t i;
+
+	for (i = 0; i + 1u < len; i += 2u) {
+		a = (a + (((uint32_t)data[i + 1u] << 8) | (uint32_t)data[i])) % 0xFFFFu;
+		b = (b + a) % 0xFFFFu;
+	}
+	if ((len & 1u) != 0u) {
+		a = (a + (uint32_t)data[len - 1u]) % 0xFFFFu;
+		b = (b + a) % 0xFFFFu;
+	}
+	return (b << 16) | a;
+}
+
+/* Adler-32 (RFC 1950), the checksum zlib carries. */
+static inline uint32_t situ_adler32(const uint8_t *data, uint32_t len)
+{
+	uint32_t a = 1;
+	uint32_t b = 0;
+	uint32_t i;
+
+	for (i = 0; i < len; i++) {
+		a = (a + (uint32_t)data[i]) % 65521u;
+		b = (b + a) % 65521u;
+	}
+	return (b << 16) | a;
+}
+
+/* ------------------------------------------------------------------------
  * Packed binary-coded decimal (section 8.1)
  *
  * Each nibble holds one decimal digit, most significant first, which is what

@@ -239,6 +239,66 @@ static void test_hdlc_refuses_six_ones(void **state)
 	assert_int_equal(situ_hdlc_bit_stuffing_decode(flag, 8, out), 0);
 }
 
+/* -- base16 (RFC 4648) ----------------------------------------------------- */
+
+static void test_base16_encodes_to_ascii_hex(void **state)
+{
+	/* Not a value situ computed and wrote down: this is what `xxd` prints. */
+	static const uint8_t in[3] = { 0xDE, 0xAD, 0xBE };
+	uint8_t out[8]  = { 0 };
+	uint8_t back[4] = { 0 };
+
+	(void)state;
+
+	assert_int_equal(situ_base16_encode(in, 24u, out), 48u);
+	assert_memory_equal(out, "DEADBE", 6);
+
+	assert_int_equal(situ_base16_decode(out, 48u, back), 24u);
+	assert_memory_equal(back, in, 3);
+}
+
+static void test_base16_needs_no_padding_at_any_length(void **state)
+{
+	/* The property that separates it from base32 and base64, and the reason it
+	 * is a table code and nothing more: every byte is exactly two nibbles, so
+	 * there is never a partial group to decide about. */
+	uint8_t in[7];
+	uint8_t out[16];
+	uint8_t back[8];
+	unsigned len;
+
+	(void)state;
+
+	for (len = 0; len < 7u; len++) {
+		unsigned i;
+
+		for (i = 0; i < len; i++) {
+			in[i] = (uint8_t)(i * 37u + 1u);
+		}
+
+		assert_int_equal(situ_base16_encode(in, len * 8u, out), len * 16u);
+		assert_int_equal(situ_base16_decode(out, len * 16u, back), len * 8u);
+		assert_memory_equal(back, in, len);
+	}
+}
+
+static void test_base16_lower_is_a_different_code_not_an_alias(void **state)
+{
+	/* A protocol that specifies one and receives the other has received
+	 * something it did not specify. */
+	static const uint8_t in[1] = { 0xAB };
+	uint8_t upper[2] = { 0 };
+	uint8_t lower[2] = { 0 };
+
+	(void)state;
+
+	situ_base16_encode(in, 8u, upper);
+	situ_base16_lower_encode(in, 8u, lower);
+
+	assert_memory_equal(upper, "AB", 2);
+	assert_memory_equal(lower, "ab", 2);
+}
+
 /* -- Reed-Solomon ---------------------------------------------------------- */
 
 /* A small deterministic generator, so a failure is reproducible. The point is
@@ -382,6 +442,9 @@ int main(void)
 		cmocka_unit_test(test_the_interleaver_refuses_a_partial_block),
 		cmocka_unit_test(test_hdlc_inserts_a_zero_after_five_ones),
 		cmocka_unit_test(test_hdlc_refuses_six_ones),
+		cmocka_unit_test(test_base16_encodes_to_ascii_hex),
+		cmocka_unit_test(test_base16_needs_no_padding_at_any_length),
+		cmocka_unit_test(test_base16_lower_is_a_different_code_not_an_alias),
 		cmocka_unit_test(test_reed_solomon_is_systematic),
 		cmocka_unit_test(test_an_undamaged_block_needs_no_correction),
 		cmocka_unit_test(test_reed_solomon_corrects_up_to_sixteen_errors),

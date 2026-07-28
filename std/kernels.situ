@@ -76,6 +76,23 @@ codec manchester {
 }
 impl manchester derived;
 
+// RFC 4648 base16. A nibble to an ASCII hex digit, which needs no padding at
+// any input length -- every byte is exactly two nibbles. That is what makes it
+// a table code and nothing more, where base32 and base64 are a table code plus
+// a rule about what to do with a partial group.
+//
+// The ratio is exact and 2:1, so a reader can compute where any byte's two
+// digits are without decoding anything before them.
+codec base16 {
+	kernel = table(input_bits = 4, output_bits = 8, code = base16);
+}
+impl base16 derived;
+
+codec base16_lower {
+	kernel = table(input_bits = 4, output_bits = 8, code = base16_lower);
+}
+impl base16_lower derived;
+
 codec code_4b5b {
 	kernel = table(input_bits = 4, output_bits = 5, code = fddi_4b5b);
 }

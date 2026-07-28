@@ -218,9 +218,13 @@ def _check_member_attrs(members: tuple[ast.Member, ...]) -> None:
 #: generated code neither checks nor records it. Section 8.6 describes both;
 #: neither is implemented.
 UNIMPLEMENTED_ATTRS: dict[str, str] = {
-	"encoding":       "text encoding is not validated by this build",
 	"nul_terminated": "nul termination is not honoured by this build",
 }
+
+#: What `[encoding = ...]` may say. Section 8.6 names these two, and an
+#: unknown one is refused rather than ignored: a schema declaring `utf16` and
+#: getting no check would be worse off than one declaring nothing.
+TEXT_ENCODINGS = frozenset({"ascii", "utf8"})
 
 
 def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:
@@ -239,11 +243,25 @@ def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:
 				label = reason,
 				notes = [
 					"situ has no string type: text is `u8 name[N]`, and section "
-					"8.6 gives it these attributes, but nothing reads them yet",
+					"8.6 gives it these attributes, but nothing reads this one yet",
 					"remove the attribute -- the layout it describes is already "
 					"correct, and only the validation is missing",
 				],
 			)
+
+		if attr.name == "encoding":
+			named = getattr(attr.value, "name", None)
+			if named not in TEXT_ENCODINGS:
+				raise error(
+					f"`{named}` is not an encoding situ validates",
+					attr.span,
+					label = "unknown encoding",
+					notes = [
+						"section 8.6 names `ascii` and `utf8`",
+						"an encoding nobody checks is worse than none declared: "
+						"the schema would claim something the code never tests",
+					],
+				)
 
 
 # ---------------------------------------------------------------------------
