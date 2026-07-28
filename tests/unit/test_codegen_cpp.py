@@ -139,16 +139,16 @@ def test_the_runtime_does_not_squat_on_schema_names() -> None:
 	assert "class view : public ::situ::rt::view {" in header
 
 
-def test_a_construct_outside_the_subset_says_so() -> None:
-	"""Rather than emitting something that looks complete. A reader has to be
-	able to tell a gap from a feature.
-
-	What is left is a variable-length member inside a sealed region: reaching
-	it needs its length read through the gate's own view."""
+def test_a_variable_member_inside_a_gate_is_reachable() -> None:
+	"""Its length is read through the gate's own view: the field that sizes it
+	is plaintext at the same offsets, so only the view differs."""
 	header = emit(SEALED_VARIABLE)
 
-	assert "is variable length" in header
-	assert "use the C gate" in header
+	assert "::situ::rt::bytes body() const noexcept" in header
+	assert "raw_.base + (" in header
+	# Through the gate's view, not the struct's.
+	body = header[header.index("bytes body()"):]
+	assert "base()" not in body[:body.index("}")]
 
 
 # -- what it compiles to ----------------------------------------------------

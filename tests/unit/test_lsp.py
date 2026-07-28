@@ -14,7 +14,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from situc.lsp import Server, analyse_text, hover_at, symbols, to_lsp_diagnostic
+from situc.lsp import (
+	Server, analyse_text, code_actions, definition_at, hover_at, symbols,
+	to_lsp_diagnostic,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 URI  = "file:///tmp/unit.situ"
@@ -266,3 +269,59 @@ def test_every_example_analyses_without_raising() -> None:
 
 		assert analysis.source is not None
 		symbols(analysis)		# must not raise either
+
+
+# -- code actions and definitions -------------------------------------------
+
+
+def test_code_actions_carry_the_advisor_s_costs() -> None:
+	"""Section 18.2's catalog is already ranked and costed. An editor is where
+	a reader would rather see it, because the suggestion is about a field they
+	are looking at."""
+	schema = ("target buffer;\nendian big;\n"
+	          "struct h { u8 v; u16 n; }\n"
+	          "struct s { h hdr; u8 opts[hdr.n]; u32 after; }\n")
+	analysis = analyse_text(URI, schema)
+	line, col = line_of(schema, "opts[hdr.n]")
+
+	actions = code_actions(analysis, line, col + 1)
+
+	assert actions
+	assert all("cost" in action["data"] for action in actions)
+	assert all(action["kind"] == "refactor" for action in actions)
+
+
+def test_code_actions_are_offered_rather_than_applied() -> None:
+	"""A suggestion like "reorder the members" is a change with a cost the
+	author has to agree to. Applying it silently would be situ making a design
+	decision on somebody's behalf."""
+	schema = ("target buffer;\nendian big;\n"
+	          "struct h { u8 v; u16 n; }\n"
+	          "struct s { h hdr; u8 opts[hdr.n]; u32 after; }\n")
+	analysis = analyse_text(URI, schema)
+	line, col = line_of(schema, "opts[hdr.n]")
+
+	for action in code_actions(analysis, line, col + 1):
+		assert "edit" not in action
+		assert "disabled" in action
+
+
+def test_definition_finds_a_type() -> None:
+	"""A schema names types far more than it declares them, and the
+	declaration is usually what a reader wants next."""
+	analysis = analyse_text(URI, SCHEMA)
+	line, col = line_of(SCHEMA, "protocol  proto")
+
+	found = definition_at(analysis, line, col + 1)
+
+	assert found is not None
+	declared, _ = line_of(SCHEMA, "enum protocol")
+	assert found["range"]["start"]["line"] == declared
+
+
+def test_definition_of_a_scalar_is_nothing() -> None:
+	"""`u16` is not declared anywhere, so there is nowhere to go."""
+	analysis = analyse_text(URI, SCHEMA)
+	line, col = line_of(SCHEMA, "u16       total")
+
+	assert definition_at(analysis, line, col + 1) is None

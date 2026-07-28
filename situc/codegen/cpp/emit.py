@@ -489,11 +489,10 @@ class Emitter:
 			lines.extend(["",
 			              f"\t\t/* {path} is [secret]: no debug accessor is",
 			              "\t\t * generated for it at all (section 14.6). */"])
-		for path in skipped:
-			lines.extend(["",
-			              f"\t\t/* {path} is variable length. Reaching it needs",
-			              "\t\t * its length read through this view, which the C++",
-			              "\t\t * backend does not do yet; use the C gate. */"])
+		for placement in rest:
+			if placement.path in secret:
+				continue
+			lines.extend(self._gated_span(struct, placement))
 
 		lines.extend([
 			"",
@@ -524,6 +523,42 @@ class Emitter:
 			"\t}",
 		])
 		return lines
+
+	def _gated_span(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A byte run inside a sealed region.
+
+		Its length is read through the gate's own view: the field that sizes it
+		is plaintext at the same offsets, so the arithmetic is the struct's and
+		only the view it is read through differs.
+		"""
+		scalar = placement.scalar
+		if scalar is None or scalar.bits != BITS_PER_BYTE:
+			return ["", f"\t\t/* {placement.path}: element type"
+			        f" {placement.type_name} is not reachable through the gate. */"]
+
+		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		start = self._offset_expression(struct, placement)
+		count = (str(placement.array_count) if placement.array_count is not None
+		         else self._count_expression(struct, placement))
+
+		if start is None or count is None:
+			return ["", f"\t\t/* {placement.path}: this backend cannot resolve"
+			        f" its extent. */"]
+
+		# Inside the gate the view is `raw_`, not `base()`.
+		start = start.replace("base()", "raw_.base")
+		count = count.replace("base()", "raw_.base")
+
+		return [
+			"",
+			f"\t\t/* {placement.path}: {placement.array_count or placement.sized_by}"
+			f" bytes, reached through the gate. */",
+			f"\t\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
+			"\t\t{",
+			f"\t\t\treturn ::situ::rt::bytes(raw_.base + ({start}), {count});",
+			"\t\t}",
+		]
 
 	def _gated_accessor(self, entry: Resolved) -> list[str]:
 		placement = entry.placement

@@ -1,0 +1,195 @@
+"""The Rust backend (section 26.18).
+
+The claim that matters is the same one every backend carries: that it describes
+the same bytes as the C. The claim specific to Rust is that section 12.3's
+invalidation rule stops being a run-time check and becomes a compile error, so
+there is a test that requires the offending program to fail to build.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from situc.codegen.rust import generate as generate_rs
+from situc.layout import solve
+from situc.parser import parse_text
+from situc.resolve import resolve
+
+ROOT    = Path(__file__).resolve().parents[2]
+RUNTIME = ROOT / "runtime" / "rust" / "situ_rt.rs"
+RUSTC   = shutil.which("rustc")
+
+PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
+
+
+def emit(body: str, preamble: str = PREAMBLE) -> str:
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	return generate_rs(schema, resolved, "unit").module
+
+
+def build(tmp_path: Path, body: str, main: str = "") -> subprocess.CompletedProcess[str]:
+	"""Generate, lay out a crate, and compile it."""
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+
+	# The runtime is `no_std` on its own; as a module of a larger crate the
+	# attribute belongs to the crate root, not to it.
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "unit.rs").write_text(emit(body), encoding="ascii")
+
+	if main:
+		(src / "main.rs").write_text(
+			"mod situ_rt;\nmod unit;\n" + main, encoding="ascii")
+		entry, kind = src / "main.rs", []
+	else:
+		(src / "lib.rs").write_text("pub mod situ_rt;\npub mod unit;\n",
+		                            encoding="ascii")
+		entry, kind = src / "lib.rs", ["--crate-type", "lib"]
+
+	assert RUSTC is not None
+	return subprocess.run(
+		[RUSTC, "--edition", "2021", *kind, str(entry),
+		 "-o", str(tmp_path / "out")],
+		capture_output=True, text=True, check=False, cwd=tmp_path)
+
+
+# -- what it emits ----------------------------------------------------------
+
+
+def test_an_enum_is_repr_and_carries_its_membership_test() -> None:
+	module = emit("enum kind : u8 { one = 1, two = 2 }\nstruct s { kind k; }")
+
+	assert "#[repr(u8)]" in module
+	assert "pub enum Kind {" in module
+	assert "pub fn is_known(raw: u8) -> bool {" in module
+	assert "matches!(raw, 1 | 2)" in module
+
+
+def test_an_enum_field_reads_as_an_option() -> None:
+	"""A field may hold a value no member names. Section 8.7 rejects those on
+	parse rather than on read, and the type says so."""
+	module = emit("enum kind : u8 { one = 1 }\nstruct s { kind k; }")
+
+	assert "pub fn k(&self) -> Option<Kind> {" in module
+
+
+def test_a_field_named_for_a_keyword_becomes_a_raw_identifier() -> None:
+	"""A schema is free to call a field `type`; Rust is not. Raw identifiers
+	exist for exactly this, and decision 0013 says the naming is the author's."""
+	module = emit("struct s { u8 type; u8 match; }")
+
+	assert "pub fn r#type(&self)" in module
+	assert "pub fn r#match(&self)" in module
+	# `set_type` is not itself a keyword, so it needs no escape -- and
+	# `set_r#type` would not be an identifier at all.
+	assert "pub fn set_type(&mut self" in module
+	assert "set_r#" not in module
+
+
+def test_a_byte_array_is_a_slice() -> None:
+	"""The length travels with the pointer and cannot be lost."""
+	module = emit("struct s { u8 octets[4]; }")
+
+	assert "pub fn octets(&self) -> &[u8] {" in module
+	assert "&self.bytes[0..4]" in module
+
+
+def test_reads_and_writes_are_separate_types() -> None:
+	"""So a reader who only parses never holds a `&mut` they do not need."""
+	module = emit("struct s { u16 a; }")
+
+	assert "pub struct S<'a> {\n\tbytes: &'a [u8]," in module
+	assert "pub struct SMut<'a> {\n\tbytes: &'a mut [u8]," in module
+
+
+def test_a_covered_write_gets_no_setter() -> None:
+	"""It leaves a tag stale, so it is not an assignment -- the same refusal
+	every other backend makes."""
+	module = emit("struct s { u8 hop; authenticated { u16 seq; } tag u8[16]; }")
+
+	assert "No set_seq(): writing it leaves tag stale" in module
+
+
+# -- what it compiles to ----------------------------------------------------
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("body", [
+	"struct s { u8 a; u16 b; u32 c; }",
+	"struct s [allow_straddle] { u4 a; u4 b; bit c; u13 d; u2 e; }",
+	"struct inner { u16 x; }\nstruct s { u8 tag; inner nested; }",
+	"enum k : u8 { one = 1 }\nstruct s { k kind; u8 rest[3]; }",
+	"struct s { q16_16 gain; bcd4 counter; }",
+	"struct s { u8 name[8] [nul_terminated, encoding = utf8]; }",
+	"struct s { u8 v [must_eq = 1]; reserved u8 [must_be_zero]; }",
+	"struct s { u8 type; u8 match; u8 move; }",
+])
+def test_it_compiles(tmp_path: Path, body: str) -> None:
+	result = build(tmp_path, body)
+
+	assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_it_agrees_with_the_layout(tmp_path: Path) -> None:
+	"""Every field, against the offsets the map states."""
+	body = """enum protocol : u8 { tcp = 6, udp = 17 }
+	struct hdr [allow_straddle] {
+		u4        version;
+		u4        ihl;
+		u16       total;
+		bit       flag;
+		u15       offset;
+		protocol  proto;
+		u8        ttl;
+	}
+	"""
+	result = build(tmp_path, body, main='''
+fn main() {
+	let mut buf = [0u8; 7];
+	for i in 0..7 { buf[i] = (i * 11 + 3) as u8; }
+
+	let h = unit::Hdr::new(&buf).unwrap();
+	assert_eq!(h.version(), 0);
+	assert_eq!(h.ihl(), 3);
+	assert_eq!(h.total(), 0x0e19);
+	assert_eq!(h.ttl(), 69);
+
+	let mut m = unit::HdrMut::new(&mut buf).unwrap();
+	m.set_ttl(64);
+	assert_eq!(m.as_ref().ttl(), 64);
+}
+''')
+	assert result.returncode == 0, result.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, run.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_write_while_a_read_view_lives_does_not_compile(tmp_path: Path) -> None:
+	"""Section 12.3, as a compile error rather than a generation counter.
+
+	This is the claim the Rust backend exists for. The C runtime carries a
+	generation and checks it at run time in a `SITU_CHECKED` build; here the
+	borrow checker refuses the program.
+	"""
+	result = build(tmp_path, "struct s { u16 a; u16 b; }", main='''
+fn main() {
+	let mut buf = [0u8; 4];
+	let reader = unit::S::new(&buf).unwrap();
+	let mut writer = unit::SMut::new(&mut buf).unwrap();
+	writer.set_a(1);
+	let _ = reader.b();
+}
+''')
+	assert result.returncode != 0, "a stale read compiled and should not"
+	assert "borrow" in result.stderr

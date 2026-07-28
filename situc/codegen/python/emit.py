@@ -76,7 +76,7 @@ class Emitter:
 			"from situ_runtime import (",
 			"\tConstraintError, Gate, Message, View, acquire, as_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
-			"\tnul_len, open_gate, utf8_valid,",
+			"\tcompose, nul_len, open_gate, utf8_valid,",
 			")",
 			"",
 			"__all__ = [",
@@ -136,9 +136,7 @@ class Emitter:
 		name   = c_name(struct.name)
 
 		if layout.register is not None:
-			return ["", f"# register {struct.name} (section 15) is a bus",
-			        "# transaction, which Python cannot make. Use the C header.",
-			        ""]
+			return self._register(struct)
 
 		lines = ["", f"class {name}(View):", *self._class_doc(struct)]
 		lines.extend(self._acquire(struct))
@@ -149,6 +147,97 @@ class Emitter:
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
 		lines.append("")
+		return lines
+
+	def _register(self, struct: ResolvedStruct) -> list[str]:
+		"""A register's word composition, without pretending to be a driver.
+
+		Python cannot promise `volatile` -- there is no way to tell the
+		interpreter that a read has a side effect. What it can do exactly is the
+		arithmetic: compose a whole word from its fields and hand it back for
+		the caller to write however they reach the bus. That is the shape
+		section 15's headline asks for anyway, since a partial-width field in a
+		`no_rmw` register cannot be written alone.
+		"""
+		info = struct.layout.register
+		assert info is not None
+
+		name  = c_name(struct.name)
+		lines = [
+			"",
+			f"class {name}:",
+			f'\t"""register {struct.name}'
+			+ (f" at {info.address:#x}" if info.address is not None else "")
+			+ f': {info.width} bits.',
+			"",
+			"\tPython cannot promise `volatile`, so this composes words and does",
+			"\tnot drive a bus. Read and write through whatever addresses the",
+			"\tdevice -- an mmap of /dev/mem, a probe, a simulator -- and use",
+			'\t`word` to build what you send."""',
+			"",
+			f"\tWIDTH = {info.width}",
+		]
+		if info.address is not None:
+			lines.append(f"\tADDRESS = {info.address:#x}")
+
+		lines.extend([
+			"",
+			"\tclass word:",
+			'\t\t"""A copy of the bits. Composing costs no transaction."""',
+			"",
+			"\t\t__slots__ = (\"raw\",)",
+			"",
+			"\t\tdef __init__(self, raw: int = 0) -> None:",
+			"\t\t\tself.raw = raw",
+		])
+
+		for entry in own_entries(struct):
+			lines.extend(self._register_field(entry))
+
+		lines.append("")
+		return lines
+
+	def _register_field(self, entry: Resolved) -> list[str]:
+		placement = entry.placement
+		scalar    = placement.scalar
+
+		if placement.kind == "reserved":
+			return ["",
+			        f"\t\t# {placement.path} is reserved: no accessor, and its",
+			        "\t\t# bits are carried through a compose untouched."]
+		if scalar is None:
+			return []
+
+		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		mode  = placement.access_mode or ast.AccessMode.RW
+		shift = placement.offset_bits or 0
+		mask  = (1 << scalar.bits) - 1
+		lines = ["", f"\t\t# {placement.path}: {mode.value},"
+		         f" bits {shift}..{shift + scalar.bits - 1}"]
+
+		if mode.readable:
+			lines.extend([
+				"\t\t@property",
+				f"\t\tdef {name}(self) -> int:",
+				f"\t\t\treturn (self.raw >> {shift}) & {mask:#x}",
+			])
+		else:
+			lines.append(f"\t\t# No {name}: the mode is {mode.value}, so a read"
+			             f" returns nothing the field holds.")
+
+		if mode.writable and mode.is_assignment:
+			lines.extend([
+				f"\t\tdef with_{name}(self, value: int) -> \"{{}}\":".format(
+					c_name(entry.placement.path.split(".")[0]) + ".word"),
+				f'\t\t\t"""A new word with {name} set; the rest untouched."""',
+				f"\t\t\treturn type(self)(compose(self.raw, int(value),"
+				f" {shift}, {mask:#x}))",
+			])
+		elif mode.writable:
+			lines.append(f"\t\t# No with_{name}: `{mode.value}` is not an"
+			             f" assignment.")
+		else:
+			lines.append(f"\t\t# No with_{name}: the mode is {mode.value}.")
 		return lines
 
 	def _class_doc(self, struct: ResolvedStruct) -> list[str]:

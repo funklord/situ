@@ -127,14 +127,56 @@ def test_an_enum_field_may_hold_a_value_that_is_not_a_member() -> None:
 	assert "as_enum(k, " in module
 
 
-def test_registers_say_they_are_not_emitted() -> None:
-	"""A register is a bus transaction, which Python cannot make."""
-	module = emit("register r @ 0x00 { width = 32; access_width = 32;"
-	              " bit enable [rw]; reserved u31 [preserve]; }",
-	              preamble="target mmio;\nendian little;\nbit_order lsb_first;\n")
+MMIO = "target mmio;\nendian little;\nbit_order lsb_first;\n"
 
-	assert "is a bus" in module
-	assert "Use the C header" in module
+REGISTER = """register ctrl @ 0x00 {
+	width        = 32;
+	access_width = 32;
+	volatile;
+	no_rmw;
+
+	bit       enable  [rw];
+	bit       start   [wo, on_write = trigger];
+	u3        mode    [rw];
+	bit       busy    [ro];
+	bit       error   [w1c];
+	reserved  u25     [preserve];
+}
+"""
+
+
+def test_a_register_composes_words_without_claiming_to_drive_a_bus() -> None:
+	"""Python cannot promise `volatile`, so this is not a driver -- and the
+	docstring says so where a reader will look. What it does exactly is the
+	arithmetic, which is the shape section 15 asks for anyway."""
+	module = emit(REGISTER, preamble=MMIO)
+
+	assert "cannot promise `volatile`" in module
+	assert "does not drive a bus" in module or "not drive a bus" in module
+	assert "def with_enable(self, value: int)" in module
+
+
+def test_a_python_register_enforces_its_access_modes(tmp_path: Path) -> None:
+	"""The same modes the C++ backend enforces, checked the way Python can:
+	the attribute is simply not there."""
+	module = load(tmp_path, REGISTER, preamble=MMIO)
+
+	word = module.ctrl.word(0).with_enable(1).with_mode(5)
+
+	assert word.raw == 0x15
+	assert (word.enable, word.mode, word.busy) == (1, 5, 0)
+	assert not hasattr(word, "with_busy")	# ro
+	assert not hasattr(word, "start")	# wo
+	assert not hasattr(word, "with_error")	# w1c is not an assignment
+
+
+def test_a_compose_leaves_reserved_bits_alone(tmp_path: Path) -> None:
+	"""`with_x` clears only its own bits, which is what `[preserve]` asks."""
+	module = load(tmp_path, REGISTER, preamble=MMIO)
+
+	word = module.ctrl.word(0xFFFFFFFF).with_mode(0)
+
+	assert word.raw == 0xFFFFFFFF & ~(0x7 << 2)
 
 
 # -- what it does at run time ------------------------------------------------

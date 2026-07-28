@@ -221,6 +221,40 @@ def open_gate(gate_class: type, view: View, verified: bool) -> Gate:
 	return gate_class(view, Gate._KEY)	# type: ignore[call-arg,no-any-return]
 
 
+class Register:
+	"""A memory-mapped register, over whatever the caller can address.
+
+	Python cannot promise `volatile`: there is no way to tell the interpreter
+	that a read has a side effect, and no bus transaction to order. So this is
+	*not* a driver, and the module says so where a reader will look.
+
+	What it is good for is the thing people actually reach for Python to do --
+	bring-up scripts and test rigs, over an `mmap` of `/dev/mem`, a debug probe,
+	or a simulator. The composition below is exact and the same arithmetic the
+	C++ backend does; only the transport is the caller's.
+
+	`read_word` and `write_word` are supplied by the caller because situ does
+	not know what is on the other end.
+	"""
+
+	__slots__ = ("read_word", "write_word", "address")
+
+	def __init__(self, read_word: object, write_word: object,
+			address: int = 0) -> None:
+		self.read_word  = read_word
+		self.write_word = write_word
+		self.address    = address
+
+
+def compose(raw: int, value: int, shift: int, mask: int) -> int:
+	"""Place `value` into `raw` at `shift`, clearing only its own bits.
+
+	Reserved bits keep whatever the read gave them, which is what `[preserve]`
+	asks for.
+	"""
+	return (raw & ~(mask << shift)) | ((value & mask) << shift)
+
+
 def as_enum(cls: type, raw: int) -> object:
 	"""The enum member, or the raw value when it is not one.
 

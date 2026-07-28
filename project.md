@@ -2834,9 +2834,9 @@ bytes and the caller runs the cipher.
 **Status: complete.** `situc build --target=cpp` emits one header per schema,
 covering scalars, bit fields, straddling fields, enums, nested structs, byte
 arrays, fixed point, BCD, dynamic layout, sealed regions, registers and every
-constraint the C backend validates. One gap remains and says so in the emitted
-header: a variable-length member *inside* a sealed region, whose length has to
-be read through the gate's own view.
+constraint the C backend validates. A variable-length member inside a sealed region is reachable too: its length
+is read through the gate's own view, since the field that sizes it is plaintext
+at the same offsets and only the view differs.
 
 **Registers are where the access modes stop being documentation.** A `word` is
 a copy of the bits and a register is a place on a bus, and separating them is
@@ -2928,8 +2928,14 @@ Codecs bind the C implementation (decision 0017), which for C++ costs nothing:
 
 ### 26.17 Python backend
 
-**Status: complete except registers**, which are a bus transaction Python
-cannot make and say so. `situc build --target=python` emits one module per
+**Status: complete.** Registers are there too, though not as a driver: Python
+cannot promise `volatile`, so the generated class composes words exactly and
+leaves the transport to the caller -- an `mmap` of `/dev/mem`, a probe, a
+simulator. That is the shape section 15 asks for anyway, since a partial-width
+field in a `no_rmw` register cannot be written alone. The access modes still
+decide which operations exist: a `ro` field has no composer and a `wo` field
+has no getter, checked the way Python can check it, by the attribute simply not
+being there. `situc build --target=python` emits one module per
 schema over `runtime/python/situ_runtime.py`.
 
 **The surface is properties**, not `get_x()` methods. A caller who has to write
@@ -2971,21 +2977,34 @@ it proves untenable.
 
 ### 26.18 Rust backend
 
-**Status: not started.** Ordered last of the backends because adoption is far
-enough out that speculative work would be guesswork, not because it matters
-least. This section supersedes 26.11, which allocated a number to it before
-the backend order was decided.
+**Status: the static subset works.** `situc build --target=rust` emits one
+module per schema over `runtime/rust/situ_rt.rs`, which is `no_std` and
+allocation-free. Scalars, bit fields, straddling fields, enums, nested structs,
+byte arrays, fixed point, BCD and every constraint the C backend validates.
+Not yet: dynamic layout, sealed regions and registers, each of which says so in
+the emitted module. This section supersedes 26.11.
 
-Typestate for stages, borrows for view invalidation, `zerocopy`-style traits
-where the `repr` axis permits. This is where the capability system is expressed
-most naturally, and it should expose any place the C backend papered over a
-soundness gap.
+**Invalidation is the borrow checker.** Section 12.3's rule is a generation
+counter checked at run time in C and compiled out of a release build. Here a
+write through `&mut` while a read view is outstanding does not compile, so the
+counter is not carried at all -- and a test asserts exactly that by requiring
+the offending program to fail to build.
 
-One thing it will *introduce* rather than expose: decision 0017 binds codecs to
-the single C implementation, so a Rust program calling one goes through
-`extern "C"` and therefore through `unsafe`, in the backend whose argument is
-that the capability system becomes compile-time. The generated code must mark
-that at the call site rather than bury it.
+Reads and writes are separate types, `Foo` and `FooMut`, which is what the
+ecosystem does and means a reader who only parses never holds a `&mut` they do
+not need. An enum field reads as `Option<T>`, because a field may hold a value
+no member names and section 8.7 rejects those on parse rather than on read.
+
+**A schema is free to name a field `type`; Rust is not.** Raw identifiers carry
+it -- `r#type` -- which is what they exist for, and decision 0013 says the
+naming is the author's. `set_type` needs no escape, and `set_r#type` would not
+be an identifier at all.
+
+Codecs bind the C implementation (decision 0017), so a Rust program calling one
+goes through `extern "C"` and therefore through `unsafe`, in the backend whose
+argument is that the capability system becomes compile-time. Nothing generated
+does that yet; when it does, the `unsafe` belongs at the call site rather than
+buried.
 
 ### 26.19 Language server
 
@@ -3015,10 +3034,11 @@ answers, with nothing to hover over rather than an exception.
 parsing one is microseconds. Incremental sync would be a cache to keep coherent
 in exchange for time nobody is waiting on.
 
-Not yet: the advisor's costed suggestions as code actions, and go-to-definition
-for a type name. Both are the same shape as what is here -- `situc advise`
-already computes the first -- and neither is what makes the server worth
-starting.
+**Code actions and go-to-definition** are there too. The actions carry the
+advisor's costs and are offered rather than applied: a suggestion like
+"reorder the members so this one is last" is a change with a cost the author
+has to agree to, and applying it silently would be situ making a design
+decision on somebody's behalf.
 
 ### 26.20 Folded out, not scheduled
 

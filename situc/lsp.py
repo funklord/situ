@@ -217,6 +217,76 @@ def _offset_of(source: Source, line: int, character: int) -> int:
 	return starts[line] + character
 
 
+def code_actions(analysis: Analysis, line: int, character: int) -> list[dict[str, Any]]:
+	"""The advisor's suggestions, for whatever the cursor is near.
+
+	Section 18.2's catalog is already ranked and costed, and `situc advise`
+	prints it. An editor is where a reader would rather see it, because the
+	suggestion is about a field they are looking at.
+
+	These are informational rather than fixes. A suggestion like "reorder the
+	members so this one is last" is a change with a cost the author has to
+	agree to, and applying it silently would be situ making a design decision
+	on somebody's behalf.
+	"""
+	if analysis.resolved is None:
+		return []
+
+	from situc import advise
+
+	offset = _offset_of(analysis.source, line, character)
+	found  = []
+
+	for suggestion in advise.suggest(analysis.resolved):
+		span = suggestion.span
+		if not span.start <= offset < span.end:
+			continue
+		found.append({
+			"title": f"{suggestion.subject}: {suggestion.summary}",
+			"kind":  "refactor",
+			"diagnostics": [],
+			"disabled": {"reason": suggestion.cost.render()},
+			"data": {
+				"rule":   suggestion.rule,
+				"detail": suggestion.detail,
+				"cost":   suggestion.cost.render(),
+				"yields": suggestion.yields,
+			},
+		})
+
+	return found
+
+
+def definition_at(analysis: Analysis, line: int,
+		character: int) -> dict[str, Any] | None:
+	"""Where the type under the cursor is declared.
+
+	A schema names types far more than it declares them, and the declaration is
+	usually the thing a reader wants next.
+	"""
+	if analysis.resolved is None or analysis.schema is None:
+		return None
+
+	offset = _offset_of(analysis.source, line, character)
+	named  = None
+
+	for struct in analysis.resolved.structs.values():
+		for entry in struct.entries:
+			span = getattr(entry.placement, "span", None)
+			if span is not None and span.start <= offset < span.end:
+				if named is None or (span.end - span.start) < named[0]:
+					named = (span.end - span.start, entry.placement.type_name)
+
+	if named is None or named[1] is None:
+		return None
+
+	for decl in list(analysis.schema.structs()) + list(analysis.schema.enums()):
+		if decl.name == named[1]:
+			return {"uri": _uri_of(analysis.source),
+			        "range": _range(analysis.source, decl.span)}
+	return None
+
+
 def symbols(analysis: Analysis) -> list[dict[str, Any]]:
 	"""The outline: structs, and their fields beneath them."""
 	if analysis.resolved is None or analysis.schema is None:
@@ -331,8 +401,10 @@ class Server:
 			self.reply(call_id, {
 				"capabilities": {
 					"textDocumentSync":      1,	# full
-					"hoverProvider":         True,
+					"hoverProvider":          True,
 					"documentSymbolProvider": True,
+					"codeActionProvider":     True,
+					"definitionProvider":     True,
 				},
 				"serverInfo": {"name": "situc-lsp"},
 			})
@@ -350,6 +422,10 @@ class Server:
 			self.reply(call_id, self._hover(params))
 		elif method == "textDocument/documentSymbol":
 			self.reply(call_id, self._symbols(params))
+		elif method == "textDocument/codeAction":
+			self.reply(call_id, self._actions(params))
+		elif method == "textDocument/definition":
+			self.reply(call_id, self._definition(params))
 		elif call_id is not None:
 			# A request situ does not answer still needs an answer, or the
 			# editor waits for one that never comes.
@@ -388,6 +464,21 @@ class Server:
 		if text is None:
 			return None
 		return {"contents": {"kind": "markdown", "value": text}}
+
+	def _actions(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+		uri      = _uri(params)
+		at       = (params.get("range") or {}).get("start") or {}
+		analysis = analyse_text(uri, self.documents.get(uri, ""))
+
+		return code_actions(analysis, at.get("line", 0), at.get("character", 0))
+
+	def _definition(self, params: dict[str, Any]) -> dict[str, Any] | None:
+		uri      = _uri(params)
+		position = params.get("position") or {}
+		analysis = analyse_text(uri, self.documents.get(uri, ""))
+
+		return definition_at(analysis, position.get("line", 0),
+		                     position.get("character", 0))
 
 	def _symbols(self, params: dict[str, Any]) -> list[dict[str, Any]]:
 		uri = _uri(params)
