@@ -33,7 +33,10 @@ from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import local_name, own_entries, own_members
+from situc.traverse import (
+	Check, Member, classify, classify_check, local_name, own_entries,
+	own_members,
+)
 from situc.types import ScalarKind, ScalarType
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -718,28 +721,27 @@ class Emitter:
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 
-		if placement.kind == "reserved":
+		# The order is `traverse.classify`'s rather than this file's: three
+		# backends shipped the same two mistakes when each kept its own.
+		kind = classify(struct, placement, self.structs)
+
+		if kind is Member.RESERVED:
 			return ["",
 			        f"\t/* {placement.path} is reserved: no accessor, and"
 			        f" `validate` holds it to",
 			        "\t * the pattern the schema declares. */"]
-		# Checked before the offset: a member sized by the data usually has a
-		# dynamic offset too, and bailing on that first would skip it.
-		if placement.kind == "field" and placement.sized_by is not None:
+		if kind is Member.VARIABLE:
 			return self._variable(struct, placement)
-
-		if placement.kind != "field" or placement.offset_bits is None:
-			return ["", f"\t/* {placement.path}: not in the static subset yet. */"]
-		if placement.type_name in self.structs:
+		if kind is Member.NESTED:
 			return self._nested(struct, placement)
-		if placement.array_count is not None:
+		if kind is Member.ARRAY:
 			return self._array(struct, placement)
-		if placement.scalar is None:
+		if kind is Member.SCALAR and placement.offset_bits is not None:
+			return self._scalar(struct, entry)
+		if kind is Member.NOTHING:
 			return []
 
-		return self._scalar(struct, entry)
-
-	# -- one scalar ----------------------------------------------------
+		return ["", f"\t/* {placement.path}: not in the static subset yet. */"]
 
 	def _scalar(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
@@ -914,13 +916,20 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 
-		# An array of structs is not a nested struct: validating every element
-		# on every parse is a cost the caller should choose, which is the same
-		# call the C backend makes.
-		if placement.array_count is not None or placement.sized_by is not None:
-			return self._array_checks(struct, placement, scalar) if scalar else []
+		check = classify_check(struct, placement, self.structs)
 
-		if placement.type_name in self.structs and scalar is None:
+		if check is Check.NOTHING:
+			return []
+		# This backend emits no accessor for a scalar at a dynamic offset, so
+		# there is nothing to check it through. The gap is declared where the
+		# accessor would have been.
+		if check is not Check.NESTED and check is not Check.REPEATED \
+				and placement.offset_bits is None:
+			return []
+		if check is Check.REPEATED:
+			assert scalar is not None
+			return self._array_checks(struct, placement, scalar)
+		if check is Check.NESTED:
 			name = c_name(local_name(struct, placement))
 			return [
 				f"\t\tif (const ::situ::rt::err e = {name}().validate();"
@@ -929,12 +938,10 @@ class Emitter:
 				"\t\t}",
 			]
 
-		if scalar is None or placement.offset_bits is None:
-			return []
-
+		assert scalar is not None
 		lines: list[str] = []
 
-		if placement.kind == "reserved" and placement.array_count is None:
+		if check is Check.RESERVED:
 			policy = _reserved_policy(placement.attrs)
 			if policy in ("must_be_zero", "must_be_one"):
 				want = "0" if policy == "must_be_zero" \

@@ -27,7 +27,10 @@ from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import local_name, own_entries, own_members
+from situc.traverse import (
+	Check, Member, classify, classify_check, local_name, own_entries,
+	own_members,
+)
 from situc.types import ScalarType
 
 
@@ -277,22 +280,23 @@ class Emitter:
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 
-		if placement.kind == "reserved":
+		kind = classify(struct, placement, self.structs)
+
+		if kind is Member.RESERVED:
 			return ["", f"\t# {placement.path} is reserved: no accessor, and",
 			        "\t# validate() holds it to the pattern the schema declares."]
-		if placement.kind != "field":
-			return ["", f"\t# {placement.path}: not emitted by this backend yet."]
-
-		if placement.sized_by is not None:
+		if kind is Member.VARIABLE:
 			return self._variable(struct, placement)
-		if placement.type_name in self.structs:
+		if kind is Member.NESTED:
 			return self._nested(struct, placement)
-		if placement.array_count is not None:
+		if kind is Member.ARRAY:
 			return self._array(struct, placement)
-		if placement.scalar is None:
+		if kind is Member.SCALAR:
+			return self._scalar(struct, entry)
+		if kind is Member.NOTHING:
 			return []
 
-		return self._scalar(struct, entry)
+		return ["", f"\t# {placement.path}: not emitted by this backend yet."]
 
 	def _scalar(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
@@ -589,15 +593,18 @@ class Emitter:
 		scalar    = placement.scalar
 		name      = c_name(local_name(struct, placement))
 
-		if placement.array_count is not None or placement.sized_by is not None:
-			return self._array_check(struct, placement, scalar, name)
+		check = classify_check(struct, placement, self.structs)
 
-		if placement.type_name in self.structs and scalar is None:
-			return [f"\t\tself.{name}.validate()"]
-		if scalar is None or placement.offset_bits is None:
+		if check is Check.NOTHING:
 			return []
+		if check is Check.REPEATED:
+			return self._array_check(struct, placement, scalar, name)
+		if check is Check.NESTED:
+			return [f"\t\tself.{name}.validate()"]
 
-		if placement.kind == "reserved":
+		assert scalar is not None
+
+		if check is Check.RESERVED:
 			policy = _reserved_policy(placement.attrs)
 			if policy not in ("must_be_zero", "must_be_one"):
 				return []

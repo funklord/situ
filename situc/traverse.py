@@ -15,6 +15,9 @@ backend reads the same way.
 
 from __future__ import annotations
 
+from collections.abc import Container
+from enum import Enum
+
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
@@ -54,6 +57,127 @@ def own_entries(struct: ResolvedStruct) -> list[Resolved]:
 def own_members(struct: ResolvedStruct) -> list[Placement]:
 	"""The struct's own members, in order, partitioning its bytes exactly."""
 	return [entry.placement for entry in own_entries(struct)]
+
+
+class Member(Enum):
+	"""What a backend has to emit for one member, and nothing about how.
+
+	The *order* these are tested in is the whole point of this enum. Three
+	backends shipped the same two bugs before it existed, because the walk in
+	this module handed them the members without saying which question to ask
+	first:
+
+	  * `VARIABLE` has to be decided before `UNPLACED`. A member sized by the
+	    data usually has a dynamic offset too, so a backend that bails on the
+	    offset first silently skips every variable-length member it has.
+	  * `NESTED` has to be decided after `ARRAY`. An array of structs names a
+	    struct type, and treating it as a nested one emits an accessor that
+	    takes no index and a validate call to a method that does not exist.
+
+	`classify` below is that order, written once.
+	"""
+
+	#: No accessor; `validate` holds it to the declared pattern.
+	RESERVED  = "reserved"
+	#: A tag, a checksum, a sealed or authenticated region, a marker, a
+	#: variant, an opaque or indexed span. Each needs its own machinery.
+	REGION    = "region"
+	#: Extent decided by the data: `x[n]` or `x[remaining]`.
+	VARIABLE  = "variable"
+	#: A counted array, of scalars or of structs.
+	ARRAY     = "array"
+	#: One struct, at a fixed offset.
+	NESTED    = "nested"
+	#: A field that is none of the above and has no offset either: nothing a
+	#: backend can place. Note that a *scalar* at a dynamic offset is `SCALAR`,
+	#: not this -- whether the offset can be resolved is the backend's business.
+	UNPLACED  = "unplaced"
+	#: One value.
+	SCALAR    = "scalar"
+	#: Nothing to emit.
+	NOTHING   = "nothing"
+
+
+def classify(struct: ResolvedStruct, placement: Placement,
+		structs: Container[str]) -> Member:
+	"""Which kind of member this is, asked in the order that is safe.
+
+	`structs` is whatever the backend uses to recognise a struct type -- a set
+	of names, usually. Passed in rather than reached for, so this stays a
+	function of the data.
+	"""
+	if placement.kind == "reserved":
+		return Member.RESERVED
+	if placement.kind != "field":
+		return Member.REGION
+
+	# Before UNPLACED: a member sized by the data usually has a dynamic offset
+	# as well, and asking about the offset first loses it.
+	if placement.sized_by is not None:
+		return Member.VARIABLE
+
+	# Before NESTED: an array of structs names a struct type and is not one.
+	if placement.array_count is not None:
+		return Member.ARRAY
+
+	if placement.type_name in structs:
+		return Member.NESTED
+
+	# A scalar is a scalar whatever its offset. Whether the backend can
+	# *resolve* a dynamic one is the backend's business -- classifying it as
+	# unplaced here dropped every field after a variable member, which is a
+	# third way to get this wrong and was found the same way as the first two.
+	if placement.scalar is not None:
+		return Member.SCALAR
+	if placement.offset_bits is None:
+		return Member.UNPLACED
+	return Member.NOTHING
+
+
+class Check(Enum):
+	"""What `validate` has to check for one member.
+
+	A separate order from `Member`, and separate for a reason: an array of
+	structs gets an *accessor* per element and no per-element validation,
+	because walking every element on every parse is a cost the caller should
+	choose. So `REPEATED` comes before `NESTED` here too, but means something
+	different from `ARRAY` above.
+	"""
+
+	#: Its own `validate`, called through.
+	NESTED     = "nested"
+	#: An array or a data-sized run: encoding, termination, reserved bytes.
+	REPEATED   = "repeated"
+	#: A reserved field, held to `must_be_zero` or `must_be_one`.
+	RESERVED   = "reserved"
+	#: `must_eq`, `min`, `max`, and enum membership.
+	CONSTRAINED = "constrained"
+	#: Nothing to check.
+	NOTHING    = "nothing"
+
+
+def classify_check(struct: ResolvedStruct, placement: Placement,
+		structs: Container[str]) -> Check:
+	"""What to validate for this member, in the order that is safe."""
+	# Before NESTED: an array of structs is not a nested struct, and calling
+	# `self.recs().validate()` on one names a method that takes an index.
+	if placement.array_count is not None or placement.sized_by is not None:
+		return Check.REPEATED if placement.scalar is not None else Check.NOTHING
+
+	if placement.scalar is None:
+		return (Check.NESTED if placement.type_name in structs
+		        else Check.NOTHING)
+
+	# The offset is deliberately not consulted. What kind of check a member
+	# needs is a fact about the schema; whether a backend can emit it is a fact
+	# about the backend, and conflating them made this module state one
+	# backend's limit as if it were the language's. The C backend validates a
+	# constrained field at a dynamic offset; the others say they cannot yet.
+	if placement.kind == "reserved":
+		return Check.RESERVED
+	if placement.kind != "field":
+		return Check.NOTHING
+	return Check.CONSTRAINED
 
 
 def byte_span(placement: Placement) -> tuple[int, int] | None:

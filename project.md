@@ -2000,8 +2000,10 @@ situ/
     propagate.py              the 11.3 table, data-driven
     resolve.py                the seam joining layout to the table
     traverse.py               the struct walk every backend and artifact shares:
-                              which entries are a struct's own members, and which
-                              bytes a placement occupies
+                              which entries are a struct's own members, which
+                              bytes a placement occupies, and -- the part that
+                              had to be learned three times -- the order to ask
+                              what kind of member it is
     requirements.py           predicate evaluation and discharge
     namespaces.py             `::` qualification and `--prefix`; decision 0012
     capmap.py                 capability map construction
@@ -3070,7 +3072,10 @@ section 8.6 for what is and is not claimed today.
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
-   adding a row and a test, never editing scattered conditionals.
+   adding a row and a test, never editing scattered conditionals. The same rule
+   now covers backend dispatch: `traverse.classify` says what kind of member a
+   placement is, in the one order that is safe, and a backend that grows its
+   own gets the same two bugs three backends already shipped.
 2. No capability may be strengthened by any construct. If an implementation
    seems to need that, the axis definition is wrong -- stop and ask.
 3. Every diagnostic has a blame chain. A diagnostic without one is a bug.

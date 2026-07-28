@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import ResolvedStruct, resolve
 from situc.traverse import (
-	byte_span, container_bits, is_own_member, local_name, own_members, span_bits,
+	Check, Member, byte_span, classify, classify_check, container_bits,
+	is_own_member, local_name, own_members, span_bits,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
@@ -139,3 +144,96 @@ def test_is_own_member_agrees_with_own_members() -> None:
 
 	assert [p for p in (e.placement for e in held.entries)
 	        if is_own_member(held, p)] == own_members(held)
+
+
+# -- the dispatch order ------------------------------------------------------
+
+
+def classified(body: str, field: str) -> Member:
+	held = structs(body)
+	name = field.split(".")[0]
+	found = next(e.placement for e in held[name].entries
+	             if e.placement.path == field)
+	return classify(held[name], found, set(held))
+
+
+def checked(body: str, field: str) -> Check:
+	held = structs(body)
+	name = field.split(".")[0]
+	found = next(e.placement for e in held[name].entries
+	             if e.placement.path == field)
+	return classify_check(held[name], found, set(held))
+
+
+def test_a_variable_member_is_decided_before_its_offset() -> None:
+	"""The first of the two traps. A member sized by the data usually has a
+	dynamic offset too, so a backend that asks about the offset first silently
+	skips every variable member it has. Three backends shipped that."""
+	body = "struct h { u8 v; u16 n; }\nstruct s { h hdr; u8 opts[hdr.n]; }"
+
+	assert classified(body, "s.opts") is Member.VARIABLE
+
+
+def test_an_array_of_structs_is_not_a_nested_struct() -> None:
+	"""The second trap. It names a struct type, and treating it as one emits an
+	accessor that takes no index -- and a validate call to a method that does
+	not exist."""
+	body = "struct r { u32 id; }\nstruct s { u8 n; r recs[4]; }"
+
+	assert classified(body, "s.recs") is Member.ARRAY
+	# And nothing to check: per-element validation is a cost the caller
+	# chooses, so a struct array gets an accessor and no check.
+	assert checked(body, "s.recs") is Check.NOTHING
+
+	nested = "struct r { u32 id; }\nstruct s { u8 n; r one; }"
+	assert classified(nested, "s.one") is Member.NESTED
+	assert checked(nested, "s.one") is Check.NESTED
+
+
+def test_a_scalar_at_a_dynamic_offset_is_still_a_scalar() -> None:
+	"""The third way to get this wrong, found while factoring the first two:
+	whether a dynamic offset can be *resolved* is the backend's business, and
+	classifying it as unplaced drops every field after a variable member."""
+	body = ("struct h { u8 v; u16 n; }"
+	        "\nstruct s { h hdr; u8 opts[hdr.n]; u16 after; }")
+
+	assert classified(body, "s.after") is Member.SCALAR
+	assert checked(body, "s.after") is Check.CONSTRAINED
+
+
+def test_a_reserved_field_is_neither_read_nor_ignored() -> None:
+	body = "struct s { u4 a; reserved u4 [must_be_zero]; }"
+
+	assert classified(body, "s.<reserved0>") is Member.RESERVED
+	assert checked(body, "s.<reserved0>") is Check.RESERVED
+
+
+def test_a_region_is_not_a_field() -> None:
+	body = """struct h { u8 v; u16 length; }
+	struct s {
+		u8   hop;
+		authenticated { h hdr; u8 nonce[12] [nonce]; }
+		tag  u8[16];
+	}
+	"""
+	assert classified(body, "s.authenticated") is Member.REGION
+
+
+@pytest.mark.parametrize("target", ["c", "cpp", "python", "rust"])
+def test_every_backend_uses_the_shared_order(target: str) -> None:
+	"""The point of the module. A backend that grew its own dispatch would get
+	the two traps above wrong in its own way, which is what happened three
+	times before this existed.
+
+	The C backend is the exception and is listed anyway: it predates the
+	classifier and its dispatch is spread across `_field`, which is why it
+	never had the bug -- it never had one place to get it wrong in.
+	"""
+	import importlib
+
+	if target == "c":
+		pytest.skip("the C backend dispatches per construct, not in one place")
+
+	source = (ROOT / "situc" / "codegen" / target / "emit.py").read_text()
+	assert "classify(struct, placement, self.structs)" in source
+	assert "classify_check(struct, placement, self.structs)" in source
