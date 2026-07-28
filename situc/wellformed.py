@@ -366,6 +366,57 @@ def check_codec_bindings(schema: ast.Schema) -> None:
 					         "a codec's properties are what the lattice reads; "
 					         "without them nothing can be said about the region"],
 				)
+			if isinstance(region, ast.Sealed):
+				_check_sealing_codec(region, codecs[region.codec],
+				                     bound.get(region.codec))
+
+
+def _check_sealing_codec(region: ast.Sealed, codec: ast.CodecDecl,
+		impl: ast.ImplDecl | None) -> None:
+	"""What a codec must be before it may seal (open questions 11 and 12).
+
+	Two refusals, and both are about the stage gate meaning what it says.
+
+	Section 14.3's gate exists so that a sealed interior is unreachable before
+	its tag verifies. A codec that does not authenticate has no tag to verify,
+	so the gate would be ceremony over nothing -- the caller passes `verified`,
+	nothing checked anything, and the type system carries a promise the
+	cryptography never made.
+
+	And a *derived* implementation may not seal at all. Situ generates
+	table-driven code, whose access pattern depends on the data it processes;
+	over the plaintext of a sealed region that is a cache-timing channel, and
+	section 14.6 forbids exactly that for `[secret]` bytes. Situ cannot promise
+	constant time and will not pretend to, so sealing takes a tier-1 extern
+	implementation, where the timing properties are the supplier's to state.
+	"""
+	if not codec.authenticated:
+		raise error(
+			f"`{codec.name}` does not authenticate, so it cannot seal a region",
+			region.span,
+			label = "no tag to verify",
+			notes = [
+				"section 14.3's gate hands out the interior only once a tag has "
+				"verified; a codec without one makes that a promise nothing keeps",
+				f"declare `authenticated;` in `codec {codec.name}` if it really "
+				f"does, or use `coded({codec.name})` for a transform that does not",
+			],
+		)
+
+	if impl is not None and impl.kind is ast.ImplKind.DERIVED:
+		raise error(
+			f"`{codec.name}` has a derived implementation, so it cannot seal",
+			region.span,
+			label = "generated code, over secret bytes",
+			notes = [
+				"a generated implementation is table driven, and a table indexed "
+				"by secret data is a cache-timing channel -- which section 14.6 "
+				"forbids for `[secret]` bytes and this would reintroduce",
+				"situ cannot promise constant time, so it declines rather than "
+				"pretending: bind an extern implementation whose timing is "
+				f"stated, with `impl {codec.name} extern \"...\";`",
+			],
+		)
 
 
 def _coded_regions(members: tuple[ast.Member, ...]) -> list[ast.Coded | ast.Sealed]:

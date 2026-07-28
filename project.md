@@ -2106,6 +2106,7 @@ keeping. They are referenced from the sections they bear on; this is the index.
 | 0016 | A composed expansion may carry both a ratio and an addend |
 | 0017 | One codec implementation, in C, with a per-language plugin slot |
 | 0018 | `ratio_padded(a, b)`, for codes that emit whole groups |
+| 0019 | What a codec must be before it may seal |
 
 0004 and 0007 look contradictory and are not. 0004 made aarch64 compile-only
 and deferred a revisit; 0007 closes that revisit once user-mode emulation was
@@ -3175,26 +3176,52 @@ section 8.6 for what is and is not claimed today.
 
 ---
 
-## 27. Open questions
+## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
 that depends on it.
 
-1. **`until`-delimited arrays.** Genuinely useful for existing protocols,
-   but sequential-only and awkward to bound. Phase 6 or later; may be dropped.
-   **Folded out of the roadmap** with text-protocol support (26.20): the real
-   question underneath is whether the capability lattice should model
-   delimiter-framed data, where no field has an offset, and answering that
-   comes before the construct.
+**All twelve are settled.** Four were answered by building the thing they were
+about, five by a decision record, two by concluding the question was not one,
+and one by deciding deliberately not to answer it yet. Where a resolution rests
+on something a reader can check, the check is named.
+
+Kept in full rather than deleted. What a question turned out *not* to be is
+often the useful part -- 12 asked about ordering and the ordering was already
+fine, while the thing actually broken was two lines away and nobody had asked
+about it.
+
+1. ~~**`until`-delimited arrays.**~~ **RESOLVED as not-now, deliberately.**
+   The construct was never the question. Underneath it is whether the
+   capability lattice should model delimiter-framed data at all -- where no
+   field has an offset, so `offset`, `access` and `address` have nothing to
+   say and eleven of thirteen axes are vacuous. That is a language question
+   rather than a syntax one, and it is not answered. 26.20 records the whole
+   position; the construct stays out until the question underneath it is
+   taken, and situ says what it does not cover rather than covering it badly.
 2. ~~**Multiple tags with nested coverage.**~~ **RESOLVED.** Nested coverage is
    permitted and recomputes innermost first, which is the only order that
    terminates: an outer tag covers the inner tag's own bytes, so writing the
    inner one afterwards would leave the outer one stale again. Innermost is
    narrowest, since coverage is disjoint or nested by 14.1, so the sizes of two
    coverage sets order them. `docs/decisions/0011-nested-tag-coverage.md`.
-3. **Cross-field invariants.** `invariant len == size(payload);` is attractive
-   -- checked on parse, maintained automatically on mutation. Where does the
-   maintenance obligation live in the generated API? Deferred.
+3. ~~**Cross-field invariants.**~~ **RESOLVED: the obligation goes where
+   coverage already puts it.** The question was where the maintenance
+   obligation lives in the generated API, and the tag machinery had already
+   answered it for a harder case. A field a tag covers gets no plain setter;
+   it gets `set_x(msg, value)`, which marks the tag stale, and the message
+   refuses to be transmittable until it is recomputed (14.2).
+
+   An invariant is that shape exactly. `invariant len == size(payload)` makes
+   `len` a derived value; writing `payload` leaves it stale in the same way a
+   covered write leaves a tag stale. So a field an invariant reads is covered
+   by that invariant, loses its plain setter, and a `recompute` is generated
+   beside the ones tags get. Nothing new is needed on the lattice: `auth` is
+   already set-valued and already means "these bytes have an obligation
+   attached", and the dirty bit is already per-obligation rather than per-tag.
+
+   Not implemented -- no phase needed it -- but no longer open: the design is
+   the coverage machinery, and a schema construct that reuses it.
 4. ~~**Slack tracking.**~~ **RESOLVED.** No field is added to the view. `limit`
    *is* the capacity, established once at acquisition; the used extent is read
    from the data rather than stored a second time, so slack is
@@ -3202,8 +3229,18 @@ that depends on it.
    hold onto: a sub-view of a variable-length region must be acquired with the
    region's *maximum* extent, or a grow-in-place fails its own bounds check.
    `docs/decisions/0008-slack-tracking.md`.
-5. **Bit-level offsets in the pin syntax.** `@ 0x14` is a byte offset. Does
-   `@ 0x14:3` (byte 0x14, bit 3) earn its keep? Probably yes for registers.
+5. ~~**Bit-level offsets in the pin syntax.**~~ **RESOLVED: no.** The guess
+   was "probably yes for registers", and building the registers showed
+   otherwise. A register's fields are declared in order with their widths, and
+   a gap is `reserved uN` -- which says how wide the gap is, carries a
+   `[preserve]` or `[must_be_zero]` policy, and is checked by the generated
+   validator. `@ 0x14:3` says only where the *next* field starts, so two
+   fields can silently overlap and nothing accounts for the bits between.
+
+   The capability map prints `0x06:3` as *output*, which is what the notation
+   is good for: reporting a position the solver computed. Accepting it as
+   input would be accepting a second, weaker way to say what `reserved`
+   already says exactly.
 6. ~~**Non-power-of-two integer widths above 8 bits.**~~ **RESOLVED.** A width
    divisible by 8 is a byte-aligned scalar, so `u24` and `u48` are ordinary
    scalars. Every other width is bit packed and may sit at any bit offset, so
@@ -3216,36 +3253,74 @@ that depends on it.
    host-order formats, gated behind `[allow_host_dependent]` and non-canonical;
    and `endian_marker` for runtime-resolved byte order, which is
    `CanonicalGiven(marker)` and costs nothing on the offset or size axes.
-   Write the decision record.
-8. **Compact-versus-mutable tension.** Not a question so much as a standing
-   tradeoff to surface: compactness wants varints, bit packing, and elided
-   optionals, all of which destroy fixed offsets. Situ's value is making that
-   choice explicit per field. **The varint sub-question is now resolved:** they
-   are required (Section 8.1.1), because describing protobuf is impossible
-   without them. `minimal` is the canonical-encoding rule and it is mandatory
-   for `require canonical`.
+   `docs/decisions/0014-positional-directives.md` carries the harder half of
+   it: `native` is resolved by the *C* compiler, not by situc, because the
+   machine running the generator is not the machine running the output.
+8. ~~**Compact-versus-mutable tension.**~~ **NOT A QUESTION, and it should
+   not have been listed as one.** It is the thing situ is for. Compactness
+   wants varints, bit packing and elided optionals; every one of them destroys
+   a fixed offset; and the whole point of the lattice is that the schema says
+   which was chosen and the map says what it cost. There is nothing to decide
+   because there is no right answer to decide on -- only a tradeoff to make
+   visible per field, which is what the thirteen axes do.
 
-9. **Kernel pipeline property composition.** 13.4 states composition is
-   pointwise and conservative. Verify that against a real case: does
-   `rs |> interleave |> manchester` compose to something usefully strong, or
-   does conservatism collapse it to nothing? If the latter, the composition
-   rules need refinement before tier 2 is worth building.
-10. **Bit phase in the public API.** The solver tracks bits internally, but what
-   does a non-byte-aligned region look like to a C caller? Options: forbid
-   non-byte-aligned region boundaries at the API surface (simplest, probably
-   right for v0), or expose a bit-offset view type. Decide before phase 12.
-11. **Whether tier-2 codecs need a constant-time mode.** A table-driven codec
-   over secret data is a cache-timing side channel. `[secret]` regions already
-   forbid data-dependent access in generated accessors (14.6); does that
-   obligation extend into generated codec implementations, and is a
-   constant-time Reed-Solomon realistic? Decide before applying tier 2 to
-   sealed regions.
-12. **`systematic` and authentication interaction.** A systematic FEC block
-   inside a `sealed` region means the ciphertext is FEC-coded and the plaintext
-   is not, or vice versa depending on layer order. Encrypt-then-code and
-   code-then-encrypt have different capability outcomes and different security
-   properties. Both should be expressible; the ordering must be explicit in the
-   schema, never inferred.
+   The varint sub-question was real and is resolved: required (8.1.1), because
+   describing protobuf is impossible without them, with `minimal` as the
+   canonical-encoding rule and mandatory for `require canonical`.
+
+9. ~~**Kernel pipeline property composition.**~~ **RESOLVED by building it:
+   conservatism does not collapse it.** The named case is in
+   `std/kernels.situ` and the map prints its answer:
+
+   ```
+   codec framed expansion=ratio_exact(2,1) seekable=permuted
+                granularity=block deterministic
+   ```
+
+   An exact ratio survives three stages, which is the property that matters --
+   interior offsets stay a linear function of input offsets, so a field under
+   the pipeline keeps a computable position. What the composition *did* need
+   was a wider vocabulary rather than weaker rules: the addend and the ratio
+   have to travel together, since parity appended before a doubling gets
+   doubled. `docs/decisions/0016-composed-expansion.md`.
+10. ~~**Bit phase in the public API.**~~ **RESOLVED: forbidden at the
+   surface**, which was the option the question guessed at. A struct whose
+   size is not a whole number of bytes gets no accessors in any backend, and
+   `gen-checks` says so in the emitted file rather than skipping quietly:
+   `s: not a whole number of bytes, so it has no accessors`.
+
+   Bit *fields* are another matter and are fully supported: they are read by
+   value through a shift and a mask, never by pointer, which is what
+   `repr = ValueConverted` on them means. What is refused is a bit-phase
+   *boundary* -- a region or struct that starts or ends mid-byte -- because a
+   caller has no way to hold one. The layout solver refuses a bit-packed field
+   after a dynamically sized member for the same reason, and all four backends
+   assert that rule rather than handling it (invariant 12).
+11. ~~**Whether tier-2 codecs need a constant-time mode.**~~ **RESOLVED: the
+   obligation extends, situ cannot discharge it, so situ refuses.** A table
+   indexed by plaintext leaks that plaintext through the cache whether the
+   table was written by hand or emitted by situ, and the emitted one is
+   table-driven by construction. Whether a constant-time Reed-Solomon is
+   realistic turned out not to matter, because situ does not generate one.
+
+   So a codec with a `derived` implementation may not seal a region. Sealing
+   takes a tier-1 `extern` implementation, where the timing properties are the
+   supplier's to state -- the same move decision 0017 makes about codecs
+   generally. `docs/decisions/0019-sealing-requires-authentication.md`.
+12. ~~**`systematic` and authentication interaction.**~~ **RESOLVED: the
+   ordering was already explicit, and the real gap was elsewhere.** Both
+   orders are expressible and neither is inferred, because a pipeline says
+   which stage runs first: `aead |> rs` is encrypt-then-code and `rs |> aead`
+   is code-then-encrypt, and the composed signature differs accordingly.
+
+   What the question did not ask, and what was actually wrong, is that
+   `sealed(C)` accepted any codec at all -- including one that authenticates
+   nothing. `sealed(crc32)` built, and the stage gate would have handed out
+   the interior on a `verified` flag nothing had checked. A codec must declare
+   `authenticated` before it may seal.
+   `docs/decisions/0019-sealing-requires-authentication.md` carries both
+   refusals, since this question and 11 turned out to be the same one asked
+   from different ends.
 ## 28. Glossary
 
 | Term | Meaning |

@@ -218,3 +218,78 @@ def test_an_encoding_situ_cannot_check_is_refused() -> None:
 
 	assert "not an encoding situ validates" in message
 	assert "`ascii` and `utf8`" in message
+
+
+# -- what may seal (decision 0019) -------------------------------------------
+
+
+AEAD = """codec aead {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+"""
+
+PLAIN = """codec plain {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	invertible;
+	deterministic;
+}
+"""
+
+SEALING = """struct h { u8 v; u16 length; }
+struct s {
+	u8 hop;
+	authenticated { h hdr; u8 nonce[12] [nonce]; }
+	sealed(%s, nonce = nonce) { u16 inner; }
+	tag u8[16];
+}
+"""
+
+
+def test_a_codec_that_does_not_authenticate_cannot_seal() -> None:
+	"""Section 14.3's gate hands out the interior once a tag has verified. A
+	codec with no tag makes that a promise nothing keeps -- the ceremony
+	without the substance."""
+	message = rendered(PLAIN + 'impl plain extern "p";\n' + SEALING % "plain")
+
+	assert "does not authenticate, so it cannot seal" in message
+	assert "no tag to verify" in message
+	assert "coded(plain)" in message
+
+
+def test_a_derived_implementation_cannot_seal() -> None:
+	"""Generated code is table driven, and a table indexed by secret data is a
+	cache-timing channel -- which 14.6 forbids and this would reintroduce.
+
+	No kernel derives `authenticated`, so the reachable case is a *pipeline*
+	whose authentication comes from an extern stage and whose implementation is
+	generated anyway. That is open question 12's own example: encrypt-then-code,
+	where situ would emit a table-driven Reed-Solomon over sealed plaintext.
+	"""
+	body = (AEAD + 'impl aead extern "my_aead";\n'
+	        "codec rs { kernel = polynomial(field = 256, n = 255, k = 223); }\n"
+	        "impl rs derived;\n"
+	        "codec protected = aead |> rs;\n"
+	        "impl protected derived;\n" + SEALING % "protected")
+	message = rendered(body)
+
+	assert "has a derived implementation, so it cannot seal" in message
+	assert "cache-timing channel" in message
+	assert "extern" in message
+
+
+def test_an_extern_authenticating_codec_may_seal() -> None:
+	"""Which is the way out both diagnostics name, so it has to work."""
+	parse_text(AEAD + 'impl aead extern "my_aead";\n' + SEALING % "aead")
+
+
+def test_a_transform_that_does_not_authenticate_may_still_code() -> None:
+	"""`coded` is for exactly this: a transform with no security claim."""
+	parse_text(PLAIN + 'impl plain extern "p";\n'
+	           "struct s { u8 hop; coded body(plain) { u16 inner; } }\n")
