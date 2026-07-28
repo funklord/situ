@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
 	build_cmd.add_argument("schema", type=Path)
 	build_cmd.add_argument("--out", type=Path, default=Path("."),
 	                       help="output directory (default: the current one)")
-	build_cmd.add_argument("--target", choices=("c",), default="c",
+	build_cmd.add_argument("--target", choices=("c", "cpp"), default="c",
 	                       help="backend; rust arrives in phase 11")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
@@ -278,17 +278,35 @@ def _resolve_for_diff(path: Path) -> ResolvedSchema:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
+	"""`situc build schema.situ [--target=c|cpp]` -- generate accessors.
+
+	Both backends read the same layout and the same capability vectors; what
+	differs is how much of them the target language can enforce rather than
+	document (section 20.1).
+	"""
 	from situc.codegen.c import generate
+	from situc.codegen.cpp import generate as generate_cpp
 
 	source, resolved, outcomes = analyse(args.schema)
-	generated = generate(parse(source), resolved, args.schema.stem, args.prefix)
+	files: dict[str, str]
+	warnings: list[Diagnostic]
+
+	if args.target == "cpp":
+		cpp      = generate_cpp(parse(source), resolved, args.schema.stem,
+		                        args.prefix)
+		files    = cpp.files()
+		warnings = cpp.warnings
+	else:
+		emitted  = generate(parse(source), resolved, args.schema.stem, args.prefix)
+		files    = emitted.files()
+		warnings = emitted.warnings
 
 	args.out.mkdir(parents=True, exist_ok=True)
-	for name, text in generated.files().items():
+	for name, text in files.items():
 		(args.out / name).write_text(text, encoding="ascii")
 		print(f"situc: wrote {args.out / name}", file=sys.stderr)
 
-	_report(args, generated.warnings + requirements.warnings(outcomes)
+	_report(args, warnings + requirements.warnings(outcomes)
 	        + requirements.deferrals(outcomes))
 	return 0
 

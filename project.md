@@ -2818,19 +2818,58 @@ bytes and the caller runs the cipher.
 
 ### 26.16 C++ backend
 
-**Status: not started.** The next backend after C, and the largest population
-that situ does not yet reach.
+**Status: the static subset works.** `situc build --target=cpp` emits one
+header per schema. Scalars, bit fields, straddling fields, enums, nested
+structs, byte arrays, fixed point, BCD and every constraint the C backend
+validates are covered. Not yet: dynamic layout, sealed regions and their gates,
+codecs, and registers -- each says so in the emitted header rather than being
+silently absent, because a reader has to be able to tell a gap from a feature.
 
-The design questions are real and want settling before code exists. A view
-could be a value as it is in C, or a type with a destructor and no copy. The
-stage gate could stay a struct-wrapped view or become a distinct type the
-compiler refuses to convert. `repr = MemoryIdentical` could hand back a
-`std::span` where the bytes really are the value, which is a guarantee C can
-only document. Each of those trades expressiveness for the C backend's
-property that the generated code is obvious at a glance.
+**There is no second runtime.** `runtime/cpp/situ.hpp` is a header over
+`situ.h`, whose functions are already `extern "C"`. A second implementation of
+the same arithmetic is a second thing to get wrong, which is decision 0017's
+argument about codecs applied to the runtime.
+
+**What C++ enforces that C documents.** This is the whole reason the backend
+is worth having, and it came to three things:
+
+- A byte array is a `situ::rt::bytes`, so its length travels with its pointer.
+  The C backend hands out a bare pointer and a `_COUNT` macro and nothing makes
+  a caller use the second with the first.
+- Every fallible operation is `[[nodiscard]]`. In C the return of `validate` is
+  as ignorable as any other `int`.
+- A `enum class` cannot be confused with its backing width.
+
+The stage gate is the fourth and is not built yet: a class whose constructor is
+private, so a sealed region's view cannot be made except by the function that
+verifies the tag. In C the struct is there for anybody determined enough to
+fill in. That is the headline and it waits on codec binding.
+
+**The design decisions, and why.** A view is a value, as in C: it owns nothing,
+so a destructor would be a lie about what it is, and section 12.3's
+invalidation rule is a generation check rather than a lifetime. Errors are
+return codes rather than exceptions because the target may have neither
+unwinding nor a heap; the generated headers compile clean under
+`-fno-exceptions -fno-rtti`. `situ::rt::span` is twenty lines rather than
+`<span>` because a freestanding toolchain may not ship the header and the part
+of it worth having is small. C++17 rather than 20, for the same reason.
+
+**Two naming hazards C does not have**, both found by compiling the examples
+rather than by thinking about it. A field may share a name with its type --
+IPv4 has a `protocol` field of type `protocol` -- and an unqualified use inside
+the class changes what that name means partway through it, which C++ rejects
+outright; every generated type is therefore fully qualified. And the runtime
+lives in `situ::rt` rather than `situ`, because generated code lives in `situ`
+and a schema is free to declare `struct message` or `struct view`.
+
+**The test that matters is that the two backends agree.** Two backends over one
+layout that disagreed would be worse than one, because the schema would then
+mean two things. Both headers are compiled into one program over one buffer and
+compared field by field, including a write through the C++ side read back
+through C.
 
 Codecs bind the C implementation (decision 0017), which for C++ costs nothing:
-`extern "C"` is idiomatic and the generated header already emits the guard.
+`extern "C"` is idiomatic and the generated C header already emits the guard.
 
 ### 26.17 Python backend
 
