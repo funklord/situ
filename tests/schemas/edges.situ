@@ -62,3 +62,25 @@ struct two_tags {
 }
 
 require size(two_tags) == 23;
+
+// Text with the two attributes section 8.6 offers, which no protocol here uses
+// and which were both parsed and dropped on the floor until they were not.
+//
+// `nul_terminated` reads the declared size as the capacity: the field is
+// sixteen bytes whatever it holds, and the content runs to the first zero. So
+// the bytes past the terminator are not part of the value, two buffers
+// differing only there mean the same thing, and the field is NonCanonical --
+// which the capability map says out loud rather than leaving to be discovered.
+struct labelled {
+	u8  name[16]  [nul_terminated, encoding = utf8];
+	u8  code[4]   [encoding = ascii];
+	u16 sequence;
+}
+
+require size(labelled) == 22;
+require in_place(labelled.sequence);
+
+// Recorded rather than required: the trailing bytes are the cost of a
+// capacity-sized string, and the remedy would be to zero them on write and
+// demand it on parse.
+assert canonical(labelled.name);

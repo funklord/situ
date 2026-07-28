@@ -597,12 +597,26 @@ strictness is enabled, and a `[nul_terminated]` flag. Length-prefixed text is
 just a `u8[]` with a size expression. This avoids inventing string semantics
 the underlying protocol may not have.
 
-**Status: neither attribute is implemented.** Both are refused rather than
-accepted, because they used to parse and be dropped: a schema could declare a
-field ASCII and the generated code would neither validate it nor record it.
-The names stay in `ATTRIBUTE_NAMES` because bracket disambiguation depends on
-them (decision 0006). The layout they annotate is already correct -- only the
-validation is missing.
+**Both attributes are implemented.** `[encoding = ascii | utf8]` is validated
+on parse, strictly in the sense RFC 3629 requires -- an overlong form or a
+surrogate half is refused, because either is a second spelling of a character
+that already has one. An encoding situ cannot check is an error rather than a
+silent nod.
+
+**`[nul_terminated]` reads the declared size as the capacity.** The field is
+its declared width whatever it holds, so nothing after it moves and `size(X)`
+is unchanged; the content runs to the first zero byte. Two consequences follow
+and both are stated rather than left to be found:
+
+- The generated accessors gain `_len()`, the content length, bounded by the
+  capacity. An unterminated field reports the whole width rather than reading
+  past it -- a getter is not the place to discover a malformed field.
+- `validate` refuses a field with no terminator in it. Without one, nobody
+  knows where the content stops.
+- The field is **`canonical = NonCanonical`**, because the bytes past the
+  terminator do not affect the value and two buffers differing only there mean
+  the same thing. The remedy the rule names is to zero the padding on write and
+  require it on parse, which buys the single encoding back.
 
 Note what this section does *not* claim. Fixed-extent text inside a binary
 frame is covered, because it is a byte array with a length. Genuinely
@@ -2763,9 +2777,18 @@ mod 5 precisely because that is what decides the padding.
 their last two characters, so text encoded with one and decoded with the other
 is wrong in exactly the bytes that made somebody reach for it.
 
-**Still open: `nul_terminated`.** Parsed, refused, and needing a decision about
-what a terminator does to a field's extent -- whether the declared size is the
-capacity or the content -- before it can mean anything.
+**`nul_terminated` is done, and the declared size is the capacity.** That was
+the decision the feature was waiting on, and it is the one that keeps the
+layout static: a nul-terminated field is its declared width whatever it holds,
+so nothing after it moves. Section 8.6 records what follows -- a `_len()`
+accessor, a validator that demands the terminator, and `NonCanonical` on the
+canonical axis, since the bytes past the terminator are not part of the value.
+
+`tests/schemas/edges.situ` carries a struct using both text attributes, because
+no protocol in the tree does and generated code that never runs is the thing
+that file exists to prevent.
+
+**26.15 is complete.**
 
 **Parsing most protocols should need nothing installed.** The long-term aim is
 that a schema for an ordinary protocol builds and runs against situ alone --

@@ -88,6 +88,30 @@ def test_bit_field_keeps_in_place_mutation() -> None:
 	       == Value("InPlaceFixed")
 
 
+# -- row: nul terminated -----------------------------------------------------
+
+
+def test_a_nul_terminated_field_is_not_canonical() -> None:
+	"""The declared size is the capacity, so the bytes past the terminator are
+	not part of the value -- and two buffers differing only there mean the same
+	thing, which is what NonCanonical says."""
+	body = "struct S { u8 name[8] [nul_terminated]; }"
+
+	assert axis_of(body, "S.name", Axis.CANONICAL) == Value("NonCanonical")
+	assert "nul-terminated" in rules_for(body, "S.name", Axis.CANONICAL)
+
+
+def test_a_nul_terminated_field_keeps_its_extent() -> None:
+	"""Capacity, not content: the field is eight bytes whatever it holds, so
+	nothing after it moves and its own size is still fixed."""
+	terminated = "struct S { u8 name[8] [nul_terminated]; u16 after; }"
+	plain      = "struct S { u8 name[8]; u16 after; }"
+
+	for axis in (Axis.OFFSET, Axis.SIZE, Axis.ALIGN, Axis.MUTATE):
+		assert axis_of(terminated, "S.after", axis) == axis_of(plain, "S.after", axis)
+	assert axis_of(terminated, "S.name", Axis.SIZE) == axis_of(plain, "S.name", Axis.SIZE)
+
+
 # -- row: fixed point --------------------------------------------------------
 
 
@@ -332,6 +356,7 @@ def test_reachable_rows_are_all_tested() -> None:
 	"""
 	tested = {
 		"non-native-endian-scalar",
+		"nul-terminated",
 		"fixed-point",
 		"bcd",
 		"bit-field",

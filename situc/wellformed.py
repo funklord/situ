@@ -217,10 +217,6 @@ def _check_member_attrs(members: tuple[ast.Member, ...]) -> None:
 #: refusing it: the schema says the text is ASCII, or nul-terminated, and the
 #: generated code neither checks nor records it. Section 8.6 describes both;
 #: neither is implemented.
-UNIMPLEMENTED_ATTRS: dict[str, str] = {
-	"nul_terminated": "nul termination is not honoured by this build",
-}
-
 #: What `[encoding = ...]` may say. Section 8.6 names these two, and an
 #: unknown one is refused rather than ignored: a schema declaring `utf16` and
 #: getting no check would be worse off than one declaring nothing.
@@ -234,20 +230,6 @@ def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:
 		if previous is not None:
 			raise _redeclaration("attribute", attr.name, previous, attr)
 		seen[attr.name] = attr
-
-		reason = UNIMPLEMENTED_ATTRS.get(attr.name)
-		if reason is not None:
-			raise error(
-				f"`{attr.name}` is not implemented",
-				attr.span,
-				label = reason,
-				notes = [
-					"situ has no string type: text is `u8 name[N]`, and section "
-					"8.6 gives it these attributes, but nothing reads this one yet",
-					"remove the attribute -- the layout it describes is already "
-					"correct, and only the validation is missing",
-				],
-			)
 
 		if attr.name == "encoding":
 			named = getattr(attr.value, "name", None)

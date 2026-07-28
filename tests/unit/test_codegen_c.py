@@ -921,3 +921,34 @@ def test_text_without_an_encoding_is_not_validated() -> None:
 	# Named calls, not the substring: `situ_s_validate` contains "valid".
 	assert "situ_ascii_valid" not in source
 	assert "situ_utf8_valid" not in source
+
+
+def test_a_nul_terminated_field_reports_its_content_length() -> None:
+	"""The declared size is the capacity, so the other number -- how much of it
+	is content -- is the one a caller would otherwise compute by hand."""
+	header, source = emit("struct s { u8 name[8] [nul_terminated]; }")
+
+	assert "uint32_t situ_s_name_len(situ_view_t view)" in header
+	assert "situ_nul_len(view.base + 0u, 8u)" in header
+
+	# And the terminator has to be there, or nobody knows where content stops.
+	assert "situ_nul_terminated((view.base) + 0u, 8u)" in source
+
+
+def test_a_nul_terminated_field_does_not_move_what_follows() -> None:
+	"""Capacity, not content: the field is its declared size whatever it
+	holds, which is the whole reason this reading was chosen."""
+	terminated, _ = emit("struct s { u8 name[8] [nul_terminated]; u16 after; }")
+	plain, _      = emit("struct s { u8 name[8]; u16 after; }")
+
+	assert "#define SITU_S_SIZE_FIXED 10u" in terminated
+	assert terminated.count("situ_get_be16(view.base + 8u)") == \
+	       plain.count("situ_get_be16(view.base + 8u)") == 1
+
+
+def test_a_plain_byte_array_gets_no_length_accessor() -> None:
+	"""The attribute is the claim; without it the bytes are just bytes."""
+	header, _ = emit("struct s { u8 name[8]; }")
+
+	assert "situ_s_name_len" not in header
+	assert "situ_s_name_ptr" in header

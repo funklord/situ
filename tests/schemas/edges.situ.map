@@ -1,0 +1,33 @@
+# situ capability map v1
+# schema: edges.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct edges size=19 repr=ValueConverted atomic=NonAtomic
+  edges.trim                             offset=AbsoluteStatic(0x00) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  edges.scale                            offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  edges.offset                           offset=AbsoluteStatic(0x01) size=Fixed(12bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  edges.channel                          offset=AbsoluteStatic(0x02:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  edges.samples                          offset=AbsoluteStatic(0x03) size=Fixed(8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  edges.deltas                           offset=AbsoluteStatic(0x0B) size=Fixed(8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+
+struct labelled size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  labelled.name                          offset=AbsoluteStatic(0x00) size=Fixed(16) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  labelled.code                          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  labelled.sequence                      offset=AbsoluteStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(tag, checksum)
+  two_tags.hop                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  two_tags.inner                         offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(tag)
+  two_tags.kind                          offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(tag)
+  two_tags.<reserved0>                   offset=AbsoluteStatic(0x02) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(tag)
+  two_tags.flags                         offset=AbsoluteStatic(0x02:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(tag)
+  two_tags.tag                           offset=AbsoluteStatic(0x03) size=Fixed(16) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  two_tags.outer                         offset=AbsoluteStatic(0x13) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(checksum)
+  two_tags.sequence                      offset=AbsoluteStatic(0x13) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  two_tags.checksum                      offset=AbsoluteStatic(0x15) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable

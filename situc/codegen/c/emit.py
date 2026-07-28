@@ -1273,6 +1273,8 @@ class Emitter:
 				f"{self._base_expression(struct, placement, gated=gate is not None)};",
 				"}",
 			])
+			lines.extend(self._nul_length(struct, placement, local, taken, held,
+			                              gate is not None))
 			return lines
 
 		lines.extend([
@@ -1628,6 +1630,10 @@ class Emitter:
 				and _has_attr(placement.attrs, "encoding"):
 			return self._encoding_check(struct, placement, scalar)
 
+		if scalar is not None and placement.array_count is not None \
+				and _has_attr(placement.attrs, "nul_terminated"):
+			return self._nul_check(struct, placement, scalar)
+
 		if scalar is None or placement.array_count is not None:
 			return []
 		if placement.kind == "marker":
@@ -1681,6 +1687,54 @@ class Emitter:
 			])
 
 		return lines
+
+	def _nul_length(self, struct: ResolvedStruct, placement: Placement,
+			local: str, taken: str, held: str, gated: bool) -> list[str]:
+		"""How much of a nul-terminated field is content.
+
+		The capacity is a constant the header already carries; this is the
+		other number, and the one a caller has to compute by hand otherwise.
+		Bounded by the capacity, so an unterminated field reports the whole
+		thing rather than running off the end -- `validate` is what refuses
+		that, and a getter is not the place to discover it.
+		"""
+		if placement.array_count is None \
+				or not _has_attr(placement.attrs, "nul_terminated"):
+			return []
+
+		base = self._base_expression(struct, placement, gated=gated)
+		return [
+			"",
+			f"/* Content length: up to the first zero byte, or"
+			f" {placement.array_count} if there is none. */",
+			f"static inline uint32_t "
+			f"{ident(self.prefix, struct.name, local, 'len')}({taken})",
+			"{",
+			f"\treturn situ_nul_len({held}.base + {base},"
+			f" {placement.array_count}u);",
+			"}",
+		]
+
+	def _nul_check(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""A field declared nul-terminated must actually carry a terminator.
+
+		The declared size is the capacity, so a field with no zero byte in it
+		is not a short string -- it is a field whose content runs off the end,
+		and every reader of it would have to guess where to stop.
+		"""
+		if placement.offset_bits is None or scalar.bits != BITS_PER_BYTE:
+			return []
+
+		count = placement.array_count or 0
+		return [
+			f"\t/* {placement.path} [nul_terminated]: the terminator must be"
+			f" within the field */",
+			f"\tif (!situ_nul_terminated((view.base) + {placement.offset_bytes}u,"
+			f" {count}u)) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
 
 	def _encoding_check(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:

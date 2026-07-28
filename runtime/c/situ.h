@@ -430,6 +430,30 @@ static inline int64_t situ_sign_extend(uint64_t raw, uint32_t width)
  * (section 8.8), in a different costume.
  * ------------------------------------------------------------------------ */
 
+/* The content length of a nul-terminated field whose declared size is its
+ * capacity: the offset of the first zero byte, or `capacity` if there is none.
+ *
+ * Returning the capacity for an unterminated field rather than reading past it
+ * is the whole point: the field is a fixed number of bytes and this must not
+ * be the function that leaves it. `situ_nul_terminated` is what asks whether
+ * the terminator was actually there. */
+static inline uint32_t situ_nul_len(const uint8_t *data, uint32_t capacity)
+{
+	uint32_t i;
+
+	for (i = 0; i < capacity; i++) {
+		if (data[i] == 0u) {
+			return i;
+		}
+	}
+	return capacity;
+}
+
+static inline int situ_nul_terminated(const uint8_t *data, uint32_t capacity)
+{
+	return situ_nul_len(data, capacity) < capacity;
+}
+
 static inline int situ_ascii_valid(const uint8_t *data, uint32_t len)
 {
 	uint32_t i;

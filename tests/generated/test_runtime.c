@@ -227,6 +227,39 @@ static void test_ascii_is_the_seven_bit_half(void **state)
 	assert_false(situ_ascii_valid((const uint8_t *)"caf\xc3\xa9", 5));
 }
 
+static void test_nul_len_stops_at_the_terminator(void **state)
+{
+	(void)state;
+
+	assert_int_equal(situ_nul_len((const uint8_t *)"hi\0\0\0", 5), 2u);
+	assert_int_equal(situ_nul_len((const uint8_t *)"\0abcd", 5), 0u);
+}
+
+static void test_nul_len_is_bounded_by_the_capacity(void **state)
+{
+	/* An unterminated field reports the whole thing rather than running off
+	 * the end. The field is a fixed number of bytes and this must not be the
+	 * function that leaves it; `validate` is what refuses the field. */
+	(void)state;
+
+	assert_int_equal(situ_nul_len((const uint8_t *)"abcdefgh", 8), 8u);
+	assert_false(situ_nul_terminated((const uint8_t *)"abcdefgh", 8));
+	assert_true(situ_nul_terminated((const uint8_t *)"abcdefg\0", 8));
+}
+
+static void test_bytes_past_the_terminator_are_not_the_value(void **state)
+{
+	/* Which is why the field is NonCanonical: these two buffers differ, and
+	 * mean the same thing. */
+	static const uint8_t zeroed[8] = { 'h', 'i', 0, 0, 0, 0, 0, 0 };
+	static const uint8_t junked[8] = { 'h', 'i', 0, 'X', 'Y', 'Z', '!', '?' };
+
+	(void)state;
+
+	assert_int_equal(situ_nul_len(zeroed, 8), situ_nul_len(junked, 8));
+	assert_memory_equal(zeroed, junked, situ_nul_len(zeroed, 8));
+}
+
 /* -- checksums (section 26.15) --------------------------------------------- */
 
 static void test_the_internet_checksum_matches_rfc_1071(void **state)
@@ -412,6 +445,9 @@ int main(void)
 		cmocka_unit_test(test_stale_view),
 		cmocka_unit_test(test_zeroed_view_is_never_live),
 		cmocka_unit_test(test_err_str),
+		cmocka_unit_test(test_nul_len_stops_at_the_terminator),
+		cmocka_unit_test(test_nul_len_is_bounded_by_the_capacity),
+		cmocka_unit_test(test_bytes_past_the_terminator_are_not_the_value),
 		cmocka_unit_test(test_utf8_accepts_every_sequence_length),
 		cmocka_unit_test(test_utf8_rejects_a_second_spelling),
 		cmocka_unit_test(test_utf8_rejects_what_is_not_a_character),

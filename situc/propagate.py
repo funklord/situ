@@ -177,6 +177,11 @@ def _is_bcd(context: Context) -> bool:
 	return context.scalar is not None and context.scalar.is_bcd
 
 
+def _is_nul_terminated(context: Context) -> bool:
+	return any(attr.name == "nul_terminated"
+	           for attr in context.placement.attrs)
+
+
 def _straddles(context: Context) -> bool:
 	position = context.placement.bit_position
 	return position is not None and position.straddles
@@ -573,6 +578,22 @@ TABLE: tuple[Row, ...] = (
 			remedy    = "",
 		),
 		applies = _is_marker_scoped,
+	),
+	Row(
+		rule = Rule(
+			name      = "nul-terminated",
+			construct = "a nul-terminated field",
+			effects   = (
+				Effect(Axis.CANONICAL, Value("NonCanonical"),
+				       "the declared size is the capacity, so the bytes after "
+				       "the terminator do not affect the value and many byte "
+				       "sequences encode the same one"),
+			),
+			remedy    = "zero the padding on write and require it on parse to "
+			            "get a single encoding back, or drop the attribute and "
+			            "treat the field as the fixed-width bytes it is",
+		),
+		applies = _is_nul_terminated,
 	),
 	Row(
 		rule = Rule(
