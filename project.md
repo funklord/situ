@@ -2977,12 +2977,27 @@ it proves untenable.
 
 ### 26.18 Rust backend
 
-**Status: the static subset works.** `situc build --target=rust` emits one
-module per schema over `runtime/rust/situ_rt.rs`, which is `no_std` and
-allocation-free. Scalars, bit fields, straddling fields, enums, nested structs,
-byte arrays, fixed point, BCD and every constraint the C backend validates.
-Not yet: dynamic layout, sealed regions and registers, each of which says so in
-the emitted module. This section supersedes 26.11.
+**Status: complete.** `situc build --target=rust` emits one module per schema
+over `runtime/rust/situ_rt.rs`, which is `no_std` and allocation-free.
+Everything the C backend covers: scalars, bit fields, straddling fields, enums,
+nested structs, byte arrays, fixed point, BCD, dynamic layout, sealed regions,
+registers and every constraint. This section supersedes 26.11.
+
+**A slice carries its own length**, so a variable-length struct needs no second
+parameter saying where the frame ends -- the one place Rust's model is simpler
+than C's and C++'s rather than stricter.
+
+**The gate is a struct with a private field.** Rust's privacy is module-scoped,
+so no code outside the generated module can construct one, and the verified
+open is the only thing that does. A test asserts it by building the forgery and
+requiring `error[E0451]: field is private`.
+
+**A register's `unsafe` is marked where it happens.** The bus access is
+`read_volatile`/`write_volatile` through a raw pointer, `new` carries a
+`# Safety` contract saying what the caller must promise, and every block has a
+`// SAFETY:` note. Decision 0017 puts situ's unsafe surface at the bus and the
+codec calls; a reader auditing a Rust codebase needs to see it rather than find
+it.
 
 **Invalidation is the borrow checker.** Section 12.3's rule is a generation
 counter checked at run time in C and compiled out of a release build. Here a

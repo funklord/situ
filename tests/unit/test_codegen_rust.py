@@ -23,6 +23,10 @@ ROOT    = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "runtime" / "rust" / "situ_rt.rs"
 RUSTC   = shutil.which("rustc")
 
+FORGE = 'fn main() {\n\tlet buf = [0u8; 64];\n\tlet forged = unit::SSealedGate { bytes: &buf };\n\tlet _ = forged.kind();\n}\n'
+COMPOSE = 'fn main() {\n\tlet w = unit::CtrlWord::new(0).with_enable(1).with_mode(5);\n\tassert_eq!(w.raw(), 0x15);\n\tassert_eq!(w.enable(), 1);\n\tassert_eq!(w.mode(), 5);\n\tassert_eq!(w.busy(), 0);\n}\n'
+DYNAMIC = 'fn main() {\n\tlet mut buf = [0u8; 32];\n\tbuf[2] = 2;\n\tlet s = unit::S::new(&buf).unwrap();\n\tassert_eq!(s.recs_count(), 2);\n\tassert_eq!(s.recs_offset(), 3);\n\tassert!(s.recs(0).is_ok());\n\tassert!(s.recs(2).is_err());\n}\n'
+
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
 
@@ -32,7 +36,8 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_rs(schema, resolved, "unit").module
 
 
-def build(tmp_path: Path, body: str, main: str = "") -> subprocess.CompletedProcess[str]:
+def build(tmp_path: Path, body: str, main: str = "",
+		preamble: str = "") -> subprocess.CompletedProcess[str]:
 	"""Generate, lay out a crate, and compile it."""
 	src = tmp_path / "src"
 	src.mkdir(exist_ok=True)
@@ -42,7 +47,8 @@ def build(tmp_path: Path, body: str, main: str = "") -> subprocess.CompletedProc
 	(src / "situ_rt.rs").write_text(
 		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 		encoding="ascii")
-	(src / "unit.rs").write_text(emit(body), encoding="ascii")
+	(src / "unit.rs").write_text(emit(body, preamble or PREAMBLE),
+	                            encoding="ascii")
 
 	if main:
 		(src / "main.rs").write_text(
@@ -193,3 +199,141 @@ fn main() {
 ''')
 	assert result.returncode != 0, "a stale read compiled and should not"
 	assert "borrow" in result.stderr
+
+
+# -- dynamic layout ---------------------------------------------------------
+
+
+DYN = "struct h { u8 v; u16 n; }\nstruct r { u32 id; }\nstruct s { h hdr; r recs[hdr.n]; }\n"
+
+
+def test_a_variable_struct_needs_no_length_parameter() -> None:
+	"""A slice carries its own length, so unlike C and C++ nothing has to be
+	told where the frame ends."""
+	module = emit(DYN)
+
+	assert "pub const SIZE_MIN: usize = 3;" in module
+	assert "pub fn new(bytes: &'a [u8]) -> Result<Self>" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_dynamic_offsets_and_counts_work(tmp_path: Path) -> None:
+	result = build(tmp_path, DYN, main=DYNAMIC)
+	assert result.returncode == 0, result.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, run.stderr
+
+
+# -- the gate ---------------------------------------------------------------
+
+
+SEALED = """codec aead {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+impl aead extern "my_aead";
+
+struct h { u8 v; u16 length; }
+struct s {
+	u8   hop;
+	authenticated { h hdr; u8 nonce[12] [nonce]; }
+	sealed(aead, nonce = nonce) {
+		u16  kind;
+		u8   session_key[16] [secret];
+	}
+	tag  u8[16];
+}
+"""
+
+
+def test_a_gate_has_a_private_field() -> None:
+	"""Rust privacy is module-scoped, so a private field means no code outside
+	this module can construct one -- and the open is the only thing that does."""
+	module = emit(SEALED)
+
+	assert "pub struct SSealedGate<'a> {\n\tbytes: &'a [u8],\n}" in module
+	assert "pub fn open_sealed(&self, verified: bool)" in module
+	assert "return Err(Error::Tag);" in module
+
+
+def test_a_secret_field_gets_no_accessor_inside_the_gate() -> None:
+	module = emit(SEALED)
+
+	assert "session_key is [secret]" in module
+	assert "pub fn session_key" not in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_forging_a_gate_does_not_compile(tmp_path: Path) -> None:
+	"""The claim. If this starts compiling, the backend has lost the guarantee
+	that makes it worth having."""
+	result = build(tmp_path, SEALED, main=FORGE)
+
+	assert result.returncode != 0, "a gate was built without verifying"
+	assert "private" in result.stderr
+
+
+# -- registers --------------------------------------------------------------
+
+
+MMIO = "target mmio;\nendian little;\nbit_order lsb_first;\n"
+
+REGISTER = """register ctrl @ 0x00 {
+	width        = 32;
+	access_width = 32;
+	volatile;
+	no_rmw;
+
+	bit       enable  [rw];
+	bit       start   [wo, on_write = trigger];
+	u3        mode    [rw];
+	bit       busy    [ro];
+	bit       error   [w1c];
+	reserved  u25     [preserve];
+}
+"""
+
+
+def test_a_register_separates_the_word_from_the_bus() -> None:
+	"""A word is a copy of the bits; the register is a place. Composing costs
+	no transaction and writing costs exactly one."""
+	module = emit(REGISTER, preamble=MMIO)
+
+	assert "pub struct CtrlWord(u32);" in module
+	assert "pub const fn with_enable(self, value: u32) -> Self {" in module
+	assert "write_volatile" in module
+
+
+def test_the_unsafe_is_marked_where_it_happens() -> None:
+	"""Decision 0017 puts situ's unsafe surface at the bus and the codec calls.
+	A reader auditing this needs to see it, not find it."""
+	module = emit(REGISTER, preamble=MMIO)
+
+	assert "/// # Safety" in module
+	assert module.count("// SAFETY:") >= 2
+
+
+def test_an_access_mode_decides_which_operations_exist() -> None:
+	module = emit(REGISTER, preamble=MMIO)
+
+	assert "// No with_busy(): the mode is ro." in module
+	assert "// No start(): the mode is wo" in module
+	assert "// No with_error(): `w1c` is not an assignment" in module
+	assert "pub fn clear_error(&self)" in module
+	assert "pub fn trigger_start(&self)" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_register_composition_produces_the_right_bits(tmp_path: Path) -> None:
+	result = build(tmp_path, REGISTER, main=COMPOSE, preamble=MMIO)
+	assert result.returncode == 0, result.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, run.stderr

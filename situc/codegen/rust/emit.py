@@ -31,7 +31,7 @@ from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import local_name, own_entries
+from situc.traverse import local_name, own_entries, own_members
 from situc.types import ScalarType
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -162,13 +162,9 @@ class Emitter:
 		layout = struct.layout
 
 		if layout.register is not None:
-			return [f"// register {struct.name} (section 15) is not emitted by",
-			        "// the Rust backend yet; use the C header.", ""]
-		if not layout.is_fixed_size:
-			return [f"// {struct.name} is not fixed size. The Rust backend",
-			        "// covers the static subset so far; use the C header.", ""]
-
+			return self._register(struct)
 		name  = _pascal(struct.name)
+		fixed = layout.is_fixed_size
 		lines = [
 			f"/// struct {struct.name}: {layout.size_bytes} bytes, fixed.",
 			"///",
@@ -184,11 +180,17 @@ class Emitter:
 			"}",
 			"",
 			f"impl<'a> {name}<'a> {{",
-			f"\tpub const SIZE: usize = {layout.size_bytes};",
+			(f"\tpub const SIZE: usize = {layout.size_bytes};" if fixed
+			 else f"\tpub const SIZE_MIN: usize = {layout.size_bytes};"),
 			"",
 			"\t/// The one bounds check. Everything below trusts it.",
+			"\t///",
+			("\t/// A slice carries its own length, so a variable-length struct"
+			 if not fixed else "\t/// The extent is the struct's own."),
+			("\t/// needs no second parameter saying where the frame ends."
+			 if not fixed else "\t///"),
 			f"\tpub fn new(bytes: &'a [u8]) -> Result<Self> {{",
-			"\t\tif bytes.len() < Self::SIZE {",
+			f"\t\tif bytes.len() < Self::{'SIZE' if fixed else 'SIZE_MIN'} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"\t\tOk(Self { bytes })",
@@ -199,14 +201,17 @@ class Emitter:
 			lines.extend(self._getter(struct, entry))
 
 		lines.extend(self._validate(struct))
+		lines.extend(self._gate_opens(struct))
 		lines.extend(["}", ""])
+		lines.extend(self._gates(struct))
 
 		lines.extend([
 			f"impl<'a> {name}Mut<'a> {{",
-			f"\tpub const SIZE: usize = {layout.size_bytes};",
+			(f"\tpub const SIZE: usize = {layout.size_bytes};" if fixed
+			 else f"\tpub const SIZE_MIN: usize = {layout.size_bytes};"),
 			"",
 			f"\tpub fn new(bytes: &'a mut [u8]) -> Result<Self> {{",
-			"\t\tif bytes.len() < Self::SIZE {",
+			f"\t\tif bytes.len() < Self::{'SIZE' if fixed else 'SIZE_MIN'} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"\t\tOk(Self { bytes })",
@@ -234,6 +239,12 @@ class Emitter:
 			return ["",
 			        f"\t// {placement.path} is reserved: no accessor, and",
 			        "\t// validate() holds it to the declared pattern."]
+		# Checked before the offset: a member sized by the data usually has a
+		# dynamic offset too, and bailing on that first would skip it. The C++
+		# and Python backends each shipped this bug before it was caught.
+		if placement.kind == "field" and placement.sized_by is not None:
+			return self._variable(struct, placement)
+
 		if placement.kind != "field" or placement.offset_bits is None:
 			return ["", f"\t// {placement.path}: not in the static subset yet."]
 
@@ -250,15 +261,13 @@ class Emitter:
 				"\t}",
 			]
 
-		if placement.array_count is not None or placement.sized_by is not None:
-			if scalar is None or scalar.bits != BITS_PER_BYTE:
-				return ["", f"\t// {placement.path}: element type"
-				        f" {placement.type_name} is not in the subset yet."]
-			count = placement.array_count
-			if count is None:
-				return ["", f"\t// {placement.path}: a data-driven length is not",
-				        "\t// in the static subset yet."]
+		if placement.sized_by is not None:
+			return self._variable(struct, placement)
 
+		if placement.array_count is not None:
+			if scalar is None or scalar.bits != BITS_PER_BYTE:
+				return self._struct_array(struct, placement)
+			count = placement.array_count
 			start = placement.offset_bytes
 			lines = [
 				"",
@@ -286,6 +295,408 @@ class Emitter:
 			*self._axes_doc(entry),
 			f"\tpub fn {name}(&self) -> {self._field_type(placement)} {{",
 			f"\t\t{self._load(placement, scalar)}",
+			"\t}",
+		]
+
+	def _register(self, struct: ResolvedStruct) -> list[str]:
+		"""A memory-mapped register (section 15).
+
+		A `Word` is a copy of the bits and the register is a place on a bus,
+		and keeping them apart is what the headline asks for: a partial-width
+		field in a `no_rmw` register cannot be written alone, so composing the
+		whole word and writing it once is the only shape the API has.
+
+		The transport is `read_volatile`/`write_volatile` through a raw
+		pointer, which is where a Rust program's `unsafe` lives -- marked at
+		the call site rather than buried, because a reader auditing this needs
+		to see it.
+		"""
+		info = struct.layout.register
+		assert info is not None
+
+		name  = _pascal(struct.name)
+		word  = self._rust_type_for_bits(info.width)
+		lines = [
+			f"/// register {struct.name}"
+			+ (f" at {info.address:#x}" if info.address is not None else "")
+			+ f": {info.width} bits, {info.access_width}-bit bus access"
+			+ (", volatile" if info.volatile else "")
+			+ (", no read-modify-write" if info.no_rmw else "") + ".",
+			"#[derive(Debug, Clone, Copy, PartialEq, Eq)]",
+			f"pub struct {name}Word({word});",
+			"",
+			f"impl {name}Word {{",
+			f"\tpub const fn new(raw: {word}) -> Self {{",
+			"\t\tSelf(raw)",
+			"\t}",
+			"",
+			f"\tpub const fn raw(self) -> {word} {{",
+			"\t\tself.0",
+			"\t}",
+		]
+
+		for entry in own_entries(struct):
+			lines.extend(self._register_field(entry, name, word))
+
+		lines.extend(["}", ""])
+
+		lines.extend([
+			f"/// The register itself: a place on a bus, not a value.",
+			f"pub struct {name} {{",
+			"	base: *mut u8,",
+			"}",
+			"",
+			f"impl {name} {{",
+		])
+		if info.address is not None:
+			lines.append(f"	pub const ADDRESS: usize = {info.address:#x};")
+		lines.extend([
+			f"	pub const WIDTH: usize = {info.width};",
+			"",
+			"	/// # Safety",
+			"	///",
+			"	/// `base` must address this device's register block, and stay",
+			"	/// valid for as long as this value does. Nothing situ knows can",
+			"	/// check that -- it is the one thing the caller has to promise.",
+			"	pub const unsafe fn new(base: *mut u8) -> Self {",
+			"		Self { base }",
+			"	}",
+			"",
+			f"	pub fn read(&self) -> {name}Word {{",
+			"		// SAFETY: the pointer came from `new`, whose contract is that",
+			"		// it addresses this block.",
+			f"		{name}Word(unsafe {{ self.word().read_volatile() }})",
+			"	}",
+			"",
+			f"	pub fn write(&self, value: {name}Word) {{",
+			"		// SAFETY: as above.",
+			"		unsafe { self.word().write_volatile(value.raw()) }",
+			"	}",
+		])
+
+		for entry in own_entries(struct):
+			lines.extend(self._register_action(entry, name, word))
+
+		lines.extend([
+			"",
+			f"	fn word(&self) -> *mut {word} {{",
+			f"		// SAFETY: the offset is the register's declared address.",
+			f"		(unsafe {{ self.base.add({info.address or 0:#x}) }}) as *mut {word}",
+			"	}",
+			"}",
+			"",
+		])
+		return lines
+
+	def _register_field(self, entry: Resolved, owner: str,
+			word: str) -> list[str]:
+		placement = entry.placement
+		scalar    = placement.scalar
+
+		if placement.kind == "reserved":
+			return ["",
+			        f"\t// {placement.path} is reserved: no accessor, and its",
+			        "\t// bits ride through a compose untouched."]
+		if scalar is None:
+			return []
+
+		name  = _ident(placement.path.rsplit(".", 1)[-1])
+		base  = c_name(placement.path.rsplit(".", 1)[-1])
+		mode  = placement.access_mode or ast.AccessMode.RW
+		shift = placement.offset_bits or 0
+		mask  = (1 << scalar.bits) - 1
+		lines = ["", f"\t/// {placement.path}: {mode.value},"
+		         f" bits {shift}..{shift + scalar.bits - 1}"]
+
+		if mode.readable:
+			lines.extend([
+				f"\tpub const fn {name}(self) -> {word} {{",
+				f"\t\t(self.0 >> {shift}) & {mask:#x}",
+				"\t}",
+			])
+		else:
+			lines.append(f"\t// No {name}(): the mode is {mode.value}, so a read"
+			             f" returns nothing the field holds.")
+
+		if mode.writable and mode.is_assignment:
+			lines.extend([
+				f"\tpub const fn {_ident('with_' + base)}(self, value: {word})"
+				f" -> Self {{",
+				f"\t\tSelf((self.0 & !({mask:#x} << {shift}))"
+				f" | ((value & {mask:#x}) << {shift}))",
+				"\t}",
+			])
+		elif mode.writable:
+			lines.append(f"\t// No with_{base}(): `{mode.value}` is not an"
+			             f" assignment; see the register's own method.")
+		else:
+			lines.append(f"\t// No with_{base}(): the mode is {mode.value}.")
+		return lines
+
+	def _register_action(self, entry: Resolved, owner: str,
+			word: str) -> list[str]:
+		"""A write that is not an assignment: `w1c`, and `on_write`."""
+		placement = entry.placement
+		scalar    = placement.scalar
+		if scalar is None or placement.kind == "reserved":
+			return []
+
+		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		mode  = placement.access_mode or ast.AccessMode.RW
+		shift = placement.offset_bits or 0
+		mask  = (1 << scalar.bits) - 1
+
+		if placement.on_write is not ast.SideEffect.NONE:
+			return [
+				"",
+				f"\t/// {placement.path} has on_write ="
+				f" {placement.on_write.value}: the write is the event.",
+				f"\tpub fn {_ident('trigger_' + name)}(&self) {{",
+				f"\t\tself.write({owner}Word({mask:#x} << {shift}))",
+				"\t}",
+			]
+		if mode is ast.AccessMode.W1C:
+			return [
+				"",
+				f"\t/// {placement.path} is w1c: writing a one clears it, and",
+				"\t/// every other bit stays zero so neighbours are untouched.",
+				f"\tpub fn {_ident('clear_' + name)}(&self) {{",
+				f"\t\tself.write({owner}Word({mask:#x} << {shift}))",
+				"\t}",
+			]
+		return []
+
+	def _rust_type_for_bits(self, bits: int) -> str:
+		return f"u{_storage_width(bits)}"
+
+	def _sealed(self, struct: ResolvedStruct) -> list[Placement]:
+		return [entry.placement for entry in struct.entries
+		        if entry.placement.kind == "sealed"]
+
+	def _gate_opens(self, struct: ResolvedStruct) -> list[str]:
+		"""The only thing that hands out a gate, and only once verified."""
+		lines: list[str] = []
+
+		for region in self._sealed(struct):
+			name  = c_name(local_name(struct, region))
+			gate  = _pascal(f"{struct.name}_{name}_gate")
+			lines.extend([
+				"",
+				f"\t/// Open {region.path}, and only if the tag has verified.",
+				"\t///",
+				f"\t/// `{gate}` has a private field, so nothing outside this",
+				"\t/// module can construct one and this is the only function",
+				"\t/// that does. Section 14.3, as a type rather than a rule.",
+				f"\tpub fn {_ident('open_' + name)}(&self, verified: bool)"
+				f" -> Result<{gate}<'_>> {{",
+				"\t\tif !verified {",
+				"\t\t\treturn Err(Error::Tag);",
+				"\t\t}",
+				f"\t\tOk({gate} {{ bytes: self.bytes }})",
+				"\t}",
+			])
+		return lines
+
+	def _gates(self, struct: ResolvedStruct) -> list[str]:
+		lines: list[str] = []
+
+		for region in self._sealed(struct):
+			name = c_name(local_name(struct, region))
+			gate = _pascal(f"{struct.name}_{name}_gate")
+
+			inside = [entry for entry in struct.entries
+			          if entry.placement.sealed_by == region.name
+			          and entry.placement.kind == "field"
+			          and entry.placement.offset_bits is not None]
+
+			lines.extend([
+				f"/// {region.path}: reachable only through a verified open.",
+				"///",
+				"/// The field below is private to this module, so no code",
+				"/// outside can make one of these. Parsing attacker-controlled",
+				"/// plaintext before authenticating it is not discouraged here;",
+				"/// it does not compile.",
+				f"pub struct {gate}<'a> {{",
+				"	bytes: &'a [u8],",
+				"}",
+				"",
+				f"impl<'a> {gate}<'a> {{",
+			])
+
+			for entry in inside:
+				lines.extend(self._gated(entry))
+
+			if not inside:
+				lines.append("	// Nothing in this region has an accessor.")
+
+			lines.extend(["}", ""])
+		return lines
+
+	def _gated(self, entry: Resolved) -> list[str]:
+		placement = entry.placement
+		scalar    = placement.scalar
+		name      = _ident(placement.path.rsplit(".", 1)[-1])
+
+		if any(attr.name == "secret" for attr in placement.attrs):
+			return ["",
+			        f"\t// {placement.path} is [secret]: no accessor is",
+			        "\t// generated for it at all (section 14.6)."]
+
+		if scalar is None:
+			return []
+
+		if placement.array_count is not None or placement.sized_by is not None:
+			if scalar.bits != BITS_PER_BYTE:
+				return []
+			count = (str(placement.array_count) if placement.array_count is not None
+			         else None)
+			if count is None:
+				return ["", f"\t// {placement.path}: a data-driven length inside",
+				        "\t// a gate is not emitted yet."]
+			start = placement.offset_bytes
+			return [
+				"",
+				f"\tpub fn {name}(&self) -> &[u8] {{",
+				f"\t\t&self.bytes[{start}..{start + int(count)}]",
+				"\t}",
+			]
+
+		return [
+			"",
+			f"\tpub fn {name}(&self) -> {self._field_type(placement)} {{",
+			f"\t\t{self._load(placement, scalar)}",
+			"\t}",
+		]
+
+	def _offset_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""Where a member starts: the same walk every backend does."""
+		if placement.offset_bits is not None:
+			return str(placement.offset_bits // BITS_PER_BYTE)
+
+		constant = 0
+		terms: list[str] = []
+
+		for other in own_members(struct):
+			if other.path == placement.path:
+				break
+			if other.is_fixed_size:
+				constant += other.size_bits // BITS_PER_BYTE
+				continue
+			length = self._length_expression(struct, other)
+			if length is None:
+				return None
+			terms.append(length)
+
+		return " + ".join([str(constant), *terms])
+
+	def _length_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		if placement.sized_by == "remaining":
+			start = self._offset_expression(struct, placement)
+			return None if start is None else f"(self.bytes.len() - ({start}))"
+		if placement.sized_by is None:
+			return None
+
+		count = self._count_expression(struct, placement)
+		element = self._element_bytes(placement)
+		if count is None or element is None:
+			return None
+		return f"({count})" if element == 1 else f"({count}) * {element}"
+
+	def _count_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
+		if driver is None or driver.placement.scalar is None:
+			return None
+		if driver.placement.offset_bits is None:
+			return None
+		return (f"{self._raw_load(driver.placement, driver.placement.scalar)}"
+		        f" as usize")
+
+	def _element_bytes(self, placement: Placement) -> int | None:
+		nested = self.resolved.structs.get(placement.type_name or "")
+		if nested is not None:
+			return (int(nested.layout.size_bytes)
+			        if nested.layout.is_fixed_size else None)
+		if placement.scalar is not None and placement.scalar.bits % BITS_PER_BYTE == 0:
+			return max(placement.scalar.bits // BITS_PER_BYTE, 1)
+		return None
+
+	def _variable(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A member whose extent the data decides."""
+		name   = _ident(local_name(struct, placement))
+		base   = c_name(local_name(struct, placement))
+		start  = self._offset_expression(struct, placement)
+		length = self._length_expression(struct, placement)
+
+		if start is None or length is None:
+			return ["", f"\t// {placement.path}: sized by"
+			        f" `{placement.sized_by}`, which this backend cannot resolve."]
+
+		nested = self.resolved.structs.get(placement.type_name or "")
+		lines  = [
+			"",
+			f"\t/// {placement.path}: offset and extent both from the data.",
+			f"\tpub fn {_ident(base + '_offset')}(&self) -> usize {{",
+			f"\t\t{start}",
+			"\t}",
+		]
+
+		if nested is None:
+			lines.extend([
+				"",
+				f"\tpub fn {name}(&self) -> &[u8] {{",
+				f"\t\tlet at = self.{_ident(base + '_offset')}();",
+				f"\t\t&self.bytes[at..at + ({length})]",
+				"\t}",
+			])
+			return lines
+
+		inner = _pascal(placement.type_name or "")
+		count = self._count_expression(struct, placement)
+		lines.extend([
+			"",
+			f"\tpub fn {_ident(base + '_count')}(&self) -> usize {{",
+			f"\t\t{count}",
+			"\t}",
+			"",
+			f"\t/// Element `index`. Bounded by the count as well as the",
+			"\t/// extent: bytes after the array are inside the view and are",
+			"\t/// not elements.",
+			f"\tpub fn {name}(&self, index: usize) -> Result<{inner}<'_>> {{",
+			f"\t\tif index >= self.{_ident(base + '_count')}() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tlet at = self.{_ident(base + '_offset')}()"
+			f" + index * {inner}::SIZE;",
+			f"\t\t{inner}::new(&self.bytes[at..])",
+			"\t}",
+		])
+		return lines
+
+	def _struct_array(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A counted array of structs."""
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None or not inner.layout.is_fixed_size:
+			return ["", f"\t// {placement.path}: element type"
+			        f" {placement.type_name} has no fixed size."]
+
+		name  = _ident(local_name(struct, placement))
+		count = placement.array_count or 0
+		start = placement.offset_bytes
+		outer = _pascal(placement.type_name or "")
+
+		return [
+			"",
+			f"\t/// {placement.path}: {count} elements of {outer}.",
+			f"\tpub fn {name}(&self, index: usize) -> Result<{outer}<'_>> {{",
+			f"\t\tif index >= {count} {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\t{outer}::new(&self.bytes[{start} + index * {outer}::SIZE..])",
 			"\t}",
 		]
 
@@ -403,8 +814,14 @@ class Emitter:
 			scalar    = placement.scalar
 			name      = _ident(local_name(struct, placement))
 
-			if placement.type_name in self.structs and scalar is None \
-					and placement.array_count is None:
+			# An array of structs is not a nested struct: validating every
+			# element on every parse is a cost the caller should choose, and
+			# `self.recs()` takes an index rather than nothing.
+			if placement.array_count is not None or placement.sized_by is not None:
+				checks.extend(self._array_checks(placement, name))
+				continue
+
+			if placement.type_name in self.structs and scalar is None:
 				checks.append(f"\t\tself.{name}().validate()?;")
 				continue
 			if scalar is None or placement.offset_bits is None:
@@ -419,10 +836,6 @@ class Emitter:
 						"\t\t\treturn Err(Error::Constraint);",
 						"\t\t}",
 					])
-				continue
-
-			if placement.array_count is not None or placement.sized_by is not None:
-				checks.extend(self._array_checks(placement, name))
 				continue
 
 			enum = self.enums.get(placement.type_name or "")
