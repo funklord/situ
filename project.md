@@ -2989,6 +2989,11 @@ registers and every constraint. This section supersedes 26.11.
 parameter saying where the frame ends -- the one place Rust's model is simpler
 than C's and C++'s rather than stricter.
 
+A member after a variable-length one is placed at run time and read like any
+other: its arithmetic is the struct's own walk, and only where the read is
+measured from differs. Its constraints are checked too, which is what the C
+backend always did and what the other three had quietly skipped.
+
 **The gate is a struct with a private field.** Rust's privacy is module-scoped,
 so no code outside the generated module can construct one, and the verified
 open is the only thing that does. A test asserts it by building the forgery and

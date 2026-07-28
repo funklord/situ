@@ -736,7 +736,7 @@ class Emitter:
 			return self._nested(struct, placement)
 		if kind is Member.ARRAY:
 			return self._array(struct, placement)
-		if kind is Member.SCALAR and placement.offset_bits is not None:
+		if kind is Member.SCALAR:
 			return self._scalar(struct, entry)
 		if kind is Member.NOTHING:
 			return []
@@ -748,11 +748,26 @@ class Emitter:
 		scalar    = placement.scalar
 		assert scalar is not None
 
+		# A member after a variable-length one is placed at run time. Its own
+		# arithmetic is the struct's -- the same walk `_offset_expression`
+		# does -- so the only difference from a static field is where `base()`
+		# is measured from.
+		offset = (None if placement.offset_bits is not None
+		          else self._offset_expression(struct, placement))
+
+		if placement.offset_bits is None:
+			if offset is None:
+				return ["", f"\t/* {placement.path}: its offset cannot be"
+				        f" resolved. */"]
+			if scalar.is_bit_packed:
+				return ["", f"\t/* {placement.path}: a bit-packed field at a",
+				        "\t * dynamic offset is not emitted yet. */"]
+
 		name  = c_name(local_name(struct, placement))
 		ctype = self._field_ctype(placement)
 		lines = ["", *self._axes_comment(entry)]
 
-		load = self._load(scalar, placement)
+		load = self._load(scalar, placement, offset)
 		if placement.type_name in self.enums:
 			load = f"static_cast<{ctype}>({load})"
 
@@ -778,13 +793,14 @@ class Emitter:
 		lines.extend([
 			f"\tvoid set_{name}({ctype} value) noexcept",
 			"\t{",
-			f"\t\t{self._store(scalar, placement, stored)}",
+			f"\t\t{self._store(scalar, placement, stored, offset)}",
 			"\t}",
 		])
 		return lines
 
-	def _load(self, scalar: ScalarType, placement: Placement) -> str:
-		base   = f"base() + {placement.offset_bytes}"
+	def _load(self, scalar: ScalarType, placement: Placement,
+			offset: str | None = None) -> str:
+		base   = f"base() + {offset if offset is not None else placement.offset_bytes}"
 		ctype  = self._ctype(scalar)
 
 		if scalar.is_bcd:
@@ -818,8 +834,8 @@ class Emitter:
 		        f" {placement.offset_bits}, {scalar.bits}))")
 
 	def _store(self, scalar: ScalarType, placement: Placement,
-			value: str) -> str:
-		base = f"base() + {placement.offset_bytes}"
+			value: str, offset: str | None = None) -> str:
+		base = f"base() + {offset if offset is not None else placement.offset_bytes}"
 
 		if scalar.is_bcd:
 			value = (f"situ_bcd_encode(static_cast<std::uint64_t>({value}),"
@@ -919,12 +935,6 @@ class Emitter:
 		check = classify_check(struct, placement, self.structs)
 
 		if check is Check.NOTHING:
-			return []
-		# This backend emits no accessor for a scalar at a dynamic offset, so
-		# there is nothing to check it through. The gap is declared where the
-		# accessor would have been.
-		if check is not Check.NESTED and check is not Check.REPEATED \
-				and placement.offset_bits is None:
 			return []
 		if check is Check.REPEATED:
 			assert scalar is not None

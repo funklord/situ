@@ -404,3 +404,23 @@ def test_default_pass_admits_what_it_says_it_admits(tmp_path: Path) -> None:
 	rt     = runtime()
 
 	module.s.at(rt.Message(bytearray([9, 0]))).validate()
+
+
+def test_a_constrained_field_at_a_dynamic_offset_is_validated(tmp_path: Path) -> None:
+	"""Its offset is computed at run time; its constraint is checked all the
+	same, which is what the C backend has always done."""
+	module = load(tmp_path, "struct h { u8 v; u16 n; }\n"
+	              "struct s { h hdr; u8 opts[hdr.n]; u16 after [must_eq = 7]; }")
+	rt     = runtime()
+
+	buf = bytearray(16)
+	buf[2] = 2			# hdr.n = 2, so `after` lands at 5
+	buf[5], buf[6] = 0, 7
+
+	s = module.s.at(rt.Message(buf), 0, 16)
+	assert s.after == 7
+	s.validate()
+
+	buf[6] = 9
+	with pytest.raises(rt.ConstraintError):
+		s.validate()

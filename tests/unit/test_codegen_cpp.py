@@ -458,3 +458,14 @@ def test_default_pass_admits_what_it_says_it_admits() -> None:
 
 	assert "constexpr bool is_known(k value) noexcept" in header
 	assert "if (!is_known(kind()))" not in header
+
+
+def test_a_constrained_field_at_a_dynamic_offset_is_validated() -> None:
+	"""The C backend always did; this one said it could not place the field at
+	all, so a `must_eq` after a variable member went unchecked. Three backends
+	over one layout that disagree mean a schema means three things."""
+	header = emit("struct h { u8 v; u16 n; }\n"
+	              "struct s { h hdr; u8 opts[hdr.n]; u16 after [must_eq = 7]; }")
+
+	assert "std::uint16_t after() const noexcept" in header
+	assert "if (after() != 7) {" in header

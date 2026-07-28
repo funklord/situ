@@ -287,14 +287,23 @@ class Emitter:
 				])
 			return lines
 
-		if scalar is None or placement.offset_bits is None:
+		if scalar is None:
 			return ["", f"\t// {placement.path}: not in the static subset yet."]
+
+		# A member after a variable-length one is placed at run time. Its
+		# arithmetic is the struct's own walk, and only where the read is
+		# measured from differs.
+		offset = (None if placement.offset_bits is not None
+		          else self._offset_expression(struct, placement))
+		if placement.offset_bits is None and (offset is None
+				or scalar.is_bit_packed):
+			return ["", f"\t// {placement.path}: this backend cannot place it."]
 
 		return [
 			"",
 			*self._axes_doc(entry),
 			f"\tpub fn {name}(&self) -> {self._field_type(placement)} {{",
-			f"\t\t{self._load(placement, scalar)}",
+			f"\t\t{self._load(placement, scalar, offset)}",
 			"\t}",
 		]
 
@@ -707,8 +716,9 @@ class Emitter:
 		                               Axis.ATOMIC, Axis.MUTATE))
 		return [f"\t/// {entry.placement.path}: {axes}"]
 
-	def _load(self, placement: Placement, scalar: ScalarType) -> str:
-		raw   = self._raw_load(placement, scalar)
+	def _load(self, placement: Placement, scalar: ScalarType,
+			offset: str | None = None) -> str:
+		raw   = self._raw_load(placement, scalar, offset)
 		rtype = self._rust_type(scalar)
 
 		if scalar.is_bcd:
@@ -727,8 +737,10 @@ class Emitter:
 
 		return f"{raw} as {rtype}"
 
-	def _raw_load(self, placement: Placement, scalar: ScalarType) -> str:
+	def _raw_load(self, placement: Placement, scalar: ScalarType,
+			offset: str | None = None) -> str:
 		big = placement.endian is not ast.Endian.LITTLE
+		at  = offset if offset is not None else str(placement.offset_bytes)
 
 		if scalar.is_bit_packed:
 			msb  = placement.bit_order is not ast.BitOrder.LSB_FIRST
@@ -739,7 +751,7 @@ class Emitter:
 			return raw
 
 		reader = "read_be" if big else "read_le"
-		raw    = (f"situ_rt::{reader}(self.bytes, {placement.offset_bytes},"
+		raw    = (f"situ_rt::{reader}(self.bytes, {at},"
 		          f" {scalar.bits // BITS_PER_BYTE})")
 		if scalar.signed:
 			return f"situ_rt::sign_extend({raw}, {scalar.bits})"
@@ -784,8 +796,10 @@ class Emitter:
 			"\t}",
 		]
 
-	def _store(self, placement: Placement, scalar: ScalarType) -> str:
+	def _store(self, placement: Placement, scalar: ScalarType,
+			offset: str | None = None) -> str:
 		big   = placement.endian is not ast.Endian.LITTLE
+		at    = offset if offset is not None else str(placement.offset_bytes)
 		value = "value as u64"
 
 		if placement.type_name in self.enums:
@@ -799,7 +813,7 @@ class Emitter:
 			        f" {scalar.bits}, {str(msb).lower()}, {value})")
 
 		writer = "write_be" if big else "write_le"
-		return (f"situ_rt::{writer}(self.bytes, {placement.offset_bytes},"
+		return (f"situ_rt::{writer}(self.bytes, {at},"
 		        f" {scalar.bits // BITS_PER_BYTE}, {value})")
 
 	# -- validation ----------------------------------------------------
@@ -818,12 +832,6 @@ class Emitter:
 
 			if check is Check.NOTHING:
 				continue
-			# This backend emits no accessor for a scalar at a dynamic offset, so
-			# there is nothing to check it through. The gap is declared where the
-			# accessor would have been.
-			if check is not Check.NESTED and check is not Check.REPEATED \
-					and placement.offset_bits is None:
-				continue
 			if check is Check.REPEATED:
 				checks.extend(self._array_checks(placement, name))
 				continue
@@ -833,12 +841,21 @@ class Emitter:
 
 			assert scalar is not None
 
+			# The same offset the accessor uses. A member after a
+			# variable-length one is placed at run time, and the validator
+			# reads it the same way the getter does.
+			offset = (None if placement.offset_bits is not None
+			          else self._offset_expression(struct, placement))
+			if placement.offset_bits is None and (offset is None
+					or scalar.is_bit_packed):
+				continue
+
 			if check is Check.RESERVED:
 				policy = _reserved_policy(placement.attrs)
 				if policy in ("must_be_zero", "must_be_one"):
 					want = 0 if policy == "must_be_zero" else (1 << scalar.bits) - 1
 					checks.extend([
-						f"\t\tif {self._raw_load(placement, scalar)} != {want} {{",
+						f"\t\tif {self._raw_load(placement, scalar, offset)} != {want} {{",
 						"\t\t\treturn Err(Error::Constraint);",
 						"\t\t}",
 					])
@@ -849,7 +866,7 @@ class Emitter:
 					and enum.effective_default is ast.EnumDefault.ERROR:
 				checks.extend([
 					f"\t\tif !{_pascal(enum.name)}::is_known("
-					f"{self._raw_load(placement, scalar)} as"
+					f"{self._raw_load(placement, scalar, offset)} as"
 					f" {self._rust_type(scalar)}) {{",
 					"\t\t\treturn Err(Error::Constraint);",
 					"\t\t}",
@@ -861,7 +878,7 @@ class Emitter:
 				expected = evaluate(attr.value, self.resolved.layout.env)
 				operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
 				checks.extend([
-					f"\t\tif {self._raw_load(placement, scalar)}"
+					f"\t\tif {self._raw_load(placement, scalar, offset)}"
 					f" {operator} {expected} {{",
 					"\t\t\treturn Err(Error::Constraint);",
 					"\t\t}",

@@ -337,3 +337,13 @@ def test_register_composition_produces_the_right_bits(tmp_path: Path) -> None:
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
 	                     text=True, check=False)
 	assert run.returncode == 0, run.stderr
+
+
+def test_a_constrained_field_at_a_dynamic_offset_is_validated() -> None:
+	"""The C backend always did; this one declared the field unplaceable, so a
+	`must_eq` after a variable member went unchecked."""
+	module = emit("struct h { u8 v; u16 n; }\n"
+	              "struct s { h hdr; u8 opts[hdr.n]; u16 after [must_eq = 7]; }")
+
+	assert "pub fn after(&self) -> u16 {" in module
+	assert "!= 7 {" in module

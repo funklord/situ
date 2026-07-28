@@ -171,8 +171,9 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 	# The offset is deliberately not consulted. What kind of check a member
 	# needs is a fact about the schema; whether a backend can emit it is a fact
 	# about the backend, and conflating them made this module state one
-	# backend's limit as if it were the language's. The C backend validates a
-	# constrained field at a dynamic offset; the others say they cannot yet.
+	# backend's limit as if it were the language's. Every backend validates a
+	# constrained field at a dynamic offset now -- C always did, and the gap in
+	# the other three was found by asking this module the wrong question.
 	if placement.kind == "reserved":
 		return Check.RESERVED
 	if placement.kind != "field":
