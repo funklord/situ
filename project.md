@@ -2818,12 +2818,29 @@ bytes and the caller runs the cipher.
 
 ### 26.16 C++ backend
 
-**Status: complete except registers.** `situc build --target=cpp` emits one
-header per schema, covering scalars, bit fields, straddling fields, enums,
-nested structs, byte arrays, fixed point, BCD, dynamic layout, sealed regions
-and every constraint the C backend validates. Registers say so in the emitted
-header rather than being silently absent, because a reader has to be able to
-tell a gap from a feature.
+**Status: complete.** `situc build --target=cpp` emits one header per schema,
+covering scalars, bit fields, straddling fields, enums, nested structs, byte
+arrays, fixed point, BCD, dynamic layout, sealed regions, registers and every
+constraint the C backend validates. One gap remains and says so in the emitted
+header: a variable-length member *inside* a sealed region, whose length has to
+be read through the gate's own view.
+
+**Registers are where the access modes stop being documentation.** A `word` is
+a copy of the bits and a register is a place on a bus, and separating them is
+what section 15's headline asks for: a partial-width field in a `no_rmw`
+register cannot be written alone, and the remedy is to compose the whole word
+and write it once. Here that remedy is the only shape the API has:
+
+```cpp
+r.write(r.read().with_enable(1).with_mode(5));
+```
+
+Each mode then decides which operations exist rather than which are unwise. A
+`ro` field has no composer, a `wo` field has no getter, and `w1c` has neither
+-- writing a one clears it, which is not an assignment, so it gets
+`clear_error()` instead. `on_write` makes the write itself the event and gets
+`trigger_start()`. Tests assert each of those by requiring the forbidden
+expression to fail to compile; in C they are comments.
 
 **The stage gate is the reason this backend exists.** Section 14.3 asks that a
 sealed interior be unreachable before its tag verifies. C gets close: the

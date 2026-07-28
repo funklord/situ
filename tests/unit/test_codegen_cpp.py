@@ -31,6 +31,30 @@ LIBSITU  = ROOT / "build" / "host" / "runtime" / "libsitu.a"
 CPP_USE = '#include "unit.hpp"\nint main()\n{\n\tstd::uint8_t buf[64] = {0};\n\tsitu::rt::message msg(buf, sizeof buf);\n\tsitu::s p;\n\tif (situ::s::at(msg, 0, p) != situ::rt::err::ok) { return 1; }\n\n\tstd::uint16_t seen = 0;\n\tif (p.with_sealed(true, [&](situ::s::sealed_gate g) {\n\t\tseen = g.inner_kind();\n\t}) != situ::rt::err::ok) { return 1; }\n\n\treturn seen == 0 ? 0 : 1;\n}\n'
 CPP_FORGE = '#include "unit.hpp"\nint main()\n{\n\tstd::uint8_t buf[64] = {0};\n\tsitu_view_t raw{buf, sizeof buf, 0};\n\tsitu::s::sealed_gate forged(raw);\n\treturn static_cast<int>(forged.inner_kind());\n}\n'
 
+COMPOSE = '#include "unit.hpp"\nint main()\n{\n\talignas(4) volatile std::uint8_t block[8] = {0};\n\tsitu::ctrl r(block);\n\n\tr.write(r.read().with_enable(1).with_mode(5));\n\tauto w = r.read();\n\tif (w.enable() != 1 || w.mode() != 5) { return 1; }\n\n\tr.trigger_start();\n\tif (r.read().raw() != 0x2u) { return 1; }\n\n\tr.write(situ::ctrl::word(0xFFFFFFFFu));\n\tr.clear_error();\n\tif (r.read().raw() != 0x40u) { return 1; }\n\treturn 0;\n}\n'
+
+SEALED_VARIABLE = """codec aead {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+impl aead extern "my_aead";
+
+struct h { u8 v; u16 length; }
+struct s {
+	u8   hop;
+	authenticated { h hdr; u8 nonce[12] [nonce]; }
+	sealed(aead, nonce = nonce) {
+		u16  kind;
+		u8   body[hdr.length];
+	}
+	tag  u8[16];
+}
+"""
+
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
 WARNINGS = ["-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
@@ -43,9 +67,10 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_cpp(schema, resolved, "unit").header
 
 
-def compiles(tmp_path: Path, body: str, extra: str = "") -> subprocess.CompletedProcess[str]:
+def compiles(tmp_path: Path, body: str, extra: str = "",
+		preamble: str = "") -> subprocess.CompletedProcess[str]:
 	"""Generate the header, compile it, and hand back the result."""
-	schema   = parse_text(PREAMBLE + body)
+	schema   = parse_text((preamble or PREAMBLE) + body)
 	resolved = resolve(schema, solve(schema))
 
 	(tmp_path / "unit.hpp").write_text(
@@ -116,13 +141,14 @@ def test_the_runtime_does_not_squat_on_schema_names() -> None:
 
 def test_a_construct_outside_the_subset_says_so() -> None:
 	"""Rather than emitting something that looks complete. A reader has to be
-	able to tell a gap from a feature."""
-	header = emit("register r @ 0x00 { width = 32; access_width = 32;"
-	              " bit enable [rw]; reserved u31 [preserve]; }",
-	              preamble="target mmio;\nendian little;\nbit_order lsb_first;\n")
+	able to tell a gap from a feature.
 
-	assert "is a register" in header
-	assert "use the C header" in header
+	What is left is a variable-length member inside a sealed region: reaching
+	it needs its length read through the gate's own view."""
+	header = emit(SEALED_VARIABLE)
+
+	assert "is variable length" in header
+	assert "use the C gate" in header
 
 
 # -- what it compiles to ----------------------------------------------------
@@ -333,3 +359,87 @@ def test_forging_a_gate_does_not_compile(tmp_path: Path) -> None:
 
 	assert result.returncode != 0, "a gate was constructed without verifying"
 	assert "private" in result.stderr or "protected" in result.stderr
+
+
+# -- registers (section 15) -------------------------------------------------
+
+
+MMIO = "target mmio;\nendian little;\nbit_order lsb_first;\n"
+
+REGISTER = """register ctrl @ 0x00 {
+	width        = 32;
+	access_width = 32;
+	volatile;
+	no_rmw;
+
+	bit       enable  [rw];
+	bit       start   [wo, on_write = trigger];
+	u3        mode    [rw];
+	bit       busy    [ro];
+	bit       error   [w1c];
+	reserved  u25     [preserve];
+}
+"""
+
+
+def test_a_register_composes_a_word_then_writes_it_once() -> None:
+	"""Section 15's headline is that a partial-width field in a `no_rmw`
+	register cannot be written alone, and the remedy is to compose the whole
+	word. Here that remedy is the only shape the API has."""
+	header = emit(REGISTER, preamble=MMIO)
+
+	assert "class word {" in header
+	assert "constexpr word with_enable(std::uint8_t value) const noexcept" in header
+	assert "void write(word value) const noexcept" in header
+
+
+def test_an_access_mode_decides_which_operations_exist() -> None:
+	"""Not which are documented as unwise. A `ro` field has no composer and a
+	`wo` field has no getter, so the mode is checked by the compiler."""
+	header = emit(REGISTER, preamble=MMIO)
+
+	assert "No with_busy(): the mode is ro." in header
+	assert "No start(): the mode is wo" in header
+	assert "No with_error(): `w1c` is not an assignment" in header
+
+
+def test_a_write_that_is_not_an_assignment_gets_its_own_method() -> None:
+	"""`w1c` clears by writing a one, and `on_write` makes the write itself the
+	event. Neither is `x = value`, so neither is spelled that way."""
+	header = emit(REGISTER, preamble=MMIO)
+
+	assert "void clear_error() const noexcept" in header
+	assert "void trigger_start() const noexcept" in header
+
+
+def test_a_reserved_field_is_carried_through_a_compose() -> None:
+	"""`with_x` clears only its own bits, so reserved bits keep whatever the
+	read gave them -- which is what `[preserve]` asks for."""
+	header = emit(REGISTER, preamble=MMIO)
+
+	assert "is reserved: no accessor" in header
+	assert "carried through a compose untouched" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_register_composition_produces_the_right_bits(tmp_path: Path) -> None:
+	result = compiles(tmp_path, REGISTER, extra=COMPOSE, preamble=MMIO)
+
+	assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+@pytest.mark.parametrize("expression", [
+	"w.with_busy(1)",	# ro: no composer
+	"w.start()",		# wo: no getter
+	"w.with_error(1)",	# w1c: the write is not an assignment
+])
+def test_an_operation_the_mode_forbids_does_not_compile(
+	tmp_path: Path, expression: str,
+) -> None:
+	"""The claim registers are worth a backend for. In C these are comments."""
+	main = ('#include "unit.hpp"\nint main() { situ::ctrl::word w(0);'
+	        f' (void){expression}; return 0; }}\n')
+	result = compiles(tmp_path, REGISTER, extra=main, preamble=MMIO)
+
+	assert result.returncode != 0, f"{expression} compiled and should not"

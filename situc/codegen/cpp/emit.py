@@ -148,8 +148,7 @@ class Emitter:
 		name   = c_name(struct.name)
 
 		if layout.register is not None:
-			return ["", f"/* {struct.name} is a register (section 15). The C++",
-			        " * backend does not emit those yet; use the C header. */"]
+			return self._register(struct)
 
 		lines = ["", *self._struct_comment(struct),
 		         f"class {name} : public ::situ::rt::view {{", "public:"]
@@ -168,6 +167,184 @@ class Emitter:
 		lines.extend(self._gates(struct))
 		lines.append("};")
 		return lines
+
+	def _register(self, struct: ResolvedStruct) -> list[str]:
+		"""A memory-mapped register (section 15).
+
+		The whole-word read and the field composition are separate types,
+		because they are separate things: a `word` is a copy of the bits and a
+		register is a place on a bus. That split is what section 15's headline
+		asks for -- where a field cannot be written alone, the remedy is to
+		compose the whole word and write it once, and here that remedy is the
+		only shape the API has.
+
+		`with_x()` returns a new word rather than mutating, so composing reads
+		as one expression and the write is visibly one transaction:
+
+		    r.write(r.read().with_enable(1).with_mode(3));
+		"""
+		info = struct.layout.register
+		assert info is not None
+
+		name  = c_name(struct.name)
+		word  = self._ctype_for_bits(info.width)
+		lines = [
+			"",
+			f"/* register {struct.name}"
+			+ (f" at {info.address:#x}" if info.address is not None else "")
+			+ f": {info.width} bits, {info.access_width}-bit bus access"
+			+ (", volatile" if info.volatile else "")
+			+ (", no read-modify-write" if info.no_rmw else "") + ". */",
+			f"class {name} {{",
+			"public:",
+		]
+		if info.address is not None:
+			lines.append(f"\tstatic constexpr std::uint32_t address = {info.address:#x};")
+		lines.extend([
+			f"\tstatic constexpr std::uint32_t width = {info.width};",
+			"",
+			"\t/* A word: a copy of the bits, not the register. Composing one",
+			"\t * costs no bus transaction; writing it costs exactly one. */",
+			"\tclass word {",
+			"\tpublic:",
+			f"\t\tconstexpr explicit word({word} raw) noexcept : raw_(raw) {{}}",
+			f"\t\tconstexpr {word} raw() const noexcept {{ return raw_; }}",
+		])
+
+		for entry in own_entries(struct):
+			lines.extend(self._register_field(entry, word))
+
+		lines.extend([
+			"",
+			"\tprivate:",
+			f"\t\t{word} raw_;",
+			"\t};",
+			"",
+			f"\texplicit constexpr {name}(volatile std::uint8_t *block) noexcept",
+			"\t\t: block_(block) {}",
+			"",
+		])
+		lines.extend(self._register_access(struct, info, word))
+		lines.extend([
+			"",
+			"private:",
+			f"\tvolatile {word} *at() const noexcept",
+			"\t{",
+			f"\t\treturn reinterpret_cast<volatile {word} *>(block_ + "
+			f"{info.address or 0:#x});",
+			"\t}",
+			"",
+			"\tvolatile std::uint8_t *block_;",
+			"};",
+		])
+		return lines
+
+	def _register_access(self, struct: ResolvedStruct, info: object,
+			word: str) -> list[str]:
+		"""Read, write, and the operations that are neither."""
+		lines = [
+			"\t[[nodiscard]] word read() const noexcept",
+			"\t{",
+			"\t\treturn word(*at());",
+			"\t}",
+			"",
+			"\tvoid write(word value) const noexcept",
+			"\t{",
+			"\t\t*at() = value.raw();",
+			"\t}",
+		]
+
+		for entry in own_entries(struct):
+			placement = entry.placement
+			mode      = placement.access_mode
+			if placement.kind == "reserved" or placement.scalar is None:
+				continue
+
+			name  = c_name(local_name(struct, placement))
+			shift = placement.offset_bits or 0
+			mask  = (1 << placement.scalar.bits) - 1
+
+			if placement.on_write is not ast.SideEffect.NONE:
+				lines.extend([
+					"",
+					f"\t/* {placement.path} has on_write ="
+					f" {placement.on_write.value}: the write is the event, and",
+					"\t * the value written is not a value the field then holds. */",
+					f"\tvoid trigger_{name}() const noexcept",
+					"\t{",
+					f"\t\t*at() = static_cast<{word}>({mask:#x}u << {shift}u);",
+					"\t}",
+				])
+			elif mode is ast.AccessMode.W1C:
+				lines.extend([
+					"",
+					f"\t/* {placement.path} is w1c: writing a one clears it, so",
+					"\t * this is a clear rather than an assignment. Every other",
+					"\t * bit is left zero, which leaves neighbouring w1c fields",
+					"\t * alone. */",
+					f"\tvoid clear_{name}() const noexcept",
+					"\t{",
+					f"\t\t*at() = static_cast<{word}>({mask:#x}u << {shift}u);",
+					"\t}",
+				])
+		return lines
+
+	def _register_field(self, entry: Resolved, word: str) -> list[str]:
+		"""A field's getter and composer, if its access mode admits them."""
+		placement = entry.placement
+		scalar    = placement.scalar
+
+		if placement.kind == "reserved":
+			return ["",
+			        f"\t\t/* {placement.path} is reserved: no accessor, and its",
+			        "\t\t * bits are carried through a compose untouched. */"]
+		if scalar is None:
+			return []
+
+		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		mode  = placement.access_mode or ast.AccessMode.RW
+		shift = placement.offset_bits or 0
+		mask  = (1 << scalar.bits) - 1
+		ctype = self._field_ctype(placement)
+		lines = ["", f"\t\t/* {placement.path}: {mode.value},"
+		         f" bits {shift}..{shift + scalar.bits - 1} */"]
+
+		if mode.readable:
+			raw = f"(raw_ >> {shift}u) & {mask:#x}u"
+			cast = (f"static_cast<{ctype}>({raw})" if placement.type_name in self.enums
+			        else f"static_cast<{ctype}>({raw})")
+			lines.extend([
+				f"\t\t[[nodiscard]] constexpr {ctype} {name}() const noexcept",
+				"\t\t{",
+				f"\t\t\treturn {cast};",
+				"\t\t}",
+			])
+		else:
+			lines.append(f"\t\t/* No {name}(): the mode is"
+			             f" {mode.value}, so a read returns nothing the field holds. */")
+
+		if mode.writable and mode.is_assignment:
+			value = ("static_cast<std::uint32_t>(value)"
+			         if placement.type_name in self.enums else "value")
+			lines.extend([
+				f"\t\t[[nodiscard]] constexpr word with_{name}({ctype} value)"
+				f" const noexcept",
+				"\t\t{",
+				f"\t\t\treturn word(static_cast<{word}>(",
+				f"\t\t\t\t(raw_ & ~static_cast<{word}>({mask:#x}u << {shift}u))",
+				f"\t\t\t\t| ((static_cast<{word}>({value}) & {mask:#x}u)"
+				f" << {shift}u)));",
+				"\t\t}",
+			])
+		elif mode.writable:
+			lines.append(f"\t\t/* No with_{name}(): `{mode.value}` is not an"
+			             f" assignment. See the register's own method. */")
+		else:
+			lines.append(f"\t\t/* No with_{name}(): the mode is {mode.value}. */")
+		return lines
+
+	def _ctype_for_bits(self, bits: int) -> str:
+		return f"std::uint{_storage_width(bits)}_t"
 
 	def _struct_comment(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
