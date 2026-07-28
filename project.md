@@ -1800,13 +1800,15 @@ pleasant they are to write:
    parts of the lattice C cannot: a view can be a type with a destructor, the
    stage gate a distinct type rather than a convention, `repr` a
    `std::span` where the bytes really are the value.
-3. **Rust** -- expresses the capability system most naturally of all: typestate
+3. **Python** -- reaches people who would otherwise not describe their format
+   at all. It enforces the least of the lattice, which is a fact to state
+   rather than a reason to skip it.
+4. **Rust** -- expresses the capability system most naturally of all: typestate
    as distinct types, view invalidation as borrows, `zerocopy`-style traits
    where `repr` permits. Expect it to expose places the C backend papered over.
-4. **Python** -- and after it, whatever the users are writing.
-
-   C++ and Python are the ones that land first, and Rust is far enough out that
-   speculative work on it would be guesswork.
+   Ordered last because adoption is far enough out that speculative work on it
+   would be guesswork, not because it matters least.
+5. And after those, whatever the users are writing.
 
 **Codecs have one implementation, and it is the C one.** Accessors are native
 to every target -- they are shifts and offsets, and there is no algorithm to
@@ -2129,19 +2131,29 @@ into an embedded build environment (Section 22).
 
 ---
 
-## 25.1 Where things stand
+## 26. Implementation plan
 
-A summary, so that the phase sections below do not have to be read end to end
-to answer "what works". Each claim here is the phase section's, condensed.
+Phases carry a **Status** line until they are reached; keeping those current is
+how this document doubles as the record of where the work is. A phase is
+complete when its acceptance criteria pass, not when its code looks finished.
 
-**Complete.** Front end, layout solver, capability lattice, requirements and
-blame chains, the C backend, expressions and dynamic layout, variants, opaque
-regions, TLV, indexed tables, varints, both codec tiers, the cryptographic
-model, the advisor, the MMIO target, and the `.proto` importer. Every command
-section 21 names is implemented.
+**Phases 0 through 14 are complete.** They are the plan as first written, plus
+the three things that landed after it ran out: front end, layout solver,
+capability lattice, requirements and blame chains, the C backend, expressions
+and dynamic layout, variants, opaque regions, TLV, indexed tables, varints,
+both codec tiers, the cryptographic model, the advisor, the MMIO target, the
+`.proto` importer, documentation generation, the Wireshark dissector, and fixed
+point and BCD. Every command section 21 names has landed, and
+`FUTURE_COMMANDS` in `situc/cli.py` is empty.
 
-**Not started.** The Rust backend (26.11), and section 26.14's list: the LSP,
-the remaining built-in codecs, and the C++ and Python backends.
+Phases 0 through 8 are ordered by dependency; everything after is largely
+independent of the rest.
+
+**What remains is 26.15 through 26.19**, in that order: the built-in codec set,
+the C++ backend, the Python backend, the Rust backend, and the language server.
+They were a "beyond" list until the phase numbering outlived the plan it
+described and the remaining work needed an order of its own. 26.20 records what
+is deliberately not scheduled, which is not the same as unfinished.
 
 **The shape of the test suite**, because its size is the argument for trusting
 any of the above:
@@ -2154,23 +2166,10 @@ any of the above:
 | targets built | 3 | host, aarch64 under emulation, aarch64 big endian |
 
 Every one of those numbers is a floor rather than a target. The generated
-checks in particular are derived from the schemas, so adding an example adds
-coverage without anybody writing a test.
-
-**Diagnostics are snapshot-tested** in `tests/golden/`, because section 17
-makes message quality the product rather than a finish. A regression in the
-exact text of a blame chain fails the build.
-
-## 26. Implementation plan
-
-Phases carry a **Status** line until they are reached; keeping those current is
-how this document doubles as the record of where the work is. A phase is
-complete when its acceptance criteria pass, not when its code looks finished.
-
-**Every phase is complete except 11, the Rust backend.** Phases 0 through 8 are
-ordered by dependency; 9, 10, 12 and 13 are largely independent of each other
-and are done. Every command section 21 names has landed, and `FUTURE_COMMANDS`
-in `situc/cli.py` is empty. What remains is section 26.14.
+checks are derived from the schemas, so adding an example adds coverage without
+anybody writing a test. Diagnostics are snapshot-tested in `tests/golden/`,
+because section 17 makes message quality the product rather than a finish: a
+regression in the exact text of a blame chain fails the build.
 
 Phases 0 through 8 are ordered by dependency, and 9 onward are largely
 independent of each other. Do not implement ahead of the plan.
@@ -2442,21 +2441,10 @@ emitted correctly and verified by disassembly; `ro`/`wo` asymmetry holds.
 
 ### 26.11 Phase 11: Rust backend
 
-**Status: not started, and deliberately not next.** Section 20.1 reorders the
-backends by how many people need them: C++ and Python land before Rust, which
-is far enough out that speculative work on it would be guesswork. The empty
-`situc/codegen/rust/` is the only thing in the tree that refers to it.
-
-Typestate for stages, borrows for view invalidation, `zerocopy`-style traits
-where the `repr` axis permits. This is where the capability system is expressed
-most naturally, and it will expose any place where the C backend papered over a
-soundness gap.
-
-One thing it will *introduce* rather than expose: decision 0017 binds codecs to
-the single C implementation, so a Rust program calling one goes through
-`extern "C"` and therefore through `unsafe`, in the backend whose argument is
-that the capability system becomes compile-time. The generated code must mark
-that at the call site rather than bury it.
+**Superseded by 26.18.** This number was allocated to the Rust backend before
+the backend order was decided; section 20.1 now puts C++ and Python ahead of
+it. The number stays rather than being reused, so that a reference to "phase
+11" written earlier still lands somewhere true.
 
 ### 26.12 Phase 12: transforms, tier 2 (derived codecs)
 
@@ -2523,8 +2511,7 @@ Recommended order within the phase, cheapest and highest-value first:
    same generator.
 
    No performance work yet. The arithmetic is table-driven but scalar, and
-   Section 26.14 still owes the constant-time question raised in
-   section 26.16.
+   The constant-time question is open question 11, and is still open.
 
 **Acceptance per family:** derived properties match a hand-written signature for
 a known code; generated implementation passes vectors from an independent
@@ -2644,35 +2631,11 @@ wrong value is refused would pass against a validator that did nothing. The
 baseline satisfies every `must_eq`, `min` and reserved policy first and asserts
 the struct validates, then breaks one field.
 
-### 26.14 Beyond
+### 26.14 Delivered after the plan ran out
 
-LSP; the built-in codec set below; the C++, Rust and Python backends (20.1).
-
-**Parsing most protocols should need nothing installed.** The long-term aim is
-that a schema for an ordinary protocol builds and runs against situ alone --
-that is what "batteries included" has to mean for a description language, since
-a user who must go and find three libraries before their schema compiles will
-write the parser by hand instead.
-
-The line between what ships and what does not is not popularity but whether
-situ can produce it honestly:
-
-- **Built in** -- anything a kernel description derives, or that is a few
-  hundred lines of dependency-free C. The six kernel families are already here,
-  and Reed-Solomon with them. Still missing and worth adding: the internet
-  checksum (RFC 1071), Fletcher and Adler-32, base64/base32/hex, UTF-8
-  validation. All small, all common, none of them needing anybody's library.
-- **Optional** -- anything needing a real implementation behind it. AEAD
-  ciphers, hashes, deflate, zstd, LZ4. These stay tier-1: declared by property
-  signature, trusted, supplied by the user.
-
-**And optional has to mean optional.** A schema pays for what it names and
-nothing else, or every user links a crypto library so that the few who seal a
-region can. This already holds and is now tested rather than assumed: generated
-code includes `situ.h` and its own header, and a schema that seals a region
-with `aes_gcm_128` has exactly the dependencies of one that does not -- none.
-The stage gate takes the verification result as a parameter, so situ guards the
-bytes and the caller runs the cipher.
+The plan ran to phase 13. Three things landed after it, and they are numbered
+here rather than left in a "beyond" list: a delivered thing is a phase whatever
+the plan called it at the time.
 
 **Fixed-point and BCD are done.** Section 8.1 called for the type table to be
 extensible and it was: both landed by adding kinds to `situc/types.py` and a
@@ -2730,6 +2693,110 @@ own name, the way RFC 791 draws `Source Address` rather than four octets, and
 get their own diagram further down. Variable-length members take the rest of
 the row they start in and continue in the slanted form RFCs use.
 
+### 26.15 The built-in codec set
+
+**Status: not started.** The cheapest of the remaining work and the only piece
+with no open design question behind it -- every codec named below is derivable
+from a kernel family that already exists, so most would be a row in
+`std/kernels.situ` and a vector test rather than new machinery.
+
+One exception worth knowing before starting: base64's ratio is exact (4:3) but
+its padding makes the output length depend on the input length mod 3, which
+section 13.2's expansion vocabulary does not express. That needs deciding, and
+decision 0016 is the precedent for widening the vocabulary rather than
+approximating.
+
+**Parsing most protocols should need nothing installed.** The long-term aim is
+that a schema for an ordinary protocol builds and runs against situ alone --
+that is what "batteries included" has to mean for a description language, since
+a user who must go and find three libraries before their schema compiles will
+write the parser by hand instead.
+
+The line between what ships and what does not is not popularity but whether
+situ can produce it honestly:
+
+- **Built in** -- anything a kernel description derives, or that is a few
+  hundred lines of dependency-free C. The six kernel families are already here,
+  and Reed-Solomon with them. Still missing and worth adding: the internet
+  checksum (RFC 1071), Fletcher and Adler-32, base64/base32/hex, UTF-8
+  validation. All small, all common, none of them needing anybody's library.
+- **Optional** -- anything needing a real implementation behind it. AEAD
+  ciphers, hashes, deflate, zstd, LZ4. These stay tier-1: declared by property
+  signature, trusted, supplied by the user.
+
+**And optional has to mean optional.** A schema pays for what it names and
+nothing else, or every user links a crypto library so that the few who seal a
+region can. This already holds and is now tested rather than assumed: generated
+code includes `situ.h` and its own header, and a schema that seals a region
+with `aes_gcm_128` has exactly the dependencies of one that does not -- none.
+The stage gate takes the verification result as a parameter, so situ guards the
+bytes and the caller runs the cipher.
+
+### 26.16 C++ backend
+
+**Status: not started.** The next backend after C, and the largest population
+that situ does not yet reach.
+
+The design questions are real and want settling before code exists. A view
+could be a value as it is in C, or a type with a destructor and no copy. The
+stage gate could stay a struct-wrapped view or become a distinct type the
+compiler refuses to convert. `repr = MemoryIdentical` could hand back a
+`std::span` where the bytes really are the value, which is a guarantee C can
+only document. Each of those trades expressiveness for the C backend's
+property that the generated code is obvious at a glance.
+
+Codecs bind the C implementation (decision 0017), which for C++ costs nothing:
+`extern "C"` is idiomatic and the generated header already emits the guard.
+
+### 26.17 Python backend
+
+**Status: not started.** Reaches people who would otherwise not describe their
+format at all, which is the argument for it.
+
+It will enforce the least of the lattice, and that is a fact to state rather
+than a reason to skip it: `memoryview` gives zero-copy reads, but nothing in
+Python stops a caller keeping a view past the write that invalidates it, and
+`repr` and `atomic` become documentation. Invariant 5 applied to backends
+(20.1) means the generated code and the capability map must say so.
+
+Codecs bind the C implementation, which costs Python a build step -- the
+friction Python users least expect. Decision 0017 records why a pure-Python
+second implementation is the wrong answer to that, and what the plugin slot is
+for if it proves untenable.
+
+### 26.18 Rust backend
+
+**Status: not started.** Ordered last of the backends because adoption is far
+enough out that speculative work would be guesswork, not because it matters
+least. This section supersedes 26.11, which allocated a number to it before
+the backend order was decided.
+
+Typestate for stages, borrows for view invalidation, `zerocopy`-style traits
+where the `repr` axis permits. This is where the capability system is expressed
+most naturally, and it should expose any place the C backend papered over a
+soundness gap.
+
+One thing it will *introduce* rather than expose: decision 0017 binds codecs to
+the single C implementation, so a Rust program calling one goes through
+`extern "C"` and therefore through `unsafe`, in the backend whose argument is
+that the capability system becomes compile-time. The generated code must mark
+that at the call site rather than bury it.
+
+### 26.19 Language server
+
+**Status: not started.** The largest remaining item and the least like the rest
+of the codebase: a long-running process, incremental reparsing, and a protocol
+to speak, where everything so far has been a batch compiler that runs once and
+exits.
+
+What it would carry that an editor cannot get elsewhere: the capability vector
+of the field under the cursor, the blame chain for a requirement that fails,
+and the advisor's costed suggestions as code actions. Those are already
+computed -- `situc explain` and `situc advise` are the same information behind
+a different door -- so the work is the server, not the analysis.
+
+### 26.20 Folded out, not scheduled
+
 **Text-based protocols are folded out of the roadmap, not scheduled.** Text of
 a fixed extent inside a binary frame is already covered -- it is a byte array
 with a length -- and that is the case that shows up inside the protocols situ
@@ -2774,7 +2841,7 @@ that depends on it.
 
 1. **`until`-delimited arrays.** Genuinely useful for existing protocols,
    but sequential-only and awkward to bound. Phase 6 or later; may be dropped.
-   **Folded out of the roadmap** with text-protocol support (26.14): the real
+   **Folded out of the roadmap** with text-protocol support (26.20): the real
    question underneath is whether the capability lattice should model
    delimiter-framed data, where no field has an offset, and answering that
    comes before the construct.
