@@ -846,6 +846,33 @@ definition and the fold is exactly `A`-`Z`.
 The two compose with 8.6.2: `decimal u32 n until "\r\n" [trim]` accepts
 ` 5`, and adding `[minimal]` still refuses `007`.
 
+### 8.6.5 A region that is both delimited and coded
+
+`coded body(dot_stuffing) until "\r\n.\r\n" { ... }`: the extent is found by
+scanning, and the bytes found are the transform's output.
+
+**Scan first, decode second, and the order is the protocol's rather than a
+convenience.** SMTP's dot-stuffing exists to protect its own terminator: a
+body line consisting of one dot is sent as two, so `CRLF . CRLF` is
+unambiguous in the encoded bytes and would not be in the decoded ones. A
+decoder running first would have to know where to stop, which is what the
+scan is for.
+
+The extent comes from the delimiter and not from the codec's expansion. Those
+answer different questions -- the expansion says how much the transform could
+grow the interior to, and the delimiter says where the encoded bytes actually
+stop -- and only the second is on the wire.
+
+Such a region gets the scan accessors and no token comparison. `_eq` over a
+transform's output would compare stuffed text, or ciphertext, against a
+literal somebody wrote in the clear; the header says instead that the pointer
+is the encoded form and the decode is the caller's.
+
+What stays out is a grammar: alternation, repetition and rule references.
+A parse tree has no offsets to be static about, and the capability map would
+have nothing to say about one. See
+`docs/decisions/0020-delimited-data.md`.
+
 ### 8.6.6 A run that ends on a condition
 
 `T x[] while (cond)`: the run ends **after** the element for which `cond` is
@@ -893,33 +920,6 @@ The run is `access = Sequential`: how many elements there are is neither in
 the schema nor stated in the data, so element N is reached by reading the N-1
 before it. A count field ahead of the run would make it `Random`, at the cost
 of a number the format has to carry and keep true.
-
-### 8.6.5 A region that is both delimited and coded
-
-`coded body(dot_stuffing) until "\r\n.\r\n" { ... }`: the extent is found by
-scanning, and the bytes found are the transform's output.
-
-**Scan first, decode second, and the order is the protocol's rather than a
-convenience.** SMTP's dot-stuffing exists to protect its own terminator: a
-body line consisting of one dot is sent as two, so `CRLF . CRLF` is
-unambiguous in the encoded bytes and would not be in the decoded ones. A
-decoder running first would have to know where to stop, which is what the
-scan is for.
-
-The extent comes from the delimiter and not from the codec's expansion. Those
-answer different questions -- the expansion says how much the transform could
-grow the interior to, and the delimiter says where the encoded bytes actually
-stop -- and only the second is on the wire.
-
-Such a region gets the scan accessors and no token comparison. `_eq` over a
-transform's output would compare stuffed text, or ciphertext, against a
-literal somebody wrote in the clear; the header says instead that the pointer
-is the encoded form and the decode is the caller's.
-
-What stays out is a grammar: alternation, repetition and rule references.
-A parse tree has no offsets to be static about, and the capability map would
-have nothing to say about one. See
-`docs/decisions/0020-delimited-data.md`.
 
 ### 8.7 Enums
 
@@ -2606,14 +2606,22 @@ situ/
                               bytes a placement occupies, and -- the part that
                               had to be learned three times -- the order to ask
                               what kind of member it is
+    invariant.py              which right-hand sides an `invariant` may have
+                              (16.1), and the walk over one -- the leaves are
+                              each backend's and the rest is the language's
+    names.py                  ways of writing a schema fact that no target
+                              language decides: how a delimiter reads, and
+                              which field names an expression rewrites
+    wire.py                   the byte-level contract and its comparison; 19.3
     requirements.py           predicate evaluation and discharge
     namespaces.py             `::` qualification and `--prefix`; decision 0012
     capmap.py                 capability map construction
     diagnostics.py            diagnostic construction, blame chains, rendering
     dump.py, unparse.py       `dump-ast` and round-tripping
     advise.py                 suggestion catalog and cost model; phase 9
-    revision.py               `situc diff`: capability regressions between two
-                              revisions of a schema
+    revision.py               `situc diff`: capability *cost* between two
+                              revisions. Not compatibility: see 18.3 and 19.3
+                              for why those are different questions
     kernels.py                property signatures derived from kernel
                               descriptions; phase 12
     proto.py                  the `.proto` importer; phase 13
@@ -2806,10 +2814,13 @@ point and BCD. Every command section 21 names has landed, and
 Phases 0 through 8 are ordered by dependency; everything after is largely
 independent of the rest.
 
-**26.15 through 26.19 are complete too**: the built-in codec set, and the C++,
-Python and Rust backends, and the language server. **Nothing on the roadmap is
-outstanding.** 26.21 records what is deliberately not scheduled, which is not
-the same as unfinished.
+**26.15 through 26.23 are complete too**: the built-in codec set, the three
+non-C backends, the language server, cross-field invariants, text protocols,
+schema evolution, and the constructs the worked examples asked for.
+**Nothing on the roadmap is outstanding.** What situ deliberately does not
+cover is named where the construct that would cover it would go -- 8.6.6 for
+a grammar, 8.6.2 for signed text -- rather than in a list of absences, which
+goes stale the moment one of them lands.
 
 **Four backends over one layout**, and the claim that matters is that they
 agree. Each is tested against the C output on the same buffer, field by field,
@@ -3774,6 +3785,16 @@ What each target adds over C, where the language allows it:
 - `[trim]` and `[case_insensitive]`, the two canonicity questions text asks
   that binary does not (8.6.4).
 
+And three more that the worked examples asked for afterwards, which 26.23
+records:
+
+- A **fixed-width** text number, `decimal u16 code[3]`, which SMTP's reply
+  code and HTTP's status both are and neither could be written (8.6.2).
+- A region that is **delimited and coded**, which SMTP's dot-stuffed DATA
+  body is: two constructs that existed and would not compose (8.6.5).
+- `while`, a run ending after the element failing a test, which SMTP asked
+  for and IPv6 extension headers asked for second (8.6.6).
+
 Not covered, and worth naming so nobody designs around a limit that is not
 there: a grammar -- alternation, repetition and rule references -- which is
 out by decision rather than unfinished, because a parse tree has no offsets to
@@ -3822,6 +3843,47 @@ since the construct was added, which six consumers had absorbed (invariant
 None of those are about schema evolution. They were found by it, because
 adding a construct means walking every backend and every artifact, and that
 walk is the only thing that reads them all in one sitting.
+
+### 26.23 What the worked examples asked for
+
+Three protocols written down as schemas, and what writing them cost. Not a
+phase: the roadmap had run out, and these were chosen because each has a
+shape the tree did not already have.
+
+**HTTP** (8.6.1--8.6.4). Delimited fields, a header block, a text
+Content-Length driving a binary body. Writing it found three latent bugs, none
+of them about HTTP: the expression parser did not know decision 0006's bracket
+rule, so `max 16 [encoding = ascii]` indexed `16` by the attribute list;
+nesting a variable-size struct named a `SIZE_FIXED` macro that is emitted only
+for fixed ones, so any schema doing it produced C that did not compile; and
+the member *after* such a struct was placed on top of it, because the offset
+sum treated it as zero bytes wide.
+
+**SMTP** (8.6.2, 8.6.5). A reply code is three digits with no delimiter, and
+8.6.2 required `until` on every text number -- so the commonest fixed-record
+shape in existence was unwriteable. Dot-stuffing needed a `coded` region that
+is also delimited, which is two existing constructs that refused to compose.
+
+And it asked for something it did not get: a multiline reply ends after the
+line whose separator is a space, which no delimiter expresses. The schema said
+so, named the construct that would cover it, and did not invent it.
+
+**IPv6 extension headers** (8.6.6). The second protocol wanting a run that
+ends after the element failing a test, which is what made `while` worth
+having. It also found that `traverse.classify` called a member sized by
+arithmetic over a field a SCALAR, so three backends read one byte and called
+it the field.
+
+**One protocol is not evidence; two is.** SMTP asked for `while` and was
+declined, with the reason written into the schema. IPv6 asked for the same
+shape with different fields, and that pair is the whole justification. The
+cost of waiting was one example carrying a limitation for a while. The cost of
+not waiting would have been a construct shaped around a single format, and
+`until` had already been generalised once from `nul_terminated`.
+
+The rule is not that two is a magic number. It is that the second asker is
+what tells you which parts of the first were the protocol and which were the
+shape.
 
 ### Invariants to hold across all phases
 
@@ -4024,6 +4086,34 @@ walk is the only thing that reads them all in one sitting.
    a local, whatever it is called. Where a language offers no such
    qualification, the compile lists carry the collision, which is the thing
    that actually catches the next one.
+30. **A real protocol finds what a synthetic schema does not.** `edges.situ`
+   exercises every construct deliberately and had not found any of: a bracket
+   ambiguity in the expression parser, a nested variable struct naming a macro
+   that does not exist, a member placed on top of the one before it, a
+   fixed-width text number being unwriteable, or two constructs that refused
+   to compose. Three real formats found all five between them, because a
+   protocol combines constructs in the order its designers needed rather than
+   the order the compiler's author thought of. Each new example is worth
+   writing until one of them stops finding something.
+31. **One protocol asking is not evidence; two is.** SMTP wanted a run ending
+   on a test over the element just read, and did not get it: the schema
+   recorded the limitation and named the construct that would cover it. IPv6
+   extension headers wanted the same shape with different fields, and `while`
+   was built then. The cost of waiting was one example carrying a limitation;
+   the cost of not waiting would have been a construct shaped around one
+   format. The second asker is what separates the protocol from the shape.
+32. **A language that has two constructs and cannot compose them is the
+   anomaly.** The same judgement cut the other way for dot-stuffing. `until`
+   and `coded` both existed and a region could not be both, which is not a
+   missing feature but a missing edge -- so it was built on one protocol
+   asking, where `while` waited for two. What distinguishes them is whether
+   anything new is being invented.
+33. **C's integer promotion is a guarantee that runs out.** `(len + 1) * 8`
+   over a `u8` field is correct in C because the read is widened to `int`
+   before the arithmetic, and wrong in Rust, which has no such rule -- 255 + 1
+   is 0 there. Rust refusing it is the useful signal: the same expression over
+   a `u32` field wraps in both languages, and only one of them said so. Where
+   generated arithmetic depends on a width the schema did not state, state it.
 
 ---
 
