@@ -16,6 +16,7 @@
 
 #include "header.h"
 #include "tiff.h"
+#include "edges.h"
 
 static int failures;
 
@@ -139,10 +140,89 @@ static void test_tiff(void)
 	}
 }
 
+/* Section 8.6 and 19.4, on a second architecture.
+ *
+ * The scan is byte-oriented and the digits are ASCII, so none of this should
+ * depend on the host's byte order -- and "should not" is the claim this
+ * directory exists to stop anyone making without checking. What could
+ * genuinely differ is the offset arithmetic, which is uint32_t throughout and
+ * feeds a pointer.
+ */
+static void test_framed(void)
+{
+	/* "SITU" | "1.0" CRLF | "abc" NUL | count */
+	static const uint8_t FRAME[] = {
+		'S', 'I', 'T', 'U',
+		'1', '.', '0', 0x0D, 0x0A,
+		'a', 'b', 'c', 0x00,
+		0x12, 0x34,
+	};
+	uint8_t     buf[sizeof(FRAME)];
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	memcpy(buf, FRAME, sizeof(buf));
+	situ_msg_init(&msg, buf, (uint32_t)sizeof(buf));
+	check("framed view",
+	      situ_framed_view(&msg, 0, (uint32_t)sizeof(buf), &view), SITU_OK);
+
+	check("version len", situ_framed_version_len(view), 3);
+	check("version terminated",
+	      (uint64_t)situ_framed_version_terminated(view), 1);
+	check("version span", situ_framed_version_span(view), 5);
+	check("label len", situ_framed_label_len(view), 3);
+
+	/* The one that is not obviously portable: a member found by two scans,
+	 * read as a big-endian word. */
+	check("count offset", situ_framed_count_offset(view), 13);
+	check("count", situ_framed_count_get(view), 0x1234);
+	check("framed validate", situ_framed_validate(view), SITU_OK);
+}
+
+static void test_text_number(void)
+{
+	static const uint8_t DIGITS[] = { '4', '2', 0x0D, 0x0A, 'x', 'y' };
+	uint8_t     buf[sizeof(DIGITS)];
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint16_t    parsed = 0;
+
+	memcpy(buf, DIGITS, sizeof(buf));
+	situ_msg_init(&msg, buf, (uint32_t)sizeof(buf));
+	check("texty view",
+	      situ_texty_view(&msg, 0, (uint32_t)sizeof(buf), &view), SITU_OK);
+
+	check("digits parse", situ_texty_count_get(view, &parsed), SITU_OK);
+	check("digits value", parsed, 42);
+	check("body length", situ_texty_body_len(view), 42);
+}
+
+static void test_versioned(void)
+{
+	static const uint8_t V1[] = { 1, 0x00, 0x05 };
+	uint8_t     buf[16];
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    flags = 0;
+
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, V1, sizeof(V1));
+	situ_msg_init(&msg, buf, (uint32_t)sizeof(V1));
+	check("versioned view",
+	      situ_versioned_view(&msg, 0, (uint32_t)sizeof(V1), &view), SITU_OK);
+
+	check("v1 length", situ_versioned_length_get(view), 5);
+	check("v1 refuses flags",
+	      situ_versioned_flags_get(view, &flags), SITU_ERR_VERSION);
+}
+
 int main(void)
 {
 	test_header();
 	test_tiff();
+	test_framed();
+	test_text_number();
+	test_versioned();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);

@@ -28,7 +28,13 @@ PYTHON		?= python3
 SITUC		?= $(PYTHON) -m situc.cli
 
 GEN_DIR		:= $(BUILD_DIR)/gen
-SCHEMAS		:= tests/schemas/header.situ examples/tiff/tiff.situ
+# `edges` carries the section 8.6 and 19.4 constructs: a delimited member, a
+# text-encoded number, a run of records and a versioned field. None of that
+# parsing had ever run anywhere but x86-64 -- the scan is byte-oriented and
+# should not care, and "should not care" is what this directory exists to
+# stop anyone saying.
+SCHEMAS		:= tests/schemas/header.situ examples/tiff/tiff.situ \
+		   tests/schemas/edges.situ
 GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))
 GEN_SRCS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.c)
 GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
