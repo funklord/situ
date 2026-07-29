@@ -34,6 +34,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	refuse_delimited,
 	Check, Member, classify, classify_check, local_name, obligation,
 	obligations, own_entries, own_members,
 )
@@ -57,6 +58,7 @@ class Generated:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> Generated:
+	refuse_delimited(schema, resolved, "Rust")
 	return Generated(module=Emitter(schema, resolved, basename).module(),
 	                 basename=basename)
 

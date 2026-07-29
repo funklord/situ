@@ -3357,14 +3357,25 @@ early.
 
 Delivered:
 
-- `T x[] until "D"`, with `max N` to bound the scan.
+- `T x[] until "D"`, with `max N` to bound the scan (8.6.1).
 - `offset = Scanned` and `repr = TextConverted`, two distinctions that were
   being collapsed into `Dynamic` and `ValueConverted`.
 - `[quoted]` and `[escape]`, for a protocol that admits the delimiter inside a
   field, at the cost of `canonical = NonCanonical`.
-- Text-encoded scalars, so a number written as digits is a typed field.
-- Records repeated until a terminator, which is what makes a header block
-  expressible.
+- Text-encoded numbers, so a length written as digits is a typed field that
+  drives an array (8.6.2).
+- The C backend, end to end: a frame of method, target, text Content-Length
+  and binary body parses, and every malformed variant is refused.
+
+Outstanding, and declared rather than discovered:
+
+- **C++, Python and Rust do not emit delimited members.** They refuse with a
+  diagnostic naming the C backend and the section. Before that they reached
+  `offset_bytes` on a scanned member and raised an `AssertionError` out of the
+  layout module, which is a crash wearing a stack trace.
+- **Records repeated to a terminator** -- `header fields[] until "\r\n"`
+  where the element is a struct. Without it a header *block* is not
+  expressible, only the individual lines of one.
 
 ### Invariants to hold across all phases
 

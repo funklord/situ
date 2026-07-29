@@ -226,3 +226,37 @@ def test_the_derived_field_is_immutable_and_says_which_invariant_decided() -> No
 
 	assert total.vector.get(Axis.MUTATE).base == "Immutable"
 	assert total.placement.derived_by == "invariant total"
+
+
+# -- delimited members, where a backend does not have them yet ---------------
+
+
+DELIMITED = 'struct s { u8 line[] until "\\r\\n"; u16 count; }'
+
+
+@pytest.mark.parametrize("target", ["cpp", "python", "rust"])
+def test_a_backend_without_delimiters_says_so(target: str) -> None:
+	"""Rather than raising `AssertionError: offset is dynamic` out of the
+	layout module, which is what reaching `offset_bytes` on a scanned member
+	did. A traceback tells a user nothing about their schema and looks like a
+	crash because it is one."""
+	from situc.diagnostics import SituError
+
+	schema   = parse_text(PREAMBLE + DELIMITED)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	with pytest.raises(SituError, match="cannot emit a delimited member yet"):
+		emit(schema, resolved, "unit")
+
+
+def test_the_c_backend_does_have_them() -> None:
+	"""The other half of the claim above. A gap declared where there is none
+	sends a reader designing around a limit that is not there (invariant 12),
+	so the two tests are written together."""
+	schema   = parse_text(PREAMBLE + DELIMITED)
+	resolved = resolve(schema, solve(schema))
+
+	header = "\n".join(generate_c(schema, resolved, "unit").files().values())
+
+	assert "situ_s_line_span" in header

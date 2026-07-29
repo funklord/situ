@@ -36,6 +36,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	refuse_delimited,
 	Check, Member, classify, classify_check, local_name, obligation,
 	obligations, own_entries, own_members,
 )
@@ -59,6 +60,7 @@ class Generated:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		namespace: str = "situ") -> Generated:
+	refuse_delimited(schema, resolved, "C++")
 	return Generated(
 		header   = Emitter(schema, resolved, basename, namespace).header(),
 		basename = basename,
