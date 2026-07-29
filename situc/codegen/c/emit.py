@@ -30,6 +30,7 @@ from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.names import render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
@@ -1331,7 +1332,7 @@ class Emitter:
 
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
-			f" * {_render_delimiter(delim)} stands in for one. Walked, not indexed:",
+			f" * {render_delimiter(delim)} stands in for one. Walked, not indexed:",
 			" * a view is a value and nothing here allocates, so there is nowhere",
 			" * to keep a table of offsets. Use `indexed` where O(1) matters. */",
 			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
@@ -1423,7 +1424,7 @@ class Emitter:
 		terminated = ident(self.prefix, struct.name, local, "terminated")
 
 		return [
-			f"/* `{placement.name}` runs to the first {_render_delimiter(delim)}."
+			f"/* `{placement.name}` runs to the first {render_delimiter(delim)}."
 			" Reaching anything after",
 			" * it means this scan, which is why the map calls their offsets"
 			" Scanned",
@@ -2185,7 +2186,7 @@ class Emitter:
 			]
 
 		lines = [
-			f"\t/* `{placement.name}` runs to {_render_delimiter(delim)}, and a",
+			f"\t/* `{placement.name}` runs to {render_delimiter(delim)}, and a",
 			"\t * frame that does not contain it was cut short: the member ran",
 			"\t * to the end of the buffer rather than to its own end. */",
 			f"\tif (!{ident(self.prefix, struct.name, local, 'terminated')}(view)) {{",
@@ -2601,17 +2602,3 @@ def _bit_assembly(endian: ast.Endian | None) -> str:
 	if endian is ast.Endian.NATIVE:
 		return "ne"
 	return "lsb" if endian is ast.Endian.LITTLE else "msb"
-
-
-def _render_delimiter(delim: bytes) -> str:
-	"""A delimiter as a reader of the generated header would write it.
-
-	`"\\r\\n"` rather than `{0x0D, 0x0A}`: the comment is there to be checked
-	against the specification somebody is implementing, and that specification
-	says CRLF.
-	"""
-	named = {0x0D: "\\r", 0x0A: "\\n", 0x09: "\\t", 0x00: "\\0"}
-	shown = "".join(named.get(byte, chr(byte) if 0x20 <= byte < 0x7F
-	                          else f"\\x{byte:02x}")
-	                for byte in delim)
-	return f'`"{shown}"`'

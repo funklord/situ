@@ -84,6 +84,12 @@ class Member(Enum):
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
 	#: variant, an opaque or indexed span. Each needs its own machinery.
 	REGION    = "region"
+	#: Ends at a delimiter: `x[] until "D"`, and a text number, which is a
+	#: delimited run read as digits.
+	DELIMITED = "delimited"
+	#: A run of records ending where a terminator stands in for one:
+	#: `T x[] until "D"` with T a struct.
+	RECORD_RUN = "record_run"
 	#: Extent decided by the data: `x[n]` or `x[remaining]`.
 	VARIABLE  = "variable"
 	#: A counted array, of scalars or of structs.
@@ -112,6 +118,14 @@ def classify(struct: ResolvedStruct, placement: Placement,
 		return Member.RESERVED
 	if placement.kind != "field":
 		return Member.REGION
+
+	# Before everything below, and before ARRAY in particular. `x[] until "D"`
+	# carries `array_count = 1` -- the empty bracket form is one run, not one
+	# element -- so asking about the count first calls a delimited member a
+	# fixed array of one and reads two bytes at a static offset.
+	if placement.delimiter is not None:
+		return (Member.RECORD_RUN if placement.type_name in structs
+		        else Member.DELIMITED)
 
 	# Before UNPLACED: a member sized by the data usually has a dynamic offset
 	# as well, and asking about the offset first loses it.
@@ -154,6 +168,8 @@ class Check(Enum):
 	RESERVED   = "reserved"
 	#: `must_eq`, `min`, `max`, and enum membership.
 	CONSTRAINED = "constrained"
+	#: The delimiter is there, and for a text number, that the digits parse.
+	DELIMITED  = "delimited"
 	#: Nothing to check.
 	NOTHING    = "nothing"
 
@@ -161,6 +177,14 @@ class Check(Enum):
 def classify_check(struct: ResolvedStruct, placement: Placement,
 		structs: Container[str]) -> Check:
 	"""What to validate for this member, in the order that is safe."""
+	# A delimited member's check is that its delimiter is there, and a run's
+	# is nothing -- the walk that finds the terminator is the check. Neither
+	# is `REPEATED`, which would validate an encoding over a length that has
+	# not been established yet.
+	if placement.delimiter is not None:
+		return (Check.NOTHING if placement.type_name in structs
+		        else Check.DELIMITED)
+
 	# Before NESTED: an array of structs is not a nested struct, and calling
 	# `self.recs().validate()` on one names a method that takes an index.
 	if placement.array_count is not None or placement.sized_by is not None:

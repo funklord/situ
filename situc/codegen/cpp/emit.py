@@ -31,12 +31,12 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.names import render_delimiter
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	refuse_delimited,
 	Check, Member, classify, classify_check, local_name, obligation,
 	obligations, own_entries, own_members,
 )
@@ -60,7 +60,6 @@ class Generated:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		namespace: str = "situ") -> Generated:
-	refuse_delimited(schema, resolved, "C++")
 	return Generated(
 		header   = Emitter(schema, resolved, basename, namespace).header(),
 		basename = basename,
@@ -190,6 +189,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._extent_method(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
@@ -729,9 +729,288 @@ class Emitter:
 
 		return " + ".join([str(constant), *terms])
 
+	# -- delimited members (section 8.6) --------------------------------
+
+	def _delimiter_array(self, placement: Placement) -> str:
+		"""The delimiter as a C++ initialiser list, inline at the call site.
+
+		A `static constexpr` member would need an out-of-line definition
+		before C++17 and is a stored object either way; this is two bytes in
+		an argument, which the optimiser folds into the compare.
+		"""
+		delim = placement.delimiter
+		assert delim is not None
+		return ("(const std::uint8_t[]){"
+		        + ", ".join(f"0x{byte:02X}" for byte in delim) + "}")
+
+	def _scan_expression(self, placement: Placement, data: str,
+			limit: str) -> str:
+		delim = placement.delimiter
+		assert delim is not None
+		array = self._delimiter_array(placement)
+
+		if placement.delimiter_quote is None and placement.delimiter_escape is None:
+			return f"situ_scan({data}, {limit}, {array}, {len(delim)}u)"
+
+		quote  = (f"{placement.delimiter_quote}u"
+		          if placement.delimiter_quote is not None else "SITU_NO_BYTE")
+		escape = (f"{placement.delimiter_escape}u"
+		          if placement.delimiter_escape is not None else "SITU_NO_BYTE")
+		return (f"situ_scan_relaxed({data}, {limit}, {array}, {len(delim)}u, "
+		        f"{quote}, {escape})")
+
+	def _delimited(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The same three questions the C backend answers, as methods.
+
+		`len()` is the content, `span()` is content plus delimiter -- what the
+		next member's offset is computed from -- and `terminated()` is neither.
+		Named identically to the C accessors on purpose: a reader moving
+		between the two headers for one schema should not have to learn a
+		second vocabulary for the same three numbers.
+		"""
+		assert placement.delimiter is not None
+		name  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the scan starts. */"]
+
+		limit = (f"limit() - ({start})" if placement.delimiter_cap is None
+		         else f"situ_min_u32({placement.delimiter_cap}u, limit() - ({start}))")
+
+		lines = [
+			"",
+			f"\t/* {placement.path} runs to the first"
+			f" {render_delimiter(delim)}. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_offset() const noexcept",
+			"\t{",
+			f"\t\treturn {start};",
+			"\t}",
+			f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
+			"\t{",
+			f"\t\treturn {self._scan_expression(placement, f'base() + {name}_offset()', limit)};",
+			"\t}",
+			f"\t[[nodiscard]] bool {name}_terminated() const noexcept",
+			"\t{",
+			f"\t\treturn {name}_len() < ({limit});",
+			"\t}",
+			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+			"\t{",
+			f"\t\treturn {name}_len() + ({name}_terminated() ? {len(delim)}u : 0u);",
+			"\t}",
+		]
+
+		if placement.radix is None:
+			lines.extend([
+				f"\t[[nodiscard]] ::situ::rt::const_bytes {name}() const noexcept",
+				"\t{",
+				f"\t\treturn ::situ::rt::const_bytes(base() + {name}_offset(),"
+				f" {name}_len());",
+				"\t}",
+			])
+			return lines
+
+		return lines + self._text_number(struct, placement)
+
+	def _text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A number written as digits, read through something that can fail.
+
+		`err` and an out-parameter rather than the value, alone among the
+		getters here: every other conversion is total, and a decimal parse is
+		not. `[[nodiscard]]` is what stops the error being dropped, which is
+		one of the three things this backend enforces that C can only
+		document.
+		"""
+		assert placement.radix is not None
+		scalar = placement.scalar
+		assert scalar is not None
+
+		name  = c_name(local_name(struct, placement))
+		ctype = self._ctype(scalar)
+		limit = (1 << scalar.bits) - 1
+
+		return [
+			f"\t/* Digits, in the range of {scalar.name}. The only getter here",
+			"\t * that can fail, which is what `repr = TextConverted` means. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out) const noexcept",
+			"\t{",
+			"\t\tstd::uint64_t value;",
+			"",
+			f"\t\tif (situ_parse_uint(base() + {name}_offset(), {name}_len(),"
+			f" {placement.radix}u, {limit}u, &value) != 0) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+			f"\t\tout = static_cast<{ctype}>(value);",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+			f"\t/* The same digits where an error cannot be returned: the offset",
+			"\t * arithmetic after this field is not fallible. `validate`",
+			"\t * refuses a frame whose digits are not digits, so a validated",
+			"\t * one always parses here. */",
+			f"\t[[nodiscard]] {ctype} {name}_value() const noexcept",
+			"\t{",
+			"\t\tstd::uint64_t value = 0u;",
+			"",
+			f"\t\t(void)situ_parse_uint(base() + {name}_offset(), {name}_len(),"
+			f" {placement.radix}u, {limit}u, &value);",
+			f"\t\treturn static_cast<{ctype}>(value);",
+			"\t}",
+		]
+
+	def _record_run(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run of records, ending where the terminator would be an element.
+
+		Walked, not indexed, exactly as in C and for the same reason: a view
+		is a value and nothing here allocates. What C++ adds is that `at()`
+		returns `[[nodiscard]] err`, so an out-of-range index cannot be
+		ignored into a use of an uninitialised view.
+		"""
+		assert placement.delimiter is not None
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or not self._extent_terms(element):
+			return ["", f"\t/* No accessors for {placement.path}: one"
+			        f" `{placement.type_name}` has no",
+			        "\t * extent this backend can compute, so the run cannot be"
+			        " walked. */"]
+
+		name  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		inner = c_name(placement.type_name or "")
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the run starts. */"]
+
+		array = self._delimiter_array(placement)
+		walk  = [
+			f"\t\tstd::uint32_t at = {start};",
+			"\t\tstd::uint32_t n  = 0;",
+			"",
+			f"\t\twhile (at + {len(delim)}u <= limit()) {{",
+			f"\t\t\tif (situ_scan(base() + at, {len(delim)}u, {array},"
+			f" {len(delim)}u) == 0u) {{",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"",
+			"\t\t\tsitu_view_t raw;",
+			"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)"
+			" != SITU_OK) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			f"\t\t\tconst std::uint32_t size = {inner}(raw).extent();",
+			"\t\t\tif (size == 0u || at + size > limit()) {",
+			"\t\t\t\t/* A zero-extent element would walk here forever, and",
+			"\t\t\t\t * one running past the limit was never in this frame. */",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+		]
+
+		return [
+			"",
+			f"\t/* {placement.path} is a run of `{placement.type_name}`, ending",
+			f"\t * where {render_delimiter(delim)} stands in for one. Walked, not",
+			"\t * indexed: there is nowhere to keep a table of offsets. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+			"\t{",
+			*walk,
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\treturn n;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,"
+			f" {inner} &out) const noexcept",
+			"\t{",
+			*walk,
+			"\t\t\tif (n == index) {",
+			"\t\t\t\tsitu_view_t found;",
+			"\t\t\t\tconst situ_err_t e = situ_view_sub(this->raw(), at, size,"
+			" &found);",
+			"",
+			"\t\t\t\tif (e == SITU_OK) {",
+			f"\t\t\t\t\tout = {inner}(found);",
+			"\t\t\t\t}",
+			"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
+			"\t\t\t}",
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\treturn ::situ::rt::err::bounds;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+			"\t{",
+			*walk,
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\t(void)n;",
+			"",
+			"\t\t/* The terminator belongs to this member. Where the run ran",
+			"\t\t * out of buffer instead there is none to count. */",
+			f"\t\tif (at + {len(delim)}u <= limit()) {{",
+			f"\t\t\tat += {len(delim)}u;",
+			"\t\t}",
+			f"\t\treturn at - ({start});",
+			"\t}",
+		]
+
+	def _extent_terms(self, struct: ResolvedStruct) -> list[str] | None:
+		"""The lengths one instance of a variable struct sums to, or None."""
+		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+			return None
+
+		terms: list[str] = []
+		for placement in own_members(struct):
+			if placement.is_fixed_size:
+				terms.append(str(placement.size_bits // BITS_PER_BYTE))
+				continue
+			if placement.sized_by == "remaining":
+				return None		# consumes its view; nothing follows one
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return None
+			terms.append(length)
+		return terms
+
+	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
+		"""How many bytes one instance occupies, for a run that walks them."""
+		if not any(classify(other, entry.placement, self.structs)
+		           is Member.RECORD_RUN
+		           and entry.placement.type_name == struct.name
+		           for other in self.resolved.structs.values()
+		           for entry in other.entries):
+			return []
+
+		terms = self._extent_terms(struct)
+		if terms is None:
+			return []
+
+		return [
+			"",
+			f"\t/* How many bytes one `{struct.name}` occupies. A run of these is",
+			"\t * walked, and the walk needs to know where each one ends. */",
+			"\t[[nodiscard]] std::uint32_t extent() const noexcept",
+			"\t{",
+			f"\t\treturn {' + '.join(terms)};",
+			"\t}",
+		]
+
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
+		# A delimited member's extent is not a closed form: it is wherever the
+		# delimiter turns out to be, and `_span()` is the member's own answer.
+		# The same call serves a byte array and a run of records -- one name
+		# for "how far this member reaches", whichever it is.
+		if placement.delimiter is not None:
+			return f"{c_name(local_name(struct, placement))}_span()"
+
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
 			return None if start is None else f"(limit() - ({start}))"
@@ -753,6 +1032,14 @@ class Emitter:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None or driver.placement.scalar is None:
 			return None
+
+		# A text driver's value is digits, not bits, and it has no fixed
+		# offset either -- it is behind the scans of everything before it.
+		# Both of the checks below would have refused it for the wrong reason.
+		if driver.placement.radix is not None:
+			name = c_name(local_name(struct, driver.placement))
+			return f"static_cast<std::uint32_t>({name}_value())"
+
 		if driver.placement.offset_bits is None:
 			return None
 
@@ -840,6 +1127,10 @@ class Emitter:
 			        f"\t/* {placement.path} is reserved: no accessor, and"
 			        f" `validate` holds it to",
 			        "\t * the pattern the schema declares. */"]
+		if kind is Member.DELIMITED:
+			return self._delimited(struct, placement)
+		if kind is Member.RECORD_RUN:
+			return self._record_run(struct, placement)
 		if kind is Member.VARIABLE:
 			return self._variable(struct, placement)
 		if kind is Member.NESTED:
@@ -1075,6 +1366,43 @@ class Emitter:
 		lines.extend(["\t\treturn ::situ::rt::err::ok;", "\t}"])
 		return lines
 
+	def _delimiter_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The delimiter is there, and a text number's digits are digits.
+
+		That the content excludes the delimiter needs no check: the scan stops
+		at the first one, so it holds by construction. A missing delimiter is
+		the truncated-frame case, and is the only thing parse can catch.
+		"""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []		# checked under the element's own struct
+
+		name  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		assert delim is not None
+
+		lines = [
+			f"\t\t/* {placement.path} runs to {render_delimiter(delim)}; a frame",
+			"\t\t * without it was cut short. */",
+			f"\t\tif (!{name}_terminated()) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		]
+
+		if placement.radix is not None:
+			scalar = placement.scalar
+			assert scalar is not None
+			lines.extend([
+				f"\t\t{{",
+				f"\t\t\t{self._ctype(scalar)} parsed;",
+				f"\t\t\tif (const ::situ::rt::err e = {name}(parsed);"
+				" e != ::situ::rt::err::ok) {",
+				"\t\t\t\treturn e;",
+				"\t\t\t}",
+				"\t\t}",
+			])
+		return lines
+
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		from situc.expr import evaluate
 
@@ -1085,6 +1413,8 @@ class Emitter:
 
 		if check is Check.NOTHING:
 			return []
+		if check is Check.DELIMITED:
+			return self._delimiter_check(struct, placement)
 		if check is Check.REPEATED:
 			assert scalar is not None
 			return self._array_checks(struct, placement, scalar)
