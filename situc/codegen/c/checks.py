@@ -462,6 +462,71 @@ def _view_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 		 " * trusts it. */"])
 
 
+def _delimited_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str, extent: int) -> None:
+	"""The scan finds a planted delimiter, and reports its absence.
+
+	Both, because a `_len` that returned the whole buffer would pass the
+	second on its own -- and that is what an unterminated member does, so the
+	two answers have to be told apart by something.
+	"""
+	placement = entry.placement
+	delim     = placement.delimiter
+	if delim is None or placement.offset_bits != 0:
+		return
+	if placement.scalar is None:
+		return		# a run of records; its walk is checked by the instance
+
+	local   = c_name(placement.path[len(struct.name) + 1:])
+	length  = ident(prefix, struct.name, local, "len")
+	done    = ident(prefix, struct.name, local, "terminated")
+	content = 3
+	room    = min(extent, content + len(delim) + 4)
+
+	planted = [f"\tbuf[{i}u] = 0x{0x41 + i:02X}u;" for i in range(content)]
+	planted += [f"\tbuf[{content + i}u] = 0x{byte:02X}u;"
+	            for i, byte in enumerate(delim)]
+
+	suite.add(
+		f"check_{c_name(struct.name)}_{local}_stops_at_its_delimiter",
+		[
+			f"\tuint8_t buf[{room}u];",
+			"\tsitu_msg_t msg;",
+			"\tsitu_view_t view = {0};",
+			"",
+			"\tmemset(buf, 0x2E, sizeof buf);",
+			*planted,
+			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
+			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"(&msg, 0, {room}u, &view), SITU_OK);",
+			"",
+			f"\tassert_int_equal({length}(view), {content}u);",
+			f"\tassert_true({done}(view));",
+		],
+		[f"/* {placement.path} runs to its delimiter and stops there. Its",
+		 "\t * `size_bits` is the delimiter's own width, so a check written",
+		 "\t * against that would assert the one number that is not the",
+		 "\t * member's length. */"])
+
+	suite.add(
+		f"check_{c_name(struct.name)}_{local}_reports_a_missing_delimiter",
+		[
+			f"\tuint8_t buf[{room}u];",
+			"\tsitu_msg_t msg;",
+			"\tsitu_view_t view = {0};",
+			"",
+			"\tmemset(buf, 0x2E, sizeof buf);",
+			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
+			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"(&msg, 0, {room}u, &view), SITU_OK);",
+			"",
+			f"\tassert_false({done}(view));",
+		],
+		["/* And says so when it is not there, rather than reporting an empty",
+		 "\t * member: a frame that stops early is not a frame with a short",
+		 "\t * field in it. */"])
+
+
 def _versioned_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		prefix: str, extent: int) -> None:
 	"""A member arrives at its version, and is refused before it.
@@ -616,6 +681,12 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 		_versioned_checks(suite, struct, entry, prefix, extent)
 		return		# same: its getter takes an out-parameter, because there
 				# is no value to return when the field is not there
+
+	if placement.delimiter is not None:
+		_delimited_checks(suite, struct, entry, prefix, extent)
+		return		# it has no `_get` and no fixed extent: the checks below
+				# read `size_bits`, which for one of these is the
+				# delimiter's own width and not the member's
 
 	if placement.array_count is not None or placement.sized_by is not None:
 		_array_checks(suite, struct, entry, prefix, extent)

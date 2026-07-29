@@ -1,0 +1,89 @@
+// An HTTP/1.1 request head (RFC 9112 section 3).
+//
+// Here because it is the shape situ said for a long time it would not
+// describe: a request line and a header block framed by CRLF, then a body
+// whose length is stated in text. Section 26.21 records why that position was
+// wrong -- every capability axis says something about a delimited field, and
+// two of them say more about text than about binary.
+//
+// What this is not is a parser generator. Situ describes where the bytes are
+// and what they cost to reach; it does not know that `Host` is mandatory or
+// that a `Transfer-Encoding` displaces `Content-Length`. Those are the
+// protocol's rules and belong in the code that uses these accessors.
+
+target buffer;
+endian big;
+
+// One header line. `name` stops at the colon and folds case, because
+// `Content-Length` and `content-length` are one field name; `value` stops at
+// the CRLF and ignores the optional whitespace around itself.
+//
+// Both are `canonical = NonCanonical`, and the map says so: two byte
+// sequences carry the same meaning, which is exactly what that axis is for.
+struct header_field {
+	u8  name[]   until ":"     [case_insensitive, encoding = ascii];
+	u8  value[]  until "\r\n"  [trim];
+}
+
+// The delimiter is `:` and not `": "`. RFC 9112 permits `name:value` with no
+// space at all, and a tab where a space would do, so demanding one loses
+// every header that omits it -- which is what the first draft of this file
+// did, and what running it against a realistic request showed in one line.
+// The optional whitespace is the *value's* to ignore, which is `[trim]`.
+
+// The request line. Each part ends where the next begins.
+//
+// `method` is capped: a token longer than sixteen bytes is not a method any
+// registry lists, and the cap turns an unterminated scan into an error rather
+// than a read to the end of the buffer. `target` is capped for the same
+// reason at a length real servers accept.
+struct request_line {
+	u8  method[]   until " "     max 16   [encoding = ascii];
+	u8  target[]   until " "     max 8192;
+	u8  version[]  until "\r\n"  max 16   [encoding = ascii];
+}
+
+// The head: a request line, then header lines until a blank one.
+//
+// The terminator ends the *run* rather than any single field -- a CRLF inside
+// a header line belongs to that line. Section 8.6.3 is the construct and the
+// distinction, which reads alike in the schema and could not differ more in
+// the bytes.
+struct request_head {
+	request_line  start;
+	header_field  fields[] until "\r\n";
+}
+
+// A response head, differing only in the first line. Kept separate rather
+// than shared through a variant: the two lines have different fields, and a
+// discriminant that told them apart would have to come from outside the
+// bytes.
+struct status_line {
+	u8       version[]  until " "     max 16  [encoding = ascii];
+	decimal  u16        code until " " max 3  [minimal];
+	u8       reason[]   until "\r\n"  max 256;
+}
+
+struct response_head {
+	status_line   start;
+	header_field  fields[] until "\r\n";
+}
+
+// The bill for describing a text protocol, recorded rather than hidden.
+//
+// `assert` warns where it fails, and every one of these fails: that is the
+// point. A predicate names the strong value, so asserting it over a field
+// that does not reach it is how a schema writes down what it gave up --
+// the same way `edges.situ` records the cost of a nul-terminated field.
+//
+// Read the three warnings this produces as the answer to "what does framing
+// in text cost", and compare them against `udp.situ`, which asserts the same
+// things and satisfies them.
+assert random_access(request_head.fields);
+assert canonical(header_field.name);
+assert canonical(header_field.value);
+
+// And the one thing that is a requirement. The request line starts at offset
+// zero in every message, because nothing precedes it -- so the first scan
+// begins at a known place even though nothing after it does.
+require absolute_static(request_line.method);

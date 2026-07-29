@@ -1692,7 +1692,12 @@ class Parser:
 				name = self.expect_ident("a member name after `.`")
 				expr = ast.Access(Span(self.source, expr.span.start, name.span.end),
 				                  expr, name.text)
-			elif self.current.is_symbol("["):
+			elif self.current.is_symbol("[") and not self.bracket_is_attrs():
+				# Decision 0006's rule, which the expression parser did not
+				# know. `until "," max 16 [encoding = ascii]` reaches here
+				# with the cursor on the attribute list, and indexing `16` by
+				# it is the same ambiguity that rule exists to settle -- one
+				# level down, where nobody had looked for it.
 				expr = self.parse_index(expr)
 			else:
 				return expr

@@ -1217,11 +1217,24 @@ class Emitter:
 		        and placement.type_name in self.structs)
 
 	def _is_run_element(self, name: str) -> bool:
-		"""Whether any struct in this schema walks a run of `name`."""
-		return any(self._is_record_run(entry.placement)
+		"""Whether anything needs to know how long one `name` is.
+
+		A run walks them, and a nested member has to size its sub-view. Both
+		read the same function, and gating it on the run alone left the nested
+		case reaching for `SIZE_FIXED` instead.
+		"""
+		return any((self._is_record_run(entry.placement)
+		            or self._is_nested_member(entry.placement))
 		           and entry.placement.type_name == name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries)
+
+	def _is_nested_member(self, placement: Placement) -> bool:
+		return (placement.kind == "field"
+		        and placement.delimiter is None
+		        and placement.array_count is None
+		        and placement.sized_by is None
+		        and placement.type_name in self.structs)
 
 	def _struct_extent(self, struct: ResolvedStruct) -> list[str]:
 		"""How many bytes one instance of a variable struct occupies.
@@ -1681,6 +1694,20 @@ class Emitter:
 			local = c_name(self._local(struct, placement))
 			return f"{ident(self.prefix, struct.name, local, 'span')}({held})"
 
+		# A nested struct with no single size. Its own `_extent` needs a view
+		# positioned at the member, which is not something an expression can
+		# make -- so the member emits a helper that does, and this calls it.
+		# Without this the sum treated the member as zero bytes wide and put
+		# whatever follows it at the same offset.
+		nested = self.resolved.structs.get(placement.type_name or "")
+		if (nested is not None and not nested.layout.is_fixed_size
+				and placement.kind == "field"
+				and placement.array_count is None
+				and placement.sized_by is None
+				and placement.delimiter is None):
+			local = c_name(self._local(struct, placement))
+			return f"{ident(self.prefix, struct.name, local, 'extent')}({held})"
+
 		if placement.kind in ("coded", "sealed"):
 			length = self._region_length(struct, placement, held)
 			assert length is not None, "callers check _has_length first"
@@ -1894,12 +1921,60 @@ class Emitter:
 		return lines
 
 	def _sub_view(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""A sub-view of a nested struct.
+
+		`SIZE_FIXED` only exists where a struct has one size, so nesting a
+		variable one emitted a reference to a macro that was never defined --
+		since nested structs and variable structs both existed, and found by
+		the first schema that nested one.
+		"""
 		nested = placement.type_name
 		base   = self._base_expression(struct, placement)
+		inner  = self.resolved.structs.get(nested)
+		name   = ident(self.prefix, struct.name,
+		               c_name(self._local(struct, placement)), "view")
+
+		if inner is not None and not inner.layout.is_fixed_size:
+			extent = ident(self.prefix, nested, "extent")
+			site   = ident(self.prefix, struct.name,
+			               c_name(self._local(struct, placement)), "extent")
+			return [
+				f"/* How many bytes `{placement.name}` occupies here. The",
+				" * member after it starts at the end of this, and that was a",
+				f" * constant zero until `{nested}` stopped having one size --",
+				" * so the next member was placed on top of this one. */",
+				f"static inline uint32_t {site}(situ_view_t view)",
+				"{",
+				"\tsitu_view_t whole;",
+				"",
+				f"\tif (situ_view_sub(view, {base}, view.limit - {base}, &whole)"
+				" != SITU_OK) {",
+				"\t\treturn 0u;",
+				"\t}",
+				f"\treturn {extent}(whole);",
+				"}",
+				"",
+				f"/* `{placement.name}` has no one size, so its extent is read",
+				" * from the bytes. The sub-view is taken twice: once over what",
+				" * is left, to give the extent function something to measure,",
+				" * and once at the size it reports. */",
+				f"static inline situ_err_t {name}(situ_view_t view, "
+				"situ_view_t *out)",
+				"{",
+				"\tsitu_view_t whole;",
+				"\tsitu_err_t  e;",
+				"",
+				f"\te = situ_view_sub(view, {base}, view.limit - {base}, &whole);",
+				"\tif (e != SITU_OK) {",
+				"\t\treturn e;",
+				"\t}",
+				f"\treturn situ_view_sub(view, {base}, {extent}(whole), out);",
+				"}",
+			]
+
 		return [
-			f"static inline situ_err_t "
-			f"{ident(self.prefix, struct.name, c_name(self._local(struct, placement)), 'view')}"
-			"(situ_view_t view, situ_view_t *out)",
+			f"static inline situ_err_t {name}(situ_view_t view, "
+			"situ_view_t *out)",
 			"{",
 			f"\treturn situ_view_sub(view, {base}, "
 			f"{macro(self.prefix, nested, 'SIZE_FIXED')}, out);",

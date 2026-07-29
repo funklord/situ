@@ -1,0 +1,35 @@
+# situ wire signature v0
+# schema: http.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+struct header_field size=3..
+  @0x0000   until:3a  u8         name  fold-case encoding=ascii
+  ~         until:0d0a u8         value  big trim
+
+struct request_head size=6..
+  @0x0000   4..8224   request_line start  big
+  ~         until:0d0a header_field fields  big
+
+struct request_line size=4..8224
+  @0x0000   until:20  u8         method  cap=16 encoding=ascii
+  ~         until:20  u8         target  cap=8192
+  ~         until:0d0a u8         version  big cap=16 encoding=ascii
+
+struct response_head size=6..
+  @0x0000   4..275    status_line start  big
+  ~         until:0d0a header_field fields  big
+
+struct status_line size=4..275
+  @0x0000   until:20  u8         version  cap=16 encoding=ascii
+  ~         until:20  u16        code  radix=10 minimal cap=3
+  ~         until:0d0a u8         reason  big cap=256
