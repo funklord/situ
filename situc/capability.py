@@ -47,13 +47,14 @@ class Axis(Enum):
 # the parameters are unioned rather than picked between -- see SET_VALUED.
 DOMAINS: dict[Axis, tuple[str, ...]] = {
 	Axis.SIZE:	("Fixed", "Bounded", "Unbounded"),
-	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "Dynamic"),
+	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "Dynamic", "Scanned"),
 	Axis.ACCESS:	("Random", "Sequential"),
 	Axis.MUTATE:	("InPlaceFixed", "InPlaceSlack", "Shifting",
 			 "RewriteRequired", "Immutable"),
 	Axis.ADDRESS:	("Stable", "FrameStable", "Unstable"),
 	Axis.ALIGN:	("Aligned", "Unaligned"),
-	Axis.REPR:	("MemoryIdentical", "ValueConverted", "ConditionallyConverted"),
+	Axis.REPR:	("MemoryIdentical", "ValueConverted", "TextConverted",
+			 "ConditionallyConverted"),
 	Axis.ATOMIC:	("AtomicWord", "NonAtomic"),
 	Axis.CANONICAL:	("Canonical", "CanonicalGiven", "NonCanonical"),
 	Axis.STAGE:	("CompileTime", "ParseTime", "TransformTime", "VerifyGated"),

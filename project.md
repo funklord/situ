@@ -342,7 +342,7 @@ struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
 member        = field | reserved | block | variant | tag_field ;
 
-field         = type_ref ident [ array_spec ] [ pin ] [ attrs ] ";" ;
+field         = type_ref ident [ array_spec ] [ until ] [ pin ] [ attrs ] ";" ;
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 tag_field     = ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
                 [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
@@ -362,6 +362,12 @@ variant       = "variant" ident "switch" "(" expr ")" "{"
 
 array_spec    = "[" [ size_expr ] "]" ;
 size_expr     = expr | "remaining" ;
+
+(* Section 8.6.1. Where a member ends when no length says so. The
+   delimiter is a string literal rather than an expression: it would
+   otherwise have to be evaluated against the data it is being looked
+   for in. `max` bounds the scan. *)
+until         = "until" string [ "max" expr ] ;
 pin           = "@" expr ;
 
 attrs         = "[" attr { "," attr } "]" ;
@@ -624,15 +630,57 @@ and both are stated rather than left to be found:
   the same thing. The remedy the rule names is to zero the padding on write and
   require it on parse, which buys the single encoding back.
 
-Note what this section does *not* claim. Fixed-extent text inside a binary
-frame is covered, because it is a byte array with a length. Genuinely
-text-based protocols -- HTTP, SMTP, SIP, anything framed by CRLF and parsed by
-delimiter -- are **not** covered and are not a near-term goal. They need
-`T x[] until (cond)` (open question 1), and their fields are delimited rather
-than placed, which is the opposite of what the capability lattice is built to
-reason about: there is no offset to be static about. A protocol whose framing
-is textual but whose payload is binary can describe the payload here and the
-framing elsewhere.
+Delimiter-framed text is covered too, and has its own section below.
+
+### 8.6.1 Delimited members
+
+A member may end at a delimiter rather than at a length:
+
+```situ
+struct greeting {
+	u8  magic[4];                       // binary, placed
+	u8  version[] until "\r\n" max 16;  // text, scanned, capped
+	u8  name[]    until "\0";           // text, scanned, unbounded
+	u32 payload_len;                    // binary again -- but now behind a scan
+	u8  payload[payload_len];
+}
+```
+
+The delimiter is part of the member's extent and not part of its value, for
+the reason `nul_terminated` counts its capacity: members partition their
+struct's bytes exactly, and a delimiter nobody owned would be a hole.
+
+**A scanned offset is not a dynamic one.** `Dynamic` is arithmetic over values
+already read -- one addition, and it cannot fail. `Scanned` is a search:
+linear in the distance to the delimiter, and the delimiter may not be there.
+The map above reports `payload_len` as `offset=Scanned access=Sequential
+address=Unstable` even though it is an ordinary big-endian `u32`, because that
+is what putting it after text costs, and the remedy the blame chain names is
+declaration order.
+
+**`until D max N` bounds the scan.** With a cap the member is `Bounded` rather
+than `Unbounded` and a missing delimiter is an error instead of a read to the
+end of the buffer. Without one the member is also `effect = EffectOnRead`,
+because the cost of a read then depends on the data rather than the schema --
+which an embedded caller has to know before choosing the format.
+
+**The content may not contain the delimiter.** That is not a restriction situ
+invented: content that did would be unrepresentable, since writing it back
+would produce different framing. `validate` refuses such a field and the setter
+refuses such a value, which makes the member `Canonical` and the round trip
+total. For HTTP this enforcement *is* the CRLF-injection check.
+
+Where a protocol genuinely admits the delimiter inside a field, say how it is
+made inert -- `[quoted = "\""]` or `[escape = "\\"]`. Both relax the scan and
+cost `canonical = NonCanonical`, because two byte sequences then encode one
+value. Situ cannot tell which case a protocol is in; only the author knows
+whether a comma inside a CSV field is possible, so this is stated rather than
+inferred and the safe reading is the silent one.
+
+What stays out is a grammar: alternation, repetition and rule references.
+A parse tree has no offsets to be static about, and the capability map would
+have nothing to say about one. See
+`docs/decisions/0020-delimited-data.md`.
 
 ### 8.7 Enums
 
@@ -3237,17 +3285,34 @@ that describe a field and each had to learn the word "derived".
 Every bug in it was a disagreement rather than a crash, which is why
 `tests/unit/test_invariants.py` compares the backends instead of reading each.
 
-### 26.21 Folded out, not scheduled
+### 26.21 Text protocols
 
-**Text-based protocols are folded out of the roadmap, not scheduled.** Text of
-a fixed extent inside a binary frame is already covered -- it is a byte array
-with a length -- and that is the case that shows up inside the protocols situ
-targets. Delimiter-framed protocols (HTTP, SMTP, SIP) are a different problem:
-their fields have no offsets to be static about, so the capability lattice has
-nothing to say about them, and `until`-delimited arrays (open question 1) are
-only the entry price. Deciding whether the lattice should model delimited data
-at all comes before any of the work, and that decision has not been taken. See
-section 8.6 for what is and is not claimed today.
+**Reversing 26.21's earlier position, which was wrong.** It read: text-based
+protocols are folded out, because "their fields have no offsets to be static
+about, so the capability lattice has nothing to say about them". Kept here
+rather than deleted, because what a position got wrong is the useful part.
+
+It was wrong on the facts. Every axis says something about a delimited field,
+and two of them -- `canonical` and `access` -- say more about text than about
+binary. The machinery was already in the tree, firing for a construct of the
+same shape. `docs/decisions/0020-delimited-data.md` has the evidence and takes
+the decision; 8.6.1 is the language.
+
+What the old position got right is kept: situ is not becoming a parser
+generator. A full grammar stays out, because a parse tree has no offsets to be
+static about -- which is the sentence the old position applied one level too
+early.
+
+Delivered:
+
+- `T x[] until "D"`, with `max N` to bound the scan.
+- `offset = Scanned` and `repr = TextConverted`, two distinctions that were
+  being collapsed into `Dynamic` and `ValueConverted`.
+- `[quoted]` and `[escape]`, for a protocol that admits the delimiter inside a
+  field, at the cost of `canonical = NonCanonical`.
+- Text-encoded scalars, so a number written as digits is a typed field.
+- Records repeated until a terminator, which is what makes a header block
+  expressible.
 
 ### Invariants to hold across all phases
 
@@ -3359,14 +3424,24 @@ often the useful part -- 12 asked about ordering and the ordering was already
 fine, while the thing actually broken was two lines away and nobody had asked
 about it.
 
-1. ~~**`until`-delimited arrays.**~~ **RESOLVED as not-now, deliberately.**
-   The construct was never the question. Underneath it is whether the
-   capability lattice should model delimiter-framed data at all -- where no
-   field has an offset, so `offset`, `access` and `address` have nothing to
-   say and eleven of thirteen axes are vacuous. That is a language question
-   rather than a syntax one, and it is not answered. 26.21 records the whole
-   position; the construct stays out until the question underneath it is
-   taken, and situ says what it does not cover rather than covering it badly.
+1. ~~**`until`-delimited arrays.**~~ **RESOLVED: the lattice models delimited
+   data, and the earlier answer was wrong.** The construct was never the
+   question -- that much held. Underneath it was whether the lattice should
+   model delimiter-framed data at all, and the position taken was that it
+   should not, because "no field has an offset, so `offset`, `access` and
+   `address` have nothing to say and eleven of thirteen axes are vacuous".
+
+   That claim was false, and the tree disproved it. A struct of variable-sized
+   elements -- where element N cannot be found without walking the N-1 before
+   it -- already produced `access=Sequential mutate=Shifting address=Unstable`,
+   from a rule whose blame reads "element N cannot be found without walking the
+   N-1 elements before it". That sentence was already about delimited data;
+   it had been written for something else.
+
+   The stronger argument runs the other way. `canonical` exists to say that
+   several byte sequences encode one value, and text is where that is most
+   often true. The axis was built for this and had never met the case it fits
+   best. See 8.6.1 and `docs/decisions/0020-delimited-data.md`.
 2. ~~**Multiple tags with nested coverage.**~~ **RESOLVED.** Nested coverage is
    permitted and recomputes innermost first, which is the only order that
    terminates: an outer tag covers the inner tag's own bytes, so writing the

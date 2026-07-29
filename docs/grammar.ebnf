@@ -56,7 +56,7 @@ struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 
 member		= field | reserved | marker_field | block | variant | tag_field ;
 
-field		= type_ref ident [ array_spec ] [ pin ] [ attrs ] ";" ;
+field		= type_ref ident [ array_spec ] [ until ] [ pin ] [ attrs ] ";" ;
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 (* The name is optional and defaults to the keyword, so an unnamed tag is
  * `tag` and an unnamed sealed region is `sealed` -- which is what lets
@@ -85,6 +85,12 @@ variant		= "variant" ident "switch" "(" expr ")" "{"		(* PHASE 6 *)
  * when it holds "=" or "," at depth 1, or a lone known attribute name. *)
 array_spec	= "[" [ size_expr ] "]" ;
 size_expr	= expr | "remaining" ;
+
+(* Section 8.6.1. Where a member ends when no length says so. The
+ * delimiter is a string literal rather than an expression: it would
+ * otherwise have to be evaluated against the data it is being looked for
+ * in. `max` bounds the scan. *)
+until		= "until" string [ "max" expr ] ;
 pin		= "@" expr ;
 
 attrs		= "[" attr { "," attr } "]" ;

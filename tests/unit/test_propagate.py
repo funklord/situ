@@ -436,6 +436,11 @@ def test_reachable_rows_are_all_tested() -> None:
 		"register-read-only",
 		"register-rmw-unsafe",
 		"register-side-effect",
+		# Section 8.6.1, delimiter-framed data.
+		"delimited-member",
+		"unbounded-scan",
+		"relaxed-delimiter",
+		"scanned-predecessor",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
@@ -745,3 +750,68 @@ def test_error_propagating_is_advisory_only() -> None:
 	for path in ("S.b.x", "S.t"):
 		for axis in (Axis.MUTATE, Axis.OFFSET, Axis.ACCESS, Axis.STAGE):
 			assert axis_of(plain, path, axis) == axis_of(noisy, path, axis)
+
+
+# -- rows: delimiter-framed data (section 8.6.1) ----------------------------
+
+DELIMITED = 'struct S { u8 line[] until "\\r\\n"; u8 rest[remaining]; }'
+
+
+def test_a_delimited_member_is_unbounded_and_shifting() -> None:
+	"""Its length is wherever the delimiter turns out to be, which the schema
+	does not know and the data does not state."""
+	assert axis_of(DELIMITED, "S.line", Axis.SIZE) == Value("Unbounded")
+	assert axis_of(DELIMITED, "S.line", Axis.MUTATE) == Value("Shifting")
+	assert rules_for(DELIMITED, "S.line", Axis.MUTATE)[0] == "delimited-member"
+	# The size comes from the generic row, not from this one. A delimited row
+	# claiming Unbounded would have reported a capped scan as unbounded, which
+	# contradicts the remedy it names.
+	assert rules_for(DELIMITED, "S.line", Axis.SIZE) == ["unbounded-size"]
+
+
+def test_an_uncapped_scan_costs_on_every_read() -> None:
+	"""Reading walks to the delimiter, so the cost of a read depends on the
+	data rather than the schema -- which is a property a caller budgeting for
+	an embedded target has to know before they choose the format."""
+	assert axis_of(DELIMITED, "S.line", Axis.EFFECT) == Value("EffectOnRead")
+	assert rules_for(DELIMITED, "S.line", Axis.EFFECT) == ["unbounded-scan"]
+
+
+def test_a_capped_scan_does_not() -> None:
+	"""`until D max N` is the remedy the row names, so it has to work."""
+	capped = 'struct S { u8 line[] until "\\r\\n" max 128; u8 rest[remaining]; }'
+
+	assert axis_of(capped, "S.line", Axis.EFFECT) == Value("Pure")
+	assert axis_of(capped, "S.line", Axis.SIZE).base == "Bounded"
+
+
+def test_a_member_after_a_scan_is_reached_by_searching() -> None:
+	"""`Scanned` rather than `Dynamic`: a dynamic offset is arithmetic over
+	values already read and cannot fail, and this is a search that can."""
+	assert axis_of(DELIMITED, "S.rest", Axis.OFFSET) == Value("Scanned")
+	assert axis_of(DELIMITED, "S.rest", Axis.ACCESS) == Value("Sequential")
+	assert axis_of(DELIMITED, "S.rest", Axis.ADDRESS) == Value("Unstable")
+	assert "scanned-predecessor" in rules_for(DELIMITED, "S.rest", Axis.OFFSET)
+
+
+def test_the_delimited_member_itself_is_not_past_a_scan() -> None:
+	"""Reaching it is still arithmetic; only what follows it is a search.
+	Setting the cause before the placement blamed the member for its own
+	delimiter."""
+	assert axis_of(DELIMITED, "S.line", Axis.OFFSET) == Value("AbsoluteStatic", ("0x00",))
+
+
+def test_a_relaxed_delimiter_costs_canonicity() -> None:
+	"""A quoted delimiter is inert, so the same value has more than one
+	spelling -- which is the trade `[quoted]` buys and has to be stated."""
+	relaxed = 'struct S { u8 field[] until "," [quoted = "\\""]; u8 rest[remaining]; }'
+
+	assert axis_of(relaxed, "S.field", Axis.CANONICAL) == Value("NonCanonical")
+	assert rules_for(relaxed, "S.field", Axis.CANONICAL) == ["relaxed-delimiter"]
+
+
+def test_a_bare_delimiter_stays_canonical() -> None:
+	"""Without a relaxation the content may not contain the delimiter at all,
+	so exactly one byte sequence encodes a given value. That exclusion is the
+	thing `validate` checks, and it is what makes the round trip total."""
+	assert axis_of(DELIMITED, "S.line", Axis.CANONICAL) == Value("Canonical")

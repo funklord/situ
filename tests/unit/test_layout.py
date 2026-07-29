@@ -287,10 +287,15 @@ def test_negative_length_array_rejected() -> None:
 	assert "may be negative" in rendered("const N = 0 - 1;\nstruct S { u8 a[N]; }")
 
 
-def test_empty_array_form_deferred_to_phase_six() -> None:
+def test_an_empty_array_needs_something_to_say_where_it_stops() -> None:
+	"""`[]` says how many only where something else does: an `indexed` region
+	supplies a count, and `until` supplies a delimiter. Alone it says nothing,
+	and the diagnostic names both ways out rather than only the one that
+	existed when it was written."""
 	report = rendered("struct S { u8 a[]; }")
 	assert "an array needs a size here" in report
-	assert "phase 6" in report
+	assert "`indexed` region" in report
+	assert "`until`" in report
 
 
 def test_array_sized_by_an_earlier_field() -> None:

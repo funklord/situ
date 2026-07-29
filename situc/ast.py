@@ -148,6 +148,41 @@ class ArraySpec(Node):
 
 
 @dataclass(frozen=True)
+class Until(Node):
+	"""`until "\\r\\n"` -- where a delimited member stops (section 8.6.1).
+
+	The delimiter is bytes rather than text: a schema may frame on `0x00` as
+	readily as on CRLF, and the lexer's string literal already carries either.
+
+	`quoted` and `escape` are how a protocol says the delimiter may appear
+	inside the content after all. Without one of them the content simply may
+	not contain the delimiter, which is not a restriction situ invented --
+	content that did would be unrepresentable, since writing it back would
+	produce different framing. See docs/decisions/0020-delimited-data.md.
+
+	`cap` bounds the scan. A delimiter that is not there makes an unbounded
+	read on a buffer whose end is the only thing stopping it, and an embedded
+	caller usually wants the smaller promise.
+	"""
+
+	span: Span
+	delimiter: bytes
+	quoted: int | None	= None
+	escape: int | None	= None
+	cap: Expr | None	= None
+
+	@property
+	def is_relaxed(self) -> bool:
+		"""Whether the delimiter may occur in the content.
+
+		When it may, two byte sequences can encode one value and the field is
+		NonCanonical. When it may not, the exclusion is enforced and the round
+		trip is total.
+		"""
+		return self.quoted is not None or self.escape is not None
+
+
+@dataclass(frozen=True)
 class TypeRef(Node):
 	"""A scalar type or a named user type.
 
@@ -182,6 +217,7 @@ class Field(Member):
 	array: ArraySpec | None		= None
 	pin: Expr | None		= None
 	attrs: tuple[Attr, ...]		= ()
+	until: Until | None		= None
 
 
 @dataclass(frozen=True)
@@ -193,6 +229,7 @@ class Reserved(Member):
 	type_ref: TypeRef
 	array: ArraySpec | None		= None
 	attrs: tuple[Attr, ...]		= ()
+	until: Until | None		= None
 
 
 @dataclass(frozen=True)

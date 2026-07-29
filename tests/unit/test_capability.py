@@ -29,9 +29,25 @@ def test_every_axis_has_a_domain() -> None:
 
 def test_domains_are_ordered_strongest_first() -> None:
 	assert DOMAINS[Axis.OFFSET][0] == "AbsoluteStatic"
-	assert DOMAINS[Axis.OFFSET][-1] == "Dynamic"
+	assert DOMAINS[Axis.OFFSET][-1] == "Scanned"
 	assert DOMAINS[Axis.MUTATE][0] == "InPlaceFixed"
 	assert DOMAINS[Axis.MUTATE][-1] == "Immutable"
+
+
+def test_a_scanned_offset_is_weaker_than_a_dynamic_one() -> None:
+	"""`Dynamic` is arithmetic over values already read: one addition, and it
+	cannot fail. `Scanned` is a search -- linear in the distance to the
+	delimiter, and the delimiter may not be there. Reporting both as `Dynamic`
+	would hide a cost difference and a failure mode
+	(docs/decisions/0020-delimited-data.md)."""
+	assert rank(Axis.OFFSET, Value("Dynamic")) < rank(Axis.OFFSET, Value("Scanned"))
+
+
+def test_a_text_conversion_is_weaker_than_a_byte_swap() -> None:
+	"""A byte swap is total: every bit pattern of the right width is some
+	value. A decimal parse is not, so the getter has to be able to fail."""
+	assert (rank(Axis.REPR, Value("ValueConverted"))
+	        < rank(Axis.REPR, Value("TextConverted")))
 
 
 def test_stage_is_ordered_toward_less_usable() -> None:

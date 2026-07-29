@@ -104,6 +104,8 @@ ATTRIBUTE_NAMES = frozenset({
 	# section 8.2 - 8.6: layout and representation
 	"allow_straddle", "require_aligned", "encoding", "nul_terminated",
 	"endian", "bit_order", "size",
+	# section 8.6.1: how a delimiter is made inert inside the content
+	"quoted", "escape",
 	# section 8.3: host-dependent byte order
 	"allow_host_dependent",
 	# section 8.8: reserved behaviour
@@ -1430,10 +1432,55 @@ class Parser:
 		type_ref = self.parse_type_ref()
 		name     = self.expect_ident("a field name")
 		array    = self.parse_array_spec()
+		until    = self.parse_until()
 		pin      = self.parse_pin()
 		attrs    = self.parse_attrs()
 		self.expect_symbol(";", "after the field declaration")
-		return ast.Field(self.span_from(start), name.text, type_ref, array, pin, attrs)
+		return ast.Field(self.span_from(start), name.text, type_ref, array, pin,
+		                 attrs, until)
+
+	def parse_until(self) -> ast.Until | None:
+		"""`until "\\r\\n"`, optionally bounded and optionally relaxed.
+
+		Between the array spec and the pin, because it says where the member
+		*ends* and belongs beside the thing that says how many there are. The
+		relaxations are attributes rather than more keywords: `[quoted = '"']`
+		reads as a property of the field, which it is.
+		"""
+		if not self.current.is_ident("until"):
+			return None
+
+		start = self.advance()
+		token = self.current
+
+		if token.kind is not TokenKind.STRING:
+			raise error(
+				"a delimiter must be a string literal",
+				token.span,
+				label = "expected a string",
+				notes = ['`until "\\r\\n"` or `until "\\0"`: the bytes a member '
+				         "ends at",
+				         "an expression would have to be evaluated against the "
+				         "data the delimiter is being looked for in"],
+			)
+		self.advance()
+
+		if not token.text:
+			raise error(
+				"an empty delimiter matches everywhere",
+				token.span,
+				label = "no bytes to look for",
+				notes = ["a zero-length delimiter is found at offset 0 of any "
+				         "buffer, so the member would always be empty"],
+			)
+
+		cap: ast.Expr | None = None
+		if self.current.is_ident("max"):
+			self.advance()
+			cap = self.parse_expr()
+
+		return ast.Until(self.span_from(start), token.text.encode("latin-1"),
+		                 cap = cap)
 
 	def parse_qualification(self, head: Token) -> str:
 		"""`outer::Header`, from the `::` at the cursor.

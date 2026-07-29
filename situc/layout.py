@@ -124,6 +124,21 @@ class Placement:
 	#: The invariant that maintains this field, if one does. Such a field
 	#: is not the author's to write: only a recompute may.
 	derived_by: str | None		= None
+	#: `until "\r\n"`: the member ends at the first occurrence of these bytes,
+	#: found by scanning rather than computed. Everything after it has
+	#: `offset = Scanned` rather than `Dynamic` -- a search that can fail,
+	#: not an addition that cannot (docs/decisions/0020-delimited-data.md).
+	delimiter: bytes | None		= None
+	#: How the delimiter is made inert inside the content, where a protocol
+	#: admits it there. Both cost `canonical = NonCanonical`, because two byte
+	#: sequences then encode one value.
+	delimiter_quote: int | None	= None
+	delimiter_escape: int | None	= None
+	#: A bound on the scan, from `until D max N`.
+	delimiter_cap: int | None	= None
+	#: The earlier member whose scan made this one's offset Scanned, for blame.
+	scan_cause: str | None		= None
+	scan_cause_span: Span | None	= None
 	# Set on a field of a `register`: how the bus lets it be reached, and what
 	# touching it does besides move a value (section 15.2).
 	access_mode: ast.AccessMode | None	= None
@@ -350,6 +365,12 @@ class Walk:
 	# The first member whose size was not fixed, which is what every later
 	# member's Dynamic offset traces back to.
 	cause: tuple[str, Span, str] | None = None
+	# The first member found by scanning for a delimiter. Separate from
+	# `cause` because it is a strictly stronger claim: a dynamic offset is
+	# arithmetic over values already read and cannot fail, while reaching a
+	# member past a scan means searching, and the delimiter may not be there
+	# (docs/decisions/0020-delimited-data.md).
+	scan: tuple[str, Span] | None = None
 	# Fields that exist only after a transform has run. Recorded so a reference
 	# to one gets the decidability diagnostic of section 13.3 rather than a
 	# bare "not in scope".
@@ -1139,6 +1160,9 @@ class Solver:
 		count   = self.array_extent(member, state, last)
 		total   = _multiply(element, count)
 
+		if member.until is not None:
+			total = self.delimited_extent(member, member.until, state)
+
 		self.check_alignment(decl, member, scalar, cursor, element)
 		position = self.bit_position(scalar, local, cursor, element)
 
@@ -1171,7 +1195,20 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			delimiter          = member.until.delimiter if member.until else None,
+			delimiter_quote    = _delimiter_byte(member, "quoted"),
+			delimiter_escape   = _delimiter_byte(member, "escape"),
+			delimiter_cap      = self._scan_cap(member),
+			scan_cause         = state.scan[0] if state.scan else None,
+			scan_cause_span    = state.scan[1] if state.scan else None,
 		))
+
+		if member.until is not None and state.scan is None:
+			# The scan begins *after* this member: reaching this one is still
+			# arithmetic, and reaching anything past it is a search. Setting it
+			# before the placement would have blamed the delimited member for
+			# its own delimiter.
+			state.scan = (name, member.span)
 
 		if isinstance(member, ast.Field) and member.type_ref.scalar is None:
 			self.absorb_nested(member, layout, path, cursor, element,
@@ -1186,6 +1223,45 @@ class Solver:
 			state.cause = (name, member.span, _render_extent(total))
 
 		state.cursor = cursor.advance(total)
+
+	def delimited_extent(self, member: ast.Field | ast.Reserved,
+			until: ast.Until, state: Walk) -> Interval:
+		"""How many bits a delimited member occupies, delimiter included.
+
+		The delimiter is part of the member's extent even though it is not part
+		of its value, for the same reason `nul_terminated` counts its capacity:
+		members partition their struct's bytes exactly, and a delimiter nobody
+		owned would be a hole between two members.
+
+		The minimum is an empty content plus the delimiter. The maximum is the
+		cap where one is given, and unbounded otherwise -- which is the honest
+		answer, and the reason `until D max N` exists for callers who need a
+		smaller promise than "as far as the buffer goes".
+		"""
+		floor = len(until.delimiter) * BITS_PER_BYTE
+
+		if until.cap is None:
+			return Interval(floor, None)
+
+		env  = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		size = interval_of(until.cap, env)
+
+		if size.hi is None or size.hi < len(until.delimiter):
+			raise error(
+				f"a scan capped below its own delimiter can never succeed",
+				until.cap.span,
+				label = f"cap is {size.render()} bytes",
+				notes = [f"the delimiter is {len(until.delimiter)} byte(s), so "
+				         f"a member of at most {size.hi} could not hold it",
+				         "the cap bounds the whole member, delimiter included"],
+			)
+
+		return Interval(floor, size.hi * BITS_PER_BYTE)
+
+	def _scan_cap(self, member: ast.Field | ast.Reserved) -> int | None:
+		if member.until is None or member.until.cap is None:
+			return None
+		return evaluate(member.until.cap, self.result.env)
 
 	def _varint_minimal(self, member: ast.Field | ast.Reserved) -> bool:
 		varint = self.varints.get(member.type_ref.name)
@@ -1424,12 +1500,18 @@ class Solver:
 			return Interval.point(1)
 
 		if member.array.size is None:
+			# `until` is the other thing that can say where an array stops, and
+			# it says it after the brackets rather than inside them: the length
+			# is not a number the schema knows, it is wherever the delimiter
+			# turns out to be (section 8.6.1).
+			if member.until is not None:
+				return Interval.point(1)
 			raise error(
 				"an array needs a size here",
 				member.array.span,
 				label = "expected a length",
 				notes = ["the empty form `[]` is only legal inside an `indexed` "
-				         "region, which arrives in phase 6"],
+				         "region, or with `until` to say where it stops"],
 			)
 
 		if isinstance(member.array.size, ast.Remaining):
@@ -1848,3 +1930,39 @@ def _find(layout: StructLayout, path: str) -> Placement | None:
 
 def _hex(value: int) -> str:
 	return f"0x{value:02X}"
+
+
+def _delimiter_byte(member: ast.Field | ast.Reserved, name: str) -> int | None:
+	"""The one byte `[quoted = '"']` or `[escape = '\\']` names.
+
+	One byte, not a string: quoting is a state toggle and escaping applies to
+	the byte after, and neither generalises to a sequence without becoming a
+	grammar. A schema that needs more than this needs a parser, which is the
+	line docs/decisions/0020-delimited-data.md draws.
+	"""
+	if member.until is None:
+		return None
+
+	for attr in member.attrs:
+		if attr.name != name or attr.value is None:
+			continue
+		if not isinstance(attr.value, ast.StringLiteral):
+			raise error(
+				f"`{name}` takes a one-byte string",
+				attr.span,
+				label = "expected a string literal",
+				notes = [f'`[{name} = "\\\\"]`, the byte that makes a delimiter '
+				         "inert"],
+			)
+		raw = attr.value.value.encode("latin-1")
+		if len(raw) != 1:
+			raise error(
+				f"`{name}` takes exactly one byte, not {len(raw)}",
+				attr.span,
+				label = f"{len(raw)} bytes",
+				notes = ["quoting is a state toggle and escaping applies to the "
+				         "byte after it; neither generalises to a sequence "
+				         "without becoming a grammar"],
+			)
+		return raw[0]
+	return None

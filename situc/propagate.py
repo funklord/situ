@@ -269,6 +269,31 @@ def _is_unbounded_size(context: Context) -> bool:
 	return context.placement.size_max_bits is None
 
 
+def _is_delimited(context: Context) -> bool:
+	return context.placement.delimiter is not None
+
+
+def _is_uncapped_scan(context: Context) -> bool:
+	placement = context.placement
+	return placement.delimiter is not None and placement.delimiter_cap is None
+
+
+def _is_relaxed_delimiter(context: Context) -> bool:
+	"""The delimiter may occur in the content, so a value has two spellings.
+
+	Without a relaxation the content simply may not contain the delimiter --
+	which is checked on parse, and is what keeps the field Canonical.
+	"""
+	placement = context.placement
+	return (placement.delimiter is not None
+	        and (placement.delimiter_quote is not None
+	             or placement.delimiter_escape is not None))
+
+
+def _is_past_a_scan(context: Context) -> bool:
+	return context.placement.scan_cause is not None
+
+
 def _is_array(placement: Placement) -> bool:
 	return placement.array_count is not None or placement.sized_by is not None
 
@@ -596,6 +621,81 @@ TABLE: tuple[Row, ...] = (
 			            "recompute, which is the one thing that may set it",
 		),
 		applies = _is_derived,
+	),
+	Row(
+		rule = Rule(
+			name      = "delimited-member",
+			construct = "a member that ends at a delimiter",
+			effects   = (
+				Effect(Axis.MUTATE, Value("Shifting"),
+				       "the length is wherever the delimiter turns out to be, "
+				       "so a longer value needs more room and the bytes after "
+				       "it have to move to make it"),
+			),
+			# The size axis is deliberately not set here. `unbounded-size`
+			# already reports an absent upper bound and `until D max N` gives
+			# one, so claiming Unbounded from this row would have reported a
+			# capped scan as unbounded -- the row would have contradicted the
+			# remedy it names.
+			remedy    = "`until D max N` bounds the scan, which makes the member "
+			            "statically allocatable and turns a missing delimiter "
+			            "into an error instead of a read to the end of the buffer",
+		),
+		applies = _is_delimited,
+	),
+	Row(
+		rule = Rule(
+			name      = "unbounded-scan",
+			construct = "a delimited member with no cap on the scan",
+			effects   = (
+				Effect(Axis.EFFECT, Value("EffectOnRead"),
+				       "reading it walks the buffer to the delimiter, so the "
+				       "cost of a read depends on the data rather than the "
+				       "schema"),
+			),
+			remedy    = "`until D max N` bounds the walk",
+		),
+		applies = _is_uncapped_scan,
+	),
+	Row(
+		rule = Rule(
+			name      = "relaxed-delimiter",
+			construct = "a delimited member whose delimiter may occur in its content",
+			effects   = (
+				Effect(Axis.CANONICAL, Value("NonCanonical"),
+				       "a quoted or escaped delimiter is inert, so the same "
+				       "value has more than one spelling"),
+			),
+			remedy    = "drop `[quoted]` or `[escape]` if the protocol does not "
+			            "need them; without one the content may not contain the "
+			            "delimiter at all, which is checked on parse and buys a "
+			            "single spelling back",
+		),
+		applies = _is_relaxed_delimiter,
+	),
+	Row(
+		rule = Rule(
+			name      = "scanned-predecessor",
+			construct = "a member found by scanning for a delimiter earlier in the frame",
+			effects   = (
+				Effect(Axis.OFFSET, Value("Scanned"),
+				       "reaching this field means searching for the delimiter "
+				       "that ends an earlier one, which is linear in the "
+				       "distance to it and can fail when the delimiter is not "
+				       "there"),
+				Effect(Axis.ACCESS, Value("Sequential"),
+				       "there is no arithmetic that finds this field: every "
+				       "member between it and the frame base has to be walked"),
+				Effect(Axis.ADDRESS, Value("Unstable"),
+				       "a pointer to it moves whenever anything before it "
+				       "changes length, which delimited content does freely"),
+			),
+			remedy = "put the fixed-offset members before the first delimited "
+			         "one; everything ahead of a scan keeps a static offset, "
+			         "and that costs nothing but declaration order",
+			blames_cause = True,
+		),
+		applies = _is_past_a_scan,
 	),
 	Row(
 		rule = Rule(
