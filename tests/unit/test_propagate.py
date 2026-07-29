@@ -441,6 +441,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"unbounded-scan",
 		"relaxed-delimiter",
 		"scanned-predecessor",
+		"text-number",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 

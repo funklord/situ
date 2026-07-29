@@ -273,6 +273,10 @@ def _is_delimited(context: Context) -> bool:
 	return context.placement.delimiter is not None
 
 
+def _is_text_number(context: Context) -> bool:
+	return context.placement.radix is not None
+
+
 def _is_uncapped_scan(context: Context) -> bool:
 	placement = context.placement
 	return placement.delimiter is not None and placement.delimiter_cap is None
@@ -642,6 +646,23 @@ TABLE: tuple[Row, ...] = (
 			            "into an error instead of a read to the end of the buffer",
 		),
 		applies = _is_delimited,
+	),
+	Row(
+		rule = Rule(
+			name      = "text-number",
+			construct = "a number written as digits rather than stored as bits",
+			effects   = (
+				Effect(Axis.REPR, Value("TextConverted"),
+				       "the value is not the memory and the conversion can "
+				       "fail: a byte swap is total, and `12x4` is not a "
+				       "number"),
+			),
+			remedy    = "read it through the generated getter, which returns an "
+			            "error rather than a value where the digits are not "
+			            "digits; there is no pointer accessor that could hand "
+			            "back a number",
+		),
+		applies = _is_text_number,
 	),
 	Row(
 		rule = Rule(

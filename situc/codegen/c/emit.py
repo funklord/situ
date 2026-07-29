@@ -793,6 +793,24 @@ class Emitter:
 				continue
 
 			local = c_name(path)
+
+			# A text number has no fixed bytes to store into. Writing 4096
+			# where 12 was takes two more digits than the field holds, so the
+			# write moves everything after it -- which is a re-encode of the
+			# frame, not a store. Emitting the ordinary setter here wrote four
+			# raw bytes over the digits, which is not even the wrong number.
+			if target.placement.radix is not None:
+				lines.extend([
+					f"/* No {ident(self.prefix, struct.name, local, 'set')}():"
+					f" `{path}` is written as digits, and a",
+					" * longer number needs more of them. Rewrite the frame"
+					" rather than the",
+					" * field -- there is no store here that leaves the bytes"
+					" after it where",
+					" * they were. */",
+				])
+				continue
+
 			ctype = self._field_ctype(target.placement)
 			store = self._store_statement(
 				target.placement.scalar, target.placement,
@@ -878,7 +896,11 @@ class Emitter:
 
 		if placement.delimiter is not None:
 			lines.extend(self._delimited(struct, placement))
-			lines.extend(self._covered_pointer_note(struct, placement))
+			if placement.radix is not None:
+				lines.extend(self._text_number(struct, placement))
+				lines.extend(self._text_value_helper(struct, placement))
+			else:
+				lines.extend(self._covered_pointer_note(struct, placement))
 			return lines
 
 		if placement.type_name in self.structs:
@@ -1234,6 +1256,56 @@ class Emitter:
 			"}",
 		]
 
+	def _text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A number written as digits, read through a getter that can fail.
+
+		Out-parameter and an error code, not a return value. Every other
+		scalar getter in this header returns the value, because every other
+		conversion is total -- a byte swap has an answer for any bit pattern.
+		A decimal parse does not, and a getter that returned 0 for `12x4`
+		would be handing back a number nobody wrote.
+
+		That difference is the whole of what `repr = TextConverted` means, and
+		it shows up in the signature rather than in a comment.
+		"""
+		assert placement.radix is not None
+		scalar = placement.scalar
+		assert scalar is not None
+
+		local  = c_name(self._local(struct, placement))
+		ctype  = self._field_ctype(placement)
+		length = ident(self.prefix, struct.name, local, "len")
+		ptr    = ident(self.prefix, struct.name, local, "ptr")
+		base   = {10: "decimal", 16: "hexadecimal"}[placement.radix]
+		limit  = (1 << scalar.bits) - 1
+
+		return [
+			"",
+			f"/* `{placement.name}` is a {base} number: the digits between the",
+			f" * start of the member and its delimiter, in the range of"
+			f" {scalar.name}.",
+			" *",
+			" * This one takes an out-parameter because the conversion can"
+			" fail, which",
+			" * no other scalar getter here can. Empty digits, a byte that is"
+			" not one,",
+			f" * and anything above {limit} are all SITU_ERR_CONSTRAINT. */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'get')}"
+			f"(situ_view_t view, {ctype} *out)",
+			"{",
+			"\tuint64_t value;",
+			"",
+			f"\tif (situ_parse_uint({ptr}(view), {length}(view), "
+			f"{placement.radix}u, {limit}u, &value) != 0) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+			f"\t*out = ({ctype})value;",
+			"\treturn SITU_OK;",
+			"}",
+		]
+
 	def _scan_limit(self, placement: Placement, base: str) -> str:
 		"""How far the scan may run: to the cap, or to the end of the buffer."""
 		if placement.delimiter_cap is None:
@@ -1429,11 +1501,69 @@ class Emitter:
 		if target is None or target.placement.scalar is None:
 			return f"{placement.array_count or 0}u"
 
+		# A text driver's value is digits, not bits. Loading it with
+		# `situ_get_be32` read the ASCII as a big-endian integer, which is the
+		# kind of wrong that produces a plausible number: "10" came out as
+		# 0x3130.
+		if target.placement.radix is not None:
+			return self._text_count_expression(struct, target.placement)
+
 		loaded = self._load_expression(
 			target.placement.scalar, target.placement,
 			self._value_base(struct, target.placement, gated=held != "view"),
 			offset=self._value_offset(target.placement))
 		return f"({loaded})"
+
+	def _text_count_expression(self, struct: ResolvedStruct,
+			driver: Placement) -> str:
+		"""A length written as digits, as an expression that cannot fail.
+
+		The parse can fail, and this cannot: an offset function returning an
+		error would make every accessor downstream of it fallible, and the
+		whole shape of this API is that the checks happen once and the reads
+		trust them.
+
+		So the check happens once, in `validate`, which refuses a frame whose
+		digits are not digits -- and this reads the same bytes knowing that.
+		An unvalidated frame gets zero here, which is the same bargain as
+		every other accessor on this header: they trust the bounds check they
+		did not perform.
+		"""
+		local = c_name(self._local(struct, driver))
+		return f"{ident(self.prefix, struct.name, local, 'value')}(view)"
+
+	def _text_value_helper(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The non-failing read, for the offset arithmetic that cannot fail."""
+		assert placement.radix is not None
+		scalar = placement.scalar
+		assert scalar is not None
+
+		local  = c_name(self._local(struct, placement))
+		ctype  = self._field_ctype(placement)
+		limit  = (1 << scalar.bits) - 1
+
+		return [
+			"",
+			"/* The same digits, read where an error cannot be returned: the",
+			" * offset arithmetic downstream of this field is not fallible, and",
+			" * making it so would put an error path in every accessor after it.",
+			" *",
+			" * `validate` is what makes this safe -- it refuses a frame whose",
+			" * digits are not digits, so a validated frame always parses here.",
+			" * An unvalidated one reads zero, which is the same bargain every",
+			" * other accessor makes with the bounds check it did not do. */",
+			f"static inline {ctype} "
+			f"{ident(self.prefix, struct.name, local, 'value')}(situ_view_t view)",
+			"{",
+			"	uint64_t value = 0u;",
+			"",
+			f"	(void)situ_parse_uint({ident(self.prefix, struct.name, local, 'ptr')}(view),"
+			f" {ident(self.prefix, struct.name, local, 'len')}(view),"
+			f" {placement.radix}u, {limit}u, &value);",
+			f"	return ({ctype})value;",
+			"}",
+		]
 
 	def _element_view(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -1836,7 +1966,7 @@ class Emitter:
 		delim = placement.delimiter
 		assert delim is not None
 
-		return [
+		lines = [
 			f"\t/* `{placement.name}` runs to {_render_delimiter(delim)}, and a",
 			"\t * frame that does not contain it was cut short: the member ran",
 			"\t * to the end of the buffer rather than to its own end. */",
@@ -1844,6 +1974,27 @@ class Emitter:
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 		]
+
+		if placement.radix is not None:
+			# A text number's digits are a constraint like any other, so parse
+			# refuses them here rather than leaving every caller of the getter
+			# to be the first to find out.
+			ctype = self._field_ctype(placement)
+			lines.extend([
+				"",
+				f"\t/* And its digits have to be digits, in range. */",
+				"\t{",
+				f"\t\t{ctype} parsed;",
+				f"\t\tsitu_err_t e = "
+				f"{ident(self.prefix, struct.name, local, 'get')}(view, &parsed);",
+				"",
+				"\t\tif (e != SITU_OK) {",
+				"\t\t\treturn e;",
+				"\t\t}",
+				"\t}",
+			])
+
+		return lines
 
 	def _validate_decl(self, struct: ResolvedStruct) -> list[str]:
 		return [

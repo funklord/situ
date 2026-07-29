@@ -121,6 +121,11 @@ ATTRIBUTE_NAMES = frozenset({
 	"on_read", "on_write", "volatile", "no_rmw",
 })
 
+#: Section 8.6.2. The base a text-encoded number is written in. Two, because
+#: these are the two that appear in the protocols this targets; a third would
+#: need a reason beyond being arithmetically possible.
+RADIX_KEYWORDS = {"decimal": 10, "hex": 16}
+
 KERNEL_FAMILIES	= {family.value: family for family in ast.KernelFamily}
 TARGET_KINDS	= {kind.value: kind for kind in ast.TargetKind}
 STRICTNESS	= {level.value: level for level in ast.Strictness}
@@ -1015,6 +1020,8 @@ class Parser:
 				phase, described = future
 				raise not_yet_implemented(described, token.span, phase)
 
+			if token.text in RADIX_KEYWORDS:
+				return self.parse_text_field()
 			if token.text == "endian_marker":
 				return self.parse_marker_field()
 			if token.text == "reserved":
@@ -1426,6 +1433,34 @@ class Parser:
 		attrs = self.parse_attrs()
 		self.expect_symbol(";", "after the reserved declaration")
 		return ast.Reserved(self.span_from(start), type_ref, array, attrs)
+
+	def parse_text_field(self) -> ast.Field:
+		"""`decimal u32 n until ":"` -- a number written as digits.
+
+		The scalar names the value's *domain*, not its width in the buffer:
+		"7" and "1234567" are the same kind of field at different widths, so a
+		text number has no width to declare. What `u32` says is which values
+		are representable, which is what a caller needs and what the range
+		check is written against.
+		"""
+		start = self.advance()
+		radix = RADIX_KEYWORDS[start.text]
+		field = self.parse_field()
+
+		if field.until is None:
+			raise error(
+				f"`{start.text} {field.name}` has no end",
+				field.span,
+				label = "no `until` on this member",
+				notes = ["a text number is as wide as the number, so something "
+				         "has to say where it stops",
+				         f'`{start.text} {field.type_ref.name} {field.name} '
+				         f'until ":"` frames it'],
+			)
+
+		return ast.Field(self.span_from(start), field.name, field.type_ref,
+		                 field.array, field.pin, field.attrs, field.until,
+		                 radix)
 
 	def parse_field(self) -> ast.Field:
 		start    = self.current

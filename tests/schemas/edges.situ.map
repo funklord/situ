@@ -39,6 +39,10 @@ struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable atom
   quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   quoted_row.rest                        offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct texty size=2 access=Sequential mutate=Shifting address=Unstable repr=TextConverted
+  texty.count                            offset=AbsoluteStatic(0x00) size=Bounded(2, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
+  texty.body                             offset=Scanned size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
 struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(tag, checksum)
   two_tags.hop                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   two_tags.inner                         offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(tag)

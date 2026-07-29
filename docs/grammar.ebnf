@@ -56,7 +56,8 @@ struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 
 member		= field | reserved | marker_field | block | variant | tag_field ;
 
-field		= type_ref ident [ array_spec ] [ until ] [ pin ] [ attrs ] ";" ;
+field		= [ radix ] type_ref ident [ array_spec ] [ until ] [ pin ] [ attrs ] ";" ;
+radix		= "decimal" | "hex" ;		(* section 8.6.2 *)
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 (* The name is optional and defaults to the keyword, so an unnamed tag is
  * `tag` and an unnamed sealed region is `sealed` -- which is what lets

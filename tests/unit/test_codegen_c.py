@@ -1108,3 +1108,69 @@ def test_the_delimiter_comment_reads_as_the_spec_writes_it() -> None:
 	header, _ = emit(FRAMED)
 
 	assert '`"\\r\\n"`' in header
+
+
+# -- text-encoded numbers (section 8.6.2) -----------------------------------
+
+TEXTY = 'struct s { decimal u16 count until "\\r\\n" max 8; u8 body[count]; }'
+
+
+def test_a_text_number_getter_can_fail() -> None:
+	"""Every other scalar getter here returns the value, because every other
+	conversion is total. A decimal parse is not, and a getter that returned 0
+	for `12x4` would be handing back a number nobody wrote -- which is the
+	whole of what `repr = TextConverted` means."""
+	header, _ = emit(TEXTY)
+
+	assert ("static inline situ_err_t situ_s_count_get"
+	        "(situ_view_t view, uint16_t *out)") in header
+	assert "situ_parse_uint(situ_s_count_ptr(view)" in header
+	assert "return SITU_ERR_CONSTRAINT;" in header
+
+
+def test_the_range_checked_is_the_declared_types() -> None:
+	"""`u16` gives the value's domain, not its width in the buffer: a text
+	number is as wide as the number."""
+	header, _ = emit(TEXTY)
+
+	assert "10u, 65535u, &value)" in header
+
+
+def test_a_length_written_in_digits_is_parsed_not_loaded() -> None:
+	"""Loading it read the ASCII as a big-endian integer, which is the kind of
+	wrong that produces a plausible number: "10" came out as 0x3130."""
+	header, _ = emit(TEXTY)
+
+	assert "situ_s_body_len" in header
+	assert "situ_get_be16" not in header.split("situ_s_body_len")[1][:200]
+	assert "situ_s_count_value(view)" in header
+
+
+def test_a_text_number_gets_no_raw_setter() -> None:
+	"""Writing 4096 where 12 was takes two more digits than the field holds, so
+	the write moves everything after it. The ordinary setter stored four raw
+	bytes over the digits, which is not even the wrong number."""
+	header, _ = emit(TEXTY)
+
+	assert "No situ_s_count_set()" in header
+	assert "static inline void situ_s_count_set(" not in header
+
+
+def test_validate_refuses_digits_that_are_not_digits() -> None:
+	"""A constraint like any other, so parse refuses it rather than leaving
+	every caller of the getter to be the first to find out."""
+	_, source = emit(TEXTY)
+
+	assert "situ_s_count_get(view, &parsed)" in source
+
+
+def test_a_signed_text_number_is_refused() -> None:
+	"""situ reads digits as a magnitude. A sign or a point is a grammar rather
+	than a number, which is the line decision 0020 draws."""
+	with pytest.raises(SituError, match="must be an unsigned integer"):
+		emit('struct s { decimal i32 n until "\\r\\n"; }')
+
+
+def test_a_text_number_needs_somewhere_to_stop() -> None:
+	with pytest.raises(SituError, match="has no end"):
+		emit("struct s { decimal u32 n; }")

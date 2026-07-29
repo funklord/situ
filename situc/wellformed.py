@@ -15,7 +15,7 @@ from __future__ import annotations
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
-from situc.types import is_scalar_name
+from situc.types import ScalarKind, is_scalar_name
 
 Structs = dict[str, ast.StructDecl]
 
@@ -106,15 +106,35 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 			         "delimiter for a framed one"],
 		)
 
-	if member.array is None:
+	# A text number is a single value *and* delimited: the delimiter says
+	# where the digits stop, which is the one thing that can, since a number
+	# written as digits is as wide as the number (section 8.6.2).
+	if member.array is None and getattr(member, "radix", None) is None:
 		raise error(
 			f"`{name}` is a single value, so a delimiter has nothing to bound",
 			member.until.span,
 			label = "not an array",
 			notes = ["a delimiter says how far a run of elements goes",
 			         f"`{member.type_ref.name} {name}[] until ...` frames a "
-			         "run of them"],
+			         "run of them",
+			         f"`decimal {member.type_ref.name} {name} until ...` reads "
+			         "the run as a number written in digits"],
 		)
+
+	radix = getattr(member, "radix", None)
+	if radix is not None:
+		scalar = member.type_ref.scalar
+		if scalar is None or scalar.kind is not ScalarKind.UINT:
+			raise error(
+				f"`{name}` is a text number, so its type must be an unsigned "
+				f"integer",
+				member.type_ref.span,
+				label = f"`{member.type_ref.name}` is not one",
+				notes = ["the type gives the range of values the digits may "
+				         "spell, and situ reads digits as a magnitude",
+				         "a signed or fractional text format needs a sign or a "
+				         "point, which is a grammar rather than a number"],
+			)
 
 	if any(attr.name == "nul_terminated" for attr in member.attrs):
 		raise error(

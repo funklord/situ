@@ -424,6 +424,81 @@ def _view_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 		 " * trusts it. */"])
 
 
+def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str) -> None:
+	"""A number written as digits parses, and one written badly does not.
+
+	The claim `repr = TextConverted` makes is that the conversion is real and
+	that it can fail. Both halves need holding to: a getter that returned the
+	right number for good digits and zero for `12x` would satisfy the first
+	and quietly break the second, which is the failure the axis exists to warn
+	about.
+	"""
+	placement = entry.placement
+	if placement.offset_bits != 0 or placement.delimiter is None:
+		suite.skip(placement.path,
+		           "a text number behind another member has no fixed offset to "
+		           "write digits at")
+		return
+
+	local  = c_name(placement.path[len(struct.name) + 1:])
+	getter = ident(prefix, struct.name, local, "get")
+	ctype  = _ctype(placement.scalar)
+	delim  = placement.delimiter
+	digits = "42"
+	extent = len(digits) + len(delim) + 4
+
+	def frame(content: str) -> list[str]:
+		body = [f"\tmemset(buf, 0, sizeof buf);"]
+		for index, char in enumerate(content):
+			body.append(f"\tbuf[{index}u] = 0x{ord(char):02X}u;")
+		for index, byte in enumerate(delim):
+			body.append(f"\tbuf[{len(content) + index}u] = 0x{byte:02X}u;")
+		return body
+
+	suite.add(
+		f"check_{c_name(struct.name)}_{local}_reads_its_digits",
+		[
+			f"\tuint8_t buf[{extent}u];",
+			"\tsitu_msg_t msg;",
+			"\tsitu_view_t view = {0};",
+			f"\t{ctype} value = 0;",
+			"",
+			*frame(digits),
+			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
+			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"(&msg, 0, {extent}u, &view), SITU_OK);",
+			"",
+			f"\tassert_int_equal({getter}(view, &value), SITU_OK);",
+			f"\tassert_int_equal(value, {digits});",
+		],
+		[f"/* {placement.path} is written as digits. The map calls it",
+		 "\t * TextConverted, which is a claim that the conversion happens --",
+		 "\t * a getter handing back the first byte would pass no test that",
+		 "\t * did not look at the number. */"])
+
+	suite.add(
+		f"check_{c_name(struct.name)}_{local}_refuses_what_is_not_a_number",
+		[
+			f"\tuint8_t buf[{extent}u];",
+			"\tsitu_msg_t msg;",
+			"\tsitu_view_t view = {0};",
+			f"\t{ctype} value = 0;",
+			"",
+			*frame("4x"),
+			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
+			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"(&msg, 0, {extent}u, &view), SITU_OK);",
+			"",
+			f"\tassert_int_equal({getter}(view, &value), SITU_ERR_CONSTRAINT);",
+			f"\tassert_int_equal({ident(prefix, struct.name, 'validate')}(view),"
+			" SITU_ERR_CONSTRAINT);",
+		],
+		["/* The other half of TextConverted: the conversion can fail, and a",
+		 "\t * getter that returned zero for `4x` would be handing back a",
+		 "\t * number nobody wrote. */"])
+
+
 def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 		entry: Resolved, prefix: str, extent: int) -> None:
 	placement = entry.placement
@@ -437,6 +512,11 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 	if placement.varint is not None:
 		suite.skip(placement.path, "a varint has no fixed extent to check")
 		return
+
+	if placement.radix is not None:
+		_text_number_checks(suite, struct, entry, prefix)
+		return		# no fixed extent, and its getter returns an error rather
+				# than a value -- the checks below assume both
 
 	if placement.array_count is not None or placement.sized_by is not None:
 		_array_checks(suite, struct, entry, prefix, extent)

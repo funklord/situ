@@ -134,3 +134,13 @@ struct quoted_row {
 	u8  field[] until "," [quoted = "\""];
 	u8  rest[remaining];
 }
+
+// A text number driving a binary payload: the shape that motivated section
+// 8.6.1 in the first place, and the only place in the tree where an array's
+// length comes from digits rather than bits. Loading it as an integer read
+// the ASCII: "10" came out as 0x3130, which is the kind of wrong that
+// produces a plausible number.
+struct texty {
+	decimal  u16  count until "\r\n" max 8;
+	u8            body[count];
+}

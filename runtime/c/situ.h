@@ -555,6 +555,59 @@ static inline int situ_delimiter_absent(const uint8_t *data, uint32_t len,
 	return situ_scan(data, len, delim, delim_len) == len;
 }
 
+/* Text-encoded numbers (section 8.6.2).
+ *
+ * Returns 0 on success. A conversion that can fail is why `repr` reports
+ * TextConverted rather than ValueConverted: a byte swap is total, and `12x4`
+ * is not a number.
+ *
+ * Refused, each for a reason a protocol cares about:
+ *
+ *   - an empty run, because no digits is not the number zero
+ *   - a byte that is not a digit in this base, including trailing space
+ *   - a value above `max`, which is the declared type's range
+ *
+ * Overflow is checked before it happens rather than after. Detecting it by
+ * looking for a result that got smaller is a wrap, which is undefined for
+ * signed types and merely wrong for unsigned ones.
+ */
+static inline int situ_parse_uint(const uint8_t *data, uint32_t len,
+		uint32_t radix, uint64_t max, uint64_t *out)
+{
+	uint64_t value = 0u;
+	uint32_t i;
+
+	if (len == 0u || radix < 2u || radix > 16u) {
+		return -1;
+	}
+
+	for (i = 0u; i < len; i++) {
+		uint8_t  c = data[i];
+		uint32_t digit;
+
+		if (c >= (uint8_t)'0' && c <= (uint8_t)'9') {
+			digit = (uint32_t)(c - (uint8_t)'0');
+		} else if (c >= (uint8_t)'a' && c <= (uint8_t)'f') {
+			digit = (uint32_t)(c - (uint8_t)'a') + 10u;
+		} else if (c >= (uint8_t)'A' && c <= (uint8_t)'F') {
+			digit = (uint32_t)(c - (uint8_t)'A') + 10u;
+		} else {
+			return -1;
+		}
+
+		if (digit >= radix) {
+			return -1;
+		}
+		if (value > (max - digit) / radix) {
+			return -1;
+		}
+		value = value * radix + digit;
+	}
+
+	*out = value;
+	return 0;
+}
+
 static inline int situ_ascii_valid(const uint8_t *data, uint32_t len)
 {
 	uint32_t i;

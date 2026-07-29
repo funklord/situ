@@ -342,7 +342,8 @@ struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
 member        = field | reserved | block | variant | tag_field ;
 
-field         = type_ref ident [ array_spec ] [ until ] [ pin ] [ attrs ] ";" ;
+field         = [ radix ] type_ref ident [ array_spec ] [ until ] [ pin ] [ attrs ] ";" ;
+radix         = "decimal" | "hex" ;          (* section 8.6.2 *)
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 tag_field     = ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
                 [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
@@ -684,6 +685,49 @@ cost `canonical = NonCanonical`, because two byte sequences then encode one
 value. Situ cannot tell which case a protocol is in; only the author knows
 whether a comma inside a CSV field is possible, so this is stated rather than
 inferred and the safe reading is the silent one.
+
+### 8.6.2 Text-encoded numbers
+
+A number may be written as digits rather than stored as bits:
+
+```situ
+struct message {
+	u8       method[]  until " "     max 8;
+	u8       target[]  until "\r\n"  max 256;
+	decimal  u32       length until "\r\n" max 12;
+	u8       body[length];
+}
+```
+
+`decimal` and `hex`, and the scalar beside them gives the value's **domain,
+not its width**: "7" and "1234567" are the same kind of field at different
+widths, so a text number has no width to declare. `u32` says which values are
+representable, which is what the range check is written against.
+
+**The getter takes an out-parameter and returns an error.** Every other scalar
+getter returns the value, because every other conversion is total -- a byte
+swap has an answer for any bit pattern. A decimal parse does not, and a getter
+that returned 0 for `12x4` would be handing back a number nobody wrote. That
+difference is the whole of `repr = TextConverted`, and it shows up in the
+signature rather than in a comment.
+
+Refused, each for a reason a protocol cares about: an empty run, because no
+digits is not the number zero; a byte that is not a digit in that base,
+including a trailing space; and a value outside the declared type. `validate`
+refuses all three, so a frame that parses has a number in it.
+
+**A text number gets no setter.** Writing 4096 where 12 was takes two more
+digits than the field holds, so the write moves everything after it -- a
+re-encode of the frame rather than a store.
+
+**A length written in digits still drives an array.** `body[length]` works,
+and the offset arithmetic that depends on it reads a non-failing helper rather
+than the fallible getter: an offset function returning an error would make
+every accessor downstream of it fallible, and the shape of this API is that
+the checks happen once and the reads trust them. `validate` is that check.
+
+Signed and fractional text formats are refused. A sign or a point is a grammar
+rather than a number, which is the same line drawn below.
 
 What stays out is a grammar: alternation, repetition and rule references.
 A parse tree has no offsets to be static about, and the capability map would

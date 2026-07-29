@@ -218,6 +218,11 @@ class Field(Member):
 	pin: Expr | None		= None
 	attrs: tuple[Attr, ...]		= ()
 	until: Until | None		= None
+	#: `decimal u32 n until ":"` -- the value is written as digits rather than
+	#: stored as bits. 10 or 16; None for an ordinary scalar. The scalar type
+	#: gives the value's domain, not its width in the buffer, because a text
+	#: number's width in the buffer depends on the number (section 8.6.2).
+	radix: int | None		= None
 
 
 @dataclass(frozen=True)

@@ -136,6 +136,10 @@ class Placement:
 	delimiter_escape: int | None	= None
 	#: A bound on the scan, from `until D max N`.
 	delimiter_cap: int | None	= None
+	#: `decimal`/`hex`: the base the value is written in. The `scalar` beside
+	#: it gives the value's domain rather than its width in the buffer, which
+	#: for a text number depends on the number (section 8.6.2).
+	radix: int | None		= None
 	#: The earlier member whose scan made this one's offset Scanned, for blame.
 	scan_cause: str | None		= None
 	scan_cause_span: Span | None	= None
@@ -1196,6 +1200,7 @@ class Solver:
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
 			delimiter          = member.until.delimiter if member.until else None,
+			radix              = getattr(member, "radix", None),
 			delimiter_quote    = _delimiter_byte(member, "quoted"),
 			delimiter_escape   = _delimiter_byte(member, "escape"),
 			delimiter_cap      = self._scan_cap(member),
