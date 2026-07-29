@@ -138,11 +138,10 @@ def _label(struct: ResolvedStruct, placement: Placement) -> str:
 	local = local_name(struct, placement)
 	if placement.kind == "reserved":
 		return "reserved"
-	# Before the array case. A delimited member carries `array_count = 1` --
-	# the empty bracket form is one run, not one element -- so asking about
-	# the count first labelled `name[] until ": "` as `name[1]`, an array of
-	# one. Somebody implementing from that diagram writes a fixed-width
-	# parser, which is worse than the diagram omitting the member.
+	# `name...`, because there is no count to show and no length either: where
+	# it stops is in the data. It read `name[1]` while the solver claimed a
+	# count of one, and somebody implementing from that diagram writes a
+	# fixed-width parser.
 	if placement.delimiter is not None:
 		return f"{local}..."
 	if placement.array_count is not None:

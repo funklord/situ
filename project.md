@@ -3785,6 +3785,20 @@ be static about.
    structs arrived. Nothing noticed because the only harness the build
    compiled was over a fixed-size schema. `edges.situ` is in that list now,
    which is invariant 15 applied to an artifact rather than to a construct.
+25. **Do not record a fact that is not one, however convenient.** The layout
+   solver set `array_count = 1` on `x[] until "D"` -- one run counted as one
+   element -- and four consumers believed it: the classifier called it an
+   ARRAY, `doc` labelled it `x[1]` and drew a one-byte box, the dissector read
+   one byte and misaligned the rest of the packet, and `gen-checks` sized a
+   synthesised instance from it. Each needed its own code to disbelieve it,
+   and every one of those was written as a bug fix without anyone asking why
+   four places needed the same one.
+
+   Deleting it then exposed two more sites that had been *right by accident*:
+   the dissector and `gen-checks` both reached their delimited branch because
+   a check above them failed, and it failed because of the lie. A false fact
+   in the model is not contained by the code that works around it -- it
+   becomes load-bearing, and the workarounds hold up the wrong thing.
 20. **The shared classifier is only shared if the first backend uses it too.**
    `traverse.classify` was written after three backends shipped the same two
    dispatch bugs, and the C backend -- which had not had them -- was left with

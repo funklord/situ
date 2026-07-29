@@ -119,10 +119,14 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	if placement.kind != "field":
 		return Member.REGION
 
-	# Before everything below, and before ARRAY in particular. `x[] until "D"`
-	# carries `array_count = 1` -- the empty bracket form is one run, not one
-	# element -- so asking about the count first calls a delimited member a
-	# fixed array of one and reads two bytes at a static offset.
+	# Before everything below. A delimited member answers no to every question
+	# after this one -- it has no count, no `sized_by`, and a scalar element
+	# type -- so without this it comes out SCALAR, and a backend reads the
+	# delimiter's own width at a static offset and calls it the field.
+	#
+	# It used to come out ARRAY instead, because the solver recorded
+	# `array_count = 1` for the empty bracket form. That lie is gone; the
+	# check stays, because the answer without it is wrong either way.
 	if placement.delimiter is not None:
 		return (Member.RECORD_RUN if placement.type_name in structs
 		        else Member.DELIMITED)

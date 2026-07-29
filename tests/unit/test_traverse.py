@@ -326,3 +326,31 @@ def test_an_invariant_belongs_only_to_its_own_struct() -> None:
 	parsed, found = schema_of(BOTH + "struct t { u8 x; }\n")
 
 	assert obligations(parsed, found["t"]) == []
+
+
+def test_a_delimited_member_has_no_element_count() -> None:
+	"""`x[] until "D"` is one run, not one element, and the solver used to
+	record `array_count = 1` for it.
+
+	Four consumers believed it and each needed its own code to disbelieve it:
+	the classifier called it an ARRAY, `doc` labelled it `x[1]` and drew a
+	one-byte box, the dissector read one byte and misaligned the rest of the
+	packet, and `gen-checks` sized a synthesised instance from it. Removing it
+	then exposed a fifth place that was only accidentally right -- the
+	dissector reached its delimiter branch because the *nested struct* check
+	above it failed, and it failed because of the lie.
+	"""
+	parsed, found = schema_of('struct s { u8 line[] until "\\r\\n"; u8 r[remaining]; }')
+	line = next(p for p in own_members(found["s"]) if p.name == "line")
+
+	assert line.array_count is None
+	assert line.delimiter == b"\r\n"
+
+
+def test_a_real_array_still_has_one() -> None:
+	"""The other half. Removing a wrong value is only right if the right one
+	survives."""
+	_, found = schema_of("struct s { u16 xs[4]; }")
+	xs = next(p for p in own_members(found["s"]) if p.name == "xs")
+
+	assert xs.array_count == 4

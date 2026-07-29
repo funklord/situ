@@ -193,9 +193,10 @@ def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 
 		# Chosen rather than derived: a delimited member is as long as the
 		# instance decides to make it, and the instance writes the delimiter
-		# where it says. Deriving it from `size_bits` gave the empty content
-		# case and then asserted an offset the accessor -- scanning a buffer
-		# with no delimiter in it -- had no reason to agree with.
+		# where it says. Deriving it from `size_bits` gives the empty-content
+		# case, and the check then asserts an offset the accessor -- scanning
+		# a buffer with no delimiter anywhere in it -- has no reason to agree
+		# with.
 		return INSTANCE_CONTENT + len(placement.delimiter)
 
 	if placement.sized_by == "remaining":
@@ -339,7 +340,16 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 	name  = placement.path
 	lines = [f"\t/* {name} starts at {offset}. */"]
 
-	if placement.sized_by is not None or placement.array_count is not None:
+	# Before the counted case. This reached the delimiter branch below only
+	# because the solver claimed `array_count = 1` for a delimited member --
+	# so the condition passed for the wrong reason and the right thing
+	# happened by accident. Removing that lie exposed it, and only the
+	# compile step noticed: pytest was green and the generated C was not.
+	if placement.delimiter is not None or placement.sized_by is not None \
+			or placement.array_count is not None:
+		# A delimited byte run has a pointer and a length like any other; only
+		# a run of *records* has a count and an indexed accessor. The element
+		# type is what separates them, not the delimiter.
 		if placement.scalar is not None:
 			ptr = ident(prefix, struct.name, local, "ptr")
 			lines.append(f"\tassert_int_equal((uint32_t)({ptr}(view) - view.base),"

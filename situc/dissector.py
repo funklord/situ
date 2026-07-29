@@ -321,6 +321,14 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	at    = "at" if start is None else str(start // BITS_PER_BYTE)
 	seek  = [] if start is None else [f"\tat = {at}"]
 
+	# Before the nested-struct case. A run of records names a struct type and
+	# is not one, and this used to reach the delimiter branch only because a
+	# delimited member carried `array_count = 1` -- so the check below failed
+	# for the wrong reason and the right thing happened by accident. Removing
+	# that lie from the solver is what exposed it.
+	if placement.delimiter is not None:
+		return _delimited(resolved, struct, placement, field, seek)
+
 	# A nested struct gets its own dissector and its own subtree.
 	if placement.type_name in resolved.structs and placement.array_count is None \
 			and placement.sized_by is None:
@@ -334,14 +342,6 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tend",
 			f"\tat = at + {nested.layout.size_bytes}",
 		]
-
-	# Before the repeated case, and for the reason it keeps having to be said:
-	# a delimited member carries `array_count = 1`, so asking about the count
-	# first dissected `name[] until ": "` as one byte and misaligned every
-	# field after it. A dissector shows those bytes to somebody debugging a
-	# live capture, with the confidence of a decode.
-	if placement.delimiter is not None:
-		return _delimited(resolved, struct, placement, field, seek)
 
 	if placement.sized_by is not None or placement.array_count is not None:
 		return _repeated(resolved, struct, placement, field, seek)

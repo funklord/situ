@@ -1215,7 +1215,17 @@ class Solver:
 			varint         = (member.type_ref.name
 			                  if member.type_ref.name in self.varints else None),
 			varint_minimal = self._varint_minimal(member),
-			array_count    = count.value() if count.is_point and member.array else None,
+			# Not for a delimited member. `array_extent` returns one run for
+			# `x[] until "D"` because that is what a run is, and recording it
+			# here said "an array of exactly one element", which is false and
+			# was believed: the classifier called it an ARRAY, `doc` labelled
+			# it `x[1]` and drew a one-byte box, the dissector read one byte
+			# and misaligned the rest of the packet, and gen-checks sized an
+			# instance from it. Four consumers, one lie, and each of them
+			# needed its own code to disbelieve it.
+			array_count    = (count.value()
+			                  if count.is_point and member.array
+			                  and member.until is None else None),
 			element_bits   = element.lo if element.is_point else None,
 			bit_position   = position,
 			frame_relative = False,
