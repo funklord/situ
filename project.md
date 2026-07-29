@@ -2057,7 +2057,14 @@ The model:
 
 1. **Version is a field, not metadata.** Schemas that need to evolve carry an
    explicit version discriminant and use `variant` to select the layout.
-2. **Old revisions are kept in the schema**, not deleted:
+2. **Old revisions are kept in the schema**, not deleted. Two ways, and the
+   first is the one to reach for:
+
+   - `[since = N]` on a member, for the case that is almost all of them: the
+     format only ever gained fields at the end. Append-only is enforced rather
+     than reviewed for, and every member keeps a static offset. See 19.4.
+   - `variant` on the version field, where a revision genuinely re-laid the
+     bytes rather than extending them:
 
 ```situ
 variant body switch (hdr.version) {
@@ -2213,6 +2220,65 @@ reported rather than waved through.
 `default = error` -- which is the default (8.7), so the common case is the
 surprising one. The two schemas differ by one word and could not differ more
 in a deployment.
+
+### 19.4 More than one version in one file
+
+`[since = N]` says a member arrived in version N, and `[version = f]` on the
+struct says which member carries it:
+
+```situ
+struct msg [version = ver] {
+	u8   ver;
+	u16  length;
+	u32  flags [since = 2];
+	u16  extra [since = 3];
+}
+```
+
+**One rule carries the whole construct: the versions across a struct's members
+never decrease.** That is append-only, said structurally rather than reviewed
+for. Situ has no field numbers -- position carries identity (section 4) -- so
+a member inserted before an existing one moves every byte after it and every
+deployed peer misreads the message. `situc wire` catches that after the fact;
+here it is refused, because a schema that says "this arrived in v2" is making
+a compatibility claim and the claim has to be true.
+
+Two things follow, and they are worth stating together because they sound
+contradictory:
+
+- **Every member keeps a static offset.** Append-only means nothing before a
+  versioned member can move, so `flags` is at `0x03` in every message that has
+  it. The map says `AbsoluteStatic(0x03)`, not `Dynamic`.
+- **The struct's extent is a range.** `size=3..9`: v1 is three bytes, v3 is
+  nine. What varies is not where the members are but how many of them are
+  there.
+
+**A versioned member is `stage = ParseTime`.** Whether the bytes are present
+is a value in the data, so nothing can reach them before the version field has
+been read -- which is the same shape as the stage gate of 14.3, one axis
+weaker.
+
+**The getter takes an out-parameter and returns `SITU_ERR_VERSION`.** There is
+no value to return when the field is not there, and a getter that handed back
+whatever follows would return another member's bytes, or another message's.
+That is the bug the construct exists to make impossible, so it is not
+available to write. One build reads all three versions and refuses exactly the
+fields each message does not carry.
+
+**A version field with nothing versioned yet is fine.** It is the ordinary
+first revision of an extensible format, and refusing it would force the
+attribute into the same commit as the first new member -- the commit where its
+absence matters least and its presence is noisiest.
+
+**19.3 knows about this.** Appending a member is normally reported as
+*probably* safe, because an old receiver sized its buffer from the old
+contract and situ cannot know whether it ignores trailing bytes or rejects the
+message as overlong. Appending one behind a `[since]` is *provably* safe: the
+old receiver reads the version field and knows the bytes are not its own,
+which its own schema said before the edit existed. The two read differently in
+the verdict, and they should -- otherwise the construct that makes extension
+safe still reports as a risk, and a reviewer learns to wave the category
+through.
 
 ## 20. Code generation
 

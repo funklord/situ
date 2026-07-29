@@ -167,3 +167,14 @@ struct messy {
 	u8  name[]  until ":"    [case_insensitive];
 	u8  value[] until "\r\n" [trim];
 }
+
+// One file, three versions of one protocol. `[since]` is append-only by
+// construction -- the compiler refuses a member that arrives before one
+// declared earlier -- so every member keeps a static offset and what varies
+// is only whether the bytes are there at all.
+struct versioned [version = ver] {
+	u8   ver;
+	u16  length;
+	u32  flags [since = 2];
+	u16  extra [since = 3];
+}

@@ -360,3 +360,44 @@ def test_a_nested_call_is_refused_too() -> None:
 	                   "invariant s.total == size(s.a) + popcount(s.a);")
 
 	assert "`popcount` is not something an invariant can ask" in message
+
+
+# -- versioned members (section 19.4) ----------------------------------------
+
+
+def test_a_member_may_not_arrive_before_one_declared_earlier() -> None:
+	"""The whole of `[since]`. Situ has no field numbers, so a member inserted
+	before an existing one moves every byte after it -- and a schema claiming
+	"this arrived in v2" is making a compatibility claim that has to be true."""
+	message = rendered("struct s [version = v] { u8 v; u32 b [since = 2]; u16 a; }")
+
+	assert "arrives in version 1, after a member that arrives in 2" in message
+	assert "append-only" in message
+
+
+def test_a_versioned_member_needs_a_version_field() -> None:
+	"""A reader has to know which version a message is before it knows whether
+	the bytes are there."""
+	message = rendered("struct s { u32 b [since = 2]; }")
+
+	assert "has a versioned member and no version field" in message
+
+
+def test_the_version_field_may_not_be_versioned() -> None:
+	message = rendered("struct s [version = v] { u8 v [since = 2]; u16 a [since = 2]; }")
+
+	assert "cannot be one of them" in message
+	assert "know the version to find the version" in message
+
+
+def test_the_version_field_must_hold_a_number() -> None:
+	message = rendered("struct s [version = v] { u8 v[4]; u16 a [since = 2]; }")
+
+	assert "not a single scalar" in message
+
+
+def test_a_version_field_with_nothing_versioned_yet_is_fine() -> None:
+	"""The ordinary first revision of an extensible format. Refusing it would
+	force the attribute into the same commit as the first new member, which is
+	where its absence matters least."""
+	parse_text("struct s [version = v] { u8 v; u16 a; }")

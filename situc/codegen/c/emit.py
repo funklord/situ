@@ -1975,6 +1975,45 @@ class Emitter:
 
 	# -- scalars --------------------------------------------------------
 
+	def _versioned_get(self, struct: ResolvedStruct, placement: Placement,
+			ctype: str, taken: str, load: str) -> list[str]:
+		"""A member present only from a given version (section 19.4).
+
+		Out-parameter and an error, because there is no value to return when
+		the field is not there. A getter returning whatever follows would hand
+		back the bytes of some later member, or of another message entirely --
+		which is the bug this construct exists to make impossible, so it is
+		not available to write.
+
+		The offset is still a constant. `[since]` is append-only, so nothing
+		before this member can move; what varies is only whether the bytes are
+		present, and that is one comparison against a field at a known offset.
+		"""
+		assert placement.since is not None and placement.version_field is not None
+
+		local   = c_name(self._local(struct, placement))
+		version = ident(self.prefix, struct.name,
+		                c_name(placement.version_field), "get")
+
+		return [
+			f"/* Present from version {placement.since}. Reading it from an "
+			f"earlier message",
+			" * would return the bytes of whatever follows, so this reports"
+			" rather",
+			" * than guesses. The offset is a constant either way: `[since]` is",
+			" * append-only, so nothing ahead of this member can move. */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'get')}"
+			f"({taken}, {ctype} *out)",
+			"{",
+			f"	if ({version}(view) < {placement.since}u) {{",
+			"		return SITU_ERR_VERSION;",
+			"	}",
+			f"	*out = ({ctype})({load});",
+			"	return SITU_OK;",
+			"}",
+		]
+
 	def _scalar_get(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
@@ -1990,12 +2029,15 @@ class Emitter:
 		load   = self._load_expression(scalar, placement, base,
 		                               offset=self._value_offset(placement))
 
-		lines = [
-			f"static inline {ctype} {getter}({taken})",
-			"{",
-			f"\treturn ({ctype})({load});",
-			"}",
-		]
+		if placement.since is not None:
+			lines = self._versioned_get(struct, placement, ctype, taken, load)
+		else:
+			lines = [
+				f"static inline {ctype} {getter}({taken})",
+				"{",
+				f"\treturn ({ctype})({load});",
+				"}",
+			]
 
 		# A pointer accessor is offered only where the value is literally the
 		# bytes. Section 20.2: never hand out a pointer into a converted field.

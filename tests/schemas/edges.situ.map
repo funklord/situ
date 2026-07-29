@@ -68,3 +68,9 @@ struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic au
   two_tags.outer                         offset=AbsoluteStatic(0x13) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(checksum)
   two_tags.sequence                      offset=AbsoluteStatic(0x13) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
   two_tags.checksum                      offset=AbsoluteStatic(0x15) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
+struct versioned size=3 repr=ValueConverted atomic=NonAtomic stage=ParseTime
+  versioned.ver                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  versioned.length                       offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  versioned.flags                        offset=AbsoluteStatic(0x03) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
+  versioned.extra                        offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime

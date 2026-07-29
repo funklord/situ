@@ -151,6 +151,14 @@ class Placement:
 	#: `[case_insensitive]`: two spellings differing only in ASCII case are
 	#: one token, which is what an HTTP header name is.
 	case_insensitive: bool		= False
+	#: `[since = N]`: the member is present from protocol version N onward
+	#: (section 19.4). Its offset is still static -- `[since]` is append-only
+	#: by construction, so nothing before it can move -- and what varies is
+	#: whether the bytes are there at all.
+	since: int | None		= None
+	#: The member whose value says which version this is, for a struct that
+	#: has one. Copied onto every member so a backend has it to hand.
+	version_field: str | None	= None
 	#: The earlier member whose scan made this one's offset Scanned, for blame.
 	scan_cause: str | None		= None
 	scan_cause_span: Span | None	= None
@@ -451,6 +459,15 @@ class Solver:
 
 		layout.size_bits     = state.cursor.lo
 		layout.size_max_bits = state.cursor.hi
+
+		# A versioned struct is as small as its first version and as large as
+		# its last, so its extent is a range even though every member in it
+		# sits at a static offset. Both facts are true at once, and only
+		# because `[since]` is append-only: nothing moves, and what varies is
+		# how much of the struct is there (section 19.4).
+		earliest = _first_versioned(layout)
+		if earliest is not None:
+			layout.size_bits = earliest
 		self.result.structs[name] = layout
 		return layout
 
@@ -1214,6 +1231,8 @@ class Solver:
 			radix              = getattr(member, "radix", None),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
 			trimmed            = _has_attr(member.attrs, "trim"),
+			since              = _since_of(member),
+			version_field      = _version_field(decl),
 			case_insensitive   = _has_attr(member.attrs, "case_insensitive"),
 			delimiter_quote    = _delimiter_byte(member, "quoted"),
 			delimiter_escape   = _delimiter_byte(member, "escape"),
@@ -1965,6 +1984,25 @@ def _find(layout: StructLayout, path: str) -> Placement | None:
 
 def _hex(value: int) -> str:
 	return f"0x{value:02X}"
+
+
+def _first_versioned(layout: StructLayout) -> int | None:
+	"""Where the first `[since]` member starts, which is version 1's extent."""
+	starts = [placement.offset_bits for placement in layout.placements
+	          if placement.since is not None and placement.offset_bits is not None]
+	return min(starts) if starts else None
+
+
+def _since_of(member: ast.Field | ast.Reserved) -> int | None:
+	from situc.wellformed import _since_of as read
+
+	return read(member)
+
+
+def _version_field(decl: ast.StructDecl) -> str | None:
+	from situc.wellformed import _version_field as read
+
+	return read(decl)
 
 
 def _delimiter_byte(member: ast.Field | ast.Reserved, name: str) -> int | None:

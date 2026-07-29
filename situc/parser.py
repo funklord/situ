@@ -110,6 +110,8 @@ ATTRIBUTE_NAMES = frozenset({
 	"minimal",
 	# section 8.6.4: what a delimited value ignores
 	"trim", "case_insensitive",
+	# section 19.4: one file, more than one version of the protocol
+	"since", "version",
 	# section 8.3: host-dependent byte order
 	"allow_host_dependent",
 	# section 8.8: reserved behaviour

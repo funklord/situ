@@ -214,3 +214,36 @@ def test_a_changed_delimiter_is_breaking(edit: str) -> None:
 	found = verdict('struct s { u8 a[] until ";"; }', edit)
 
 	assert found.breaking
+
+
+# -- one file, more than one version (section 19.4) -------------------------
+
+V1 = "struct m [version = ver] { u8 ver; u16 length; }"
+V2 = (
+	"struct m [version = ver] { u8 ver; u16 length; "
+	"u32 flags [since = 2]; }"
+)
+
+
+def test_appending_behind_a_since_is_provably_safe() -> None:
+	"""The distinction the construct exists for. An old receiver reads the
+	version field and knows the bytes are not its own -- which its own schema
+	said before this edit existed."""
+	found = verdict(V1, V2)
+
+	assert not found.breaking
+	assert "knows these bytes are not its own" in detail(found)
+
+
+def test_appending_without_one_is_only_probably_safe() -> None:
+	"""The same bytes in the same place, and situ cannot tell what an old
+	receiver does with them."""
+	found = verdict(V1, "struct m [version = ver] { u8 ver; u16 length; "
+	                    "u32 flags; }")
+
+	assert not found.breaking
+	assert "may reject the message as overlong" in detail(found)
+
+
+def test_the_signature_records_which_version_a_member_arrived_in() -> None:
+	assert "since=2" in signature(V2)

@@ -12,6 +12,8 @@ than a style one, which is why they are errors here.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
@@ -56,6 +58,7 @@ def check(schema: ast.Schema) -> None:
 	check_registers(schema)
 	check_no_recursive_types(schema)
 	check_delimiters(schema)
+	check_versions(schema)
 	check_invariants(schema)
 
 
@@ -146,6 +149,135 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 			         "declared size to be the capacity of",
 			         'a nul-framed member is `until "\\0"`'],
 		)
+
+
+def check_versions(schema: ast.Schema) -> None:
+	"""`[since = N]` says a member arrived in version N (section 19.4).
+
+	One rule carries the whole construct: **the versions across a struct's
+	members must never decrease.** That is append-only, said structurally.
+
+	Situ has no field numbers -- position carries identity (section 4) -- so a
+	member inserted before an existing one moves every byte after it, and
+	every deployed peer misreads the message. Elsewhere that is caught by
+	`situc wire` after the fact; here it is refused, because a schema that
+	says "this arrived in v2" is making a compatibility claim and the claim
+	has to be true.
+	"""
+	for struct in schema.structs():
+		version = _version_field(struct)
+		members = [member for member in _walk_members(struct.members)
+		           if isinstance(member, (ast.Field, ast.Reserved))]
+		tagged  = [(member, _since_of(member)) for member in members]
+
+		if not any(since is not None for _, since in tagged):
+			# A struct that names a version field and has no `[since]` member
+			# yet is the ordinary first revision of an extensible format --
+			# the state every versioned schema is in before its first
+			# extension. Refusing it would force the attribute to be added in
+			# the same commit as the first new member, which is the commit
+			# where its absence matters least and its presence is noisiest.
+			if version is not None:
+				_check_version_field(struct, version)
+			continue
+
+		if version is None:
+			member = next(m for m, since in tagged if since is not None)
+			raise error(
+				f"`struct {struct.name}` has a versioned member and no version "
+				f"field",
+				member.span,
+				label = "`[since]` here",
+				notes = ["a reader has to know which version a message is "
+				         "before it knows whether these bytes are present",
+				         f"add `[version = f]` to `struct {struct.name}`, "
+				         "naming the member that carries it"],
+			)
+
+		_check_version_field(struct, version)
+		_check_append_only(struct, tagged)
+
+
+def _check_version_field(struct: ast.StructDecl, version: str) -> None:
+	held = _find_member(struct, version)
+	if held is None:
+		raise error(
+			f"`{struct.name}` has no member `{version}`",
+			struct.span,
+			label = "no such version field",
+			notes = ["`[version = f]` names a member of this struct"],
+		)
+
+	# `_find_member` walks every kind of member, and a version has to be one
+	# that holds a number: a `variant` or a region has no value to read.
+	if not isinstance(held, ast.Field) or held.array is not None \
+			or not held.type_ref.is_scalar:
+		raise error(
+			f"`{version}` is not a single scalar, so it cannot say which "
+			f"version this is",
+			held.span,
+			label = "the version field",
+			notes = ["a version is one number, read before anything that "
+			         "depends on it"],
+		)
+
+	if _since_of(held) is not None:
+		raise error(
+			f"`{version}` decides which members are present, so it cannot be "
+			f"one of them",
+			held.span,
+			label = "`[since]` on the version field",
+			notes = ["a reader would have to know the version to find the "
+			         "version"],
+		)
+
+
+def _check_append_only(struct: ast.StructDecl,
+		tagged: Sequence[tuple[ast.Field | ast.Reserved, int | None]]) -> None:
+	"""Versions never decrease, so nothing is ever inserted before anything."""
+	highest = 0
+	for member, since in tagged:
+		version = 1 if since is None else since
+
+		if version < highest:
+			name = getattr(member, "name", "a reserved member")
+			raise error(
+				f"`{name}` arrives in version {version}, after a member that "
+				f"arrives in {highest}",
+				member.span,
+				label = f"`since = {version}` here",
+				notes = [
+					"situ has no field numbers: position carries identity "
+					"(section 4), so a member added before an existing one "
+					"moves every byte after it",
+					"every version a member is added in must be at least the "
+					"one before it -- which is append-only, and is the whole "
+					"of what makes `[since]` a compatibility claim",
+				],
+			)
+		highest = version
+
+
+def _version_field(struct: ast.StructDecl) -> str | None:
+	for attr in struct.attrs:
+		if attr.name == "version" and isinstance(attr.value, ast.NameRef):
+			return attr.value.name
+	return None
+
+
+def _since_of(member: ast.Member) -> int | None:
+	for attr in getattr(member, "attrs", ()):
+		if attr.name != "since":
+			continue
+		if not isinstance(attr.value, ast.IntLiteral) or attr.value.value < 1:
+			raise error(
+				"`since` takes a version number, counting from 1",
+				attr.span,
+				label = "expected a literal",
+				notes = ["`[since = 2]`: the version this member arrived in"],
+			)
+		return attr.value.value
+	return None
 
 
 def check_invariants(schema: ast.Schema) -> None:

@@ -70,3 +70,9 @@ struct two_tags size=23
   @0x0015   2         u8         checksum
   tag covers: <reserved0> flags inner kind
   checksum covers: outer sequence
+
+struct versioned size=3..9
+  @0x0000   1         u8         ver
+  @0x0001   2         u16        length  big
+  @0x0003   4         u32        flags  big since=2
+  @0x0007   2         u16        extra  big since=3

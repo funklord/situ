@@ -452,6 +452,48 @@ def _view_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 		 " * trusts it. */"])
 
 
+def _versioned_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str, extent: int) -> None:
+	"""A member arrives at its version, and is refused before it.
+
+	Both halves. A getter that always returned the bytes would pass the first
+	and silently hand back whatever follows for an older message, which is the
+	failure `[since]` exists to prevent -- so testing only that it works at
+	the right version would test the half that was never in doubt.
+	"""
+	placement = entry.placement
+	version   = placement.version_field
+	since     = placement.since
+	if version is None or since is None or placement.scalar is None:
+		return
+
+	local  = c_name(placement.path[len(struct.name) + 1:])
+	getter = ident(prefix, struct.name, local, "get")
+	setter = ident(prefix, struct.name, c_name(version), "set")
+	ctype  = _ctype(placement.scalar)
+
+	def body(at_version: int, expected: str) -> list[str]:
+		return [
+			*_acquire(struct, prefix, extent),
+			f"\t{ctype} value = 0;",
+			"",
+			f"\t{setter}(view, {at_version});",
+			f"\tassert_int_equal({getter}(view, &value), {expected});",
+		]
+
+	suite.add(
+		f"check_{c_name(struct.name)}_{local}_is_readable_from_version_{since}",
+		body(since, "SITU_OK"),
+		[f"/* {placement.path} arrives in version {since}. */"])
+
+	suite.add(
+		f"check_{c_name(struct.name)}_{local}_is_refused_before_version_{since}",
+		body(since - 1, "SITU_ERR_VERSION"),
+		[f"/* And is not there before it. A getter that returned the bytes",
+		 "\t * anyway would hand back whatever follows -- another member's,",
+		 "\t * or another message's. */"])
+
+
 def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		prefix: str) -> None:
 	"""A number written as digits parses, and one written badly does not.
@@ -545,6 +587,11 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 		_text_number_checks(suite, struct, entry, prefix)
 		return		# no fixed extent, and its getter returns an error rather
 				# than a value -- the checks below assume both
+
+	if placement.since is not None:
+		_versioned_checks(suite, struct, entry, prefix, extent)
+		return		# same: its getter takes an out-parameter, because there
+				# is no value to return when the field is not there
 
 	if placement.array_count is not None or placement.sized_by is not None:
 		_array_checks(suite, struct, entry, prefix, extent)

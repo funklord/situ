@@ -184,6 +184,8 @@ def _constraints(placement: Placement) -> list[str]:
 		facts.append(f"escape={placement.delimiter_escape:#04x}")
 	if placement.delimiter_cap is not None:
 		facts.append(f"cap={placement.delimiter_cap}")
+	if placement.since is not None:
+		facts.append(f"since={placement.since}")
 	if placement.varint is not None:
 		facts.append(f"varint={placement.varint}")
 	if placement.codec is not None:
@@ -476,10 +478,25 @@ def _compare_member(struct: str, index: int, was: str | None,
 
 	if was is None:
 		assert now is not None, "both cannot be absent; the loop bounds ensure it"
-		# Appended. Not automatically safe: an old receiver sized its buffer
-		# from the old contract, so it either ignores the extra bytes or
-		# rejects the message as overlong, and which one is not situ's to
-		# know.
+
+		# An appended member behind a `[since]` is the one case where
+		# appending is provably safe rather than probably: the version field
+		# tells an old receiver that these bytes are not for it, and its own
+		# schema said as much before this edit existed. That is the whole
+		# purpose of section 19.4, so the checker has to know it -- otherwise
+		# the construct that makes extension safe still reports as a risk, and
+		# a reviewer learns to wave the category through.
+		since = next((fact for fact in _facts_of(now)
+		              if fact.startswith("since=")), None)
+		if since is not None:
+			return [Finding("forward", where,
+			                f"appended {_name_of(now)} at `{since}`; an old "
+			                "receiver reads the version field and knows these "
+			                "bytes are not its own")]
+
+		# Without one, an old receiver sized its buffer from the old contract,
+		# so it either ignores the extra bytes or rejects the message as
+		# overlong -- and which is not situ's to know.
 		return [Finding("forward", where,
 		                f"appended {_name_of(now)}; an old receiver was not "
 		                "written to expect these bytes and may reject the "

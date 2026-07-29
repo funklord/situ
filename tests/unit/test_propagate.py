@@ -443,6 +443,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"scanned-predecessor",
 		"text-number",
 		"non-minimal-text-number",
+		"versioned-member",
 		"trimmed-value",
 		"case-insensitive-token",
 	}

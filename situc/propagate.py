@@ -306,6 +306,10 @@ def _is_relaxed_delimiter(context: Context) -> bool:
 	             or placement.delimiter_escape is not None))
 
 
+def _is_versioned(context: Context) -> bool:
+	return context.placement.since is not None
+
+
 def _is_trimmed(context: Context) -> bool:
 	return context.placement.trimmed
 
@@ -729,6 +733,23 @@ TABLE: tuple[Row, ...] = (
 			            "single spelling back",
 		),
 		applies = _is_relaxed_delimiter,
+	),
+	Row(
+		rule = Rule(
+			name      = "versioned-member",
+			construct = "a member present only from a given protocol version",
+			effects   = (
+				Effect(Axis.STAGE, Value("ParseTime"),
+				       "whether these bytes are here at all is a value in the "
+				       "data, so nothing can reach them before the version "
+				       "field has been read"),
+			),
+			remedy    = "read it through the generated accessor, which returns "
+			            "a version error rather than the bytes that happen to "
+			            "follow; there is no unconditional getter, because "
+			            "there is no unconditional field",
+		),
+		applies = _is_versioned,
 	),
 	Row(
 		rule = Rule(
