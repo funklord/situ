@@ -1174,3 +1174,78 @@ def test_a_signed_text_number_is_refused() -> None:
 def test_a_text_number_needs_somewhere_to_stop() -> None:
 	with pytest.raises(SituError, match="has no end"):
 		emit("struct s { decimal u32 n; }")
+
+
+# -- runs of records (section 8.6.3) ----------------------------------------
+
+BLOCK = (
+	'struct kv {\n'
+	'\tu8 key[]   until ": ";\n'
+	'\tu8 value[] until "\\r\\n";\n'
+	'}\n'
+	'struct blk {\n'
+	'\tkv entries[] until "\\r\\n";\n'
+	'\tu8 payload[remaining];\n'
+	'}\n'
+)
+
+
+def test_a_run_of_records_is_walked_not_scanned() -> None:
+	"""The distinction the two spellings hide. For a byte array the delimiter
+	ends the content, so the scan looks anywhere; for a run it ends the run,
+	and is a terminator only where an element would start. Scanning anywhere
+	found the CRLF at the end of the first header line and stopped there."""
+	header, _ = emit(BLOCK)
+
+	assert "static inline uint32_t situ_blk_entries_count(situ_view_t view)" in header
+	assert ("static inline situ_err_t situ_blk_entries_at"
+	        "(situ_view_t view, uint32_t index, situ_view_t *out)") in header
+	assert "situ_kv_extent(element)" in header
+
+
+def test_the_element_type_gets_an_extent_function() -> None:
+	"""The next element starts where this one ends, and for a struct whose own
+	members are delimited that is not a constant."""
+	header, _ = emit(BLOCK)
+
+	assert "static inline uint32_t situ_kv_extent(situ_view_t view)" in header
+	assert "extent = extent + (situ_kv_key_span(view));" in header
+
+
+def test_only_a_run_element_gets_one() -> None:
+	"""Emitted for every variable struct it was dead code in most headers, and
+	in one case a function that summed a member with no resolvable length and
+	returned a confident zero."""
+	header, _ = emit("struct s { u8 n; u8 body[n]; }")
+
+	assert "situ_s_extent" not in header
+
+
+def test_the_walk_cannot_run_forever() -> None:
+	"""A record whose members are all delimited and all empty occupies no
+	bytes. A walk that advanced by that would not terminate on input somebody
+	chose, which is a denial of service rather than a wrong answer."""
+	header, _ = emit(BLOCK)
+
+	assert "if (size == 0u || at + size > view.limit)" in header
+
+
+def test_the_terminator_belongs_to_the_run() -> None:
+	"""So the member after it starts past the blank line, not on it."""
+	header, _ = emit(BLOCK)
+
+	assert "at = at + 2u;" in header
+	assert "situ_blk_payload" in header
+
+
+def test_a_run_whose_element_has_no_extent_says_so() -> None:
+	"""A `[remaining]` member inside the element consumes whatever view it is
+	given, so a second element has nowhere to begin. Saying nothing would leave
+	a reader looking for a typo."""
+	header, _ = emit(
+		'struct e { u8 all[remaining]; }\n'
+		'struct s { e items[] until "\\r\\n"; }\n'
+	)
+
+	assert "No accessors for `items`" in header
+	assert "has no extent this build can compute" in header

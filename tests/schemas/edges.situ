@@ -144,3 +144,17 @@ struct texty {
 	decimal  u16  count until "\r\n" max 8;
 	u8            body[count];
 }
+
+// A run of records ending where a terminator stands in for one. The only
+// construct in the tree where the delimiter is *not* looked for anywhere: a
+// CRLF inside a header line belongs to that line, and treating this as a
+// delimited byte array found the first one and stopped there.
+struct kv {
+	u8  key[]   until ": ";
+	u8  value[] until "\r\n";
+}
+
+struct kv_block {
+	kv  entries[] until "\r\n";
+	u8  payload[remaining];
+}

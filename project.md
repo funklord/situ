@@ -729,6 +729,47 @@ the checks happen once and the reads trust them. `validate` is that check.
 Signed and fractional text formats are refused. A sign or a point is a grammar
 rather than a number, which is the same line drawn below.
 
+### 8.6.3 Runs of records
+
+An array of structs may end at a terminator rather than at a count:
+
+```situ
+struct field {
+	u8  name[]  until ": ";
+	u8  value[] until "\r\n";
+}
+
+struct block {
+	field  fields[] until "\r\n";
+	u8     body[remaining];
+}
+```
+
+**The terminator ends the run, not the content.** This is the one place the
+two spellings of `until` mean different things, and confusing them is silent:
+for a byte array the delimiter is looked for anywhere, and for a run it is a
+terminator only where an element would otherwise start. A CRLF inside the
+first header line belongs to that line. Treating a run as a byte array found
+that CRLF and stopped there, reporting one field where there were three.
+
+The terminator belongs to the run's extent, as a delimiter belongs to the
+member it ends, so `body` starts past the blank line rather than on it.
+
+**Walked, not indexed.** A view is a value and situ never allocates, so there
+is nowhere to keep a table of offsets; `access = Sequential` says so and
+`indexed` is the construct for a caller who needs O(1). The element type gets
+a generated `_extent`, because the next element starts where this one ends and
+for a struct whose own members are delimited that is not a constant.
+
+**Every walk is bounded twice.** By the view's limit, and by refusing to
+advance on a zero-extent element -- which is not theoretical, since a record
+whose members are all delimited and all empty occupies no bytes, and a walk
+that took it would not terminate on input somebody chose.
+
+Where the element has no extent situ can compute -- a `[remaining]` member
+inside it consumes whatever view it is given, so a second element has nowhere
+to begin -- no accessors are emitted and the header says why.
+
 What stays out is a grammar: alternation, repetition and rule references.
 A parse tree has no offsets to be static about, and the capability map would
 have nothing to say about one. See
@@ -3367,15 +3408,17 @@ Delivered:
 - The C backend, end to end: a frame of method, target, text Content-Length
   and binary body parses, and every malformed variant is refused.
 
+A real HTTP header block parses in C: three fields with their names and
+values, the terminator consumed, and the body located after it.
+
 Outstanding, and declared rather than discovered:
 
 - **C++, Python and Rust do not emit delimited members.** They refuse with a
   diagnostic naming the C backend and the section. Before that they reached
   `offset_bytes` on a scanned member and raised an `AssertionError` out of the
   layout module, which is a crash wearing a stack trace.
-- **Records repeated to a terminator** -- `header fields[] until "\r\n"`
-  where the element is a struct. Without it a header *block* is not
-  expressible, only the individual lines of one.
+- Runs of records, so a header *block* is expressible and not only the
+  individual lines of one (8.6.3).
 
 ### Invariants to hold across all phases
 

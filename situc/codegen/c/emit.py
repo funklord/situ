@@ -207,6 +207,11 @@ class Emitter:
 		for entry in struct.entries:
 			lines.extend(self._field(struct, entry))
 
+		# After the members, not before: it sums their `_span` functions, and
+		# the C preprocessor is not a scope. Emitting it beside the size
+		# constants -- where a reader would look for it -- put every call
+		# ahead of its declaration.
+		lines.extend(self._struct_extent(struct))
 		lines.extend(self._shifting_setters(struct))
 		lines.extend(self._covered_setters(struct))
 		lines.extend(self._invariants(struct))
@@ -894,6 +899,10 @@ class Emitter:
 		if placement.offset_bits is None:
 			lines.extend(self._offset_function(struct, placement))
 
+		if self._is_record_run(placement):
+			lines.extend(self._record_run(struct, placement))
+			return lines
+
 		if placement.delimiter is not None:
 			lines.extend(self._delimited(struct, placement))
 			if placement.radix is not None:
@@ -1191,6 +1200,199 @@ class Emitter:
 
 	# -- delimited members (section 8.6.1) ------------------------------
 
+	def _is_record_run(self, placement: Placement) -> bool:
+		"""`T x[] until "D"` where T is a struct: a run of records, not bytes.
+
+		The two spell alike and mean different things, and getting them
+		confused is silent. For a byte array the delimiter ends the *content*,
+		so the scan looks for it anywhere. For a run of records it ends the
+		*run*, and is only a terminator where an element would otherwise
+		start -- a CRLF inside the first header line is part of that line, not
+		the end of the block. Scanning for it anywhere found the first one and
+		stopped there.
+		"""
+		return (placement.delimiter is not None
+		        and placement.type_name in self.structs)
+
+	def _is_run_element(self, name: str) -> bool:
+		"""Whether any struct in this schema walks a run of `name`."""
+		return any(self._is_record_run(entry.placement)
+		           and entry.placement.type_name == name
+		           for other in self.resolved.structs.values()
+		           for entry in other.entries)
+
+	def _struct_extent(self, struct: ResolvedStruct) -> list[str]:
+		"""How many bytes one instance of a variable struct occupies.
+
+		Needed to walk a run of them: the next element starts where this one
+		ends, and for a struct whose own members are delimited that is not a
+		constant. A fixed-size struct has `SIZE_FIXED` and needs none of this.
+		"""
+		# Only where something walks a run of these. Emitted for every variable
+		# struct it was dead code in most headers, and in one case a function
+		# that summed a member with no resolvable length and returned a
+		# confident zero.
+		if not self._is_run_element(struct.name):
+			return []
+		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+			return []
+
+		constant = 0
+		terms: list[str] = []
+
+		for placement in self._top_level(struct):
+			if placement.is_fixed_size:
+				constant += placement.size_bits // BITS_PER_BYTE
+				continue
+			if placement.sized_by == "remaining":
+				# It runs to the end of whatever view it is given, so an
+				# instance of this struct is exactly that view. Nothing after
+				# it can be walked to, which is what `[remaining]` means.
+				return []
+			if not self._has_length(struct, placement):
+				return []
+			terms.append(self._length_expression(struct, placement))
+
+		lines = [
+			"",
+			f"/* How many bytes one `{struct.name}` occupies at this view's base.",
+			" *",
+			" * A run of these is walked rather than indexed, and the walk needs",
+			" * to know where each one ends. For a struct whose own members are",
+			" * delimited that is a scan, not a constant. */",
+			f"static inline uint32_t {ident(self.prefix, struct.name, 'extent')}"
+			"(situ_view_t view)",
+			"{",
+			f"\tuint32_t extent = {constant}u;",
+		]
+		lines.extend(f"\textent = extent + ({term});" for term in terms)
+		if not terms:
+			lines.append("\t(void)view;")
+		lines.extend(["\treturn extent;", "}"])
+		return lines
+
+	def _record_run(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run of records, ending where the terminator would be an element.
+
+		Three functions, and a walk in each rather than one cached count: a
+		view is a value and situ never allocates, so there is nowhere to put a
+		table of offsets. `indexed` is the construct for a caller who needs
+		O(1), and the map says `access = Sequential` here so nobody reaches for
+		this expecting it.
+
+		Every walk is bounded twice over -- by the view's limit, and by
+		refusing to advance on a zero-extent element. The second is not
+		theoretical: a record whose members are all delimited and all empty
+		occupies no bytes, and a walk that took it would not terminate on
+		input somebody chose.
+		"""
+		assert placement.delimiter is not None
+		element = self.resolved.structs[placement.type_name]
+		if not self._struct_extent(element):
+			return self._unwalkable_run(struct, placement)
+
+		local  = c_name(self._local(struct, placement))
+		delim  = placement.delimiter
+		bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+		base   = self._base_expression(struct, placement, gated=False)
+		extent = ident(self.prefix, element.name, "extent")
+
+		sym   = ident(self.prefix, struct.name, local, "delim")
+		count = ident(self.prefix, struct.name, local, "count")
+		at    = ident(self.prefix, struct.name, local, "at")
+		span  = ident(self.prefix, struct.name, local, "span")
+
+		walk = [
+			f"\tuint32_t at = {base};",
+			"\tuint32_t n  = 0u;",
+			"",
+			f"\twhile (at + {len(delim)}u <= view.limit) {{",
+			"\t\tsitu_view_t element;",
+			"\t\tuint32_t    size;",
+			"",
+			"\t\t/* The terminator only terminates where an element would",
+			"\t\t * start. Inside one it is that element's own byte. */",
+			f"\t\tif (situ_scan(view.base + at, {len(delim)}u, {sym}, "
+			f"{len(delim)}u) == 0u) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			" != SITU_OK) {",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tsize = {extent}(element);",
+			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\t\t/* A zero-extent element would walk here forever, and one",
+			"\t\t\t * running past the limit was never in this frame. */",
+			"\t\t\tbreak;",
+			"\t\t}",
+		]
+
+		return [
+			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
+			f" * {_render_delimiter(delim)} stands in for one. Walked, not indexed:",
+			" * a view is a value and nothing here allocates, so there is nowhere",
+			" * to keep a table of offsets. Use `indexed` where O(1) matters. */",
+			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
+			"",
+			f"static inline uint32_t {count}(situ_view_t view)",
+			"{",
+			*walk,
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\treturn n;",
+			"}",
+			"",
+			f"static inline situ_err_t {at}(situ_view_t view, uint32_t index,"
+			" situ_view_t *out)",
+			"{",
+			*walk,
+			"\t\tif (n == index) {",
+			"\t\t\treturn situ_view_sub(view, at, size, out);",
+			"\t\t}",
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\treturn SITU_ERR_BOUNDS;",
+			"}",
+			"",
+			f"static inline uint32_t {span}(situ_view_t view)",
+			"{",
+			*walk,
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\t(void)n;",
+			"",
+			"\t/* The terminator belongs to this member, as a delimiter does.",
+			"\t * Where the run ran out of buffer instead there is none to",
+			"\t * count. */",
+			f"\tif (at + {len(delim)}u <= view.limit) {{",
+			f"\t\tat = at + {len(delim)}u;",
+			"\t}",
+			f"\treturn at - {base};",
+			"}",
+		]
+
+	def _unwalkable_run(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run whose element has no extent this backend can compute.
+
+		Said rather than skipped. The member is in the map with a size and an
+		offset, and a header that simply lacked the accessor would leave a
+		reader looking for a typo.
+		"""
+		return [
+			f"/* No accessors for `{placement.name}`: one `{placement.type_name}`",
+			" * has no extent this build can compute, so the run cannot be",
+			" * walked and nothing after it can be placed. A `[remaining]`",
+			" * member inside the element is the usual cause -- it consumes",
+			" * whatever view it is given, so a second element has nowhere to",
+			" * begin. */",
+		]
+
 	def _delimited(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Content, length, and where the member ends.
@@ -1403,6 +1605,10 @@ class Emitter:
 		# scans, and everything downstream sums that call rather than trying to
 		# inline the search (section 8.6.1).
 		if placement.delimiter is not None:
+			# The same call for both, and deliberately: a byte array's `_span`
+			# is its content plus the delimiter, a record run's is its
+			# elements plus the terminator. One name for "how far this member
+			# reaches", whichever it turns out to be.
 			local = c_name(self._local(struct, placement))
 			return f"{ident(self.prefix, struct.name, local, 'span')}({held})"
 
@@ -1966,6 +2172,18 @@ class Emitter:
 		delim = placement.delimiter
 		assert delim is not None
 
+		if self._is_record_run(placement):
+			# A run's terminator is checked by the walk that finds it, and a
+			# run that ran out of buffer has no elements to be wrong about --
+			# `_count` simply stops. Validating each element is a cost the
+			# caller chooses, as it is for any other array of structs.
+			return [
+				f"\t/* `{placement.name}` is a run of records. Whether its",
+				f"\t * terminator was reached is `{ident(self.prefix, struct.name, local, 'span')}`'s",
+				"\t * answer, and validating each element is the caller's",
+				"\t * choice, as with any other array of structs. */",
+			]
+
 		lines = [
 			f"\t/* `{placement.name}` runs to {_render_delimiter(delim)}, and a",
 			"\t * frame that does not contain it was cut short: the member ran",
@@ -2051,7 +2269,14 @@ class Emitter:
 		# but not because anything looks -- the scan stops at the first one, so
 		# it holds by construction. A missing delimiter is different, and is
 		# the truncated-frame case.
+		#
+		# An element's own members are checked under the element's struct, not
+		# here. They appear in this struct's entries under a dotted path
+		# because the map names them, and carrying the delimiter through so
+		# the map reads consistently brought them into this loop as well.
 		if placement.delimiter is not None:
+			if "." in placement.path[len(struct.name) + 1:]:
+				return []
 			return self._delimiter_check(struct, placement)
 
 		# A struct-typed member carries its own constraints, and they are not

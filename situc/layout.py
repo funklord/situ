@@ -1436,6 +1436,19 @@ class Solver:
 				bit_position   = inner.bit_position,
 				frame_relative = framed or inner.frame_relative,
 				sized_by       = inner.sized_by,
+				# Carried, not recomputed. The copy is the same member seen
+				# from the parent, so what it costs to reach is the same too:
+				# without these `block.fields[].value` read `offset=Dynamic`
+				# while `field.value` -- the identical bytes, under their own
+				# struct -- read `offset=Scanned`. Two answers about one field
+				# in one map.
+				delimiter        = inner.delimiter,
+				delimiter_quote  = inner.delimiter_quote,
+				delimiter_escape = inner.delimiter_escape,
+				delimiter_cap    = inner.delimiter_cap,
+				radix            = inner.radix,
+				scan_cause       = inner.scan_cause,
+				scan_cause_span  = inner.scan_cause_span,
 				frame_base_dynamic = base_dynamic or inner.frame_base_dynamic,
 				dynamic_cause      = cause[0] if cause else None,
 				dynamic_cause_span = cause[1] if cause else None,

@@ -182,6 +182,15 @@ def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 	offset the check would then assert with confidence.
 	"""
 	if placement.delimiter is not None:
+		if placement.type_name in resolved.structs:
+			# A run of records, synthesised empty: the terminator stands where
+			# the first element would. Building a populated one would mean
+			# synthesising the element's own delimiters recursively, and the
+			# empty run is worth pinning in its own right -- "the terminator
+			# is at position zero, so there are no elements" is the first
+			# thing a walk gets wrong.
+			return len(placement.delimiter)
+
 		# Chosen rather than derived: a delimited member is as long as the
 		# instance decides to make it, and the instance writes the delimiter
 		# where it says. Deriving it from `size_bits` gave the empty content
@@ -269,9 +278,14 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 		])
 		for placement, offset in delimited:
 			assert placement.delimiter is not None
+			# A byte array's delimiter ends its content; a run's terminator
+			# stands where an element would start. Putting a run's terminator
+			# after three bytes of zeros made the walk try to parse those
+			# zeros as an element.
+			at = offset if placement.type_name in resolved.structs \
+				else offset + INSTANCE_CONTENT
 			for index, byte in enumerate(placement.delimiter):
-				body.append(f"\tbuf[{offset + INSTANCE_CONTENT + index}u] = "
-				            f"0x{byte:02X}u;")
+				body.append(f"\tbuf[{at + index}u] = 0x{byte:02X}u;")
 
 	body.extend([
 		"",
@@ -338,6 +352,20 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 
 		at    = ident(prefix, struct.name, local, "at")
 		first = f"first_{local}"
+
+		if placement.delimiter is not None:
+			# The instance is the empty run. Asking for element 0 must fail,
+			# and the count must be zero -- which is the answer a walk that
+			# looked for its terminator anywhere rather than only where an
+			# element would start does not give.
+			count = ident(prefix, struct.name, local, "count")
+			lines.extend([
+				f"\tsitu_view_t {first};",
+				f"\tassert_int_equal({count}(view), 0u);",
+				f"\tassert_int_equal({at}(view, 0u, &{first}), SITU_ERR_BOUNDS);",
+			])
+			return lines
+
 		lines.extend([
 			f"\tsitu_view_t {first};",
 			f"\tassert_int_equal({at}(view, 0u, &{first}), SITU_OK);",
