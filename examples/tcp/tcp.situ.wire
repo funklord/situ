@@ -1,0 +1,33 @@
+# situ wire signature v0
+# schema: tcp.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct tcp_header size=20
+  @0x0000   2         u16        source_port  big
+  @0x0002   2         u16        destination_port  big
+  @0x0004   4         u32        sequence  big
+  @0x0008   4         u32        acknowledgement  big
+  @0x000c   4bit      u4         data_offset  msb_first min=5
+  @0x000c:4 4bit      u4         <reserved0>  msb_first must_be_zero
+  @0x000d   1bit      bit        cwr  msb_first
+  @0x000d:1 1bit      bit        ece  msb_first
+  @0x000d:2 1bit      bit        urgent  msb_first
+  @0x000d:3 1bit      bit        ack  msb_first
+  @0x000d:4 1bit      bit        push  msb_first
+  @0x000d:5 1bit      bit        reset  msb_first
+  @0x000d:6 1bit      bit        syn  msb_first
+  @0x000d:7 1bit      bit        fin  msb_first
+  @0x000e   2         u16        window  big
+  @0x0010   2         u16        checksum  big
+  @0x0012   2         u16        urgent_pointer  big

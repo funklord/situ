@@ -119,6 +119,13 @@ def build_parser() -> argparse.ArgumentParser:
 	diff_cmd.add_argument("new", type=Path)
 	diff_cmd.add_argument("--format", choices=("text", "json"), default="text")
 
+	wire_cmd = sub.add_parser(
+		"wire", help="emit the byte-level contract, or check the committed one")
+	wire_cmd.add_argument("schema", type=Path)
+	wire_cmd.add_argument("--check", action="store_true",
+	                      help="compare against the committed .situ.wire and "
+	                           "classify what changed")
+
 	map_cmd = sub.add_parser("map", help="emit the capability map")
 	map_cmd.add_argument("schema", type=Path)
 	map_cmd.add_argument("--format", choices=("text", "summary"), default="text",
@@ -162,6 +169,54 @@ def cmd_dump_ast(args: argparse.Namespace) -> int:
 	output = unparse(schema) if args.format == "source" else dump(schema)
 	sys.stdout.write(output)
 	return 0
+
+
+def cmd_wire(args: argparse.Namespace) -> int:
+	"""`situc wire schema.situ` -- what the bytes mean (section 19.3).
+
+	Committed and checked for the reason the map is: a wire break should be a
+	red diff at the moment somebody edits the schema, not something a peer
+	discovers in production. Unlike the map, the failure here is not a cost --
+	it is a message that no longer parses on a machine nobody can recompile.
+	"""
+	from situc import wire
+
+	source   = read_source(args.schema)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	current  = wire.render(schema, resolved, source.path)
+
+	if not args.check:
+		sys.stdout.write(current)
+		return 0
+
+	committed = args.schema.with_suffix(".situ.wire")
+	if not committed.exists():
+		print(f"situc: no committed signature at {committed}", file=sys.stderr)
+		print(f"situc: create it with `situc wire {args.schema} > {committed}`",
+		      file=sys.stderr)
+		return 1
+
+	before = committed.read_text(encoding="ascii")
+	if before == current:
+		print(f"situc: {committed} is current", file=sys.stderr)
+		return 0
+
+	verdict = wire.compare(before, current)
+	sys.stdout.write(wire.render_verdict(verdict))
+
+	if verdict.breaking:
+		print(f"situc: the wire contract of {args.schema.name} is not "
+		      "backward compatible", file=sys.stderr)
+		print("situc: a deployed peer will misread messages from this build",
+		      file=sys.stderr)
+		return 1
+
+	print(f"situc: the wire contract of {args.schema.name} changed compatibly",
+	      file=sys.stderr)
+	print(f"situc: review the above, then run "
+	      f"`situc wire {args.schema} > {committed}`", file=sys.stderr)
+	return 1
 
 
 def cmd_map(args: argparse.Namespace) -> int:
@@ -608,6 +663,7 @@ def main(argv: list[str] | None = None) -> int:
 		"dump-ast": cmd_dump_ast,
 		"advise":   cmd_advise,
 		"diff":     cmd_diff,
+		"wire":     cmd_wire,
 		"map":      cmd_map,
 		"build":    cmd_build,
 		"gen-fuzz": cmd_gen_fuzz,

@@ -1,0 +1,19 @@
+# situ wire signature v0
+# schema: udp.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+struct udp_header size=8
+  @0x0000   2         u16        source_port  big
+  @0x0002   2         u16        destination_port  big
+  @0x0004   2         u16        length  big min=8
+  @0x0006   2         u16        checksum  big

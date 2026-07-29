@@ -2067,10 +2067,31 @@ variant body switch (hdr.version) {
 }
 ```
 
-3. **`situc diff` is the compatibility linter.** It reports whether a new
-   revision changed the layout of an existing version arm (a wire break) versus
-   only added a new arm (compatible).
-4. **Never silently accept unknown versions.** `default: error` is required
+3. **Three compatibilities, and they are not one question.** Saying a revision
+   is "compatible" without saying which is how the word stops meaning
+   anything:
+
+   | | asks | who finds out |
+   |---|---|---|
+   | **wire** | can a new sender talk to an old receiver? | deployed peers, silently |
+   | **API** | does code calling the accessors still compile? | the build |
+   | **cost** | does it still cost what it cost? | performance, at scale |
+
+   `situc diff` answers the third and part of the second. It was described
+   here as the compatibility linter, which it is not, and the gap is not
+   academic: flipping `endian big` to `endian little` changes every byte on
+   the wire and `diff` reports "No capability change"; swapping two `u16`
+   members reports zero regressions and exits 0.
+
+   Worst, moving a field *out* of an authenticated region -- a security
+   regression -- is reported as an **improvement**, because `Uncovered`
+   genuinely ranks stronger than `Covered`: a field with no tag over it is
+   cheaper to write. The lattice is right about cost. The mistake was reading
+   a cost ordering as a compatibility ordering.
+
+4. **`situc wire` is the compatibility linter**, and it answers the first
+   question. See 19.3.
+5. **Never silently accept unknown versions.** `default: error` is required
    under strict mode.
 
 Explicitly rejected alternative: unknown-field retention. It is what makes
@@ -2117,6 +2138,81 @@ Direction is one-way. There is no `.situ` to `.proto` export and there should
 never be one; Situ can express layouts protobuf cannot represent.
 
 ---
+
+### 19.3 The wire signature
+
+`situc wire` emits the byte-level contract, and it is committed beside the
+schema as `NAME.situ.wire` and checked. Same argument as the capability map
+(18.1): the failure should be a red diff at the moment somebody edits the
+schema. The stakes are higher here -- a capability regression is a performance
+surprise, and a wire break is a message a deployed peer cannot read, on a
+machine nobody can recompile.
+
+```
+struct udp_header size=8
+  @0x0000   2         u16        source_port  big
+  @0x0002   2         u16        destination_port  big
+  @0x0004   2         u16        length  big min=8
+  @0x0006   2         u16        checksum  big
+```
+
+**No capabilities appear in it.** Mixing the two would produce a signature
+that churns whenever something gets faster, which teaches people to skim the
+diff -- and skimming this diff is the failure mode it exists to prevent.
+
+**It is positional, not nominal.** Position carries identity (section 4), so a
+name is not on the wire at all; the signature records names only so a
+comparison can say *which* member moved.
+
+`situc wire --check` classifies what changed rather than printing a textual
+diff, because the categories are not equally alarming:
+
+| | meaning |
+|---|---|
+| **BREAKING** | a deployed peer misreads these bytes |
+| **COVERAGE** | what a tag authenticates changed -- peers agree on the bytes and disagree on the tag, and if the region shrank the new build authenticates *less* |
+| backward-compatible | a new receiver reads what an old sender produces; an old receiver may refuse what a new sender produces |
+| forward-compatible | an old receiver reads what a new sender produces |
+| api-only | the bytes are unchanged; calling code has to be edited |
+
+Three of these are things `situc diff` gets wrong, and each was checked before
+this was written rather than assumed:
+
+- Flipping `endian big` to `endian little` rewrites every message and leaves
+  every capability vector identical. `diff` reports "No capability change".
+- Swapping two `u16` members reports zero regressions and exits 0.
+- Moving a field *out* of an authenticated region is reported as an
+  **improvement**, twice.
+
+**Two directions, named separately.** Tightening a constraint keeps old
+*senders* working and may make a new receiver reject them; loosening does the
+reverse. Calling either "compatible" without saying which is how the word
+stops meaning anything.
+
+**What the bytes are, versus which of them are allowed.** A changed `max`
+narrows the set both sides agree is valid, so old and new still read the same
+number and one may refuse it -- compatible in one direction. A changed byte
+order means the same bytes are a different number, which no agreement about
+ranges helps with. The first version of this reported a byte-order flip as a
+relaxed constraint, putting the same break twice in the reassuring half of the
+output.
+
+**A permutation is not a rename.** Swapping two members of equal width leaves
+every byte where it was, so on the wire it is literally two renames -- which
+is exactly why it needs its own finding. The names did not change; what moved
+is the meaning attached to each position, and an old receiver reads each under
+the other's name. Reported as a rename it would have looked cosmetic, which is
+the most dangerous thing this file could do.
+
+**Appending is not assumed safe.** An old receiver sized its buffer from the
+old contract, and whether it ignores trailing bytes or rejects the message as
+overlong is a property of that receiver which situ does not know. It is
+reported rather than waved through.
+
+**Adding an enum member** is free under `default = pass` and breaking under
+`default = error` -- which is the default (8.7), so the common case is the
+surprising one. The two schemas differ by one word and could not differ more
+in a deployment.
 
 ## 20. Code generation
 
@@ -2247,6 +2343,7 @@ situc gen-derived <schema>        implementations from kernel descriptions
 situc advise  <schema>            ranked design suggestions with costs
 situc explain <schema> <path>     one field's capability vector and blame chains
 situc diff    <old> <new>         capability regressions between revisions
+situc wire    <schema>            the byte-level contract [--check] (19.3)
 situc doc     <schema>            byte-layout diagrams and a field reference
                                   [--format=ascii|markdown] [--out DIR]
 situc gen-tests   <schema> <vectors>

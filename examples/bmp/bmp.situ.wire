@@ -1,0 +1,36 @@
+# situ wire signature v0
+# schema: bmp.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian little
+target buffer
+
+enum compression : u32 unknown=error
+  rgb=0 rle8=1 rle4=2 bitfields=3
+
+struct bitmap_file_header size=14
+  @0x0000   2         u8         signature  little
+  @0x0002   4         u32        file_size  little
+  @0x0006   2         u16        <reserved0>  little must_be_zero
+  @0x0008   2         u16        <reserved1>  little must_be_zero
+  @0x000a   4         u32        pixel_offset  little
+
+struct bitmap_info_header size=40
+  @0x0000   4         u32        header_size  little must_eq=40
+  @0x0004   4         i32        width  little
+  @0x0008   4         i32        height  little
+  @0x000c   2         u16        planes  little must_eq=1
+  @0x000e   2         u16        bits_per_pixel  little
+  @0x0010   4         compression compression  little
+  @0x0014   4         u32        image_size  little
+  @0x0018   4         i32        x_pixels_per_meter  little
+  @0x001c   4         i32        y_pixels_per_meter  little
+  @0x0020   4         u32        colours_used  little
+  @0x0024   4         u32        important_colours  little

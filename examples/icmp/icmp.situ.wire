@@ -1,0 +1,23 @@
+# situ wire signature v0
+# schema: icmp.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+enum icmp_type : u8 unknown=error
+  echo_reply=0 destination_unreachable=3 redirect=5 echo_request=8 time_exceeded=11 parameter_problem=12
+
+struct icmp_echo size=8
+  @0x0000   1         icmp_type  type  must_eq=icmp_type.echo_request
+  @0x0001   1         u8         code  must_be_zero
+  @0x0002   2         u16        checksum  big
+  @0x0004   2         u16        identifier  big
+  @0x0006   2         u16        sequence  big

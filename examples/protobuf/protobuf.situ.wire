@@ -1,0 +1,16 @@
+# situ wire signature v0
+# schema: protobuf.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian little
+target buffer
+
+struct proto_message size=0..
+  @0x0000   0..       tlv        fields

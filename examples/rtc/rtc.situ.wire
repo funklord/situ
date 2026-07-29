@@ -1,0 +1,32 @@
+# situ wire signature v0
+# schema: rtc.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct calibration size=6
+  @0x0000   2         q8_8       trim_ppm  big
+  @0x0002   4         uq16_16    reference_hz  big
+
+struct rtc_frame size=15
+  @0x0000   1         u8         version  must_eq=1
+  @0x0001   6         wall_clock clock  big
+  @0x0007   6         calibration cal  big
+  @0x000d   2         u16        checksum  big
+
+struct wall_clock size=6
+  @0x0000   1         bcd2       seconds  max=59
+  @0x0001   1         bcd2       minutes  max=59
+  @0x0002   1         bcd2       hours  max=23
+  @0x0003   1         bcd2       day  min=1 max=31
+  @0x0004   1         bcd2       month  min=1 max=12
+  @0x0005   1         bcd2       year

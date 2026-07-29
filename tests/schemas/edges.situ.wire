@@ -1,0 +1,72 @@
+# situ wire signature v0
+# schema: edges.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct derived size=13
+  @0x0000   2         u16        total  big
+  @0x0002   1         u8         a
+  @0x0003   4         u32        b  big
+  @0x0007   2         u16        sequence  big
+  @0x0009   4         u8         tag
+  tag covers: body sequence
+
+struct edges size=19
+  @0x0000   5bit      i5         trim  msb_first
+  @0x0000:5 3bit      u3         scale  msb_first
+  @0x0001   12bit     i12        offset  big msb_first
+  @0x0002:4 4bit      u4         channel  msb_first
+  @0x0003   8         u16        samples  big
+  @0x000b   8         i32        deltas  big
+
+struct framed size=9..
+  @0x0000   4         u8         magic  big
+  @0x0004   until:0d0a u8         version  big cap=16
+  ~         until:00  u8         label
+  ~         2         u16        count  big
+
+struct kv size=4..
+  @0x0000   until:3a20 u8         key  big
+  ~         until:0d0a u8         value  big
+
+struct kv_block size=2..
+  @0x0000   until:0d0a kv         entries  big
+  ~         0..       u8         payload  sized-by=remaining
+
+struct labelled size=22
+  @0x0000   16        u8         name  big nul_terminated encoding=utf8
+  @0x0010   4         u8         code  big encoding=ascii
+  @0x0014   2         u16        sequence  big
+
+struct messy size=3..
+  @0x0000   until:3a  u8         name  fold-case
+  ~         until:0d0a u8         value  big trim
+
+struct quoted_row size=1..
+  @0x0000   until:2c  u8         field  quote=0x22
+  ~         0..       u8         rest  sized-by=remaining
+
+struct texty size=2..65543
+  @0x0000   until:0d0a u16        count  big radix=10 cap=8
+  ~         0..65535  u8         body  sized-by=count
+
+struct two_tags size=23
+  @0x0000   1         u8         hop
+  @0x0001   1         u8         kind
+  @0x0002   4bit      u4         <reserved0>  msb_first must_be_one
+  @0x0002:4 4bit      u4         flags  msb_first
+  @0x0003   16        u8         tag
+  @0x0013   2         u16        sequence  big
+  @0x0015   2         u8         checksum
+  tag covers: <reserved0> flags inner kind
+  checksum covers: outer sequence

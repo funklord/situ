@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from situc import capmap, requirements
+from situc import capmap, wire, requirements
 from situc.diagnostics import Source, SituError
 from situc.dump import dump
 from situc.layout import solve
@@ -157,3 +157,41 @@ def test_future_examples_are_rejected_naming_their_phase(path: Path) -> None:
 		f"{path.parent.name} is marked buildable at phase {phase}, but the parser "
 		f"reported phase {reported}:\n{rendered}"
 	)
+
+
+# -- the wire signature (section 19.3) --------------------------------------
+
+
+@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+def test_committed_wire_signature_is_current(path: Path) -> None:
+	"""The byte-level contract, committed for the reason the map is.
+
+	A capability regression is a performance surprise; a wire break is a
+	message a deployed peer cannot read, on a machine nobody can recompile.
+	The second deserves the reviewable diff at least as much as the first, and
+	`situc diff` does not provide it: it compares capability vectors, so a
+	byte-order flip reports "No capability change" and a field leaving an
+	authenticated region reports an improvement.
+	"""
+	committed = path.with_suffix(".situ.wire")
+	assert committed.exists(), (
+		f"{path.parent.name} has no committed wire signature; run:\n"
+		f"    python3 -m situc.cli wire {path} > {committed}"
+	)
+
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	assert wire.render(schema, resolved, source.path) == committed.read_text(
+		encoding="ascii"), (
+		f"the wire contract of {path.parent.name} has changed; review the diff "
+		f"-- a change here is a change a deployed peer sees -- then run:\n"
+		f"    python3 -m situc.cli wire {path} > {committed}"
+	)
+
+
+@pytest.mark.parametrize("path", FUTURE, ids=ids(FUTURE))
+def test_future_examples_have_no_stale_signature(path: Path) -> None:
+	"""A schema that does not build cannot have a contract to commit."""
+	assert not path.with_suffix(".situ.wire").exists()

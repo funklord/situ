@@ -1,0 +1,43 @@
+# situ wire signature v0
+# schema: telemetry.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+enum frame_kind : u8 unknown=error
+  sample=1 heartbeat=2 fault=3 calibration=4
+
+enum quality : u2 unknown=error
+  good=0 degraded=1 stale=2 invalid=3
+
+struct reading size=4
+  @0x0000   2         i16        value  big
+  @0x0002   1         status     status
+  @0x0003   1         u8         channel
+
+struct status size=1
+  @0x0000   1bit      bit        calibrated  msb_first
+  @0x0000:1 1bit      bit        self_test_passed  msb_first
+  @0x0000:2 1bit      bit        power_good  msb_first
+  @0x0000:3 1bit      bit        over_temperature  msb_first
+  @0x0000:4 2bit      quality    quality  msb_first
+  @0x0000:6 2bit      u2         <reserved0>  msb_first must_be_zero
+
+struct telemetry_frame size=56
+  @0x0000   1         u8         version  must_eq=PROTOCOL_VERSION
+  @0x0001   1         frame_kind kind
+  @0x0002   2         u16        sequence  big
+  @0x0004   4         u32        timestamp_high  big
+  @0x0008   4         u32        timestamp_low  big
+  @0x000c   8         u8         device_id  big sized-by=DEVICE_ID_BYTES
+  @0x0014   32        reading    readings  big sized-by=CHANNEL_COUNT
+  @0x0034   4         u32        checksum  big

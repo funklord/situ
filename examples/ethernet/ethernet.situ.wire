@@ -1,0 +1,24 @@
+# situ wire signature v0
+# schema: ethernet.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+enum ether_type : u16 unknown=error
+  ipv4=2048 arp=2054 vlan=33024 ipv6=34525
+
+struct ethernet_header size=14
+  @0x0000   6         mac_address destination  big
+  @0x0006   6         mac_address source  big
+  @0x000c   2         ether_type ethertype  big
+
+struct mac_address size=6
+  @0x0000   6         u8         octets  big

@@ -1,0 +1,35 @@
+# situ wire signature v0
+# schema: dns.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+enum opcode : u4 unknown=error
+  query=0 iquery=1 status=2 notify=4 update=5
+
+enum response_code : u4 unknown=error
+  no_error=0 format_error=1 server_failure=2 name_error=3 not_implemented=4 refused=5
+
+struct dns_header size=12
+  @0x0000   2         u16        id  big
+  @0x0002   1bit      bit        is_response  msb_first
+  @0x0002:1 4bit      opcode     opcode  msb_first
+  @0x0002:5 1bit      bit        authoritative  msb_first
+  @0x0002:6 1bit      bit        truncated  msb_first
+  @0x0002:7 1bit      bit        recursion_desired  msb_first
+  @0x0003   1bit      bit        recursion_available  msb_first
+  @0x0003:1 3bit      u3         <reserved0>  msb_first must_be_zero
+  @0x0003:4 4bit      response_code response_code  msb_first
+  @0x0004   2         u16        question_count  big
+  @0x0006   2         u16        answer_count  big
+  @0x0008   2         u16        authority_count  big
+  @0x000a   2         u16        additional_count  big

@@ -1,0 +1,39 @@
+# situ wire signature v0
+# schema: ntp.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+enum leap_indicator : u2 unknown=error
+  none=0 last_minute_61=1 last_minute_59=2 unsynchronised=3
+
+enum mode : u3 unknown=error
+  reserved_mode=0 symmetric_active=1 symmetric_passive=2 client=3 server=4 broadcast=5 control=6 private_use=7
+
+struct ntp_packet size=48
+  @0x0000   2bit      leap_indicator leap  msb_first
+  @0x0000:2 3bit      u3         version  msb_first must_eq=4
+  @0x0000:5 3bit      mode       mode  msb_first
+  @0x0001   1         u8         stratum
+  @0x0002   1         i8         poll
+  @0x0003   1         i8         precision
+  @0x0004   4         u32        root_delay  big
+  @0x0008   4         u32        root_dispersion  big
+  @0x000c   4         u32        reference_id  big
+  @0x0010   8         timestamp  reference  big
+  @0x0018   8         timestamp  origin  big
+  @0x0020   8         timestamp  receive  big
+  @0x0028   8         timestamp  transmit  big
+
+struct timestamp size=8
+  @0x0000   4         u32        seconds  big
+  @0x0004   4         u32        fraction  big

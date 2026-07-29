@@ -1,0 +1,30 @@
+# situ wire signature v0
+# schema: header.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+enum msg_type : u8 unknown=error
+  hello=1 data=2 close=3
+
+struct flags size=1
+  @0x0000   1bit      bit        urgent  msb_first
+  @0x0000:1 1bit      bit        ack  msb_first
+  @0x0000:2 3bit      u3         priority  msb_first
+  @0x0000:5 3bit      u3         <reserved0>  msb_first must_be_zero
+
+struct header size=9
+  @0x0000   1         u8         version  must_eq=1
+  @0x0001   1         msg_type   type
+  @0x0002   1         flags      flags
+  @0x0003   2         u16        length  big max=MAX_PAYLOAD
+  @0x0005   4         u32        seq  big
