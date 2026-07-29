@@ -820,3 +820,21 @@ def test_a_bare_delimiter_stays_canonical() -> None:
 	so exactly one byte sequence encodes a given value. That exclusion is the
 	thing `validate` checks, and it is what makes the round trip total."""
 	assert axis_of(DELIMITED, "S.line", Axis.CANONICAL) == Value("Canonical")
+
+
+def test_a_padded_text_number_is_canonical() -> None:
+	"""`007` is not a second spelling of `7` in a three-digit field -- it is
+	the only one, because `7` alone does not fit and the parse refuses a
+	space. The padding is forced rather than optional, which is the whole
+	difference from a delimited number."""
+	body = "struct S { decimal u16 code[3]; u8 rest[remaining]; }"
+
+	assert axis_of(body, "S.code", Axis.CANONICAL) == Value("Canonical")
+
+
+def test_a_delimited_text_number_is_not() -> None:
+	"""The half that keeps the other honest: there the padding is optional,
+	so a value has more than one spelling."""
+	body = 'struct S { decimal u16 code until "\\r\\n"; u8 rest[remaining]; }'
+
+	assert axis_of(body, "S.code", Axis.CANONICAL) == Value("NonCanonical")

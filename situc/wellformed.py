@@ -111,7 +111,9 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 
 	# A text number is a single value *and* delimited: the delimiter says
 	# where the digits stop, which is the one thing that can, since a number
-	# written as digits is as wide as the number (section 8.6.2).
+	# written as digits is as wide as the number (section 8.6.2). A
+	# fixed-width one declares an array size instead and has no `until` to
+	# reach this check.
 	if member.array is None and getattr(member, "radix", None) is None:
 		raise error(
 			f"`{name}` is a single value, so a delimiter has nothing to bound",

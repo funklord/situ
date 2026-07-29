@@ -286,7 +286,15 @@ def _is_loose_text_number(context: Context) -> bool:
 	shipped without using it.
 	"""
 	placement = context.placement
-	return placement.radix is not None and not placement.radix_minimal
+	if placement.radix is None or placement.radix_minimal:
+		return False
+
+	# A fixed-width text number is canonical without asking. `007` is not a
+	# second spelling of `7` in a three-digit field -- it is the only one,
+	# because `7` alone does not fit the field and the parse refuses a space.
+	# The padding is forced rather than optional, which is the whole
+	# difference between this and a delimited number.
+	return placement.array_count is None
 
 
 def _is_uncapped_scan(context: Context) -> bool:

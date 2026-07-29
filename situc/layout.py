@@ -140,6 +140,22 @@ class Placement:
 	#: it gives the value's domain rather than its width in the buffer, which
 	#: for a text number depends on the number (section 8.6.2).
 	radix: int | None		= None
+	@property
+	def radix_max(self) -> int | None:
+		"""The largest value this text number can hold.
+
+		Not the type's maximum. `decimal u16 code[3]` is three digits, so it
+		holds 0..999 whatever `u16` would allow -- and a range check written
+		against the type would accept a value the field cannot represent.
+		"""
+		if self.radix is None or self.scalar is None:
+			return None
+
+		limit = (1 << self.scalar.bits) - 1
+		if self.array_count is None:
+			return limit
+		return min(limit, int(self.radix ** self.array_count) - 1)
+
 	#: `[minimal]`: leading zeros are refused, so one value has one spelling.
 	#: Without it "007" and "7" are the same number written two ways, which is
 	#: what `canonical` exists to report.
@@ -1194,6 +1210,16 @@ class Solver:
 
 		if member.until is not None:
 			total = self.delimited_extent(member, member.until, state)
+		elif getattr(member, "radix", None) is not None and member.array is not None:
+			# `decimal u16 code[3]` is three *digits*, which is three bytes.
+			# The generic path multiplied the count by the scalar's width and
+			# made it six -- because everywhere else `[n]` counts elements of
+			# the declared type, and here the declared type is the value's
+			# domain rather than its storage (8.6.2). Silently a field of the
+			# wrong width, which every offset after it inherits.
+			digits = count.value() if count.is_point else None
+			if digits is not None:
+				total = Interval.point(digits * BITS_PER_BYTE)
 
 		self.check_alignment(decl, member, scalar, cursor, element)
 		position = self.bit_position(scalar, local, cursor, element)

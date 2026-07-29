@@ -705,6 +705,23 @@ not its width**: "7" and "1234567" are the same kind of field at different
 widths, so a text number has no width to declare. `u32` says which values are
 representable, which is what the range check is written against.
 
+**Two ways to say where the digits stop.** `until "\r\n"` for a delimited
+number, and `[3]` for one of declared width -- SMTP's reply code and HTTP's
+status are both exactly three digits with nothing after them, and requiring
+`until` made those unwriteable.
+
+The two differ on canonicity, in the direction that surprises. A *padded*
+field is `Canonical`: `007` is the only spelling of seven in three digits,
+because `7` alone does not fit and the parse refuses a space, so the padding
+is forced rather than optional. A delimited number is `NonCanonical` unless
+`[minimal]` says otherwise.
+
+A width is digits, not elements. `decimal u16 code[3]` is three bytes:
+everywhere else `[n]` counts elements of the declared type, and here the type
+is the value's domain rather than its storage. And the range checked is the
+*field's* -- three digits hold 0..999 whatever `u16` would allow, so a check
+written against the type would accept a value the field cannot represent.
+
 **The getter takes an out-parameter and returns an error.** Every other scalar
 getter returns the value, because every other conversion is total -- a byte
 swap has an answer for any bit pattern. A decimal parse does not, and a getter

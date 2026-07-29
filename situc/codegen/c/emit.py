@@ -900,6 +900,16 @@ class Emitter:
 		if placement.offset_bits is None:
 			lines.extend(self._offset_function(struct, placement))
 
+		if placement.radix is not None and placement.delimiter is None:
+			lines.extend(self._fixed_text_number(struct, placement))
+			return lines
+
+		# A text number with a width rather than a delimiter (8.6.2): three
+		# digits, padded, and no scan at all.
+		if placement.radix is not None and placement.delimiter is None:
+			lines.extend(self._fixed_text_number(struct, placement))
+			return lines
+
 		if self._is_record_run(placement):
 			lines.extend(self._record_run(struct, placement))
 			return lines
@@ -1502,6 +1512,62 @@ class Emitter:
 			"}",
 		])
 		return lines
+
+	def _fixed_text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Digits in a field of declared width, padded (section 8.6.2).
+
+		SMTP's reply code and HTTP's status are both this: exactly three
+		digits, no delimiter, and the leading zero is required rather than
+		tolerated. That last part is why this is `Canonical` where a delimited
+		text number is not -- `007` is the only spelling of seven here, not a
+		second one.
+
+		The range is the field's, not the type's. `decimal u16 code[3]` holds
+		0..999, and a check written against `u16` would accept a value the
+		three bytes cannot represent.
+		"""
+		assert placement.radix is not None
+		scalar = placement.scalar
+		assert scalar is not None
+		width  = placement.array_count or 0
+		limit  = placement.radix_max or 0
+
+		local = c_name(self._local(struct, placement))
+		ctype = self._field_ctype(placement)
+		base  = self._base_expression(struct, placement)
+		base  = f"view.base + {base}" if base.isdigit() or base.endswith("u") \
+			else base
+
+		return [
+			"",
+			f"/* `{placement.name}`: {width} digits, padded, holding 0..{limit}.",
+			" *",
+			f" * The range is the field's rather than {scalar.name}'s: three"
+			" bytes cannot",
+			f" * hold what {scalar.name} can, and a check against the type"
+			" would accept a",
+			" * value the field cannot represent. */",
+			f"static inline const uint8_t *"
+			f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
+			"{",
+			f"\treturn {base};",
+			"}",
+			"",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'get')}"
+			f"(situ_view_t view, {ctype} *out)",
+			"{",
+			"\tuint64_t value;",
+			"",
+			f"\tif (situ_parse_uint({ident(self.prefix, struct.name, local, 'ptr')}"
+			f"(view), {width}u, {placement.radix}u, {limit}u, &value) != 0) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+			f"\t*out = ({ctype})value;",
+			"\treturn SITU_OK;",
+			"}",
+		]
 
 	def _text_number(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

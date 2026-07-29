@@ -1453,15 +1453,35 @@ class Parser:
 		radix = RADIX_KEYWORDS[start.text]
 		field = self.parse_field()
 
-		if field.until is None:
+		# Two ways to say where the digits stop, and SMTP needs the second.
+		# A reply code is exactly three digits with nothing after them, and
+		# requiring `until` made that unwriteable -- "a text number is as wide
+		# as the number" is true of a delimited one and false of a padded
+		# field, which is a common shape in every fixed-record format.
+		framed = field.until is not None
+		fixed  = field.array is not None and field.array.size is not None
+
+		if not framed and not fixed:
 			raise error(
 				f"`{start.text} {field.name}` has no end",
 				field.span,
-				label = "no `until` on this member",
-				notes = ["a text number is as wide as the number, so something "
-				         "has to say where it stops",
+				label = "neither a width nor a delimiter",
+				notes = ["a text number is as wide as the number unless "
+				         "something says otherwise, so one of two things has "
+				         "to",
 				         f'`{start.text} {field.type_ref.name} {field.name} '
-				         f'until ":"` frames it'],
+				         f'until ":"` stops it at a delimiter',
+				         f"`{start.text} {field.type_ref.name} {field.name}[3]` "
+				         "gives it a fixed width, padded"],
+			)
+
+		if framed and fixed:
+			raise error(
+				f"`{field.name}` says twice how wide it is",
+				field.span,
+				label = "a width and a delimiter",
+				notes = ["a fixed-width number does not need a delimiter, and "
+				         "a delimited one has no width to declare"],
 			)
 
 		return ast.Field(self.span_from(start), field.name, field.type_ref,

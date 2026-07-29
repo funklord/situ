@@ -1175,8 +1175,15 @@ def test_a_signed_text_number_is_refused() -> None:
 
 
 def test_a_text_number_needs_somewhere_to_stop() -> None:
-	with pytest.raises(SituError, match="has no end"):
+	"""And the diagnostic offers both ways, because there are two and a
+	reader who only hears about `until` writes SMTP's three-digit reply code
+	as a delimited field with nothing to delimit it."""
+	with pytest.raises(SituError, match="has no end") as caught:
 		emit("struct s { decimal u32 n; }")
+
+	rendered = caught.value.diagnostic.render()
+	assert 'until ":"` stops it at a delimiter' in rendered
+	assert "gives it a fixed width, padded" in rendered
 
 
 # -- runs of records (section 8.6.3) ----------------------------------------
@@ -1305,3 +1312,27 @@ def test_the_harness_gates_a_versioned_read() -> None:
 	text = fuzz_source("struct S [version = v] { u8 v; u32 b [since = 2]; }")
 
 	assert "situ_S_b_get(view, &held) == SITU_OK" in text
+
+
+def test_a_fixed_width_text_number_is_its_digits_wide() -> None:
+	"""`decimal u16 code[3]` is three digits, which is three bytes. The
+	generic array path multiplied the count by the scalar's width and made it
+	six -- because everywhere else `[n]` counts elements of the declared type,
+	and here the type is the value's domain rather than its storage."""
+	header, _ = emit("struct s { decimal u16 code[3]; u8 sep; }")
+
+	assert "SITU_S_SIZE_FIXED 4u" in header
+
+
+def test_it_is_checked_against_the_fields_range_not_the_types() -> None:
+	"""Three bytes hold 0..999, whatever `u16` would allow. A check written
+	against the type accepts a value the field cannot represent."""
+	header, _ = emit("struct s { decimal u16 code[3]; u8 sep; }")
+
+	assert "10u, 999u, &value" in header
+
+
+def test_a_fixed_width_text_number_needs_no_delimiter() -> None:
+	with pytest.raises(SituError, match="says twice how wide it is"):
+		emit('struct s { decimal u16 c[3] until ":"; u8 r[remaining]; }')
+

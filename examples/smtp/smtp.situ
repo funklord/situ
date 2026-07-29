@@ -1,0 +1,70 @@
+// SMTP (RFC 5321), and the two things about its framing that are not like
+// the others.
+//
+// Chosen because it breaks in an informative place. A command line is an
+// ordinary delimited member and situ handles it. The DATA body ends at a
+// five-byte delimiter and situ handles that too. The *multiline reply* it
+// cannot express at all, and saying exactly why is worth more than an
+// example that only demonstrates what already worked.
+
+target buffer;
+endian big;
+
+// A command: verb, optional argument, CRLF. The verb is case-insensitive by
+// RFC 5321 section 2.4, which is a canonicity cost and is recorded as one.
+//
+// `until " "` rather than a fixed four bytes: `DATA` and `RCPT TO:` are both
+// verbs and only one has an argument, so the space is what ends it.
+struct command {
+	u8  verb[]      until " "     max 16  [case_insensitive, encoding = ascii];
+	u8  argument[]  until "\r\n"  max 512 [trim];
+}
+
+// One line of a reply. The code is three digits with no delimiter, which is
+// why `[3]` and not `until`: in a padded field the leading zero is required
+// rather than tolerated, so `007` is the only spelling of seven and the field
+// is `Canonical` where a delimited number would not be.
+//
+// The separator after it is the whole of SMTP's multiline framing: `-` means
+// another line follows, a space means this was the last. Both bytes are in
+// the layout and readable. What situ cannot do is *use* the separator to
+// decide how many lines there are -- see the note at the end.
+struct reply_line {
+	decimal  u16  code[3];
+	u8            separator;
+	u8            text[]  until "\r\n"  max 512;
+}
+
+// The DATA body, which ends at a dot on a line of its own.
+//
+// A five-byte delimiter, and the one place in this file where situ's framing
+// is exactly the protocol's. RFC 5321 section 4.1.1.4 writes the terminator
+// as CRLF "." CRLF and that is what this scans for.
+struct data_block {
+	u8  body[] until "\r\n.\r\n";
+}
+
+// What situ does not describe here, said plainly.
+//
+// A multiline reply is a run of `reply_line` that ends *after* the line whose
+// separator is a space. Situ's run construct (8.6.3) ends a run at a
+// terminator standing where an element would start -- a different rule, and
+// not this one. The difference is the quantifier: `until` asks about the
+// position before each element, and SMTP asks about a field inside the
+// element just read.
+//
+// So a reader of this schema gets the line and has to loop itself. That is
+// the honest boundary and it is drawn here rather than in a paragraph
+// somebody has to find: everything in this file is what situ describes, and a
+// multiline reply is not in it.
+//
+// The construct that would cover it is a run ending on a predicate over the
+// element -- `reply_line lines[] while (separator == 0x2D)`. It is not
+// invented here, because a language addition wants a second protocol asking
+// for the same thing, and one example is not that.
+
+// The bill, recorded rather than hidden.
+assert canonical(command.verb);
+assert canonical(reply_line.text);
+require absolute_static(command.verb);
+require absolute_static(reply_line.code);
