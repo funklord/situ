@@ -825,6 +825,15 @@ class Emitter:
 			"\t\t\treturn Err(Error::Constraint);",
 			"\t\t}",
 		]
+		if placement.radix_minimal:
+			lines.extend([
+				f"\t\tlet at = self.{_ident(f'{base}_offset')}();",
+				f"\t\tif !situ_rt::digits_minimal("
+				f"&self.bytes[at..at + self.{_ident(f'{base}_len')}()],"
+				f" {placement.radix}) {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			])
 		if placement.radix is not None:
 			# Reading it is the check. `?` rather than a match, because the
 			# error is already the right one and `Result` cannot be dropped.

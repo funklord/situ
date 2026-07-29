@@ -608,6 +608,34 @@ static inline int situ_parse_uint(const uint8_t *data, uint32_t len,
 	return 0;
 }
 
+/* Whether digits are the one spelling of their value (section 8.6.2).
+ *
+ * A leading zero is another spelling of the same number, and for hexadecimal
+ * so is a change of case. `[minimal]` is what asks for this; without it the
+ * field is NonCanonical and the map says so, which is the honest default --
+ * most formats do permit `007`, and refusing it would reject valid data.
+ */
+static inline int situ_digits_minimal(const uint8_t *data, uint32_t len,
+		uint32_t radix)
+{
+	uint32_t i;
+
+	if (len == 0u) {
+		return 0;
+	}
+	if (len > 1u && data[0] == (uint8_t)'0') {
+		return 0;		/* a leading zero, and the value is not zero */
+	}
+	if (radix > 10u) {
+		for (i = 0u; i < len; i++) {
+			if (data[i] >= (uint8_t)'A' && data[i] <= (uint8_t)'F') {
+				return 0;	/* upper case is the second spelling */
+			}
+		}
+	}
+	return 1;
+}
+
 static inline int situ_ascii_valid(const uint8_t *data, uint32_t len)
 {
 	uint32_t i;

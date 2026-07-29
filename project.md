@@ -726,6 +726,18 @@ than the fallible getter: an offset function returning an error would make
 every accessor downstream of it fallible, and the shape of this API is that
 the checks happen once and the reads trust them. `validate` is that check.
 
+**A text number is `NonCanonical` unless it says otherwise.** `007` and `7`
+are one value written two ways, and above base ten so are `FF` and `ff`. That
+is exactly what the `canonical` axis reports, and it is the axis decision 0020
+argued has more to say about text than about binary -- so a text construct
+that did not use it would be the argument left unmade.
+
+`[minimal]` refuses a leading zero and an upper-case hex digit on parse, which
+buys one spelling per value back and makes the field `Canonical`. It is the
+same word `varint_type` already uses for the same reason. Refusing them
+unasked would reject valid data, because most formats do permit `007`, so the
+loose reading is the default and the map says what it costs.
+
 Signed and fractional text formats are refused. A sign or a point is a grammar
 rather than a number, which is the same line drawn below.
 
@@ -1042,18 +1054,18 @@ weakening order. Constructs weaken axes; nothing strengthens them.
 | Axis | Domain (strongest to weakest) | Meaning |
 |---|---|---|
 | `size` | `Fixed(n)` > `Bounded(lo,hi)` > `Unbounded` | byte extent |
-| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` | position knowledge |
+| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `Scanned` is a search that can fail (8.6.1) |
 | `access` | `Random` > `Sequential` | can reach element N directly |
 | `mutate` | `InPlaceFixed` > `InPlaceSlack` > `Shifting` > `RewriteRequired` > `Immutable` | write cost |
 | `address` | `Stable` > `FrameStable` > `Unstable` | can a pointer be held |
 | `align` | `Aligned(n)` > `Unaligned` | relative to message base |
-| `repr` | `MemoryIdentical` > `ValueConverted` > `ConditionallyConverted(f)` | is the value literally the bytes |
+| `repr` | `MemoryIdentical` > `ValueConverted` > `TextConverted` > `ConditionallyConverted(f)` | is the value literally the bytes, and can the conversion fail: a byte swap is total, a decimal parse is not (8.6.2) |
 | `atomic` | `AtomicWord` > `NonAtomic` | single-instruction access possible |
 | `canonical` | `Canonical` > `CanonicalGiven(f)` > `NonCanonical` | exactly one valid encoding |
 | `stage` | `CompileTime` < `ParseTime` < `TransformTime` < `VerifyGated` | when resolvable (later = more gated) |
 | `auth` | `Uncovered` / `Covered(obligation)` | which obligations cover these bytes: a tag (14.2), or an invariant that derives a value from them (16.1) |
 | `secrecy` | `Public` / `Secret` | affects generated API |
-| `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | MMIO side effects |
+| `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | MMIO side effects, and an uncapped scan, whose read cost depends on the data (8.6.1) |
 
 Notes on the less obvious ones:
 
@@ -2075,19 +2087,36 @@ pleasant they are to write:
 1. **C (C11)** -- done. Target is embedded: no allocation, no libc dependency
    beyond `<stdint.h>` and `<string.h>`, no recursion, bounded stack, no VLAs,
    MISRA-friendly where it does not conflict with clarity.
-2. **C++** -- the largest population after C, and the one that can express
-   parts of the lattice C cannot: a view can be a type with a destructor, the
-   stage gate a distinct type rather than a convention, `repr` a
-   `std::span` where the bytes really are the value.
-3. **Python** -- reaches people who would otherwise not describe their format
-   at all. It enforces the least of the lattice, which is a fact to state
-   rather than a reason to skip it.
-4. **Rust** -- expresses the capability system most naturally of all: typestate
-   as distinct types, view invalidation as borrows, `zerocopy`-style traits
-   where `repr` permits. Expect it to expose places the C backend papered over.
-   Ordered last because adoption is far enough out that speculative work on it
-   would be guesswork, not because it matters least.
+2. **C++ (C++17)** -- done. The largest population after C, and the one that
+   can express parts of the lattice C cannot: a span carries its length, an
+   error is `[[nodiscard]]`, and the stage gate is a type with no public
+   constructor rather than a convention.
+3. **Python (3.11+)** -- done. Reaches people who would otherwise not describe
+   their format at all. It enforces the least of the lattice, which is a fact
+   to state rather than a reason to skip it.
+4. **Rust (2021)** -- done. Expresses the capability system most naturally of
+   all: view invalidation is the borrow checker, so the generation counter the
+   C runtime carries is not needed; a gate cannot be constructed outside the
+   open that verifies it; and `Result` is `#[must_use]`, so an ignored error
+   does not compile.
 5. And after those, whatever the users are writing.
+
+**"Expect it to expose places the C backend papered over" was right, and not
+only of Rust.** Every backend after the first has found something in the ones
+before it, and the pattern is consistent enough to plan for (invariant 13):
+
+- C++ found that the count expression asked for a fixed offset before asking
+  what kind of field it was, so a text-encoded length was refused as
+  unsupported. C had the same bug and had declared a gap that was not real.
+- Python found that the readable form of a delimiter -- `` `"\r\n"` ``, which
+  is how a specification writes it -- cannot be embedded in generated source
+  as it stands, because it holds both backslashes and double quotes.
+- Rust found that its own `validate` omitted the delimited case, which is a
+  bug no amount of reading the emitted text would show, because the bug was
+  the absence of text.
+
+Which is why each backend is finished by *running* the same worked example
+through it and comparing bytes, rather than by inspecting what it emitted.
 
 **Codecs have one implementation, and it is the C one.** Accessors are native
 to every target -- they are shifts and offsets, and there is no algorithm to
@@ -3407,6 +3436,8 @@ Delivered:
   drives an array (8.6.2).
 - Runs of records, so a header *block* is expressible and not only the
   individual lines of one (8.6.3).
+- `[minimal]` on a text number, which is the `canonical` axis finally doing
+  the work decision 0020 argued it was built for.
 - **All four backends.** A real HTTP header block parses in C, C++, Python and
   Rust, to the same three fields and the same span, and each refuses the same
   malformed frames for the same reason and in the same order.
@@ -3418,6 +3449,12 @@ What each target adds over C, where the language allows it:
 | C++ | methods on the view | `at()` is `[[nodiscard]] err`, so an out-of-range index cannot be ignored into a use of an uninitialised view |
 | Python | properties | the text-number property raises rather than returning a sentinel |
 | Rust | `&[u8]` slices | a slice carries its length, so it cannot be paired with the wrong count; `Result` is `#[must_use]`, so ignoring a bad parse does not compile |
+
+Not covered, and worth naming so nobody designs around a limit that is not
+there or expects one that is: case-insensitive matching of a *token* against a
+set (`Content-Length` against `content-length`), optional whitespace around a
+value, and a grammar. The first two are canonicity questions the axis could
+carry and the construct does not; the third is out by decision.
 
 ### Invariants to hold across all phases
 
@@ -3506,6 +3543,42 @@ What each target adds over C, where the language allows it:
    information behind a different door". Adding a construct means checking
    every artifact that describes a field, not the backends alone: `doc`,
    `map`, `explain`, hover and the advisor each answer for their own reader.
+20. **The shared classifier is only shared if the first backend uses it too.**
+   `traverse.classify` was written after three backends shipped the same two
+   dispatch bugs, and the C backend -- which had not had them -- was left with
+   its own walk. So when `until` arrived, the one place the fact "a delimited
+   member is not an array" belonged was the one place it was missing, and the
+   other three inherited a classifier that called `x[] until "D"` an ARRAY:
+   the empty bracket form carries `array_count = 1`, because one *run* is one
+   thing to count. All three then emitted a fixed array of one element at a
+   static offset. A shared rule with an exempt caller is a rule with a hole
+   in the shape of that caller.
+21. **Agreeing on the answer is not agreeing.** Two backends can return the
+   same value and disagree about which of two true things went wrong. Python
+   reported "these digits are not a number" where C reported "this frame stops
+   early", for a frame that was both; both are `CONSTRAINT`, both are correct,
+   and nobody would notice until two people compared notes on the same
+   capture. Where more than one check can fire, the order is part of the
+   schema's meaning and is fixed in one place.
+22. **A test that greps generated source does not run it.** Rust's `validate`
+   omitted the delimited case entirely: a frame with `5x` where a length
+   belonged passed validation and panicked in the accessor. Nothing that
+   inspected the emitted text would have seen it, because the bug was the
+   absence of text. Each of these three backends was finished by running the
+   same HTTP header block through it and comparing bytes, and each time that
+   found something reading would not have.
+23. **Generated code that warns teaches a reader to ignore warnings.** The
+   Rust backend imported `Dirty` unconditionally, so every schema without a
+   tag or an invariant warned on sight. `-D warnings` on generated output is
+   worth keeping green for the same reason `-Werror` is on the runtime: the
+   first ignorable warning makes the next one ignorable too.
+24. **A guard against non-termination is not a comment.** A record whose
+   members are all delimited and all empty occupies no bytes, and a walk that
+   advanced by that would not return on input somebody chose. That is a denial
+   of service rather than a wrong answer, so every generated walk is bounded
+   twice: by the view's extent, and by refusing to advance on a zero-length
+   element. Generated code never allocates or recurses (invariant 4); it must
+   not loop unboundedly either.
 
 ---
 

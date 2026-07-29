@@ -384,6 +384,22 @@ def parse_uint(data: memoryview | bytes, radix: int, limit: int) -> int | None:
 DIGITS: Final = "0123456789abcdef"
 
 
+def digits_minimal(data: memoryview | bytes, radix: int) -> bool:
+	"""Whether digits are the one spelling of their value (section 8.6.2).
+
+	A leading zero is another spelling of the same number, and above base ten
+	so is a change of case. `[minimal]` is what asks for this; without it the
+	field is NonCanonical and the map says so, which is the honest default --
+	most formats do permit `007`.
+	"""
+	raw = bytes(data)
+	if not raw:
+		return False
+	if len(raw) > 1 and raw[0:1] == b"0":
+		return False
+	return radix <= 10 or not any(b"A"[0] <= byte <= b"F"[0] for byte in raw)
+
+
 def bcd_decode(packed: int, digits: int) -> int:
 	value = 0
 	for i in range(digits - 1, -1, -1):

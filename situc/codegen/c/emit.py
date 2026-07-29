@@ -2199,6 +2199,19 @@ class Emitter:
 			# refuses them here rather than leaving every caller of the getter
 			# to be the first to find out.
 			ctype = self._field_ctype(placement)
+			if placement.radix_minimal:
+				lines.extend([
+					"",
+					"\t/* `[minimal]`: one spelling per value, so a leading zero",
+					"\t * is a second way to write a number that already has one. */",
+					f"\tif (!situ_digits_minimal("
+					f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
+					f"\t\t\t{ident(self.prefix, struct.name, local, 'len')}(view),"
+					f" {placement.radix}u)) {{",
+					"\t\t return SITU_ERR_CONSTRAINT;",
+					"\t}",
+				])
+
 			lines.extend([
 				"",
 				f"\t/* And its digits have to be digits, in range. */",

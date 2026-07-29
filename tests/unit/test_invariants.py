@@ -252,3 +252,57 @@ def test_every_backend_has_delimited_members(target: str, marker: str) -> None:
 	emit, _  = BACKENDS[target]
 
 	assert marker in "\n".join(emit(schema, resolved, "unit").files().values())
+
+
+# -- one spelling per value (section 8.6.2) ---------------------------------
+
+MINIMAL = 'struct s { decimal u16 n until "\\r\\n" [minimal]; u8 r[remaining]; }'
+LOOSE   = 'struct s { decimal u16 n until "\\r\\n"; u8 r[remaining]; }'
+
+
+def test_a_text_number_is_non_canonical_by_default() -> None:
+	"""`007` and `7` are one value written two ways. Decision 0020 argued the
+	`canonical` axis has more to say about text than about binary, and then the
+	first text construct shipped without using it."""
+	schema   = parse_text(PREAMBLE + LOOSE)
+	resolved = resolve(schema, solve(schema))
+	entry    = next(e for e in resolved.structs["s"].entries
+	                if e.placement.path == "s.n")
+
+	assert entry.vector.get(Axis.CANONICAL).base == "NonCanonical"
+
+
+def test_minimal_buys_the_single_spelling_back() -> None:
+	schema   = parse_text(PREAMBLE + MINIMAL)
+	resolved = resolve(schema, solve(schema))
+	entry    = next(e for e in resolved.structs["s"].entries
+	                if e.placement.path == "s.n")
+
+	assert entry.vector.get(Axis.CANONICAL).base == "Canonical"
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_every_backend_enforces_minimal(target: str) -> None:
+	"""A capability claim nothing backs is worse than no claim. `Canonical`
+	here is a promise that the bytes follow from the value, and only the
+	generated check makes it true."""
+	schema   = parse_text(PREAMBLE + MINIMAL)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "digits_minimal" in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_no_backend_enforces_it_uninvited(target: str) -> None:
+	"""Most formats do permit `007`, so refusing it unasked would reject valid
+	data. The map reports NonCanonical instead, which is the honest default."""
+	schema   = parse_text(PREAMBLE + LOOSE)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "digits_minimal" not in source

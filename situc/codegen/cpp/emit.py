@@ -1389,6 +1389,15 @@ class Emitter:
 			"\t\t}",
 		]
 
+		if placement.radix_minimal:
+			lines.extend([
+				"\t\t/* `[minimal]`: one spelling per value. */",
+				f"\t\tif (!situ_digits_minimal(base() + {name}_offset(),"
+				f" {name}_len(), {placement.radix}u)) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			])
+
 		if placement.radix is not None:
 			scalar = placement.scalar
 			assert scalar is not None

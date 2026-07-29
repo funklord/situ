@@ -83,7 +83,8 @@ class Emitter:
 			"from situ_runtime import (",
 			"\tConstraintError, Gate, Message, View, acquire, as_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
-			"\tcompose, nul_len, open_gate, parse_uint, scan, utf8_valid,",
+			"\tcompose, nul_len, open_gate, utf8_valid,",
+			*self._delimited_imports(),
 			")",
 			"",
 			"__all__ = [",
@@ -100,6 +101,27 @@ class Emitter:
 			lines.extend(self._struct(self.resolved.structs[name]))
 
 		return "\n".join(lines) + "\n"
+
+	def _delimited_imports(self) -> list[str]:
+		"""The section 8.6 helpers, imported only where something uses one.
+
+		A generated module that imports what it does not use is noise a reader
+		learns to skim, and `digits_minimal` in particular would have said the
+		schema asked for a canonicity check when it had not (invariant 23).
+		"""
+		placements = [entry.placement
+		              for struct in self.resolved.structs.values()
+		              for entry in struct.entries]
+
+		needed = []
+		if any(p.delimiter is not None for p in placements):
+			needed.append("scan")
+		if any(p.radix is not None for p in placements):
+			needed.append("parse_uint")
+		if any(p.radix_minimal for p in placements):
+			needed.append("digits_minimal")
+
+		return [f"\t{', '.join(sorted(needed))},"] if needed else []
 
 	def _order(self) -> list[str]:
 		"""Contained structs first: a class body names them at definition time."""
@@ -965,6 +987,15 @@ class Emitter:
 			f'{repr(delim).replace(chr(92), chr(92) * 2)}: '
 			'the frame stops first")',
 		]
+		if placement.radix_minimal:
+			raw = (f"self._msg.buffer[self._at + self.{name}_offset:"
+			       f"self._at + self.{name}_offset + self.{name}_len]")
+			lines.extend([
+				f"\t\tif not digits_minimal({raw}, {placement.radix}):",
+				"\t\t\traise ConstraintError(",
+				f'\t\t\t\t"{placement.path} is not the minimal spelling of '
+				'its value")',
+			])
 		if placement.radix is not None:
 			# Reading it is the check: the property raises for digits that are
 			# not digits, which is the whole of what it is for.

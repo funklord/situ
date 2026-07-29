@@ -294,6 +294,23 @@ pub fn parse_uint(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
 	Some(value)
 }
 
+/// Whether digits are the one spelling of their value (section 8.6.2).
+///
+/// A leading zero is another spelling of the same number, and above base ten
+/// so is a change of case. `[minimal]` is what asks for this; without it the
+/// field is NonCanonical and the map says so, which is the honest default --
+/// most formats do permit `007`.
+#[inline]
+pub fn digits_minimal(bytes: &[u8], radix: u32) -> bool {
+	if bytes.is_empty() {
+		return false;
+	}
+	if bytes.len() > 1 && bytes[0] == b'0' {
+		return false;
+	}
+	radix <= 10 || !bytes.iter().any(|&b| (b'A'..=b'F').contains(&b))
+}
+
 #[inline]
 pub fn ascii_valid(bytes: &[u8]) -> bool {
 	let mut i = 0;

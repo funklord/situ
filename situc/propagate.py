@@ -277,6 +277,18 @@ def _is_text_number(context: Context) -> bool:
 	return context.placement.radix is not None
 
 
+def _is_loose_text_number(context: Context) -> bool:
+	"""A text number that accepts more than one spelling of a value.
+
+	`007` and `7` are the same number, and so are `FF` and `ff`. That is
+	exactly what `canonical` reports, and decision 0020 argued the axis has
+	more to say about text than about binary -- then the first text construct
+	shipped without using it.
+	"""
+	placement = context.placement
+	return placement.radix is not None and not placement.radix_minimal
+
+
 def _is_uncapped_scan(context: Context) -> bool:
 	placement = context.placement
 	return placement.delimiter is not None and placement.delimiter_cap is None
@@ -663,6 +675,22 @@ TABLE: tuple[Row, ...] = (
 			            "back a number",
 		),
 		applies = _is_text_number,
+	),
+	Row(
+		rule = Rule(
+			name      = "non-minimal-text-number",
+			construct = "a text number that accepts leading zeros",
+			effects   = (
+				Effect(Axis.CANONICAL, Value("NonCanonical"),
+				       "`007` and `7` are the same value written two ways, and "
+				       "for hexadecimal so are `FF` and `ff`, so the bytes do "
+				       "not follow from the number"),
+			),
+			remedy    = "`[minimal]` refuses a leading zero on parse, which buys "
+			            "one spelling per value back -- the same thing it means "
+			            "on a varint",
+		),
+		applies = _is_loose_text_number,
 	),
 	Row(
 		rule = Rule(
