@@ -234,7 +234,7 @@ def test_the_derived_field_is_immutable_and_says_which_invariant_decided() -> No
 DELIMITED = 'struct s { u8 line[] until "\\r\\n"; u16 count; }'
 
 
-@pytest.mark.parametrize("target", ["python", "rust"])
+@pytest.mark.parametrize("target", ["rust"])
 def test_a_backend_without_delimiters_says_so(target: str) -> None:
 	"""Rather than raising `AssertionError: offset is dynamic` out of the
 	layout module, which is what reaching `offset_bytes` on a scanned member
@@ -253,6 +253,7 @@ def test_a_backend_without_delimiters_says_so(target: str) -> None:
 @pytest.mark.parametrize("target,marker", [
 	("c", "situ_s_line_span"),
 	("cpp", "line_span()"),
+	("python", "def line_span(self)"),
 ])
 def test_the_backends_that_do_have_them(target: str, marker: str) -> None:
 	"""The other half of the claim above. A gap declared where there is none

@@ -304,6 +304,86 @@ def nul_len(data: memoryview | bytes, capacity: int) -> int:
 	return capacity if end < 0 else end
 
 
+#: A byte position no byte occupies, for a format with no quote or escape.
+NO_BYTE: Final = -1
+
+
+def scan(data: memoryview | bytes, limit: int, delim: bytes,
+		quote: int = NO_BYTE, escape: int = NO_BYTE) -> int:
+	"""Where a delimited member's content stops (section 8.6.1).
+
+	The offset of the first occurrence of `delim` within `limit` bytes, or
+	`limit` where it is not there. The caller distinguishes the two: a member
+	whose delimiter is absent is truncated rather than empty, and a getter is
+	not the place to decide what to do about that.
+
+	`quote` toggles -- inside a quoted run the delimiter is content -- and
+	`escape` applies to the byte after it, including a quote byte and
+	including itself. A quoted run left open finds no delimiter, which is the
+	same answer as one that is not there and the right one, since the content
+	has not been terminated.
+	"""
+	raw = bytes(data)[:limit]
+
+	if not delim or len(delim) > limit:
+		return limit
+
+	# `bytes.find` is C and this loop is not, so the common case takes the
+	# fast path. The relaxed one cannot: whether a match counts depends on
+	# state built up by walking every byte before it.
+	if quote == NO_BYTE and escape == NO_BYTE:
+		found = raw.find(delim)
+		return limit if found < 0 else found
+
+	quoted = False
+	i      = 0
+	while i + len(delim) <= limit:
+		byte = raw[i]
+		if escape != NO_BYTE and byte == escape:
+			i += 2
+			continue
+		if quote != NO_BYTE and byte == quote:
+			quoted = not quoted
+			i += 1
+			continue
+		if not quoted and raw[i:i + len(delim)] == delim:
+			return i
+		i += 1
+	return limit
+
+
+def parse_uint(data: memoryview | bytes, radix: int, limit: int) -> int | None:
+	"""A number written as digits, or None where it is not one.
+
+	`None` rather than an exception, because every caller has something to do
+	with it: a getter raises, and the offset arithmetic that cannot fail reads
+	zero. Refused for the reasons a protocol cares about -- an empty run,
+	because no digits is not the number zero; a byte that is not a digit in
+	this base, including a trailing space; and a value outside the declared
+	type.
+	"""
+	raw = bytes(data)
+	if not raw:
+		return None
+
+	try:
+		value = int(raw.decode("ascii"), radix)
+	except ValueError:
+		return None
+
+	# `int` accepts a sign, whitespace and an `0x` prefix, none of which are
+	# digits. Checking the bytes rather than trusting the parse keeps this the
+	# same language the C runtime accepts, which is the point of having one
+	# answer per schema rather than one per backend.
+	if not all(chr(byte) in DIGITS[:radix] for byte in raw.lower()):
+		return None
+
+	return value if 0 <= value <= limit else None
+
+
+DIGITS: Final = "0123456789abcdef"
+
+
 def bcd_decode(packed: int, digits: int) -> int:
 	value = 0
 	for i in range(digits - 1, -1, -1):

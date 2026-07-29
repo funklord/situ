@@ -424,3 +424,96 @@ def test_a_constrained_field_at_a_dynamic_offset_is_validated(tmp_path: Path) ->
 	buf[6] = 9
 	with pytest.raises(rt.ConstraintError):
 		s.validate()
+
+
+# -- delimited members (section 8.6) ----------------------------------------
+
+BLOCK = (
+	'struct kv { u8 key[] until ": "; u8 value[] until "\\r\\n"; }\n'
+	'struct blk { kv entries[] until "\\r\\n"; u8 body[remaining]; }\n'
+)
+
+HTTP = (
+	'struct msg {\n'
+	'\tu8       method[] until " " max 8;\n'
+	'\tdecimal  u32      length until "\\r\\n" max 12;\n'
+	'\tu8       body[length];\n'
+	'}\n'
+)
+
+
+def test_a_header_block_parses(tmp_path: Path) -> None:
+	"""The claim the whole construct exists for, run rather than inspected."""
+	module = load(tmp_path, BLOCK)
+	raw    = bytearray(b"Host: example.com\r\nAccept: */*\r\n\r\nhello")
+	view   = module.blk.at(runtime().Message(raw), 0, len(raw))
+
+	assert view.entries_count == 2
+	assert bytes(view.entries(0).key)   == b"Host"
+	assert bytes(view.entries(0).value) == b"example.com"
+	assert bytes(view.entries(1).key)   == b"Accept"
+	assert bytes(view.body)             == b"hello"
+
+
+def test_the_terminator_is_not_looked_for_inside_an_element(tmp_path: Path) -> None:
+	"""A CRLF at the end of the first header line belongs to that line. Scanning
+	for the terminator anywhere found it there and reported one field."""
+	module = load(tmp_path, BLOCK)
+	raw    = bytearray(b"A: 1\r\nB: 2\r\nC: 3\r\n\r\n")
+	view   = module.blk.at(runtime().Message(raw), 0, len(raw))
+
+	assert view.entries_count == 3
+
+
+def test_an_empty_run_has_no_elements(tmp_path: Path) -> None:
+	"""The terminator standing where the first element would. The first thing
+	a walk gets wrong, in one direction or the other."""
+	module = load(tmp_path, BLOCK)
+	raw    = bytearray(b"\r\nbody")
+	view   = module.blk.at(runtime().Message(raw), 0, len(raw))
+
+	assert view.entries_count == 0
+	assert bytes(view.body) == b"body"
+
+
+def test_an_index_past_the_end_raises(tmp_path: Path) -> None:
+	module = load(tmp_path, BLOCK)
+	raw    = bytearray(b"A: 1\r\n\r\n")
+	view   = module.blk.at(runtime().Message(raw), 0, len(raw))
+
+	with pytest.raises(IndexError):
+		view.entries(1)
+
+
+def test_a_text_length_drives_a_binary_body(tmp_path: Path) -> None:
+	"""The shape that motivated the whole section: a header in text stating how
+	long the bytes after it are."""
+	module = load(tmp_path, HTTP)
+	raw    = bytearray(b"GET 5\r\nhello")
+	view   = module.msg.at(runtime().Message(raw), 0, len(raw))
+
+	view.validate()
+	assert view.length == 5
+	assert bytes(view.body) == b"hello"
+
+
+def test_digits_that_are_not_digits_raise(tmp_path: Path) -> None:
+	"""Every other property here returns a value because every other conversion
+	is total. Returning 0 for `5x` would hand back a number nobody wrote."""
+	module = load(tmp_path, HTTP)
+	raw    = bytearray(b"GET 5x\r\nhello")
+	view   = module.msg.at(runtime().Message(raw), 0, len(raw))
+
+	with pytest.raises(runtime().ConstraintError):
+		view.length
+
+
+def test_validate_reports_a_short_frame_before_the_digits(tmp_path: Path) -> None:
+	"""For a frame cut short before the digits both are wrong, and "this frame
+	stops early" is the more useful answer. C reports it in that order too."""
+	module = load(tmp_path, HTTP)
+	raw    = bytearray(b"GET ")
+	view   = module.msg.at(runtime().Message(raw), 0, len(raw))
+
+	with pytest.raises(runtime().ConstraintError, match="the frame stops first"):
+		view.validate()

@@ -25,12 +25,12 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.names import render_delimiter
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	refuse_delimited,
 	Check, Member, classify, classify_check, local_name, obligation,
 	own_entries, own_members,
 )
@@ -52,7 +52,6 @@ class Generated:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> Generated:
-	refuse_delimited(schema, resolved, "Python")
 	return Generated(module=Emitter(schema, resolved, basename).module(),
 	                 basename=basename)
 
@@ -84,7 +83,7 @@ class Emitter:
 			"from situ_runtime import (",
 			"\tConstraintError, Gate, Message, View, acquire, as_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
-			"\tcompose, nul_len, open_gate, utf8_valid,",
+			"\tcompose, nul_len, open_gate, parse_uint, scan, utf8_valid,",
 			")",
 			"",
 			"__all__ = [",
@@ -152,6 +151,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._extent_property(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
@@ -373,6 +373,10 @@ class Emitter:
 		if kind is Member.RESERVED:
 			return ["", f"\t# {placement.path} is reserved: no accessor, and",
 			        "\t# validate() holds it to the pattern the schema declares."]
+		if kind is Member.DELIMITED:
+			return self._delimited(struct, placement)
+		if kind is Member.RECORD_RUN:
+			return self._record_run(struct, placement)
 		if kind is Member.VARIABLE:
 			return self._variable(struct, placement)
 		if kind is Member.NESTED:
@@ -612,6 +616,239 @@ class Emitter:
 
 	# -- dynamic arithmetic --------------------------------------------
 
+	# -- delimited members (section 8.6) --------------------------------
+
+	def _scan_call(self, placement: Placement, data: str, limit: str) -> str:
+		delim = placement.delimiter
+		assert delim is not None
+		args = [data, limit, repr(delim)]
+
+		if placement.delimiter_quote is not None:
+			args.append(f"quote={placement.delimiter_quote}")
+		if placement.delimiter_escape is not None:
+			args.append(f"escape={placement.delimiter_escape}")
+		return f"scan({', '.join(args)})"
+
+	def _delimited(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The same three numbers every backend gives, as properties.
+
+		`_len` is the content, `_span` is content plus delimiter -- what the
+		next member's offset is computed from -- and `_terminated` is neither.
+		Properties rather than methods for the reason the rest of this backend
+		gives: a caller who has to write `packet.line_len()` writes the parser
+		by hand instead, and a backend nobody uses enforces nothing.
+		"""
+		assert placement.delimiter is not None
+		name  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the scan starts."]
+
+		limit = (f"self._len - ({start})" if placement.delimiter_cap is None
+		         else f"min({placement.delimiter_cap}, self._len - ({start}))")
+		data  = f"self._msg.buffer[self._at + ({start}):]"
+
+		lines = [
+			"",
+			f"\t@property",
+			f"\tdef {name}_offset(self) -> int:",
+			f'\t\t"""{placement.path}: where the scan starts."""',
+			f"\t\treturn {start}",
+			"",
+			"\t@property",
+			f"\tdef {name}_len(self) -> int:",
+			f'\t\t"""Content length: to the first {render_delimiter(delim)},'
+			' or the whole run."""',
+			f"\t\treturn {self._scan_call(placement, data, limit)}",
+			"",
+			"\t@property",
+			f"\tdef {name}_terminated(self) -> bool:",
+			f'\t\t"""Whether the delimiter is there at all. It is not when the'
+			' frame was cut short."""',
+			f"\t\treturn self.{name}_len < ({limit})",
+			"",
+			"\t@property",
+			f"\tdef {name}_span(self) -> int:",
+			f'\t\t"""Content plus delimiter: where the next member starts."""',
+			f"\t\treturn self.{name}_len + ({len(delim)} if self.{name}_terminated"
+			" else 0)",
+		]
+
+		if placement.radix is None:
+			lines.extend([
+				"",
+				"\t@property",
+				f"\tdef {name}(self) -> memoryview:",
+				"\t\tself._check()",
+				f"\t\tstart = self._at + self.{name}_offset",
+				f"\t\treturn self._msg.buffer[start:start + self.{name}_len]",
+			])
+			return lines
+
+		return lines + self._text_number(struct, placement)
+
+	def _text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Digits, read through something that can say they are not digits.
+
+		Raising rather than returning None, for the reason `validate` raises:
+		idiom is not a capability, and a None a caller silently drops is worse
+		than an exception they have to catch. `_value` is the same digits
+		where nothing can be raised -- the offset arithmetic after this field
+		is not fallible.
+		"""
+		assert placement.radix is not None
+		scalar = placement.scalar
+		assert scalar is not None
+
+		name  = c_name(local_name(struct, placement))
+		limit = (1 << scalar.bits) - 1
+		raw   = (f"self._msg.buffer[self._at + self.{name}_offset:"
+		         f"self._at + self.{name}_offset + self.{name}_len]")
+
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}(self) -> int:",
+			f'\t\t"""{placement.path}: digits, in the range of {scalar.name}.',
+			"",
+			"\t\tThe only property here that can raise. Every other conversion",
+			"\t\tis total; a decimal parse is not, and returning 0 for `12x4`",
+			'\t\twould hand back a number nobody wrote."""',
+			"\t\tself._check()",
+			f"\t\tvalue = parse_uint({raw}, {placement.radix}, {limit})",
+			"\t\tif value is None:",
+			f"\t\t\traise ConstraintError(",
+			f'\t\t\t\tf"{placement.path} is not a {scalar.name} written in '
+			f'base {placement.radix}")',
+			"\t\treturn value",
+			"",
+			"\t@property",
+			f"\tdef {name}_value(self) -> int:",
+			f'\t\t"""The same digits where nothing may raise.',
+			"",
+			"\t\tThe offset arithmetic after this field is not fallible, and",
+			"\t\tmaking it so would put a try/except in every accessor after",
+			"\t\tit. `validate` refuses a frame whose digits are not digits,",
+			'\t\tso a validated one always parses here."""',
+			f"\t\tvalue = parse_uint({raw}, {placement.radix}, {limit})",
+			"\t\treturn 0 if value is None else value",
+		]
+
+	def _record_run(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run of records, ending where the terminator would be an element."""
+		assert placement.delimiter is not None
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._extent_expression(element) is None:
+			return ["", f"\t# No accessors for {placement.path}: one"
+			        f" `{placement.type_name}` has no extent",
+			        "\t# this backend can compute, so the run cannot be walked."]
+
+		name  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		inner = c_name(placement.type_name or "")
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the run starts."]
+
+		return [
+			"",
+			f"\tdef _{name}_walk(self) -> list[int]:",
+			f'\t\t"""Where each `{placement.type_name}` starts, and where the run'
+			" ends.",
+			"",
+			f"\t\tThe terminator only terminates where an element would start;",
+			"\t\tinside one it is that element's own byte. Bounded twice over,",
+			"\t\tby the buffer and by refusing to advance on a zero-extent",
+			"\t\telement -- a record whose members are all delimited and all",
+			'\t\tempty occupies no bytes, and this would not return."""',
+			"\t\tself._check()",
+			f"\t\tat     = {start}",
+			"\t\tstarts = []",
+			"",
+			f"\t\twhile at + {len(delim)} <= self._len:",
+			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"
+			f"self._at + at + {len(delim)}]) == {delim!r}:",
+			"\t\t\t\tbreak",
+			f"\t\t\telement = {inner}(self._msg, self._at + at, self._len - at)",
+			"\t\t\tsize    = element._extent",
+			"\t\t\tif size == 0 or at + size > self._len:",
+			"\t\t\t\tbreak",
+			"\t\t\tstarts.append(at)",
+			"\t\t\tat += size",
+			"",
+			f"\t\tstarts.append(at + ({len(delim)} if at + {len(delim)}"
+			" <= self._len else 0))",
+			"\t\treturn starts",
+			"",
+			"\t@property",
+			f"\tdef {name}_count(self) -> int:",
+			f"\t\treturn len(self._{name}_walk()) - 1",
+			"",
+			"\t@property",
+			f"\tdef {name}_span(self) -> int:",
+			f'\t\t"""Every element plus the terminator: where the next member'
+			' starts."""',
+			f"\t\treturn self._{name}_walk()[-1] - ({start})",
+			"",
+			f"\tdef {name}(self, index: int) -> {inner}:",
+			f'\t\t"""Element `index`. Walked, not indexed: a view is a value and',
+			"\t\tnothing here keeps a table of offsets, which is what",
+			'\t\t`access = Sequential` in the map is telling you."""',
+			f"\t\tstarts = self._{name}_walk()",
+			"\t\tif not 0 <= index < len(starts) - 1:",
+			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+			f"\t\treturn {inner}(self._msg, self._at + starts[index],",
+			"\t\t\tstarts[index + 1] - starts[index])",
+		]
+
+	def _extent_expression(self, struct: ResolvedStruct) -> str | None:
+		"""How many bytes one instance of a variable struct occupies."""
+		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+			return None
+
+		terms: list[str] = []
+		for placement in own_members(struct):
+			if placement.is_fixed_size:
+				terms.append(str(placement.size_bits // BITS_PER_BYTE))
+				continue
+			if placement.sized_by == "remaining":
+				return None
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return None
+			terms.append(length)
+		return " + ".join(terms) if terms else None
+
+	def _extent_property(self, struct: ResolvedStruct) -> list[str]:
+		"""Emitted only for a type something walks a run of."""
+		if not any(classify(other, entry.placement, self.structs)
+		           is Member.RECORD_RUN
+		           and entry.placement.type_name == struct.name
+		           for other in self.resolved.structs.values()
+		           for entry in other.entries):
+			return []
+
+		extent = self._extent_expression(struct)
+		if extent is None:
+			return []
+
+		return [
+			"",
+			"\t@property",
+			"\tdef _extent(self) -> int:",
+			f'\t\t"""How many bytes one `{struct.name}` occupies.',
+			"",
+			"\t\tA run of these is walked, and the walk needs to know where",
+			'\t\teach one ends."""',
+			f"\t\treturn {extent}",
+		]
+
 	def _offset_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		if placement.offset_bits is not None:
@@ -635,6 +872,12 @@ class Emitter:
 
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
+		# A delimited member's extent is wherever the delimiter turns out to
+		# be, and `_span` is the member's own answer. One name for "how far
+		# this member reaches", whether it is a byte run or a run of records.
+		if placement.delimiter is not None:
+			return f"self.{c_name(local_name(struct, placement))}_span"
+
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
 			return None if start is None else f"(self._len - ({start}))"
@@ -655,6 +898,13 @@ class Emitter:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None or driver.placement.scalar is None:
 			return None
+
+		# A text driver holds digits, not bits, and sits behind the scans of
+		# everything before it -- so neither the offset check below nor the
+		# raw load after it applies.
+		if driver.placement.radix is not None:
+			return f"self.{c_name(local_name(struct, driver.placement))}_value"
+
 		if driver.placement.offset_bits is None:
 			return None
 		return self._raw_load(driver.placement, driver.placement.scalar)
@@ -688,6 +938,39 @@ class Emitter:
 		lines.extend(checks)
 		return lines
 
+	def _delimiter_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The delimiter is there, and a text number's digits are digits.
+
+		Terminated first, and deliberately: for a frame cut short before the
+		digits both are wrong, and "this frame stops early" is the more useful
+		of the two answers. C reports it in that order and so does this.
+		"""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []		# checked under the element's own struct
+
+		name  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		assert delim is not None
+
+		lines = [
+			f"\t\tif not self.{name}_terminated:",
+			f"\t\t\traise ConstraintError(",
+			# `bytes` repr rather than `render_delimiter`, which is the one
+			# place the two differ: the readable form holds both backslashes
+			# and double quotes, and this goes inside a double-quoted Python
+			# literal in generated source. `b'\r\n'` says the same thing and
+			# survives the trip.
+			f'\t\t\t\t"{placement.path} has no '
+			f'{repr(delim).replace(chr(92), chr(92) * 2)}: '
+			'the frame stops first")',
+		]
+		if placement.radix is not None:
+			# Reading it is the check: the property raises for digits that are
+			# not digits, which is the whole of what it is for.
+			lines.append(f"\t\t_ = self.{name}")
+		return lines
+
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		from situc.expr import evaluate
 
@@ -697,6 +980,8 @@ class Emitter:
 
 		check = classify_check(struct, placement, self.structs)
 
+		if check is Check.DELIMITED:
+			return self._delimiter_check(struct, placement)
 		if check is Check.NOTHING:
 			return []
 		if check is Check.REPEATED:
