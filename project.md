@@ -13,7 +13,8 @@ Artifacts:
 | Schema file         | `*.situ`    |
 | Compiler            | `situc`     |
 | C runtime (minimal) | `libsitu`   |
-| Capability map file | `*.situ.map`|
+| Capability map file | `*.situ.map` |
+| Wire signature file | `*.situ.wire` |
 
 ---
 
@@ -2045,6 +2046,17 @@ blame chain for every axis that is not at its strongest value.
 between two schema revisions: fields that lost in-place mutability, size bounds
 that grew, canonicity that was lost. Intended for code review and CI.
 
+**It is a cost linter and not a compatibility one**, and the difference is
+worth stating here as well as in 19: the two questions are asked by different
+people about the same edit. This one answers "does it still cost what it
+cost". `situc wire` answers "can a deployed peer still read it" (19.3).
+
+The clearest way to see that they are different orderings: moving a field out
+of an authenticated region is an **improvement** here, and correctly so --
+a field with no tag over it is cheaper to write. It is also a security
+regression. Both readings are true of the same edit, which is why one tool
+cannot serve both.
+
 ---
 
 ## 19. Schema evolution
@@ -3677,6 +3689,50 @@ there: a grammar -- alternation, repetition and rule references -- which is
 out by decision rather than unfinished, because a parse tree has no offsets to
 be static about.
 
+### 26.22 Schema evolution
+
+Section 19's model, built after the roadmap ran out and prompted by one
+question: can two `.situ` files be compared for a backward-compatible
+extension, and can one file carry more than one version.
+
+Both turned out to rest on a mistake in 19 itself. `situc diff` was described
+as the compatibility linter and is a *cost* linter -- it compares capability
+vectors. Three edits proved the gap before anything was built: a byte-order
+flip reported "No capability change", a same-width member swap reported zero
+regressions, and moving a field out of an authenticated region reported an
+**improvement**. The third is not a bug in the lattice. `Uncovered` ranks
+stronger than `Covered` because a field with no tag over it is cheaper to
+write, and the lattice is right about cost. The mistake was reading a cost
+ordering as a compatibility ordering.
+
+Delivered:
+
+- **`situc wire`** (19.3): the byte-level contract, committed as
+  `NAME.situ.wire` and checked, with the currency test the map has. It
+  classifies rather than diffing -- BREAKING, COVERAGE, backward, forward,
+  api-only -- because the categories are not equally alarming.
+- **`[since = N]`** (19.4): more than one version in one file, append-only by
+  construction. Every member keeps a static offset and the struct's extent is
+  a range, which sound contradictory and are both exact.
+- The two meet: appending a member reports as *probably* safe, and appending
+  one behind a `[since]` reports as *provably* safe, because the old receiver
+  reads the version field and knows the bytes are not its own.
+
+What building it cost, and what that says:
+
+The same accessor was ungated in four backends and the write side in all four
+including C (invariants 27 and 28). The C++ factory shadowed its own class
+name for any schema with a struct called `msg` (invariant 29). `gen-fuzz` had
+never compiled for a variable-size struct at all -- the artifact whose purpose
+is hostile input did not build for the structs most likely to fail on it. And
+the layout solver had been recording `array_count = 1` for a delimited member
+since the construct was added, which six consumers had absorbed (invariant
+25).
+
+None of those are about schema evolution. They were found by it, because
+adding a construct means walking every backend and every artifact, and that
+walk is the only thing that reads them all in one sitting.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -3785,29 +3841,6 @@ be static about.
    structs arrived. Nothing noticed because the only harness the build
    compiled was over a fixed-size schema. `edges.situ` is in that list now,
    which is invariant 15 applied to an artifact rather than to a construct.
-25. **Do not record a fact that is not one, however convenient.** The layout
-   solver set `array_count = 1` on `x[] until "D"` -- one run counted as one
-   element -- and four consumers believed it: the classifier called it an
-   ARRAY, `doc` labelled it `x[1]` and drew a one-byte box, the dissector read
-   one byte and misaligned the rest of the packet, and `gen-checks` sized a
-   synthesised instance from it. Each needed its own code to disbelieve it,
-   and every one of those was written as a bug fix without anyone asking why
-   four places needed the same one.
-
-   Deleting it then exposed two more sites that had been *right by accident*:
-   the dissector and `gen-checks` both reached their delimited branch because
-   a check above them failed, and it failed because of the lie. A false fact
-   in the model is not contained by the code that works around it -- it
-   becomes load-bearing, and the workarounds hold up the wrong thing.
-
-   Removing it also has a second-order form that is harder to see. `size_bits`
-   on a delimited member is its *delimiter's* width -- a true lower bound, and
-   the one number that is not the answer to "which bytes does this member
-   touch". `byte_span` answered with it, so once the count was gone the
-   dissector declared `ProtoField.uint8` for an HTTP header name and Wireshark
-   would have shown a variable-length text field as a single decimal number. A
-   flatly false value gets found; a true value answering a different question
-   does not.
 20. **The shared classifier is only shared if the first backend uses it too.**
    `traverse.classify` was written after three backends shipped the same two
    dispatch bugs, and the C backend -- which had not had them -- was left with
@@ -3844,6 +3877,56 @@ be static about.
    twice: by the view's extent, and by refusing to advance on a zero-length
    element. Generated code never allocates or recurses (invariant 4); it must
    not loop unboundedly either.
+25. **Do not record a fact that is not one, however convenient.** The layout
+   solver set `array_count = 1` on `x[] until "D"` -- one run counted as one
+   element -- and four consumers believed it: the classifier called it an
+   ARRAY, `doc` labelled it `x[1]` and drew a one-byte box, the dissector read
+   one byte and misaligned the rest of the packet, and `gen-checks` sized a
+   synthesised instance from it. Each needed its own code to disbelieve it,
+   and every one of those was written as a bug fix without anyone asking why
+   four places needed the same one.
+
+   Deleting it then exposed two more sites that had been *right by accident*:
+   the dissector and `gen-checks` both reached their delimited branch because
+   a check above them failed, and it failed because of the lie. A false fact
+   in the model is not contained by the code that works around it -- it
+   becomes load-bearing, and the workarounds hold up the wrong thing.
+
+   Removing it also has a second-order form that is harder to see. `size_bits`
+   on a delimited member is its *delimiter's* width -- a true lower bound, and
+   the one number that is not the answer to "which bytes does this member
+   touch". `byte_span` answered with it, so once the count was gone the
+   dissector declared `ProtoField.uint8` for an HTTP header name and Wireshark
+   would have shown a variable-length text field as a single decimal number. A
+   flatly false value gets found; a true value answering a different question
+   does not.
+26. **An assertion weaker than the property passes on broken code.** The
+   cross-backend check that every target refuses a versioned read searched for
+   `"version"` and passed on C++ while C++ was still emitting an ungated
+   getter -- because that substring is in the doc comment saying which version
+   a member arrives in, which an ungated getter carries too. Each refusal is
+   spelled out now. Invariant 22 says a test that greps does not run; this is
+   the case where it greps for the wrong thing and looks like it ran.
+27. **Silence is worse than a crash.** Three backends met `[since]` and
+   emitted a plain getter, building without complaint, so a caller reading a
+   v2 field from a v1 message got whatever followed in the buffer. The same
+   three met `until` and raised an `AssertionError` out of the layout module,
+   which is ugly and told somebody immediately. Where a backend cannot do
+   something, refusing loudly is the floor; emitting something that compiles
+   and is wrong is below it.
+28. **Reading the wrong bytes is a wrong answer; writing them is somebody
+   else's data.** Every backend gated the getter for a versioned member and
+   left the setter open, C included and first. Writing a `[since = 2]` field
+   to a v1 message puts those bytes past the end of that message. Accessor
+   pairs are not symmetric in consequence, and the write side is the one that
+   escapes the object.
+29. **Generated code shares a namespace with names the schema chose.** The C++
+   factory named its own parameter `msg`, so any schema with a struct called
+   `msg` emitted a header where the parameter shadowed the class and the file
+   did not compile. Renaming that one parameter is the same bet again: a
+   schema may call a struct anything. Every generated local is now named so
+   that colliding takes deliberate effort, and `struct msg { ... }` is in the
+   compile lists -- which is the thing that actually catches the next one.
 
 ---
 
