@@ -263,3 +263,13 @@ def test_an_unversioned_member_is_not_guarded() -> None:
 	lua = emit("struct s { u8 v; u16 a; u32 b; }")
 
 	assert "present from version" not in lua
+
+
+def test_a_delimited_member_is_a_bytes_field() -> None:
+	"""Not a uint. Its width is not the delimiter's, and declaring it one made
+	Wireshark render a variable-length header name as a single decimal
+	number."""
+	lua = emit('struct s { u8 name[] until ":"; u8 rest[remaining]; }')
+
+	assert 'ProtoField.bytes("s.name", "name")' in lua
+	assert "ProtoField.uint8(\"s.name\"" not in lua

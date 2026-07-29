@@ -3799,6 +3799,15 @@ be static about.
    a check above them failed, and it failed because of the lie. A false fact
    in the model is not contained by the code that works around it -- it
    becomes load-bearing, and the workarounds hold up the wrong thing.
+
+   Removing it also has a second-order form that is harder to see. `size_bits`
+   on a delimited member is its *delimiter's* width -- a true lower bound, and
+   the one number that is not the answer to "which bytes does this member
+   touch". `byte_span` answered with it, so once the count was gone the
+   dissector declared `ProtoField.uint8` for an HTTP header name and Wireshark
+   would have shown a variable-length text field as a single decimal number. A
+   flatly false value gets found; a true value answering a different question
+   does not.
 20. **The shared classifier is only shared if the first backend uses it too.**
    `traverse.classify` was written after three backends shipped the same two
    dispatch bugs, and the C backend -- which had not had them -- was left with

@@ -291,6 +291,19 @@ def byte_span(placement: Placement) -> tuple[int, int] | None:
 	if placement.offset_bits is None or not placement.size_bits:
 		return None
 
+	# A delimited member has no fixed extent either, and `size_bits` is its
+	# *delimiter's* width -- an honest lower bound, and the one number that is
+	# not the answer to this question. Returning it made a variable-length
+	# text field come out as a two-byte span, and the dissector declared
+	# `ProtoField.uint8` for an HTTP header name: Wireshark would show it as a
+	# single decimal number.
+	#
+	# This is the `array_count` lesson one level down (invariant 25). The
+	# count was flatly false and this is a true number answering a different
+	# question, which is the harder kind to notice.
+	if placement.delimiter is not None:
+		return None
+
 	first = placement.offset_bits // BITS_PER_BYTE
 	last  = (placement.offset_bits + placement.size_bits - 1) // BITS_PER_BYTE
 	return first, last - first + 1

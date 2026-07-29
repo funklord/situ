@@ -354,3 +354,31 @@ def test_a_real_array_still_has_one() -> None:
 	xs = next(p for p in own_members(found["s"]) if p.name == "xs")
 
 	assert xs.array_count == 4
+
+
+def test_a_delimited_member_has_no_byte_span() -> None:
+	"""`size_bits` for one is its *delimiter's* width -- an honest lower bound,
+	and the one number that is not the answer to "which bytes does this
+	touch".
+
+	Returning it made a variable-length text field come out as a two-byte
+	span, and the dissector declared `ProtoField.uint8` for an HTTP header
+	name: Wireshark would have shown it as a single decimal number. That is
+	the `array_count` lesson one level down, and harder to see -- the count
+	was flatly false, and this is a true number answering a different
+	question.
+	"""
+	_, found = schema_of('struct s { u8 line[] until "\\r\\n"; u8 r[remaining]; }')
+	line = next(p for p in own_members(found["s"]) if p.name == "line")
+
+	assert line.size_bits == 16		# the CRLF, and a true lower bound
+	assert byte_span(line) is None
+	assert container_bits(line, (8, 16, 32)) is None
+
+
+def test_a_fixed_member_still_has_one() -> None:
+	"""The half that keeps the other honest."""
+	_, found = schema_of("struct s { u16 a; }")
+	a = next(p for p in own_members(found["s"]) if p.name == "a")
+
+	assert byte_span(a) == (0, 2)
