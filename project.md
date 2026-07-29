@@ -343,7 +343,9 @@ struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
 member        = field | reserved | block | variant | tag_field ;
 
-field         = [ radix ] type_ref ident [ array_spec ] [ until ] [ pin ] [ attrs ] ";" ;
+field         = [ radix ] type_ref ident [ array_spec ] [ until | repeat ]
+                [ pin ] [ attrs ] ";" ;
+repeat        = "while" "(" expr ")" [ "max" expr ] ;   (* section 8.6.6 *)
 radix         = "decimal" | "hex" ;          (* section 8.6.2 *)
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 tag_field     = ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
@@ -843,6 +845,54 @@ definition and the fold is exactly `A`-`Z`.
 
 The two compose with 8.6.2: `decimal u32 n until "\r\n" [trim]` accepts
 ` 5`, and adding `[minimal]` still refuses `007`.
+
+### 8.6.6 A run that ends on a condition
+
+`T x[] while (cond)`: the run ends **after** the element for which `cond` is
+false.
+
+```situ
+struct ext_header {
+	next_header  next;
+	u8           hdr_ext_len;
+	u8           data[(hdr_ext_len + 1) * 8 - 2];
+}
+
+ext_header chain[] while (next == 0 || next == 43 || next == 44
+                          || next == 60) max 8;
+```
+
+**The difference from `until` is the quantifier, and it is the whole of it.**
+`until` asks about the position *before* each element: is the terminator
+standing where an element would start. `while` asks about the element just
+read. Neither expresses the other, and two real protocols wanted the second:
+an IPv6 extension chain ends after the header naming an upper-layer protocol,
+and SMTP's multiline reply ends after the line whose separator is a space.
+
+That pair is why the construct exists. SMTP asked first and was left
+unwritten, with the schema saying so, because one protocol is not evidence
+that a construct is general -- 26.23 records the wait and what ended it.
+
+**The condition reads the element's own fields and nothing else.** Not the
+enclosing struct's: its later members are placed after the run, so asking
+about one would be circular, and its earlier members are a temptation worth
+refusing, because a condition mixing both scopes reads as though it were
+evaluated once and it is evaluated per element.
+
+**A `while` run is never empty.** The first element is parsed before the
+condition is evaluated. Whether the run is there at all is a different
+question and `variant` is what asks it.
+
+**`max N` bounds the walk**, and for a chain it should. RFC 8200 sets no limit
+on the number of extension headers, and a receiver that walks an unbounded
+chain on attacker-chosen input is the denial of service that RFC's own
+security section warns about. The cap is a deployment decision and the schema
+is the right place to record it.
+
+The run is `access = Sequential`: how many elements there are is neither in
+the schema nor stated in the data, so element N is reached by reading the N-1
+before it. A count field ahead of the run would make it `Random`, at the cost
+of a number the format has to carry and keep true.
 
 ### 8.6.5 A region that is both delimited and coded
 

@@ -51,7 +51,7 @@ GEN_DIR		:= $(BUILD_DIR)/gen
 SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   examples/arp/arp.situ examples/bmp/bmp.situ \
 		   examples/dns/dns.situ examples/ethernet/ethernet.situ examples/http/http.situ \
-		   examples/icmp/icmp.situ examples/ipv4/ipv4.situ \
+		   examples/icmp/icmp.situ examples/ipv6ext/ipv6ext.situ examples/ipv4/ipv4.situ \
 		   examples/message/message.situ examples/ntp/ntp.situ \
 		   examples/packet/packet.situ examples/protobuf/protobuf.situ \
 		   examples/registers/registers.situ examples/rtc/rtc.situ examples/smtp/smtp.situ \

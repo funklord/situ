@@ -401,3 +401,37 @@ def test_a_version_field_with_nothing_versioned_yet_is_fine() -> None:
 	force the attribute into the same commit as the first new member, which is
 	where its absence matters least."""
 	parse_text("struct s [version = v] { u8 v; u16 a; }")
+
+
+# -- runs ending on a condition (section 8.6.6) ------------------------------
+
+
+def test_a_while_condition_may_only_read_the_element() -> None:
+	"""The enclosing struct's later members are placed after the run, so
+	asking about one would be circular -- and its earlier members are a
+	temptation worth refusing, because a condition mixing both scopes reads as
+	though it were evaluated once and it is evaluated per element."""
+	message = rendered("struct e { u8 n; }\n"
+	                   "struct s { u8 k; e x[] while (k == 1); }")
+
+	assert "has no field `k`" in message
+	assert "not against `s`" in message
+
+
+def test_a_run_may_not_say_twice_where_it_ends() -> None:
+	message = rendered('struct e { u8 n; }\n'
+	                   'struct s { e x[] until "\\r\\n" while (n == 1); }')
+
+	assert "says twice where its run ends" in message
+
+
+def test_a_condition_needs_a_run_to_end() -> None:
+	message = rendered("struct s { u8 x while (x == 1); }")
+
+	assert "there is no run to end" in message
+
+
+def test_a_condition_needs_an_element_with_fields() -> None:
+	message = rendered("struct s { u8 x[] while (x == 1); }")
+
+	assert "which is not a struct" in message

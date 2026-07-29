@@ -81,10 +81,19 @@ struct data_block {
 // somebody has to find: everything in this file is what situ describes, and a
 // multiline reply is not in it.
 //
-// The construct that would cover it is a run ending on a predicate over the
-// element -- `reply_line lines[] while (separator == 0x2D)`. It is not
-// invented here, because a language addition wants a second protocol asking
-// for the same thing, and one example is not that.
+// The construct that covers it is a run ending on a predicate over the
+// element, and it now exists: `while` (8.6.6). It was not invented for this
+// file, because a language addition wants a second protocol asking for the
+// same thing and one example is not that. IPv6 extension headers asked
+// second, and `examples/ipv6ext` is where it landed.
+//
+// Written out, an SMTP reply is:
+//
+//     reply_line lines[] while (separator == 0x2D);
+//
+// It is left out here on purpose. This file is the record of a construct
+// being asked for and declined, and rewriting it once the answer arrived
+// would erase the more useful half of the example.
 
 // The bill, recorded rather than hidden.
 assert canonical(command.verb);

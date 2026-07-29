@@ -20,6 +20,8 @@ Principles that shape every line emitted here:
 
 from __future__ import annotations
 
+import re
+
 from math import lcm
 
 from dataclasses import dataclass, field
@@ -910,6 +912,10 @@ class Emitter:
 			lines.extend(self._fixed_text_number(struct, placement))
 			return lines
 
+		if placement.repeat_while is not None:
+			lines.extend(self._repeat_while(struct, entry))
+			return lines
+
 		if self._is_record_run(placement):
 			lines.extend(self._record_run(struct, placement))
 			return lines
@@ -1241,6 +1247,7 @@ class Emitter:
 		case reaching for `SIZE_FIXED` instead.
 		"""
 		return any((self._is_record_run(entry.placement)
+		            or entry.placement.repeat_while is not None
 		            or self._is_nested_member(entry.placement))
 		           and entry.placement.type_name == name
 		           for other in self.resolved.structs.values()
@@ -1302,6 +1309,149 @@ class Emitter:
 			lines.append("\t(void)view;")
 		lines.extend(["\treturn extent;", "}"])
 		return lines
+
+	def _repeat_while(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""A run ending after the element that fails a condition (8.6.6).
+
+		Two protocols asked for this and neither could be written with a
+		delimiter: SMTP's multiline reply ends after the line whose separator
+		is a space, and an IPv6 extension chain ends after the header whose
+		`next_header` names an upper-layer protocol. The difference from
+		`until` is the quantifier -- that asks about the position before each
+		element, and this asks about the element just read.
+
+		Never empty: the first element is parsed before the condition is
+		evaluated, and whether the run is there at all is a `variant`'s
+		question.
+		"""
+		placement = entry.placement
+		element   = self.resolved.structs.get(placement.type_name or "")
+		if element is None:
+			return []
+
+		extent = self._element_extent_call(element)
+		if extent is None:
+			return [
+				f"/* No accessors for `{placement.name}`: one"
+				f" `{placement.type_name}` has no",
+				" * extent this build can compute, so the run cannot be"
+				" walked. */",
+			]
+
+		local = c_name(self._local(struct, placement))
+		base  = self._base_expression(struct, placement, gated=False)
+		cond  = self._element_condition(element, placement)
+		cap   = ("" if placement.repeat_cap is None
+		         else f" && n < {placement.repeat_cap}u")
+
+		count = ident(self.prefix, struct.name, local, "count")
+		at    = ident(self.prefix, struct.name, local, "at")
+		span  = ident(self.prefix, struct.name, local, "span")
+
+		walk = [
+			f"\tuint32_t at = {base};",
+			"\tuint32_t n  = 0u;",
+			"",
+			f"\twhile (at < view.limit{cap}) {{",
+			"\t\tsitu_view_t element;",
+			"\t\tuint32_t    size;",
+			"",
+			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			" != SITU_OK) {",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tsize = {extent};",
+			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\t\t/* A zero-extent element would walk here forever, and one",
+			"\t\t\t * running past the limit was never in this frame. */",
+			"\t\t\tbreak;",
+			"\t\t}",
+		]
+
+		return [
+			f"/* `{placement.name}` is a run of `{placement.type_name}` ending"
+			f" after the",
+			f" * element for which `{placement.repeat_while}` is false. The"
+			" element that",
+			" * ends it is part of the run: the condition is asked about it"
+			" after it",
+			" * has been read, which is the whole difference from a"
+			" delimiter. */",
+			f"static inline uint32_t {count}(situ_view_t view)",
+			"{",
+			*walk,
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			f"\t\tif (!({cond})) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			"\t}",
+			"\treturn n;",
+			"}",
+			"",
+			f"static inline situ_err_t {at}(situ_view_t view, uint32_t index,"
+			" situ_view_t *out)",
+			"{",
+			*walk,
+			"\t\tif (n == index) {",
+			"\t\t\treturn situ_view_sub(view, at, size, out);",
+			"\t\t}",
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			f"\t\tif (!({cond})) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			"\t}",
+			"\treturn SITU_ERR_BOUNDS;",
+			"}",
+			"",
+			f"static inline uint32_t {span}(situ_view_t view)",
+			"{",
+			*walk,
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			f"\t\tif (!({cond})) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			"\t}",
+			"\t(void)n;",
+			f"\treturn at - {base};",
+			"}",
+		]
+
+	def _element_extent_call(self, element: ResolvedStruct) -> str | None:
+		"""How one element's length is read, as an expression over `element`."""
+		if element.layout.is_fixed_size:
+			return f"{macro(self.prefix, element.name, 'SIZE_FIXED')}"
+		if not self._struct_extent(element):
+			return None
+		return f"{ident(self.prefix, element.name, 'extent')}(element)"
+
+	def _element_condition(self, element: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The predicate, as C over the element's own view."""
+		return self._over_fields(element, placement.repeat_while or "", "element")
+
+	def _over_fields(self, struct: ResolvedStruct, source: str,
+			held: str) -> str:
+		"""A schema expression over a struct's own fields, as C.
+
+		Every name in it is a field of `struct`, so each becomes that field's
+		getter over the view named by `held`. Longest name first, or `len`
+		would rewrite the `len` inside `hdr_ext_len`.
+		"""
+		for placement in sorted((entry.placement for entry in struct.entries),
+		                        key=lambda p: -len(p.name)):
+			if placement.scalar is None:
+				continue
+			if "." in placement.path[len(struct.name) + 1:]:
+				continue
+			getter = ident(self.prefix, struct.name, c_name(placement.name),
+			               "get")
+			source = re.sub(rf"\b{re.escape(placement.name)}\b",
+			                f"{getter}({held})", source)
+		return source
 
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -1788,11 +1938,11 @@ class Emitter:
 		# delimiter turns out to be. The member emits its own `_span`, which
 		# scans, and everything downstream sums that call rather than trying to
 		# inline the search (section 8.6.1).
-		if placement.delimiter is not None:
-			# The same call for both, and deliberately: a byte array's `_span`
-			# is its content plus the delimiter, a record run's is its
-			# elements plus the terminator. One name for "how far this member
-			# reaches", whichever it turns out to be.
+		if placement.delimiter is not None or placement.repeat_while is not None:
+			# One name for "how far this member reaches", whichever kind it
+			# is: a byte array's `_span` is its content plus the delimiter, a
+			# record run's is its elements plus the terminator, and a `while`
+			# run's is its elements.
 			local = c_name(self._local(struct, placement))
 			return f"{ident(self.prefix, struct.name, local, 'span')}({held})"
 
@@ -1819,6 +1969,15 @@ class Emitter:
 			# An opaque region's size expression is already a byte count; there
 			# are no elements to multiply by.
 			return f"(uint32_t){self._count_expression(struct, placement, held)}"
+
+		# A size that is arithmetic over a field rather than a bare reference
+		# to one. `sized_by` holds a path and holds nothing for this, so the
+		# count branch below returned zero -- for `data[(len + 1) * 8 - 2]`,
+		# which is a length counted in units and about as common as a length
+		# gets.
+		if placement.size_expr is not None:
+			rendered = self._over_fields(struct, placement.size_expr, held)
+			return f"(uint32_t)({rendered})"
 
 		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
 

@@ -1,0 +1,22 @@
+# situ capability map v1
+# schema: ipv6ext.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct ext_header size=8 mutate=Shifting canonical=NonCanonical
+  ext_header.next                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  ext_header.hdr_ext_len                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ext_header.data                        offset=AbsoluteStatic(0x02) size=Bounded(6, 2046) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct packet_tail size=8 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical
+  packet_tail.chain                      offset=AbsoluteStatic(0x00) size=Bounded(8, 16384) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  packet_tail.chain[]                    offset=FrameStatic(0x00) size=Bounded(8, 2048) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  packet_tail.chain[].next               offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  packet_tail.chain[].hdr_ext_len        offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  packet_tail.chain[].data               offset=FrameStatic(0x02) size=Bounded(6, 2046) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  packet_tail.payload                    offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

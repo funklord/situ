@@ -1485,9 +1485,16 @@ class Parser:
 				         "a delimited one has no width to declare"],
 			)
 
+		# Keywords, because this rebuilds a `Field` that another function
+		# built and the positional form silently took `radix` for whatever
+		# field was added most recently.
 		return ast.Field(self.span_from(start), field.name, field.type_ref,
-		                 field.array, field.pin, field.attrs, field.until,
-		                 radix)
+		                 array  = field.array,
+		                 pin    = field.pin,
+		                 attrs  = field.attrs,
+		                 until  = field.until,
+		                 repeat = field.repeat,
+		                 radix  = radix)
 
 	def parse_field(self) -> ast.Field:
 		start    = self.current
@@ -1495,11 +1502,34 @@ class Parser:
 		name     = self.expect_ident("a field name")
 		array    = self.parse_array_spec()
 		until    = self.parse_until()
+		repeat   = self.parse_while()
 		pin      = self.parse_pin()
 		attrs    = self.parse_attrs()
 		self.expect_symbol(";", "after the field declaration")
 		return ast.Field(self.span_from(start), name.text, type_ref, array, pin,
-		                 attrs, until)
+		                 attrs, until, repeat)
+
+	def parse_while(self) -> ast.While | None:
+		"""`while (next_header == 43 || next_header == 44)`.
+
+		Parenthesised, unlike `until`'s bare literal, because it is an
+		expression and the parentheses are what stop `max` after it reading as
+		part of the condition.
+		"""
+		if not self.current.is_ident("while"):
+			return None
+
+		start = self.advance()
+		self.expect_symbol("(", "before the condition")
+		predicate = self.parse_expr()
+		self.expect_symbol(")", "after the condition")
+
+		cap: ast.Expr | None = None
+		if self.current.is_ident("max"):
+			self.advance()
+			cap = self.parse_expr()
+
+		return ast.While(self.span_from(start), predicate, cap)
 
 	def parse_until(self) -> ast.Until | None:
 		"""`until "\\r\\n"`, optionally bounded and optionally relaxed.

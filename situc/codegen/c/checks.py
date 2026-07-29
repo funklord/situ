@@ -141,7 +141,7 @@ def _struct_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 	for entry in struct.entries:
 		_field_checks(suite, resolved, struct, entry, prefix, extent)
 
-	_validate_checks(suite, resolved, struct, prefix, extent)
+	_validate_checks(suite, schema, resolved, struct, prefix, extent)
 	_coverage_checks(suite, schema, struct, prefix, extent)
 	_gate_checks(suite, struct, prefix, extent)
 
@@ -581,6 +581,14 @@ def _versioned_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		 "\t * the start and the setter did not, which is the asymmetry worth",
 		 "\t * naming: reading the wrong bytes is a wrong answer, and writing",
 		 "\t * them is somebody else's data. */"])
+
+
+def _passes_unknown(schema: ast.Schema, name: str | None) -> bool:
+	"""Whether this enum admits values no member names (section 8.7)."""
+	for decl in schema.enums():
+		if decl.name == name:
+			return decl.effective_default is ast.EnumDefault.PASS
+	return False
 
 
 def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
@@ -1284,7 +1292,8 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return writes
 
 
-def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
+def _validate_checks(suite: Suite, schema: ast.Schema,
+		resolved: ResolvedSchema, struct: ResolvedStruct,
 		prefix: str, extent: int) -> None:
 	"""Each declared constraint must actually refuse a buffer that breaks it.
 
@@ -1299,7 +1308,7 @@ def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 	baseline = _baseline(resolved, struct, extent)
 	if baseline is not None:
 		_reserved_checks(suite, resolved, struct, prefix, extent, baseline)
-		_enum_checks(suite, resolved, struct, prefix, extent, baseline)
+		_enum_checks(suite, schema, resolved, struct, prefix, extent, baseline)
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -1337,7 +1346,8 @@ def _validate_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			 " * does not admit has to be refused on parse. */"])
 
 
-def _enum_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
+def _enum_checks(suite: Suite, schema: ast.Schema,
+		resolved: ResolvedSchema, struct: ResolvedStruct,
 		prefix: str, extent: int, baseline: list[str]) -> None:
 	"""An enum field admits its members and, with `default = error`, nothing else.
 
@@ -1360,6 +1370,14 @@ def _enum_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 		decl = next((held for held in resolved.layout.env.enums
 		             if held == placement.type_name), None)
 		if decl is None:
+			continue
+
+		# `default = pass` says an unknown value is accepted, which is exactly
+		# what section 8.7 offers it for -- IANA keeps assigning numbers, and
+		# a receiver refusing tomorrow's would refuse tomorrow's traffic. This
+		# emitted the rejection check regardless of the policy, so a schema
+		# that used the escape hatch failed a test asserting it had not.
+		if _passes_unknown(schema, placement.type_name):
 			continue
 
 		# A value no member names. Walking up from zero finds one unless the

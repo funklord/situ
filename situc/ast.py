@@ -183,6 +183,33 @@ class Until(Node):
 
 
 @dataclass(frozen=True)
+class While(Node):
+	"""`while (separator == 0x2D)` -- a run that ends after an element that
+	fails a predicate (section 8.6.6).
+
+	Different from `until` in the quantifier, which is the whole of it.
+	`until` asks about the position *before* each element: is the terminator
+	standing where an element would start. `while` asks about the element
+	just read. Two real protocols wanted the second and neither could be
+	written with the first: SMTP's multiline reply ends after the line whose
+	separator is a space, and an IPv6 extension chain ends after the header
+	whose `next_header` names an upper-layer protocol.
+
+	The predicate reads the element's own fields, and nothing else. It cannot
+	see the enclosing struct, because the enclosing struct's later members are
+	placed *after* this run and asking about them would be circular.
+
+	A `while` run is never empty: the first element is parsed before the
+	predicate is evaluated. Whether the run is there at all is a different
+	question, and a `variant` is what asks it.
+	"""
+
+	span: Span
+	predicate: Expr
+	cap: Expr | None = None
+
+
+@dataclass(frozen=True)
 class TypeRef(Node):
 	"""A scalar type or a named user type.
 
@@ -218,6 +245,8 @@ class Field(Member):
 	pin: Expr | None		= None
 	attrs: tuple[Attr, ...]		= ()
 	until: Until | None		= None
+	#: `T x[] while (cond)` -- a run ending after the element that fails it.
+	repeat: While | None		= None
 	#: `decimal u32 n until ":"` -- the value is written as digits rather than
 	#: stored as bits. 10 or 16; None for an ordinary scalar. The scalar type
 	#: gives the value's domain, not its width in the buffer, because a text

@@ -1171,6 +1171,14 @@ class Emitter:
 			        f"\t/* {placement.path} is reserved: no accessor, and"
 			        f" `validate` holds it to",
 			        "\t * the pattern the schema declares. */"]
+		if kind is Member.REPEAT_WHILE:
+			return ["",
+			        f"\t/* {placement.path}: a run ending after the element for",
+			        f"\t * which `{placement.repeat_while}` is false.",
+			        "\t *",
+			        "\t * The C backend emits the walk for this (8.6.6) and this",
+			        "\t * one has not caught up. Nothing after it can be placed",
+			        "\t * either, because its extent is what their offsets add. */"]
 		if kind is Member.DELIMITED:
 			return self._delimited(struct, placement)
 		if kind is Member.RECORD_RUN:

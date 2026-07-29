@@ -1,0 +1,64 @@
+// IPv6 extension headers (RFC 8200 section 4).
+//
+// The second protocol to ask for a run that ends on a condition, and the
+// reason `while` exists. SMTP's multiline reply asked first and was left
+// unwritten, because one protocol is not evidence that a construct is
+// general. Two with the same shape and different fields is.
+//
+// The chain: each header names what follows it, and the chain ends at the
+// header naming an upper-layer protocol rather than another extension. That
+// is a test on the header just read, which is what `while` asks and what
+// `until` cannot -- a delimiter asks about the position *before* an element.
+
+target buffer;
+endian big;
+
+enum next_header : u8 {
+	hop_by_hop   = 0,
+	routing      = 43,
+	fragment     = 44,
+	destination  = 60,
+	// The upper-layer protocols that end a chain. Listed because a reader of
+	// the schema should not have to know which numbers are which, and
+	// `default = pass` because IANA keeps assigning more and a receiver that
+	// refused an unknown one would refuse tomorrow's traffic.
+	tcp          = 6,
+	udp          = 17,
+	icmpv6       = 58,
+	no_next      = 59,
+	default      = pass,
+}
+
+// Every extension header but AH and ESP shares this shape. `hdr_ext_len`
+// counts 8-octet units and excludes the first 8, so the whole header is
+// `(hdr_ext_len + 1) * 8` and the data after the two fixed bytes is that
+// less two.
+//
+// A length in units rather than bytes is about as common as a length gets,
+// and until this example the C backend emitted zero for it: `sized_by` holds
+// a field path and holds nothing for arithmetic over one.
+struct ext_header {
+	next_header  next;
+	u8           hdr_ext_len;
+	u8           data[(hdr_ext_len + 1) * 8 - 2];
+}
+
+// The chain, and the construct.
+//
+// `max 8` bounds the walk. RFC 8200 sets no limit on the number of extension
+// headers, and a receiver that walks an unbounded chain on attacker-chosen
+// input is the denial of service the RFC's own security section warns about.
+// The cap is a deployment decision the schema is the right place to record.
+struct packet_tail {
+	ext_header  chain[] while (next == 0 || next == 43 || next == 44
+	                           || next == 60) max 8;
+	u8          payload[remaining];
+}
+
+// The bill.
+//
+// The chain is Sequential because its length is neither in the schema nor
+// stated in the data: it is whichever header first fails the condition. That
+// is the cost of self-describing chains and it is the same cost SMTP pays.
+assert random_access(packet_tail.chain);
+require absolute_static(ext_header.next);

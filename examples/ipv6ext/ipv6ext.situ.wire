@@ -1,0 +1,25 @@
+# situ wire signature v0
+# schema: ipv6ext.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+enum next_header : u8 unknown=pass
+  hop_by_hop=0 routing=43 fragment=44 destination=60 tcp=6 udp=17 icmpv6=58 no_next=59
+
+struct ext_header size=8..2048
+  @0x0000   1         next_header next
+  @0x0001   1         u8         hdr_ext_len
+  @0x0002   6..2046   u8         data  big
+
+struct packet_tail size=8..
+  @0x0000   8..16384  ext_header chain  big
+  ~         0..       u8         payload  sized-by=remaining

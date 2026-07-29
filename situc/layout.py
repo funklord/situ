@@ -136,6 +136,18 @@ class Placement:
 	delimiter_escape: int | None	= None
 	#: A bound on the scan, from `until D max N`.
 	delimiter_cap: int | None	= None
+	#: The array's size expression as source, where it is not a bare field
+	#: reference. `sized_by` holds a path and holds nothing for
+	#: `data[(len + 1) * 8 - 2]`, so a backend reading only that emitted a
+	#: length of zero for one of the commonest shapes there is -- a length
+	#: field counted in units rather than bytes.
+	size_expr: str | None		= None
+	#: `while (cond)`: the run ends after the element that fails this.
+	#: Held as source rather than as a tree, because every consumer of it
+	#: either renders it or hands it to a backend that renders it.
+	repeat_while: str | None	= None
+	#: A bound on the number of elements, from `while (...) max N`.
+	repeat_cap: int | None		= None
 	#: `decimal`/`hex`: the base the value is written in. The `scalar` beside
 	#: it gives the value's domain rather than its width in the buffer, which
 	#: for a text number depends on the number (section 8.6.2).
@@ -1221,7 +1233,9 @@ class Solver:
 		count   = self.array_extent(member, state, last)
 		total   = _multiply(element, count)
 
-		if member.until is not None:
+		if getattr(member, "repeat", None) is not None:
+			total = self.repeated_extent(member, state)
+		elif member.until is not None:
 			total = self.delimited_extent(member, member.until, state)
 		elif getattr(member, "radix", None) is not None and member.array is not None:
 			# `decimal u16 code[3]` is three *digits*, which is three bytes.
@@ -1269,6 +1283,7 @@ class Solver:
 			bit_position   = position,
 			frame_relative = False,
 			sized_by       = self.sizing_field(member),
+			size_expr      = _size_source(member),
 			access_mode    = _access_mode(member, decl),
 			on_read        = _side_effect(member.attrs, "on_read"),
 			on_write       = _side_effect(member.attrs, "on_write"),
@@ -1277,6 +1292,8 @@ class Solver:
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
 			delimiter          = member.until.delimiter if member.until else None,
+			repeat_while       = _repeat_source(member),
+			repeat_cap         = self._repeat_cap(member),
 			radix              = getattr(member, "radix", None),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
 			trimmed            = _has_attr(member.attrs, "trim"),
@@ -1310,6 +1327,39 @@ class Solver:
 			state.cause = (name, member.span, _render_extent(total))
 
 		state.cursor = cursor.advance(total)
+
+	def repeated_extent(self, member: ast.Field | ast.Reserved,
+			state: Walk) -> Interval:
+		"""How many bits a `while` run occupies (section 8.6.6).
+
+		At least one element, because the first is parsed before the predicate
+		is evaluated -- a `while` run is never empty, and whether the run is
+		there at all is a `variant`'s question rather than this one's.
+
+		Unbounded above unless `max N` caps the count, which is the only thing
+		that can: how many elements there are is in the data.
+		"""
+		repeat = getattr(member, "repeat", None)
+		assert repeat is not None
+
+		# `self.structs` holds declarations; the laid-out element is in the
+		# result, and asking the wrong one for a size is how this first
+		# reached for an attribute a `StructDecl` does not have.
+		element = self.result.structs.get(member.type_ref.name)
+		floor   = element.size_bits if element is not None else BITS_PER_BYTE
+		cap     = self._repeat_cap(member)
+
+		if cap is None:
+			return Interval(floor, None)
+
+		ceiling = element.size_max_bits if element is not None else None
+		return Interval(floor, None if ceiling is None else ceiling * cap)
+
+	def _repeat_cap(self, member: ast.Field | ast.Reserved) -> int | None:
+		repeat = getattr(member, "repeat", None)
+		if repeat is None or repeat.cap is None:
+			return None
+		return evaluate(repeat.cap, self.result.env)
 
 	def delimited_extent(self, member: ast.Member,
 			until: ast.Until, state: Walk) -> Interval:
@@ -1603,18 +1653,20 @@ class Solver:
 			return Interval.point(1)
 
 		if member.array.size is None:
-			# `until` is the other thing that can say where an array stops, and
-			# it says it after the brackets rather than inside them: the length
-			# is not a number the schema knows, it is wherever the delimiter
-			# turns out to be (section 8.6.1).
-			if member.until is not None:
+			# `until` and `while` are the other two things that can say where
+			# an array stops, and both say it after the brackets rather than
+			# inside them: the length is not a number the schema knows, it is
+			# wherever the delimiter turns out to be (8.6.1) or wherever the
+			# condition first fails (8.6.6).
+			if member.until is not None or getattr(member, "repeat", None):
 				return Interval.point(1)
 			raise error(
 				"an array needs a size here",
 				member.array.span,
 				label = "expected a length",
 				notes = ["the empty form `[]` is only legal inside an `indexed` "
-				         "region, or with `until` to say where it stops"],
+				         "region, or with `until` or `while` to say where it "
+				         "stops"],
 			)
 
 		if isinstance(member.array.size, ast.Remaining):
@@ -2052,6 +2104,25 @@ def _version_field(decl: ast.StructDecl) -> str | None:
 	from situc.wellformed import _version_field as read
 
 	return read(decl)
+
+
+def _size_source(member: ast.Field | ast.Reserved) -> str | None:
+	"""An array's size as source, when it is more than a field reference."""
+	from situc.unparse import expr_to_source
+
+	array = getattr(member, "array", None)
+	if array is None or array.size is None:
+		return None
+	if isinstance(array.size, ast.Remaining) or _path_of(array.size) is not None:
+		return None		# `[remaining]` and `[n]` are already handled
+	return expr_to_source(array.size)
+
+
+def _repeat_source(member: ast.Field | ast.Reserved) -> str | None:
+	from situc.unparse import expr_to_source
+
+	repeat = getattr(member, "repeat", None)
+	return None if repeat is None else expr_to_source(repeat.predicate)
 
 
 def _delimiter_byte(member: ast.Field | ast.Reserved, name: str) -> int | None:

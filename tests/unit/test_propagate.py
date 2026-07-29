@@ -437,6 +437,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"register-rmw-unsafe",
 		"register-side-effect",
 		# Section 8.6.1, delimiter-framed data.
+		"repeat-while",
 		"delimited-member",
 		"unbounded-scan",
 		"relaxed-delimiter",

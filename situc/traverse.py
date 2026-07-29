@@ -90,6 +90,9 @@ class Member(Enum):
 	#: A run of records ending where a terminator stands in for one:
 	#: `T x[] until "D"` with T a struct.
 	RECORD_RUN = "record_run"
+	#: A run ending after the element that fails a predicate:
+	#: `T x[] while (cond)`.
+	REPEAT_WHILE = "repeat_while"
 	#: Extent decided by the data: `x[n]` or `x[remaining]`.
 	VARIABLE  = "variable"
 	#: A counted array, of scalars or of structs.
@@ -127,6 +130,12 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# It used to come out ARRAY instead, because the solver recorded
 	# `array_count = 1` for the empty bracket form. That lie is gone; the
 	# check stays, because the answer without it is wrong either way.
+	# Before the delimiter, though the two cannot both be set -- wellformed
+	# refuses a member that says twice where its run ends, and the order here
+	# is what makes that refusal the only place it has to be said.
+	if placement.repeat_while is not None:
+		return Member.REPEAT_WHILE
+
 	if placement.delimiter is not None:
 		return (Member.RECORD_RUN if placement.type_name in structs
 		        else Member.DELIMITED)
@@ -185,6 +194,11 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 	# is nothing -- the walk that finds the terminator is the check. Neither
 	# is `REPEATED`, which would validate an encoding over a length that has
 	# not been established yet.
+	# A run's own check is the walk that ends it; validating each element is
+	# the caller's choice, as with any other array of structs.
+	if placement.repeat_while is not None:
+		return Check.NOTHING
+
 	if placement.delimiter is not None:
 		return (Check.NOTHING if placement.type_name in structs
 		        else Check.DELIMITED)

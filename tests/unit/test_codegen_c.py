@@ -1365,3 +1365,62 @@ def test_a_coded_region_gets_no_token_comparison() -> None:
 
 	assert "situ_s_body_eq" not in header
 	assert "the pointer above is" in header
+
+
+# -- runs ending on a condition (section 8.6.6) -----------------------------
+
+CHAIN = (
+	"struct e { u8 next; u8 len; u8 d[(len + 1) * 8 - 2]; }\n"
+	"struct s { e chain[] while (next == 43 || next == 44); u8 rest[remaining]; }\n"
+)
+
+
+def test_a_while_run_is_walked_and_the_condition_asked_after() -> None:
+	"""The whole difference from a delimiter. `until` asks about the position
+	before an element; this asks about the element just read, so the one that
+	ends the run is part of it."""
+	header, _ = emit(CHAIN)
+
+	assert "situ_s_chain_count" in header
+	assert "situ_e_next_get(element) == 43" in header
+	# The condition is tested after the cursor advances, so the failing
+	# element has already been counted.
+	body = header.split("situ_s_chain_count")[1]
+	assert body.index("n  = n + 1u") < body.index("if (!(situ_e_next_get")
+
+
+def test_a_length_in_units_is_not_zero() -> None:
+	"""`sized_by` holds a field path and holds nothing for arithmetic over
+	one, so the length branch returned zero -- for a length counted in units,
+	which is about as common as a length gets."""
+	header, _ = emit(CHAIN)
+
+	assert "(situ_e_len_get(view) + 1) * 8 - 2" in header
+
+
+def test_the_substitution_takes_the_longest_name_first() -> None:
+	"""Or `len` rewrites the `len` inside `hdr_ext_len` and the expression
+	names a getter that does not exist."""
+	header, _ = emit(
+		"struct e { u8 len; u8 hdr_ext_len; u8 d[(hdr_ext_len + 1) * 8 - 2]; }\n"
+		"struct s { e c[] while (len == 1); u8 r[remaining]; }\n")
+
+	assert "situ_e_hdr_ext_len_get" in header
+	assert "situ_e_len_get(view)_ext_len" not in header
+
+
+def test_a_capped_run_stops_counting() -> None:
+	"""RFC 8200 sets no limit on an extension chain, and a receiver walking an
+	unbounded one on attacker-chosen input is the denial of service its own
+	security section warns about."""
+	header, _ = emit(
+		"struct e { u8 next; u8 len; u8 d[(len + 1) * 8 - 2]; }\n"
+		"struct s { e c[] while (next == 43) max 8; u8 r[remaining]; }\n")
+
+	assert "n < 8u" in header
+
+
+def test_the_member_after_a_run_is_placed() -> None:
+	header, _ = emit(CHAIN)
+
+	assert "offset = offset + (situ_s_chain_span(view));" in header

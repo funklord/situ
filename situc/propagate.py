@@ -269,6 +269,10 @@ def _is_unbounded_size(context: Context) -> bool:
 	return context.placement.size_max_bits is None
 
 
+def _is_repeat_while(context: Context) -> bool:
+	return context.placement.repeat_while is not None
+
+
 def _is_delimited(context: Context) -> bool:
 	return context.placement.delimiter is not None
 
@@ -657,6 +661,28 @@ TABLE: tuple[Row, ...] = (
 			            "recompute, which is the one thing that may set it",
 		),
 		applies = _is_derived,
+	),
+	Row(
+		rule = Rule(
+			name      = "repeat-while",
+			construct = "a run that ends after the element failing a condition",
+			effects   = (
+				Effect(Axis.ACCESS, Value("Sequential"),
+				       "how many elements there are is not in the schema and "
+				       "not stated in the data either: it is whichever one "
+				       "first fails the condition, so element N is reached by "
+				       "reading the N-1 before it"),
+				Effect(Axis.MUTATE, Value("Shifting"),
+				       "an element whose length changes moves every element "
+				       "after it, and so does one that starts or stops "
+				       "satisfying the condition"),
+			),
+			remedy    = "`while (...) max N` bounds the walk, which makes the "
+			            "run statically allocatable; a count field ahead of it "
+			            "would make it `Random` instead, at the cost of a "
+			            "number the format has to carry",
+		),
+		applies = _is_repeat_while,
 	),
 	Row(
 		rule = Rule(

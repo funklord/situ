@@ -58,6 +58,7 @@ def check(schema: ast.Schema) -> None:
 	check_registers(schema)
 	check_no_recursive_types(schema)
 	check_delimiters(schema)
+	check_repeats(schema)
 	check_versions(schema)
 	check_invariants(schema)
 
@@ -151,6 +152,80 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 			         "declared size to be the capacity of",
 			         'a nul-framed member is `until "\\0"`'],
 		)
+
+
+def check_repeats(schema: ast.Schema) -> None:
+	"""`while (cond)` runs a predicate over the element just read.
+
+	The predicate reads that element's own fields and nothing else. Not the
+	enclosing struct's: its later members are placed *after* this run, so
+	asking about one would be circular, and its earlier members are a
+	temptation worth refusing -- a condition mixing both scopes reads as
+	though it were evaluated once, and it is evaluated per element.
+	"""
+	structs = {decl.name: decl for decl in schema.structs()}
+
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			if not isinstance(member, (ast.Field, ast.Reserved)):
+				continue
+			repeat = getattr(member, "repeat", None)
+			if repeat is None:
+				continue
+			_check_one_repeat(struct, member, repeat, structs)
+
+
+def _check_one_repeat(struct: ast.StructDecl, member: ast.Field | ast.Reserved,
+		repeat: ast.While, structs: Structs) -> None:
+	name = getattr(member, "name", "a reserved member")
+
+	if member.array is None:
+		raise error(
+			f"`{name}` is a single value, so there is no run to end",
+			repeat.span,
+			label = "`while` here",
+			notes = ["a condition says how far a run of elements goes",
+			         f"`T {name}[] while (...)` frames a run of them"],
+		)
+
+	if member.until is not None:
+		raise error(
+			f"`{name}` says twice where its run ends",
+			repeat.span,
+			label = "a condition and a delimiter",
+			notes = ["`until` ends a run at a terminator standing where an "
+			         "element would start; `while` ends it after an element "
+			         "that fails a test",
+			         "a run that stopped at whichever came first would be two "
+			         "formats depending on the data"],
+		)
+
+	element = structs.get(member.type_ref.name)
+	if element is None:
+		raise error(
+			f"`{name}` repeats `{member.type_ref.name}`, which is not a struct",
+			repeat.span,
+			label = "`while` here",
+			notes = ["the condition reads a field of the element, so the "
+			         "element has to have fields"],
+		)
+
+	for path in paths_in(repeat.predicate):
+		field = path.rpartition(".")[2]
+		if _find_member(element, field) is None:
+			raise error(
+				f"`{member.type_ref.name}` has no field `{field}`",
+				repeat.span,
+				label = "not a field of the element",
+				notes = [
+					f"the condition is evaluated against one `"
+					f"{member.type_ref.name}`, not against `{struct.name}`",
+					"a member of the enclosing struct is either placed after "
+					"this run, which would be circular, or before it and "
+					"unchanging, which reads as though the condition were "
+					"evaluated once rather than per element",
+				],
+			)
 
 
 def check_versions(schema: ast.Schema) -> None:
