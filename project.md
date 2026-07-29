@@ -664,11 +664,19 @@ end of the buffer. Without one the member is also `effect = EffectOnRead`,
 because the cost of a read then depends on the data rather than the schema --
 which an embedded caller has to know before choosing the format.
 
-**The content may not contain the delimiter.** That is not a restriction situ
-invented: content that did would be unrepresentable, since writing it back
-would produce different framing. `validate` refuses such a field and the setter
-refuses such a value, which makes the member `Canonical` and the round trip
-total. For HTTP this enforcement *is* the CRLF-injection check.
+**The content cannot contain the delimiter** -- structurally, not by a check.
+The scan stops at the first occurrence, so a parsed member's content never
+holds one, which is what makes the member `Canonical`. For HTTP that is what
+defeats header injection on the read path: a value with a bare CR or LF cannot
+be produced by parsing, because the scan would have stopped there.
+
+What `validate` does check is the other half. A member whose delimiter is
+absent ran to the end of the buffer rather than to its own end, and that frame
+was cut short.
+
+On the write path a delimited member is reached through its pointer, so
+nothing situ generates can enforce anything; the header says so where the
+covered-pointer note already says the rest.
 
 Where a protocol genuinely admits the delimiter inside a field, say how it is
 made inert -- `[quoted = "\""]` or `[escape = "\\"]`. Both relax the scan and

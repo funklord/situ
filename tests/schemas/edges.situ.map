@@ -24,10 +24,20 @@ struct edges size=19 repr=ValueConverted atomic=NonAtomic
   edges.samples                          offset=AbsoluteStatic(0x03) size=Fixed(8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   edges.deltas                           offset=AbsoluteStatic(0x0B) size=Fixed(8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
 
+struct framed size=9 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
+  framed.magic                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  framed.version                         offset=AbsoluteStatic(0x04) size=Bounded(2, 16) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  framed.label                           offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  framed.count                           offset=Scanned size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential address=Unstable
+
 struct labelled size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   labelled.name                          offset=AbsoluteStatic(0x00) size=Fixed(16) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
   labelled.code                          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   labelled.sequence                      offset=AbsoluteStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+  quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting canonical=NonCanonical effect=EffectOnRead
+  quoted_row.rest                        offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
 struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(tag, checksum)
   two_tags.hop                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

@@ -64,12 +64,17 @@ has to be able to say so. The width in the buffer also varies with the value,
 which `ValueConverted` never does.
 
 **Where the delimiter may occur in the content, the schema says how.** A bare
-`until D` means the first match, and situ *enforces* that the content cannot
-contain `D`: `validate` refuses such a field and the setter refuses such a
-value. That is not a restriction invented here -- content containing the
-delimiter is unrepresentable in the format, since writing it back would produce
-a different framing. Enforcing it makes the field `Canonical` and makes the
-round trip total.
+`until D` means the first match, and the content then cannot contain `D` --
+not because anything checks, but because the scan stops at the first
+occurrence, so a parsed member's content never holds one. It is structural
+rather than validated, which is stronger. That is what makes the field
+`Canonical`: exactly one byte sequence yields a given value.
+
+Content containing the delimiter is unrepresentable in the format anyway, since
+writing it back would produce different framing. What *is* checked on parse is
+the other half: a member whose delimiter is absent ran to the end of the buffer
+rather than to its own end, and that frame was cut short. `validate` returns
+`SITU_ERR_CONSTRAINT` for it.
 
 Where a protocol genuinely admits the delimiter inside a field, that
 enforcement would reject valid data, so the author says how the delimiter is
@@ -82,9 +87,12 @@ inferred, and the safe reading is the silent one (invariant 9).
 
 ## Consequences
 
-For HTTP, the automatic exclusion *is* the CRLF-injection check. A header value
-containing a bare CR or LF is exactly the bug class, and a schema written here
-gets the validator generated rather than remembered.
+For HTTP, the structural exclusion is what defeats header injection on the
+read path: a value containing a bare CR or LF cannot be produced by parsing,
+because the scan would have stopped there. On the write path a delimited member
+is reached through its pointer, so situ enforces nothing and says so where the
+pointer note already says the rest -- which is the honest position, not a
+weaker one dressed up.
 
 Eleven of thirteen axes were said to be vacuous. On the worked example in 8.6
 the count is zero: every axis carries a value that differs between a text field

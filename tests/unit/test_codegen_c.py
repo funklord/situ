@@ -1024,3 +1024,87 @@ def test_an_expression_the_backend_cannot_evaluate_says_so() -> None:
 	                 "invariant s.total == size(s.body) * count(s.body) / 0;\n")
 
 	assert "situ_s_total_set" not in header
+
+
+# -- delimited members (section 8.6.1) --------------------------------------
+
+FRAMED = (
+	'struct s {\n'
+	'\tu8  magic[4];\n'
+	'\tu8  line[] until "\\r\\n";\n'
+	'\tu16 count;\n'
+	'}\n'
+)
+
+
+def test_a_delimited_member_gets_content_and_span() -> None:
+	"""Two numbers, because a caller and the next member want different ones.
+	`_len` is the content; `_span` is content plus delimiter, which is what the
+	following member's offset is computed from."""
+	header, _ = emit(FRAMED)
+
+	assert "static inline uint32_t situ_s_line_len(situ_view_t view)" in header
+	assert "static inline uint32_t situ_s_line_span(situ_view_t view)" in header
+	assert "situ_scan(situ_s_line_ptr(view)" in header
+
+
+def test_the_delimiter_is_part_of_the_span_and_not_the_content() -> None:
+	"""Members partition their struct's bytes exactly, so a delimiter nobody
+	owned would be a hole between two members -- the same reason
+	`nul_terminated` counts its capacity."""
+	header, _ = emit(FRAMED)
+
+	assert "situ_s_line_len(view) + (situ_s_line_terminated(view) ? 2u : 0u)" in header
+
+
+def test_a_missing_delimiter_adds_nothing_to_the_span() -> None:
+	"""The member ran to the end of the buffer. Claiming the delimiter's bytes
+	anyway would put the next member past the limit its own bounds check
+	trusts, which is a read outside the view the caller established."""
+	header, _ = emit(FRAMED)
+
+	assert "situ_s_line_terminated(view) ? 2u : 0u" in header
+
+
+def test_a_later_members_offset_sums_the_scan() -> None:
+	"""Not an inlined search: the member emits its own `_span` and everything
+	downstream calls it, so one scan is described in one place."""
+	header, _ = emit(FRAMED)
+
+	assert "situ_s_count_offset" in header
+	assert "offset = offset + (situ_s_line_span(view));" in header
+
+
+def test_validate_refuses_a_frame_with_no_delimiter_in_it() -> None:
+	"""The one thing parse can check. That the content excludes the delimiter
+	needs no check: the scan stops at the first one, so it holds by
+	construction."""
+	_, source = emit(FRAMED)
+
+	assert "if (!situ_s_line_terminated(view))" in source
+	assert "SITU_ERR_CONSTRAINT" in source
+
+
+def test_a_capped_scan_stops_at_the_smaller_of_cap_and_buffer() -> None:
+	"""A cap larger than what is left would read past the extent the one bounds
+	check established, so the cap alone is not the limit."""
+	header, _ = emit('struct s { u8 line[] until "\\r\\n" max 16; u8 rest[remaining]; }')
+
+	assert "situ_min_u32(16u, view.limit - 0u)" in header
+
+
+def test_a_relaxed_delimiter_scans_for_an_inert_one() -> None:
+	header, _ = emit('struct s { u8 f[] until "," [quoted = "\\""]; u8 rest[remaining]; }')
+
+	assert "situ_scan_relaxed(" in header
+	assert "0x22u" in header or "34u" in header	# the quote byte
+	assert "SITU_NO_BYTE" in header			# no escape byte
+
+
+def test_the_delimiter_comment_reads_as_the_spec_writes_it() -> None:
+	"""`"\\r\\n"` rather than `{0x0D, 0x0A}`: the comment exists to be checked
+	against the specification somebody is implementing, and that document says
+	CRLF."""
+	header, _ = emit(FRAMED)
+
+	assert '`"\\r\\n"`' in header

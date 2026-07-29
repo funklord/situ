@@ -876,6 +876,11 @@ class Emitter:
 		if placement.offset_bits is None:
 			lines.extend(self._offset_function(struct, placement))
 
+		if placement.delimiter is not None:
+			lines.extend(self._delimited(struct, placement))
+			lines.extend(self._covered_pointer_note(struct, placement))
+			return lines
+
 		if placement.type_name in self.structs:
 			if self._is_array(placement):
 				lines.extend(self._element_view(struct, placement))
@@ -1162,6 +1167,96 @@ class Emitter:
 		"""
 		return own_members(struct)
 
+	# -- delimited members (section 8.6.1) ------------------------------
+
+	def _delimited(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Content, length, and where the member ends.
+
+		Three functions rather than one, because a caller and the next member
+		want different numbers. `_len` is the content, which is what a reader
+		of the field wants. `_span` is content plus delimiter, which is what
+		the following member's offset is computed from -- the delimiter belongs
+		to this member's extent even though it is not part of its value, for
+		the reason `nul_terminated` counts its capacity.
+
+		`_terminated` is separate from both. A member whose delimiter is
+		missing is truncated rather than empty, and a getter is not the place
+		to decide what to do about that; `validate` is.
+		"""
+		assert placement.delimiter is not None
+
+		local  = c_name(self._local(struct, placement))
+		delim  = placement.delimiter
+		bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+		base   = self._base_expression(struct, placement, gated=False)
+		limit  = self._scan_limit(placement, base)
+
+		sym        = ident(self.prefix, struct.name, local, "delim")
+		ptr        = ident(self.prefix, struct.name, local, "ptr")
+		length     = ident(self.prefix, struct.name, local, "len")
+		span       = ident(self.prefix, struct.name, local, "span")
+		terminated = ident(self.prefix, struct.name, local, "terminated")
+
+		return [
+			f"/* `{placement.name}` runs to the first {_render_delimiter(delim)}."
+			" Reaching anything after",
+			" * it means this scan, which is why the map calls their offsets"
+			" Scanned",
+			" * rather than Dynamic: it is a search, and the delimiter may not"
+			" be there. */",
+			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
+			"",
+			f"static inline const uint8_t *{ptr}(situ_view_t view)",
+			"{",
+			f"\treturn view.base + {base};",
+			"}",
+			"",
+			f"static inline uint32_t {length}(situ_view_t view)",
+			"{",
+			f"\treturn {self._scan_call(placement, f'{ptr}(view)', limit, sym)};",
+			"}",
+			"",
+			f"static inline int {terminated}(situ_view_t view)",
+			"{",
+			f"\treturn {length}(view) < ({limit});",
+			"}",
+			"",
+			f"static inline uint32_t {span}(situ_view_t view)",
+			"{",
+			"\t/* The delimiter is this member's too, so the next member starts",
+			"\t * after it. Where it is missing there is nothing to add: the",
+			"\t * member ran to the end of the buffer, and claiming the extra",
+			"\t * bytes would put the next one past the limit its own bounds",
+			"\t * check trusts. */",
+			f"\treturn {length}(view) + "
+			f"({terminated}(view) ? {len(delim)}u : 0u);",
+			"}",
+		]
+
+	def _scan_limit(self, placement: Placement, base: str) -> str:
+		"""How far the scan may run: to the cap, or to the end of the buffer."""
+		if placement.delimiter_cap is None:
+			return f"view.limit - {base}"
+		# The smaller of the two, not the cap alone: a cap larger than what is
+		# left would read past the extent the one bounds check established.
+		return f"situ_min_u32({placement.delimiter_cap}u, view.limit - {base})"
+
+	def _scan_call(self, placement: Placement, data: str, limit: str,
+			sym: str) -> str:
+		delim = placement.delimiter
+		assert delim is not None
+
+		if placement.delimiter_quote is None and placement.delimiter_escape is None:
+			return f"situ_scan({data}, {limit}, {sym}, {len(delim)}u)"
+
+		quote  = (f"{placement.delimiter_quote}u"
+		          if placement.delimiter_quote is not None else "SITU_NO_BYTE")
+		escape = (f"{placement.delimiter_escape}u"
+		          if placement.delimiter_escape is not None else "SITU_NO_BYTE")
+		return (f"situ_scan_relaxed({data}, {limit}, {sym}, "
+		        f"{len(delim)}u, {quote}, {escape})")
+
 	def _offset_function(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Resolve a dynamic offset by summing what precedes it.
@@ -1230,6 +1325,14 @@ class Emitter:
 		through whichever view the caller holds.
 		"""
 		gated = held != "view"
+
+		# A delimited member's extent is not a closed form: it is wherever the
+		# delimiter turns out to be. The member emits its own `_span`, which
+		# scans, and everything downstream sums that call rather than trying to
+		# inline the search (section 8.6.1).
+		if placement.delimiter is not None:
+			local = c_name(self._local(struct, placement))
+			return f"{ident(self.prefix, struct.name, local, 'span')}({held})"
 
 		if placement.kind in ("coded", "sealed"):
 			length = self._region_length(struct, placement, held)
@@ -1717,6 +1820,31 @@ class Emitter:
 
 	# -- validation -----------------------------------------------------
 
+	def _delimiter_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A delimited member whose delimiter is missing is a truncated frame.
+
+		The other half of section 8.6.1 -- that the content may not contain the
+		delimiter -- is not checked here, because there is nothing to check:
+		the scan stops at the first occurrence, so a parsed member's content
+		cannot contain one. It holds by construction, which is stronger than a
+		check. Writing is the direction where it can be broken, and a delimited
+		member is written through its pointer, so the header says so where a
+		pointer note already says the rest.
+		"""
+		local = c_name(self._local(struct, placement))
+		delim = placement.delimiter
+		assert delim is not None
+
+		return [
+			f"\t/* `{placement.name}` runs to {_render_delimiter(delim)}, and a",
+			"\t * frame that does not contain it was cut short: the member ran",
+			"\t * to the end of the buffer rather than to its own end. */",
+			f"\tif (!{ident(self.prefix, struct.name, local, 'terminated')}(view)) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
 	def _validate_decl(self, struct: ResolvedStruct) -> list[str]:
 		return [
 			"",
@@ -1766,6 +1894,14 @@ class Emitter:
 	def _checks_for(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
+
+		# A delimited member's delimiter has to be there. That is the one thing
+		# parse can check about it: the content cannot contain the delimiter,
+		# but not because anything looks -- the scan stops at the first one, so
+		# it holds by construction. A missing delimiter is different, and is
+		# the truncated-frame case.
+		if placement.delimiter is not None:
+			return self._delimiter_check(struct, placement)
 
 		# A struct-typed member carries its own constraints, and they are not
 		# this function's to restate: delegate to the type's own validator.
@@ -2089,3 +2225,17 @@ def _bit_assembly(endian: ast.Endian | None) -> str:
 	if endian is ast.Endian.NATIVE:
 		return "ne"
 	return "lsb" if endian is ast.Endian.LITTLE else "msb"
+
+
+def _render_delimiter(delim: bytes) -> str:
+	"""A delimiter as a reader of the generated header would write it.
+
+	`"\\r\\n"` rather than `{0x0D, 0x0A}`: the comment is there to be checked
+	against the specification somebody is implementing, and that specification
+	says CRLF.
+	"""
+	named = {0x0D: "\\r", 0x0A: "\\n", 0x09: "\\t", 0x00: "\\0"}
+	shown = "".join(named.get(byte, chr(byte) if 0x20 <= byte < 0x7F
+	                          else f"\\x{byte:02x}")
+	                for byte in delim)
+	return f'`"{shown}"`'

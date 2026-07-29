@@ -454,6 +454,107 @@ static inline int situ_nul_terminated(const uint8_t *data, uint32_t capacity)
 	return situ_nul_len(data, capacity) < capacity;
 }
 
+static inline uint32_t situ_min_u32(uint32_t a, uint32_t b)
+{
+	return a < b ? a : b;
+}
+
+/* Delimited members (section 8.6.1).
+ *
+ * `situ_scan` returns the offset of the first occurrence of `delim` within
+ * `limit` bytes, or `limit` when it is not there. The caller distinguishes the
+ * two: a member whose delimiter is absent is truncated, not empty, and a
+ * getter is not the place to decide what to do about that.
+ *
+ * Naive matching, deliberately. A delimiter is one or two bytes in every
+ * format this targets, so the setup cost of anything cleverer exceeds the scan
+ * it would save, and the generated code stays something a reader can check
+ * against the spec they are implementing.
+ */
+static inline uint32_t situ_scan(const uint8_t *data, uint32_t limit,
+		const uint8_t *delim, uint32_t delim_len)
+{
+	uint32_t i;
+	uint32_t j;
+
+	if (delim_len == 0u || delim_len > limit) {
+		return limit;
+	}
+
+	for (i = 0u; i + delim_len <= limit; i++) {
+		for (j = 0u; j < delim_len; j++) {
+			if (data[i + j] != delim[j]) {
+				break;
+			}
+		}
+		if (j == delim_len) {
+			return i;
+		}
+	}
+	return limit;
+}
+
+/* The same, with a byte that makes the delimiter inert.
+ *
+ * `quote` toggles: inside a quoted run the delimiter is content. `escape`
+ * applies to the byte after it, including a quote byte and including itself.
+ * Either may be `SITU_NO_BYTE` to say the format does not have one.
+ *
+ * A quoted run left open at the end of the buffer finds no delimiter, which
+ * is the same answer as a delimiter that is not there -- and the right one,
+ * since the content the schema describes has not been terminated.
+ */
+#define SITU_NO_BYTE 0x100u
+
+static inline uint32_t situ_scan_relaxed(const uint8_t *data, uint32_t limit,
+		const uint8_t *delim, uint32_t delim_len,
+		uint32_t quote, uint32_t escape)
+{
+	uint32_t i;
+	uint32_t j;
+	int      quoted = 0;
+
+	if (delim_len == 0u || delim_len > limit) {
+		return limit;
+	}
+
+	for (i = 0u; i + delim_len <= limit; i++) {
+		if (escape != SITU_NO_BYTE && data[i] == (uint8_t)escape) {
+			i++;		/* the next byte is content, whatever it is */
+			continue;
+		}
+		if (quote != SITU_NO_BYTE && data[i] == (uint8_t)quote) {
+			quoted = !quoted;
+			continue;
+		}
+		if (quoted) {
+			continue;
+		}
+		for (j = 0u; j < delim_len; j++) {
+			if (data[i + j] != delim[j]) {
+				break;
+			}
+		}
+		if (j == delim_len) {
+			return i;
+		}
+	}
+	return limit;
+}
+
+/* Whether the content of a bare delimited member is representable.
+ *
+ * Without a quote or escape byte the content may not contain the delimiter:
+ * writing back content that did would produce different framing, so such a
+ * field did not come from this schema. For a CRLF-framed protocol this is the
+ * header-injection check, which is why it is generated rather than remembered.
+ */
+static inline int situ_delimiter_absent(const uint8_t *data, uint32_t len,
+		const uint8_t *delim, uint32_t delim_len)
+{
+	return situ_scan(data, len, delim, delim_len) == len;
+}
+
 static inline int situ_ascii_valid(const uint8_t *data, uint32_t len)
 {
 	uint32_t i;

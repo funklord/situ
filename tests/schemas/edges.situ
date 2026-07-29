@@ -111,3 +111,26 @@ struct derived {
 
 require size(derived) == 13;
 invariant derived.total == size(derived.a) + size(derived.b);
+
+// Delimiter-framed members, and a frame that mixes them with placed ones.
+//
+// The construct section 8.6.1 adds. Here rather than in an example protocol
+// because the point is the *mixture*: `magic` keeps a static offset, `count`
+// is an ordinary big-endian u16 that has lost one, and the map has to say so.
+//
+// `version` is capped and `label` is not, which is the difference between
+// Bounded and Unbounded and between Pure and EffectOnRead on the same
+// construct.
+struct framed {
+	u8   magic[4];
+	u8   version[] until "\r\n" max 16;
+	u8   label[]   until "\0";
+	u16  count;
+}
+
+// A delimiter the content may contain, which is the other half of 8.6.1 and
+// the only thing in the tree that is NonCanonical for that reason.
+struct quoted_row {
+	u8  field[] until "," [quoted = "\""];
+	u8  rest[remaining];
+}

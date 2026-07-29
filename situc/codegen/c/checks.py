@@ -167,6 +167,12 @@ def _element_bytes(resolved: ResolvedSchema, placement: Placement) -> int | None
 	return int(nested.layout.size_bytes)
 
 
+#: Content bytes given to each delimited member of a synthesised instance.
+#: Non-zero so that a member's content is distinguishable from the zero fill,
+#: and small enough that several fit a comfortable buffer.
+INSTANCE_CONTENT = 3
+
+
 def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 		chosen: dict[str, int]) -> int | None:
 	"""The size this member takes in the synthesised instance.
@@ -175,6 +181,14 @@ def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 	knows how to pin down, and guessing would put every later member on an
 	offset the check would then assert with confidence.
 	"""
+	if placement.delimiter is not None:
+		# Chosen rather than derived: a delimited member is as long as the
+		# instance decides to make it, and the instance writes the delimiter
+		# where it says. Deriving it from `size_bits` gave the empty content
+		# case and then asserted an offset the accessor -- scanning a buffer
+		# with no delimiter in it -- had no reason to agree with.
+		return INSTANCE_CONTENT + len(placement.delimiter)
+
 	if placement.sized_by == "remaining":
 		return INSTANCE_TAIL
 	if placement.sized_by is not None:
@@ -235,13 +249,36 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	body  = [
 		f"\tuint8_t buf[{total}u];",
 		"\tsitu_msg_t msg;",
-		"\tsitu_view_t view;",
+		# Zeroed rather than left to the acquisition: a view is written only
+		# when `situ_view_at` succeeds, and a compiler that cannot prove the
+		# assertion below holds is right to say so.
+		"\tsitu_view_t view = {0};",
 		"",
 		"\tmemset(buf, 0, sizeof buf);",
+	]
+
+	delimited = [(placement, offset) for placement, offset in offsets
+	             if placement.delimiter is not None]
+	if delimited:
+		body.extend([
+			"",
+			f"\t/* Put each delimiter {INSTANCE_CONTENT} bytes into its member, so",
+			"\t * the scan has something to find. Without this every delimited",
+			"\t * member runs to the end of the buffer and the offsets below",
+			"\t * are arithmetic about a frame that does not exist. */",
+		])
+		for placement, offset in delimited:
+			assert placement.delimiter is not None
+			for index, byte in enumerate(placement.delimiter):
+				body.append(f"\tbuf[{offset + INSTANCE_CONTENT + index}u] = "
+				            f"0x{byte:02X}u;")
+
+	body.extend([
+		"",
 		"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
 		f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
 		f"(&msg, 0, {total}u, &view), SITU_OK);",
-	]
+	])
 
 	if setters:
 		body.extend([

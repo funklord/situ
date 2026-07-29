@@ -55,7 +55,77 @@ def check(schema: ast.Schema) -> None:
 	check_nonce_references(schema)
 	check_registers(schema)
 	check_no_recursive_types(schema)
+	check_delimiters(schema)
 	check_invariants(schema)
+
+
+#: Attributes that only mean anything on a delimited member.
+DELIMITER_ATTRS = ("quoted", "escape")
+
+
+def check_delimiters(schema: ast.Schema) -> None:
+	"""`until` says where a member stops, so nothing else may also say it.
+
+	Every refusal here is a member that would have two answers to one question,
+	or an attribute with nothing to attach to. Both are ambiguity, which
+	section 17.0 makes an error rather than a preference.
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			if not isinstance(member, (ast.Field, ast.Reserved)):
+				continue
+			_check_one_delimiter(member)
+
+
+def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
+	name = getattr(member, "name", "a reserved member")
+
+	if member.until is None:
+		for attr in member.attrs:
+			if attr.name in DELIMITER_ATTRS:
+				raise error(
+					f"`{attr.name}` needs a delimiter to make inert",
+					attr.span,
+					label = "no `until` on this member",
+					notes = [f"`{attr.name}` says how a delimiter may appear "
+					         "inside the content, and this member has no "
+					         "delimiter",
+					         'add `until "D"`, or drop the attribute'],
+				)
+		return
+
+	if member.array is not None and member.array.size is not None:
+		raise error(
+			f"`{name}` says twice where it stops",
+			member.until.span,
+			label = "a delimiter here",
+			notes = ["the array already gives a length, and a member that ran "
+			         "to whichever came first would be two formats depending on "
+			         "the data",
+			         "keep the length for a fixed-extent field, or the "
+			         "delimiter for a framed one"],
+		)
+
+	if member.array is None:
+		raise error(
+			f"`{name}` is a single value, so a delimiter has nothing to bound",
+			member.until.span,
+			label = "not an array",
+			notes = ["a delimiter says how far a run of elements goes",
+			         f"`{member.type_ref.name} {name}[] until ...` frames a "
+			         "run of them"],
+		)
+
+	if any(attr.name == "nul_terminated" for attr in member.attrs):
+		raise error(
+			f"`{name}` is both delimited and nul-terminated",
+			member.until.span,
+			label = "a delimiter here",
+			notes = ["`nul_terminated` reads the declared size as a capacity "
+			         "and the content to the first zero; `until` has no "
+			         "declared size to be the capacity of",
+			         'a nul-framed member is `until "\\0"`'],
+		)
 
 
 def check_invariants(schema: ast.Schema) -> None:
