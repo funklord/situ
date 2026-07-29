@@ -910,6 +910,7 @@ class Emitter:
 				lines.extend(self._text_number(struct, placement))
 				lines.extend(self._text_value_helper(struct, placement))
 			else:
+				lines.extend(self._token_compare(struct, placement))
 				lines.extend(self._covered_pointer_note(struct, placement))
 			return lines
 
@@ -1423,7 +1424,15 @@ class Emitter:
 		span       = ident(self.prefix, struct.name, local, "span")
 		terminated = ident(self.prefix, struct.name, local, "terminated")
 
-		return [
+		raw = ident(self.prefix, struct.name, local, "raw_len")
+		# Trimming separates the two questions a delimited member answers.
+		# The *framing* is the scan: where the delimiter is, and therefore
+		# where the next member starts. The *value* is what is left after the
+		# whitespace at either end. Without `[trim]` they are the same number
+		# and only one function is emitted for both.
+		scan_len = raw if placement.trimmed else length
+
+		lines = [
 			f"/* `{placement.name}` runs to the first {render_delimiter(delim)}."
 			" Reaching anything after",
 			" * it means this scan, which is why the map calls their offsets"
@@ -1432,19 +1441,14 @@ class Emitter:
 			" be there. */",
 			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
 			"",
-			f"static inline const uint8_t *{ptr}(situ_view_t view)",
+			f"static inline uint32_t {scan_len}(situ_view_t view)",
 			"{",
-			f"\treturn view.base + {base};",
-			"}",
-			"",
-			f"static inline uint32_t {length}(situ_view_t view)",
-			"{",
-			f"\treturn {self._scan_call(placement, f'{ptr}(view)', limit, sym)};",
+			f"\treturn {self._scan_call(placement, f'view.base + {base}', limit, sym)};",
 			"}",
 			"",
 			f"static inline int {terminated}(situ_view_t view)",
 			"{",
-			f"\treturn {length}(view) < ({limit});",
+			f"\treturn {scan_len}(view) < ({limit});",
 			"}",
 			"",
 			f"static inline uint32_t {span}(situ_view_t view)",
@@ -1454,10 +1458,37 @@ class Emitter:
 			"\t * member ran to the end of the buffer, and claiming the extra",
 			"\t * bytes would put the next one past the limit its own bounds",
 			"\t * check trusts. */",
-			f"\treturn {length}(view) + "
+			f"\treturn {scan_len}(view) + "
 			f"({terminated}(view) ? {len(delim)}u : 0u);",
 			"}",
+			"",
 		]
+
+		if not placement.trimmed:
+			lines.extend([
+				f"static inline const uint8_t *{ptr}(situ_view_t view)",
+				"{",
+				f"\treturn view.base + {base};",
+				"}",
+			])
+			return lines
+
+		lines.extend([
+			"/* `[trim]`: the whitespace at either end is framing rather than",
+			" * value, so the span above is unchanged -- those bytes are still",
+			" * this member's -- and these two describe what is left. */",
+			f"static inline const uint8_t *{ptr}(situ_view_t view)",
+			"{",
+			f"\treturn view.base + {base} + situ_trim_start(view.base + {base},"
+			f" {scan_len}(view));",
+			"}",
+			"",
+			f"static inline uint32_t {length}(situ_view_t view)",
+			"{",
+			f"\treturn situ_trim_len(view.base + {base}, {scan_len}(view));",
+			"}",
+		])
+		return lines
 
 	def _text_number(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -1506,6 +1537,43 @@ class Emitter:
 			"\t}",
 			f"\t*out = ({ctype})value;",
 			"\treturn SITU_OK;",
+			"}",
+		]
+
+	def _token_compare(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""How to ask whether a delimited value is a particular token.
+
+		Emitted for every delimited byte run, not only the case-insensitive
+		ones, because the question "is this field `Content-Length`" is the
+		thing a caller of a text format actually asks -- and the answer depends
+		on what the schema says about case. Leaving it to the caller means
+		leaving them to decide, and the schema has already decided.
+
+		`[case_insensitive]` folds ASCII case; without it this is a plain
+		compare. Either way the length is checked first, so a prefix is not a
+		match -- which `strncmp` against a literal would have made it.
+		"""
+		local  = c_name(self._local(struct, placement))
+		ptr    = ident(self.prefix, struct.name, local, "ptr")
+		length = ident(self.prefix, struct.name, local, "len")
+		fold   = "situ_ascii_ci_eq" if placement.case_insensitive else "situ_bytes_eq"
+
+		how = ("folding ASCII case, because the schema says this token is "
+		       "case-insensitive" if placement.case_insensitive
+		       else "byte for byte")
+
+		return [
+			"",
+			f"/* Whether `{placement.name}` is a given token, compared {how}.",
+			" *",
+			" * The length is checked first, so a prefix is not a match --"
+			" which is",
+			" * what `strncmp` against a literal quietly makes it. */",
+			f"static inline int {ident(self.prefix, struct.name, local, 'eq')}"
+			"(situ_view_t view, const uint8_t *other, uint32_t other_len)",
+			"{",
+			f"\treturn {fold}({ptr}(view), {length}(view), other, other_len);",
 			"}",
 		]
 

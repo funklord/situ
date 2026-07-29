@@ -384,6 +384,29 @@ def parse_uint(data: memoryview | bytes, radix: int, limit: int) -> int | None:
 DIGITS: Final = "0123456789abcdef"
 
 
+#: What `[trim]` removes. Space and horizontal tab, and nothing else -- not
+#: `str.strip`, which also takes CR, LF, VT and FF, three of which are
+#: delimiters in the protocols this is for. This is HTTP's OWS.
+OWS: Final = b" \t"
+
+
+def trim(data: memoryview | bytes) -> bytes:
+	"""The value with the optional whitespace at either end removed."""
+	return bytes(data).strip(OWS)
+
+
+def ascii_ci_eq(a: memoryview | bytes, b: memoryview | bytes) -> bool:
+	"""ASCII case folding, and only ASCII.
+
+	`str.lower` is Unicode: it maps `KELVIN SIGN` to `k` and the Turkish
+	dotless forms in ways a protocol token never means. Folding exactly A-Z
+	is what the formats specify.
+	"""
+	fold = bytes.maketrans(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+	                       b"abcdefghijklmnopqrstuvwxyz")
+	return bytes(a).translate(fold) == bytes(b).translate(fold)
+
+
 def digits_minimal(data: memoryview | bytes, radix: int) -> bool:
 	"""Whether digits are the one spelling of their value (section 8.6.2).
 

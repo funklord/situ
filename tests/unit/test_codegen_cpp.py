@@ -181,6 +181,11 @@ def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	'struct s { decimal u16 n until "\\r\\n" max 8; u8 body[n]; }',
 	'struct kv { u8 k[] until ": "; u8 v[] until "\\r\\n"; }\n'
 	'struct blk { kv entries[] until "\\r\\n"; u8 payload[remaining]; }',
+	# Section 8.6.4: optional whitespace and a case-insensitive token, which
+	# split what had been one number into framing and value.
+	'struct h { u8 n[] until ":" [case_insensitive]; u8 v[] until "\\r\\n" [trim]; }\n'
+	'struct r { h fields[] until "\\r\\n"; u8 body[remaining]; }',
+	'struct s { decimal u16 n until "\\r\\n" [trim, minimal]; u8 b[n]; }',
 ])
 def test_it_compiles_clean(tmp_path: Path, body: str) -> None:
 	result = compiles(tmp_path, body)

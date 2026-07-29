@@ -294,6 +294,39 @@ pub fn parse_uint(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
 	Some(value)
 }
 
+/// What `[trim]` removes: space and horizontal tab, and nothing else.
+///
+/// Not `u8::is_ascii_whitespace`, which also takes CR, LF and FF -- three of
+/// which are delimiters in the protocols this is for, so trimming them would
+/// eat the framing. This is HTTP's OWS.
+#[inline]
+pub fn is_ows(byte: u8) -> bool {
+	byte == b' ' || byte == b'\t'
+}
+
+/// The value with the optional whitespace at either end removed.
+#[inline]
+pub fn trim(bytes: &[u8]) -> &[u8] {
+	let mut start = 0;
+	let mut end = bytes.len();
+
+	while start < end && is_ows(bytes[start]) {
+		start += 1;
+	}
+	while end > start && is_ows(bytes[end - 1]) {
+		end -= 1;
+	}
+	&bytes[start..end]
+}
+
+/// ASCII case folding, and only ASCII: a protocol token is ASCII by
+/// definition, and `to_lowercase` is Unicode.
+#[inline]
+pub fn ascii_ci_eq(a: &[u8], b: &[u8]) -> bool {
+	a.len() == b.len()
+		&& a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
+}
+
 /// Whether digits are the one spelling of their value (section 8.6.2).
 ///
 /// A leading zero is another spelling of the same number, and above base ten

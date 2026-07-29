@@ -443,6 +443,8 @@ def test_reachable_rows_are_all_tested() -> None:
 		"scanned-predecessor",
 		"text-number",
 		"non-minimal-text-number",
+		"trimmed-value",
+		"case-insensitive-token",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 

@@ -1045,7 +1045,10 @@ def test_a_delimited_member_gets_content_and_span() -> None:
 
 	assert "static inline uint32_t situ_s_line_len(situ_view_t view)" in header
 	assert "static inline uint32_t situ_s_line_span(situ_view_t view)" in header
-	assert "situ_scan(situ_s_line_ptr(view)" in header
+	# The scan reads from the member's own base rather than through `_ptr`.
+	# With `[trim]` those differ -- `_ptr` skips the leading whitespace, and a
+	# scan starting there would measure the wrong run.
+	assert "situ_scan(view.base + 4u" in header
 
 
 def test_the_delimiter_is_part_of_the_span_and_not_the_content() -> None:

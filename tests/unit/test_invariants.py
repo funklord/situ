@@ -306,3 +306,72 @@ def test_no_backend_enforces_it_uninvited(target: str) -> None:
 	source = "\n".join(emit(schema, resolved, "unit").files().values())
 
 	assert "digits_minimal" not in source
+
+
+# -- optional whitespace and case-insensitive tokens (section 8.6.4) --------
+
+MESSY = (
+	'struct hdr {\n'
+	'\tu8 name[]  until ":"    [case_insensitive];\n'
+	'\tu8 value[] until "\\r\\n" [trim];\n'
+	'}\n'
+	'struct req { hdr fields[] until "\\r\\n"; u8 body[remaining]; }\n'
+)
+
+
+@pytest.mark.parametrize("field", ["hdr.name", "hdr.value"])
+def test_both_cost_canonicity(field: str) -> None:
+	"""`Content-Length` and `content-length` are one token with two spellings;
+	` 5` and `5` are one value with two. That is what the axis is for, and both
+	attributes are ways of saying the bytes do not follow from the value."""
+	schema   = parse_text(PREAMBLE + MESSY)
+	resolved = resolve(schema, solve(schema))
+	entry    = next(e for s in resolved.structs.values() for e in s.entries
+	                if e.placement.path == field)
+
+	assert entry.vector.get(Axis.CANONICAL).base == "NonCanonical"
+
+
+def test_trimming_does_not_move_the_next_member() -> None:
+	"""`[trim]` changes what the value *is*, not where the member ends. The
+	whitespace is still this member's bytes -- members partition their struct
+	exactly -- so the framing is untouched and only the value is narrower."""
+	schema   = parse_text(PREAMBLE + MESSY)
+	resolved = resolve(schema, solve(schema))
+
+	value = next(e for s in resolved.structs.values() for e in s.entries
+	             if e.placement.path == "hdr.value")
+
+	assert value.placement.trimmed
+	# The span the layout solver computed is the delimiter run, not the
+	# trimmed content: trimming is an accessor-level fact.
+	assert value.placement.size_bits == 2 * 8
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_every_backend_trims_and_folds(target: str) -> None:
+	schema   = parse_text(PREAMBLE + MESSY)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "trim" in source
+	assert "ci_eq" in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_plain_token_compares_byte_for_byte(target: str) -> None:
+	"""The comparison is generated either way, because "is this field
+	`Content-Length`" is what a caller of a text format actually asks. What
+	changes is whether case is folded, and the schema decides that -- not each
+	caller separately."""
+	plain    = 'struct s { u8 name[] until ":"; u8 rest[remaining]; }'
+	schema   = parse_text(PREAMBLE + plain)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "name_eq" in source
+	assert "ci_eq" not in source

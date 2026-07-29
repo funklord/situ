@@ -608,6 +608,84 @@ static inline int situ_parse_uint(const uint8_t *data, uint32_t len,
 	return 0;
 }
 
+/* Optional whitespace, and case-insensitive tokens (section 8.6.4).
+ *
+ * Space and horizontal tab, and nothing else. Not `isspace`, which is locale
+ * dependent and includes CR, LF, VT and FF -- three of which are delimiters in
+ * the protocols this is for, so trimming them would eat the framing. This is
+ * HTTP's OWS and SIP's LWS, which is the set the formats actually mean.
+ */
+static inline int situ_is_ows(uint8_t byte)
+{
+	return byte == (uint8_t)' ' || byte == (uint8_t)'\t';
+}
+
+static inline uint32_t situ_trim_start(const uint8_t *data, uint32_t len)
+{
+	uint32_t i = 0u;
+
+	while (i < len && situ_is_ows(data[i])) {
+		i++;
+	}
+	return i;
+}
+
+/* The length of the content with the whitespace at both ends removed. */
+static inline uint32_t situ_trim_len(const uint8_t *data, uint32_t len)
+{
+	uint32_t start = situ_trim_start(data, len);
+	uint32_t end   = len;
+
+	while (end > start && situ_is_ows(data[end - 1u])) {
+		end--;
+	}
+	return end - start;
+}
+
+/* ASCII case folding, and only ASCII.
+ *
+ * `tolower` is locale dependent: in a Turkish locale it maps `I` to a dotless
+ * form, so a header name would stop matching itself. A protocol token is
+ * ASCII by definition, and this folds exactly that range.
+ */
+static inline uint8_t situ_ascii_fold(uint8_t byte)
+{
+	return (byte >= (uint8_t)'A' && byte <= (uint8_t)'Z')
+	       ? (uint8_t)(byte + 32u) : byte;
+}
+
+static inline int situ_bytes_eq(const uint8_t *a, uint32_t alen,
+		const uint8_t *b, uint32_t blen)
+{
+	uint32_t i;
+
+	if (alen != blen) {
+		return 0;
+	}
+	for (i = 0u; i < alen; i++) {
+		if (a[i] != b[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static inline int situ_ascii_ci_eq(const uint8_t *a, uint32_t alen,
+		const uint8_t *b, uint32_t blen)
+{
+	uint32_t i;
+
+	if (alen != blen) {
+		return 0;
+	}
+	for (i = 0u; i < alen; i++) {
+		if (situ_ascii_fold(a[i]) != situ_ascii_fold(b[i])) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 /* Whether digits are the one spelling of their value (section 8.6.2).
  *
  * A leading zero is another spelling of the same number, and for hexadecimal

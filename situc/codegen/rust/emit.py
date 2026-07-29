@@ -654,7 +654,10 @@ class Emitter:
 		          else f"core::cmp::min({placement.delimiter_cap}, "
 		               f"self.bytes.len() - ({start}))")
 
-		return [
+		# With `[trim]` the framing and the value are different numbers.
+		scan = _ident(f"{base}_raw_len" if placement.trimmed else f"{base}_len")
+
+		lines = [
 			"",
 			f"\t/// `{placement.path}` runs to the first"
 			f" {render_delimiter(delim)}.",
@@ -662,32 +665,65 @@ class Emitter:
 			f"\t\t{start}",
 			"\t}",
 			"",
-			f"\tpub fn {_ident(f'{base}_len')}(&self) -> usize {{",
+			f"\tpub fn {scan}(&self) -> usize {{",
 			f"\t\t{self._scan_call(placement, sliced)}",
 			"\t}",
 			"",
 			"\t/// Whether the delimiter is there. It is not when the frame was",
 			"\t/// cut short, which is the only thing parse can catch here.",
 			f"\tpub fn {_ident(f'{base}_terminated')}(&self) -> bool {{",
-			f"\t\tself.{_ident(f'{base}_len')}() < {limit}",
+			f"\t\tself.{scan}() < {limit}",
 			"\t}",
 			"",
 			"\t/// Content plus delimiter: where the next member starts.",
 			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
-			f"\t\tself.{_ident(f'{base}_len')}() + if self."
+			f"\t\tself.{scan}() + if self."
 			f"{_ident(f'{base}_terminated')}() {{ {len(delim)} }} else {{ 0 }}",
 			"\t}",
-		] + (self._text_number(struct, placement) if placement.radix is not None
-		     else [
+			"",
+			"\t/// The member's bytes, before anything is trimmed.",
+			f"\tpub fn {_ident(f'{base}_raw')}(&self) -> &[u8] {{",
+			f"\t\tlet at = self.{_ident(f'{base}_offset')}();",
+			f"\t\t&self.bytes[at..at + self.{scan}()]",
+			"\t}",
+		]
+
+		if placement.trimmed:
+			lines.extend([
+				"",
+				"\t/// `[trim]`: the whitespace at either end is framing rather",
+				"\t/// than value, so the span above is unchanged.",
+				f"\tpub fn {_ident(f'{base}_len')}(&self) -> usize {{",
+				f"\t\tsitu_rt::trim(self.{_ident(f'{base}_raw')}()).len()",
+				"\t}",
+			])
+
+		value = (f"situ_rt::trim(self.{_ident(f'{base}_raw')}())"
+		         if placement.trimmed else f"self.{_ident(f'{base}_raw')}()")
+
+		if placement.radix is not None:
+			return lines + self._text_number(struct, placement, value)
+
+		fold = "situ_rt::ascii_ci_eq" if placement.case_insensitive else None
+		return lines + [
 			"",
 			f"\tpub fn {name}(&self) -> &[u8] {{",
-			f"\t\tlet at = self.{_ident(f'{base}_offset')}();",
-			f"\t\t&self.bytes[at..at + self.{_ident(f'{base}_len')}()]",
+			f"\t\t{value}",
 			"\t}",
-		])
+			"",
+			f"\t/// Whether `{placement.path}` is a given token, compared "
+			+ ("folding ASCII case." if fold else "byte for byte."),
+			"\t///",
+			"\t/// The length is part of the comparison, so a prefix is not a",
+			"\t/// match.",
+			f"\tpub fn {_ident(f'{base}_eq')}(&self, other: &[u8]) -> bool {{",
+			(f"\t\t{fold}({value}, other)" if fold
+			 else f"\t\t{value} == other"),
+			"\t}",
+		]
 
-	def _text_number(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
+	def _text_number(self, struct: ResolvedStruct, placement: Placement,
+			value: str) -> list[str]:
 		"""Digits, read through a `Result` that cannot be dropped.
 
 		`#[must_use]` on `Result` is what makes this backend's version of the
@@ -711,9 +747,7 @@ class Emitter:
 			"\t/// is total; a decimal parse is not, and returning 0 for `12x4`",
 			"\t/// would hand back a number nobody wrote.",
 			f"\tpub fn {name}(&self) -> Result<{rtype}> {{",
-			f"\t\tlet at = self.{_ident(f'{base}_offset')}();",
-			f"\t\tlet raw = &self.bytes[at..at + self."
-			f"{_ident(f'{base}_len')}()];",
+			f"\t\tlet raw = {value};",
 			"",
 			f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix}, {limit}) {{",
 			f"\t\t\tSome(value) => Ok(value as {rtype}),",
@@ -826,11 +860,11 @@ class Emitter:
 			"\t\t}",
 		]
 		if placement.radix_minimal:
+			value = (f"situ_rt::trim(self.{_ident(f'{base}_raw')}())"
+			         if placement.trimmed
+			         else f"self.{_ident(f'{base}_raw')}()")
 			lines.extend([
-				f"\t\tlet at = self.{_ident(f'{base}_offset')}();",
-				f"\t\tif !situ_rt::digits_minimal("
-				f"&self.bytes[at..at + self.{_ident(f'{base}_len')}()],"
-				f" {placement.radix}) {{",
+				f"\t\tif !situ_rt::digits_minimal({value}, {placement.radix}) {{",
 				"\t\t\treturn Err(Error::Constraint);",
 				"\t\t}",
 			])

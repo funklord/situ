@@ -120,6 +120,10 @@ class Emitter:
 			needed.append("parse_uint")
 		if any(p.radix_minimal for p in placements):
 			needed.append("digits_minimal")
+		if any(p.trimmed for p in placements):
+			needed.append("trim")
+		if any(p.case_insensitive for p in placements):
+			needed.append("ascii_ci_eq")
 
 		return [f"\t{', '.join(sorted(needed))},"] if needed else []
 
@@ -673,6 +677,11 @@ class Emitter:
 		         else f"min({placement.delimiter_cap}, self._len - ({start}))")
 		data  = f"self._msg.buffer[self._at + ({start}):]"
 
+		# With `[trim]` the framing and the value are different numbers: the
+		# scan says where the next member starts, and the value is what is
+		# left after the whitespace at either end.
+		scan = f"{name}_raw_len" if placement.trimmed else f"{name}_len"
+
 		lines = [
 			"",
 			f"\t@property",
@@ -681,39 +690,67 @@ class Emitter:
 			f"\t\treturn {start}",
 			"",
 			"\t@property",
-			f"\tdef {name}_len(self) -> int:",
-			f'\t\t"""Content length: to the first {render_delimiter(delim)},'
-			' or the whole run."""',
+			f"\tdef {scan}(self) -> int:",
+			f'\t\t"""To the first {render_delimiter(delim)}, or the whole run."""',
 			f"\t\treturn {self._scan_call(placement, data, limit)}",
 			"",
 			"\t@property",
 			f"\tdef {name}_terminated(self) -> bool:",
 			f'\t\t"""Whether the delimiter is there at all. It is not when the'
 			' frame was cut short."""',
-			f"\t\treturn self.{name}_len < ({limit})",
+			f"\t\treturn self.{scan} < ({limit})",
 			"",
 			"\t@property",
 			f"\tdef {name}_span(self) -> int:",
 			f'\t\t"""Content plus delimiter: where the next member starts."""',
-			f"\t\treturn self.{name}_len + ({len(delim)} if self.{name}_terminated"
+			f"\t\treturn self.{scan} + ({len(delim)} if self.{name}_terminated"
 			" else 0)",
+			"",
+			"\t@property",
+			f"\tdef {name}_raw(self) -> memoryview:",
+			f'\t\t"""The member\'s bytes, before anything is trimmed."""',
+			"\t\tself._check()",
+			f"\t\tstart = self._at + self.{name}_offset",
+			f"\t\treturn self._msg.buffer[start:start + self.{scan}]",
 		]
+
+		if placement.trimmed:
+			lines.extend([
+				"",
+				"\t@property",
+				f"\tdef {name}_len(self) -> int:",
+				f'\t\t"""The value\'s length: `[trim]` makes the whitespace at',
+				'\t\teither end framing rather than value."""',
+				f"\t\treturn len(trim(self.{name}_raw))",
+			])
+
+		value = f"trim(self.{name}_raw)" if placement.trimmed else f"self.{name}_raw"
 
 		if placement.radix is None:
 			lines.extend([
 				"",
 				"\t@property",
-				f"\tdef {name}(self) -> memoryview:",
-				"\t\tself._check()",
-				f"\t\tstart = self._at + self.{name}_offset",
-				f"\t\treturn self._msg.buffer[start:start + self.{name}_len]",
+				f"\tdef {name}(self) -> memoryview | bytes:",
+				f"\t\treturn {value}",
+				"",
+				f"\tdef {name}_eq(self, other: bytes) -> bool:",
+				f'\t\t"""Whether {placement.path} is a given token, compared '
+				+ ("folding" if placement.case_insensitive else "byte for"),
+				("\t\tASCII case." if placement.case_insensitive
+				 else "\t\tbyte."),
+				"",
+				"\t\tThe length is part of the comparison, so a prefix is not",
+				'\t\ta match."""',
+				(f"\t\treturn ascii_ci_eq({value}, other)"
+				 if placement.case_insensitive
+				 else f"\t\treturn bytes({value}) == other"),
 			])
 			return lines
 
-		return lines + self._text_number(struct, placement)
+		return lines + self._text_number(struct, placement, value)
 
-	def _text_number(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
+	def _text_number(self, struct: ResolvedStruct, placement: Placement,
+			value: str) -> list[str]:
 		"""Digits, read through something that can say they are not digits.
 
 		Raising rather than returning None, for the reason `validate` raises:
@@ -728,8 +765,7 @@ class Emitter:
 
 		name  = c_name(local_name(struct, placement))
 		limit = (1 << scalar.bits) - 1
-		raw   = (f"self._msg.buffer[self._at + self.{name}_offset:"
-		         f"self._at + self.{name}_offset + self.{name}_len]")
+		raw   = value
 
 		return [
 			"",
@@ -988,10 +1024,8 @@ class Emitter:
 			'the frame stops first")',
 		]
 		if placement.radix_minimal:
-			raw = (f"self._msg.buffer[self._at + self.{name}_offset:"
-			       f"self._at + self.{name}_offset + self.{name}_len]")
 			lines.extend([
-				f"\t\tif not digits_minimal({raw}, {placement.radix}):",
+				f"\t\tif not digits_minimal(self.{name}, {placement.radix}):",
 				"\t\t\traise ConstraintError(",
 				f'\t\t\t\t"{placement.path} is not the minimal spelling of '
 				'its value")',

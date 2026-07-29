@@ -780,6 +780,11 @@ class Emitter:
 		limit = (f"limit() - ({start})" if placement.delimiter_cap is None
 		         else f"situ_min_u32({placement.delimiter_cap}u, limit() - ({start}))")
 
+		# With `[trim]` the framing and the value are different numbers: the
+		# scan says where the next member starts, and the value is what is
+		# left after the whitespace at either end. Without it they are one.
+		scan = f"{name}_raw_len" if placement.trimmed else f"{name}_len"
+
 		lines = [
 			"",
 			f"\t/* {placement.path} runs to the first"
@@ -788,34 +793,62 @@ class Emitter:
 			"\t{",
 			f"\t\treturn {start};",
 			"\t}",
-			f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
+			f"\t[[nodiscard]] std::uint32_t {scan}() const noexcept",
 			"\t{",
 			f"\t\treturn {self._scan_expression(placement, f'base() + {name}_offset()', limit)};",
 			"\t}",
 			f"\t[[nodiscard]] bool {name}_terminated() const noexcept",
 			"\t{",
-			f"\t\treturn {name}_len() < ({limit});",
+			f"\t\treturn {scan}() < ({limit});",
 			"\t}",
 			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
 			"\t{",
-			f"\t\treturn {name}_len() + ({name}_terminated() ? {len(delim)}u : 0u);",
+			f"\t\treturn {scan}() + ({name}_terminated() ? {len(delim)}u : 0u);",
 			"\t}",
 		]
+
+		if placement.trimmed:
+			lines.extend([
+				"\t/* `[trim]`: the whitespace at either end is framing rather",
+				"\t * than value, so the span above is unchanged. */",
+				f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
+				"\t{",
+				f"\t\treturn situ_trim_len(base() + {name}_offset(), {scan}());",
+				"\t}",
+			])
+
+		value_at = (f"base() + {name}_offset()" if not placement.trimmed else
+		            f"base() + {name}_offset() + situ_trim_start("
+		            f"base() + {name}_offset(), {scan}())")
 
 		if placement.radix is None:
 			lines.extend([
 				f"\t[[nodiscard]] ::situ::rt::const_bytes {name}() const noexcept",
 				"\t{",
-				f"\t\treturn ::situ::rt::const_bytes(base() + {name}_offset(),"
-				f" {name}_len());",
+				f"\t\treturn ::situ::rt::const_bytes({value_at}, {name}_len());",
+				"\t}",
+				"",
+				f"\t/* Whether {placement.path} is a given token, compared "
+				+ ("folding ASCII case." if placement.case_insensitive
+				   else "byte for byte."),
+				"\t *",
+				"\t * The length is checked first, so a prefix is not a match --",
+				"\t * which is what a `strncmp` against a literal makes it. */",
+				f"\t[[nodiscard]] bool {name}_eq(::situ::rt::const_bytes other)"
+				" const noexcept",
+				"\t{",
+				f"\t\treturn {'situ_ascii_ci_eq' if placement.case_insensitive else 'situ_bytes_eq'}"
+				f"({value_at}, {name}_len(),",
+				"\t\t\tother.data(), static_cast<std::uint32_t>(other.size()))"
+				" != 0;",
 				"\t}",
 			])
 			return lines
 
-		return lines + self._text_number(struct, placement)
+		return lines + self._text_number(struct, placement, value_at)
 
-	def _text_number(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
+	def _text_number(self, struct: ResolvedStruct, placement: Placement,
+			value_at: str) -> list[str]:
 		"""A number written as digits, read through something that can fail.
 
 		`err` and an out-parameter rather than the value, alone among the
@@ -839,7 +872,7 @@ class Emitter:
 			"\t{",
 			"\t\tstd::uint64_t value;",
 			"",
-			f"\t\tif (situ_parse_uint(base() + {name}_offset(), {name}_len(),"
+			f"\t\tif (situ_parse_uint({value_at}, {name}_len(),"
 			f" {placement.radix}u, {limit}u, &value) != 0) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
@@ -854,7 +887,7 @@ class Emitter:
 			"\t{",
 			"\t\tstd::uint64_t value = 0u;",
 			"",
-			f"\t\t(void)situ_parse_uint(base() + {name}_offset(), {name}_len(),"
+			f"\t\t(void)situ_parse_uint({value_at}, {name}_len(),"
 			f" {placement.radix}u, {limit}u, &value);",
 			f"\t\treturn static_cast<{ctype}>(value);",
 			"\t}",
@@ -1390,10 +1423,17 @@ class Emitter:
 		]
 
 		if placement.radix_minimal:
+			# The trimmed bytes, not `{name}()` -- for a text number that is
+			# the fallible getter and takes an out-parameter, so calling it
+			# here did not compile. The digits to check are the value's, which
+			# with `[trim]` start past the whitespace.
+			at = (f"base() + {name}_offset()" if not placement.trimmed else
+			      f"base() + {name}_offset() + situ_trim_start("
+			      f"base() + {name}_offset(), {name}_raw_len())")
 			lines.extend([
 				"\t\t/* `[minimal]`: one spelling per value. */",
-				f"\t\tif (!situ_digits_minimal(base() + {name}_offset(),"
-				f" {name}_len(), {placement.radix}u)) {{",
+				f"\t\tif (!situ_digits_minimal({at}, {name}_len(),"
+				f" {placement.radix}u)) {{",
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])

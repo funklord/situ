@@ -108,6 +108,8 @@ ATTRIBUTE_NAMES = frozenset({
 	"quoted", "escape",
 	# section 8.6.2: one spelling per value for a text number
 	"minimal",
+	# section 8.6.4: what a delimited value ignores
+	"trim", "case_insensitive",
 	# section 8.3: host-dependent byte order
 	"allow_host_dependent",
 	# section 8.8: reserved behaviour

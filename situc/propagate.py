@@ -306,6 +306,14 @@ def _is_relaxed_delimiter(context: Context) -> bool:
 	             or placement.delimiter_escape is not None))
 
 
+def _is_trimmed(context: Context) -> bool:
+	return context.placement.trimmed
+
+
+def _is_case_insensitive(context: Context) -> bool:
+	return context.placement.case_insensitive
+
+
 def _is_past_a_scan(context: Context) -> bool:
 	return context.placement.scan_cause is not None
 
@@ -721,6 +729,37 @@ TABLE: tuple[Row, ...] = (
 			            "single spelling back",
 		),
 		applies = _is_relaxed_delimiter,
+	),
+	Row(
+		rule = Rule(
+			name      = "trimmed-value",
+			construct = "a value with optional whitespace around it",
+			effects   = (
+				Effect(Axis.CANONICAL, Value("NonCanonical"),
+				       "` 5`, `5` and `5  ` carry the same value, so the bytes "
+				       "do not follow from it"),
+			),
+			remedy    = "emit no padding on write and refuse it on parse, which "
+			            "gets a single encoding back -- at the cost of rejecting "
+			            "messages the format permits",
+		),
+		applies = _is_trimmed,
+	),
+	Row(
+		rule = Rule(
+			name      = "case-insensitive-token",
+			construct = "a token compared without regard to case",
+			effects   = (
+				Effect(Axis.CANONICAL, Value("NonCanonical"),
+				       "`Content-Length` and `content-length` are one token "
+				       "with two spellings, so the bytes do not follow from "
+				       "the value"),
+			),
+			remedy    = "compare through the generated `_eq`, which folds ASCII "
+			            "case the way the schema says; `memcmp` against a "
+			            "literal is the bug this attribute exists to name",
+		),
+		applies = _is_case_insensitive,
 	),
 	Row(
 		rule = Rule(

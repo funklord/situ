@@ -782,6 +782,49 @@ Where the element has no extent situ can compute -- a `[remaining]` member
 inside it consumes whatever view it is given, so a second element has nowhere
 to begin -- no accessors are emitted and the header says why.
 
+### 8.6.4 Optional whitespace, and tokens compared without case
+
+Two attributes on a delimited member, both saying the same kind of thing: the
+bytes carry less information than they appear to.
+
+```situ
+struct header {
+	u8  name[]  until ":"    [case_insensitive];
+	u8  value[] until "\r\n" [trim];
+}
+```
+
+**`[trim]` separates framing from value.** The whitespace at either end is
+still the member's bytes -- members partition their struct exactly, and the
+span is unchanged, so nothing after it moves. What changes is the value those
+bytes carry. `Content-Length:  5` and `Content-Length:5` are one message
+written two ways, which is `canonical = NonCanonical`, and the accessor hands
+back `5` for both.
+
+Space and horizontal tab, and nothing else. Not what a locale calls
+whitespace, which includes CR and LF -- delimiters in every protocol this is
+for, so trimming them would eat the framing. This is HTTP's OWS.
+
+**`[case_insensitive]` says two spellings are one token.** Also
+`NonCanonical`, for the same reason: `Content-Length` and `content-length`
+carry the same meaning, so the bytes do not follow from it.
+
+**Both generate the comparison, and only the schema decides how.** Every
+delimited byte run gets an `_eq`, because "is this field `Content-Length`" is
+the question a caller of a text format actually asks; what
+`[case_insensitive]` changes is whether ASCII case is folded. Leaving it to
+the caller means leaving them to decide something the schema has already
+decided -- and to reach for `strncmp` against a literal, which makes a prefix
+a match. The generated comparison checks the length first.
+
+ASCII case, and only ASCII. `tolower` is locale dependent -- in a Turkish
+locale it maps `I` to a dotless form, so a header name would stop matching
+itself -- and Python's `str.lower` is Unicode. A protocol token is ASCII by
+definition and the fold is exactly `A`-`Z`.
+
+The two compose with 8.6.2: `decimal u32 n until "\r\n" [trim]` accepts
+` 5`, and adding `[minimal]` still refuses `007`.
+
 What stays out is a grammar: alternation, repetition and rule references.
 A parse tree has no offsets to be static about, and the capability map would
 have nothing to say about one. See
@@ -3450,11 +3493,13 @@ What each target adds over C, where the language allows it:
 | Python | properties | the text-number property raises rather than returning a sentinel |
 | Rust | `&[u8]` slices | a slice carries its length, so it cannot be paired with the wrong count; `Result` is `#[must_use]`, so ignoring a bad parse does not compile |
 
+- `[trim]` and `[case_insensitive]`, the two canonicity questions text asks
+  that binary does not (8.6.4).
+
 Not covered, and worth naming so nobody designs around a limit that is not
-there or expects one that is: case-insensitive matching of a *token* against a
-set (`Content-Length` against `content-length`), optional whitespace around a
-value, and a grammar. The first two are canonicity questions the axis could
-carry and the construct does not; the third is out by decision.
+there: a grammar -- alternation, repetition and rule references -- which is
+out by decision rather than unfinished, because a parse tree has no offsets to
+be static about.
 
 ### Invariants to hold across all phases
 

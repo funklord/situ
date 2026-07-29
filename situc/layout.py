@@ -144,6 +144,13 @@ class Placement:
 	#: Without it "007" and "7" are the same number written two ways, which is
 	#: what `canonical` exists to report.
 	radix_minimal: bool		= False
+	#: `[trim]`: whitespace at either end is framing, not value. The member's
+	#: *span* is unchanged -- the bytes are still there and still partition
+	#: the struct -- but the value they carry is what is left after it.
+	trimmed: bool			= False
+	#: `[case_insensitive]`: two spellings differing only in ASCII case are
+	#: one token, which is what an HTTP header name is.
+	case_insensitive: bool		= False
 	#: The earlier member whose scan made this one's offset Scanned, for blame.
 	scan_cause: str | None		= None
 	scan_cause_span: Span | None	= None
@@ -1206,6 +1213,8 @@ class Solver:
 			delimiter          = member.until.delimiter if member.until else None,
 			radix              = getattr(member, "radix", None),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
+			trimmed            = _has_attr(member.attrs, "trim"),
+			case_insensitive   = _has_attr(member.attrs, "case_insensitive"),
 			delimiter_quote    = _delimiter_byte(member, "quoted"),
 			delimiter_escape   = _delimiter_byte(member, "escape"),
 			delimiter_cap      = self._scan_cap(member),
@@ -1452,6 +1461,9 @@ class Solver:
 				delimiter_escape = inner.delimiter_escape,
 				delimiter_cap    = inner.delimiter_cap,
 				radix            = inner.radix,
+				radix_minimal    = inner.radix_minimal,
+				trimmed          = inner.trimmed,
+				case_insensitive = inner.case_insensitive,
 				scan_cause       = inner.scan_cause,
 				scan_cause_span  = inner.scan_cause_span,
 				frame_base_dynamic = base_dynamic or inner.frame_base_dynamic,

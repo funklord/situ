@@ -158,3 +158,12 @@ struct kv_block {
 	kv  entries[] until "\r\n";
 	u8  payload[remaining];
 }
+
+// Optional whitespace and a case-insensitive token: the two attributes that
+// separate what a delimited member *frames* from what it *means*. `value`
+// spans its whitespace -- members partition their struct exactly -- and
+// carries only what is left of it.
+struct messy {
+	u8  name[]  until ":"    [case_insensitive];
+	u8  value[] until "\r\n" [trim];
+}
