@@ -24,6 +24,7 @@ from collections.abc import Callable
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.names import render_delimiter
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import local_name, own_members
 from situc.unparse import expr_to_source
@@ -137,6 +138,13 @@ def _label(struct: ResolvedStruct, placement: Placement) -> str:
 	local = local_name(struct, placement)
 	if placement.kind == "reserved":
 		return "reserved"
+	# Before the array case. A delimited member carries `array_count = 1` --
+	# the empty bracket form is one run, not one element -- so asking about
+	# the count first labelled `name[] until ": "` as `name[1]`, an array of
+	# one. Somebody implementing from that diagram writes a fixed-width
+	# parser, which is worse than the diagram omitting the member.
+	if placement.delimiter is not None:
+		return f"{local}..."
 	if placement.array_count is not None:
 		return f"{local}[{placement.array_count}]"
 	if placement.sized_by is not None:
@@ -180,7 +188,11 @@ def _diagram(struct: ResolvedStruct) -> list[str]:
 			_place(row, flush, width, at, start - at, "unused")
 			at = start
 
-		if placement.sized_by is not None or placement.size_bits == 0:
+		# A delimited member has no fixed extent either: `size_bits` is the
+		# delimiter's own width, which is the one number that is not the
+		# member's size. Drawn as a fixed box it read as a one-byte field.
+		if (placement.sized_by is not None or placement.size_bits == 0
+				or placement.delimiter is not None):
 			# A variable member starting mid-row takes the rest of that row.
 			# Flushing first would pad it with blanks, which reads as unused
 			# space exactly where the member actually begins.
@@ -308,12 +320,24 @@ def _offset(placement: Placement) -> str:
 
 
 def _size(placement: Placement) -> str:
+	if placement.delimiter is not None:
+		# What a reader needs is where it stops, not how many bytes the
+		# delimiter takes -- which is what the fixed-size branch below
+		# reported, and it is the one number nobody wants.
+		shown = render_delimiter(placement.delimiter).strip("`")
+		if placement.delimiter_cap is not None:
+			return f"to {shown}, max {placement.delimiter_cap}"
+		return f"to {shown}"
 	if placement.sized_by is not None:
 		return f"[{placement.sized_by}]"
 	if placement.size_bits % BITS_PER_BYTE:
 		bits = placement.size_bits
 		return f"{bits} bit" if bits == 1 else f"{bits} bits"
 	return _bytes(placement.size_bits // BITS_PER_BYTE)
+
+
+#: Attributes this module says in words rather than passing through.
+RENDERED_IN_PROSE = ("since",)
 
 
 def _notes(placement: Placement) -> list[str]:
@@ -326,10 +350,21 @@ def _notes(placement: Placement) -> list[str]:
 	if placement.endian is not None and placement.size_bits > BITS_PER_BYTE:
 		notes.append(f"{placement.endian.value} endian")
 	for attr in placement.attrs:
+		# Skip the ones rendered in prose above. `since = 2` and "from version
+		# 2" in one row is the same fact twice, and a reader who sees a
+		# document repeat itself starts skimming it.
+		if attr.name in RENDERED_IN_PROSE:
+			continue
 		notes.append(attr.name if attr.value is None
 		             else f"{attr.name} = {_attr_value(attr)}")
 	if placement.covered_by:
 		notes.append("covered by " + ", ".join(placement.covered_by))
+	if placement.radix is not None:
+		base = {10: "decimal", 16: "hexadecimal"}.get(placement.radix,
+		                                             f"base {placement.radix}")
+		notes.append(f"{base} digits")
+	if placement.since is not None:
+		notes.append(f"from version {placement.since}")
 	if placement.derived_by is not None:
 		# The half of section 16.1 a reader of this table most needs. The
 		# fields an invariant *reads* already showed up here, through

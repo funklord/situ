@@ -3764,6 +3764,16 @@ be static about.
    information behind a different door". Adding a construct means checking
    every artifact that describes a field, not the backends alone: `doc`,
    `map`, `explain`, hover and the advisor each answer for their own reader.
+
+   The second pass of this found worse than an omission. `doc` labelled a
+   delimited member `name[1]` and gave its size as the delimiter's width --
+   an array of one, drawn as a fixed box -- because `array_count = 1` on the
+   empty bracket form. Somebody implementing from that diagram writes a
+   fixed-width parser. And the advisor told a versioned schema to move a
+   member past a `[since]` one, at "cost: nothing": a reordering the compiler
+   refuses, and one that would move bytes for every deployed peer if it did
+   not. An artifact that says nothing is a gap; one that says something false
+   is a defect, and both come from the same missed pass.
 20. **The shared classifier is only shared if the first backend uses it too.**
    `traverse.classify` was written after three backends shipped the same two
    dispatch bugs, and the C backend -- which had not had them -- was left with

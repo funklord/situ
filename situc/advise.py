@@ -171,10 +171,24 @@ def _find_tail_reordering(resolved: ResolvedSchema) -> list[Suggestion]:
 			# A tag is not a candidate for moving forward: it authenticates
 			# what precedes it, so it has to follow. Suggesting otherwise
 			# would be advice that cannot be taken.
+			#
+			# Nor is a versioned member. `[since]` is append-only (19.4), so
+			# moving this member past one would be refused by the compiler --
+			# and if it were not, it would move bytes for every deployed peer
+			# that speaks the earlier version. The advisor said "cost:
+			# nothing" for exactly that.
 			behind = [later for later in members[index + 1:]
 			          if later.vector.get(Axis.OFFSET).base == "Dynamic"
-			          and later.placement.kind not in ("tag", "checksum")]
+			          and later.placement.kind not in ("tag", "checksum")
+			          and later.placement.since is None]
 			if not behind:
+				continue
+
+			# And this member cannot be moved past one either, whatever else
+			# follows it: the destination is the end, and a versioned member
+			# is already there.
+			if any(later.placement.since is not None
+			       for later in members[index + 1:]):
 				continue
 
 			listed = ", ".join(f"`{later.placement.name}`" for later in behind[:4])

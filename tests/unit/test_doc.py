@@ -173,3 +173,60 @@ def test_a_plain_field_is_not_called_derived() -> None:
 	text = emit("struct s { u16 total; u8 a; }")
 
 	assert "derived" not in text
+
+
+# -- delimited and versioned members (sections 8.6, 19.4) -------------------
+
+
+def test_a_delimited_member_is_not_an_array_of_one() -> None:
+	"""It carries `array_count = 1` -- the empty bracket form is one run, not
+	one element -- so the table called `name[] until ": "` a one-element array
+	of the delimiter's width. Somebody implementing from that writes a
+	fixed-width parser, which is worse than the row being absent."""
+	text = emit('struct s { u8 name[] until ": "; u8 rest[remaining]; }')
+
+	assert "name[1]" not in text
+	assert "name..." in text
+
+
+def test_a_delimited_member_says_where_it_stops() -> None:
+	"""Which is the only size a reader can use. The fixed-size branch reported
+	the delimiter's own width, the one number that is not the member's."""
+	text = emit('struct s { u8 name[] until ": "; u8 rest[remaining]; }')
+
+	assert 'to ": "' in text
+	assert "2 bytes" not in text.split("Field")[1]
+
+
+def test_a_capped_scan_says_its_cap() -> None:
+	text = emit('struct s { u8 n[] until "\\r\\n" max 16; u8 rest[remaining]; }')
+
+	assert 'to "\\r\\n", max 16' in text
+
+
+def test_a_delimited_member_is_drawn_as_variable() -> None:
+	"""The diagram had it as a fixed one-byte box, which is the RFC convention
+	for something entirely different."""
+	drawn = diagram(emit('struct s { u8 name[] until ": "; u8 rest[remaining]; }'))
+
+	assert any("(variable)" in line for line in drawn)
+
+
+def test_a_text_number_says_which_base() -> None:
+	text = emit('struct s { decimal u16 n until "\\r\\n"; u8 r[remaining]; }')
+
+	assert "decimal digits" in text
+
+
+def test_a_versioned_member_says_which_version() -> None:
+	text = emit("struct s [version = v] { u8 v; u16 a; u32 b [since = 2]; }")
+
+	assert "from version 2" in text
+
+
+def test_it_does_not_say_the_version_twice() -> None:
+	"""`since = 2` and "from version 2" in one row is one fact twice, and a
+	document that repeats itself teaches a reader to skim it."""
+	text = emit("struct s [version = v] { u8 v; u16 a; u32 b [since = 2]; }")
+
+	assert "since = 2" not in text

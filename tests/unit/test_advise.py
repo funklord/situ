@@ -326,3 +326,31 @@ def test_changes_serialise_for_ci() -> None:
 	assert payload["before"] == "InPlaceFixed"
 	assert payload["after"] == "Shifting"
 	assert payload["regression"] is True
+
+
+# -- versioned members (section 19.4) ---------------------------------------
+
+
+def test_it_does_not_suggest_moving_a_member_past_a_versioned_one() -> None:
+	"""`[since]` is append-only, so the compiler refuses the reordering this
+	suggested -- and it was advertised as costing nothing. If it were legal it
+	would move bytes for every deployed peer speaking the earlier version,
+	which is the opposite of nothing."""
+	found = by_rule("""struct s [version = v] {
+		u8   v;
+		u8   n;
+		u8   body[n];
+		u32  flags [since = 2];
+	}
+	""", "move-dynamic-to-tail")
+
+	assert not found
+
+
+def test_it_still_suggests_it_where_the_move_is_legal() -> None:
+	"""The other half. Silencing a rule is only right if it stays useful for
+	the case it was written for."""
+	found = by_rule("struct s { u8 n; u8 body[n]; u32 flags; }",
+	                "move-dynamic-to-tail")
+
+	assert found
