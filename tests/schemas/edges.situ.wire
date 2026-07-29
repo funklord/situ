@@ -48,6 +48,15 @@ struct labelled size=22
   @0x0010   4         u8         code  big encoding=ascii
   @0x0014   2         u16        sequence  big
 
+struct link size=4..1024
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         units
+  @0x0002   2..1022   u8         body  big
+
+struct linked size=4..
+  @0x0000   4..6144   link       chain  big
+  ~         0..       u8         tail  sized-by=remaining
+
 struct messy size=3..
   @0x0000   until:3a  u8         name  fold-case
   ~         until:0d0a u8         value  big trim

@@ -26,19 +26,19 @@ struct edges size=19 repr=ValueConverted atomic=NonAtomic
 
 struct framed size=9 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
   framed.magic                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
-  framed.version                         offset=AbsoluteStatic(0x04) size=Bounded(2, 16) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
-  framed.label                           offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  framed.version                         offset=AbsoluteStatic(0x04) size=Bounded(2, 16) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  framed.label                           offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
   framed.count                           offset=Scanned size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential address=Unstable
 
-struct kv size=4 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
-  kv.key                                 offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
-  kv.value                               offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+struct kv size=4 access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  kv.key                                 offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
+  kv.value                               offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
 
 struct kv_block size=2 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
-  kv_block.entries                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting effect=EffectOnRead
+  kv_block.entries                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
   kv_block.entries[]                     offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
-  kv_block.entries[].key                 offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
-  kv_block.entries[].value               offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  kv_block.entries[].key                 offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
+  kv_block.entries[].value               offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
   kv_block.payload                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
 struct labelled size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
@@ -46,12 +46,25 @@ struct labelled size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanoni
   labelled.code                          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   labelled.sequence                      offset=AbsoluteStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
-struct messy size=3 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
-  messy.name                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting canonical=NonCanonical effect=EffectOnRead
-  messy.value                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+struct link size=4 mutate=Shifting
+  link.kind                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  link.units                             offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  link.body                              offset=AbsoluteStatic(0x02) size=Bounded(2, 1022) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
-struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
-  quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting canonical=NonCanonical effect=EffectOnRead
+struct linked size=4 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic
+  linked.chain                           offset=AbsoluteStatic(0x00) size=Bounded(4, 6144) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  linked.chain[]                         offset=FrameStatic(0x00) size=Bounded(4, 1024) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  linked.chain[].kind                    offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  linked.chain[].units                   offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  linked.chain[].body                    offset=FrameStatic(0x02) size=Bounded(2, 1022) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  linked.tail                            offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct messy size=3 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  messy.name                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
+  messy.value                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+
+struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   quoted_row.rest                        offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
 struct texty size=2 access=Sequential mutate=Shifting address=Unstable repr=TextConverted canonical=NonCanonical

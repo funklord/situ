@@ -178,3 +178,20 @@ struct versioned [version = ver] {
 	u32  flags [since = 2];
 	u16  extra [since = 3];
 }
+
+// A run that ends after the element failing a test, and an element sized by
+// arithmetic over one of its own fields.
+//
+// Here so the walk is fuzzed and cross-tested, which is where a termination
+// bug in it would show: every guard in that loop exists because an adversary
+// picks the bytes.
+struct link {
+	u8  kind;
+	u8  units;
+	u8  body[(units + 1) * 4 - 2];
+}
+
+struct linked {
+	link  chain[] while (kind == 0x11 || kind == 0x22) max 6;
+	u8    tail[remaining];
+}

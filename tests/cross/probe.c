@@ -216,10 +216,51 @@ static void test_versioned(void)
 	      situ_versioned_flags_get(view, &flags), SITU_ERR_VERSION);
 }
 
+/* Section 8.6.6, on a second architecture.
+ *
+ * The walk itself is byte arithmetic and should not care about byte order.
+ * What could differ is the element extent -- `(units + 1) * 4 - 2` over a u8
+ * field, which is correct in C only because integer promotion widens the read
+ * to `int` before the arithmetic. That is a rule, not an accident, but it is
+ * a rule worth checking on a target with different register widths.
+ */
+static void test_linked(void)
+{
+	static const uint8_t CHAIN[] = {
+		0x11, 0,  1, 2,           /* kind 0x11, (0+1)*4-2 = 2 body bytes  */
+		0x22, 1,  3, 4, 5, 6, 7, 8,   /* kind 0x22, 6 body bytes          */
+		0x33, 0,  9, 10,          /* kind 0x33 ends the run, and is in it */
+		'T', 'A', 'I', 'L',
+	};
+	uint8_t     buf[sizeof(CHAIN)];
+	situ_msg_t  msg;
+	situ_view_t view;
+	situ_view_t element;
+
+	memcpy(buf, CHAIN, sizeof(buf));
+	situ_msg_init(&msg, buf, (uint32_t)sizeof(buf));
+	check("linked view",
+	      situ_linked_view(&msg, 0, (uint32_t)sizeof(buf), &view), SITU_OK);
+
+	/* Three, and the third is the one that ended it. */
+	check("chain count", situ_linked_chain_count(view), 3);
+	check("chain span", situ_linked_chain_span(view), 16);
+
+	check("element 0", situ_linked_chain_at(view, 0u, &element), SITU_OK);
+	check("element 0 extent", situ_link_extent(element), 4);
+	check("element 1", situ_linked_chain_at(view, 1u, &element), SITU_OK);
+	check("element 1 extent", situ_link_extent(element), 8);
+
+	check("past the end", situ_linked_chain_at(view, 3u, &element),
+	      SITU_ERR_BOUNDS);
+	check("tail length", situ_linked_tail_len(view), 4);
+}
+
 int main(void)
 {
 	test_header();
 	test_tiff();
+	test_linked();
 	test_framed();
 	test_text_number();
 	test_versioned();

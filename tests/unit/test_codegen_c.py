@@ -1424,3 +1424,16 @@ def test_the_member_after_a_run_is_placed() -> None:
 	header, _ = emit(CHAIN)
 
 	assert "offset = offset + (situ_s_chain_span(view));" in header
+
+
+def test_the_fuzz_harness_walks_a_while_run() -> None:
+	"""Walking is the read that can run off the end, and this is the harness
+	whose whole job is to try. It fell through to the nested-struct branch and
+	named a `_view` accessor a run does not have."""
+	text = fuzz_source(
+		"struct e { u8 k; u8 u; u8 b[(u + 1) * 4 - 2]; }\n"
+		"struct S { e chain[] while (k == 1) max 6; u8 tail[remaining]; }\n")
+
+	assert "situ_S_chain_count(view)" in text
+	assert "situ_S_chain_at(view, i, &element)" in text
+	assert "situ_S_chain_view" not in text

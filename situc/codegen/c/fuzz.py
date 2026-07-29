@@ -194,6 +194,14 @@ def _reads(struct: ResolvedStruct, prefix: str,
 			lines.extend(_versioned_read(struct, placement, local, prefix))
 			continue
 
+		if placement.repeat_while is not None:
+			# Walking the run is the read that can run off the end, and this
+			# is the harness whose whole job is to try. Falling through to the
+			# nested-struct branch named a `_view` accessor a run does not
+			# have.
+			lines.extend(_walk_read(struct, local, prefix))
+			continue
+
 		if placement.delimiter is not None or placement.sized_by is not None:
 			lines.extend(_variable_read(resolved_names, struct, placement,
 			                            local, prefix))
@@ -230,6 +238,26 @@ def _reads(struct: ResolvedStruct, prefix: str,
 			])
 
 	return lines
+
+
+def _walk_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:
+	"""Count a run and reach every element of it."""
+	count = ident(prefix, struct.name, local, "count")
+	at    = ident(prefix, struct.name, local, "at")
+
+	return [
+		"\t{",
+		f"\t\tconst uint32_t n = {count}(view);",
+		"\t\tsitu_view_t element;",
+		"",
+		"\t\tsitu_fuzz_sink((uint64_t)n);",
+		"\t\tfor (uint32_t i = 0u; i < n; i++) {",
+		f"\t\t\tif ({at}(view, i, &element) == SITU_OK) {{",
+		"\t\t\t\tsitu_fuzz_sink((uint64_t)element.limit);",
+		"\t\t\t}",
+		"\t\t}",
+		"\t}",
+	]
 
 
 def _versioned_read(struct: ResolvedStruct, placement: Placement, local: str,
