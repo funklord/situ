@@ -352,7 +352,8 @@ tag_field     = ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
 block         = "positional"    "{" { member } "}"
               | "authenticated" [ ident ] [ attrs ] "{" { member } "}"
               | "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
-              | "coded"  ident   "(" codec_args ")" [ attrs ] "{" { member } "}"
+              | "coded"  ident   "(" codec_args ")" [ until ] [ attrs ]
+                "{" { member } "}"
               | "indexed" "(" index_args ")" "{" { member } "}"
               | "opaque" ident "[" size_expr "]" [ attrs ] ";"
               | "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
@@ -842,6 +843,28 @@ definition and the fold is exactly `A`-`Z`.
 
 The two compose with 8.6.2: `decimal u32 n until "\r\n" [trim]` accepts
 ` 5`, and adding `[minimal]` still refuses `007`.
+
+### 8.6.5 A region that is both delimited and coded
+
+`coded body(dot_stuffing) until "\r\n.\r\n" { ... }`: the extent is found by
+scanning, and the bytes found are the transform's output.
+
+**Scan first, decode second, and the order is the protocol's rather than a
+convenience.** SMTP's dot-stuffing exists to protect its own terminator: a
+body line consisting of one dot is sent as two, so `CRLF . CRLF` is
+unambiguous in the encoded bytes and would not be in the decoded ones. A
+decoder running first would have to know where to stop, which is what the
+scan is for.
+
+The extent comes from the delimiter and not from the codec's expansion. Those
+answer different questions -- the expansion says how much the transform could
+grow the interior to, and the delimiter says where the encoded bytes actually
+stop -- and only the second is on the wire.
+
+Such a region gets the scan accessors and no token comparison. `_eq` over a
+transform's output would compare stuffed text, or ciphertext, against a
+literal somebody wrote in the clear; the header says instead that the pointer
+is the encoded form and the decode is the caller's.
 
 What stays out is a grammar: alternation, repetition and rule references.
 A parse tree has no offsets to be static about, and the capability map would

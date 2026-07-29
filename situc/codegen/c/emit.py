@@ -919,6 +919,13 @@ class Emitter:
 			if placement.radix is not None:
 				lines.extend(self._text_number(struct, placement))
 				lines.extend(self._text_value_helper(struct, placement))
+			elif placement.codec is not None:
+				# The bytes are the transform's output. A token comparison
+				# over them would compare ciphertext, or stuffed text, to a
+				# literal somebody wrote in the clear -- and the pointer is
+				# not the value either, which is the one thing a caller has
+				# to be told here (section 13.6).
+				lines.extend(self._coded_delimited_note(struct, placement))
 			else:
 				lines.extend(self._token_compare(struct, placement))
 				lines.extend(self._covered_pointer_note(struct, placement))
@@ -1617,6 +1624,35 @@ class Emitter:
 			f"\t*out = ({ctype})value;",
 			"\treturn SITU_OK;",
 			"}",
+		]
+
+	def _coded_delimited_note(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A region found by scanning and then decoded (section 13.6).
+
+		Scan first, decode second, and the order is the protocol's rather than
+		a convenience: SMTP's dot-stuffing protects its own terminator, so
+		`CRLF . CRLF` is unambiguous in the encoded bytes and would not be in
+		the decoded ones. A decoder that ran first would have to know where to
+		stop, which is what the scan is for.
+		"""
+		local = c_name(self._local(struct, placement))
+		return [
+			"",
+			f"/* `{placement.name}` is `{placement.codec}` output, and the"
+			f" pointer above is",
+			" * the encoded form. There is no accessor for the decoded bytes:"
+			" the",
+			f" * transform is the caller's to run, and its length is"
+			f" {placement.codec}'s",
+			" * to report rather than this header's to guess.",
+			" *",
+			" * The scan runs on the encoded bytes, which is the order the"
+			" format",
+			" * specifies -- a stuffing code protects its own terminator, so"
+			" the",
+			" * sequence is unambiguous here and would not be after"
+			" decoding. */",
 		]
 
 	def _token_compare(self, struct: ResolvedStruct,

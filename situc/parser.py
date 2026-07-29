@@ -1117,13 +1117,14 @@ class Parser:
 			args.append(self.parse_attr())
 
 		self.expect_symbol(")", "after the codec arguments")
+		until = self.parse_until()
 		attrs = self.parse_attrs()
 		self.expect_symbol("{", "to open the coded region")
 		members = self.parse_members()
 		self.expect_symbol("}", "to close the coded region")
 
 		return ast.Coded(self.span_from(start), name.text, codec.text,
-		                 tuple(args), members, attrs)
+		                 tuple(args), members, attrs, until)
 
 	def parse_authenticated(self) -> ast.Authenticated:
 		"""`authenticated { ... }`, or `authenticated header { ... }`.

@@ -605,6 +605,15 @@ class Solver:
 		interior    = Interval(interior_lo, interior_hi)
 		extent      = _expand(codec, interior)
 
+		# A delimited region's extent is the scan, not the interior put
+		# through the expansion. The two answer different questions: the
+		# expansion says how much the transform *could* grow the interior to,
+		# and the delimiter says where the encoded bytes actually stop. Only
+		# the second is on the wire (section 13.6).
+		until = getattr(region, "until", None)
+		if until is not None:
+			extent = self.delimited_extent(region, until, state)
+
 		layout.placements.insert(slot, Placement(
 			path          = f"{prefix}.{region.name}",
 			name          = region.name,
@@ -619,6 +628,10 @@ class Solver:
 			span          = region.span,
 			attrs         = region.attrs,
 			codec         = region.codec,
+			delimiter     = until.delimiter if until is not None else None,
+			delimiter_cap = (evaluate(until.cap, self.result.env)
+			                 if until is not None and until.cap is not None
+			                 else None),
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
@@ -1298,7 +1311,7 @@ class Solver:
 
 		state.cursor = cursor.advance(total)
 
-	def delimited_extent(self, member: ast.Field | ast.Reserved,
+	def delimited_extent(self, member: ast.Member,
 			until: ast.Until, state: Walk) -> Interval:
 		"""How many bits a delimited member occupies, delimiter included.
 

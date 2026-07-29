@@ -8,12 +8,17 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec dot_stuffing derived expansion=ratio_bounded(4,3) seekable=none granularity=stream invertible deterministic
+
 struct command size=3 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
   command.verb                           offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   command.argument                       offset=Scanned size=Bounded(2, 512) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
 
-struct data_block size=5 mutate=Shifting effect=EffectOnRead
-  data_block.body                        offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
+struct data_block size=5 access=Sequential mutate=Shifting atomic=NonAtomic stage=TransformTime effect=EffectOnRead
+  data_block.body                        offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
+  data_block.body.content                offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
 
 struct reply_line size=6 mutate=Shifting repr=TextConverted atomic=NonAtomic
   reply_line.code                        offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=TextConverted atomic=NonAtomic

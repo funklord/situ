@@ -1336,3 +1336,32 @@ def test_a_fixed_width_text_number_needs_no_delimiter() -> None:
 	with pytest.raises(SituError, match="says twice how wide it is"):
 		emit('struct s { decimal u16 c[3] until ":"; u8 r[remaining]; }')
 
+
+
+def test_a_coded_region_may_be_delimited() -> None:
+	"""Scan first, decode second -- the order the protocols needing this
+	specify. SMTP's dot-stuffing protects its own terminator, so `CRLF . CRLF`
+	is unambiguous in the encoded bytes and would not be in the decoded ones.
+	A decoder running first would have to know where to stop, which is what
+	the scan is for."""
+	header, _ = emit(
+		"codec stuff { kernel = stuffing(worst_case = 4, per = 3, "
+		"unit = stream, code = dot); }\n"
+		"impl stuff derived;\n"
+		'struct s { coded body(stuff) until "\\r\\n.\\r\\n" { u8 c[remaining]; } }')
+
+	assert "situ_s_body_span" in header
+	assert "0x0Du, 0x0Au, 0x2Eu, 0x0Du, 0x0Au" in header
+
+
+def test_a_coded_region_gets_no_token_comparison() -> None:
+	"""`_eq` over a transform's output would compare stuffed text -- or
+	ciphertext -- against a literal somebody wrote in the clear."""
+	header, _ = emit(
+		"codec stuff { kernel = stuffing(worst_case = 4, per = 3, "
+		"unit = stream, code = dot); }\n"
+		"impl stuff derived;\n"
+		'struct s { coded body(stuff) until "\\r\\n.\\r\\n" { u8 c[remaining]; } }')
+
+	assert "situ_s_body_eq" not in header
+	assert "the pointer above is" in header

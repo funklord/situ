@@ -35,13 +35,36 @@ struct reply_line {
 	u8            text[]  until "\r\n"  max 512;
 }
 
-// The DATA body, which ends at a dot on a line of its own.
+// Dot-stuffing (RFC 5321 section 4.5.2). A line beginning with a dot is sent
+// with two, and the receiver removes one -- which is what makes the
+// terminator below unambiguous, because a body line consisting of one dot
+// arrives as two.
 //
-// A five-byte delimiter, and the one place in this file where situ's framing
-// is exactly the protocol's. RFC 5321 section 4.1.1.4 writes the terminator
-// as CRLF "." CRLF and that is what this scans for.
+// Declared as a `stuffing` kernel, which is the family COBS and HDLC are in:
+// a trigger predicate and an insertion rule. The worst case is a body of
+// nothing but `.CRLF` lines, three bytes in and four out.
+//
+// `unit = stream` and not `byte`, and the difference is real: the trigger is
+// "the start of a line", which a decoder cannot evaluate from one byte
+// without knowing what preceded it.
+codec dot_stuffing {
+	kernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);
+}
+impl dot_stuffing derived;
+
+// The DATA body: bytes ending at a dot on a line of its own, and stuffed.
+//
+// Both facts at once, and the order matters. The scan runs on the *encoded*
+// bytes, because the stuffing is what protects the terminator -- `CRLF . CRLF`
+// is unambiguous here and would not be after decoding. So the region is
+// delimited and coded, and situ says which of its accessors give you which.
+//
+// The map records the consequence: `stage = TransformTime` on the interior,
+// because nothing in it can be read before the transform has run.
 struct data_block {
-	u8  body[] until "\r\n.\r\n";
+	coded body(dot_stuffing) until "\r\n.\r\n" {
+		u8  content[remaining];
+	}
 }
 
 // What situ does not describe here, said plainly.

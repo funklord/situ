@@ -69,7 +69,7 @@ tag_field	= ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
 block		= "positional" "{" { member } "}"
 	| "authenticated" [ ident ] [ attrs ] "{" { member } "}"
 	| "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
-	| "coded" ident "(" codec_args ")" [ attrs ] "{" { member } "}"
+	| "coded" ident "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
 	| "indexed" "(" index_args ")" "{" { member } "}"		(* PHASE 6 *)
 	| "opaque" ident "[" size_expr "]" [ attrs ] ";"		(* PHASE 6 *)
 	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;			(* PHASE 6 *)

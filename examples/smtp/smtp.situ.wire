@@ -17,7 +17,7 @@ struct command size=3..528
   ~         until:0d0a u8         argument  big trim cap=512
 
 struct data_block size=5..
-  @0x0000   until:0d0a2e0d0a u8         body  big
+  @0x0000   until:0d0a2e0d0a dot_stuffing body  codec=dot_stuffing
 
 struct reply_line size=6..516
   @0x0000   3         u16        code  big radix=10

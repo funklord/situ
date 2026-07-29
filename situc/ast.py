@@ -379,6 +379,14 @@ class Coded(Member):
 	args: tuple[Attr, ...]
 	members: tuple[Member, ...]
 	attrs: tuple[Attr, ...] = ()
+	#: `coded body(dot_stuffing) until "\r\n.\r\n" { ... }` -- a region whose
+	#: extent is found by scanning rather than computed from its interior.
+	#:
+	#: Scan first, then decode. That is the order the protocols that need this
+	#: specify: SMTP's dot-stuffing protects the terminator, so the sequence
+	#: is unambiguous in the *encoded* bytes and would not be in the decoded
+	#: ones (section 13.6).
+	until: Until | None = None
 
 
 @dataclass(frozen=True)
