@@ -146,6 +146,13 @@ def test_a_covered_write_takes_the_dirty_word() -> None:
 	"struct s { u16 total; u8 a; u32 b; }\ninvariant s.total == size(s.a) + size(s.b);",
 	"struct s { u16 n; u8 a; authenticated { u16 q; } tag u8[4]; }"
 	"\ninvariant s.n == size(s.a);",
+	# Section 8.6: a delimited byte run, a quoted one, a text length driving
+	# an array, and a run of records.
+	'struct s { u8 magic[4]; u8 line[] until "\\r\\n"; u16 count; }',
+	'struct s { u8 f[] until "," [quoted = "\\""]; u8 rest[remaining]; }',
+	'struct s { decimal u16 n until "\\r\\n" max 8; u8 body[n]; }',
+	'struct kv { u8 k[] until ": "; u8 v[] until "\\r\\n"; }\n'
+	'struct blk { kv entries[] until "\\r\\n"; u8 payload[remaining]; }',
 ])
 def test_it_compiles(tmp_path: Path, body: str) -> None:
 	result = build(tmp_path, body)

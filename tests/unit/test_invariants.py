@@ -234,32 +234,19 @@ def test_the_derived_field_is_immutable_and_says_which_invariant_decided() -> No
 DELIMITED = 'struct s { u8 line[] until "\\r\\n"; u16 count; }'
 
 
-@pytest.mark.parametrize("target", ["rust"])
-def test_a_backend_without_delimiters_says_so(target: str) -> None:
-	"""Rather than raising `AssertionError: offset is dynamic` out of the
-	layout module, which is what reaching `offset_bytes` on a scanned member
-	did. A traceback tells a user nothing about their schema and looks like a
-	crash because it is one."""
-	from situc.diagnostics import SituError
-
-	schema   = parse_text(PREAMBLE + DELIMITED)
-	resolved = resolve(schema, solve(schema))
-	emit, _  = BACKENDS[target]
-
-	with pytest.raises(SituError, match="cannot emit a delimited member yet"):
-		emit(schema, resolved, "unit")
-
-
 @pytest.mark.parametrize("target,marker", [
 	("c", "situ_s_line_span"),
 	("cpp", "line_span()"),
 	("python", "def line_span(self)"),
+	("rust", "pub fn line_span(&self)"),
 ])
-def test_the_backends_that_do_have_them(target: str, marker: str) -> None:
-	"""The other half of the claim above. A gap declared where there is none
-	sends a reader designing around a limit that is not there (invariant 12),
-	so the two tests are written together -- and this one is what makes the
-	first fail the day a backend catches up and nobody edits the list."""
+def test_every_backend_has_delimited_members(target: str, marker: str) -> None:
+	"""All four, which is what closes section 8.6.
+
+	This replaces a pair of tests that said three did not: one asserting the
+	refusal and one asserting C did have it, written together so that the
+	first failed the day a backend caught up. It did, three times, which is
+	the whole reason to write the second half."""
 	schema   = parse_text(PREAMBLE + DELIMITED)
 	resolved = resolve(schema, solve(schema))
 	emit, _  = BACKENDS[target]

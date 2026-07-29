@@ -3405,20 +3405,19 @@ Delivered:
   field, at the cost of `canonical = NonCanonical`.
 - Text-encoded numbers, so a length written as digits is a typed field that
   drives an array (8.6.2).
-- The C backend, end to end: a frame of method, target, text Content-Length
-  and binary body parses, and every malformed variant is refused.
-
-A real HTTP header block parses in C: three fields with their names and
-values, the terminator consumed, and the body located after it.
-
-Outstanding, and declared rather than discovered:
-
-- **C++, Python and Rust do not emit delimited members.** They refuse with a
-  diagnostic naming the C backend and the section. Before that they reached
-  `offset_bytes` on a scanned member and raised an `AssertionError` out of the
-  layout module, which is a crash wearing a stack trace.
 - Runs of records, so a header *block* is expressible and not only the
   individual lines of one (8.6.3).
+- **All four backends.** A real HTTP header block parses in C, C++, Python and
+  Rust, to the same three fields and the same span, and each refuses the same
+  malformed frames for the same reason and in the same order.
+
+What each target adds over C, where the language allows it:
+
+| | delimited member | what it enforces that C documents |
+|---|---|---|
+| C++ | methods on the view | `at()` is `[[nodiscard]] err`, so an out-of-range index cannot be ignored into a use of an uninitialised view |
+| Python | properties | the text-number property raises rather than returning a sentinel |
+| Rust | `&[u8]` slices | a slice carries its length, so it cannot be paired with the wrong count; `Result` is `#[must_use]`, so ignoring a bad parse does not compile |
 
 ### Invariants to hold across all phases
 

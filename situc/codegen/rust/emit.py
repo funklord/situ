@@ -29,12 +29,12 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.names import render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	refuse_delimited,
 	Check, Member, classify, classify_check, local_name, obligation,
 	obligations, own_entries, own_members,
 )
@@ -58,7 +58,6 @@ class Generated:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> Generated:
-	refuse_delimited(schema, resolved, "Rust")
 	return Generated(module=Emitter(schema, resolved, basename).module(),
 	                 basename=basename)
 
@@ -120,7 +119,12 @@ class Emitter:
 			"",
 			"#![allow(dead_code)]",
 			"",
-			"use crate::situ_rt::{self, Dirty, Error, Result};",
+			# `Dirty` only where something marks or clears a bit. An unused
+			# import is a warning, and a generated file that warns on sight
+			# teaches a reader to ignore warnings from generated files.
+			("use crate::situ_rt::{self, Dirty, Error, Result};"
+			 if self._needs_dirty() else
+			 "use crate::situ_rt::{self, Error, Result};"),
 			"",
 		]
 
@@ -133,6 +137,12 @@ class Emitter:
 		return "\n".join(lines) + "\n"
 
 	# -- enums ---------------------------------------------------------
+
+	def _needs_dirty(self) -> bool:
+		"""Whether anything in this schema marks or clears a dirty bit."""
+		return any(entry.placement.covered_by or entry.placement.derived_by
+		           for struct in self.resolved.structs.values()
+		           for entry in struct.entries)
 
 	def _enum(self, decl: ast.EnumDecl) -> list[str]:
 		values  = self.resolved.layout.env.enums[decl.name]
@@ -208,6 +218,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._getter(struct, entry))
 
+		lines.extend(self._extent_method(struct))
 		lines.extend(self._validate(struct))
 		lines.extend(self._gate_opens(struct))
 		lines.extend(["}", ""])
@@ -252,6 +263,10 @@ class Emitter:
 			return ["",
 			        f"\t// {placement.path} is reserved: no accessor, and",
 			        "\t// validate() holds it to the declared pattern."]
+		if kind is Member.DELIMITED:
+			return self._delimited(struct, placement)
+		if kind is Member.RECORD_RUN:
+			return self._record_run(struct, placement)
 		if kind is Member.VARIABLE:
 			return self._variable(struct, placement)
 		if kind is Member.UNPLACED or kind is Member.REGION:
@@ -592,6 +607,270 @@ class Emitter:
 			"\t}",
 		]
 
+	# -- delimited members (section 8.6) --------------------------------
+
+	def _scan_call(self, placement: Placement, slice_expr: str) -> str:
+		delim = placement.delimiter
+		assert delim is not None
+		bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
+
+		if placement.delimiter_quote is None and placement.delimiter_escape is None:
+			return f"situ_rt::scan({slice_expr}, {bytes_})"
+
+		quote  = (f"{placement.delimiter_quote}"
+		          if placement.delimiter_quote is not None else "situ_rt::NO_BYTE")
+		escape = (f"{placement.delimiter_escape}"
+		          if placement.delimiter_escape is not None else "situ_rt::NO_BYTE")
+		return (f"situ_rt::scan_relaxed({slice_expr}, {bytes_}, "
+		        f"{quote}, {escape})")
+
+	def _scan_slice(self, placement: Placement, start: str) -> str:
+		"""The bytes the scan may look at: to the cap, or to the end."""
+		if placement.delimiter_cap is None:
+			return f"&self.bytes[({start})..]"
+		return (f"&self.bytes[({start})..core::cmp::min("
+		        f"({start}) + {placement.delimiter_cap}, self.bytes.len())]")
+
+	def _delimited(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The same three numbers every backend gives.
+
+		A slice carries its own length, so `len` here is the content and the
+		accessor hands back exactly it -- there is no pointer to pair with a
+		count and no way to lose one. `span` is content plus delimiter, which
+		is what the next member's offset is computed from.
+		"""
+		assert placement.delimiter is not None
+		name  = _ident(local_name(struct, placement))
+		base  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the scan starts."]
+
+		sliced = self._scan_slice(placement, start)
+		limit  = (f"(self.bytes.len() - ({start}))" if placement.delimiter_cap is None
+		          else f"core::cmp::min({placement.delimiter_cap}, "
+		               f"self.bytes.len() - ({start}))")
+
+		return [
+			"",
+			f"\t/// `{placement.path}` runs to the first"
+			f" {render_delimiter(delim)}.",
+			f"\tpub fn {_ident(f'{base}_offset')}(&self) -> usize {{",
+			f"\t\t{start}",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(f'{base}_len')}(&self) -> usize {{",
+			f"\t\t{self._scan_call(placement, sliced)}",
+			"\t}",
+			"",
+			"\t/// Whether the delimiter is there. It is not when the frame was",
+			"\t/// cut short, which is the only thing parse can catch here.",
+			f"\tpub fn {_ident(f'{base}_terminated')}(&self) -> bool {{",
+			f"\t\tself.{_ident(f'{base}_len')}() < {limit}",
+			"\t}",
+			"",
+			"\t/// Content plus delimiter: where the next member starts.",
+			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+			f"\t\tself.{_ident(f'{base}_len')}() + if self."
+			f"{_ident(f'{base}_terminated')}() {{ {len(delim)} }} else {{ 0 }}",
+			"\t}",
+		] + (self._text_number(struct, placement) if placement.radix is not None
+		     else [
+			"",
+			f"\tpub fn {name}(&self) -> &[u8] {{",
+			f"\t\tlet at = self.{_ident(f'{base}_offset')}();",
+			f"\t\t&self.bytes[at..at + self.{_ident(f'{base}_len')}()]",
+			"\t}",
+		])
+
+	def _text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Digits, read through a `Result` that cannot be dropped.
+
+		`#[must_use]` on `Result` is what makes this backend's version of the
+		claim stronger than C's: there, ignoring the error is a warning nobody
+		enabled; here it does not compile.
+		"""
+		assert placement.radix is not None
+		scalar = placement.scalar
+		assert scalar is not None
+
+		name  = _ident(local_name(struct, placement))
+		base  = c_name(local_name(struct, placement))
+		rtype = self._field_type(placement, writing=True)
+		limit = (1 << scalar.bits) - 1
+
+		return [
+			"",
+			f"\t/// `{placement.path}`: digits, in the range of {scalar.name}.",
+			"\t///",
+			"\t/// The only accessor here that can fail. Every other conversion",
+			"\t/// is total; a decimal parse is not, and returning 0 for `12x4`",
+			"\t/// would hand back a number nobody wrote.",
+			f"\tpub fn {name}(&self) -> Result<{rtype}> {{",
+			f"\t\tlet at = self.{_ident(f'{base}_offset')}();",
+			f"\t\tlet raw = &self.bytes[at..at + self."
+			f"{_ident(f'{base}_len')}()];",
+			"",
+			f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix}, {limit}) {{",
+			f"\t\t\tSome(value) => Ok(value as {rtype}),",
+			"\t\t\tNone => Err(Error::Constraint),",
+			"\t\t}",
+			"\t}",
+			"",
+			"\t/// The same digits where an error cannot be returned: the offset",
+			"\t/// arithmetic after this field is not fallible. `validate`",
+			"\t/// refuses a frame whose digits are not digits, so a validated",
+			"\t/// one always parses here.",
+			f"\tpub fn {_ident(f'{base}_value')}(&self) -> {rtype} {{",
+			f"\t\tself.{name}().unwrap_or(0)",
+			"\t}",
+		]
+
+	def _record_run(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run of records, ending where the terminator would be an element."""
+		assert placement.delimiter is not None
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._extent_expression(element) is None:
+			return ["", f"\t// No accessors for {placement.path}: one"
+			        f" `{placement.type_name}` has no extent",
+			        "\t// this backend can compute, so the run cannot be walked."]
+
+		base  = c_name(local_name(struct, placement))
+		delim = placement.delimiter
+		inner = _pascal(placement.type_name or "")
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the run starts."]
+
+		bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
+		walk = [
+			f"\t\tlet mut at = {start};",
+			"\t\tlet mut n  = 0usize;",
+			"",
+			f"\t\twhile at + {len(delim)} <= self.bytes.len() {{",
+			f"\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			"\t\t\tlet size = element.extent();",
+			"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+			"\t\t\t\t// A zero-extent element would loop here forever, and",
+			"\t\t\t\t// one past the end was never in this frame.",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+		]
+
+		return [
+			"",
+			f"\t/// `{placement.path}` is a run of `{placement.type_name}`,"
+			f" ending where",
+			f"\t/// {render_delimiter(delim)} stands in for one. Walked, not"
+			" indexed: a view",
+			"\t/// borrows the caller's slice and nothing here allocates, so",
+			"\t/// there is nowhere to keep a table of offsets.",
+			f"\tpub fn {_ident(f'{base}_count')}(&self) -> usize {{",
+			*walk,
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\tn",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
+			*walk,
+			"\t\t\tif n == index {",
+			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size] }});",
+			"\t\t\t}",
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\tErr(Error::Bounds)",
+			"\t}",
+			"",
+			"\t/// Every element plus the terminator: where the next member",
+			"\t/// starts. Where the run ran out of buffer there is none to add.",
+			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+			*walk,
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\tlet _ = n;",
+			f"\t\tif at + {len(delim)} <= self.bytes.len() {{",
+			f"\t\t\tat += {len(delim)};",
+			"\t\t}",
+			f"\t\tat - ({start})",
+			"\t}",
+		]
+
+	def _delimiter_checks(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The delimiter is there, and a text number's digits are digits.
+
+		Terminated first: for a frame cut short before the digits both are
+		wrong, and "this frame stops early" is the more useful answer. The
+		other three report it in that order too.
+		"""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []		# checked under the element's own struct
+
+		base  = c_name(local_name(struct, placement))
+		lines = [
+			f"\t\tif !self.{_ident(f'{base}_terminated')}() {{",
+			"\t\t\treturn Err(Error::Constraint);",
+			"\t\t}",
+		]
+		if placement.radix is not None:
+			# Reading it is the check. `?` rather than a match, because the
+			# error is already the right one and `Result` cannot be dropped.
+			lines.append(f"\t\tself.{_ident(local_name(struct, placement))}()?;")
+		return lines
+
+	def _extent_expression(self, struct: ResolvedStruct) -> str | None:
+		"""How many bytes one instance of a variable struct occupies."""
+		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+			return None
+
+		terms: list[str] = []
+		for placement in own_members(struct):
+			if placement.is_fixed_size:
+				terms.append(str(placement.size_bits // BITS_PER_BYTE))
+				continue
+			if placement.sized_by == "remaining":
+				return None
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return None
+			terms.append(length)
+		return " + ".join(terms) if terms else None
+
+	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
+		"""Emitted only for a type something walks a run of."""
+		if not any(classify(other, entry.placement, self.structs)
+		           is Member.RECORD_RUN
+		           and entry.placement.type_name == struct.name
+		           for other in self.resolved.structs.values()
+		           for entry in other.entries):
+			return []
+
+		extent = self._extent_expression(struct)
+		if extent is None:
+			return []
+
+		return [
+			"",
+			f"\t/// How many bytes one `{struct.name}` occupies. A run of these",
+			"\t/// is walked, and the walk needs to know where each one ends.",
+			"\tpub fn extent(&self) -> usize {",
+			f"\t\t{extent}",
+			"\t}",
+		]
+
 	def _offset_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""Where a member starts: the same walk every backend does."""
@@ -616,6 +895,10 @@ class Emitter:
 
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
+		# Wherever the delimiter turns out to be. One name for "how far this
+		# member reaches", whether it is a byte run or a run of records.
+		if placement.delimiter is not None:
+			return (f"self.{_ident(c_name(local_name(struct, placement)) + '_span')}()")
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
 			return None if start is None else f"(self.bytes.len() - ({start}))"
@@ -633,6 +916,13 @@ class Emitter:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None or driver.placement.scalar is None:
 			return None
+
+		# Digits, not bits, and behind the scans of everything before it --
+		# so neither the offset check nor the raw load below applies.
+		if driver.placement.radix is not None:
+			name = _ident(c_name(local_name(struct, driver.placement)) + "_value")
+			return f"self.{name}() as usize"
+
 		if driver.placement.offset_bits is None:
 			return None
 		return (f"{self._raw_load(driver.placement, driver.placement.scalar)}"
@@ -964,6 +1254,9 @@ class Emitter:
 			check = classify_check(struct, placement, self.structs)
 
 			if check is Check.NOTHING:
+				continue
+			if check is Check.DELIMITED:
+				checks.extend(self._delimiter_checks(struct, placement))
 				continue
 			if check is Check.REPEATED:
 				checks.extend(self._array_checks(placement, name))

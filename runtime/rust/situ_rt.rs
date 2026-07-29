@@ -195,6 +195,105 @@ pub fn nul_len(bytes: &[u8]) -> usize {
 	bytes.len()
 }
 
+/// A byte position no byte occupies, for a format with no quote or escape.
+pub const NO_BYTE: u32 = 0x100;
+
+/// Where a delimited member's content stops (section 8.6.1).
+///
+/// The offset of the first occurrence of `delim` within `bytes`, or
+/// `bytes.len()` where it is not there. The caller distinguishes the two: a
+/// member whose delimiter is absent is truncated rather than empty, and a
+/// getter is not the place to decide what to do about that.
+#[inline]
+pub fn scan(bytes: &[u8], delim: &[u8]) -> usize {
+	let limit = bytes.len();
+
+	if delim.is_empty() || delim.len() > limit {
+		return limit;
+	}
+	let mut i = 0;
+	while i + delim.len() <= limit {
+		if &bytes[i..i + delim.len()] == delim {
+			return i;
+		}
+		i += 1;
+	}
+	limit
+}
+
+/// The same, with a byte that makes the delimiter inert.
+///
+/// `quote` toggles: inside a quoted run the delimiter is content. `escape`
+/// applies to the byte after it, including a quote byte and including itself.
+/// Either may be `NO_BYTE`.
+///
+/// A quoted run left open finds no delimiter, which is the same answer as one
+/// that is not there -- and the right one, since the content the schema
+/// describes has not been terminated.
+#[inline]
+pub fn scan_relaxed(bytes: &[u8], delim: &[u8], quote: u32, escape: u32) -> usize {
+	let limit = bytes.len();
+
+	if delim.is_empty() || delim.len() > limit {
+		return limit;
+	}
+
+	let mut quoted = false;
+	let mut i = 0;
+	while i + delim.len() <= limit {
+		if escape != NO_BYTE && bytes[i] as u32 == escape {
+			i += 2;		// the next byte is content, whatever it is
+			continue;
+		}
+		if quote != NO_BYTE && bytes[i] as u32 == quote {
+			quoted = !quoted;
+			i += 1;
+			continue;
+		}
+		if !quoted && &bytes[i..i + delim.len()] == delim {
+			return i;
+		}
+		i += 1;
+	}
+	limit
+}
+
+/// A number written as digits, or `None` where it is not one (section 8.6.2).
+///
+/// `Option` rather than `Result`: there is one way to fail and naming it
+/// would be a second error type for the same fact. Refused for the reasons a
+/// protocol cares about -- an empty run, because no digits is not the number
+/// zero; a byte that is not a digit in this base, including a trailing space;
+/// and a value above `max`, which is the declared type's range.
+///
+/// Overflow is checked before it happens. Detecting it afterwards by looking
+/// for a result that got smaller is a wrap, which panics in a debug build and
+/// is merely wrong in a release one.
+#[inline]
+pub fn parse_uint(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
+	if bytes.is_empty() || !(2..=16).contains(&radix) {
+		return None;
+	}
+
+	let mut value: u64 = 0;
+	for &byte in bytes {
+		let digit = match byte {
+			b'0'..=b'9' => (byte - b'0') as u32,
+			b'a'..=b'f' => (byte - b'a') as u32 + 10,
+			b'A'..=b'F' => (byte - b'A') as u32 + 10,
+			_ => return None,
+		};
+		if digit >= radix {
+			return None;
+		}
+		if value > (max - digit as u64) / radix as u64 {
+			return None;
+		}
+		value = value * radix as u64 + digit as u64;
+	}
+	Some(value)
+}
+
 #[inline]
 pub fn ascii_valid(bytes: &[u8]) -> bool {
 	let mut i = 0;

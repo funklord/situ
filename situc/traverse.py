@@ -318,36 +318,3 @@ def container_bits(placement: Placement, widths: tuple[int, ...]) -> int | None:
 		if bits <= width:
 			return width
 	return None
-
-
-def refuse_delimited(schema: Schema, resolved: object, target: str) -> None:
-	"""Refuse a delimited schema in a backend that cannot emit one yet.
-
-	A gap, said where a user meets it. Before this the three backends without
-	delimited support reached `Placement.offset_bytes` on a scanned member and
-	raised `AssertionError: offset is dynamic` -- a traceback out of the
-	compiler, which tells a user nothing about their schema and looks like a
-	crash because it is one.
-
-	Section 8.6.1 is implemented in C. That the other three do not have it yet
-	is a real gap (invariant 12), so it is declared rather than discovered.
-	"""
-	from situc.diagnostics import error
-
-	structs = getattr(resolved, "structs", {})
-	for struct in structs.values():
-		for entry in struct.entries:
-			placement = entry.placement
-			if placement.delimiter is None:
-				continue
-			raise error(
-				f"the {target} backend cannot emit a delimited member yet",
-				placement.span,
-				label = "ends at a delimiter",
-				notes = [
-					"`until` is implemented in the C backend (section 8.6.1); "
-					f"the {target} one has not caught up",
-					"generate C for this schema, or describe the delimited "
-					"part of the format separately until it has",
-				],
-			)
