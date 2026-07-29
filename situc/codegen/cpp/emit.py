@@ -31,7 +31,7 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.names import render_delimiter
+from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
@@ -507,7 +507,7 @@ class Emitter:
 				" size_bytes, &raw);",
 				"",
 				"\t\tif (e == SITU_OK) {",
-				f"\t\t\tout = {name}(raw);",
+				f"\t\t\tout = ::{self.namespace}::{name}(raw);",
 				"\t\t}",
 				"\t\treturn static_cast<::situ::rt::err>(e);",
 				"\t}",
@@ -525,7 +525,7 @@ class Emitter:
 			" length, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
-			f"\t\t\tout = {name}(raw);",
+			f"\t\t\tout = ::{self.namespace}::{name}(raw);",
 			"\t\t}",
 			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",
@@ -893,6 +893,96 @@ class Emitter:
 			"\t}",
 		]
 
+	def _repeat_while(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run ending after the element that fails a condition (8.6.6)."""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._extent_terms(element) is None:
+			return ["", f"\t/* No accessors for {placement.path}: one"
+			        f" `{placement.type_name}` has no",
+			        "\t * extent this backend can compute. */"]
+
+		name  = c_name(local_name(struct, placement))
+		inner = c_name(placement.type_name or "")
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the run starts. */"]
+
+		cap  = ("" if placement.repeat_cap is None
+		        else f" && n < {placement.repeat_cap}u")
+		walk = [
+			f"\t\tstd::uint32_t at = {start};",
+			"\t\tstd::uint32_t n  = 0;",
+			"",
+			f"\t\twhile (at < limit(){cap}) {{",
+			"\t\t\tsitu_view_t raw;",
+			"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)"
+			" != SITU_OK) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
+			"\t\t\tconst std::uint32_t size = element.extent();",
+			"\t\t\tif (size == 0u || at + size > limit()) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+		]
+		tail = [
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			f"\t\t\tif (!({self._element_cond(element, placement)})) {{",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
+		return [
+			"",
+			f"\t/* {placement.path} is a run of `{placement.type_name}` ending",
+			f"\t * after the element for which `{placement.repeat_while}` is",
+			"\t * false. That element is part of the run: the condition is",
+			"\t * asked about it once it has been read. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+			"\t{",
+			*walk, *tail,
+			"\t\treturn n;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,"
+			f" {inner} &out) const noexcept",
+			"\t{",
+			*walk,
+			"\t\t\tif (n == index) {",
+			"\t\t\t\tsitu_view_t found;",
+			"\t\t\t\tconst situ_err_t e = situ_view_sub(this->raw(), at,"
+			" size, &found);",
+			"",
+			"\t\t\t\tif (e == SITU_OK) {",
+			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found);",
+			"\t\t\t\t}",
+			"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
+			"\t\t\t}",
+			*tail,
+			"\t\treturn ::situ::rt::err::bounds;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+			"\t{",
+			*walk, *tail,
+			"\t\t(void)n;",
+			f"\t\treturn at - ({start});",
+			"\t}",
+		]
+
+	def _element_cond(self, element: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The condition over `element`, whose accessors are methods."""
+		names = [entry.placement.name for entry in element.entries
+		         if entry.placement.scalar is not None
+		         and "." not in entry.placement.path[len(element.name) + 1:]]
+		return over_fields(names, placement.repeat_while or "",
+		                   lambda name: f"element.{c_name(name)}()")
+
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element.
@@ -934,7 +1024,8 @@ class Emitter:
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-			f"\t\t\tconst std::uint32_t size = {inner}(raw).extent();",
+			f"\t\t\tconst std::uint32_t size = "
+			f"::{self.namespace}::{inner}(raw).extent();",
 			"\t\t\tif (size == 0u || at + size > limit()) {",
 			"\t\t\t\t/* A zero-extent element would walk here forever, and",
 			"\t\t\t\t * one running past the limit was never in this frame. */",
@@ -966,7 +1057,7 @@ class Emitter:
 			" &found);",
 			"",
 			"\t\t\t\tif (e == SITU_OK) {",
-			f"\t\t\t\t\tout = {inner}(found);",
+			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found);",
 			"\t\t\t\t}",
 			"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t\t\t}",
@@ -1015,8 +1106,10 @@ class Emitter:
 		"""How many bytes one instance occupies, for a run that walks them."""
 		# A run walks them and a nested member sizes its view from one. Gated
 		# on the run alone, the nested case reached for `size_bytes` instead.
+		# A run walks them, a `while` run walks them, and a nested member
+		# sizes its view from one. All three read the same method.
 		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.NESTED)
+		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
@@ -1036,14 +1129,27 @@ class Emitter:
 			"\t}",
 		]
 
+	def _over_fields(self, struct: ResolvedStruct, source: str) -> str:
+		names = [entry.placement.name for entry in struct.entries
+		         if entry.placement.scalar is not None
+		         and "." not in entry.placement.path[len(struct.name) + 1:]]
+		return over_fields(names, source, lambda name: f"{c_name(name)}()")
+
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
+		# A size that is arithmetic over a field rather than a reference to
+		# one. `sized_by` holds a path and holds nothing for this, so the
+		# member fell through to the scalar case and this backend handed back
+		# one byte and called it the field.
+		if placement.size_expr is not None:
+			return (f"static_cast<std::uint32_t>("
+			        f"{self._over_fields(struct, placement.size_expr)})")
 		# A delimited member's extent is not a closed form: it is wherever the
 		# delimiter turns out to be, and `_span()` is the member's own answer.
 		# The same call serves a byte array and a run of records -- one name
 		# for "how far this member reaches", whichever it is.
-		if placement.delimiter is not None:
+		if placement.delimiter is not None or placement.repeat_while is not None:
 			return f"{c_name(local_name(struct, placement))}_span()"
 
 		# A nested struct with no single size. Without this the sum treated
@@ -1152,7 +1258,7 @@ class Emitter:
 			f"\t\t\t{inner}::size_bytes, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
-			f"\t\t\tout = {inner}(raw);",
+			f"\t\t\tout = ::{self.namespace}::{inner}(raw);",
 			"\t\t}",
 			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",
@@ -1172,13 +1278,7 @@ class Emitter:
 			        f" `validate` holds it to",
 			        "\t * the pattern the schema declares. */"]
 		if kind is Member.REPEAT_WHILE:
-			return ["",
-			        f"\t/* {placement.path}: a run ending after the element for",
-			        f"\t * which `{placement.repeat_while}` is false.",
-			        "\t *",
-			        "\t * The C backend emits the walk for this (8.6.6) and this",
-			        "\t * one has not caught up. Nothing after it can be placed",
-			        "\t * either, because its extent is what their offsets add. */"]
+			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
 			return self._delimited(struct, placement)
 		if kind is Member.RECORD_RUN:

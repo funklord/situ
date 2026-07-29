@@ -18,6 +18,7 @@ than an exception they have to catch.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from situc import ast
@@ -25,7 +26,7 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.names import render_delimiter
+from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
@@ -36,6 +37,23 @@ from situc.traverse import (
 )
 from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarType
+
+
+def _pythonic(source: str) -> str:
+	"""A schema expression as Python.
+
+	The schema's operators are C's, which is a choice the language made once
+	and every other backend is happy with. Python spells three of them in
+	words, and emitting `||` produced a module that did not parse -- the same
+	shape as `/` meaning float division here and integer division everywhere
+	else (8.6.2).
+
+	`!=` is left alone, which is why the negation is matched with a lookahead
+	rather than replaced outright.
+	"""
+	source = source.replace("||", " or ").replace("&&", " and ")
+	source = re.sub(r"!(?!=)", "not ", source)
+	return re.sub(r"\s+", " ", source).strip()
 
 
 @dataclass
@@ -401,13 +419,7 @@ class Emitter:
 			return ["", f"\t# {placement.path} is reserved: no accessor, and",
 			        "\t# validate() holds it to the pattern the schema declares."]
 		if kind is Member.REPEAT_WHILE:
-			return ["",
-			        f"\t# {placement.path}: a run ending after the element for",
-			        f"\t# which `{placement.repeat_while}` is false.",
-			        "\t#",
-			        "\t# The C backend emits the walk for this (8.6.6) and this",
-			        "\t# one has not caught up. Nothing after it can be placed",
-			        "\t# either, because its extent is what their offsets add."]
+			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
 			return self._delimited(struct, placement)
 		if kind is Member.RECORD_RUN:
@@ -871,6 +883,79 @@ class Emitter:
 			"\t\treturn 0 if value is None else value",
 		]
 
+	def _over_fields(self, struct: ResolvedStruct, source: str,
+			held: str) -> str:
+		names = [entry.placement.name for entry in struct.entries
+		         if entry.placement.scalar is not None
+		         and "." not in entry.placement.path[len(struct.name) + 1:]]
+		return _pythonic(over_fields(names, source,
+		                             lambda name: f"{held}.{c_name(name)}"))
+
+	def _repeat_while(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run ending after the element that fails a condition (8.6.6)."""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._extent_expression(element) is None:
+			return ["", f"\t# No accessors for {placement.path}: one"
+			        f" `{placement.type_name}` has no extent",
+			        "\t# this backend can compute."]
+
+		name  = c_name(local_name(struct, placement))
+		inner = c_name(placement.type_name or "")
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the run starts."]
+
+		cond = self._over_fields(element, placement.repeat_while or "", "element")
+		cap  = ("" if placement.repeat_cap is None
+		        else f" and len(starts) <= {placement.repeat_cap}")
+
+		return [
+			"",
+			f"\tdef _{name}_walk(self) -> list[int]:",
+			f'\t\t"""Where each `{placement.type_name}` starts, and where the'
+			" run ends.",
+			"",
+			f"\t\tThe run ends after the element for which",
+			f"\t\t`{placement.repeat_while}` is false -- that element is part",
+			"\t\tof it, because the condition is asked once it has been read.",
+			"",
+			"\t\tBounded twice, by the buffer and by refusing to advance on a",
+			'\t\tzero-extent element."""',
+			"\t\tself._check()",
+			f"\t\tat     = {start}",
+			"\t\tstarts = []",
+			"",
+			f"\t\twhile at < self._len{cap}:",
+			f"\t\t\telement = {inner}(self._msg, self._at + at, self._len - at)",
+			"\t\t\tsize    = element._extent",
+			"\t\t\tif size == 0 or at + size > self._len:",
+			"\t\t\t\tbreak",
+			"\t\t\tstarts.append(at)",
+			"\t\t\tat += size",
+			f"\t\t\tif not ({cond}):",
+			"\t\t\t\tbreak",
+			"",
+			"\t\tstarts.append(at)",
+			"\t\treturn starts",
+			"",
+			"\t@property",
+			f"\tdef {name}_count(self) -> int:",
+			f"\t\treturn len(self._{name}_walk()) - 1",
+			"",
+			"\t@property",
+			f"\tdef {name}_span(self) -> int:",
+			f"\t\treturn self._{name}_walk()[-1] - ({start})",
+			"",
+			f"\tdef {name}(self, index: int) -> {inner}:",
+			f"\t\tstarts = self._{name}_walk()",
+			"\t\tif not 0 <= index < len(starts) - 1:",
+			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+			f"\t\treturn {inner}(self._msg, self._at + starts[index],",
+			"\t\t\tstarts[index + 1] - starts[index])",
+		]
+
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element."""
@@ -962,7 +1047,7 @@ class Emitter:
 		"""Emitted only for a type something walks a run of."""
 		# A run walks them and a nested member sizes itself from one.
 		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.NESTED)
+		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
@@ -1009,8 +1094,14 @@ class Emitter:
 		# A delimited member's extent is wherever the delimiter turns out to
 		# be, and `_span` is the member's own answer. One name for "how far
 		# this member reaches", whether it is a byte run or a run of records.
-		if placement.delimiter is not None:
+		if placement.delimiter is not None or placement.repeat_while is not None:
 			return f"self.{c_name(local_name(struct, placement))}_span"
+
+		# Arithmetic over a field rather than a reference to one. Without this
+		# the member fell through to the scalar case and this backend read one
+		# byte and called it the field.
+		if placement.size_expr is not None:
+			return self._over_fields(struct, placement.size_expr, "self")
 
 		# A nested struct with no single size, which the sum treated as zero
 		# bytes wide -- so whatever followed it was placed on top of it.

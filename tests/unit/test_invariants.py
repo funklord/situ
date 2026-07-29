@@ -486,3 +486,80 @@ def test_a_nested_fixed_struct_still_uses_its_constant(target: str) -> None:
 	source = "\n".join(emit(schema, resolved, "unit").files().values())
 
 	assert "a_extent" not in source
+
+
+# -- runs ending on a condition (section 8.6.6) -----------------------------
+
+WHILE_RUN = (
+	"struct e { u8 next; u8 len; u8 d[(len + 1) * 8 - 2]; }\n"
+	"struct s { e chain[] while (next == 43 || next == 44); u8 rest[remaining]; }\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_every_backend_walks_a_while_run(target: str) -> None:
+	schema   = parse_text(PREAMBLE + WHILE_RUN)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "chain_count" in source
+	assert "has not caught up" not in source
+
+
+#: How each backend spells reading `len` inside `(len + 1) * 8 - 2`. Written
+#: out rather than matched loosely, because the loose version passed on Rust
+#: while Rust emitted a one-byte scalar (invariant 26, again).
+SIZED_BY_EXPRESSION = {
+	"c":      "(situ_e_len_get(view) + 1) * 8 - 2",
+	"cpp":    "(len() + 1) * 8 - 2",
+	"python": "(self.len + 1) * 8 - 2",
+	"rust":   "((self.len() as usize) + 1) * 8 - 2",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_no_backend_reads_an_expression_sized_member_as_a_scalar(
+		target: str) -> None:
+	"""`sized_by` holds a field path and holds nothing for arithmetic over
+	one, so `traverse.classify` called `d[(len + 1) * 8 - 2]` a SCALAR and
+	three backends handed back one byte and called it the field. C escaped
+	only because it does not use the classifier -- invariant 20 pointing the
+	other way for once."""
+	schema   = parse_text(PREAMBLE + WHILE_RUN)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert SIZED_BY_EXPRESSION[target] in source
+
+
+def test_the_python_condition_is_python() -> None:
+	"""The schema's operators are C's. Python spells three of them in words,
+	and emitting `||` produced a module that did not parse."""
+	schema   = parse_text(PREAMBLE + WHILE_RUN)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS["python"]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	# The condition as *code*. `||` legitimately survives in the docstring
+	# that quotes the schema, which is what a looser assertion caught.
+	assert "if not (self.next == 43 or self.next == 44)" not in source
+	assert "if not (element.next == 43 or element.next == 44):" in source
+
+
+def test_the_rust_reads_are_widened() -> None:
+	"""`(len + 1) * 8` in u8 arithmetic is 255 + 1 = 0, then zero. C computes
+	it correctly only because integer promotion widens to `int` first, which
+	is a rule Rust does not have -- and a guarantee C stops giving above 16
+	bits."""
+	schema   = parse_text(PREAMBLE + WHILE_RUN)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS["rust"]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "as usize) + 1" in source

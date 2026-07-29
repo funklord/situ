@@ -4013,10 +4013,17 @@ walk is the only thing that reads them all in one sitting.
 29. **Generated code shares a namespace with names the schema chose.** The C++
    factory named its own parameter `msg`, so any schema with a struct called
    `msg` emitted a header where the parameter shadowed the class and the file
-   did not compile. Renaming that one parameter is the same bet again: a
-   schema may call a struct anything. Every generated local is now named so
-   that colliding takes deliberate effort, and `struct msg { ... }` is in the
-   compile lists -- which is the thing that actually catches the next one.
+   did not compile.
+
+   Renaming that parameter fixed one instance and this invariant then claimed
+   the class of them, which was false: a generated *local* called `e` shadowed
+   a class called `e` the next time a schema used that name, in the same
+   backend. Renaming is the wrong instrument -- a schema may call a struct
+   anything, and every rename is the same bet at longer odds. The fix is to
+   make the reference unambiguous instead: `::situ::e` cannot be shadowed by
+   a local, whatever it is called. Where a language offers no such
+   qualification, the compile lists carry the collision, which is the thing
+   that actually catches the next one.
 
 ---
 

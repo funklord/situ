@@ -8,6 +8,9 @@ copied it before this module existed.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
+
 
 def render_delimiter(delim: bytes) -> str:
 	"""A delimiter as a reader of the generated code would write it.
@@ -21,3 +24,22 @@ def render_delimiter(delim: bytes) -> str:
 	                          else f"\\x{byte:02x}")
 	                for byte in delim)
 	return f'`"{shown}"`'
+
+
+def over_fields(names: list[str], source: str,
+		getter: Callable[[str], str]) -> str:
+	"""A schema expression rewritten so each field name is a read of it.
+
+	`(hdr_ext_len + 1) * 8 - 2` becomes the same arithmetic over whatever the
+	backend calls reading `hdr_ext_len`. The expression's shape is the
+	schema's and identical in every target; only the read differs, which is
+	the same split `situc.invariant` makes for the same reason.
+
+	**Longest name first**, or `len` rewrites the `len` inside `hdr_ext_len`
+	and the result names a getter that does not exist. That is not
+	hypothetical: those two fields sit side by side in an IPv6 extension
+	header, which is the schema this was written for.
+	"""
+	for name in sorted(names, key=len, reverse=True):
+		source = re.sub(rf"\b{re.escape(name)}\b", getter(name), source)
+	return source

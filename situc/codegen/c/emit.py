@@ -32,7 +32,7 @@ from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.names import render_delimiter
+from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
@@ -1441,17 +1441,11 @@ class Emitter:
 		getter over the view named by `held`. Longest name first, or `len`
 		would rewrite the `len` inside `hdr_ext_len`.
 		"""
-		for placement in sorted((entry.placement for entry in struct.entries),
-		                        key=lambda p: -len(p.name)):
-			if placement.scalar is None:
-				continue
-			if "." in placement.path[len(struct.name) + 1:]:
-				continue
-			getter = ident(self.prefix, struct.name, c_name(placement.name),
-			               "get")
-			source = re.sub(rf"\b{re.escape(placement.name)}\b",
-			                f"{getter}({held})", source)
-		return source
+		names = [entry.placement.name for entry in struct.entries
+		         if entry.placement.scalar is not None
+		         and "." not in entry.placement.path[len(struct.name) + 1:]]
+		return over_fields(names, source, lambda name:
+			f"{ident(self.prefix, struct.name, c_name(name), 'get')}({held})")
 
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

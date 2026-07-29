@@ -2115,6 +2115,14 @@ def _size_source(member: ast.Field | ast.Reserved) -> str | None:
 		return None
 	if isinstance(array.size, ast.Remaining) or _path_of(array.size) is not None:
 		return None		# `[remaining]` and `[n]` are already handled
+
+	# And a constant. `octets[4]` has no field path either, and reporting it
+	# here made `traverse.classify` call a fixed array variable -- which is
+	# the same fact `array_count` already carries, said a second time and
+	# believed instead.
+	if not paths_in(array.size):
+		return None
+
 	return expr_to_source(array.size)
 
 

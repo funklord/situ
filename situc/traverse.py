@@ -142,7 +142,13 @@ def classify(struct: ResolvedStruct, placement: Placement,
 
 	# Before UNPLACED: a member sized by the data usually has a dynamic offset
 	# as well, and asking about the offset first loses it.
-	if placement.sized_by is not None:
+	#
+	# `size_expr` as well as `sized_by`. The first holds a field path and is
+	# None for `d[(len + 1) * 8 - 2]`, so a member sized by arithmetic over a
+	# field fell past this to SCALAR -- and three backends handed back one
+	# byte and called it the field. C escaped only because it does not use
+	# this function, which is invariant 20 pointing the other way for once.
+	if placement.sized_by is not None or placement.size_expr is not None:
 		return Member.VARIABLE
 
 	# Before NESTED: an array of structs names a struct type and is not one.

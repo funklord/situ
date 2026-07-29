@@ -195,6 +195,10 @@ def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	# backend got this wrong in a different way and none of them compiled or
 	# ran it before.
 	"struct inner { u8 n; u8 body[n]; }\nstruct outer { inner a; u16 tail; }",
+	# Section 8.6.6: a run ending on a condition, whose element is sized by
+	# arithmetic over one of its own fields.
+	"struct e { u8 next; u8 len; u8 d[(len + 1) * 8 - 2]; }\n"
+	"struct s { e chain[] while (next == 43) max 8; u8 rest[remaining]; }",
 ])
 def test_it_compiles_clean(tmp_path: Path, body: str) -> None:
 	result = compiles(tmp_path, body)

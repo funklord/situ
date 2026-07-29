@@ -29,7 +29,7 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.names import render_delimiter
+from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
@@ -264,13 +264,7 @@ class Emitter:
 			        f"\t// {placement.path} is reserved: no accessor, and",
 			        "\t// validate() holds it to the declared pattern."]
 		if kind is Member.REPEAT_WHILE:
-			return ["",
-			        f"\t// {placement.path}: a run ending after the element for",
-			        f"\t// which `{placement.repeat_while}` is false.",
-			        "\t//",
-			        "\t// The C backend emits the walk for this (8.6.6) and this",
-			        "\t// one has not caught up. Nothing after it can be placed",
-			        "\t// either, because its extent is what their offsets add."]
+			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
 			return self._delimited(struct, placement)
 		if kind is Member.RECORD_RUN:
@@ -821,6 +815,88 @@ class Emitter:
 			"\t}",
 		]
 
+	def _over_fields(self, struct: ResolvedStruct, source: str,
+			held: str) -> str:
+		names = [entry.placement.name for entry in struct.entries
+		         if entry.placement.scalar is not None
+		         and "." not in entry.placement.path[len(struct.name) + 1:]]
+		# `as usize` on every read, and Rust is right to demand it. A length
+		# field is narrow -- `hdr_ext_len` is a u8 -- and `(len + 1) * 8` in
+		# u8 arithmetic is 255 + 1 = 0, then zero. C computes the same
+		# expression correctly only because integer promotion widens it to
+		# `int` first, which is a rule this backend does not have and a
+		# guarantee C stops giving above 16 bits.
+		return over_fields(names, source,
+		                   lambda name: f"({held}.{_ident(c_name(name))}()"
+		                                " as usize)")
+
+	def _repeat_while(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run ending after the element that fails a condition (8.6.6)."""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._extent_expression(element) is None:
+			return ["", f"\t// No accessors for {placement.path}: one"
+			        f" `{placement.type_name}` has no extent",
+			        "\t// this backend can compute."]
+
+		base  = c_name(local_name(struct, placement))
+		inner = _pascal(placement.type_name or "")
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the run starts."]
+
+		cond = self._over_fields(element, placement.repeat_while or "", "element")
+		cap  = ("" if placement.repeat_cap is None
+		        else f" && n < {placement.repeat_cap}")
+		walk = [
+			f"\t\tlet mut at = {start};",
+			"\t\tlet mut n  = 0usize;",
+			"",
+			f"\t\twhile at < self.bytes.len(){cap} {{",
+			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			"\t\t\tlet size = element.extent();",
+			"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+		]
+		tail = [
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			f"\t\t\tif !({cond}) {{",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
+		return [
+			"",
+			f"\t/// `{placement.path}` is a run of `{placement.type_name}`"
+			f" ending after",
+			f"\t/// the element for which `{placement.repeat_while}` is false.",
+			"\t/// That element is part of the run: the condition is asked",
+			"\t/// about it once it has been read.",
+			f"\tpub fn {_ident(f'{base}_count')}(&self) -> usize {{",
+			*walk, *tail,
+			"\t\tn",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
+			*walk,
+			"\t\t\tif n == index {",
+			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size] }});",
+			"\t\t\t}",
+			*tail,
+			"\t\tErr(Error::Bounds)",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+			*walk, *tail,
+			"\t\tlet _ = n;",
+			f"\t\tat - ({start})",
+			"\t}",
+		]
+
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element."""
@@ -953,7 +1029,7 @@ class Emitter:
 		"""Emitted only for a type something walks a run of."""
 		# A run walks them and a nested member sizes its slice from one.
 		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.NESTED)
+		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
@@ -998,8 +1074,14 @@ class Emitter:
 			placement: Placement) -> str | None:
 		# Wherever the delimiter turns out to be. One name for "how far this
 		# member reaches", whether it is a byte run or a run of records.
-		if placement.delimiter is not None:
+		if placement.delimiter is not None or placement.repeat_while is not None:
 			return (f"self.{_ident(c_name(local_name(struct, placement)) + '_span')}()")
+
+		# Arithmetic over a field rather than a reference to one. Without this
+		# the member fell through to the scalar case and this backend read one
+		# byte and called it the field.
+		if placement.size_expr is not None:
+			return self._over_fields(struct, placement.size_expr, "self")
 
 		# A nested struct with no single size. Without this the member after
 		# it had no resolvable offset and was dropped from the module.
