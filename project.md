@@ -2317,7 +2317,7 @@ independent of the rest.
 
 **26.15 through 26.19 are complete too**: the built-in codec set, and the C++,
 Python and Rust backends, and the language server. **Nothing on the roadmap is
-outstanding.** 26.20 records what is deliberately not scheduled, which is not
+outstanding.** 26.21 records what is deliberately not scheduled, which is not
 the same as unfinished.
 
 **Four backends over one layout**, and the claim that matters is that they
@@ -3220,7 +3220,24 @@ advisor's costs and are offered rather than applied: a suggestion like
 has to agree to, and applying it silently would be situ making a design
 decision on somebody's behalf.
 
-### 26.20 Folded out, not scheduled
+### 26.20 Cross-field invariants
+
+Open question 3's construct, built after the roadmap ran out. `invariant
+frame.total == size(frame.header) + size(frame.body);` -- see 16.1 for what it
+means and what each backend emits.
+
+Worth recording is how little was needed and where the cost actually fell. The
+resolution had said the maintenance obligation goes where coverage already
+puts it, and that was exactly true: no axis was added, no propagation rule
+changed shape, one row. What took the time was everything downstream of the
+construct rather than the construct -- one numbering shared by four backends,
+four recompute emitters over one shared expression walk, and five artifacts
+that describe a field and each had to learn the word "derived".
+
+Every bug in it was a disagreement rather than a crash, which is why
+`tests/unit/test_invariants.py` compares the backends instead of reading each.
+
+### 26.21 Folded out, not scheduled
 
 **Text-based protocols are folded out of the roadmap, not scheduled.** Text of
 a fixed extent inside a binary frame is already covered -- it is a byte array
@@ -3284,6 +3301,41 @@ section 8.6 for what is and is not claimed today.
    gate of 14.3 would hand out a sealed interior on a flag nobody had checked.
    The question was adjacent to the bug rather than about it. A settled
    question is worth the read regardless of how it settles.
+15. **A new construct lands in a schema the suite compiles, in the same
+   commit.** `tests/schemas/edges.situ` exists to say this and its own header
+   says it -- "a construct the language offers and nothing exercises is a
+   construct whose generated code has never run" -- and the commit that added
+   invariants did not follow it. The generated C contained a macro name with a
+   space in it, which no compiler would take and no test tried. The narrower
+   trap: the schema exercised by hand derived from a nested struct and an
+   array, neither of which gets a setter, so the one path that pastes a name
+   into an identifier was never reached. Exercising a construct means reaching
+   the code it changes, not mentioning it.
+16. **A label is not an identifier, and one string cannot be both for long.**
+   `covered_by` holds "invariant total" because a diagnostic has to say that;
+   generated code needs `total`. They were one string for as long as tags were
+   the only obligation, and the day they stopped being one the compiler emitted
+   `SITU_S_INVARIANT TOTAL_DIRTY`. Where a name is read by a human and by a
+   code generator, carry both from the start.
+17. **A derived fact gets one derivation.** Dirty-bit numbering was computed in
+   two backends from two different lists, and a struct carrying both a tag and
+   an invariant got different bits in C and in Python. This is invariant 1
+   again, one level down: the table is data, and so is anything computed from
+   it. `traverse.obligations` is the numbering; no backend counts for itself.
+18. **A refusal must blame the right thing.** `checksum(s.a)` in an invariant
+   reached every backend, and each declined it saying *this build* could not
+   evaluate it -- accurate about a dynamic offset on a constrained target, and
+   false about a question that exists nowhere. A reader told the build is at
+   fault goes looking for a better compiler. Invariant 12 says a declared gap
+   must be real; this is its other half -- a real gap must be attributed to
+   whatever actually causes it.
+19. **Two doors to one answer must open on the same room.** `situc explain`
+   printed the blame chain for a weakened axis and LSP hover printed only the
+   value, so the editor gave a worse answer than the CLI for the same field --
+   while this project's stated reason for the server is that it is "this
+   information behind a different door". Adding a construct means checking
+   every artifact that describes a field, not the backends alone: `doc`,
+   `map`, `explain`, hover and the advisor each answer for their own reader.
 
 ---
 
@@ -3312,7 +3364,7 @@ about it.
    capability lattice should model delimiter-framed data at all -- where no
    field has an offset, so `offset`, `access` and `address` have nothing to
    say and eleven of thirteen axes are vacuous. That is a language question
-   rather than a syntax one, and it is not answered. 26.20 records the whole
+   rather than a syntax one, and it is not answered. 26.21 records the whole
    position; the construct stays out until the question underneath it is
    taken, and situ says what it does not cover rather than covering it badly.
 2. ~~**Multiple tags with nested coverage.**~~ **RESOLVED.** Nested coverage is

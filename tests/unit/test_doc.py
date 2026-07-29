@@ -155,3 +155,21 @@ def test_every_example_documents_without_error(path: Path) -> None:
 
 	assert text.endswith("\n")
 	assert "struct " in text or "tlv" in text
+
+
+def test_a_derived_field_says_it_is_derived() -> None:
+	"""Somebody writing an encoder from this table needs to know the value is
+	not theirs to choose. The fields an invariant *reads* showed up here from
+	the start, through `covered_by`, so the dependency was documented from one
+	end only -- and the missing end is the one that constrains the writer."""
+	text = emit("struct s { u16 total; u8 a; u32 b; }\n"
+	            "invariant s.total == size(s.a) + size(s.b);\n")
+
+	assert "derived: invariant total computes it" in text
+	assert "covered by invariant total" in text
+
+
+def test_a_plain_field_is_not_called_derived() -> None:
+	text = emit("struct s { u16 total; u8 a; }")
+
+	assert "derived" not in text

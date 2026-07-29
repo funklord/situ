@@ -330,6 +330,14 @@ def _notes(placement: Placement) -> list[str]:
 		             else f"{attr.name} = {_attr_value(attr)}")
 	if placement.covered_by:
 		notes.append("covered by " + ", ".join(placement.covered_by))
+	if placement.derived_by is not None:
+		# The half of section 16.1 a reader of this table most needs. The
+		# fields an invariant *reads* already showed up here, through
+		# `covered_by`, so the dependency was documented from one end only --
+		# and the end that was missing is the one somebody writing an encoder
+		# from this table has to know about, because it says the value is not
+		# theirs to choose.
+		notes.append(f"derived: {placement.derived_by} computes it")
 	if placement.sealed_by is not None:
 		notes.append(f"sealed by {placement.sealed_by}")
 	return notes

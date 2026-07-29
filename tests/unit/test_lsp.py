@@ -325,3 +325,45 @@ def test_definition_of_a_scalar_is_nothing() -> None:
 	line, col = line_of(SCHEMA, "u16       total")
 
 	assert definition_at(analysis, line, col + 1) is None
+
+
+def test_hover_says_why_an_axis_is_weakened() -> None:
+	"""The vector alone answers the smaller half. A reader looking at a field
+	wants to know what did that and what they may do instead, and the
+	propagation table has carried both since section 11.3 -- `situc explain`
+	printed them and hover did not, so the editor gave a weaker answer than the
+	CLI for the same field."""
+	analysis = analyse_text(URI, SCHEMA)
+	line, col = line_of(SCHEMA, "u15       offset")
+
+	text = hover_at(analysis, line, col + 12)
+
+	assert text is not None
+	assert "**Why:**" in text
+	assert "remedy:" in text
+
+
+def test_hover_on_a_derived_field_names_the_invariant() -> None:
+	"""`mutate = Immutable` is true and unhelpful on its own: an editor is
+	exactly where somebody wonders why a field they can see has no setter."""
+	source = ("target buffer;\nendian big;\n"
+	          "struct s {\n\tu16 total;\n\tu8 a;\n\tu32 b;\n}\n"
+	          "invariant s.total == size(s.a) + size(s.b);\n")
+	analysis = analyse_text(URI, source)
+
+	text = hover_at(analysis, 3, 7)
+
+	assert text is not None
+	assert "`mutate` = Immutable" in text
+	assert "a field an invariant maintains" in text
+	assert "call the generated recompute" in text
+
+
+def test_hover_without_a_weakening_has_no_why_section() -> None:
+	"""An empty heading is worse than none: it reads as information withheld."""
+	analysis = analyse_text(URI, "target buffer;\nstruct s { u8 a; }\n")
+
+	text = hover_at(analysis, 1, 12)
+
+	assert text is not None
+	assert "**Why:**" not in text

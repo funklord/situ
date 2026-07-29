@@ -200,7 +200,31 @@ def _render_vector(entry: Any) -> str:
 	elif strongest:
 		lines.extend(f"- {text}" for text in strongest)
 
+	lines.extend(_render_blame(entry))
 	return "\n".join(lines)
+
+
+def _render_blame(entry: Any) -> list[str]:
+	"""Why each weakened axis is what it is, and what to do about it.
+
+	The vector alone says `mutate` is `Immutable` and stops there, which
+	answers the smaller half of the question: a reader looking at a field
+	wants to know *what did that* and *what may I do instead*, and the
+	propagation table has carried both since 11.3. `situc explain` printed
+	them and hover did not, so the editor gave a weaker answer than the CLI
+	for the same field -- which this module's own docstring says it must not.
+	"""
+	if not entry.weakenings:
+		return []
+
+	lines = ["", "**Why:**"]
+	for weakening in entry.weakenings:
+		lines.append(f"- `{weakening.effect.axis.value}` = "
+		             f"{weakening.effect.value.render()} -- "
+		             f"{weakening.rule.construct}: {weakening.effect.because}")
+		if weakening.rule.remedy:
+			lines.append(f"  - *remedy:* {weakening.rule.remedy}")
+	return lines
 
 
 def _is_weakened(entry: Any, axis: Any) -> bool:
