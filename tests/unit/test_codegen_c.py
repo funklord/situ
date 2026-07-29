@@ -1252,3 +1252,56 @@ def test_a_run_whose_element_has_no_extent_says_so() -> None:
 
 	assert "No accessors for `items`" in header
 	assert "has no extent this build can compute" in header
+
+
+def test_the_harness_compiles_for_a_variable_struct() -> None:
+	"""It never did. The harness declared `buf[SITU_X_SIZE_FIXED]` for every
+	struct, and that macro is emitted only where a struct has one size -- so
+	`gen-fuzz` produced C that did not compile for anything with a length
+	field, a `[remaining]` tail or a delimiter. Those are the structs most
+	likely to have a parsing bug, and none of them had ever been fuzzed."""
+	text = fuzz_source("struct S { u8 n; u8 body[n]; }")
+
+	assert "SITU_S_SIZE_FIXED" not in text
+	assert "extent = size < sizeof buf" in text
+
+
+def test_the_harness_gives_a_variable_struct_the_fuzzers_own_length() -> None:
+	"""Better fuzzing than a constant: the extent that reaches the bounds
+	check is one the fuzzer chose, and one it can shrink."""
+	text = fuzz_source("struct S { u8 a; u8 rest[remaining]; }")
+
+	assert "situ_S_view(&msg, 0, extent, &view)" in text
+
+
+def test_the_harness_reads_the_last_byte_a_length_claims() -> None:
+	"""Not the first. The length is attacker-controlled and the pointer is
+	where it aims, so an off-by-one in the extent shows up at the end."""
+	text = fuzz_source("struct S { u8 n; u8 body[n]; }")
+
+	assert "situ_S_body_ptr(view)[n - 1u]" in text
+
+
+def test_the_harness_walks_a_run_of_records() -> None:
+	"""A run has a count and an indexed accessor rather than a pointer and a
+	length, and the walk is the read that can run off the end."""
+	text = fuzz_source('struct kv { u8 k[] until ":"; u8 v[] until "\\r\\n"; }\n'
+	                   'struct S { kv items[] until "\\r\\n"; u8 r[remaining]; }')
+
+	assert "situ_S_items_count(view)" in text
+	assert "situ_S_items_at(view, i, &element)" in text
+
+
+def test_the_harness_does_not_read_an_array_element_entry() -> None:
+	"""`recs[]` describes every element at once and owns no bytes. Reading it
+	emitted an accessor for a member that does not exist -- the shared walk
+	knows that, and this loop had its own copy that did not."""
+	text = fuzz_source("struct e { u16 x; }\nstruct S { u8 n; e recs[n]; }")
+
+	assert "situ_S_recs_view" not in text
+
+
+def test_the_harness_gates_a_versioned_read() -> None:
+	text = fuzz_source("struct S [version = v] { u8 v; u32 b [since = 2]; }")
+
+	assert "situ_S_b_get(view, &held) == SITU_OK" in text

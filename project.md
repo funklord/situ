@@ -3774,6 +3774,17 @@ be static about.
    refuses, and one that would move bytes for every deployed peer if it did
    not. An artifact that says nothing is a gap; one that says something false
    is a defect, and both come from the same missed pass.
+
+   The third pass found the worst of the three, and it had nothing to do with
+   the construct that prompted it. `gen-fuzz` declared
+   `buf[SITU_X_SIZE_FIXED]` for every struct, and that macro exists only where
+   a struct has one size -- so it had never produced compilable C for anything
+   with a length field, a `[remaining]` tail or a delimiter. The artifact
+   whose entire purpose is to be run against hostile input did not build for
+   the structs most likely to have a parsing bug, and had not since variable
+   structs arrived. Nothing noticed because the only harness the build
+   compiled was over a fixed-size schema. `edges.situ` is in that list now,
+   which is invariant 15 applied to an artifact rather than to a construct.
 20. **The shared classifier is only shared if the first backend uses it too.**
    `traverse.classify` was written after three backends shipped the same two
    dispatch bugs, and the C backend -- which had not had them -- was left with

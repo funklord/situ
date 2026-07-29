@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
+from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.traverse import own_entries
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
@@ -56,14 +58,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	]
 
 	for struct in structs:
-		lines.extend(_harness(struct, prefix))
+		lines.extend(_harness(struct, prefix, frozenset(resolved.structs)))
 
 	lines.extend(_entry_point(structs, basename, prefix))
 	lines.extend(_standalone(basename))
 	return "\n".join(lines) + "\n"
 
 
-def _harness(struct: ResolvedStruct, prefix: str) -> list[str]:
+def _harness(struct: ResolvedStruct, prefix: str,
+		structs: frozenset[str]) -> list[str]:
 	"""Read every field of one struct and discard the results.
 
 	The reads are what matter: an out-of-bounds accessor, a bit extraction that
@@ -71,8 +74,32 @@ def _harness(struct: ResolvedStruct, prefix: str) -> list[str]:
 	will trip the sanitizer here. The values are deliberately unused, funnelled
 	through a volatile sink so the optimiser cannot delete the loads.
 	"""
-	size  = macro(prefix, struct.name, "SIZE_FIXED")
-	lines = [
+	if struct.layout.is_fixed_size:
+		lines = _fixed_preamble(struct, prefix)
+	else:
+		lines = _variable_preamble(struct, prefix)
+
+	lines += [
+		"",
+		"\t/* Validation must be safe on arbitrary bytes: it is the first thing",
+		"\t * a parser runs and the last thing an attacker controls. */",
+		f"\t(void){ident(prefix, struct.name, 'validate')}(view);",
+		"",
+	]
+
+	reads = _reads(struct, prefix, structs)
+	if reads:
+		lines.extend(reads)
+	else:
+		lines.append("\t(void)view;")
+
+	lines.extend(["}", ""])
+	return lines
+
+
+def _fixed_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
+	size = macro(prefix, struct.name, "SIZE_FIXED")
+	return [
 		f"static void fuzz_{struct.name}(const uint8_t *data, size_t size)",
 		"{",
 		"\tsitu_msg_t  msg;",
@@ -89,33 +116,88 @@ def _harness(struct: ResolvedStruct, prefix: str) -> list[str]:
 		f"\tif ({ident(prefix, struct.name, 'view')}(&msg, 0, &view) != SITU_OK) {{",
 		"\t\treturn;",
 		"\t}",
-		"",
-		"\t/* Validation must be safe on arbitrary bytes: it is the first thing",
-		"\t * a parser runs and the last thing an attacker controls. */",
-		f"\t(void){ident(prefix, struct.name, 'validate')}(view);",
-		"",
 	]
 
-	reads = _reads(struct, prefix)
-	if reads:
-		lines.extend(reads)
-	else:
-		lines.append("\t(void)view;")
 
-	lines.extend(["}", ""])
-	return lines
+#: How much of the fuzzer's input an unbounded struct is given.
+#:
+#: There is no `SIZE_MAX` for one, and the harness has to declare a buffer.
+#: Large enough that a scan or a length field has somewhere to run, small
+#: enough that a corpus entry stays a size a fuzzer will actually generate.
+UNBOUNDED_EXTENT = 4096
 
 
-def _reads(struct: ResolvedStruct, prefix: str) -> list[str]:
+def _variable_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
+	"""A struct with no single size, which is most of the interesting ones.
+
+	This is what the harness could not do at all: it declared
+	`buf[SITU_X_SIZE_FIXED]` for every struct, and that macro is emitted only
+	where a struct has one size. So `gen-fuzz` produced C that did not compile
+	for exactly the structs most likely to have a parsing bug -- anything with
+	a length field, a `[remaining]` tail, or a delimiter -- and nothing
+	noticed, because the only harness the build compiles is over a
+	fixed-size schema.
+
+	The extent is the fuzzer's own input length rather than a constant, which
+	is also better fuzzing: the length that reaches the bounds check is one
+	the fuzzer chose and can shrink.
+	"""
+	most = struct.layout.size_max_bytes
+	cap  = (macro(prefix, struct.name, "SIZE_MAX") if most is not None
+	        else str(UNBOUNDED_EXTENT))
+	least = macro(prefix, struct.name, "SIZE_MIN")
+
+	return [
+		f"static void fuzz_{struct.name}(const uint8_t *data, size_t size)",
+		"{",
+		"\tsitu_msg_t  msg;",
+		"\tsitu_view_t view;",
+		f"\tuint8_t     buf[{cap}];",
+		"\tuint32_t    extent;",
+		"",
+		f"\tif (size < {least}) {{",
+		"\t\treturn;",
+		"\t}",
+		"",
+		"\t/* As much of the input as fits. The extent that reaches the bounds",
+		"\t * check is then one the fuzzer chose, and one it can shrink. */",
+		"\textent = size < sizeof buf ? (uint32_t)size : (uint32_t)sizeof buf;",
+		"\tmemcpy(buf, data, extent);",
+		"\tsitu_msg_init(&msg, buf, extent);",
+		"",
+		f"\tif ({ident(prefix, struct.name, 'view')}(&msg, 0, extent, &view)"
+		" != SITU_OK) {",
+		"\t\treturn;",
+		"\t}",
+	]
+
+
+def _reads(struct: ResolvedStruct, prefix: str,
+		resolved_names: frozenset[str] = frozenset()) -> list[str]:
 	lines = []
-	for entry in struct.entries:
+	# `own_entries` rather than `struct.entries`: an array's `[]` entry
+	# describes every element at once and owns no bytes, so reading it here
+	# emitted an accessor for a member that does not exist. The shared walk
+	# knows that (invariant 20); this loop had its own copy that did not.
+	for entry in own_entries(struct):
 		placement = entry.placement
 		if placement.kind == "reserved":
 			continue
-		if "." in placement.path[len(struct.name) + 1 :]:
-			continue
 
 		local = c_name(placement.path[len(struct.name) + 1 :])
+
+		# Before the scalar case, and before the counted-array one. A member
+		# whose extent the data decides has no `_get`: it has a pointer and a
+		# length, and those are the two the fuzzer most wants exercised --
+		# the length is attacker-controlled and the pointer is what it aims.
+		if placement.since is not None:
+			lines.extend(_versioned_read(struct, placement, local, prefix))
+			continue
+
+		if placement.delimiter is not None or placement.sized_by is not None:
+			lines.extend(_variable_read(resolved_names, struct, placement,
+			                            local, prefix))
+			continue
 
 		if placement.kind == "marker":
 			lines.append(f"\tsitu_fuzz_sink(("
@@ -148,6 +230,91 @@ def _reads(struct: ResolvedStruct, prefix: str) -> list[str]:
 			])
 
 	return lines
+
+
+def _versioned_read(struct: ResolvedStruct, placement: Placement, local: str,
+		prefix: str) -> list[str]:
+	"""A member the version decides is there (section 19.4).
+
+	Its getter returns an error rather than a value, so the plain sink call
+	did not compile -- and the read worth fuzzing is the refusal: a version
+	byte the fuzzer chose deciding whether four bytes at a fixed offset are
+	this message's.
+	"""
+	return [
+		"\t{",
+		f"\t\t{_ctype_of(placement)} held = 0;",
+		f"\t\tif ({ident(prefix, struct.name, local, 'get')}(view, &held)"
+		" == SITU_OK) {",
+		"\t\t\tsitu_fuzz_sink((uint64_t)held);",
+		"\t\t}",
+		"\t}",
+	]
+
+
+def _variable_read(structs: frozenset[str], struct: ResolvedStruct,
+		placement: Placement, local: str, prefix: str) -> list[str]:
+	"""Exercise a member the data sizes, without assuming it has a value.
+
+	A run of records has neither a pointer nor a length -- it has a count and
+	an indexed accessor -- so it is walked instead, which is the read that can
+	run off the end and therefore the one worth fuzzing.
+	"""
+	if placement.delimiter is not None and placement.type_name in structs:
+		# A run of records has a count and an indexed accessor rather than a
+		# pointer and a length. Walking it is the read that can run off the
+		# end, so it is the one worth fuzzing.
+		count = ident(prefix, struct.name, local, "count")
+		at    = ident(prefix, struct.name, local, "at")
+		return [
+			"\t{",
+			f"\t\tconst uint32_t n = {count}(view);",
+			"\t\tsitu_view_t element;",
+			"",
+			"\t\tsitu_fuzz_sink((uint64_t)n);",
+			"\t\tfor (uint32_t i = 0u; i < n; i++) {",
+			f"\t\t\tif ({at}(view, i, &element) == SITU_OK) {{",
+			"\t\t\t\tsitu_fuzz_sink((uint64_t)element.limit);",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
+
+	if placement.delimiter is not None and placement.radix is not None:
+		# A text number: the parse is the interesting part, and it returns an
+		# error rather than a value.
+		return [
+			"\t{",
+			f"\t\t{_ctype_of(placement)} parsed = 0;",
+			f"\t\tif ({ident(prefix, struct.name, local, 'get')}(view, &parsed)"
+			" == SITU_OK) {",
+			"\t\t\tsitu_fuzz_sink((uint64_t)parsed);",
+			"\t\t}",
+			"\t}",
+		]
+
+	length = ident(prefix, struct.name, local, "len")
+	ptr    = ident(prefix, struct.name, local, "ptr")
+
+	return [
+		"\t{",
+		f"\t\tconst uint32_t n = {length}(view);",
+		"",
+		"\t\t/* The length is the attacker's and the pointer is where it",
+		"\t\t * aims, so read the last byte it claims rather than the",
+		"\t\t * first: an off-by-one in the extent shows up there. */",
+		"\t\tsitu_fuzz_sink((uint64_t)n);",
+		"\t\tif (n > 0u) {",
+		f"\t\t\tsitu_fuzz_sink((uint64_t){ptr}(view)[n - 1u]);",
+		"\t\t}",
+		"\t}",
+	]
+
+
+def _ctype_of(placement: Placement) -> str:
+	scalar = placement.scalar
+	assert scalar is not None
+	return f"uint{max(8, scalar.bits)}_t"
 
 
 def _entry_point(structs: list[ResolvedStruct], basename: str,

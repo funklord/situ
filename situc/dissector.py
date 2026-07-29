@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.names import render_delimiter
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import byte_span, container_bits, local_name, own_members
 
@@ -47,6 +48,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	they hang off.
 	"""
 	lines = _preamble(basename)
+
+	# Only where something scans. A helper nobody calls is dead Lua in a file
+	# a user is expected to read before trusting it.
+	if any(entry.placement.delimiter is not None
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(SCAN_HELPER)
 
 	values = _value_strings(schema, resolved)
 	if values:
@@ -68,6 +76,35 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines.extend(_registration(resolved, roots))
 	return "\n".join(lines).rstrip() + "\n"
+
+
+SCAN_HELPER = [
+	"-- Where a delimited member stops (situ section 8.6.1).",
+	"--",
+	"-- Returns the content length, or the distance to `limit` when the",
+	"-- delimiter is not there -- the same two answers the generated",
+	"-- accessors give, so a capture and a parser disagree about nothing.",
+	"local function situ_scan(tvb, at, delim, limit)",
+	"\tlocal n = #delim",
+	"\tif n == 0 or at + n > limit then",
+	"\t\treturn limit - at",
+	"\tend",
+	"\tfor i = at, limit - n do",
+	"\t\tlocal match = true",
+	"\t\tfor j = 0, n - 1 do",
+	"\t\t\tif tvb(i + j, 1):uint() ~= delim[j + 1] then",
+	"\t\t\t\tmatch = false",
+	"\t\t\t\tbreak",
+	"\t\t\tend",
+	"\t\tend",
+	"\t\tif match then",
+	"\t\t\treturn i - at",
+	"\t\tend",
+	"\tend",
+	"\treturn limit - at",
+	"end",
+	"",
+]
 
 
 def _preamble(basename: str) -> list[str]:
@@ -239,7 +276,42 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 def _member(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> list[str]:
-	"""Add one member to the tree, and advance `at` past it."""
+	"""Add one member to the tree, and advance `at` past it.
+
+	A versioned member is wrapped in the guard its accessors have. Without it
+	the dissector read `tvb(3, 4)` on a three-byte v1 message and Wireshark
+	showed the packet as malformed -- blaming the capture for the schema.
+	"""
+	lines = _member_body(resolved, struct, placement)
+	guard = _version_guard(struct, placement)
+	if guard is None:
+		return lines
+
+	return [f"\t-- present from version {placement.since}", f"\t{guard}",
+	        *[f"\t{line}" for line in lines], "\tend"]
+
+
+def _version_guard(struct: ResolvedStruct, placement: Placement) -> str | None:
+	"""`if <version> >= N then`, reading the version where the accessors do."""
+	if placement.since is None or placement.version_field is None:
+		return None
+
+	field = next((entry.placement for entry in struct.entries
+	              if entry.placement.name == placement.version_field), None)
+	if field is None or field.offset_bits is None or field.scalar is None:
+		return None
+
+	span = byte_span(field)
+	if span is None:
+		return None
+
+	first, count = span
+	read = "le_uint" if field.endian is ast.Endian.LITTLE else "uint"
+	return f"if tvb({first}, {count}):{read}() >= {placement.since} then"
+
+
+def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> list[str]:
 	name  = _local(struct, placement)
 	field = f"{_lua(struct.name)}_f.{_lua(name)}"
 
@@ -263,6 +335,14 @@ def _member(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tat = at + {nested.layout.size_bytes}",
 		]
 
+	# Before the repeated case, and for the reason it keeps having to be said:
+	# a delimited member carries `array_count = 1`, so asking about the count
+	# first dissected `name[] until ": "` as one byte and misaligned every
+	# field after it. A dissector shows those bytes to somebody debugging a
+	# live capture, with the confidence of a decode.
+	if placement.delimiter is not None:
+		return _delimited(resolved, struct, placement, field, seek)
+
 	if placement.sized_by is not None or placement.array_count is not None:
 		return _repeated(resolved, struct, placement, field, seek)
 
@@ -276,6 +356,46 @@ def _member(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return [
 		f"\tsubtree:{add}({field}, tvb({first}, {count}))",
 		f"\tat = {first + count}",
+	]
+
+
+def _delimited(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, field: str, seek: list[str]) -> list[str]:
+	"""A member that ends at a delimiter (section 8.6.1).
+
+	The scan is emitted rather than the length, because there is no length:
+	Wireshark has the same bytes situ does and has to look for the same thing
+	in them. A run of records is not unrolled here -- the terminator ends the
+	run and each element is dissected by its own dissector -- so this handles
+	the byte case and says so for the other.
+	"""
+	name  = _lua(_local(struct, placement))
+	delim = placement.delimiter
+	assert delim is not None
+
+	if placement.type_name in resolved.structs:
+		return [
+			f"\t-- {placement.path}: a run of {placement.type_name} to "
+			f"{render_delimiter(delim)}.",
+			"\t-- Not unrolled: the terminator ends the run rather than each",
+			"\t-- element, so where it stops is a walk this does not do.",
+		]
+
+	bytes_ = ", ".join(str(byte) for byte in delim)
+	cap    = ("tvb:len()" if placement.delimiter_cap is None
+	          else f"math.min(at + {placement.delimiter_cap}, tvb:len())")
+
+	return [
+		f"\t-- {placement.path}, to the first {render_delimiter(delim)}",
+		*seek,
+		f"\tlocal {name}_len = situ_scan(tvb, at, {{{bytes_}}}, {cap})",
+		f"\tif {name}_len > 0 then",
+		f"\t\tsubtree:add({field}, tvb(at, {name}_len))",
+		"\tend",
+		f"\tat = at + {name}_len",
+		f"\tif at + {len(delim)} <= tvb:len() then",
+		f"\t\tat = at + {len(delim)}",
+		"\tend",
 	]
 
 

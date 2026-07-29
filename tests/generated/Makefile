@@ -67,7 +67,16 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 # built standalone so a harness nobody can compile cannot go unnoticed.
 VECTOR_SCHEMAS	:= header
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
-FUZZ_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
+
+# Fuzz harnesses. `header` is fixed-size and `edges` is not, which is the
+# distinction that matters: the harness declared `buf[SITU_X_SIZE_FIXED]` for
+# every struct, and that macro exists only where a struct has one size. So
+# `gen-fuzz` emitted C that did not compile for anything with a length field,
+# a `[remaining]` tail or a delimiter -- the structs most likely to have a
+# parsing bug -- and nothing noticed, because the only harness built here was
+# over a schema that had none of them.
+FUZZ_SCHEMAS	:= header edges
+FUZZ_BINS	:= $(FUZZ_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
 
 # The capability-conformance suites, one per schema, generated from the schema
 # alone. These are what hold the emitted accessors to what the map claims.
