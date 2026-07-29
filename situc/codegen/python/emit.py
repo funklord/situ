@@ -597,6 +597,32 @@ class Emitter:
 	def _nested(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))
 		nested = c_name(placement.type_name or "")
+		inner  = self.resolved.structs.get(placement.type_name or "")
+		start  = self._offset_expression(struct, placement)
+
+		if inner is not None and not inner.layout.is_fixed_size and start is not None:
+			# `SIZE_BYTES` is a class attribute only where a struct has one
+			# size, so this raised `AttributeError` on the first access -- a
+			# crash at the point of use rather than at generation, which is
+			# the worst place for it to arrive.
+			return [
+				"", "\t@property",
+				f"\tdef {name}_extent(self) -> int:",
+				f'\t\t"""How many bytes {placement.path} occupies here.',
+				"",
+				"\t\tRead from the bytes: the member has no one size, and",
+				'\t\tneither does the offset of whatever follows it."""',
+				f"\t\tstart = self._at + ({start})",
+				f"\t\treturn {nested}(self._msg, start,",
+				f"\t\t\tself._len - ({start}))._extent",
+				"",
+				"\t@property",
+				f"\tdef {name}(self) -> {nested}:",
+				f'\t\t"""{placement.path}, sized from its own contents."""',
+				f"\t\treturn {nested}(self._msg, self._at + ({start}),",
+				f"\t\t\tself.{name}_extent)",
+			]
+
 		return [
 			"", "\t@property", f"\tdef {name}(self) -> {nested}:",
 			f'\t\t"""{placement.path} at {placement.offset_bytes}."""',
@@ -926,8 +952,9 @@ class Emitter:
 
 	def _extent_property(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
+		# A run walks them and a nested member sizes itself from one.
 		if not any(classify(other, entry.placement, self.structs)
-		           is Member.RECORD_RUN
+		           in (Member.RECORD_RUN, Member.NESTED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
@@ -976,6 +1003,15 @@ class Emitter:
 		# this member reaches", whether it is a byte run or a run of records.
 		if placement.delimiter is not None:
 			return f"self.{c_name(local_name(struct, placement))}_span"
+
+		# A nested struct with no single size, which the sum treated as zero
+		# bytes wide -- so whatever followed it was placed on top of it.
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if (inner is not None and not inner.layout.is_fixed_size
+				and placement.kind == "field"
+				and placement.array_count is None
+				and placement.sized_by is None):
+			return f"self.{c_name(local_name(struct, placement))}_extent"
 
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)

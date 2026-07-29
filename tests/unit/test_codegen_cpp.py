@@ -191,6 +191,10 @@ def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	# A struct named `msg` shadowed the generated factory's own parameter in
 	# C++, so any schema using that name emitted a header that did not compile.
 	"struct msg { u8 a; u16 b; }",
+	# A nested struct with no single size, and a member after it. Every
+	# backend got this wrong in a different way and none of them compiled or
+	# ran it before.
+	"struct inner { u8 n; u8 body[n]; }\nstruct outer { inner a; u16 tail; }",
 ])
 def test_it_compiles_clean(tmp_path: Path, body: str) -> None:
 	result = compiles(tmp_path, body)

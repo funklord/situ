@@ -1013,8 +1013,10 @@ class Emitter:
 
 	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
 		"""How many bytes one instance occupies, for a run that walks them."""
+		# A run walks them and a nested member sizes its view from one. Gated
+		# on the run alone, the nested case reached for `size_bytes` instead.
 		if not any(classify(other, entry.placement, self.structs)
-		           is Member.RECORD_RUN
+		           in (Member.RECORD_RUN, Member.NESTED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
@@ -1043,6 +1045,15 @@ class Emitter:
 		# for "how far this member reaches", whichever it is.
 		if placement.delimiter is not None:
 			return f"{c_name(local_name(struct, placement))}_span()"
+
+		# A nested struct with no single size. Without this the sum treated
+		# it as zero bytes wide and placed whatever follows on top of it.
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if (inner is not None and not inner.layout.is_fixed_size
+				and placement.kind == "field"
+				and placement.array_count is None
+				and placement.sized_by is None):
+			return f"{c_name(local_name(struct, placement))}_extent()"
 
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
@@ -1378,6 +1389,31 @@ class Emitter:
 	def _nested(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))
 		nested = f"::{self.namespace}::{c_name(placement.type_name or '')}"
+		inner  = self.resolved.structs.get(placement.type_name or "")
+		start  = self._offset_expression(struct, placement)
+
+		if inner is not None and not inner.layout.is_fixed_size and start is not None:
+			# `size_bytes` exists only where a struct has one size, so this
+			# named a constant that was never declared and the header did not
+			# compile. The extent comes from the bytes instead: hand the
+			# member everything that is left, ask how much of it is one of
+			# these, and hand back that.
+			return [
+				"",
+				f"\t/* {placement.path}. No one size, so its extent is read from",
+				"\t * the bytes -- and so is where the member after it starts. */",
+				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
+				"\t{",
+				f"\t\treturn {nested}(situ_view_t{{ base() + ({start}),",
+				f"\t\t\tlimit() - ({start}), raw().generation }}).extent();",
+				"\t}",
+				f"\t[[nodiscard]] {nested} {name}() const noexcept",
+				"\t{",
+				f"\t\treturn {nested}(situ_view_t{{ base() + ({start}),",
+				f"\t\t\t{name}_extent(), raw().generation }});",
+				"\t}",
+			]
+
 		return [
 			"",
 			f"\t/* {placement.path} at {placement.offset_bytes}. Its own class",

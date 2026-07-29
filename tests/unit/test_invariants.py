@@ -422,3 +422,67 @@ def test_no_backend_writes_one_unguarded_either(target: str) -> None:
 	assert "void situ_s_b_set(situ_view_t view" not in source
 	assert "void set_b(std::uint32_t value)" not in source
 	assert "pub fn set_b(&mut self, value: u32) {" not in source
+
+
+# -- a nested struct with no single size ------------------------------------
+
+NESTED = (
+	"struct inner { u8 n; u8 body[n]; }\n"
+	"struct outer { inner a; u16 tail; }\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_every_backend_sizes_a_nested_variable_struct(target: str) -> None:
+	"""Each got this wrong in its own way, and the flavours are instructive.
+
+	C and C++ named a `SIZE_FIXED`/`size_bytes` constant that is emitted only
+	where a struct has one size, so neither compiled. Python named
+	`SIZE_BYTES` and raised `AttributeError` at the point of use, which is the
+	worst place for it to arrive. Rust handed the member everything to the end
+	of the buffer -- which its own accessors survive -- and then dropped the
+	member *after* it from the module entirely, because there was no extent to
+	add to its offset.
+	"""
+	schema   = parse_text(PREAMBLE + NESTED)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	# The generated helper by name, not the word: "extent" also appears in the
+	# acquisition docstring every backend emits, so a bare substring passes on
+	# a schema that has none of this (invariant 26).
+	assert "a_extent" in source
+	for absent in (
+		"SITU_INNER_SIZE_FIXED", "inner::size_bytes", "inner.SIZE_BYTES",
+	):
+		assert absent not in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_the_member_after_one_is_still_placed(target: str) -> None:
+	"""The half that is silent rather than loud. A nested variable struct
+	contributed nothing to the offset sum, so whatever followed it was placed
+	on top of it -- or, in Rust, left out."""
+	schema   = parse_text(PREAMBLE + NESTED)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "tail" in source
+	assert "cannot be resolved" not in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_nested_fixed_struct_still_uses_its_constant(target: str) -> None:
+	"""The common case, and the one that would be a pointless cost to lose."""
+	schema   = parse_text(PREAMBLE + "struct inner { u16 x; }\n"
+	                      "struct outer { inner a; u16 tail; }\n")
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "a_extent" not in source

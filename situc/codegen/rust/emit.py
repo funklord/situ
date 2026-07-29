@@ -278,6 +278,34 @@ class Emitter:
 
 		if kind is Member.NESTED:
 			nested = _pascal(placement.type_name or "")
+			inner  = self.resolved.structs.get(placement.type_name or "")
+			base   = c_name(local_name(struct, placement))
+			at     = self._offset_expression(struct, placement)
+
+			if inner is not None and not inner.layout.is_fixed_size \
+					and at is not None:
+				# The slice ran to the end of the buffer, which the inner
+				# struct's own accessors survive -- they bound themselves --
+				# so nothing crashed and nothing compiled wrong. What broke is
+				# the member *after* it: with no extent to add, its offset
+				# could not be resolved and it was silently left out of the
+				# generated module entirely.
+				return [
+					"",
+					f"\t/// How many bytes {placement.path} occupies here, read",
+					"\t/// from its own contents.",
+					f"\tpub fn {_ident(f'{base}_extent')}(&self) -> usize {{",
+					f"\t\t{nested} {{ bytes: &self.bytes[({at})..] }}.extent()",
+					"\t}",
+					"",
+					f"\t/// {placement.path}, sized from its own contents.",
+					f"\tpub fn {name}(&self) -> {nested}<'_> {{",
+					f"\t\tlet at = {at};",
+					f"\t\tlet n  = self.{_ident(f'{base}_extent')}();",
+					f"\t\t{nested} {{ bytes: &self.bytes[at..at + n] }}",
+					"\t}",
+				]
+
 			return [
 				"",
 				f"\t/// {placement.path} at {placement.offset_bytes}.",
@@ -915,8 +943,9 @@ class Emitter:
 
 	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
+		# A run walks them and a nested member sizes its slice from one.
 		if not any(classify(other, entry.placement, self.structs)
-		           is Member.RECORD_RUN
+		           in (Member.RECORD_RUN, Member.NESTED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
@@ -963,6 +992,16 @@ class Emitter:
 		# member reaches", whether it is a byte run or a run of records.
 		if placement.delimiter is not None:
 			return (f"self.{_ident(c_name(local_name(struct, placement)) + '_span')}()")
+
+		# A nested struct with no single size. Without this the member after
+		# it had no resolvable offset and was dropped from the module.
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if (inner is not None and not inner.layout.is_fixed_size
+				and placement.kind == "field"
+				and placement.array_count is None
+				and placement.sized_by is None):
+			name = _ident(c_name(local_name(struct, placement)) + "_extent")
+			return f"self.{name}()"
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
 			return None if start is None else f"(self.bytes.len() - ({start}))"
