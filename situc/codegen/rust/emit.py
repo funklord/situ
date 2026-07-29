@@ -329,6 +329,27 @@ class Emitter:
 		if placement.offset_bits is None and offset is None:
 			return ["", f"\t// {placement.path}: its offset cannot be resolved."]
 
+		if placement.since is not None and placement.version_field is not None:
+			# `Result` rather than the value: there is nothing to return when
+			# the field is not there, and returning the bytes that follow
+			# would hand back another member's. `#[must_use]` means ignoring
+			# the refusal does not compile clean.
+			version = _ident(c_name(placement.version_field))
+			return [
+				"",
+				*self._axes_doc(entry),
+				f"\t/// Present from version {placement.since}. An older"
+				" message does not",
+				"\t/// carry these bytes, so this reports rather than reading"
+				" what does.",
+				f"\tpub fn {name}(&self) -> Result<{self._field_type(placement)}> {{",
+				f"\t\tif self.{version}() < {placement.since} {{",
+				"\t\t\treturn Err(Error::Version);",
+				"\t\t}",
+				f"\t\tOk({self._load(placement, scalar, offset)})",
+				"\t}",
+			]
+
 		return [
 			"",
 			*self._axes_doc(entry),
@@ -1236,6 +1257,25 @@ class Emitter:
 			        f"\t// No {setter}(): mutate is"
 			        f" {entry.vector.get(Axis.MUTATE).render()}."]
 		rtype = self._field_type(placement, writing=True)
+
+		if placement.since is not None and placement.version_field is not None:
+			# Writing it to an earlier message puts these bytes past that
+			# message's end. `Result` is `#[must_use]`, so unlike C the
+			# refusal cannot be dropped without a warning.
+			version = _ident(c_name(placement.version_field))
+			return [
+				"",
+				f"\t/// Writing this to a message older than version"
+				f" {placement.since} would put",
+				"\t/// these bytes past its end, so it refuses.",
+				f"\tpub fn {setter}(&mut self, value: {rtype}) -> Result<()> {{",
+				f"\t\tif self.as_ref().{version}() < {placement.since} {{",
+				"\t\t\treturn Err(Error::Version);",
+				"\t\t}",
+				f"\t\t{self._store(placement, scalar)}",
+				"\t\tOk(())",
+				"\t}",
+			]
 
 		# A covered write takes the dirty word, because it has to mark a bit
 		# that outlives the view. This backend used to refuse the setter

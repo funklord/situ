@@ -2258,12 +2258,25 @@ is a value in the data, so nothing can reach them before the version field has
 been read -- which is the same shape as the stage gate of 14.3, one axis
 weaker.
 
-**The getter takes an out-parameter and returns `SITU_ERR_VERSION`.** There is
-no value to return when the field is not there, and a getter that handed back
-whatever follows would return another member's bytes, or another message's.
-That is the bug the construct exists to make impossible, so it is not
-available to write. One build reads all three versions and refuses exactly the
-fields each message does not carry.
+**The accessor reports rather than guesses, in both directions.** There is no
+value to return when the field is not there, and one that handed back whatever
+follows would return another member's bytes or another message's. Writing is
+worse: those bytes land past the end of the older message, in whatever the
+caller's buffer holds next. One build reads a v1, v2 and v3 message and
+refuses exactly the fields each does not carry.
+
+| | reads | writes |
+|---|---|---|
+| C | `situ_err_t x_get(view, T *out)` | `situ_err_t x_set(view, T)` |
+| C++ | `[[nodiscard]] err x(T &out)` | `[[nodiscard]] err set_x(T)` |
+| Python | property raising `VersionError` | setter raising `VersionError` |
+| Rust | `Result<T>` | `Result<()>` |
+
+`VersionError` is its own class in Python rather than a `ConstraintError`,
+because the remedy differs in kind: a constraint failure means the message is
+malformed, and this means the message is fine and older than the field. A
+caller handling the two alike would reject a peer it is meant to interoperate
+with.
 
 **A version field with nothing versioned yet is fine.** It is the ordinary
 first revision of an extensible format, and refusing it would force the

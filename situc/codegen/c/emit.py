@@ -2097,11 +2097,39 @@ class Emitter:
 		ctype = self._field_ctype(placement)
 		setter = ident(self.prefix, struct.name, local, "set")
 
-		base = self._value_base(struct, placement)
+		base  = self._value_base(struct, placement)
+		store = self._store_statement(scalar, placement, base, "value",
+		                              offset=self._value_offset(placement))
+
+		# A versioned field is not there to be written in an older message,
+		# and writing it anyway puts these bytes past the end of that message
+		# -- into whatever the caller's buffer holds next. The getter refused
+		# this from the start and the setter did not, which is the asymmetry
+		# worth naming: reading the wrong bytes is a wrong answer, and writing
+		# them is somebody else's data.
+		if placement.since is not None and placement.version_field is not None:
+			version = ident(self.prefix, struct.name,
+			                c_name(placement.version_field), "get")
+			return [
+				f"/* Present from version {placement.since}. Writing it to an "
+				f"earlier message",
+				" * would put these bytes past that message's end, so this"
+				" refuses. */",
+				f"static inline situ_err_t {setter}(situ_view_t view, "
+				f"{ctype} value)",
+				"{",
+				f"\tif ({version}(view) < {placement.since}u) {{",
+				"\t\treturn SITU_ERR_VERSION;",
+				"\t}",
+				f"\t{store}",
+				"\treturn SITU_OK;",
+				"}",
+			]
+
 		return [
 			f"static inline void {setter}(situ_view_t view, {ctype} value)",
 			"{",
-			f"\t{self._store_statement(scalar, placement, base, 'value', offset=self._value_offset(placement))}",
+			f"\t{store}",
 			"}",
 		]
 

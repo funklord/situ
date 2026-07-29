@@ -442,16 +442,16 @@ class Emitter:
 				f"\t * Writing anything the right side reads sets dirty_{name},",
 				"\t * and the message refuses to be transmittable until this",
 				"\t * recomputes (section 16.1). */",
-				f"\tvoid recompute_{name}(::situ::rt::message &msg) noexcept",
+				f"\tvoid recompute_{name}(::situ::rt::message &owner) noexcept",
 				"\t{",
 				f"\t\t{self._store(scalar, entry.placement, stored)}",
-				f"\t\tmsg.clear_dirty(dirty_{name});",
+				f"\t\towner.clear_dirty(dirty_{name});",
 				"\t}",
 				"",
 				f"\t[[nodiscard]] bool {name}_is_stale("
-				"const ::situ::rt::message &msg) const noexcept",
+				"const ::situ::rt::message &owner) const noexcept",
 				"\t{",
-				f"\t\treturn msg.is_stale(dirty_{name});",
+				f"\t\treturn owner.is_stale(dirty_{name});",
 				"\t}",
 			])
 
@@ -499,11 +499,11 @@ class Emitter:
 			return [
 				f"\tstatic constexpr std::uint32_t size_bytes = {layout.size_bytes};",
 				"",
-				"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &msg,",
+				"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &owner,",
 				f"\t\t\tstd::uint32_t offset, {name} &out) noexcept",
 				"\t{",
 				"\t\tsitu_view_t raw;",
-				"\t\tconst situ_err_t e = situ_view_at(msg.raw(), offset,"
+				"\t\tconst situ_err_t e = situ_view_at(owner.raw(), offset,"
 				" size_bytes, &raw);",
 				"",
 				"\t\tif (e == SITU_OK) {",
@@ -516,12 +516,12 @@ class Emitter:
 		return [
 			f"\tstatic constexpr std::uint32_t size_min = {layout.size_bytes};",
 			"",
-			"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &msg,",
+			"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &owner,",
 			f"\t\t\tstd::uint32_t offset, std::uint32_t length,"
 			f" {name} &out) noexcept",
 			"\t{",
 			"\t\tsitu_view_t raw;",
-			"\t\tconst situ_err_t e = situ_view_at(msg.raw(), offset,"
+			"\t\tconst situ_err_t e = situ_view_at(owner.raw(), offset,"
 			" length, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
@@ -1177,6 +1177,29 @@ class Emitter:
 
 		return ["", f"\t/* {placement.path}: not in the static subset yet. */"]
 
+	def _versioned(self, placement: Placement, name: str, ctype: str,
+			load: str) -> list[str]:
+		"""A member present only from a given version (section 19.4).
+
+		Out-parameter and `err`, because there is no value to return when the
+		field is not there. `[[nodiscard]]` is what makes this stronger than
+		the C version: ignoring the error is a diagnostic rather than a habit.
+		"""
+		version = c_name(placement.version_field or "")
+		return [
+			f"\t/// Present from version {placement.since}. Reading it from an",
+			"\t/// earlier message would return the bytes of whatever follows,",
+			"\t/// so this reports rather than guesses.",
+			f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out) const noexcept",
+			"\t{",
+			f"\t\tif ({version}() < {placement.since}u) {{",
+			"\t\t\treturn ::situ::rt::err::version;",
+			"\t\t}",
+			f"\t\tout = {load};",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
+
 	def _scalar(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
@@ -1210,12 +1233,15 @@ class Emitter:
 		if placement.type_name in self.enums:
 			load = f"static_cast<{ctype}>({load})"
 
-		lines.extend([
-			f"\t[[nodiscard]] {ctype} {name}() const noexcept",
-			"\t{",
-			f"\t\treturn {load};",
-			"\t}",
-		])
+		if placement.since is not None and placement.version_field is not None:
+			lines.extend(self._versioned(placement, name, ctype, load))
+		else:
+			lines.extend([
+				f"\t[[nodiscard]] {ctype} {name}() const noexcept",
+				"\t{",
+				f"\t\treturn {load};",
+				"\t}",
+			])
 
 		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
 			lines.extend([
@@ -1228,6 +1254,22 @@ class Emitter:
 		if placement.type_name in self.enums:
 			backing = self._ctype(scalar)
 			stored  = f"static_cast<{backing}>(value)"
+
+		if placement.since is not None and placement.version_field is not None:
+			version = c_name(placement.version_field)
+			return lines + [
+				f"\t/// Writing it to an earlier message would put these bytes",
+				"\t/// past that message's end, so this refuses.",
+				f"\t[[nodiscard]] ::situ::rt::err set_{name}({ctype} value)"
+				" noexcept",
+				"\t{",
+				f"\t\tif ({version}() < {placement.since}u) {{",
+				"\t\t\treturn ::situ::rt::err::version;",
+				"\t\t}",
+				f"\t\t{self._store(scalar, placement, stored, offset)}",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			]
 
 		# A covered write takes the message, because it has to mark a bit that
 		# lives there. This backend used to emit the plain setter for these
@@ -1242,10 +1284,10 @@ class Emitter:
 				f"\t/* Writing this leaves {what} stale, so it takes the message",
 				"\t * and marks the bit. The cost is in the signature rather than",
 				"\t * in a comment somebody may not read. */",
-				f"\tvoid set_{name}(::situ::rt::message &msg, {ctype} value) noexcept",
+				f"\tvoid set_{name}(::situ::rt::message &owner, {ctype} value) noexcept",
 				"\t{",
 				f"\t\t{self._store(scalar, placement, stored, offset)}",
-				f"\t\tmsg.mark_dirty({bits});",
+				f"\t\towner.mark_dirty({bits});",
 				"\t}",
 			])
 			return lines

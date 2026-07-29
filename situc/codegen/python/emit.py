@@ -81,7 +81,8 @@ class Emitter:
 			"import enum",
 			"",
 			"from situ_runtime import (",
-			"\tConstraintError, Gate, Message, View, acquire, as_enum,",
+			"\tConstraintError, Gate, Message, VersionError, View, acquire,",
+			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
 			"\tcompose, nul_len, open_gate, utf8_valid,",
 			*self._delimited_imports(),
@@ -434,9 +435,12 @@ class Emitter:
 		if placement.offset_bits is None and offset is None:
 			return ["", f"\t# {placement.path}: its offset cannot be resolved."]
 
-		lines = ["", "\t@property", f"\tdef {name}(self) -> {hint}:",
-		         *self._field_doc(entry),
-		         f"\t\treturn {self._load(placement, scalar, offset)}"]
+		if placement.since is not None and placement.version_field is not None:
+			lines = self._versioned(placement, entry, name, hint, scalar, offset)
+		else:
+			lines = ["", "\t@property", f"\tdef {name}(self) -> {hint}:",
+			         *self._field_doc(entry),
+			         f"\t\treturn {self._load(placement, scalar, offset)}"]
 
 		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
 			lines.extend([
@@ -464,13 +468,50 @@ class Emitter:
 			])
 			return lines
 
+		gate = []
+		if placement.since is not None and placement.version_field is not None:
+			# Writing it to an earlier message puts these bytes past that
+			# message's end. The getter refused this from the start and the
+			# setter did not, in every backend, until one of them was checked.
+			version = c_name(placement.version_field)
+			gate = [
+				f"\t\tif self.{version} < {placement.since}:",
+				"\t\t\traise VersionError(",
+				f'\t\t\t\tf"{placement.path} is not in a version '
+				f'{{self.{version}}} message")',
+			]
+
 		lines.extend([
 			"",
 			f"\t@{name}.setter",
 			f"\tdef {name}(self, value: {hint}) -> None:",
+			*gate,
 			f"\t\t{self._store(placement, scalar, offset)}",
 		])
 		return lines
+
+	def _versioned(self, placement: Placement, entry: Resolved, name: str,
+			hint: str, scalar: ScalarType, offset: str | None) -> list[str]:
+		"""A member present only from a given version (section 19.4).
+
+		A property that raises, not one that returns a sentinel. There is no
+		value to hand back when the field is not there, and returning the
+		bytes that follow would give another member's -- which is the bug the
+		construct exists to prevent, so it is not available to write.
+		"""
+		version = c_name(placement.version_field or "")
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}(self) -> {hint}:",
+			*self._field_doc(entry),
+			f"\t\tif self.{version} < {placement.since}:",
+			"\t\t\traise VersionError(",
+			f'\t\t\t\tf"{placement.path} arrives in version '
+			f'{placement.since}; this message is version "',
+			f"\t\t\t\tf\"{{self.{version}}}\")",
+			f"\t\treturn {self._load(placement, scalar, offset)}",
+		]
 
 	def _tag_bit(self, struct: ResolvedStruct, placement: Placement) -> str:
 		"""The bits every obligation over this field stands for, ORed.

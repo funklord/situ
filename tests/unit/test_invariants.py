@@ -375,3 +375,50 @@ def test_a_plain_token_compares_byte_for_byte(target: str) -> None:
 
 	assert "name_eq" in source
 	assert "ci_eq" not in source
+
+
+# -- versioned members (section 19.4) ---------------------------------------
+
+VERSIONED = ("struct s [version = v] { u8 v; u16 a; u32 b [since = 2]; }")
+
+
+#: How each backend spells the refusal. Written out rather than matched
+#: loosely: a substring search for "version" passes on the doc comment that
+#: says which version a member arrives in, which is exactly the text an
+#: ungated getter would still carry.
+VERSION_REFUSAL = {
+	"c":      "return SITU_ERR_VERSION;",
+	"cpp":    "return ::situ::rt::err::version;",
+	"python": "raise VersionError(",
+	"rust":   "return Err(Error::Version);",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_no_backend_reads_a_versioned_field_unguarded(target: str) -> None:
+	"""The three that were not C emitted a plain getter and built in silence,
+	which is worse than crashing: a caller reading `b` from a v1 message got
+	whatever followed in the buffer, with nothing to check."""
+	schema   = parse_text(PREAMBLE + VERSIONED)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert VERSION_REFUSAL[target] in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_no_backend_writes_one_unguarded_either(target: str) -> None:
+	"""The asymmetry every backend had, C included: the getter refused from
+	the start and the setter did not. Reading the wrong bytes is a wrong
+	answer; writing them is somebody else's data."""
+	schema   = parse_text(PREAMBLE + VERSIONED)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "void situ_s_b_set(situ_view_t view" not in source
+	assert "void set_b(std::uint32_t value)" not in source
+	assert "pub fn set_b(&mut self, value: u32) {" not in source

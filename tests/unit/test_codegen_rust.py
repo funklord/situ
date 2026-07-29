@@ -158,6 +158,11 @@ def test_a_covered_write_takes_the_dirty_word() -> None:
 	'struct h { u8 n[] until ":" [case_insensitive]; u8 v[] until "\\r\\n" [trim]; }\n'
 	'struct r { h fields[] until "\\r\\n"; u8 body[remaining]; }',
 	'struct s { decimal u16 n until "\\r\\n" [trim, minimal]; u8 b[n]; }',
+	# Section 19.4: one build reading several versions of one protocol.
+	'struct s [version = v] { u8 v; u16 a; u32 b [since = 2]; u16 c [since = 3]; }',
+	# A struct named `msg` shadowed the generated factory's own parameter in
+	# C++, so any schema using that name emitted a header that did not compile.
+	"struct msg { u8 a; u16 b; }",
 ])
 def test_it_compiles(tmp_path: Path, body: str) -> None:
 	result = build(tmp_path, body)

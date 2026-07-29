@@ -493,6 +493,20 @@ def _versioned_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		 "\t * anyway would hand back whatever follows -- another member's,",
 		 "\t * or another message's. */"])
 
+	writer = ident(prefix, struct.name, local, "set")
+	suite.add(
+		f"check_{c_name(struct.name)}_{local}_is_unwritable_before_version_{since}",
+		[
+			*_acquire(struct, prefix, extent),
+			"",
+			f"\t{setter}(view, {since - 1});",
+			f"\tassert_int_equal({writer}(view, ({ctype})1), SITU_ERR_VERSION);",
+		],
+		["/* And cannot be written there either. The getter refused this from",
+		 "\t * the start and the setter did not, which is the asymmetry worth",
+		 "\t * naming: reading the wrong bytes is a wrong answer, and writing",
+		 "\t * them is somebody else's data. */"])
+
 
 def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		prefix: str) -> None:

@@ -61,6 +61,17 @@ class StaleViewError(SituError):
 	"""
 
 
+class VersionError(SituError):
+	"""A member was reached in a message whose version does not carry it.
+
+	Its own class rather than a `ConstraintError`, because the remedy is
+	different in kind: a constraint failure means the message is malformed,
+	and this means the message is fine and older than the field. A caller
+	handling the two the same way would reject a peer it is supposed to
+	interoperate with (section 19.4).
+	"""
+
+
 class TagError(SituError):
 	"""A sealed region was opened without a verified tag."""
 
