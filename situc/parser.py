@@ -169,7 +169,11 @@ class Parser:
 		# implied impl is appended after the declaration so both spellings of a
 		# binding reach the same place.
 		self._pending_extern: tuple[str, Span] | None = None
-		self._dispatch_cases: tuple[int, ...] = ()
+		# A tlv region's item grammar, filled in as its argument list is read
+		# and collected when the region node is built.
+		self._tag_decode: tuple[ast.TagPart, ...] = ()
+		self._value_size: ast.ValueSize | None    = None
+		self._known: tuple[ast.KnownTag, ...]     = ()
 		# A `register_block` lowers to several declarations; the rest are
 		# handed back one at a time here.
 		self._pending_block: list[ast.Decl] = []
@@ -1251,7 +1255,9 @@ class Parser:
 		name  = self.expect_ident("a region name")
 		self.expect_symbol("(", "before the tlv arguments")
 
-		self._dispatch_cases = ()
+		self._tag_decode = ()
+		self._value_size = None
+		self._known      = ()
 		args: list[ast.Attr] = []
 		while not self.current.is_symbol(")"):
 			args.append(self.parse_tlv_argument())
@@ -1262,7 +1268,8 @@ class Parser:
 		attrs = self.parse_attrs()
 		self.expect_symbol(";", "after the tlv region")
 
-		span = self.span_from(start)
+		span  = self.span_from(start)
+		sizes = self._value_size
 		return ast.Tlv(
 			span       = span,
 			name       = name.text,
@@ -1272,33 +1279,52 @@ class Parser:
 			                              ast.DuplicatePolicy, span),
 			ordered    = any(arg.name == "ordering" for arg in args),
 			attrs      = attrs,
-			wire_types = self._dispatch_cases,
+			wire_types = tuple(case.label for case in sizes.cases
+			                   if case.label is not None) if sizes else (),
+			tag_decode = self._tag_decode,
+			value_size = sizes,
+			known      = self._known,
 		)
 
 	def parse_tlv_argument(self) -> ast.Attr:
 		"""One `key = value` of a tlv argument list.
 
-		The values are structured -- a `{ ... }` map of known tags, a
-		`switch (...)` over wire types -- so they are captured as written and
-		interpreted by the pass that needs them, rather than being flattened
-		into an expression here.
+		Three of the arguments carry the region's item grammar -- how a tag
+		decodes, how a value is sized, which tags are named -- and each is
+		parsed into the nodes section 9.5 describes. They used to be captured
+		as verbatim text for "the pass that needs them", which meant the one
+		thing read out of a dispatch was its `case` labels and the walk itself
+		was hand-written somewhere else.
+
+		The text is still kept alongside, because `unparse` prints what the
+		author wrote and a `switch` reconstructed from nodes would come back
+		reformatted.
 		"""
 		name = self.expect_ident("a tlv argument name")
 		if self.accept_symbol("=") is None:
 			return ast.Attr(self.span_from(name), name.text, None)
 
-		if self.current.is_symbol("{"):
-			start = self.current
-			self._skip_balanced("{", "}")
+		start = self.current
+
+		if name.text == "tag_decode":
+			self._tag_decode = self.parse_tag_decode()
 			return ast.Attr(self.span_from(name), name.text, None,
 			                raw=self._verbatim(start))
 
-		if self.current.is_ident("switch"):
-			start = self.current
-			self.advance()
-			if self.current.is_symbol("("):
-				self._skip_balanced("(", ")")
-			self._dispatch_cases = self._collect_cases()
+		if name.text == "value_size":
+			self._value_size = self.parse_value_size()
+			return ast.Attr(self.span_from(name), name.text, None,
+			                raw=self._verbatim(start))
+
+		if name.text == "known":
+			self._known = self.parse_known_tags()
+			return ast.Attr(self.span_from(name), name.text, None,
+			                raw=self._verbatim(start))
+
+		# An argument whose value is a group and whose meaning is not the item
+		# grammar -- an `ordering` rule, say. Kept as written.
+		if self.current.is_symbol("{"):
+			self._skip_balanced("{", "}")
 			return ast.Attr(self.span_from(name), name.text, None,
 			                raw=self._verbatim(start))
 
@@ -1308,33 +1334,177 @@ class Parser:
 		"""The source text from `start` to the cursor, as written."""
 		return self.source.text[start.span.start : self.tokens[self.pos - 1].span.end]
 
-	def _collect_cases(self) -> tuple[int, ...]:
-		"""Record the `case N:` labels of a dispatch while skipping its bodies.
+	def parse_tag_decode(self) -> tuple[ast.TagPart, ...]:
+		"""`{ field = tag >> 3, wire = tag & 0x7 }`
 
-		The bodies are `self_delimiting`, `prefixed(...)` and the like, which
-		belong to a later pass. The labels are wire types, and which ones a
-		region accepts is a capability question: see the packed-versus-unpacked
-		rule in propagate.py.
+		Each part is an expression over the raw tag. Nothing checks here that
+		it names only `tag` -- that is `wellformed`'s, which can say what else
+		was in scope.
 		"""
-		labels: list[int] = []
+		self.expect_symbol("{", "to open the tag decode")
 
+		parts: list[ast.TagPart] = []
+		while not self.current.is_symbol("}"):
+			name = self.expect_ident("a tag part name")
+			self.expect_symbol("=", "after the tag part name")
+			parts.append(ast.TagPart(self.span_from(name), name.text,
+			                         self.parse_expr()))
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol("}", "to close the tag decode")
+		return tuple(parts)
+
+	def parse_value_size(self) -> ast.ValueSize:
+		"""`switch (wire) { case 0: self_delimiting, ..., default: error }`"""
+		start    = self.expect_keyword("switch", "to open the value size dispatch")
+		self.expect_symbol("(", "before the dispatch selector")
+		selector = self.expect_ident("the tag part the dispatch selects on")
+		self.expect_symbol(")", "after the dispatch selector")
 		self.expect_symbol("{", "to open the dispatch")
-		depth = 1
-		while depth > 0:
-			if self.current.kind is TokenKind.EOF:
-				raise error("unterminated dispatch", self.current.span)
 
-			if self.current.is_symbol("{"):
-				depth += 1
-			elif self.current.is_symbol("}"):
-				depth -= 1
-			elif (depth == 1 and self.current.is_ident("case")
-					and self.peek().kind is TokenKind.INT):
-				labels.append(self.peek().value)
+		cases: list[ast.ValueCase] = []
+		while not self.current.is_symbol("}"):
+			cases.append(self.parse_value_case())
+			if self.accept_symbol(",") is None:
+				break
 
+		self.expect_symbol("}", "to close the dispatch")
+		return ast.ValueSize(self.span_from(start), selector.text, tuple(cases))
+
+	def parse_value_case(self) -> ast.ValueCase:
+		"""One arm: `case 2: prefixed(pb_varint)` or `default: error`."""
+		if self.current.is_ident("default"):
+			start = self.advance()
+			self.expect_symbol(":", "after `default`")
+			return ast.ValueCase(self.span_from(start), None,
+			                     self.parse_value_rule())
+
+		start = self.expect_keyword("case", "to open a dispatch arm")
+		label = self.current
+		if label.kind is not TokenKind.INT:
+			raise error(
+				f"expected a wire type, found {label.describe()}",
+				label.span,
+				label = "expected an integer literal here",
+				notes = ["a `value_size` dispatch selects on a decoded tag part,"
+				         " whose values are numbers"],
+			)
+		self.advance()
+		self.expect_symbol(":", "after the wire type")
+		return ast.ValueCase(self.span_from(start), label.value,
+		                     self.parse_value_rule())
+
+	def parse_value_rule(self) -> ast.ValueRule:
+		"""How the value is sized, once this arm is selected (section 9.5)."""
+		token = self.current
+
+		if token.kind is TokenKind.INT:
 			self.advance()
+			return ast.FixedValue(self.span_from(token), token.value)
 
-		return tuple(labels)
+		if token.is_ident("self_delimiting"):
+			self.advance()
+			return ast.SelfDelimiting(self.span_from(token))
+
+		if token.is_ident("error"):
+			self.advance()
+			return ast.RejectValue(self.span_from(token))
+
+		if token.is_ident("prefixed"):
+			self.advance()
+			self.expect_symbol("(", "before the length type")
+			length = self.expect_ident("a length type")
+			self.expect_symbol(")", "after the length type")
+			return ast.PrefixedValue(self.span_from(token), length.text)
+
+		raise error(
+			f"expected a value size, found {token.describe()}",
+			token.span,
+			label = "expected a value size here",
+			notes = ["one of: a byte count, `self_delimiting`,"
+			         " `prefixed(<length type>)`, or `error`"],
+		)
+
+	def parse_known_tags(self) -> tuple[ast.KnownTag, ...]:
+		"""`{ 1 : { name = user_id, wire = 0, type = pb_varint }, ... }`"""
+		self.expect_symbol("{", "to open the known tag map")
+
+		known: list[ast.KnownTag] = []
+		while not self.current.is_symbol("}"):
+			known.append(self.parse_known_tag())
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol("}", "to close the known tag map")
+		return tuple(known)
+
+	def parse_known_tag(self) -> ast.KnownTag:
+		"""One entry of the map, in either of section 9.5's two forms."""
+		tag = self.current
+		if tag.kind is not TokenKind.INT:
+			raise error(
+				f"expected a tag number, found {tag.describe()}",
+				tag.span,
+				label = "expected an integer literal here",
+			)
+		self.advance()
+		self.expect_symbol(":", "after the tag number")
+
+		# The simple form names the item and says nothing else about it: its
+		# extent comes from `length_type`, which is the same for every tag.
+		if not self.current.is_symbol("{"):
+			name = self.expect_ident("a name for this tag")
+			return ast.KnownTag(self.span_from(tag), tag.value, name.text)
+
+		self.advance()
+		name_text = ""
+		wire: int | None = None
+		type_name: str | None = None
+		repeated = False
+
+		while not self.current.is_symbol("}"):
+			key = self.expect_ident("a known tag attribute")
+			self.expect_symbol("=", "after the attribute name")
+
+			if key.text == "name":
+				name_text = self.expect_ident("the item's name").text
+			elif key.text == "wire":
+				value = self.current
+				if value.kind is not TokenKind.INT:
+					raise error(
+						f"expected a wire type, found {value.describe()}",
+						value.span, label="expected an integer literal here")
+				self.advance()
+				wire = value.value
+			elif key.text == "type":
+				type_name = self.expect_ident("the item's type").text
+				if self.accept_symbol("[") is not None:
+					self.expect_symbol("]", "after `[` in a known tag type")
+					repeated = True
+			else:
+				raise error(
+					f"unknown attribute `{key.text}` on a known tag",
+					key.span,
+					label = "not one of `name`, `wire`, `type`",
+				)
+
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol("}", "to close the known tag entry")
+		span = self.span_from(tag)
+
+		if not name_text:
+			raise error(
+				"a known tag needs a `name`",
+				span,
+				label = "no `name` here",
+				notes = ["the name is what the generated accessor is called;"
+				         " a tag without one cannot be reached by name"],
+			)
+
+		return ast.KnownTag(span, tag.value, name_text, wire, type_name, repeated)
 
 	def _skip_balanced(self, opener: str, closer: str) -> None:
 		"""Consume a balanced group, keeping its span but not its structure."""

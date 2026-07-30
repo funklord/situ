@@ -370,6 +370,121 @@ class DuplicatePolicy(Enum):
 	ALLOWED = "allowed"
 
 
+# ---------------------------------------------------------------------------
+# The item grammar of a `tlv` region (section 9.5)
+#
+# A tlv region says how to find its items: how to decode a raw tag into named
+# parts, and how each part decides where the value ends. That is a grammar, and
+# for a long time it was kept as the verbatim source text of three arguments,
+# "interpreted by the pass that needs them" -- a pass nobody wrote. What read
+# it instead was a hand-written walk in the C runtime with protobuf's `tag >> 3`
+# and its four wire types baked in, which is a second description of the format
+# the schema already describes. These nodes are the first description.
+# ---------------------------------------------------------------------------
+
+
+class ValueRule(Node):
+	"""How one item's value extent is found, once its wire type is known."""
+
+
+@dataclass(frozen=True)
+class SelfDelimiting(ValueRule):
+	"""`self_delimiting`: the value carries its own extent.
+
+	Legal only for a type that does -- a varint, a nul-terminated run. Section
+	9.5 says so and `wellformed` holds it to that, because a fixed-width type
+	declared self-delimiting would make the walk read a length that is not
+	there.
+	"""
+
+	span: Span
+
+
+@dataclass(frozen=True)
+class FixedValue(ValueRule):
+	"""`8`: a literal byte count."""
+
+	span: Span
+	size: int
+
+
+@dataclass(frozen=True)
+class PrefixedValue(ValueRule):
+	"""`prefixed(pb_varint)`: a length in that type, then that many bytes."""
+
+	span: Span
+	length_type: str
+
+
+@dataclass(frozen=True)
+class RejectValue(ValueRule):
+	"""`error`: a wire type this schema does not describe.
+
+	A rejection, not a gap. Protobuf's groups (wire types 3 and 4) are the
+	worked example: the walk must stop rather than guess an extent.
+	"""
+
+	span: Span
+
+
+@dataclass(frozen=True)
+class ValueCase(Node):
+	"""One arm of the `value_size` dispatch. A `label` of None is `default`."""
+
+	span: Span
+	label: int | None
+	rule: ValueRule
+
+
+@dataclass(frozen=True)
+class ValueSize(Node):
+	"""`value_size = switch (wire) { case 0: self_delimiting, ... }`
+
+	`selector` names a part `tag_decode` produces, and nothing else: the
+	dispatch happens after the tag is decoded and before the value is read, so
+	the only thing in scope is what the tag decoded to.
+	"""
+
+	span: Span
+	selector: str
+	cases: tuple[ValueCase, ...]
+
+	def default(self) -> ValueCase | None:
+		return next((case for case in self.cases if case.label is None), None)
+
+
+@dataclass(frozen=True)
+class TagPart(Node):
+	"""One named part decoded out of a raw tag: `field = tag >> 3`.
+
+	`value` is an expression over `tag` alone. The parts are what the rest of
+	the region's grammar may name.
+	"""
+
+	span: Span
+	name: str
+	value: Expr
+
+
+@dataclass(frozen=True)
+class KnownTag(Node):
+	"""One entry of the `known` map: a tag number given a name and a type.
+
+	Two forms, both from section 9.5. The simple one is `0x01 : Mtu` and gives
+	only a name; the general one is
+	`1 : { name = user_id, wire = 0, type = pb_varint }` and pins the wire type
+	an item with this tag must carry.
+	"""
+
+	span: Span
+	tag: int
+	name: str
+	wire: int | None       = None
+	type_name: str | None  = None
+	#: `type = u8[]` -- the value is a run of that type rather than one of it.
+	repeated: bool         = False
+
+
 @dataclass(frozen=True)
 class Tlv(Member):
 	"""A schema-free region of tag-length-value items (section 9.5).
@@ -393,7 +508,30 @@ class Tlv(Member):
 	# Wire types the `value_size` dispatch accepts. Protobuf's packed-versus-
 	# unpacked ambiguity is visible here and nowhere else: a repeated scalar
 	# may be written as several scalar items or as one length-prefixed one.
+	#
+	# Derived from `value_size` rather than scanned for separately. It used to
+	# be the only thing read out of the dispatch, by a pass that counted `case`
+	# labels while skipping their bodies.
 	wire_types: tuple[int, ...]	= ()
+	#: How a raw tag decodes into named parts. Empty for the simple form,
+	#: whose tag is the whole of the tag.
+	tag_decode: tuple[TagPart, ...]	= ()
+	#: How the value's extent is found. None for the simple form, which says
+	#: it with `length_type` instead.
+	value_size: ValueSize | None	= None
+	#: The tags this schema names, in the order written.
+	known: tuple[KnownTag, ...]	= ()
+
+	def part(self, name: str) -> TagPart | None:
+		return next((part for part in self.tag_decode if part.name == name), None)
+
+	def rule_for(self, wire: int) -> ValueRule | None:
+		"""The dispatch arm an item with this wire type takes, `default` last."""
+		for case in self.value_size.cases if self.value_size else ():
+			if case.label == wire:
+				return case.rule
+		default = self.value_size.default() if self.value_size else None
+		return default.rule if default else None
 
 	def argument(self, name: str) -> Expr | None:
 		for arg in self.args:

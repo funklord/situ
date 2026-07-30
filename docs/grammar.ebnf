@@ -177,11 +177,27 @@ register_member	= ( "width" | "access_width" ) "=" digits ";"
 	| field
 	| reserved ;
 
+(* A tlv region's item grammar (section 9.5). *)
+tlv_args	= tlv_arg { "," tlv_arg } ;
+tlv_arg		= "tag_decode" "=" tag_decode
+	| "value_size" "=" value_size
+	| "known"      "=" known_tags
+	| attr ;
+tag_decode	= "{" tag_part { "," tag_part } "}" ;
+tag_part	= ident "=" expr ;
+value_size	= "switch" "(" ident ")" "{" value_case { "," value_case } "}" ;
+value_case	= ( "case" digits | "default" ) ":" value_rule ;
+value_rule	= digits | "self_delimiting" | "prefixed" "(" ident ")" | "error" ;
+known_tags	= "{" known_tag { "," known_tag } "}" ;
+known_tag	= digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
+known_attr	= "name" "=" ident
+	| "wire" "=" digits
+	| "type" "=" ident [ "[" "]" ] ;
+
 (* Referenced by the productions above but never given in section 7. *)
 ref_list	= ident { "," ident } ;
 codec_args	= ident { "," attr } ;
 index_args	= attr { "," attr } ;
-tlv_args	= attr { "," attr } ;
 capability_expr	= ident "(" expr { "," expr } ")" | expr ;
 ratio		= "ratio_exact" "(" digits "," digits ")"
 	| "ratio_bounded" "(" digits "," digits ")" ;

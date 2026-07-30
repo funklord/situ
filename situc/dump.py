@@ -146,9 +146,11 @@ def _member(member: ast.Member, depth: int) -> list[str]:
 		return [_indent(depth, f"opaque {member.name} [{expr_to_source(member.size)}]")]
 
 	if isinstance(member, ast.Tlv):
-		return [_indent(depth, f"tlv {member.name} unknown={member.unknown.value} "
-		                       f"duplicates={member.duplicates.value} "
-		                       f"ordered={'yes' if member.ordered else 'no'}")]
+		lines = [_indent(depth, f"tlv {member.name} unknown={member.unknown.value} "
+		                        f"duplicates={member.duplicates.value} "
+		                        f"ordered={'yes' if member.ordered else 'no'}")]
+		lines.extend(_tlv_grammar(member, depth + 1))
+		return lines
 
 	if isinstance(member, ast.Indexed):
 		lines = [_indent(depth, f"indexed {member.name}")]
@@ -219,6 +221,43 @@ def _array(array: ast.ArraySpec | None) -> str:
 	if array is None:
 		return ""
 	return f"[{expr_to_source(array.size)}]" if array.size is not None else "[]"
+
+
+def _tlv_grammar(region: ast.Tlv, depth: int) -> list[str]:
+	"""The item grammar: how a tag decodes, how a value is sized, what is named.
+
+	Printed because it is now structure rather than the source text of three
+	arguments. A reader asking what situ made of a `switch (wire)` gets an
+	answer here instead of having to read the schema back.
+	"""
+	lines = [_indent(depth, f"tag part {part.name} = {expr_to_source(part.value)}")
+	         for part in region.tag_decode]
+
+	if region.value_size is not None:
+		lines.append(_indent(depth, f"value_size switch {region.value_size.selector}"))
+		for case in region.value_size.cases:
+			label = "default" if case.label is None else f"case {case.label}"
+			lines.append(_indent(depth + 1, f"{label}: {_value_rule(case.rule)}"))
+
+	for tag in region.known:
+		described = f"known {tag.tag} {tag.name}"
+		if tag.wire is not None:
+			described += f" wire={tag.wire}"
+		if tag.type_name is not None:
+			described += f" type={tag.type_name}{'[]' if tag.repeated else ''}"
+		lines.append(_indent(depth, described))
+
+	return lines
+
+
+def _value_rule(rule: ast.ValueRule) -> str:
+	if isinstance(rule, ast.FixedValue):
+		return f"{rule.size} bytes"
+	if isinstance(rule, ast.PrefixedValue):
+		return f"prefixed({rule.length_type})"
+	if isinstance(rule, ast.SelfDelimiting):
+		return "self_delimiting"
+	return "error"
 
 
 def _attrs(attrs: tuple[ast.Attr, ...], depth: int) -> list[str]:

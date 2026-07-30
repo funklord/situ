@@ -400,6 +400,30 @@ pin           = "@" expr ;
 attrs         = "[" attr { "," attr } "]" ;
 attr          = ident [ "=" expr ] ;
 
+(* Section 9.5. Three of a tlv region's arguments carry its item grammar --
+   how a raw tag decodes into named parts, how each part sizes a value, which
+   tags are named -- and the rest are ordinary attributes. They were kept as
+   verbatim source text for a long time, which is why this was `attr { ","
+   attr }` and the only thing anything read out of a `switch` was its labels. *)
+tlv_args      = tlv_arg { "," tlv_arg } ;
+tlv_arg       = "tag_decode" "=" tag_decode
+              | "value_size" "=" value_size
+              | "known"      "=" known_tags
+              | attr ;
+tag_decode    = "{" tag_part { "," tag_part } "}" ;
+tag_part      = ident "=" expr ;      (* over `tag`, the raw tag, alone *)
+value_size    = "switch" "(" ident ")" "{" value_case { "," value_case } "}" ;
+value_case    = ( "case" digits | "default" ) ":" value_rule ;
+value_rule    = digits                (* a literal byte count *)
+              | "self_delimiting"     (* the value carries its own extent *)
+              | "prefixed" "(" ident ")"
+              | "error" ;             (* a wire type this schema refuses *)
+known_tags    = "{" known_tag { "," known_tag } "}" ;
+known_tag     = digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
+known_attr    = "name" "=" ident
+              | "wire" "=" digits
+              | "type" "=" ident [ "[" "]" ] ;
+
 (* `array_spec` and `attrs` both open with "[", so this grammar is ambiguous as
    written: `u8 x [foo];` is either an array of `foo` elements or a scalar
    carrying the flag `foo`. Resolved by the attribute vocabulary, which is
@@ -1085,6 +1109,30 @@ a `prefixed(...)` form, or an expression.
 `duplicate_tags = allowed` sets `canonical := NonCanonical` unless an ordering
 rule is also declared, because the same content then has multiple valid
 encodings.
+
+**The item grammar is structure, and is checked.** `tag_decode`, `value_size`
+and `known` are what a walk over the region would have to follow, and for a
+long time all three were kept as the verbatim source text of their arguments,
+"interpreted by the pass that needs them". No such pass existed. The only thing
+ever read out of a `value_size` dispatch was its `case` labels -- scanned for by
+a function that skipped the bodies it was walking past, because which wire types
+a region accepts is a canonicality question and nothing else asked anything.
+
+So a region could declare `switch (wire)` while decoding no `wire`, name a tag
+whose wire type the dispatch rejects, or size a value at zero bytes, and all
+three parsed. Each is now refused where it is written:
+
+| refused | because |
+|---|---|
+| a dispatch selecting on a part `tag_decode` does not produce | nothing to select on |
+| a tag part reading anything but `tag` | nothing else has been read yet |
+| a `known` tag whose wire type the dispatch rejects | an accessor that could never read |
+| two arms for one wire type | two answers for where the value ends |
+| a value sized at zero bytes | a walk over them does not advance |
+| `prefixed(T)` for a `T` that is not a type | no length to read |
+
+The grammar for all of it is in section 7, and `situc dump-ast` prints what
+situ made of a dispatch rather than leaving a reader to re-read the schema.
 
 ### 9.6 variant
 

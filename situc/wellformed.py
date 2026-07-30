@@ -58,6 +58,7 @@ def check(schema: ast.Schema) -> None:
 	check_registers(schema)
 	check_no_recursive_types(schema)
 	check_delimiters(schema)
+	check_tlv_grammar(schema)
 	check_repeats(schema)
 	check_versions(schema)
 	check_invariants(schema)
@@ -152,6 +153,157 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 			         "declared size to be the capacity of",
 			         'a nul-framed member is `until "\\0"`'],
 		)
+
+
+# ---------------------------------------------------------------------------
+# The item grammar of a `tlv` region (section 9.5)
+# ---------------------------------------------------------------------------
+
+
+def check_tlv_grammar(schema: ast.Schema) -> None:
+	"""A tlv region's grammar has to be one a walk can follow.
+
+	Every refusal here is a region whose own description does not let an item
+	be found: a dispatch selecting on a part that was never decoded, a named
+	tag whose wire type the dispatch rejects, a value declared to carry its own
+	extent by a type that does not.
+
+	None of this was checked while the three arguments carrying the grammar
+	were held as source text. A `switch (wire)` naming no part of the tag
+	parsed, compiled, and described nothing.
+	"""
+	varints = {decl.name for decl in schema.varints()}
+
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			if isinstance(member, ast.Tlv):
+				_check_one_tlv(member, varints)
+
+
+def _check_one_tlv(region: ast.Tlv, varints: set[str]) -> None:
+	_check_tag_decode(region)
+	_check_value_size(region, varints)
+	_check_known_tags(region)
+
+
+def _check_tag_decode(region: ast.Tlv) -> None:
+	"""Each part is named once and reads the raw tag and nothing else."""
+	seen: dict[str, ast.TagPart] = {}
+	for part in region.tag_decode:
+		if part.name in seen:
+			raise _redeclaration("tag part", part.name, seen[part.name], part,
+			                     ["a tag decodes each part once: two"
+			                      " definitions give the dispatch two"
+			                      " selectors of the same name"])
+		seen[part.name] = part
+
+		for name in paths_in(part.value):
+			if name == "tag":
+				continue
+			raise error(
+				f"`{name}` is not in scope in a tag decode",
+				part.value.span,
+				label = f"`{name}` is not the raw tag",
+				notes = ["a `tag_decode` part is an expression over `tag`,"
+				         " the raw tag just read",
+				         "nothing else has been read yet: the parts are what"
+				         " decide where the value ends"],
+			)
+
+
+def _check_value_size(region: ast.Tlv, varints: set[str]) -> None:
+	"""The dispatch selects on a decoded part, and each arm sizes a value."""
+	sizes = region.value_size
+	if sizes is None:
+		return
+
+	if region.part(sizes.selector) is None:
+		known = ", ".join(f"`{part.name}`" for part in region.tag_decode)
+		raise error(
+			f"`{sizes.selector}` is not a part of the decoded tag",
+			sizes.span,
+			label = f"no `{sizes.selector}` here",
+			notes = ([f"`tag_decode` produces {known}"] if known else
+			         ["this region declares no `tag_decode`, so the dispatch"
+			          " has nothing to select on"]),
+		)
+
+	seen: dict[int, ast.ValueCase] = {}
+	default: ast.ValueCase | None = None
+	for case in sizes.cases:
+		if case.label is None:
+			if default is not None:
+				raise error(
+					"a `value_size` dispatch has at most one `default`",
+					case.span, label="a second `default` here")
+			default = case
+			continue
+		if case.label in seen:
+			raise error(
+				f"wire type {case.label} is dispatched twice",
+				case.span,
+				label = "already sized above",
+				notes = ["two arms for one wire type give the walk two answers"
+				         " for where the value ends"],
+			)
+		seen[case.label] = case
+
+		if isinstance(case.rule, ast.FixedValue) and case.rule.size == 0:
+			raise error(
+				f"wire type {case.label} sizes its value at zero bytes",
+				case.rule.span,
+				label = "a zero-length value",
+				notes = ["an item that occupies only its tag is legal;"
+				         " say so with `0` on the *tag* type, not here",
+				         "a walk over zero-extent values does not advance"],
+			)
+
+	for case in sizes.cases:
+		if isinstance(case.rule, ast.PrefixedValue) \
+				and case.rule.length_type not in varints \
+				and not is_scalar_name(case.rule.length_type):
+			raise error(
+				f"unknown length type `{case.rule.length_type}`",
+				case.rule.span,
+				label = "not a declared varint type or a scalar type",
+				notes = ["`prefixed(T)` reads a length in `T` and then that"
+				         " many bytes"],
+			)
+
+
+def _check_known_tags(region: ast.Tlv) -> None:
+	"""Each tag is named once, and the dispatch can size what it names."""
+	sizes = region.value_size
+	by_tag: dict[int, ast.KnownTag] = {}
+	by_name: dict[str, ast.KnownTag] = {}
+
+	for tag in region.known:
+		if tag.tag in by_tag:
+			raise _redeclaration("tag", str(tag.tag), by_tag[tag.tag], tag,
+			                     ["a tag names one item; which of the two an"
+			                      " accessor would read is not decidable"])
+		by_tag[tag.tag] = tag
+
+		if tag.name in by_name:
+			raise _redeclaration("known tag", tag.name, by_name[tag.name], tag,
+			                     ["the name is what the generated accessor is"
+			                      " called, and two cannot share one"])
+		by_name[tag.name] = tag
+
+		if sizes is None or tag.wire is None:
+			continue
+
+		rule = region.rule_for(tag.wire)
+		if rule is None or isinstance(rule, ast.RejectValue):
+			accepted = ", ".join(str(label) for label in sorted(region.wire_types))
+			raise error(
+				f"`{tag.name}` declares a wire type the dispatch rejects",
+				tag.span,
+				label = f"wire type {tag.wire} has no size",
+				notes = [f"`value_size` sizes wire types {accepted}" if accepted
+				         else "`value_size` sizes no wire type at all",
+				         "an item with this tag could be named and never read"],
+			)
 
 
 def check_repeats(schema: ast.Schema) -> None:
