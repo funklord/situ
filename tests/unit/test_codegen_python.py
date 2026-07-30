@@ -702,3 +702,20 @@ def test_required_never_reads_a_length_that_has_not_arrived(tmp_path: Path) -> N
 	assert module.s.required(whole) == len(whole)
 	# More than a whole message is still one, and the answer is where it ends.
 	assert module.s.required(whole + b"next") == len(whole)
+
+
+TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"
+
+
+def test_a_length_behind_a_variable_member_resolves(tmp_path: Path) -> None:
+	"""`m` sits at `2 + n`, so there is no constant to read it at -- and this
+	backend read length drivers only at constant offsets, so `b` was dropped
+	with a note and `required` declined along with it. Its own accessor knows
+	where it is. C++, Python and Rust all had this; C did not."""
+	module = load(tmp_path, TWO_LENGTHS)
+	raw    = bytearray([0, 3]) + b"abc" + bytearray([0, 2]) + b"xy"
+	held   = module.s.at(module.Message(raw), 0, len(raw))
+
+	assert held.b_offset == 7
+	assert bytes(held.b) == b"xy"
+	assert module.s.required(bytes(raw)) == len(raw)

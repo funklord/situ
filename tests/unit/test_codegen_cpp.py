@@ -816,19 +816,103 @@ int main()
 TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"
 
 
-def test_framing_inherits_this_backend_s_limits_and_says_so() -> None:
-	"""`m` sits at `2 + n`, and this backend cannot resolve a length field at
-	a dynamic offset -- it says so where `b`'s accessor would be, and has
-	since before framing existed. `required` therefore declines too, which is
-	the right answer rather than a second limitation: a framing function that
-	skipped the member it cannot measure would report a total short by it.
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_length_behind_a_variable_member_resolves(tmp_path: Path) -> None:
+	"""`m` sits at `2 + n`, so there is no constant to read it at -- and this
+	backend read length drivers only at constant offsets, so `b` was dropped
+	from the class with a note and `required` declined along with it.
 
-	The C backend does resolve this, so the equivalent test there is an ASan
-	probe of the per-member guard. Naming the asymmetry here rather than
-	contriving a schema that hides it.
+	Its own accessor knows where it is, and C++ lets a member function call
+	one declared after it, so the fix is to call `m()`. The test that stood
+	here asserted the limitation; this is what it was standing in for.
 	"""
-	header = emit(TWO_LENGTHS)
+	result = compiles(tmp_path, TWO_LENGTHS, extra="""
+#include <cstring>
+#include "unit.hpp"
 
-	assert "sized by `m`, which this backend cannot resolve yet" in header
-	assert "No `required`: one of its members has no length this can compute" \
-		in header
+int main()
+{
+	/* n = 3 "abc", m = 2 "xy": 2 + 3 + 2 + 2 = 9. */
+	std::uint8_t buf[9] = { 0, 3, 'a','b','c', 0, 2, 'x','y' };
+	const ::situ::s held{ situ_view_t{ buf, sizeof buf, 0 } };
+
+	if (held.b_offset() != 7u)
+		return 1;
+	if (held.b().size() != 2u || std::memcmp(held.b().data(), "xy", 2) != 0)
+		return 2;
+
+	std::uint32_t need;
+	if (::situ::s::required(buf, sizeof buf, need) != ::situ::rt::err::ok)
+		return 3;
+	if (need != sizeof buf)
+		return 4;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_length_behind_a_variable_member_is_guarded(tmp_path: Path) -> None:
+	"""And now that it resolves, the framing guard can be tested here too.
+
+	Where every length is at a static offset the `size_min` gate covers them
+	all and the per-member check looks redundant; this is the shape where it
+	is the only thing between `required` and a read past the buffer. C++
+	reads past it silently -- Python raises and Rust panics -- so this needs a
+	sanitizer to notice.
+	"""
+	result = compiles(tmp_path, TWO_LENGTHS, extra="""
+#include <cstdlib>
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	/* n = 200, so `m` claims offset 202. Six bytes have arrived, on the heap
+	 * so a read past them is a fault the sanitizer sees. */
+	auto *part = static_cast<std::uint8_t *>(std::malloc(6));
+	std::uint32_t need = 0;
+
+	if (part == nullptr)
+		return 1;
+	part[0] = 0; part[1] = 200;
+	std::memset(part + 2, 'x', 4);
+
+	const auto got = ::situ::s::required(part, 6u, need);
+	std::free(part);
+
+	if (got != ::situ::rt::err::truncated)
+		return 2;
+	if (need != 204u)		/* 4 fixed, plus the 200 `n` claims */
+		return 3;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 "-fsanitize=address",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

@@ -1423,7 +1423,14 @@ class Emitter:
 			return f"self.{name}() as usize"
 
 		if driver.placement.offset_bits is None:
-			return None
+			# The driver is itself behind a variable-length member, so there
+			# is no constant to read it at -- but its own accessor knows where
+			# it is, and this backend has always emitted one. Reading at a
+			# static offset was the only thing tried, so the member it sizes
+			# was dropped with a note, which is the whole of what "cannot
+			# resolve" meant. All three backends had it; C did not.
+			name = _ident(c_name(local_name(struct, driver.placement)))
+			return f"self.{name}() as usize"
 		return (f"{self._raw_load(driver.placement, driver.placement.scalar)}"
 		        f" as usize")
 

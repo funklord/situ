@@ -593,3 +593,31 @@ fn main() {
 
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_length_behind_a_variable_member_resolves(tmp_path: Path) -> None:
+	"""`m` sits at `2 + n`, so there is no constant to read it at -- and this
+	backend read length drivers only at constant offsets, so `b` was dropped
+	with a note and `required` declined along with it. Its own accessor knows
+	where it is. C++, Python and Rust all had this; C did not."""
+	built = build(tmp_path, TWO_LENGTHS, main="""
+use situ_rt::Framing;
+
+fn main() {
+	/* n = 3 "abc", m = 2 "xy": 2 + 3 + 2 + 2 = 9. */
+	let buf = [0u8, 3, b'a', b'b', b'c', 0, 2, b'x', b'y'];
+	let held = unit::S::new(&buf).unwrap();
+
+	assert_eq!(held.b_offset(), 7);
+	assert_eq!(held.b(), b"xy");
+	assert_eq!(unit::S::required(&buf), Framing::Complete(buf.len()));
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

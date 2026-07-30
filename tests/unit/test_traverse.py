@@ -453,3 +453,40 @@ def test_an_element_reached_only_through_a_run_is_still_asked() -> None:
 	        "struct outer { e run[] while (k == 0) max 8; }")
 
 	assert not measurable(body, "outer")
+
+
+# -- what sizes a member, and who decides -----------------------------------
+
+def kind_of(body: str, struct: str, member: str) -> Member:
+	held = structs(body)[struct]
+	one  = next(p for p in own_members(held) if p.name == member)
+	return classify(held, one, set(structs(body)))
+
+
+def test_a_constant_sized_array_is_an_array() -> None:
+	"""`sized_by` is set for `u8 id[N]` where N is a constant, and the count
+	is known all the same -- the frame was sized around it and the accessors
+	are the fixed-array ones.
+
+	Classified `VARIABLE` on `sized_by` alone, three backends looked for a
+	field called `N`, found none, and dropped the member with a note saying
+	they could not resolve it. C escaped by not using this function. The
+	honest question is whether the *data* decides, and `array_count` answers
+	it -- now that it is never a guess.
+	"""
+	body = "const N = 8;\nstruct s { u8 id[N]; u16 after; }"
+
+	assert kind_of(body, "s", "id") is Member.ARRAY
+
+
+def test_a_field_sized_array_is_variable() -> None:
+	"""The other half, and the reason the two look alike: both set
+	`sized_by`, and only one of them is a number the message chooses."""
+	assert kind_of("struct s { u16 n; u8 body[n]; }", "s", "body") \
+		is Member.VARIABLE
+
+
+def test_arithmetic_over_a_field_is_variable_too() -> None:
+	"""`size_expr` rather than `sized_by`, and still the data deciding."""
+	assert kind_of("struct s { u8 len; u8 d[(len + 1) * 8 - 2]; }", "s", "d") \
+		is Member.VARIABLE

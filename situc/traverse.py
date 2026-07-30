@@ -159,7 +159,19 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# field fell past this to SCALAR -- and three backends handed back one
 	# byte and called it the field. C escaped only because it does not use
 	# this function, which is invariant 20 pointing the other way for once.
-	if placement.sized_by is not None or placement.size_expr is not None:
+	# ...and only where the *data* decides. `sized_by` also names a
+	# compile-time constant -- `u8 id[DEVICE_ID_BYTES]` sets it -- and then
+	# the count is known, the frame was sized around it, and the accessors
+	# are the fixed-array ones. Three backends looked for a field of that
+	# name, found none, and dropped the member with a note saying they could
+	# not resolve it. `array_count` is the honest question, and is now never
+	# a guess.
+	#
+	# The same conflation `gen-fuzz` had, found the same way: a member the
+	# schema sizes is not a member the message sizes.
+	if placement.array_count is None \
+			and (placement.sized_by is not None
+			     or placement.size_expr is not None):
 		return Member.VARIABLE
 
 	# Before NESTED: an array of structs names a struct type and is not one.

@@ -2813,12 +2813,18 @@ the walk that finds its terminator stops just as readily at the end of what has
 arrived and nothing distinguishes the two; and a struct whose complete form can
 be zero bytes, because then every buffer already holds one.
 
-It also inherits whatever a backend cannot measure. C++ does not resolve a
-length field at a dynamic offset -- it says so where that member's accessor
-would be, and has since before framing existed -- so `required` declines there
-too. That is the right answer rather than a second limitation: a framing
-function that skipped the member it could not measure would report a total
-short by exactly that member.
+It also inherits whatever a backend cannot measure, and declining is the right
+answer rather than a second limitation: a framing function that skipped the
+member it could not measure would report a total short by exactly that member.
+
+Writing that down is what got the two remaining gaps closed. C++, Python and
+Rust all declined a length field sitting behind a variable-length member --
+there is no constant to read it at, and its own accessor knows where it is, so
+the fix was to call it. And all three treated a *constant*-sized array as
+data-sized, because `u8 id[DEVICE_ID_BYTES]` sets `sized_by` as well; they
+looked for a field of that name and dropped the member. The honest question is
+whether the *data* decides, which `array_count` answers, and it lives in
+`traverse.classify` where all three ask it (invariant 44).
 
 **Every one of these declines rather than guesses**, and says so in the file it
 writes. A generated artifact that quietly omits a member is indistinguishable

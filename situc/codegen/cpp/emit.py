@@ -1414,7 +1414,19 @@ class Emitter:
 			return f"static_cast<std::uint32_t>({name}_value())"
 
 		if driver.placement.offset_bits is None:
-			return None
+			# The driver is itself behind a variable-length member, so there
+			# is no constant to read it at -- but its own accessor knows where
+			# it is, and this backend has always emitted one. Reading at a
+			# static offset was the only thing tried, so the member it sizes
+			# was dropped from the class with a note, which is the whole of
+			# what "cannot resolve yet" meant.
+			#
+			# Calling the accessor rather than inlining the load, which is
+			# what the text-number branch above already does, and what C++
+			# allows and C does not: a member function may call one declared
+			# after it.
+			name = c_name(local_name(struct, driver.placement))
+			return f"static_cast<std::uint32_t>({name}())"
 
 		return (f"static_cast<std::uint32_t>("
 		        f"{self._raw_load(driver.placement.scalar, driver.placement, 'base() + '
