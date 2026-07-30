@@ -42,11 +42,22 @@ Rules for the implementer:
    propagation is expensive to unwind later.
 5. Everything in `docs/decisions/` is append-only. One file per decision,
    numbered, with the alternatives considered.
-6. **Where this document can be checked against the code, it is.** The 11.3
-   table and `docs/grammar.ebnf` both have tests that fail when they drift
-   from the implementation, because 11.3 was hand-maintained for a while and
-   fell about twenty rows behind. Prefer adding a check to adding a promise:
-   a normative table nobody verifies is a comment.
+6. **Where this document can be checked against the code, it is.** Four things
+   here are held to the implementation by a test that fails when they drift:
+
+   | Section | Checked by |
+   |---|---|
+   | 7, via `docs/grammar.ebnf` | `test_grammar_sync` |
+   | 11.3, the propagation table | `test_the_spec_table_matches_the_rows` |
+   | 21, the CLI surface | `test_the_cli_section_lists_every_command` |
+   | 23, the repository layout | `test_the_layout_section_lists_every_compiler_module` |
+
+   Every one of them was added *after* finding the drift, and every one found
+   more of it than expected: 11.3 was about twenty rows behind, 21 named a
+   `--strict` that never existed and called three per-subcommand flags global,
+   and 23 was missing a module. Prefer adding a check to adding a promise --
+   a normative table nobody verifies is a comment, and a list a reader types
+   from is worse than that.
 
 ---
 
@@ -2699,7 +2710,28 @@ value:
 | fuzz harness | `situc gen-fuzz` | libFuzzer/AFL entry point per parseable struct; parse safety is the top risk in a protocol parser |
 | byte-layout diagram | `situc doc --format=ascii` | RFC-style packet diagrams straight from the schema; what protocol documentation always needs |
 | Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff. Lua rather than a C plugin, for the ABI reason in `docs/decisions/0021-dissector-language.md` |
+| wire signature | `situc wire` | Section 19.3 |
 | capability map | `situc map` | Section 18.1 |
+
+**Every one of these declines rather than guesses**, and says so in the file it
+writes. A generated artifact that quietly omits a member is indistinguishable
+from one that never had it, so each refusal names the member and the reason:
+
+- `gen-checks` stops asserting offsets at a member whose reach the data
+  decides, and the generated comment says which member and why. It used to
+  place the members after a `while` run as though the run held one element,
+  which is a confident assertion about an offset the accessor walks straight
+  past.
+- `gen-dissector` emits a Lua comment where it cannot compute an extent, in
+  the position the member would have occupied.
+- `doc` reports *how* a variable member's length is decided rather than a
+  number: `to ":"`, `[len]`, `by form`, `while form == 0`. It used to print a
+  variant's `size_bits` -- the smallest arm, so "0 bytes" -- in a column where
+  everything else says where the member ends.
+
+That last one is the general shape of this class of bug, and it has now
+appeared four times: a true number, answering a question nobody asked, in a
+place where a reader will take it for the answer to the one they did.
 
 ---
 
@@ -2726,9 +2758,15 @@ situc gen-codec-tests <schema>    property tests from codec signatures
 situc import-proto <proto> -o <schema>   [--accept-lossy]
 ```
 
-Global flags: `--target=c|cpp|python|rust`, `--out=DIR`,
-`--diagnostics=text|json`,
-`--strict`, `--prefix=NAME`.
+One global flag: `--diagnostics=text|json`. `--out=DIR`,
+`--target=c|cpp|python|rust` and `--prefix=NAME` belong to the subcommands that
+take them, which is not the same thing and was written here as though it were.
+There is no `--strict`; it was listed for a while and never existed.
+
+`test_the_cli_section_lists_every_command` holds this block to the parser, for
+the reason section 0 gives: this list had drifted, and so had 11.3, and a
+surface a reader is expected to type from is worth a check rather than a
+promise.
 
 ---
 
@@ -2788,6 +2826,10 @@ situ/
     lexer.py
     parser.py
     ast.py
+    unparse.py                an expression back to schema source, for the
+                              places a fact has to survive as text: a `while`
+                              condition a backend rewrites over its own
+                              getters, and a `case` value in a comment
     wellformed.py             whole-schema checks: duplicate names, unresolvable
                               types, recursion, constant/attribute collision
     types.py                  scalar type table: integers, floats, fixed point, BCD
@@ -2807,9 +2849,13 @@ situ/
     invariant.py              which right-hand sides an `invariant` may have
                               (16.1), and the walk over one -- the leaves are
                               each backend's and the rest is the language's
-    names.py                  ways of writing a schema fact that no target
-                              language decides: how a delimiter reads, and
-                              which field names an expression rewrites
+    names.py                  the shape of a schema fact, with the spelling
+                              left to the caller: how a delimiter reads, which
+                              field names an expression rewrites, and which of
+                              C's operators a target spells differently. The
+                              last of those is here because the difficulty is
+                              an ordering -- `!=` before `!` -- and Python and
+                              Lua would otherwise get it right separately
     wire.py                   the byte-level contract and its comparison; 19.3
     requirements.py           predicate evaluation and discharge
     namespaces.py             `::` qualification and `--prefix`; decision 0012
@@ -2824,7 +2870,9 @@ situ/
                               descriptions; phase 12
     proto.py                  the `.proto` importer; phase 13
     doc.py                    `situc doc`: RFC-style diagrams and a field table
-    dissector.py              `situc gen-dissector`: a Wireshark dissector in Lua
+    dissector.py              `situc gen-dissector`: a Wireshark dissector in
+                              Lua (decision 0021), over the same traversal the
+                              code backends use -- only the reads are Lua's
     lsp.py                    `situc lsp`: diagnostics, hover, symbols, code
                               actions and definitions, over JSON-RPC on stdio
     codegen/
@@ -2907,6 +2955,8 @@ keeping. They are referenced from the sections they bear on; this is the index.
 | 0017 | One codec implementation, in C, with a per-language plugin slot |
 | 0018 | `ratio_padded(a, b)`, for codes that emit whole groups |
 | 0019 | What a codec must be before it may seal |
+| 0020 | The lattice models delimiter-framed data |
+| 0021 | The generated dissector is Lua, not a C plugin |
 
 0004 and 0007 look contradictory and are not. 0004 made aarch64 compile-only
 and deferred a revisit; 0007 closes that revisit once user-mode emulation was
@@ -4169,6 +4219,28 @@ Why Lua at all is `docs/decisions/0021-dissector-language.md`, written because
 the question was asked and nothing answered it: no build step and no ABI to
 match, against a Wireshark whose plugin ABI moves between minor releases, for
 an artifact meant to be committed beside the schema.
+
+### 26.26 What the folds keep finding
+
+"Fold what the implementation learned back into this document" has been run
+several times now, and the same thing happens each time: the prose is roughly
+right and the *lists* are wrong. The propagation table was twenty rows behind,
+the CLI surface named a flag that never existed, the repository layout was
+missing a module, and the nested-copy field list in the solver had fallen six
+behind (invariant 39).
+
+The pattern is worth naming because it predicts where to look. Prose drifts
+slowly, because a paragraph that has gone wrong usually reads wrong. A list
+does not: an entry that should be there and is not looks exactly like a list
+that is complete. Nothing about reading it says otherwise.
+
+So the rule in section 0 is not "keep the document current" -- everybody
+intends that -- it is that a list in this document should be *derived* or
+*checked*, and the four that now are took one test each. The remaining
+hand-maintained lists here are the glossary and the decision index, and both
+are append-only by nature: an entry never becomes wrong, it only fails to
+appear, and a missing glossary term costs a reader a search rather than a
+wrong build.
 
 ### Invariants to hold across all phases
 

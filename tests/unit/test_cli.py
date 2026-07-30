@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import argparse
+
 import pytest
 
-from situc.cli import main
+from situc.cli import build_parser, main
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -341,3 +343,53 @@ def test_gen_dissector_writes_lua(tmp_path: Path) -> None:
 
 	assert 'Proto("udp_header"' in lua
 	assert "ProtoField.uint16" in lua
+
+
+# -- the CLI section of the specification (21) ------------------------------
+
+SPEC = ROOT / "project.md"
+
+
+def spec_block() -> str:
+	text = SPEC.read_text(encoding="utf-8")
+	section = text[text.index("## 21. CLI surface"):text.index("## 22.")]
+	# From after the opening fence to the closing one. Searching from index 4
+	# found the opening fence again, and the block came out empty -- a test
+	# that compared nothing to everything and failed for the right reason by
+	# luck rather than by design.
+	start = section.index("```") + 3
+	return section[start:section.index("```", start)]
+
+
+def test_the_cli_section_lists_every_command() -> None:
+	"""Section 21 is what a reader types from, and it had drifted: it named a
+	`--strict` that never existed and called three per-subcommand flags
+	global. The 11.3 table had drifted the same way for the same reason --
+	nothing was checking."""
+	listed = {line.split()[1] for line in spec_block().splitlines()
+	          if line.startswith("situc ") and len(line.split()) > 1}
+
+	actions = [action for action in build_parser()._actions
+	           if isinstance(action, argparse._SubParsersAction)]
+	assert actions, "the parser has subcommands"
+
+	assert listed == set(actions[0].choices)
+
+
+def test_it_names_only_the_flags_that_are_global() -> None:
+	"""`--out` and `--target` read like global options and are not; a reader
+	who believes the old line writes `situc --target=rust build` and gets a
+	usage error."""
+	globals_ = {option
+	            for action in build_parser()._actions
+	            for option in action.option_strings
+	            if option.startswith("--")}
+	text = SPEC.read_text(encoding="utf-8")
+	section = text[text.index("## 21. CLI surface"):text.index("## 22.")]
+	claimed = section[section.index("One global flag"):]
+
+	# `--help` is argparse's, not situ's, and the section does not list it.
+	assert globals_ - {"--help"} == {"--diagnostics"}
+	assert "--diagnostics" in claimed
+	for local in ("--out", "--target", "--prefix"):
+		assert f"`{local}" in claimed or f"`{local}=" in claimed

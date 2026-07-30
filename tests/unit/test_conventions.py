@@ -3,6 +3,7 @@ suite, not only by `make lint`, so a violation fails CI wherever it enters."""
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -89,3 +90,28 @@ def test_linter_ignores_python_string_content(tmp_path: Path) -> None:
 	                  encoding="ascii")
 
 	assert lint_conventions.check_file(source, tmp_path) == []
+
+
+# -- the repository layout section (23) -------------------------------------
+
+
+def test_the_layout_section_lists_every_compiler_module() -> None:
+	"""Section 23 is a map of the tree, and `unparse.py` was missing from it.
+
+	A map with a module absent is worse than no map: a reader looking for
+	where an expression becomes text again concludes there is nowhere, which
+	is how a sixth copy of something gets written.
+	"""
+	text    = (ROOT / "project.md").read_text(encoding="utf-8")
+	section = text[text.index("## 23. Repository layout"):text.index("### 23.1")]
+	block   = section[section.index("  situc/"):]
+	# To the next entry at exactly two spaces. Slicing at `"\n  "` cut at the
+	# first *four*-space line instead, because two spaces is a prefix of four,
+	# and the block came out one line long.
+	end     = re.search(r"\n  (?=\S)", block[1:])
+	block   = block if end is None else block[:end.end()]
+
+	listed = set(re.findall(r"^\s{4}([a-z_0-9]+\.py)\b", block, re.M))
+	real   = {path.name for path in (ROOT / "situc").glob("*.py")}
+
+	assert listed == real
