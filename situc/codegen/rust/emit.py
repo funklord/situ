@@ -488,6 +488,16 @@ class Emitter:
 		if kind is Member.VARIABLE:
 			return self._variable(struct, placement)
 		if kind is Member.UNPLACED or kind is Member.REGION:
+			if placement.kind == "variant":
+				# Not a gap: a variant has no accessor of its own because
+				# there is no one thing to hand back, and its arms are
+				# emitted above. The fallthrough note said "not in the static
+				# subset yet", which reads as a missing feature.
+				return ["",
+				        f"\t// {placement.path} is a variant: exactly one arm",
+				        "\t// is present, and each is above behind the",
+				        "\t// discriminant that selects it. The variant itself",
+				        "\t// has no accessor."]
 			return ["", f"\t// {placement.path}: not in the static subset yet."]
 		if kind is Member.NOTHING:
 			return []

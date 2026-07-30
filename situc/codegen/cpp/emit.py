@@ -1938,6 +1938,17 @@ class Emitter:
 		if kind is Member.NOTHING:
 			return []
 
+		if placement.kind == "variant":
+			# Not a gap: a variant has no accessor of its own because there
+			# is no one thing to hand back, and its arms are emitted above.
+			# The fallthrough note said "not in the static subset yet", which
+			# is what a reader would take for a missing feature.
+			return ["",
+			        f"\t/* {placement.path} is a variant: exactly one arm is",
+			        "\t * present, and each is above behind the discriminant"
+			        " that",
+			        "\t * selects it. There is no accessor for the variant"
+			        " itself. */"]
 		return ["", f"\t/* {placement.path}: not in the static subset yet. */"]
 
 	def _versioned(self, placement: Placement, name: str, ctype: str,

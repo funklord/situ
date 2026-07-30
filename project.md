@@ -42,7 +42,7 @@ Rules for the implementer:
    propagation is expensive to unwind later.
 5. Everything in `docs/decisions/` is append-only. One file per decision,
    numbered, with the alternatives considered.
-6. **Where this document can be checked against the code, it is.** Four things
+6. **Where this document can be checked against the code, it is.** Five things
    here are held to the implementation by a test that fails when they drift:
 
    | Section | Checked by |
@@ -52,6 +52,10 @@ Rules for the implementer:
    | 21, the CLI surface | `test_the_cli_section_lists_every_command` |
    | 23, the repository layout | `test_the_layout_section_lists_every_compiler_module` |
    | 20.2, the failure classes | `test_the_failure_classes_match_the_runtimes` |
+
+   And 26.31 is not one of them: it is a survey, and a reader picking this up
+   should re-derive it from the generated output rather than trust it to have
+   aged well. A list that cannot be checked should say so.
 
    Every one of them was added *after* finding the drift, and every one found
    more of it than expected: 11.3 was about twenty rows behind, 21 named a
@@ -1970,7 +1974,7 @@ implementation, in C, and each language reaching it by whatever it already
 has. C++ links it for free, Rust crosses an FFI boundary it can name, and
 Python is the one that pays in a build step.
 
-The encoded bytes are reachable in either case. They were not: a coded region
+The encoded bytes are reachable in all four, delimited or not. They were not: a coded region
 with no delimiter got a comment header and nothing else, so the bytes on the
 wire were unreachable -- a strange thing for a treat-as-bytes region, and true
 only of the non-delimited case, because the scan path has always emitted a
@@ -4660,6 +4664,58 @@ loop passes the sum it already has.
 
 The feature is the last row's difference. The first row is what looking for it
 found, and it was there before any of this work began.
+
+### 26.31 Where the frontier is
+
+Measured rather than remembered: every worked example generated in all four
+backends, and every refusal the output contains collected. A reader picking
+this up should start here, and should re-derive it the same way rather than
+trusting this list to have aged well.
+
+**One construct no backend reaches into.**
+
+`tlv` interiors. `examples/protobuf`'s `proto_message.fields` gets no accessor
+anywhere -- situ describes the region, gives it a capability vector, and
+cannot walk its items. Section 9.7 argues situ must be able to describe
+protobuf; it describes it without being able to read it. `indexed` is the same
+shape one step behind: the offset table is never walked, and the header says
+insertion is not an operation at all.
+
+**Five where C is ahead of the other three.**
+
+| construct | example |
+|---|---|
+| crypto regions -- `tag`, `sealed` | `packet` |
+| an endian marker | `tiff_header.byte_order` |
+| a fixed-width text number | `reply_line.code` |
+| an array of struct elements | `telemetry_frame.readings` |
+| the `--materialize` offset cache | any delimited chain |
+
+Each says so in the generated output. None of them is a design question; they
+are the C backend having gone first and the others not having caught up on
+that construct.
+
+**Two kernel families that are described and not generated.**
+
+`stuffing`, `permutation`, `linear_block` and `shift_register` derive correct
+properties and emit no code, so `examples/smtp`'s dot-stuffed body is the one
+real coded region in the tree and the one that cannot be decoded. Only `table`
+and `polynomial` generate. That is also why the decode accessor is `table`-only
+-- the decoder's shape is the kernel's, and guessing one would name a function
+nobody agreed to write.
+
+**Smaller, known, and deliberate.**
+
+- `required` declines a run of records in all four: the walk cannot tell its
+  terminator from the end of the bytes that have arrived, so an HTTP header
+  block cannot be framed.
+- A record run keeps the quadratic `_span`, having no `_from` helper. Measured
+  as marginal; it is the one place the offset fix did not reach.
+- `gen-dissector` is never executed -- no Lua interpreter in the build.
+- Big-endian aarch64 is compile-only (decisions 0004, 0007).
+- Python emits no decode for a coded region, deliberately: it would mean
+  loading a shared object from a path this generator would have to invent
+  (13.6a).
 
 ### Invariants to hold across all phases
 

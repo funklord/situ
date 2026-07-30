@@ -585,6 +585,11 @@ class Emitter:
 		if kind is Member.NOTHING:
 			return []
 
+		if placement.kind == "variant":
+			return ["",
+			        f"\t# {placement.path} is a variant: exactly one arm is",
+			        "\t# present, and each is above behind the discriminant",
+			        "\t# that selects it. The variant itself has no accessor."]
 		return ["", f"\t# {placement.path}: not emitted by this backend yet."]
 
 	def _scalar(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
