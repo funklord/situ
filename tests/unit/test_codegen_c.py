@@ -1828,3 +1828,163 @@ int main(void)
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- framing a stream -------------------------------------------------------
+
+STREAM_FRAMED = "struct s { u8 version; u16 n; u8 body[n]; u16 trailer; }"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_length_field_is_never_read_before_it_has_arrived(tmp_path: Path) -> None:
+	"""The case every hand-written framing loop gets wrong: a `u16` length
+	read from one byte that has arrived and one that has not is a guess, and
+	the guess sizes the next read.
+
+	Fed one byte at a time, `required` must never report a total derived from
+	a field it could not yet see -- so it reports `SIZE_MIN` until the length
+	is wholly present, and the real total afterwards.
+	"""
+	header, source = emit(STREAM_FRAMED)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	/* version(1) + n(2) + body(4) + trailer(2) = 9. */
+	uint8_t whole[9] = { 1, 0, 4, 'D','A','T','A', 0xBE, 0xEF };
+	uint32_t have, need;
+
+	for (have = 0; have < sizeof whole; have++) {
+		if (situ_s_required(whole, have, &need) != SITU_ERR_TRUNCATED)
+			return 1;
+		/* Never more than the truth, and never less than what is here. */
+		if (need > sizeof whole || need <= have)
+			return 2;
+		/* Before the length has arrived, the only honest answer is the
+		 * minimum -- reading `n` from byte 1 alone would say 0x0004 or
+		 * 0x0400 depending on which byte turned up first. */
+		if (have < 3u && need != SITU_S_SIZE_MIN)
+			return 3;
+		/* Once it has, the answer is exact. */
+		if (have >= SITU_S_SIZE_MIN && need != sizeof whole)
+			return 4;
+	}
+
+	if (situ_s_required(whole, (uint32_t)sizeof whole, &need) != SITU_OK)
+		return 5;
+	if (need != sizeof whole)
+		return 6;
+
+	/* More than a whole message is still a whole message, and the answer is
+	 * where this one ends -- which is what lets a caller consume and shift. */
+	if (situ_s_required(whole, 64u, &need) != SITU_OK || need != sizeof whole)
+		return 7;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_a_fixed_size_struct_is_framed_too() -> None:
+	"""Its answer never depends on the bytes, and it is generated anyway: a
+	caller framing a stream should not need one loop for the fixed messages
+	and another for the rest, and a struct that gains a length field later
+	keeps the same call."""
+	header, _ = emit("struct s { u8 a; u32 b; }")
+
+	assert "situ_s_required(const uint8_t *data, uint32_t have" in header
+	assert "*need = SITU_S_SIZE_FIXED;" in header
+
+
+def test_a_remaining_tail_is_declined_and_says_why() -> None:
+	"""It ends where the view ends, so how long one is is the transport's
+	answer rather than the message's. Framing it is the layer below's job."""
+	header, _ = emit("struct s { u8 a; u8 rest[remaining]; }")
+
+	assert "situ_s_required" not in header.replace("No `s_required", "")
+	assert "the transport's answer rather than the message's" in header
+
+
+def test_a_record_run_is_declined_and_says_why() -> None:
+	"""The walk that finds its terminator stops just as readily at the end of
+	what has arrived, and nothing it emits tells the two apart."""
+	header, _ = emit('struct f { u8 k; u8 v[] until ";"; }\n'
+	                 'struct s { u16 n; f fields[] until "\\r\\n"; }')
+
+	assert "a run of records ends at a terminator" in header
+
+
+TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_length_behind_a_variable_member_is_guarded(tmp_path: Path) -> None:
+	"""The case the per-member check exists for, and the one a simpler design
+	misses.
+
+	`m` sits at `2 + n`, so reading it is only safe once `n` bytes of `a` have
+	arrived. Where every length field is at a static offset the `SIZE_MIN`
+	gate already covers them all, and the per-member check looks redundant --
+	which is how the first version of this test passed with the check deleted.
+	Here it is the only thing standing between `required` and a read past the
+	end of the caller's buffer, so this is built under ASan.
+	"""
+	header, source = emit(TWO_LENGTHS)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <stdlib.h>
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	/* n = 200, so `m` claims to sit at offset 202. Six bytes have arrived.
+	 * A heap buffer of exactly six, so a read past it is a fault ASan sees
+	 * rather than whatever happened to be on the stack. */
+	uint8_t *part = malloc(6);
+	uint32_t need;
+	situ_err_t got;
+
+	if (part == NULL)
+		return 1;
+	part[0] = 0; part[1] = 200;
+	memset(part + 2, 'x', 4);
+
+	got = situ_s_required(part, 6u, &need);
+	free(part);
+
+	if (got != SITU_ERR_TRUNCATED)
+		return 2;
+	/* 4 fixed bytes plus the 200 `n` claims, and not one byte of `m`. */
+	if (need != 204u)
+		return 3;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, "-fsanitize=address",
+		 f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	if build.returncode != 0 and "sanitize" in build.stderr:
+		pytest.skip("no address sanitizer")
+	assert build.returncode == 0, build.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

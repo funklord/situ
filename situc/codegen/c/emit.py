@@ -220,6 +220,7 @@ class Emitter:
 		# constants -- where a reader would look for it -- put every call
 		# ahead of its declaration.
 		lines.extend(self._struct_extent(struct))
+		lines.extend(self._required(struct))
 		lines.extend(self._shifting_setters(struct))
 		lines.extend(self._covered_setters(struct))
 		lines.extend(self._invariants(struct))
@@ -1322,6 +1323,193 @@ class Emitter:
 			lines.append("\t(void)view;")
 		lines.extend(["\treturn extent;", "}"])
 		return lines
+
+	def _required(self, struct: ResolvedStruct) -> list[str]:
+		"""How many bytes a whole message needs, given the ones so far.
+
+		The framing question, which every stream receiver answers by hand and
+		gets wrong on the truncated-length case: a `u32` length read from four
+		bytes that have not all arrived is three bytes and a guess.
+
+		It is the extent again, computed defensively. The extent function
+		assumes its bytes are present, because a walk has already bounds-
+		checked the frame; this one is called on a prefix and has to check
+		before every read.
+
+		`at` starts at the sum of *every* fixed member, including the ones
+		after the variable member being measured, and grows by each variable
+		length as it is resolved. So the check before a read is against a
+		number no smaller than that member's base -- conservative, and that is
+		what makes it sufficient. A length field always precedes the member it
+		sizes (section 10), so everything the next expression reads lies below
+		the base, and therefore below `at`.
+
+		The cost of the conservatism is that a message can be declared
+		incomplete one round earlier than strictly necessary, which costs a
+		caller one more read of a socket they were reading anyway.
+		"""
+		if struct.layout.register is not None:
+			return []
+
+		# A fixed-size struct is the easiest framing there is and was being
+		# declined, because `extent_parts` returns None for one -- it exists
+		# to measure the variable case and says so by refusing the other.
+		# Correct for its own purpose and the wrong question here.
+		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+			return self._required_fixed(struct)
+
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is None:
+			return self._unframeable(struct)
+
+		constant, variable = parts
+		if constant == 0 and not variable:
+			# Nothing to frame: every buffer, including an empty one, holds a
+			# complete message. True of a bare `tlv` region and useless to
+			# say, so it is not said.
+			return self._unframeable(struct, "a complete one can be zero bytes,"
+			        " so every buffer already holds one")
+
+		steps: list[str] = []
+		at = str(constant) + "u"
+
+		for placement in variable:
+			if not self._has_length(struct, placement):
+				return self._unframeable(struct)
+			local = c_name(self._local(struct, placement))
+			steps.extend([
+				"",
+				f"\t/* {placement.path}: reading its length means reading bytes"
+				" that",
+				"\t * have to be here first. */",
+				"\tif (have < at) {",
+				"\t\t*need = at;",
+				"\t\treturn SITU_ERR_TRUNCATED;",
+				"\t}",
+			])
+			if placement.delimiter is not None \
+					and placement.type_name in self.structs:
+				# A run of records ends at its terminator, and the walk that
+				# finds it stops just as readily at the end of what has
+				# arrived. Nothing it emits distinguishes "the run ended" from
+				# "the bytes ran out", so this cannot say a whole one is here.
+				return self._unframeable(struct, "a run of records ends at a "
+				        "terminator this cannot tell apart from the end of the "
+				        "bytes so far")
+
+			if placement.delimiter is not None:
+				terminated = ident(self.prefix, struct.name, local, "terminated")
+				steps.extend([
+					f"\tif (!{terminated}(view)) {{",
+					"\t\t/* The delimiter is not in what we have. How much"
+					" more is a",
+					"\t\t * question only the sender can answer, so the honest"
+					" lower",
+					"\t\t * bound is one byte: read again and ask again. */",
+					"\t\t*need = have + 1u;",
+					"\t\treturn SITU_ERR_TRUNCATED;",
+					"\t}",
+				])
+			steps.append(
+				f"\tat = at + ({self._length_expression(struct, placement)});")
+
+		# Only where something reads through it. A length that is arithmetic
+		# over nothing -- a varint's, say -- leaves the local set and unused,
+		# which is `-Werror` under `-Wunused-but-set-variable`.
+		uses_view = any("view" in line for line in steps)
+		view_lines = [
+			"\t/* A view over what has arrived, so every length expression"
+			" below",
+			"\t * reads through the same bounds the accessors do. */",
+			"\tview.base       = (uint8_t *)(uintptr_t)(const void *)data;",
+			"\tview.limit      = have;",
+			"\tview.generation = 0u;",
+		] if uses_view else ["\t(void)data;"]
+
+		size_min = macro(self.prefix, struct.name, "SIZE_MIN")
+		lines = [
+			"",
+			f"/* How many bytes a whole `{struct.name}` needs, given `have` of"
+			" them.",
+			" *",
+			" * SITU_OK            a complete one is present; *need is its"
+			" length",
+			" * SITU_ERR_TRUNCATED not yet; *need is a lower bound on the total",
+			" *",
+			" * For framing a stream: read, ask, read the difference, ask"
+			" again. The",
+			" * length fields are read only once the bytes holding them have"
+			" arrived,",
+			" * which is the case every hand-written version of this gets"
+			" wrong. */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, 'required')}"
+			"(const uint8_t *data, uint32_t have, uint32_t *need)",
+			"{",
+			f"\tuint32_t at = {at};",
+			*(["\tsitu_view_t view;"] if uses_view else []),
+			"",
+			# Skipped where the minimum is zero: `have < 0u` is always false
+			# and `-Wtype-limits` says so.
+			*([] if struct.layout.size_bytes == 0 else [
+				f"\tif (have < {size_min}) {{",
+				f"\t\t*need = {size_min};",
+				"\t\treturn SITU_ERR_TRUNCATED;",
+				"\t}",
+				"",
+			]),
+			*view_lines,
+			*steps,
+			"",
+			"\t*need = at;",
+			"\treturn have >= at ? SITU_OK : SITU_ERR_TRUNCATED;",
+			"}",
+		]
+		return lines
+
+	def _required_fixed(self, struct: ResolvedStruct) -> list[str]:
+		"""Framing a struct with one size: it is that size."""
+		size = macro(self.prefix, struct.name, "SIZE_FIXED")
+		return [
+			"",
+			f"/* How many bytes a whole `{struct.name}` needs, given `have` of"
+			" them.",
+			" *",
+			" * This one has a single size, so the answer never depends on the"
+			" bytes.",
+			" * It is generated anyway: a caller framing a stream should not"
+			" have to",
+			" * write one loop for the fixed messages and another for the rest,"
+			" and",
+			" * a struct that gains a length field later keeps the same call. */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, 'required')}"
+			"(const uint8_t *data, uint32_t have, uint32_t *need)",
+			"{",
+			"\t(void)data;",
+			f"\t*need = {size};",
+			f"\treturn have >= {size} ? SITU_OK : SITU_ERR_TRUNCATED;",
+			"}",
+		]
+
+	def _unframeable(self, struct: ResolvedStruct,
+			why: str | None = None) -> list[str]:
+		"""Why no `_required` was emitted, where it would be looked for."""
+		if struct.layout.register is not None:
+			return []		# a register is not framed; it is addressed
+
+		reason = why or (
+			"it ends where the view ends, so how long one is is the"
+			" transport's answer rather than the message's"
+			if any(p.sized_by == "remaining" for p in self._top_level(struct))
+			else "one of its members has no length this can compute")
+		return [
+			"",
+			f"/* No `{struct.name}_required`: {reason}.",
+			" * Framing such a message is the layer below's job -- situ can say"
+			" what",
+			" * the bytes mean and not when they have all arrived. */",
+		]
 
 	def _repeat_while(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:

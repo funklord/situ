@@ -44,6 +44,11 @@ enum class err : int {
 	version    = SITU_ERR_VERSION,
 	tag        = SITU_ERR_TAG,
 	stage      = SITU_ERR_STAGE,
+	/* Not an error in the way the others are: the bytes so far are a valid
+	 * prefix and more are needed. Separate from `bounds`, which means a read
+	 * went outside the buffer -- a bug or an attack. Conflating them makes a
+	 * receiver treat normal progress as hostile. */
+	truncated  = SITU_ERR_TRUNCATED,
 };
 
 constexpr bool ok(err e) noexcept { return e == err::ok; }

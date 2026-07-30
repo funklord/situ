@@ -70,6 +70,7 @@ const char *situ_err_str(situ_err_t err)
 	case SITU_ERR_TAG:		return "tag stale or unverified";
 	case SITU_ERR_STAGE:		return "stage gate not passed";
 	case SITU_ERR_STALE:		return "stale view";
+	case SITU_ERR_TRUNCATED:	return "incomplete: more bytes needed";
 	}
 	return "unknown error";
 }

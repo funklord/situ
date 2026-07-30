@@ -37,6 +37,11 @@ pub enum Error {
 	Tag,
 	/// A sealed interior was reached before its stage ran.
 	Stage,
+	/// Not an error in the way the others are: the bytes so far are a valid
+	/// prefix and more are needed. A stream reader gets this on every
+	/// partial read, which is why it is separate from `Bounds` -- that one
+	/// means a read went outside the buffer, which is a bug or an attack.
+	Truncated,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

@@ -53,6 +53,23 @@ class ConstraintError(SituError):
 	"""A field holds a value the schema does not admit."""
 
 
+class TruncatedError(SituError):
+	"""The bytes so far are a valid prefix and more are needed.
+
+	Not an error in the way the others are: a stream reader raises this on
+	every partial read, which is why it is separate from `BoundsError` -- that
+	one means a read went outside the buffer, a bug or an attack. Conflating
+	them makes a receiver treat normal progress as hostile.
+
+	`needed` is a lower bound on the total length, so a caller can size the
+	next read instead of guessing.
+	"""
+
+	def __init__(self, message: str, needed: int) -> None:
+		super().__init__(message)
+		self.needed = needed
+
+
 class StaleViewError(SituError):
 	"""The message moved under this view (section 12.3).
 

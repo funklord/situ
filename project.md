@@ -2784,6 +2784,28 @@ value:
 | wire signature | `situc wire` | Section 19.3 |
 | capability map | `situc map` | Section 18.1 |
 
+**Framing.** Every parseable struct also gets `<name>_required(data, have,
+need)`: given a prefix, is a whole message here, and if not how many bytes are
+needed? `SITU_OK` with the total, or `SITU_ERR_TRUNCATED` with a lower bound.
+
+It is the extent computed defensively -- the extent function assumes its bytes
+are present because a walk has already bounds-checked the frame, and this one
+is called on a prefix. The case it exists for is the one every hand-written
+framing loop gets wrong: a `u16` length read from one byte that has arrived and
+one that has not is a guess, and the guess sizes the next read.
+
+`SITU_ERR_TRUNCATED` is its own code rather than `SITU_ERR_BOUNDS`. A stream
+reader gets it on every partial read; bounds means a read went outside the
+buffer, which is a bug or an attack, and conflating them makes a receiver treat
+normal progress as hostile.
+
+Three shapes are declined, each saying so where the function would have been:
+a `[remaining]` tail, because it ends where the view ends and how long one is
+is the transport's answer rather than the message's; a run of records, because
+the walk that finds its terminator stops just as readily at the end of what has
+arrived and nothing distinguishes the two; and a struct whose complete form can
+be zero bytes, because then every buffer already holds one.
+
 **Every one of these declines rather than guesses**, and says so in the file it
 writes. A generated artifact that quietly omits a member is indistinguishable
 from one that never had it, so each refusal names the member and the reason:

@@ -32,7 +32,13 @@ typedef enum situ_err {
 	SITU_ERR_VERSION    = 3,  /* unknown version or variant discriminant	*/
 	SITU_ERR_TAG	    = 4,  /* authentication tag stale or unverified	*/
 	SITU_ERR_STAGE	    = 5,  /* region's stage gate has not been passed	*/
-	SITU_ERR_STALE	    = 6   /* view outlived a layout-shifting mutation	*/
+	SITU_ERR_STALE	    = 6,  /* view outlived a layout-shifting mutation	*/
+	/* Not an error in the way the others are: the bytes so far are a valid
+	 * prefix and more are needed. A caller reading from a stream gets this
+	 * on every partial read, which is why it is not SITU_ERR_BOUNDS -- that
+	 * one means a read went outside the buffer, which is a bug or an attack.
+	 * Conflating them makes a receiver treat normal progress as hostile. */
+	SITU_ERR_TRUNCATED  = 7
 } situ_err_t;
 
 /* A message: the caller's buffer plus the generation counter that detects
