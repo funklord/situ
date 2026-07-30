@@ -36,7 +36,9 @@ from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
-from situc.traverse import obligation, obligations, own_members
+from situc.traverse import (
+	has_computable_extent, obligation, obligations, own_members,
+)
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarKind, ScalarType
@@ -898,8 +900,15 @@ class Emitter:
 			return lines
 
 		# A dynamically placed member needs its offset worked out at runtime
-		# before anything can read it.
+		# before anything can read it -- and where that cannot be worked out,
+		# nothing else about the member can either. Emitting the accessors
+		# anyway named an offset function that was never defined, which C
+		# happens to refuse; a language that resolved it later would have
+		# taken the wrong bytes instead.
 		if placement.offset_bits is None:
+			blocker = self._offset_blocker(struct, placement)
+			if blocker is not None:
+				return lines + self._unresolvable_offset(placement, blocker)
 			lines.extend(self._offset_function(struct, placement))
 
 		if placement.radix is not None and placement.delimiter is None:
@@ -1276,12 +1285,17 @@ class Emitter:
 		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
 			return []
 
-		constant = 0
+		# Accumulated in bits and divided once. Per member it truncated: a
+		# `u2` and a `u6` are one byte together and were zero apart, so a
+		# struct that opens with a packed pair had an extent short by it --
+		# and a run of those walks over the same element forever, which the
+		# zero-extent guard catches only by refusing to move at all.
+		constant_bits = 0
 		terms: list[str] = []
 
 		for placement in self._top_level(struct):
 			if placement.is_fixed_size:
-				constant += placement.size_bits // BITS_PER_BYTE
+				constant_bits += placement.size_bits
 				continue
 			if placement.sized_by == "remaining":
 				# It runs to the end of whatever view it is given, so an
@@ -1291,6 +1305,9 @@ class Emitter:
 			if not self._has_length(struct, placement):
 				return []
 			terms.append(self._length_expression(struct, placement))
+
+		if constant_bits % BITS_PER_BYTE:
+			return []		# not a whole number of bytes; nothing to walk by
 
 		lines = [
 			"",
@@ -1302,7 +1319,7 @@ class Emitter:
 			f"static inline uint32_t {ident(self.prefix, struct.name, 'extent')}"
 			"(situ_view_t view)",
 			"{",
-			f"\tuint32_t extent = {constant}u;",
+			f"\tuint32_t extent = {constant_bits // BITS_PER_BYTE}u;",
 		]
 		lines.extend(f"\textent = extent + ({term});" for term in terms)
 		if not terms:
@@ -1898,6 +1915,18 @@ class Emitter:
 		lines.extend(["", "\treturn offset;", "}"])
 		return lines
 
+	def _offset_blocker(self, struct: ResolvedStruct,
+			placement: Placement) -> Placement | None:
+		"""The earlier member whose extent is unknown, if there is one."""
+		for other in self._top_level(struct):
+			if other.path == placement.path:
+				return None
+			if other.is_fixed_size:
+				continue
+			if not self._has_length(struct, other):
+				return other
+		return None
+
 	def _unresolvable_offset(self, placement: Placement,
 			blocker: Placement) -> list[str]:
 		"""No offset function, and the reason, where it will be looked for.
@@ -1951,6 +1980,7 @@ class Emitter:
 				and placement.array_count is None
 				and placement.sized_by is None
 				and placement.delimiter is None):
+			assert self._struct_extent(nested), "_has_length checks this first"
 			local = c_name(self._local(struct, placement))
 			return f"{ident(self.prefix, struct.name, local, 'extent')}({held})"
 
@@ -2037,6 +2067,32 @@ class Emitter:
 
 	def _has_length(self, struct: ResolvedStruct, placement: Placement) -> bool:
 		"""Whether a member's runtime extent has a closed form."""
+		# A run whose element has no computable extent cannot be walked, so
+		# how far it reaches is unknown and nothing after it can be placed.
+		# Without this the offset chain called a `_span` that was never
+		# emitted, which is a compile error rather than a wrong answer -- but
+		# only because C forbids the call, not because anything checked.
+		# Whether the element or the nested struct can be measured from its
+		# own bytes is a fact about the layout, so it is asked in one place --
+		# `gen-checks` needs the same answer to decide whether a check may
+		# call an accessor this decided not to emit.
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is not None and not element.layout.is_fixed_size:
+			nested_member = (placement.kind == "field"
+			                 and placement.delimiter is None
+			                 and placement.array_count is None
+			                 and placement.sized_by is None)
+			if (placement.repeat_while is not None
+					or self._is_record_run(placement) or nested_member):
+				return has_computable_extent(self.resolved.structs, element)
+
+		# A variant's does not: it is whichever arm the discriminant selects,
+		# and the arms differ in length -- that is what a variant is. The sum
+		# treated it as zero, so a struct containing one reported an extent
+		# missing the whole variant, and a run of those walked over the same
+		# bytes repeatedly.
+		if placement.kind == "variant":
+			return False
 		if placement.kind not in ("coded", "sealed"):
 			return True
 		return self._region_length(struct, placement) is not None
@@ -2189,7 +2245,8 @@ class Emitter:
 		name   = ident(self.prefix, struct.name,
 		               c_name(self._local(struct, placement)), "view")
 
-		if inner is not None and not inner.layout.is_fixed_size:
+		if (inner is not None and not inner.layout.is_fixed_size
+				and self._struct_extent(inner)):
 			extent = ident(self.prefix, nested, "extent")
 			site   = ident(self.prefix, struct.name,
 			               c_name(self._local(struct, placement)), "extent")
@@ -2225,6 +2282,13 @@ class Emitter:
 				"\t}",
 				f"\treturn situ_view_sub(view, {base}, {extent}(whole), out);",
 				"}",
+			]
+
+		if inner is not None and not inner.layout.is_fixed_size:
+			return [
+				f"/* No sub-view for `{placement.name}`: one `{nested}` has no",
+				" * extent this build can compute, so where it ends is not",
+				" * known and nothing after it can be placed. */",
 			]
 
 		return [
@@ -2767,6 +2831,12 @@ class Emitter:
 		# `Packet` whose `hdr.version` was wrong parsed clean -- which is the
 		# bug `gen-checks` found on its first run.
 		if scalar is None and placement.type_name in self.structs:
+			if self._offset_blocker(struct, placement) is not None:
+				return []		# no sub-view was emitted to validate through
+			nested = self.resolved.structs.get(placement.type_name)
+			if (nested is not None and not nested.layout.is_fixed_size
+					and not self._struct_extent(nested)):
+				return []
 			return self._nested_validation(struct, placement)
 
 		# A reserved array is still a constraint. Skipping it left `reserved

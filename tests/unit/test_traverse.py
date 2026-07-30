@@ -18,7 +18,8 @@ from situc.parser import parse_text
 from situc.resolve import ResolvedStruct, resolve
 from situc.traverse import (
 	Check, Member, byte_span, classify, classify_check, container_bits,
-	is_own_member, local_name, obligation, obligations, own_members, span_bits,
+	has_computable_extent, is_own_member, local_name, obligation, obligations,
+	own_members, span_bits,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -382,3 +383,56 @@ def test_a_fixed_member_still_has_one() -> None:
 	a = next(p for p in own_members(found["s"]) if p.name == "a")
 
 	assert byte_span(a) == (0, 2)
+
+
+# -- whether an instance can be measured from its own bytes -----------------
+
+
+def measurable(body: str, struct: str) -> bool:
+	found = structs(body)
+	return has_computable_extent(found, found[struct])
+
+
+def test_a_struct_of_fixed_members_can_be_measured() -> None:
+	assert measurable("struct s { u8 a; u16 b; }", "s")
+
+
+def test_so_can_one_sized_by_its_own_field() -> None:
+	"""Variable, but every member's length is written down somewhere ahead of
+	it, which is the whole of what this asks."""
+	assert measurable("struct s { u8 n; u8 body[n]; }", "s")
+
+
+def test_a_variant_cannot_be() -> None:
+	"""Its extent is whichever arm the discriminant selects, and the arms
+	differ in length -- which is what a variant is for."""
+	assert not measurable(
+		"struct s { u8 k; variant v switch (k) { case 0: u8 a; "
+		"case 1: u32 b; default: error; } }", "s")
+
+
+def test_a_remaining_member_cannot_be() -> None:
+	"""Its length is the view's rather than the struct's, so an instance is
+	exactly whatever view it was handed."""
+	assert not measurable("struct s { u8 a; u8 rest[remaining]; }", "s")
+
+
+def test_it_asks_the_same_of_a_nested_struct() -> None:
+	"""The bug that produced this function. `name`'s extent is its labels'
+	extent, so a parent holding one is only as measurable as it is."""
+	body = ("struct inner { u8 k; variant v switch (k) { case 0: u8 a; "
+	        "case 1: u32 b; default: error; } }\n"
+	        "struct outer { inner one; u16 after; }")
+
+	assert not measurable(body, "outer")
+
+
+def test_an_element_reached_only_through_a_run_is_still_asked() -> None:
+	"""A run walks by adding its element's extent, so an element that cannot
+	be measured makes the run unwalkable -- and the parent holding the run
+	unmeasurable in turn."""
+	body = ("struct e { u8 k; variant v switch (k) { case 0: u8 a; "
+	        "case 1: u32 b; default: error; } }\n"
+	        "struct outer { e run[] while (k == 0) max 8; }")
+
+	assert not measurable(body, "outer")

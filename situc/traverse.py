@@ -355,3 +355,40 @@ def container_bits(placement: Placement, widths: tuple[int, ...]) -> int | None:
 		if bits <= width:
 			return width
 	return None
+
+
+def has_computable_extent(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct) -> bool:
+	"""Whether one instance of `struct` can be measured from its own bytes.
+
+	A fact about the layout rather than about any target, and both the C
+	backend and `gen-checks` need it: the first to decide whether to emit an
+	extent function and a sub-view, the second to decide whether a check may
+	call one. They had it separately, so a struct the emitter declined to
+	measure still got a check calling the accessor it had declined to write --
+	and the generated suite failing to build is the same class of wrong as the
+	header failing to.
+
+	False where any member's own length is unknown. A `variant`'s is: it is
+	whichever arm the discriminant selects, and the arms differ in length,
+	which is what a variant is for. A `[remaining]` member's is the view's
+	rather than the struct's, so an instance of the struct is exactly whatever
+	view it was handed and there is nothing after it to place.
+	"""
+	for placement in own_members(struct):
+		if placement.is_fixed_size:
+			continue
+		if placement.kind == "variant" or placement.sized_by == "remaining":
+			return False
+		if placement.kind in ("coded", "sealed") and placement.delimiter is None:
+			return False		# the extent is the codec's expansion, not a length
+
+		element = structs.get(placement.type_name or "")
+		if element is None or element is struct:
+			continue		# a scalar run, sized by a field or a delimiter
+
+		# A run or a nested struct is only as measurable as its element.
+		if not element.layout.is_fixed_size \
+				and not has_computable_extent(structs, element):
+			return False
+	return True

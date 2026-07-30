@@ -1437,3 +1437,71 @@ def test_the_fuzz_harness_walks_a_while_run() -> None:
 	assert "situ_S_chain_count(view)" in text
 	assert "situ_S_chain_at(view, i, &element)" in text
 	assert "situ_S_chain_view" not in text
+
+
+# -- measuring a struct whose members are fractions of a byte ---------------
+
+PACKED = """
+struct label { u2 form; u6 rest; u8 text[rest]; }
+struct run { label labels[] while (form == 0) max 8; }
+"""
+
+
+def test_a_bit_packed_element_contributes_its_bits_to_the_extent() -> None:
+	"""It measured each member in whole bytes and summed those, so `u2` and
+	`u6` contributed 0 each and a label came out one byte long -- one byte
+	being `text`'s. A run over it then walked the same byte forever, or
+	rather until `max`, reading each label at the offset of the last.
+
+	Two bits and six bits are one byte only when they are added as bits.
+	"""
+	header, _ = emit(PACKED)
+
+	# One byte for the packed pair, plus however many `rest` says.
+	assert "uint32_t extent = 1u;" in header
+	assert "extent = extent + ((uint32_t)((uint8_t)situ_bits_get_msb(" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_run_over_it_advances_by_that_extent(tmp_path: Path) -> None:
+	"""The half a grep cannot check: whether the walk actually moves. Built
+	and *run*, because a probe that only compiles asserts that the accessors
+	exist and nothing at all about where they land."""
+	header, source = emit(PACKED)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	/* Two labels: (form 0, rest 2) "hi", then (form 0, rest 1) "x". */
+	uint8_t bytes[] = { 0x02, 'h', 'i', 0x01, 'x' };
+
+	situ_msg_t msg;
+	situ_view_t view, first, second;
+
+	situ_msg_init(&msg, bytes, (uint32_t)sizeof bytes);
+	if (situ_run_view(&msg, 0, (uint32_t)sizeof bytes, &view) != SITU_OK)
+		return 1;
+	if (situ_run_labels_at(view, 0, &first) != SITU_OK)
+		return 2;
+	if (situ_run_labels_at(view, 1, &second) != SITU_OK)
+		return 3;
+
+	/* Three bytes on, not one: the packed pair plus the two of text. */
+	if ((uint32_t)(second.base - first.base) != 3u)
+		return 4;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

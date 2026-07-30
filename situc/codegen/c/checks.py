@@ -32,7 +32,9 @@ from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import Obligation, obligations, own_members
+from situc.traverse import (
+	Obligation, has_computable_extent, obligations, own_members,
+)
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -700,7 +702,12 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 		_array_checks(suite, struct, entry, prefix, extent)
 		return		# no scalar accessor; the elements are what there is to check
 	if placement.scalar is None:
-		_nested_placement_check(suite, struct, entry, prefix, extent)
+		# Only where a sub-view was emitted. A nested struct whose own extent
+		# is unknowable has none, and a check calling one is a check that does
+		# not compile -- the generated suite failing to build is the same
+		# class of wrong as the header failing to.
+		if placement.offset_bits is not None:
+			_nested_placement_check(suite, resolved, struct, entry, prefix, extent)
 		return		# its interior is checked under its own struct's section
 	if placement.offset_bits is None:
 		return		# a dynamic offset has no fixed extent to name here, and
@@ -856,7 +863,8 @@ def _round_trip_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		 " * read, and the write must leave every other byte alone. */"])
 
 
-def _nested_placement_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+def _nested_placement_check(suite: Suite, resolved: ResolvedSchema,
+		struct: ResolvedStruct, entry: Resolved,
 		prefix: str, extent: int) -> None:
 	"""Where a nested struct sits inside its parent.
 
@@ -879,6 +887,17 @@ def _nested_placement_check(suite: Suite, struct: ResolvedStruct, entry: Resolve
 		return
 	if placement.sealed_by is not None:
 		return		# reached through the gate, which has its own checks
+
+	# Only where a sub-view exists to call. A nested struct whose extent
+	# cannot be measured from its own bytes gets none, and this check had its
+	# own idea of when that was -- which is to say it had none.
+	nested = resolved.structs.get(placement.type_name or "")
+	if nested is not None and not nested.layout.is_fixed_size \
+			and not has_computable_extent(resolved.structs, nested):
+		suite.skip(placement.path,
+		           "its type cannot be measured from its own bytes, so there "
+		           "is no sub-view accessor to check")
+		return
 
 	local  = c_name(placement.path[len(struct.name) + 1:])
 	getter = ident(prefix, struct.name, local, "view")
