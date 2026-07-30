@@ -2698,7 +2698,7 @@ value:
 | capability conformance | `situc gen-checks` | schema alone -> cmocka test cases holding the accessors to what the map claims; a map the generated code contradicts is worse than no map |
 | fuzz harness | `situc gen-fuzz` | libFuzzer/AFL entry point per parseable struct; parse safety is the top risk in a protocol parser |
 | byte-layout diagram | `situc doc --format=ascii` | RFC-style packet diagrams straight from the schema; what protocol documentation always needs |
-| Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff |
+| Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff. Lua rather than a C plugin, for the ABI reason in `docs/decisions/0021-dissector-language.md` |
 | capability map | `situc map` | Section 18.1 |
 
 ---
@@ -2754,7 +2754,11 @@ Global flags: `--target=c|cpp|python|rust`, `--out=DIR`,
 **What the suite does not do**, stated because a reader would otherwise assume
 it: the emitted Lua is never executed (no Wireshark, no interpreter in the
 build environment), so `gen-dissector` is checked structurally and against the
-layout rather than against Wireshark's acceptance. And the aarch64 big-endian
+layout rather than against Wireshark's acceptance. `test_blocks_balance` is the
+cheapest guard against the one error that makes the file useless, and it is not
+a Lua parser. One semantic dependency rides on this and is worth naming: the
+emitted `a and b or c` idiom for a conditional length is correct *because zero
+is truthy in Lua*, which is exactly the sort of thing running it would check. And the aarch64 big-endian
 target is compile-only; only the little-endian one runs under emulation.
 
 Implementation language for `situc`: **Python 3.11+, standard library only**,
@@ -4132,6 +4136,39 @@ arbitrary earlier offset with a cycle check and a budget, which is control flow
 rather than layout. Naming that boundary precisely is the difference between a
 limit and a shrug -- the earlier `examples/dns/dns.situ` had claimed situ could
 not describe DNS names "statically at all", which was wrong by a wide margin.
+
+### 26.25 The dissector reads the same layout
+
+Making a variant walkable in the four code backends left the dissector saying
+`no bytes of its own` for the variant and `elements of no fixed size` for the
+run -- so Wireshark showed a DNS name as nothing at all. That is invariant 36
+one artifact further out: the dissector is a fifth reader of the same walk, and
+fixing four of them is not fixing it.
+
+It now emits, per struct, the same two functions the C backend does -- an
+extent and a run span -- from the same `traverse.extent_parts` and
+`traverse.arm_members`. Only the reads are Lua's.
+
+Three other things were wrong for the same reason and had never been noticed,
+because nothing reached far enough into a variable struct to see them:
+
+- a variable-size nested struct was dissected over `size_bytes`, its
+  *minimum*, so a whole name showed as its first byte
+- a fixed-width member after a variable one reported `no bytes of its own`,
+  which is a strange thing to say about a `u16`: `byte_span` is None for a
+  dynamic offset, and *where* it sits was the only thing unknown
+- and it was therefore declared `ProtoField.bytes` and shown as hex
+
+Two operator translations now share one function. The schema's operators are
+C's; Python spells three of them in words and Lua spells four, and both need
+`!=` rewritten before `!` or the result is `not =`. That ordering is the whole
+of the difficulty, so it is written once (`names.translate_operators`) rather
+than got right twice.
+
+Why Lua at all is `docs/decisions/0021-dissector-language.md`, written because
+the question was asked and nothing answered it: no build step and no ABI to
+match, against a Wireshark whose plugin ABI moves between minor releases, for
+an artifact meant to be committed beside the schema.
 
 ### Invariants to hold across all phases
 

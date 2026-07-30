@@ -31,9 +31,14 @@ from __future__ import annotations
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.names import render_delimiter
+from situc.names import (
+	over_fields, render_delimiter, translate_operators,
+)
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import byte_span, container_bits, local_name, own_members
+from situc.traverse import (
+	arm_members, byte_span, container_bits, extent_parts, local_name,
+	own_members,
+)
 
 #: Widths Wireshark has a `ProtoField.uintN` for. Unlike C it has a 24-bit one,
 #: so a three-byte scalar is read whole here and bit-assembled there.
@@ -59,6 +64,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	values = _value_strings(schema, resolved)
 	if values:
 		lines.extend(values)
+
+	lines.extend(_extent_functions(resolved))
 
 	roots = [name for name in sorted(resolved.structs)
 	         if resolved.structs[name].layout.register is None]
@@ -158,7 +165,19 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	]
 
 	members = own_members(struct)
-	fields  = [_field(resolved, struct, placement) for placement in members]
+
+	# An arm's member is not an own member -- it lives under the variant's
+	# path -- so it got no `ProtoField` and the arm's bytes were shown as
+	# nothing at all. Which arm is present is a run-time question; which arms
+	# exist is not, so all of them are declared and the dissector picks.
+	shown: list[Placement] = []
+	for placement in members:
+		shown.append(placement)
+		if placement.kind == "variant":
+			shown.extend(member for _, member in arm_members(struct, placement)
+			             if member is not None)
+
+	fields  = [_field(resolved, struct, placement) for placement in shown]
 	fields  = [line for line in fields if line]
 
 	if fields:
@@ -189,6 +208,12 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return ""
 
 	width = container_bits(placement, FIELD_WIDTHS)
+	if width is None and _dynamic_width(placement) is not None:
+		# Same reason as `_member_body`: a `u16` after a variable member is
+		# still a `u16`. It was declared `ProtoField.bytes` and shown as two
+		# hex bytes rather than the number it is.
+		width = next((one for one in FIELD_WIDTHS
+		              if placement.size_bits <= one), None)
 	if width is None:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
@@ -232,7 +257,13 @@ def _bitmask(placement: Placement, width: int) -> int | None:
 			and placement.offset_bits % BITS_PER_BYTE == 0:
 		return None
 
-	assert placement.offset_bits is not None
+	if placement.offset_bits is None:
+		# A member the data places. Only a bit field needs a mask, and one
+		# cannot follow a dynamically sized member -- section 8.2's solver
+		# refuses it, because a bit phase across a dynamic boundary is not
+		# something it computes. So there is no mask to derive, rather than a
+		# mask this cannot derive.
+		return None
 	first = placement.offset_bits // BITS_PER_BYTE
 	skip  = placement.offset_bits - first * BITS_PER_BYTE
 	span  = width
@@ -329,34 +360,419 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.delimiter is not None:
 		return _delimited(resolved, struct, placement, field, seek)
 
+	if placement.kind == "variant":
+		return _variant(resolved, struct, placement, seek)
+
+	if placement.repeat_while is not None:
+		return _run(resolved, struct, placement, field, seek)
+
 	# A nested struct gets its own dissector and its own subtree.
 	if placement.type_name in resolved.structs and placement.array_count is None \
 			and placement.sized_by is None:
 		nested = resolved.structs[placement.type_name]
-		return [
-			f"\t-- {placement.path}",
-			*seek,
-			f"\tif tvb:len() >= at + {nested.layout.size_bytes} then",
+
+		# A variable-size struct was handed `size_bytes`, which is its
+		# *minimum* -- so a whole DNS name was dissected as its first byte and
+		# every member after it placed on top of the rest. Its extent is a
+		# question the bytes answer, and now one this file can ask.
+		size = str(nested.layout.size_bytes)
+		if not nested.layout.is_fixed_size:
+			if not _extent_terms(resolved, nested):
+				return [f"\t-- {placement.path}: one `{placement.type_name}`"
+				        " has no extent this dissector can compute"]
+			size = "size"
+
+		lines = [f"\t-- {placement.path}", *seek]
+		if size == "size":
+			lines.append(f"\tlocal size = {_extent_name(nested)}(tvb, at)")
+		lines.extend([
+			f"\tif tvb:len() >= at + {size} then",
 			f"\t\tDissector.get(\"{placement.type_name}\"):call("
-			f"tvb(at, {nested.layout.size_bytes}):tvb(), pinfo, subtree)",
-			f"\tend",
-			f"\tat = at + {nested.layout.size_bytes}",
-		]
+			f"tvb(at, {size}):tvb(), pinfo, subtree)",
+			"\tend",
+			f"\tat = at + {size}",
+		])
+		return lines
 
 	if placement.sized_by is not None or placement.array_count is not None:
 		return _repeated(resolved, struct, placement, field, seek)
 
+	add  = "add_le" if placement.endian is ast.Endian.LITTLE else "add"
 	span = byte_span(placement)
+
 	if span is None:
-		return [f"\t-- {placement.path}: no bytes of its own"]
+		# `byte_span` is None for a dynamic offset, and *where* it sits is the
+		# only thing unknown -- how wide it is was never in doubt. Reported as
+		# "no bytes of its own", which is a strange thing to say about a u16.
+		width = _dynamic_width(placement)
+		if width is None:
+			return [f"\t-- {placement.path}: no bytes of its own"]
+		return [
+			f"\t-- {placement.path}: after a member the data sizes",
+			*seek,
+			f"\tif tvb:len() >= at + {width} then",
+			f"\t\tsubtree:{add}({field}, tvb(at, {width}))",
+			"\tend",
+			f"\tat = at + {width}",
+		]
 
 	first, count = span
-	add = "add_le" if placement.endian is ast.Endian.LITTLE else "add"
-
 	return [
 		f"\tsubtree:{add}({field}, tvb({first}, {count}))",
 		f"\tat = {first + count}",
 	]
+
+
+def _dynamic_width(placement: Placement) -> int | None:
+	"""A fixed-width member's bytes, where its offset is not fixed."""
+	if placement.scalar is None or placement.array_count is not None:
+		return None
+	if not placement.is_fixed_size or placement.size_bits % BITS_PER_BYTE:
+		return None
+	return placement.size_bits // BITS_PER_BYTE
+
+
+
+def _at(base: str, offset: int) -> str:
+	"""`base + offset`, without the halves that are zero."""
+	if base == "0":
+		return str(offset)
+	return base if offset == 0 else f"{base} + {offset}"
+
+
+def _read(placement: Placement, base: str) -> str | None:
+	"""Reading one field's value in Lua, from `base`.
+
+	Arithmetic rather than a bit library. Wireshark ships Lua BitOp in most
+	builds and not in all of them, and a dissector that fails to load is worse
+	than one that divides: these are field widths, not hot code.
+	"""
+	if placement.scalar is None or placement.offset_bits is None:
+		return None
+
+	width = placement.size_bits
+	off   = placement.offset_bits
+
+	if off % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
+		first = off // BITS_PER_BYTE
+		count = width // BITS_PER_BYTE
+		if count > 4:
+			return None		# `uint` tops out at four bytes; `uint64` is a
+					# different type and no length field needs it
+		read = "le_uint" if placement.endian is ast.Endian.LITTLE else "uint"
+		return f"tvb({_at(base, first)}, {count}):{read}()"
+
+	# A bit field, and only one that sits inside a single byte: a straddling
+	# one is refused rather than guessed at, and no length field straddles.
+	position = placement.bit_position
+	if position is None or position.straddles:
+		return None
+
+	byte = f"tvb({_at(base, position.byte)}, 1):uint()"
+	if position.shift:
+		byte = f"math.floor({byte} / {1 << position.shift})"
+	return f"({byte} % {1 << position.width})"
+
+
+def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
+	"""A schema expression rewritten as Lua reads over `base`."""
+	reads: dict[str, str] = {}
+	for entry in struct.entries:
+		held = entry.placement
+		if held.scalar is None or "." in held.path[len(struct.name) + 1:]:
+			continue
+		one = _read(held, base)
+		if one is not None:
+			reads[held.name] = one
+
+	if not reads:
+		return None
+	try:
+		return over_fields(sorted(reads), source, lambda name: reads[name])
+	except KeyError:
+		return None		# names something this cannot read
+
+
+def _extent_functions(resolved: ResolvedSchema) -> list[str]:
+	"""Every measurable struct's extent, in an order Lua accepts.
+
+	`local function` binds where it is written, so one calling another has to
+	come after it. Containment is acyclic -- a struct cannot contain itself --
+	so a struct is emitted once everything it names has been.
+	"""
+	pending = dict(sorted(resolved.structs.items()))
+	lines: list[str] = []
+	done: set[str] = set()
+
+	while pending:
+		ready = [name for name, struct in pending.items()
+		         if all(held.type_name in done
+		                or held.type_name not in resolved.structs
+		                for held in own_members(struct))]
+		if not ready:
+			break			# a cycle the resolver should have refused
+		for name in ready:
+			struct = pending.pop(name)
+			# The run's walk first: the struct's own extent sums it, and the
+			# walk needs the element's extent, which is already emitted
+			# because the element is a struct this one names.
+			for placement in own_members(struct):
+				lines.extend(_run_span(resolved, struct, placement))
+			lines.extend(_extent_function(resolved, struct))
+			done.add(name)
+	return lines
+
+
+def _span_name(struct: ResolvedStruct, placement: Placement) -> str:
+	return f"{_lua(struct.name)}_{_lua(_local(struct, placement))}_span"
+
+
+def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> list[str]:
+	"""How far a `while` run reaches, as a Lua function.
+
+	A loop, not an expression: how many elements there are is whichever one
+	first fails the condition, so the only way to know where the run ends is
+	to walk it. The same shape the C backend emits, and bounded the same two
+	ways -- by the buffer, and by refusing to advance on a zero-extent
+	element.
+	"""
+	if placement.repeat_while is None:
+		return []
+
+	element = resolved.structs.get(placement.type_name or "")
+	if element is None or not _extent_terms(resolved, element):
+		return []
+
+	if _over_fields(element, placement.repeat_while, "last") is None:
+		return []
+	condition = _run_condition(resolved, struct, placement)
+
+	name = _span_name(struct, placement)
+	cap  = placement.repeat_cap
+	guard = "" if cap is None else f" and n < {cap}"
+	return [
+		"",
+		f"-- How far `{placement.path}` reaches from `at`.",
+		f"-- The run ends after the element for which `{placement.repeat_while}`",
+		"-- is false -- that element is part of it, the condition being asked",
+		"-- once it has been read.",
+		f"local function {name}(tvb, at)",
+		"	local start = at",
+		"	local n = 0",
+		f"	while at < tvb:len(){guard} do",
+		f"		local size = {_extent_name(element)}(tvb, at)",
+		"		if size == 0 or at + size > tvb:len() then break end",
+		"		local last = at",
+		"		n = n + 1",
+		"		at = at + size",
+		f"		if not ({condition}) then break end",
+		"	end",
+		"	return at - start",
+		"end",
+	]
+
+
+def _extent_name(struct: ResolvedStruct) -> str:
+	return f"{_lua(struct.name)}_extent"
+
+
+def _extent_function(resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> list[str]:
+	"""How many bytes one instance occupies, as a Lua function.
+
+	The same question `situ_<s>_extent` answers in C, and the same parts:
+	`traverse.extent_parts` says what to add up, and only the reads are Lua's.
+	Emitted as a function rather than inlined because a run calls it once per
+	element, which is exactly what the C backend does and for the same reason.
+	"""
+	terms = _extent_terms(resolved, struct)
+	if terms is None:
+		return []
+
+	constant, parts = terms
+	body = " + ".join([str(constant), *parts]) if parts else str(constant)
+	return [
+		"",
+		f"-- How many bytes one `{struct.name}` occupies at `at`.",
+		f"local function {_extent_name(struct)}(tvb, at)",
+		f"	return {body}",
+		"end",
+	]
+
+
+def _extent_terms(resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> tuple[int, list[str]] | None:
+	parts = extent_parts(resolved.structs, struct)
+	if parts is None:
+		return None
+
+	constant, variable = parts
+	terms: list[str] = []
+	for placement in variable:
+		one = _length(resolved, struct, placement)
+		if one is None:
+			return None
+		terms.append(one)
+	return constant, terms
+
+
+def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, base: str = "at") -> str | None:
+	"""How many bytes one variable member occupies, in Lua.
+
+	`base` is where the *struct* starts. In an extent function that is `at`,
+	which is what the function is handed; in a dissector it is 0, because the
+	member is dissected from a tvb of its own and `at` has already walked past
+	the fields the length is read from. Getting that wrong read the
+	discriminant from the byte after itself.
+	"""
+	if placement.kind == "variant":
+		return _variant_length(resolved, struct, placement, base)
+
+	if placement.repeat_while is not None:
+		# Before the nested-struct case below, which named the element's
+		# extent and so measured a run of labels as one label.
+		if not _run_span(resolved, struct, placement):
+			return None
+		return f"{_span_name(struct, placement)}(tvb, {base})"
+
+	if placement.size_expr is not None:
+		return _over_fields(struct, placement.size_expr, base)
+
+	if placement.sized_by is not None and placement.sized_by != "remaining":
+		count = _over_fields(struct, placement.sized_by, base)
+		if count is None:
+			return None
+		each = _element_bytes(resolved, placement)
+		return None if each is None else (
+			count if each == 1 else f"({count}) * {each}")
+
+	nested = resolved.structs.get(placement.type_name or "")
+	if nested is not None and not nested.layout.is_fixed_size \
+			and placement.array_count is None and placement.delimiter is None:
+		return f"{_extent_name(nested)}(tvb, {base})"
+
+	if placement.is_fixed_size and placement.size_bits % BITS_PER_BYTE == 0:
+		return str(placement.size_bits // BITS_PER_BYTE)
+	return None
+
+
+def _variant_length(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, base: str = "at") -> str | None:
+	"""The selected arm's length, as nested Lua `and`/`or`.
+
+	Lua has no conditional expression, and `a and b or c` is the idiom -- safe
+	here because every `b` is a length, and a length is never `false` or `nil`
+	even when it is zero.
+	"""
+	if not placement.arm_cases or placement.discriminant is None:
+		return None
+
+	held = _over_fields(struct, placement.discriminant, base)
+	if held is None:
+		return None
+
+	chain = "0"
+	for arm, member in reversed(arm_members(struct, placement)):
+		if member is None:
+			continue		# `default: error`; falls to the zero above
+		one = _length(resolved, struct, member, base)
+		if one is None:
+			return None
+		chain = one if arm.value is None \
+			else f"(({held}) == {arm.value} and {one} or {chain})"
+	return chain
+
+
+def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, seek: list[str]) -> list[str]:
+	"""The arm the discriminant selects, and only that one.
+
+	It showed nothing at all before -- `no bytes of its own` -- so a reader
+	saw the discriminant and not the bytes it discriminates, which is the half
+	that matters. Every arm has a `ProtoField`; which one is added is a
+	question about the packet.
+	"""
+	held = _over_fields(struct, placement.discriminant or "", "0")
+	if held is None:
+		return [f"\t-- {placement.path}: its discriminant is not one this"
+		        " dissector can read"]
+
+	lines = [f"\t-- {placement.path}: whichever arm"
+	         f" `{placement.discriminant}` selects", *seek,
+	         f"\tlocal arm = {held}"]
+
+	first = True
+	for arm, member in arm_members(struct, placement):
+		if member is None:
+			continue		# `default: error`; nothing to show
+		length = _length(resolved, struct, member, "0")
+		if length is None:
+			return [f"\t-- {placement.path}: one arm has no length this"
+			        " dissector can compute"]
+
+		name  = _lua(_local(struct, member))
+		field = f"{_lua(struct.name)}_f.{name}"
+		test  = ("else" if arm.value is None
+		         else f"{'if' if first else 'elseif'} arm == {arm.value} then")
+		lines.extend([
+			f"\t{test}" if arm.value is None else f"\t{test}",
+			f"\t\tlocal n = {length}",
+			"\t\tif n > 0 and tvb:len() >= at + n then",
+			f"\t\t\tsubtree:add({field}, tvb(at, n))",
+			"\t\tend",
+			"\t\tat = at + n",
+		])
+		first = False
+
+	if first:
+		return [f"\t-- {placement.path}: every arm selects nothing"]
+
+	lines.append("\tend")
+	return lines
+
+
+def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, field: str, seek: list[str]) -> list[str]:
+	"""A `while` run, walked and dissected element by element.
+
+	It showed nothing before -- `elements of no fixed size` -- because the
+	elements have no *fixed* size, which is a different thing from having no
+	size. Each one is measured and handed to its own dissector, which is the
+	whole reason a record run is worth generating one for.
+	"""
+	element = resolved.structs.get(placement.type_name or "")
+	if element is None or not _run_span(resolved, struct, placement):
+		return [f"\t-- {placement.path}: elements of no size this dissector"
+		        " can compute"]
+
+	cap   = placement.repeat_cap
+	guard = "" if cap is None else f" and n < {cap}"
+	return [
+		f"\t-- {placement.path}: walked, not indexed", *seek,
+		"\tlocal n = 0",
+		f"\twhile at < tvb:len(){guard} do",
+		f"\t\tlocal size = {_extent_name(element)}(tvb, at)",
+		"\t\tif size == 0 or at + size > tvb:len() then break end",
+		"\t\tlocal last = at",
+		"\t\tn = n + 1",
+		f"\t\tDissector.get(\"{placement.type_name}\"):call("
+		"tvb(at, size):tvb(), pinfo, subtree)",
+		"\t\tat = at + size",
+		f"\t\tif not ({_run_condition(resolved, struct, placement)}) then"
+		" break end",
+		"\tend",
+	]
+
+
+def _run_condition(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> str:
+	element = resolved.structs[placement.type_name or ""]
+	source  = _over_fields(element, placement.repeat_while or "", "last")
+	assert source is not None, "_run_span checks this first"
+	return translate_operators(source, conj=" and ", disj=" or ",
+	                           ne=" ~= ", neg="not ")
 
 
 def _delimited(resolved: ResolvedSchema, struct: ResolvedStruct,

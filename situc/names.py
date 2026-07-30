@@ -43,3 +43,23 @@ def over_fields(names: list[str], source: str,
 	for name in sorted(names, key=len, reverse=True):
 		source = re.sub(rf"\b{re.escape(name)}\b", getter(name), source)
 	return source
+
+
+def translate_operators(source: str, *, conj: str, disj: str,
+		ne: str, neg: str) -> str:
+	"""A schema condition in a target that does not spell C's operators.
+
+	The schema's operators are C's, which is a choice the language made once
+	and C, C++ and Rust are all happy with. Python spells three of them in
+	words and Lua spells four, so both needed this -- and both needed it in
+	the same order, which is the reason it is one function.
+
+	**`!=` before `!`.** Rewriting negation first eats the `!` of an
+	inequality and leaves `not =`, which is not an expression in either
+	language. It is one line either way and the wrong line reads fine.
+	"""
+	source = source.replace("!=", "\x00")		# park it out of reach of `!`
+	source = re.sub(r"!", neg, source)
+	source = source.replace("\x00", ne)
+	source = source.replace("&&", conj).replace("||", disj)
+	return re.sub(r"\s+", " ", source).strip()

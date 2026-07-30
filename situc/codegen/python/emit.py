@@ -26,7 +26,7 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.names import over_fields, render_delimiter
+from situc.names import over_fields, render_delimiter, translate_operators
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
@@ -49,12 +49,13 @@ def _pythonic(source: str) -> str:
 	shape as `/` meaning float division here and integer division everywhere
 	else (8.6.2).
 
-	`!=` is left alone, which is why the negation is matched with a lookahead
-	rather than replaced outright.
+	`!=` is left alone, and getting that ordering right is the whole of the
+	difficulty -- which is why it lives in `names` now, where the Lua
+	dissector asks the same question and would otherwise get it wrong
+	separately.
 	"""
-	source = source.replace("||", " or ").replace("&&", " and ")
-	source = re.sub(r"!(?!=)", "not ", source)
-	return re.sub(r"\s+", " ", source).strip()
+	return translate_operators(source, conj=" and ", disj=" or ",
+	                           ne="!=", neg="not ")
 
 
 @dataclass

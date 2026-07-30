@@ -273,3 +273,108 @@ def test_a_delimited_member_is_a_bytes_field() -> None:
 
 	assert 'ProtoField.bytes("s.name", "name")' in lua
 	assert "ProtoField.uint8(\"s.name\"" not in lua
+
+
+# -- a variant, and a run of them -------------------------------------------
+
+DNS_LABEL = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 128; }
+struct question { name qname; u16 qtype; u16 qclass; }
+"""
+
+
+def test_a_variant_shows_the_arm_the_discriminant_selects() -> None:
+	"""It showed `no bytes of its own`, so a reader saw the discriminant and
+	not the bytes it discriminates -- the half that matters. Every arm gets a
+	`ProtoField`, because which arms exist is a compile-time question even
+	though which one is present is not."""
+	text = emit(DNS_LABEL)
+
+	assert 'label_f.body_text = ProtoField.bytes("label.body.text"' in text
+	assert "label_f.body_pointer_low = ProtoField.uint8(" in text
+	assert "if arm == 0 then" in text
+	assert "elseif arm == 3 then" in text
+
+
+def test_the_discriminant_is_read_from_the_struct_not_from_the_cursor() -> None:
+	"""`at` has already walked past the fields a length is read from, so the
+	reads are based at 0 -- the tvb the dissector was handed starts at the
+	struct. Based at `at` it read the discriminant from the byte after
+	itself."""
+	body = emit(DNS_LABEL)
+	arm  = next(line for line in body.splitlines() if "local arm =" in line)
+
+	assert "tvb(0, 1)" in arm
+	# A word boundary: `at` is a substring of `math.floor`, and the crude
+	# check passed for the wrong reason before the fix as well as after.
+	assert not re.search(r"\bat\b", arm.split("=", 1)[1])
+
+
+def test_a_run_of_variants_is_walked_by_extent() -> None:
+	"""`elements of no fixed size` -- which is true, and is a different thing
+	from having no size. Each element is measured and handed to its own
+	dissector."""
+	text = emit(DNS_LABEL)
+
+	assert "local size = label_extent(tvb, at)" in text
+	assert 'Dissector.get("label"):call(tvb(at, size):tvb()' in text
+	assert "elements of no fixed size" not in text
+
+
+def test_the_extent_is_lua_rather_than_c() -> None:
+	"""The schema's operators are C's. Lua spells four of them differently,
+	and `!=` has to be replaced before `!` or the result is `not =`."""
+	text = emit(DNS_LABEL)
+	walk = next(line for line in text.splitlines() if "if not (" in line)
+
+	# In the code. The comment above the walk quotes the schema, operators and
+	# all, which is the point of quoting it.
+	code = [line for line in text.splitlines() if not line.strip().startswith("--")]
+
+	assert not any("&&" in line or "||" in line for line in code)
+	assert " and " in walk and " ~= " in walk
+
+
+def test_a_member_after_a_variable_one_is_placed_and_typed() -> None:
+	"""`byte_span` is None for a dynamic offset, and *where* it sits is the
+	only thing unknown -- how wide it is was never in doubt. Both were
+	reported as `no bytes of its own`, which is a strange thing to say about
+	a u16, and declared `ProtoField.bytes`."""
+	text = emit(DNS_LABEL)
+
+	assert 'question_f.qtype = ProtoField.uint16(' in text
+	assert "subtree:add(question_f.qtype, tvb(at, 2))" in text
+	assert "no bytes of its own" not in text
+
+
+def test_a_variable_nested_struct_is_dissected_over_its_extent() -> None:
+	"""It was handed `size_bytes`, which is the *minimum*: a whole DNS name
+	was dissected as its first byte, and every member after it placed on top
+	of the rest."""
+	text = emit(DNS_LABEL)
+
+	assert "local size = name_extent(tvb, at)" in text
+	assert 'Dissector.get("name"):call(tvb(at, size):tvb()' in text
+
+
+def test_helpers_are_defined_before_they_are_called() -> None:
+	"""`local function` binds where it is written, so a caller that comes
+	first names a nil. Containment is acyclic, so the order exists."""
+	text  = emit(DNS_LABEL)
+	where = {name: text.index(f"local function {name}")
+	         for name in ("label_extent", "name_labels_span", "name_extent",
+	                      "question_extent")}
+
+	assert where["label_extent"] < where["name_labels_span"]
+	assert where["name_labels_span"] < where["name_extent"]
+	assert where["name_extent"] < where["question_extent"]
+
