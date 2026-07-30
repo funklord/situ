@@ -4527,6 +4527,33 @@ Three things that fell out of building it:
    (0022). C only so far; the flag says so on the other three rather than
    silently doing nothing.
 
+**The other half of `Sequential`, and the bug it found.** A run makes reaching
+element N a walk of the N-1 before it; a *scan* makes reaching member N a
+rescan of the N-1 before it, and `_offset` does that on every call. So the
+second family also caches the resolved offsets: one word per dynamically
+placed member, built in one pass.
+
+Building it measured *three times slower* than the per-call offsets it was
+meant to replace, and the reason was not in the cache. Every loop that
+accumulates offsets -- `_offset` itself, `_required`, the cache -- had the
+running sum in hand and called `_span(view)`, which resolves the member's base
+by rescanning everything before it. A sum over M delimited members therefore
+did far more work than the M scans it was adding up, and `_offset` is on the
+default path with no flag involved.
+
+The fix is one parameter: a delimited member emits `_span_from(view, at)` and
+`_span(view)` becomes a call to it with the resolved base. Every accumulating
+loop passes the sum it already has.
+
+| | before | after |
+|---|---|---|
+| eight-member record, seven offsets, 5000 times | 10 270 ms | 45 ms |
+| the same, through the offset cache | -- | 30 ms |
+| HTTP request line, three members, 20 000 times | 77 ms | 26 ms |
+
+The feature is the last row's difference. The first row is what looking for it
+found, and it was there before any of this work began.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -4866,7 +4893,15 @@ Three things that fell out of building it:
    13% better where one pass measures twenty times better. Measure the thing;
    the argument for why it should be faster is not evidence that it is.
 
-45. **A capability nothing exercised hid a check nothing emitted.** Making a
+45. **A loop that recomputes what it is accumulating is not the shape it
+   looks like.** Every offset sum in the C backend had the running total in
+   hand and called an accessor that re-derived the base from scratch, so a
+   sum over M members cost far more than the M things it was adding. It read
+   as one pass in the source and in the generated output. Two separate
+   attempts at a faster path measured *slower* than what they replaced before
+   the cause turned up -- which is the only reason it turned up at all.
+
+46. **A capability nothing exercised hid a check nothing emitted.** Making a
    variant walkable immediately showed that `default: error` was enforced by
    no backend, in a language whose spec had said it was since section 14.5 was
    written, with an error code reserved for it and returned by nothing. Dead

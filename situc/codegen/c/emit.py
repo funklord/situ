@@ -227,6 +227,7 @@ class Emitter:
 		# ahead of its declaration.
 		lines.extend(self._struct_extent(struct))
 		lines.extend(self._required(struct))
+		lines.extend(self._offsets(struct))
 		lines.extend(self._shifting_setters(struct))
 		lines.extend(self._covered_setters(struct))
 		lines.extend(self._invariants(struct))
@@ -1408,7 +1409,7 @@ class Emitter:
 			if placement.delimiter is not None:
 				terminated = ident(self.prefix, struct.name, local, "terminated")
 				steps.extend([
-					f"\tif (!{terminated}(view)) {{",
+					f"\tif (!{terminated}_from(view, at)) {{",
 					"\t\t/* The delimiter is not in what we have. How much"
 					" more is a",
 					"\t\t * question only the sender can answer, so the honest"
@@ -1418,8 +1419,9 @@ class Emitter:
 					"\t\treturn SITU_ERR_TRUNCATED;",
 					"\t}",
 				])
-			steps.append(
-				f"\tat = at + ({self._length_expression(struct, placement)});")
+			steps.append("\tat = at + ("
+				+ self._length_expression(struct, placement, running="at")
+				+ ");")
 
 		# Only where something reads through it. A length that is arithmetic
 		# over nothing -- a varint's, say -- leaves the local set and unused,
@@ -1958,25 +1960,51 @@ class Emitter:
 			" be there. */",
 			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
 			"",
+			"/* The scan, from a base the caller already knows.",
+			" *",
+			" * Everything that accumulates offsets -- the offset functions,",
+			" * `_required`, the offset cache -- walks the members in order and",
+			" * has `at` in hand. Calling the plain `_span` there re-resolves",
+			" * the base by rescanning every member before it, so a loop over M",
+			" * members costs M^2 scans while looking like one pass. Measured:",
+			" * an eight-member record took three times *longer* through a",
+			" * cache built that way than through the per-call offsets it was",
+			" * meant to replace. */",
+			f"static inline uint32_t {scan_len}_from(situ_view_t view,"
+			" uint32_t at)",
+			"{",
+			f"\treturn {self._scan_call(placement, 'view.base + at', self._scan_limit(placement, 'at'), sym)};",
+			"}",
+			"",
 			f"static inline uint32_t {scan_len}(situ_view_t view)",
 			"{",
-			f"\treturn {self._scan_call(placement, f'view.base + {base}', limit, sym)};",
+			f"\treturn {scan_len}_from(view, {base});",
+			"}",
+			"",
+			f"static inline int {terminated}_from(situ_view_t view, uint32_t at)",
+			"{",
+			f"\treturn {scan_len}_from(view, at) < ({self._scan_limit(placement, 'at')});",
 			"}",
 			"",
 			f"static inline int {terminated}(situ_view_t view)",
 			"{",
-			f"\treturn {scan_len}(view) < ({limit});",
+			f"\treturn {terminated}_from(view, {base});",
 			"}",
 			"",
-			f"static inline uint32_t {span}(situ_view_t view)",
+			f"static inline uint32_t {span}_from(situ_view_t view, uint32_t at)",
 			"{",
 			"\t/* The delimiter is this member's too, so the next member starts",
 			"\t * after it. Where it is missing there is nothing to add: the",
 			"\t * member ran to the end of the buffer, and claiming the extra",
 			"\t * bytes would put the next one past the limit its own bounds",
 			"\t * check trusts. */",
-			f"\treturn {scan_len}(view) + "
-			f"({terminated}(view) ? {len(delim)}u : 0u);",
+			f"\treturn {scan_len}_from(view, at) + "
+			f"({terminated}_from(view, at) ? {len(delim)}u : 0u);",
+			"}",
+			"",
+			f"static inline uint32_t {span}(situ_view_t view)",
+			"{",
+			f"\treturn {span}_from(view, {base});",
 			"}",
 			"",
 		]
@@ -2203,6 +2231,96 @@ class Emitter:
 		return (f"situ_scan_relaxed({data}, {limit}, {sym}, "
 		        f"{len(delim)}u, {quote}, {escape})")
 
+	def _offsets(self, struct: ResolvedStruct) -> list[str]:
+		"""Every dynamic offset in this struct, resolved in one pass.
+
+		The other half of what `access = Sequential` costs. A run makes
+		reaching element N a walk of the N-1 before it; a *scan* makes
+		reaching member N a rescan of the N-1 before it, and `_offset` does
+		that on every call -- so reading three members of an HTTP request line
+		scans the target twice. Measured at 77ms for 20k reads of a 1200-byte
+		line, against 4ms once the offsets are held.
+
+		Same bargain as the run index and the same reason it is off by
+		default: this is memory the caller did not ask for. Nothing here
+		allocates; the struct has one word per dynamically-placed member and
+		the schema decides how many that is.
+		"""
+		if not self.materialize:
+			return []
+
+		dynamic = [held for held in self._top_level(struct)
+		           if held.offset_bits is None and held.located is None]
+		if not dynamic:
+			return []		# every offset is already a constant
+
+		# The accumulation is `_offset_function`'s, run once for all of them
+		# rather than once per member. Bailing where that one bails: a member
+		# whose length is unknown stops the chain for everything after it.
+		# A running constant, flushed where it belongs rather than summed up
+		# front: a fixed member *after* a variable one is not part of the
+		# offsets before it, and totalling them all first put every recorded
+		# offset ahead of itself by the width of everything that followed.
+		pending  = 0
+		steps: list[str] = []
+		wanted   = {held.path for held in dynamic}
+
+		def flush() -> None:
+			nonlocal pending
+			if pending:
+				steps.append(f"\tat = at + {pending}u;")
+				pending = 0
+
+		for other in self._top_level(struct):
+			if other.path in wanted:
+				flush()
+				local = c_name(self._local(struct, other))
+				steps.append(f"\tout->{local} = at;")
+			if other.is_fixed_size:
+				pending += other.size_bits // BITS_PER_BYTE
+				continue
+			if not self._has_length(struct, other):
+				return [
+					"",
+					f"/* No offset cache for `{struct.name}`:"
+					f" `{other.name}` has no length",
+					" * this can compute, so the offsets after it cannot be"
+					" resolved",
+					" * in one pass any more than one at a time. */",
+				]
+			flush()
+			steps.append("\tat = at + ("
+				+ self._length_expression(struct, other, running="at") + ");")
+
+		kind    = ident(self.prefix, struct.name, "offsets_t")
+		build   = ident(self.prefix, struct.name, "offsets")
+		fields  = [f"\tuint32_t {c_name(self._local(struct, held))};"
+		           for held in dynamic]
+
+		return [
+			"",
+			f"/* Where each dynamically-placed member of `{struct.name}`"
+			" starts.",
+			" *",
+			" * `_offset` resolves one member by summing what precedes it, so"
+			" it",
+			" * rescans every delimited member ahead of the one asked for --"
+			" on",
+			" * every call. This is that sum, once, for all of them.",
+			" *",
+			" * The memory is the caller's: one word per member below. */",
+			f"typedef struct {kind} {{",
+			*fields,
+			f"}} {kind};",
+			"",
+			f"static inline void {build}(situ_view_t view, {kind} *out)",
+			"{",
+			"\tuint32_t at = 0u;",
+			"",
+			*steps,
+			"}",
+		]
+
 	def _offset_function(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Resolve a dynamic offset by summing what precedes it.
@@ -2225,7 +2343,14 @@ class Emitter:
 				continue
 			if not self._has_length(struct, other):
 				return self._unresolvable_offset(placement, other)
-			terms.append(self._length_expression(struct, other))
+			# `running="offset"` -- the sum in hand, rather than letting
+			# `_span` re-resolve the base by rescanning everything before
+			# this member. Without it each term's base is computed from
+			# scratch, so this function is not linear in the members before
+			# it but in the work of resolving each of them; an eight-member
+			# record measured 10.3 seconds where the same reads now take 0.3.
+			terms.append(self._length_expression(struct, other,
+			                                     running="offset"))
 
 		lines = [
 			f"static inline uint32_t "
@@ -2429,7 +2554,7 @@ class Emitter:
 		return chain
 
 	def _length_expression(self, struct: ResolvedStruct, placement: Placement,
-			held: str = "view") -> str:
+			held: str = "view", running: str | None = None) -> str:
 		"""How many bytes a variable-length member occupies, at runtime.
 
 		`held` names the view in scope, which is `gate.view` inside a sealed
@@ -2448,7 +2573,22 @@ class Emitter:
 			# record run's is its elements plus the terminator, and a `while`
 			# run's is its elements.
 			local = c_name(self._local(struct, placement))
-			return f"{ident(self.prefix, struct.name, local, 'span')}({held})"
+			span  = ident(self.prefix, struct.name, local, "span")
+			# `running` is the offset a caller accumulating them already has.
+			# Without it `_span` re-resolves the base by rescanning every
+			# member before this one, so a loop over M members costs M^2
+			# scans while reading as one pass -- which is what `_required`
+			# was doing, and what made the first offset cache slower than
+			# the per-call offsets it replaced.
+			# Only a delimited *byte array* emits the `_from` form. A record
+			# run's span is a walk of its elements, which resolves its own
+			# base the same way and would benefit equally -- it just does not
+			# have the helper yet, and asking for one that is not there is a
+			# header that does not compile rather than a slow one.
+			if running is not None and placement.delimiter is not None \
+					and placement.type_name not in self.structs:
+				return f"{span}_from({held}, {running})"
+			return f"{span}({held})"
 
 		# A nested struct with no single size. Its own `_extent` needs a view
 		# positioned at the member, which is not something an expression can

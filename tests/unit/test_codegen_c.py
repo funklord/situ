@@ -1051,7 +1051,13 @@ def test_a_delimited_member_gets_content_and_span() -> None:
 	# The scan reads from the member's own base rather than through `_ptr`.
 	# With `[trim]` those differ -- `_ptr` skips the leading whitespace, and a
 	# scan starting there would measure the wrong run.
-	assert "situ_scan(view.base + 4u" in header
+	# The scan takes its base as a parameter now, and `_len(view)` passes
+	# the resolved offset in. What the test is about -- that the scan starts
+	# at the member's own base and not at `_ptr`, which `[trim]` moves -- is
+	# unchanged.
+	assert "situ_scan(view.base + at" in header
+	assert ("situ_s_line_len(situ_view_t view)\n{\n"
+		"\treturn situ_s_line_len_from(view, 4u);") in header
 
 
 def test_the_delimiter_is_part_of_the_span_and_not_the_content() -> None:
@@ -1060,7 +1066,8 @@ def test_the_delimiter_is_part_of_the_span_and_not_the_content() -> None:
 	`nul_terminated` counts its capacity."""
 	header, _ = emit(FRAMED)
 
-	assert "situ_s_line_len(view) + (situ_s_line_terminated(view) ? 2u : 0u)" in header
+	assert ("situ_s_line_len_from(view, at) + "
+		"(situ_s_line_terminated_from(view, at) ? 2u : 0u)") in header
 
 
 def test_a_missing_delimiter_adds_nothing_to_the_span() -> None:
@@ -1069,16 +1076,25 @@ def test_a_missing_delimiter_adds_nothing_to_the_span() -> None:
 	trusts, which is a read outside the view the caller established."""
 	header, _ = emit(FRAMED)
 
-	assert "situ_s_line_terminated(view) ? 2u : 0u" in header
+	# `_from(view, at)` now: everything that accumulates offsets has the
+	# base in hand, and re-resolving it there is what made a loop over M
+	# members cost M^2 scans while reading as one pass.
+	assert "situ_s_line_terminated_from(view, at) ? 2u : 0u" in header
 
 
 def test_a_later_members_offset_sums_the_scan() -> None:
 	"""Not an inlined search: the member emits its own `_span` and everything
-	downstream calls it, so one scan is described in one place."""
+	downstream calls it, so one scan is described in one place.
+
+	`_span_from(view, offset)` rather than `_span(view)`, because this loop
+	has the running sum in hand and the plain form re-resolves the base by
+	rescanning every member before it -- which made the sum cost far more
+	than the scans it is adding up.
+	"""
 	header, _ = emit(FRAMED)
 
 	assert "situ_s_count_offset" in header
-	assert "offset = offset + (situ_s_line_span(view));" in header
+	assert "offset = offset + (situ_s_line_span_from(view, offset));" in header
 
 
 def test_validate_refuses_a_frame_with_no_delimiter_in_it() -> None:
@@ -1096,7 +1112,7 @@ def test_a_capped_scan_stops_at_the_smaller_of_cap_and_buffer() -> None:
 	check established, so the cap alone is not the limit."""
 	header, _ = emit('struct s { u8 line[] until "\\r\\n" max 16; u8 rest[remaining]; }')
 
-	assert "situ_min_u32(16u, situ_remaining_u32(view.limit, 0u))" in header
+	assert "situ_min_u32(16u, situ_remaining_u32(view.limit, at))" in header
 
 
 def test_a_relaxed_delimiter_scans_for_an_inert_one() -> None:
@@ -2092,6 +2108,74 @@ int main(void)
 		return 7;
 	if (idx.start[idx.count] != situ_name_labels_span(view))
 		return 8;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_an_offset_sum_does_not_re_resolve_each_term() -> None:
+	"""The bug this whole family found, and the largest one in the tree.
+
+	Every loop that accumulates offsets -- `_offset`, `_required`, the offset
+	cache -- has the running sum in hand, and every one of them called
+	`_span(view)`, which resolves the member's base by rescanning everything
+	before it. So a sum over M delimited members did far more work than the M
+	scans it was adding up, on the *default* path with no flag involved.
+
+	Measured on an eight-member record, reading seven offsets five thousand
+	times: 10.3 seconds before, 45 milliseconds after.
+	"""
+	header, _ = emit("""
+struct s {
+	u8 a[] until ";";
+	u8 b[] until ";";
+	u8 c[] until ";";
+}
+""")
+
+	assert "situ_s_b_span_from(view, offset)" in header
+	assert "offset = offset + (situ_s_a_span(view));" not in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_and_the_two_forms_agree(tmp_path: Path) -> None:
+	"""Faster is only interesting if it is the same answer."""
+	body = 'struct s { u8 a[] until ";"; u8 b[] until ";"; u8 c[] until ";"; }'
+	header, source = materialized(body)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	char raw[] = "one;two;three;";
+	situ_msg_t msg;
+	situ_view_t view;
+	situ_s_offsets_t o;
+
+	situ_msg_init(&msg, (uint8_t *)raw, (uint32_t)strlen(raw));
+	if (situ_s_view(&msg, 0, (uint32_t)strlen(raw), &view) != SITU_OK)
+		return 1;
+
+	situ_s_offsets(view, &o);
+	if (o.b != situ_s_b_offset(view)) return 2;
+	if (o.c != situ_s_c_offset(view)) return 3;
+	if (o.b != 4u || o.c != 8u)       return 4;
+
+	/* And the span from a base equals the span that resolves its own. */
+	if (situ_s_b_span_from(view, o.b) != situ_s_b_span(view)) return 5;
 	return 0;
 }
 """, encoding="ascii")
