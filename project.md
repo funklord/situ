@@ -1130,9 +1130,10 @@ answer. Reading another arm's bytes stays inside the view -- the extent bounds
 it -- so it is a wrong answer rather than a fault, which is the kind situ
 refuses rather than the kind it cannot prevent.
 
-An arm whose member is a struct is still declined and says so. Reaching into
-one means its members under a path that is not a type, which is a further
-step.
+A struct-typed arm -- `case msg_type.hello: Hello hello;`, which is this
+section's own example and so the common shape -- gets a guarded sub-view over
+it. Its own members belong to its type and are emitted there, which is what
+makes the sub-view the whole of the work.
 
 ---
 

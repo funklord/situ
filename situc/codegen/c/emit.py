@@ -1210,6 +1210,50 @@ class Emitter:
 				"}",
 			]
 
+		# A struct-typed arm: `case msg_type.hello: Hello hello;`, which is
+		# section 9.6's own example and so the common shape rather than the
+		# exotic one. A sub-view over it, guarded the same way -- the arm's
+		# own members are its type's to emit, which is what makes this the
+		# whole of the work.
+		nested = self.resolved.structs.get(placement.type_name or "")
+		if nested is not None and placement.array_count is None \
+				and placement.sized_by is None:
+			if nested.layout.is_fixed_size:
+				size = macro(self.prefix, nested.name, "SIZE_FIXED")
+			elif self._struct_extent(nested):
+				size = "size"
+			else:
+				return [*head, f"/* ...and one `{placement.type_name}` cannot be"
+				        " measured, so there is no",
+				        " * sub-view to hand back. */"]
+
+			lines = [
+				*head,
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'view')}"
+				"(situ_view_t view, situ_view_t *out)",
+				"{",
+				f"\tif ({test}) {{",
+				"\t\treturn SITU_ERR_VERSION;",
+				"\t}",
+			]
+			if size == "size":
+				lines.extend([
+					"\tsitu_view_t whole;",
+					"",
+					f"\tif (situ_view_sub(view, {base}, view.limit - ({base}),"
+					" &whole) != SITU_OK) {",
+					"\t\treturn SITU_ERR_BOUNDS;",
+					"\t}",
+					f"\tconst uint32_t size = "
+					f"{ident(self.prefix, nested.name, 'extent')}(whole);",
+				])
+			lines.extend([
+				f"\treturn situ_view_sub(view, {base}, {size}, out);",
+				"}",
+			])
+			return lines
+
 		return [*head, f"/* ...and `{placement.name}` is not a shape this"
 		        " backend reaches into yet. */"]
 

@@ -609,9 +609,8 @@ def test_a_variant_gets_no_single_accessor() -> None:
 	"""There is no one thing to hand back -- but its arms' members are
 	reachable now, each behind the discriminant that selects it.
 
-	A struct-typed arm is still declined, and says so: reaching into one
-	means the arm's own members under a path that is not a type, which is a
-	further step. A scalar or byte-array arm is generated.
+	A struct-typed arm gets a sub-view over it, guarded the same way; its
+	own members belong to its type and are emitted there.
 	"""
 	header, _ = emit("enum K : u8 { a = 1, b = 2, }"
 	                 "struct A { u16 x; } struct B { u32 y; }"
@@ -619,7 +618,7 @@ def test_a_variant_gets_no_single_accessor() -> None:
 	                 "{ case K.a: A p; case K.b: B q; } }")
 	assert "exactly one of" in header
 	assert "S.v.p, present when the discriminant selects `K.a`" in header
-	assert "`p` is not a shape this backend reaches into yet" in header
+	assert "situ_S_v_p_view(situ_view_t view, situ_view_t *out)" in header
 
 
 def test_an_indexed_region_says_insertion_is_not_an_operation() -> None:
@@ -2357,6 +2356,82 @@ int main(void)
 		return 8;
 	if (situ_label_body_text_ptr(l, &p, &n) != SITU_ERR_VERSION)
 		return 9;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+STRUCT_ARMS = """
+enum K : u8 { a = 1, b = 2, }
+struct A { u16 x; }
+struct B { u32 y; }
+struct S {
+	K k;
+	variant v switch (k) {
+		case K.a: A p;
+		case K.b: B q;
+		default:  error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_struct_typed_arm_gets_a_guarded_sub_view(tmp_path: Path) -> None:
+	"""`case msg_type.hello: Hello hello;` is section 9.6's own example, so
+	this is the common shape rather than the exotic one -- and it was the one
+	left declined when scalar and byte-array arms landed.
+
+	The arm's own members belong to its type, so a sub-view over it is the
+	whole of the work. The guard is the same.
+	"""
+	header, source = emit(STRUCT_ARMS)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t buf[8] = { 0 };
+	situ_msg_t msg;
+	situ_view_t view, arm;
+
+	buf[0] = 1;			/* k = K.a: `p`, an A, is present */
+	buf[1] = 0xBE; buf[2] = 0xEF;
+
+	situ_msg_init(&msg, buf, (uint32_t)sizeof buf);
+	if (situ_S_view(&msg, 0, (uint32_t)sizeof buf, &view) != SITU_OK)
+		return 1;
+
+	if (situ_S_v_p_view(view, &arm) != SITU_OK)
+		return 2;
+	/* The arm starts after the discriminant and is exactly an A. */
+	if (arm.base != buf + 1 || arm.limit != 2u)
+		return 3;
+	if (situ_A_x_get(arm) != 0xBEEF)
+		return 4;
+	if (situ_S_v_q_view(view, &arm) != SITU_ERR_VERSION)
+		return 5;
+
+	buf[0] = 2;			/* k = K.b: `q`, a B */
+	buf[1] = 0xDE; buf[2] = 0xAD; buf[3] = 0xBE; buf[4] = 0xEF;
+	if (situ_S_v_q_view(view, &arm) != SITU_OK)
+		return 6;
+	if (arm.limit != 4u || situ_B_y_get(arm) != 0xDEADBEEFu)
+		return 7;
+	if (situ_S_v_p_view(view, &arm) != SITU_ERR_VERSION)
+		return 8;
 	return 0;
 }
 """, encoding="ascii")
