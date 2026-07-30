@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from situc.capability import DOMAINS, Axis, Value
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.propagate import TABLE, Resolved
 from situc.resolve import resolve
+
+ROOT = Path(__file__).resolve().parents[2]
 
 PREAMBLE = "endian big;\nbit_order msb_first;\n"
 
@@ -891,3 +895,46 @@ def test_a_delimited_text_number_is_not() -> None:
 	body = 'struct S { decimal u16 code until "\\r\\n"; u8 rest[remaining]; }'
 
 	assert axis_of(body, "S.code", Axis.CANONICAL) == Value("NonCanonical")
+
+
+# -- the spec table and the rows that run (section 11.3) --------------------
+
+SPEC = ROOT / "project.md"
+
+
+def spec_rows() -> dict[str, tuple[str, str]]:
+	"""Every `| `rule` | construct | effect |` line in section 11.3."""
+	text    = SPEC.read_text(encoding="utf-8")
+	section = text[text.index("### 11.3 Propagation rules"):
+	               text.index("**The critical rule, stated once:**")]
+
+	found = {}
+	for line in section.splitlines():
+		if not line.startswith("| `"):
+			continue
+		cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+		name, construct, effect = (cell.strip() for cell in cells)
+		found[name.strip("`")] = (construct, effect)
+	return found
+
+
+def test_the_spec_table_matches_the_rows() -> None:
+	"""Section 11.3 says it is normative, so it has to be true.
+
+	It was hand-maintained and fell about twenty rows behind -- every text
+	protocol rule, every codec rule, and the two added this year -- all of them
+	things the compiler was already doing and the specification did not
+	mention. A normative table nobody checks is a comment with a promise on it.
+	"""
+	listed = spec_rows()
+
+	assert set(listed) == {row.rule.name for row in TABLE}
+
+	for row in TABLE:
+		construct, effect = listed[row.rule.name]
+		assert construct == row.rule.construct, row.rule.name
+
+		expected = ", ".join(f"`{one.axis.value} := {one.value.render()}`"
+		                     for one in row.rule.effects)
+		assert effect == (expected or "computed from the construct"), \
+			row.rule.name

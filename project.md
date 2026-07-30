@@ -42,6 +42,11 @@ Rules for the implementer:
    propagation is expensive to unwind later.
 5. Everything in `docs/decisions/` is append-only. One file per decision,
    numbered, with the alternatives considered.
+6. **Where this document can be checked against the code, it is.** The 11.3
+   table and `docs/grammar.ebnf` both have tests that fail when they drift
+   from the implementation, because 11.3 was hand-maintained for a while and
+   fell about twenty rows behind. Prefer adding a check to adding a promise:
+   a normative table nobody verifies is a comment.
 
 ---
 
@@ -1083,6 +1088,16 @@ selected arm, so unless all arms are the same size the variant makes everything
 after it dynamic -- which the advisor will point out, along with the padding
 cost of equalizing them.
 
+Dynamic is not unknown. The size of the selected arm is a switch on the
+discriminant, and generated code evaluates it (11.6), so a variant can sit
+inside a struct something walks a run of. An `opaque` default arm is the one
+shape that cannot: it swallows whatever is left.
+
+`default: error` is a parse-time rejection, not documentation. An unrecognised
+discriminant fails `validate` with the "unknown version or variant
+discriminant" error, in every backend. Stating this because it was true of the
+specification and of nothing else for a long time -- see 11.6.
+
 ---
 
 ### 9.7 Describing protobuf
@@ -1239,35 +1254,112 @@ whatever the struct construct itself imposes.
 
 ### 11.3 Propagation rules
 
-These are normative. Implement them as a table, not as scattered conditionals.
+These are normative. Implement them as a table, not as scattered conditionals
+-- and the rows below are transcribed from `situc/propagate.py`, which is where
+they run. `test_the_spec_table_matches_the_rows` fails if the two drift, which
+is the only reason this list can be trusted: it was hand-maintained for a while
+and fell about twenty rows behind, all of them things the compiler was already
+doing.
 
-| Construct | Effect |
-|---|---|
-| fixed-size scalar, byte-aligned, native endian | identity (all strongest) |
-| non-native endian scalar | `repr := ValueConverted` |
-| bit field | `repr := ValueConverted`, `atomic := NonAtomic`, `mutate := max(mutate, InPlaceFixed)` but write is RMW |
-| straddling bit field | as above, plus `atomic := NonAtomic` and a warning |
-| unaligned multi-byte scalar | `align := Unaligned`, `atomic := NonAtomic` |
-| scalar whose width is not 8, 16, 32 or 64 | `atomic := NonAtomic` |
-| array `[N]` const | element vectors preserved; `offset` of element k is base + k*size |
-| array `[expr]` | elements `offset := FrameStatic`; **all following members** `offset := Dynamic`, `address := Unstable` |
-| array `[remaining]` | `size := Bounded(0, frame_remaining)`; must be last in frame |
-| dynamic-size element type | `access := Sequential` |
-| variant with unequal arm sizes | following members `offset := Dynamic` |
-| `opaque` | interior: none; region: `access := Sequential`, no interior addressing |
-| `tlv` | `access := Sequential`, items `address := Unstable`, `offset := Dynamic` |
-| `indexed` | elements `offset := FrameStatic` after one indirection; `access := Random`; insertion unsupported |
-| entering a frame with dynamic base | all interior `offset := FrameStatic` (not Absolute), `address := FrameStable` |
-| `endian native` | enclosing struct `canonical := NonCanonical`; requires `[allow_host_dependent]` |
-| `endian = from(marker)` | fields in scope `repr := ConditionallyConverted(marker)`, `canonical := CanonicalGiven(marker)`; `offset` and `size` unaffected |
-| `reserved [unknown]` | enclosing struct `canonical := NonCanonical` |
-| `tlv unknown = preserve` | enclosing struct `canonical := NonCanonical` |
-| enum `default = pass` | enclosing struct `canonical := NonCanonical` |
-| `authenticated { }` | members `auth := Covered(t)` for enclosing tag t |
-| `sealed(codec) { }` | see Section 13.3 |
-| `secret` attribute | `secrecy := Secret`; suppresses debug accessors, adds zeroization |
-| register with `no_rmw` | single-bit/partial fields `mutate := RewriteRequired` |
-| register with `EffectOnRead` | any field needing RMW `mutate := RewriteRequired` |
+The `Rule` column is the name that appears in a blame chain, so an `explain`
+output can be read against this table directly.
+
+**Scalars and bit packing**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `non-native-endian-scalar` | a multi-byte scalar in a declared byte order | `repr := ValueConverted` |
+| `endian-marker-scope` | a field whose byte order comes from an `endian_marker` | computed from the construct |
+| `bit-field` | a bit-packed field | `repr := ValueConverted`, `atomic := NonAtomic`, `align := Unaligned` |
+| `straddling-bit-field` | a bit field crossing a byte boundary | `atomic := NonAtomic` |
+| `unaligned-multi-byte-scalar` | a multi-byte scalar not known to be on its boundary | `atomic := NonAtomic` |
+| `odd-width-scalar` | a scalar whose width is not a machine word | `atomic := NonAtomic` |
+| `aggregate-or-array` | a struct-typed field or an array | `atomic := NonAtomic` |
+| `fixed-point` | a fixed-point field | `repr := ValueConverted` |
+| `bcd` | a packed binary-coded decimal field | `repr := ValueConverted` |
+| `varint` | a variable-length integer | `size := Bounded`, `mutate := InPlaceSlack`, `align := Unaligned`, `atomic := NonAtomic`, `repr := ValueConverted` |
+| `non-minimal-varint` | a varint type without `minimal` | `canonical := NonCanonical` |
+| `endian-native` | `endian native` | `canonical := NonCanonical` |
+
+**Size and position**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `bounded-size` | a member whose length comes from an earlier field | `size := Bounded`, `mutate := Shifting` |
+| `unbounded-size` | a member with no upper bound on its length | computed from the construct |
+| `dynamic-predecessor` | a dynamically sized member earlier in the same frame | `offset := Dynamic`, `address := Unstable` |
+| `frame-relative` | a member of a frame, addressed from the frame base | `offset := FrameStatic` |
+| `dynamic-element-type` | an array whose element type is variable-sized | `access := Sequential` |
+| `variant-unequal-arms` | a variant whose arms are not the same size | computed from the construct |
+
+**Text protocols (8.6)**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `delimited-member` | a member that ends at a delimiter | `mutate := Shifting` |
+| `relaxed-delimiter` | a delimited member whose delimiter may occur in its content | `canonical := NonCanonical` |
+| `unbounded-scan` | a delimited member with no cap on the scan | `effect := EffectOnRead` |
+| `scanned-predecessor` | a member found by scanning for a delimiter earlier in the frame | `offset := Scanned`, `access := Sequential`, `address := Unstable` |
+| `repeat-while` | a run that ends after the element failing a condition | `access := Sequential`, `mutate := Shifting` |
+| `text-number` | a number written as digits rather than stored as bits | `repr := TextConverted` |
+| `non-minimal-text-number` | a text number that accepts leading zeros | `canonical := NonCanonical` |
+| `trimmed-value` | a value with optional whitespace around it | `canonical := NonCanonical` |
+| `case-insensitive-token` | a token compared without regard to case | `canonical := NonCanonical` |
+| `nul-terminated` | a nul-terminated field | `canonical := NonCanonical` |
+
+**Aggregates**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `tlv` | a `tlv` region | `access := Sequential`, `address := Unstable`, `mutate := InPlaceSlack` |
+| `tlv-unordered-items` | a `tlv` region with no ordering rule | `canonical := NonCanonical` |
+| `tlv-non-minimal-tag` | a `tlv` region whose tag type accepts non-minimal encodings | `canonical := NonCanonical` |
+| `tlv-packed-and-unpacked` | a `tlv` region accepting both packed and unpacked encodings of a repeated value | `canonical := NonCanonical` |
+| `tlv-unknown-preserve` | a `tlv` region with `unknown = preserve` | `canonical := NonCanonical` |
+| `tlv-unordered-duplicates` | a `tlv` region with `duplicate_tags = allowed` and no ordering rule | `canonical := NonCanonical` |
+| `opaque` | an `opaque` region | `access := Sequential`, `mutate := RewriteRequired` |
+| `indexed` | an `indexed` region | `address := FrameStable` |
+
+**Codecs (13)**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `codec-not-invertible` | a codec with no inverse | `mutate := Immutable` |
+| `codec-needs-decode` | a codec that is neither systematic nor length-preserving | `stage := TransformTime`, `access := Sequential` |
+| `codec-whole-region-rewrite` | a length-preserving codec that is not seekable | `mutate := RewriteRequired` |
+| `codec-block-granularity` | a length-preserving codec with block granularity | `mutate := InPlaceSlack` |
+| `codec-permuted` | a codec whose output positions are a permutation | `address := Unstable` |
+| `codec-not-deterministic` | a codec that is not `deterministic` | `canonical := NonCanonical` |
+
+**Cryptography (14)**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `covered-by-tag` | bytes covered by an authentication tag | computed from the construct |
+| `verify-gated` | the interior of a sealed region | `stage := VerifyGated` |
+| `allow-unverified-read` | `sealed(...) [allow_unverified_read]` | `stage := TransformTime` |
+| `tag-field` | an authentication tag or checksum | `mutate := Immutable` |
+| `secret-field` | a `[secret]` field | `secrecy := Secret` |
+
+**Registers (15)**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `register-partial-word` | a register field narrower than the bus access | `repr := ValueConverted`, `atomic := NonAtomic` |
+| `register-read-only` | a register field the bus does not let you write | `mutate := Immutable` |
+| `register-rmw-unsafe` | a partial-width field in a register whose reads are not free | computed from the construct |
+| `register-side-effect` | a register field whose access has a side effect | computed from the construct |
+
+**Declared, not inferred**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `reserved-unknown` | `reserved [unknown]` | `canonical := NonCanonical` |
+| `enum-default-pass` | an enum with `default = pass` | `canonical := NonCanonical` |
+| `strictness-lenient` | `strictness = lenient` | `canonical := NonCanonical` |
+| `declared-non-canonical` | a schema saying its encoding is not canonical | computed from the construct |
+| `derived-field` | a field an invariant maintains | `mutate := Immutable` |
+| `versioned-member` | a member present only from a given protocol version | `stage := ParseTime` |
 
 **The critical rule, stated once:** a construct with dynamic size weakens the
 `offset` and `address` axes of every *subsequent* member of its enclosing
@@ -1862,6 +1954,8 @@ position, not an oversight.
   Every ignored bit is a malleability surface and a potential covert channel.
 - Unknown enum values are rejected by default.
 - Unknown TLV tags are rejected by default.
+- A variant discriminant selecting no arm is rejected by default -- `default:
+  error`, which is also the default when no `default` clause is written.
 - Forward compatibility via silent retention is a liability in an
   authenticated protocol; version negotiation (Section 19) is the correct
   mechanism.
@@ -2251,7 +2345,7 @@ Situ has no field numbers, so evolution must be explicit. This is the one place
 where protobuf's design bought something real, and the replacement must be
 deliberate rather than accidental.
 
-The model:
+### 19.1 The model
 
 1. **Version is a field, not metadata.** Schemas that need to evolve carry an
    explicit version discriminant and use `variant` to select the layout.
@@ -2655,6 +2749,7 @@ Global flags: `--target=c|cpp|python|rust`, `--out=DIR`,
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
 | backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
 | compiler mutation | by hand, recorded in 26.13a | deliberate bugs in the generator, judged by what a *user's* suite catches rather than situ's own. Not automated: choosing the mutation is the work, and a mutation nobody thought of is the gap that survives |
+| test mutation | by hand, at the point of writing | a probe that walks generated code is run once against a deliberately wrong expectation, to find out whether it is a test or a compile check. Three of mine were the latter -- `-fsyntax-only`, a `main` nobody executed, an `assert!` in an unrun binary -- and each passed identically before and after the fix it was written for (invariant 35) |
 
 **What the suite does not do**, stated because a reader would otherwise assume
 it: the emitted Lua is never executed (no Wireshark, no interpreter in the
@@ -2701,7 +2796,10 @@ situ/
                               which entries are a struct's own members, which
                               bytes a placement occupies, and -- the part that
                               had to be learned three times -- the order to ask
-                              what kind of member it is
+                              what kind of member it is. Also whether a struct
+                              can be measured from its own bytes at all, and
+                              what it measures: four backends worked that out
+                              separately and none of them agreed (invariant 34)
     invariant.py              which right-hand sides an `invariant` may have
                               (16.1), and the walk over one -- the leaves are
                               each backend's and the rest is the language's
@@ -3773,6 +3871,18 @@ ecosystem does and means a reader who only parses never holds a `&mut` they do
 not need. An enum field reads as `Option<T>`, because a field may hold a value
 no member names and section 8.7 rejects those on parse rather than on read.
 
+**`unused_parens` is a hard error under `-D warnings`, and it fires wherever a
+generated expression composes.** The other three backends parenthesise freely,
+which is how a generator stays composable: every sub-expression wraps itself
+and the caller never has to know precedence. Rust rejects that on the tail
+expression of a block and on a match arm alike, so a variant's extent -- an
+`if`/`else` chain whose branches carry length expressions built elsewhere --
+cannot simply nest them. The backend strips a fully-enclosing pair before
+placing one in a branch, and builds the chain unparenthesised, wrapping once at
+the end where it sits in a sum. Worth stating because the reflex is to reach
+for `#[allow]`, and the lint is right: the parentheses really are redundant,
+and the generator was the thing being sloppy.
+
 **A schema is free to name a field `type`; Rust is not.** Raw identifiers carry
 it -- `r#type` -- which is what they exist for, and decision 0013 says the
 naming is the author's. `set_type` needs no escape, and `set_r#type` would not
@@ -3980,6 +4090,48 @@ not waiting would have been a construct shaped around a single format, and
 The rule is not that two is a magic number. It is that the second asker is
 what tells you which parts of the first were the protocol and which were the
 shape.
+
+### 26.24 DNS name compression, and what it cost
+
+A fourth worked example, chosen for the same reason as the other three: a shape
+the tree did not have. A compressed name is a run of labels where a label is a
+variant on its top two bits, and one of the arms is a pointer to somewhere else
+in the message.
+
+It asked for three things and got all three.
+
+**A weakening the layout does not imply** (11.5). Every construct in the schema
+is canonical taken alone, and the format admits many spellings of one name,
+because the redundancy is between the name and bytes elsewhere in the message.
+No per-member rule can see that, so `[non_canonical = "reason"]` lets the
+schema say it -- one axis, a required reason, and no way to strengthen
+anything.
+
+**An extent for a variant** (11.6). This is the one that mattered. A variant's
+extent had been refused outright on the grounds that it depends on the
+discriminant, which is an argument that the extent is a *switch*, not that
+there is none. The refusal propagated: no extent meant no run over a variant,
+so the example could describe a compressed name and not walk one, which is the
+thing it exists to show.
+
+**A check nobody had written.** Walking labels immediately showed that
+`default: error` was enforced by no backend, in a language whose specification
+had said it was since 14.5 was written, with `SITU_ERR_VERSION` defined for it
+and returned by nothing. Nothing had noticed because nothing could reach a
+variant closely enough to care.
+
+It also found the extent calculation copied into four backends, each dividing
+every member to whole bytes before summing -- so a `u2` and a `u6` contributed
+nothing where together they are a byte. That moved to `traverse.extent_parts`,
+and the "can this be measured at all" predicate with it, because `gen-checks`
+had been deciding it separately and disagreeing (invariant 34).
+
+And what it did not get: situ describes a compressed name and walks one, and
+does not follow the pointer. Resolving one means re-entering the parser at an
+arbitrary earlier offset with a cycle check and a budget, which is control flow
+rather than layout. Naming that boundary precisely is the difference between a
+limit and a shrug -- the earlier `examples/dns/dns.situ` had claimed situ could
+not describe DNS names "statically at all", which was wrong by a wide margin.
 
 ### Invariants to hold across all phases
 
@@ -4447,3 +4599,8 @@ about it.
 | impl binding | the association of a signature with a concrete implementation, derived or extern |
 | conformance harness | generated property tests that falsify a signature an implementation does not satisfy |
 | fidelity report | the importer's enumeration of source constructs it could not represent |
+| extent | how many bytes one instance of a struct occupies, read from its own bytes; distinct from its *size*, which is what the layout knows without looking |
+| measurable | of a struct: its extent can be computed from its own bytes, so a run of them can be walked and a member after one can be placed |
+| walk | traversing a run by adding each element's extent, there being no count to index by |
+| wire signature | the committed, diffable record of the byte-level contract; distinct from the capability map, which records cost (19.3) |
+| declared weakening | a capability weakening a schema asserts because the layout does not imply it (11.5) |
