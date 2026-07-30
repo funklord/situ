@@ -54,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                       help="backend; rust arrives in phase 11")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
+	build_cmd.add_argument("--materialize", action="store_true",
+	                       help="also emit the second accessor family: an "
+	                            "index over each capped run, so reaching an "
+	                            "element is arithmetic rather than a walk "
+	                            "(decision 0022)")
 
 	tests_cmd = sub.add_parser("gen-tests", help="generate golden-vector tests")
 	tests_cmd.add_argument("schema", type=Path)
@@ -346,6 +351,13 @@ def cmd_build(args: argparse.Namespace) -> int:
 	from situc.codegen.c import generate
 	from situc.codegen.cpp import generate as generate_cpp
 
+	def warn_unsupported(target: str) -> None:
+		"""Said out loud rather than ignored. A flag that silently does
+		nothing is worse than one that refuses: the caller believes they got
+		the second family and measures the first."""
+		print(f"situc: --materialize is C-only so far; {target} ignores it",
+		      file=sys.stderr)
+
 	source, resolved, outcomes = analyse(args.schema)
 	files: dict[str, str]
 	warnings: list[Diagnostic]
@@ -353,6 +365,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 	if args.target == "rust":
 		from situc.codegen.rust import generate as generate_rs
 
+		if args.materialize:
+			warn_unsupported(args.target)
 		emitted_rs = generate_rs(parse(source), resolved, args.schema.stem,
 		                         args.prefix)
 		files    = emitted_rs.files()
@@ -360,17 +374,22 @@ def cmd_build(args: argparse.Namespace) -> int:
 	elif args.target == "python":
 		from situc.codegen.python import generate as generate_py
 
+		if args.materialize:
+			warn_unsupported(args.target)
 		emitted_py = generate_py(parse(source), resolved, args.schema.stem,
 		                         args.prefix)
 		files    = emitted_py.files()
 		warnings = emitted_py.warnings
 	elif args.target == "cpp":
+		if args.materialize:
+			warn_unsupported(args.target)
 		cpp      = generate_cpp(parse(source), resolved, args.schema.stem,
 		                        args.prefix)
 		files    = cpp.files()
 		warnings = cpp.warnings
 	else:
-		emitted  = generate(parse(source), resolved, args.schema.stem, args.prefix)
+		emitted  = generate(parse(source), resolved, args.schema.stem,
+		                    args.prefix, materialize=args.materialize)
 		files    = emitted.files()
 		warnings = emitted.warnings
 

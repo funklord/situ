@@ -63,7 +63,7 @@ class Generated:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		prefix: str = "situ") -> Generated:
+		prefix: str = "situ", materialize: bool = False) -> Generated:
 	# Before anything is emitted: two constructs that flatten to one C
 	# identifier would otherwise surface as a redefinition error in generated
 	# code, naming a function nobody wrote.
@@ -72,7 +72,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		*(("enum", decl.name, decl.span) for decl in schema.enums()),
 	])
 
-	emitter = Emitter(schema, resolved, basename, prefix)
+	emitter = Emitter(schema, resolved, basename, prefix, materialize)
 	return Generated(
 		header   = emitter.header(),
 		source   = emitter.source(),
@@ -83,11 +83,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str, prefix: str) -> None:
+			basename: str, prefix: str, materialize: bool = False) -> None:
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
 		self.prefix   = prefix
+		#: Emit the second accessor family (decision 0022). The consumer's
+		#: choice rather than the schema's: an embedded receiver and a desktop
+		#: inspector read the same bytes and want opposite trade-offs, and a
+		#: schema that picked would put a deployment decision in the file that
+		#: defines the wire contract.
+		self.materialize = materialize
 		self.structs  = {decl.name: decl for decl in schema.structs()}
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.markers  = {decl.name: decl for decl in schema.markers()}
@@ -934,10 +940,12 @@ class Emitter:
 
 		if placement.repeat_while is not None:
 			lines.extend(self._repeat_while(struct, entry))
+			lines.extend(self._run_index(struct, placement))
 			return lines
 
 		if self._is_record_run(placement):
 			lines.extend(self._record_run(struct, placement))
+			lines.extend(self._run_index(struct, placement))
 			return lines
 
 		if placement.delimiter is not None:
@@ -1511,6 +1519,158 @@ class Emitter:
 			" * the bytes mean and not when they have all arrived. */",
 		]
 
+	def _walk_prologue(self, base: str, cap: str, extent: str) -> list[str]:
+		"""The head of a `while` run's loop: one element measured and bounded.
+
+		Shared because the index walks exactly the same way and must, or the
+		two disagree about where an element starts -- and a second copy of a
+		loop with two break conditions is how they would.
+		"""
+		return [
+			f"\tuint32_t at = {base};",
+			"\tuint32_t n  = 0u;",
+			"",
+			f"\twhile (at < view.limit{cap}) {{",
+			"\t\tsitu_view_t element;",
+			"\t\tuint32_t    size;",
+			"",
+			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			" != SITU_OK) {",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tsize = {extent};",
+			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\t\t/* A zero-extent element would walk here forever, and one",
+			"\t\t\t * running past the limit was never in this frame. */",
+			"\t\t\tbreak;",
+			"\t\t}",
+		]
+
+	def _run_index(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The second accessor family, for a run: its element offsets, once.
+
+		A run is `access = Sequential` -- element N is reached by reading the
+		N-1 before it -- so `_at` walks from the base every call and visiting
+		every element costs O(N^2). This resolves the offsets in one pass and
+		indexes them, which is the axis the map says is weak and the only one
+		worth spending memory on: the *bytes* are already reachable by
+		pointer, so copying them buys nothing. What is expensive here is
+		finding them.
+
+		The storage is the caller's. `max N` in the schema is what makes the
+		array a fixed size, so an uncapped run gets no index rather than an
+		allocation -- generated code never allocates (invariant 4), and the
+		cap is the schema saying how much memory this may cost.
+		"""
+		if not self.materialize:
+			return []
+
+		cap = placement.repeat_cap
+		if cap is None:
+			return [
+				"",
+				f"/* No index for `{placement.name}`: the run has no `max`, so",
+				" * how many offsets to hold is not a number this knows and the",
+				" * array would have to be allocated. Add `max N` and the index",
+				" * costs N words of the caller's memory. */",
+			]
+
+		# The index walks the run itself, in one pass, so it needs what the
+		# walk needs. Building it by calling the walking accessor per element
+		# is quadratic again, which is the whole thing it exists to avoid.
+		element = self.resolved.structs.get(placement.type_name or "")
+		extent  = (None if element is None
+		           else self._element_extent_call(element))
+		if element is None or extent is None:
+			return []
+
+		cond   = self._element_condition(element, placement)
+		walk   = self._walk_prologue(
+			self._base_expression(struct, placement, gated=False),
+			f" && n < {cap}u", extent)
+
+		local  = c_name(self._local(struct, placement))
+		kind   = ident(self.prefix, struct.name, local, "index_t")
+		build  = ident(self.prefix, struct.name, local, "index")
+		fetch  = ident(self.prefix, struct.name, local, "indexed")
+		macro_ = macro(self.prefix, struct.name, local, "CAP")
+
+		return [
+			"",
+			f"/* An index over `{placement.path}`: where each element starts.",
+			" *",
+			f" * The map calls this run `access = Sequential`, which is the"
+			" cost of",
+			" * a walk: reaching element N means reading the N-1 before it, so"
+			" the",
+			" * `_at` accessor above starts from the base every call and"
+			" visiting",
+			" * every element is quadratic. Building this is one pass; every"
+			" lookup",
+			" * after it is arithmetic.",
+			" *",
+			" * The memory is the caller's, and `max` in the schema is what"
+			" bounds",
+			" * it. Nothing here allocates. */",
+			f"#define {macro_} {cap}u",
+			"",
+			f"typedef struct {kind} {{",
+			"	uint32_t count;",
+			"	/* One more than `count`: the last entry is where the run",
+			"	 * ends, so an element's size is the difference between",
+			"	 * neighbours and the last one needs no special case. */",
+			f"	uint32_t start[{macro_} + 1u];",
+			f"}} {kind};",
+			"",
+			f"static inline situ_err_t {build}(situ_view_t view, {kind} *out)",
+			"{",
+			*walk,
+			"		/* Recorded before advancing, so `start[n]` is where element",
+			"		 * n begins. The walk is the run's own -- the same lines the",
+			"		 * accessors above use -- because an index that disagreed",
+			"		 * with the walk about where an element starts would be",
+			"		 * worse than no index. */",
+			"		out->start[n] = at;",
+			"		at = at + size;",
+			"		n  = n + 1u;",
+			f"		if (!({cond})) {{",
+			"			break;",
+			"		}",
+			"	}",
+			"",
+			"	/* One pass. Building this by calling the walking accessor per",
+			"	 * element would be quadratic again, which is what the first",
+			"	 * version did -- and it measured 13% faster than the walk",
+			"	 * instead of the order of magnitude the shape promises. */",
+			"	out->count    = n;",
+			"	out->start[n] = at;",
+			"	return SITU_OK;",
+			"}",
+			"",
+			f"/* Element `index`, in constant time. The view must be the one the",
+			" * index was built from: it holds offsets, not pointers, so a"
+			" different",
+			" * view of the same bytes is fine and a different message is"
+			" not. */",
+			f"static inline situ_err_t {fetch}(const {kind} *idx,"
+			" situ_view_t view,",
+			"		uint32_t index, situ_view_t *out)",
+			"{",
+			"	uint32_t start;",
+			"",
+			"	if (index >= idx->count) {",
+			"		return SITU_ERR_BOUNDS;",
+			"	}",
+			"	start = idx->start[index];",
+			"	/* Arithmetic, not a walk. Calling the walking accessor here",
+			"	 * would build an index and then ignore it, which is what the",
+			"	 * first version of this did. */",
+			"	return situ_view_sub(view, start,",
+			"		idx->start[index + 1u] - start, out);",
+			"}",
+		]
+
 	def _repeat_while(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
 		"""A run ending after the element that fails a condition (8.6.6).
@@ -1550,25 +1710,7 @@ class Emitter:
 		at    = ident(self.prefix, struct.name, local, "at")
 		span  = ident(self.prefix, struct.name, local, "span")
 
-		walk = [
-			f"\tuint32_t at = {base};",
-			"\tuint32_t n  = 0u;",
-			"",
-			f"\twhile (at < view.limit{cap}) {{",
-			"\t\tsitu_view_t element;",
-			"\t\tuint32_t    size;",
-			"",
-			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
-			" != SITU_OK) {",
-			"\t\t\tbreak;",
-			"\t\t}",
-			f"\t\tsize = {extent};",
-			"\t\tif (size == 0u || at + size > view.limit) {",
-			"\t\t\t/* A zero-extent element would walk here forever, and one",
-			"\t\t\t * running past the limit was never in this frame. */",
-			"\t\t\tbreak;",
-			"\t\t}",
-		]
+		walk = self._walk_prologue(base, cap, extent)
 
 		return [
 			f"/* `{placement.name}` is a run of `{placement.type_name}` ending"

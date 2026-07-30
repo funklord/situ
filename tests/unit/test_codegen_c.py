@@ -1988,3 +1988,120 @@ int main(void)
 
 	run = subprocess.run([str(binary)], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- the second accessor family (decision 0022) -----------------------------
+
+INDEXED_RUN = """
+struct label { u2 form; u6 rest; u8 text[rest]; }
+struct name { label labels[] while (form == 0 && rest != 0) max 128; }
+"""
+
+
+def materialized(body: str, preamble: str = PREAMBLE) -> tuple[str, str]:
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	built    = generate(schema, resolved, "unit", materialize=True)
+	return built.header, built.source
+
+
+def test_the_second_family_is_off_by_default() -> None:
+	"""It is the consumer's choice, and the default is the one that costs
+	nothing: an index is memory a caller did not ask for."""
+	header, _ = emit(INDEXED_RUN)
+
+	assert "situ_name_labels_index" not in header
+
+
+def test_the_index_build_does_not_call_the_walking_accessor() -> None:
+	"""The trap this exists to avoid, and the first version fell in it.
+
+	Building an index by calling `_at` per element is a walk per element,
+	which is the quadratic cost the index is meant to remove -- so the build
+	is quadratic and the lookups are free, and the total is quadratic again.
+	Measured at 13% faster than the plain walk, where one pass measures 20x.
+	"""
+	header, _ = materialized(INDEXED_RUN)
+	build     = header[header.index("situ_name_labels_index(situ_view_t"):]
+	build     = build[:build.index("\n}")]
+
+	assert "situ_name_labels_at(" not in build
+	assert "while (at < view.limit" in build		# the run's own walk
+
+
+def test_a_run_without_max_gets_no_index_and_says_why() -> None:
+	"""How many offsets to hold is the cap, and without one the array would
+	have to be allocated -- which generated code does not do (invariant 4)."""
+	header, _ = materialized("""
+struct e { u8 k; u8 v; }
+struct s { e run[] while (k == 0); }
+""")
+
+	assert "No index for `run`" in header
+	assert "Add `max N`" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_index_and_the_walk_agree_on_every_element(tmp_path: Path) -> None:
+	"""Two routes to the same offsets, which is the only property that
+	matters: an index that disagreed with the walk would be worse than none.
+
+	They share the walk's loop for exactly this reason -- a second copy, with
+	its two break conditions, is how they would come to differ.
+	"""
+	header, source = materialized(INDEXED_RUN)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t buf[128];
+	uint32_t n = 0, i;
+	situ_msg_t msg;
+	situ_view_t view, walked, got;
+	situ_name_labels_index_t idx;
+
+	/* Forty one-byte labels, then the root label that ends the run. */
+	for (i = 0; i < 40; i++) {
+		buf[n++] = 1;
+		buf[n++] = (uint8_t)('a' + (i % 26));
+	}
+	buf[n++] = 0;
+
+	situ_msg_init(&msg, buf, n);
+	if (situ_name_view(&msg, 0, n, &view) != SITU_OK)
+		return 1;
+	if (situ_name_labels_index(view, &idx) != SITU_OK)
+		return 2;
+	if (idx.count != situ_name_labels_count(view))
+		return 3;
+
+	for (i = 0; i < idx.count; i++) {
+		if (situ_name_labels_at(view, i, &walked) != SITU_OK)
+			return 4;
+		if (situ_name_labels_indexed(&idx, view, i, &got) != SITU_OK)
+			return 5;
+		if (got.base != walked.base || got.limit != walked.limit)
+			return 6;
+	}
+
+	/* Past the end, and the last entry is where the run ends. */
+	if (situ_name_labels_indexed(&idx, view, idx.count, &got) != SITU_ERR_BOUNDS)
+		return 7;
+	if (idx.start[idx.count] != situ_name_labels_span(view))
+		return 8;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

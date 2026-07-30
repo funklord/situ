@@ -2861,7 +2861,7 @@ place where a reader will take it for the answer to the one they did.
 ## 21. CLI surface
 
 ```
-situc build   <schema>            generate code
+situc build   <schema>            generate code [--materialize] (26.30)
 situc map     <schema>            emit capability map
 situc map --check <schema>        compare against committed map, fail on diff
 situc gen-checks <schema>         tests holding the accessors to the map
@@ -4480,6 +4480,53 @@ drift from the code, and four hand-edited copies of anything will disagree
 eventually. What made this checkable is that the C enum is the definition and
 the other three claim to mirror it -- where that is true, say it in a test.
 
+### 26.30 The second accessor family, and what it materializes
+
+Decision 0022 said the materialized family is emitted where the zero-copy
+vector is weak. Building it made the useful part precise, and it is narrower
+than "buffered access" suggests.
+
+**Copying the bytes buys nothing.** A zero-copy accessor is already a pointer
+at them; a copy is strictly slower and costs the memory too. What is expensive
+in a weak vector is not reading the bytes, it is *finding* them -- so what the
+second family materializes is the **walk**, not the data.
+
+Concretely, `situc build --materialize` emits, per capped run, an index of
+where each element starts:
+
+```c
+#define SITU_NAME_LABELS_CAP 128u
+
+typedef struct { uint32_t count; uint32_t start[SITU_NAME_LABELS_CAP + 1u]; }
+	situ_name_labels_index_t;
+
+situ_err_t situ_name_labels_index(situ_view_t view, ...);
+situ_err_t situ_name_labels_indexed(const ... *idx, situ_view_t view,
+                                    uint32_t index, situ_view_t *out);
+```
+
+Forty-one labels, every element visited, measured: **103 ms walking, 5 ms
+indexed**, the build included.
+
+Three things that fell out of building it:
+
+1. **`max` is what makes it possible.** The cap is how many offsets to hold,
+   and without one the array would have to be allocated -- which generated
+   code does not do (invariant 4). An uncapped run gets a comment saying so
+   and what to add. The schema's bound on the walk turns out to be the
+   schema's budget for the index as well.
+2. **The build must be one pass, and the obvious version is not.** Building
+   the index by calling the walking accessor per element is a walk per
+   element: quadratic to build, free to read, quadratic in total. That
+   version measured 13% faster than the plain walk. The fix is for the index
+   to walk the run itself, recording as it goes -- which means sharing the
+   walk's loop rather than writing a second one, or the two would eventually
+   disagree about where an element starts.
+3. **The default is off.** An index is memory the caller did not ask for, and
+   whether to spend it is a deployment decision rather than a schema one
+   (0022). C only so far; the flag says so on the other three rather than
+   silently doing nothing.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -4811,7 +4858,15 @@ the other three claim to mirror it -- where that is true, say it in a test.
    being right: it records the shape of the attempt, not the shape of the
    problem.
 
-44. **A capability nothing exercised hid a check nothing emitted.** Making a
+44. **An optimisation whose shape is right can still be the same cost.**
+   Indexing a sequential run turns a walk into arithmetic, and the first
+   version built the index by calling the walking accessor once per element
+   -- a walk per element, so quadratic to build and free to read, which is
+   quadratic. The shape was right, the reasoning was right, and it measured
+   13% better where one pass measures twenty times better. Measure the thing;
+   the argument for why it should be faster is not evidence that it is.
+
+45. **A capability nothing exercised hid a check nothing emitted.** Making a
    variant walkable immediately showed that `default: error` was enforced by
    no backend, in a language whose spec had said it was since section 14.5 was
    written, with an error code reserved for it and returned by nothing. Dead
