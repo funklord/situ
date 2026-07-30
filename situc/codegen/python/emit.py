@@ -72,19 +72,23 @@ class Generated:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		prefix: str = "situ") -> Generated:
-	return Generated(module=Emitter(schema, resolved, basename).module(),
+		prefix: str = "situ", materialize: bool = False) -> Generated:
+	return Generated(module=Emitter(schema, resolved, basename,
+	                                materialize).module(),
 	                 basename=basename)
 
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str) -> None:
+			basename: str, materialize: bool = False) -> None:
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.structs  = set(resolved.structs)
+		#: Emit the second accessor family (decision 0022): the consumer's
+		#: choice rather than the schema's, and off unless asked for.
+		self.materialize = materialize
 
 	def module(self) -> str:
 		lines = [
@@ -1036,6 +1040,39 @@ class Emitter:
 			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
 			f"\t\treturn {inner}(self._msg, self._at + starts[index],",
 			"\t\t\tstarts[index + 1] - starts[index])",
+			*self._run_index(struct, placement, inner),
+		]
+
+	def _run_index(self, struct: ResolvedStruct, placement: Placement,
+			inner: str) -> list[str]:
+		"""The second family for a run: every element, walked once (0022).
+
+		`x(i)` rebuilds the walk on every call, so visiting all of them is
+		quadratic. This walks once and hands back the elements.
+
+		No `max` is needed, unlike C. The cap there is how many offsets to
+		hold, because generated C never allocates; here the list is the
+		language's and the schema's bound on the walk still bounds it. The
+		same decision reaches a different construct in each -- which is what
+		it means for the family to be the consumer's rather than the
+		schema's.
+		"""
+		if not self.materialize:
+			return []
+
+		name = c_name(local_name(struct, placement))
+		return [
+			"",
+			f"\tdef {name}_all(self) -> list[{inner}]:",
+			f'\t\t"""Every `{placement.type_name}` in `{placement.path}`,',
+			"",
+			"\t\twalked once. The map calls this run `access = Sequential`,",
+			"\t\twhich is the cost of reaching element N by reading the N-1",
+			'\t\tbefore it -- paid once here rather than once per index."""',
+			f"\t\tstarts = self._{name}_walk()",
+			f"\t\treturn [{inner}(self._msg, self._at + starts[i],",
+			"\t\t\tstarts[i + 1] - starts[i])",
+			"\t\t\tfor i in range(len(starts) - 1)]",
 		]
 
 	def _record_run(self, struct: ResolvedStruct,

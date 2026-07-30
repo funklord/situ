@@ -61,22 +61,26 @@ class Generated:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		namespace: str = "situ") -> Generated:
+		namespace: str = "situ", materialize: bool = False) -> Generated:
 	return Generated(
-		header   = Emitter(schema, resolved, basename, namespace).header(),
+		header   = Emitter(schema, resolved, basename, namespace,
+		                   materialize).header(),
 		basename = basename,
 	)
 
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str, namespace: str) -> None:
+			basename: str, namespace: str, materialize: bool = False) -> None:
 		self.schema    = schema
 		self.resolved  = resolved
 		self.basename  = basename
 		self.namespace = namespace
 		self.enums     = {decl.name: decl for decl in schema.enums()}
 		self.structs   = set(resolved.structs)
+		#: Emit the second accessor family (decision 0022): the consumer's
+		#: choice rather than the schema's, and off unless asked for.
+		self.materialize = materialize
 
 	# -- the file ------------------------------------------------------
 
@@ -962,6 +966,91 @@ class Emitter:
 			"\t}",
 		]
 
+
+	def _run_index(self, struct: ResolvedStruct, placement: Placement,
+			walk: list[str], cond: str | None, inner: str) -> list[str]:
+		"""The second family for a run: element offsets, resolved once (0022).
+
+		The C backend's shape, because this one shares its constraint: a view
+		is a value, nothing allocates, and the storage has to be the
+		caller's. `max N` bounds the array, so a run without one gets a note
+		saying what to add. Python needs no cap for the same feature, its
+		list being the language's -- one decision, a different construct in
+		each.
+		"""
+		if not self.materialize:
+			return []
+
+		cap = placement.repeat_cap or placement.delimiter_cap
+		name = c_name(local_name(struct, placement))
+		if cap is None:
+			return [
+				"",
+				f"\t/* No index for {placement.path}: the run has no `max`, so",
+				"\t * how many offsets to hold is not a number this knows and",
+				"\t * the array would have to be allocated. Add `max N`. */",
+			]
+
+		return [
+			"",
+			f"\t/* Where each element of {placement.path} starts.",
+			"\t *",
+			"\t * The map calls this run `access = Sequential`: reaching",
+			"\t * element N means reading the N-1 before it, so the indexed",
+			"\t * accessor above walks from the base on every call. Building",
+			"\t * this is one pass; every lookup after it is arithmetic. */",
+			f"\tstruct {name}_index {{",
+			"\t\tstd::uint32_t count;",
+			"\t\t/* One more than `count`: the last is where the run ends, so",
+			"\t\t * an element's size is the gap to its neighbour. */",
+			f"\t\tstd::uint32_t start[{cap}u + 1u];",
+			"\t};",
+			"",
+			f"\t[[nodiscard]] {name}_index {name}_indexed() const noexcept",
+			"\t{",
+			f"\t\t{name}_index out{{}};",
+			"",
+			*walk,
+			"\t\t\tout.start[n] = at;",
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			*([] if cond is None else [
+				f"\t\t\tif (!({cond})) {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+			]),
+			f"\t\t\tif (n == {cap}u) {{",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"\t\t}",
+			"",
+			"\t\tout.count = n;",
+			"\t\tout.start[n] = at;",
+			"\t\treturn out;",
+			"\t}",
+			"",
+			"\t/* Element `index`, in constant time. Arithmetic rather than a",
+			"\t * walk -- calling the walking accessor here would build an",
+			"\t * index and then ignore it. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_at("
+			f"const {name}_index &idx,",
+			f"\t\t\tstd::uint32_t index, ::{self.namespace}::{inner} &out)"
+			" const noexcept",
+			"\t{",
+			"\t\tif (index >= idx.count) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"\t\tsitu_view_t raw;",
+			"\t\tconst auto e = situ_view_sub(this->raw(), idx.start[index],",
+			"\t\t\tidx.start[index + 1u] - idx.start[index], &raw);",
+			"\t\tif (e != SITU_OK) {",
+			"\t\t\treturn static_cast<::situ::rt::err>(e);",
+			"\t\t}",
+			f"\t\tout = ::{self.namespace}::{inner}(raw);",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
+
 	def _repeat_while(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run ending after the element that fails a condition (8.6.6)."""
@@ -1041,6 +1130,8 @@ class Emitter:
 			"\t\t(void)n;",
 			f"\t\treturn at - ({start});",
 			"\t}",
+			*self._run_index(struct, placement, walk,
+			                 self._element_cond(element, placement), inner),
 		]
 
 	def _element_cond(self, element: ResolvedStruct,

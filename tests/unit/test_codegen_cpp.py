@@ -976,3 +976,60 @@ int main()
 
 	run = subprocess.run([str(binary)], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- the second accessor family (decision 0022) -----------------------------
+
+INDEXED_RUN = """
+struct l { u2 f; u6 r; u8 t[r]; }
+struct n { l ls[] while (f == 0 && r != 0) max 128; }
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_run_index_agrees_with_the_walk(tmp_path: Path) -> None:
+	"""C's shape rather than Python's list, because this backend shares C's
+	constraint: a view is a value, nothing allocates, and the storage is the
+	caller's. `max N` bounds the array. Measured at 13ms against 2ms."""
+	schema   = parse_text(PREAMBLE + INDEXED_RUN)
+	resolved = resolve(schema, solve(schema))
+	built    = generate_cpp(schema, resolved, "unit", materialize=True)
+	(tmp_path / "unit.hpp").write_text(built.header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text("""
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t buf[128];
+	std::uint32_t k = 0;
+	for (int i = 0; i < 40; i++) { buf[k++] = 1; buf[k++] = 'a'; }
+	buf[k++] = 0;
+
+	const ::situ::n v{ situ_view_t{ buf, k, 0 } };
+	const auto idx = v.ls_indexed();
+
+	if (idx.count != v.ls_count() || idx.count != 41u)
+		return 1;
+	for (std::uint32_t i = 0; i < idx.count; i++) {
+		::situ::l a{ situ_view_t{ buf, k, 0 } }, b{ situ_view_t{ buf, k, 0 } };
+		if (v.ls(i, a) != ::situ::rt::err::ok)          return 2;
+		if (v.ls_at(idx, i, b) != ::situ::rt::err::ok)  return 3;
+		if (a.base() != b.base() || a.limit() != b.limit()) return 4;
+	}
+	::situ::l past{ situ_view_t{ buf, k, 0 } };
+	if (v.ls_at(idx, idx.count, past) != ::situ::rt::err::bounds)
+		return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built_ = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built_.returncode == 0, built_.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

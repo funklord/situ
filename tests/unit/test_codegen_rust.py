@@ -665,3 +665,60 @@ def test_an_offset_sum_keeps_a_running_total() -> None:
 	assert "let mut at = 0usize;" in module
 	assert "at += self.a_span_from(at);" in module
 	assert "0 + self.a_span()" not in module
+
+
+# -- the second accessor family (decision 0022) -----------------------------
+
+INDEXED_RUN = """
+struct l { u2 f; u6 r; u8 t[r]; }
+struct n { l ls[] while (f == 0 && r != 0) max 128; }
+"""
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_run_index_agrees_with_the_walk(tmp_path: Path) -> None:
+	"""C's shape rather than Python's list: this backend is `no_std` and has
+	no allocator, so `max N` bounds an array the caller owns. Measured at 6ms
+	against under one."""
+	schema   = parse_text(PREAMBLE + INDEXED_RUN)
+	resolved = resolve(schema, solve(schema))
+	module   = generate_rs(schema, resolved, "unit", materialize=True).module
+
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "unit.rs").write_text(module, encoding="ascii")
+	(src / "main.rs").write_text("""
+mod situ_rt;
+mod unit;
+
+fn main() {
+	let mut buf = Vec::new();
+	for _ in 0..40 { buf.push(1u8); buf.push(b'a'); }
+	buf.push(0u8);
+
+	let v = unit::N::new(&buf).unwrap();
+	let idx = v.ls_indexed();
+
+	assert_eq!(idx.count, v.ls_count());
+	assert_eq!(idx.count, 41);
+	for i in 0..idx.count {
+		let a = v.ls(i).unwrap();
+		let b = v.ls_at(&idx, i).unwrap();
+		assert_eq!((a.f(), a.r()), (b.f(), b.r()));
+	}
+	assert!(v.ls_at(&idx, idx.count).is_err());
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", str(src / "main.rs"),
+		 "-o", str(tmp_path / "out")],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

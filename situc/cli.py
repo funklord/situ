@@ -351,13 +351,6 @@ def cmd_build(args: argparse.Namespace) -> int:
 	from situc.codegen.c import generate
 	from situc.codegen.cpp import generate as generate_cpp
 
-	def warn_unsupported(target: str) -> None:
-		"""Said out loud rather than ignored. A flag that silently does
-		nothing is worse than one that refuses: the caller believes they got
-		the second family and measures the first."""
-		print(f"situc: --materialize is C-only so far; {target} ignores it",
-		      file=sys.stderr)
-
 	source, resolved, outcomes = analyse(args.schema)
 	files: dict[str, str]
 	warnings: list[Diagnostic]
@@ -365,26 +358,23 @@ def cmd_build(args: argparse.Namespace) -> int:
 	if args.target == "rust":
 		from situc.codegen.rust import generate as generate_rs
 
-		if args.materialize:
-			warn_unsupported(args.target)
 		emitted_rs = generate_rs(parse(source), resolved, args.schema.stem,
-		                         args.prefix)
+		                         args.prefix,
+							 materialize=args.materialize)
 		files    = emitted_rs.files()
 		warnings = emitted_rs.warnings
 	elif args.target == "python":
 		from situc.codegen.python import generate as generate_py
 
-		if args.materialize:
-			warn_unsupported(args.target)
 		emitted_py = generate_py(parse(source), resolved, args.schema.stem,
-		                         args.prefix)
+		                         args.prefix,
+							 materialize=args.materialize)
 		files    = emitted_py.files()
 		warnings = emitted_py.warnings
 	elif args.target == "cpp":
-		if args.materialize:
-			warn_unsupported(args.target)
 		cpp      = generate_cpp(parse(source), resolved, args.schema.stem,
-		                        args.prefix)
+		                        args.prefix,
+							 materialize=args.materialize)
 		files    = cpp.files()
 		warnings = cpp.warnings
 	else:

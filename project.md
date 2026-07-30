@@ -4535,8 +4535,22 @@ Three things that fell out of building it:
    disagree about where an element starts.
 3. **The default is off.** An index is memory the caller did not ask for, and
    whether to spend it is a deployment decision rather than a schema one
-   (0022). C only so far; the flag says so on the other three rather than
-   silently doing nothing.
+   (0022).
+
+4. **One decision, a different construct in each language.** All four emit it
+   now, and the shapes are not the same:
+
+   | | what `--materialize` emits | `max` needed? |
+   |---|---|---|
+   | C, C++ | a `{ count, start[CAP + 1] }` the caller owns | yes |
+   | Rust | the same, `no_std` having no allocator either | yes |
+   | Python | `x_all()`, returning the elements as a list | no |
+
+   The cap is not part of the idea. It is C's refusal to allocate, arriving
+   in three languages that share it and absent from the one that does not --
+   which is what it means for the family to be the consumer's choice rather
+   than the schema's. Measured, walking against indexed: 103ms/5ms in C,
+   13ms/2ms in C++, 6ms/under one in Rust, 745ms/21ms in Python.
 
 **The other half of `Sequential`, and the bug it found.** A run makes reaching
 element N a walk of the N-1 before it; a *scan* makes reaching member N a

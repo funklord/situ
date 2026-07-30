@@ -38,9 +38,11 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_py(schema, resolved, "unit").module
 
 
-def load(tmp_path: Path, body: str, preamble: str = PREAMBLE) -> ModuleType:
+def load(tmp_path: Path, body: str, preamble: str = PREAMBLE,
+		module_text: str | None = None) -> ModuleType:
 	"""Generate the module, import it, and hand it back."""
-	(tmp_path / "unit.py").write_text(emit(body, preamble), encoding="ascii")
+	(tmp_path / "unit.py").write_text(module_text or emit(body, preamble),
+	                                  encoding="ascii")
 
 	runtime()			# so the generated import finds the cached one
 	sys.path.insert(0, str(tmp_path))
@@ -755,3 +757,44 @@ def test_an_offset_sum_keeps_a_running_total() -> None:
 	assert "at = 0" in module
 	assert "at += self.a_span_from(at)" in module
 	assert "return 0 + self.a_span" not in module
+
+
+# -- the second accessor family (decision 0022) -----------------------------
+
+INDEXED_RUN = """
+struct l { u2 f; u6 r; u8 t[r]; }
+struct n { l ls[] while (f == 0 && r != 0) max 128; }
+"""
+
+
+def materialized(body: str, preamble: str = PREAMBLE) -> str:
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	return generate_py(schema, resolved, "unit", materialize=True).module
+
+
+def test_the_second_family_is_off_by_default() -> None:
+	assert "def ls_all" not in emit(INDEXED_RUN)
+
+
+def test_a_run_is_walked_once_rather_than_per_index(tmp_path: Path) -> None:
+	"""`ls(i)` rebuilds the walk on every call, so visiting all of them is
+	quadratic: measured at 745ms against 21ms for forty labels.
+
+	No `max` is needed here, unlike C -- the cap there is how many offsets to
+	hold, because generated C never allocates, and this list is the
+	language's. One decision, a different construct in each.
+	"""
+	module = load(tmp_path, INDEXED_RUN,
+		module_text=materialized(INDEXED_RUN))
+	raw    = bytearray()
+	for _ in range(40):
+		raw += bytes([1, ord("a")])
+	raw += bytes([0])
+
+	held = module.n.at(module.Message(raw), 0, len(raw))
+	one  = [(held.ls(i)._at, held.ls(i)._len) for i in range(held.ls_count)]
+	all_ = [(e._at, e._len) for e in held.ls_all()]
+
+	assert one == all_
+	assert len(all_) == 41

@@ -59,8 +59,9 @@ class Generated:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		prefix: str = "situ") -> Generated:
-	return Generated(module=Emitter(schema, resolved, basename).module(),
+		prefix: str = "situ", materialize: bool = False) -> Generated:
+	return Generated(module=Emitter(schema, resolved, basename,
+	                                materialize).module(),
 	                 basename=basename)
 
 
@@ -105,12 +106,15 @@ def _pascal(name: str) -> str:
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str) -> None:
+			basename: str, materialize: bool = False) -> None:
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.structs  = set(resolved.structs)
+		#: Emit the second accessor family (decision 0022): the consumer's
+		#: choice rather than the schema's, and off unless asked for.
+		self.materialize = materialize
 
 	def module(self) -> str:
 		body: list[str] = []
@@ -193,6 +197,15 @@ class Emitter:
 
 		if layout.register is not None:
 			return self._register(struct)
+
+		# The index types first, at module scope: Rust has no struct
+		# declaration inside an `impl`, so they cannot live beside the methods
+		# that use them.
+		types: list[str] = []
+		for held in own_members(struct):
+			if held.repeat_while is not None or held.delimiter is not None:
+				types.extend(self._run_index_type(struct, held))
+
 		name  = _pascal(struct.name)
 		fixed = layout.is_fixed_size
 		lines = [
@@ -262,7 +275,7 @@ class Emitter:
 
 		lines.extend(self._invariants(struct))
 		lines.extend(["}", ""])
-		return lines
+		return [*types, *lines]
 
 	# -- reads ---------------------------------------------------------
 
@@ -901,6 +914,98 @@ class Emitter:
 		                   lambda name: f"({held}.{_ident(c_name(name))}()"
 		                                " as usize)")
 
+
+	def _run_index(self, struct: ResolvedStruct, placement: Placement,
+			walk: list[str], cond: str, inner: str) -> list[str]:
+		"""The second family for a run: element offsets, resolved once (0022).
+
+		C's shape rather than Python's list, because this backend is `no_std`
+		and there is no allocator to lean on. `max N` bounds the array, and a
+		run without one gets a note saying what to add. Three languages, one
+		decision, three constructs -- which is what it means for the family to
+		be the consumer's rather than the schema's.
+		"""
+		if not self.materialize:
+			return []
+
+		cap  = placement.repeat_cap or placement.delimiter_cap
+		name = c_name(local_name(struct, placement))
+		if cap is None:
+			return [
+				"",
+				f"\t// No index for {placement.path}: the run has no `max`, so",
+				"\t// how many offsets to hold is not a number this knows and",
+				"\t// the array would have to be allocated. Add `max N`.",
+			]
+
+		kind = _pascal(f"{struct.name}_{name}_index")
+		return [
+			"",
+			f"\t/// Where each element of `{placement.path}` starts.",
+			"\t///",
+			"\t/// The map calls this run `access = Sequential`: reaching",
+			"\t/// element N means reading the N-1 before it, so the indexed",
+			"\t/// accessor above walks from the base on every call. Building",
+			"\t/// this is one pass; every lookup after it is arithmetic.",
+			f"\tpub fn {_ident(name + '_indexed')}(&self) -> {kind} {{",
+			f"\t\tlet mut out = {kind} {{ count: 0, start: [0; {cap} + 1] }};",
+			"",
+			*walk,
+			"\t\t\tout.start[n] = at;",
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			f"\t\t\tif !({cond}) {{",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			f"\t\t\tif n == {cap} {{",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"\t\t}",
+			"",
+			"\t\tout.count = n;",
+			"\t\tout.start[n] = at;",
+			"\t\tout",
+			"\t}",
+			"",
+			"\t/// Element `index`, in constant time: arithmetic rather than a",
+			"\t/// walk. Calling the walking accessor here would build an index",
+			"\t/// and then ignore it.",
+			f"\tpub fn {_ident(name + '_at')}(&self, idx: &{kind},"
+			" index: usize)",
+			f"\t\t\t-> Result<{inner}<'_>> {{",
+			"\t\tif index >= idx.count {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tOk({inner} {{",
+			"\t\t\tbytes: &self.bytes[idx.start[index]..idx.start[index + 1]],",
+			"\t\t})",
+			"\t}",
+		]
+
+	def _run_index_type(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The index's own type, at module scope rather than inside `impl`."""
+		if not self.materialize:
+			return []
+		cap = placement.repeat_cap or placement.delimiter_cap
+		if cap is None:
+			return []
+
+		name = c_name(local_name(struct, placement))
+		kind = _pascal(f"{struct.name}_{name}_index")
+		return [
+			"",
+			f"/// Element offsets for `{placement.path}`, held by the caller.",
+			"///",
+			"/// One more than `count`: the last entry is where the run ends,",
+			"/// so an element's size is the gap to its neighbour.",
+			"#[derive(Debug, Clone, Copy)]",
+			f"pub struct {kind} {{",
+			"\tpub count: usize,",
+			f"\tpub start: [usize; {cap} + 1],",
+			"}",
+		]
+
 	def _repeat_while(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run ending after the element that fails a condition (8.6.6)."""
@@ -966,6 +1071,7 @@ class Emitter:
 			"\t\tlet _ = n;",
 			f"\t\tat - ({start})",
 			"\t}",
+			*self._run_index(struct, placement, walk, cond, inner),
 		]
 
 	def _record_run(self, struct: ResolvedStruct,
