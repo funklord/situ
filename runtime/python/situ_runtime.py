@@ -89,6 +89,19 @@ class VersionError(SituError):
 	"""
 
 
+class StageError(SituError):
+	"""A region's stage gate has not been passed (section 12.1).
+
+	Distinct from `TagError`, which had been carrying both: a tag that fails
+	to verify is a hostile or corrupt message, and reaching a sealed interior
+	without opening the gate is a bug in the caller. A receiver that cannot
+	tell them apart logs the second as an attack and the first as a typo.
+
+	The C runtime has named the two separately since it was written; this one
+	had six of the seven failure classes.
+	"""
+
+
 class TagError(SituError):
 	"""A sealed region was opened without a verified tag."""
 
@@ -240,7 +253,7 @@ class Gate:
 
 	def __init__(self, view: View, token: _Token) -> None:
 		if token is not Gate._KEY:
-			raise TagError(
+			raise StageError(
 				"a sealed region's interior is reachable only through its "
 				"verified open; see section 14.3")
 		self._view = view

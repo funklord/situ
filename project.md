@@ -51,13 +51,15 @@ Rules for the implementer:
    | 11.3, the propagation table | `test_the_spec_table_matches_the_rows` |
    | 21, the CLI surface | `test_the_cli_section_lists_every_command` |
    | 23, the repository layout | `test_the_layout_section_lists_every_compiler_module` |
+   | 20.2, the failure classes | `test_the_failure_classes_match_the_runtimes` |
 
    Every one of them was added *after* finding the drift, and every one found
    more of it than expected: 11.3 was about twenty rows behind, 21 named a
    `--strict` that never existed and called three per-subcommand flags global,
-   and 23 was missing a module. Prefer adding a check to adding a promise --
-   a normative table nobody verifies is a comment, and a list a reader types
-   from is worse than that.
+   23 was missing a module, and 20.2 listed five of the seven failure classes
+   -- and the check that found that also found two runtimes short of one.
+   Prefer adding a check to adding a promise -- a normative table nobody
+   verifies is a comment, and a list a reader types from is worse than that.
 
 ---
 
@@ -2741,8 +2743,16 @@ Principles:
 - **Field access within a view compiles to `base + K`.** Verify this in tests
   by inspecting generated code for constant offsets.
 - **Errors are return codes**, never `errno`, never longjmp. A single
-  `situ_err_t` enum with distinct codes per failure class (bounds, constraint,
-  version, tag, stage).
+  `situ_err_t` enum with distinct codes per failure class: bounds, constraint,
+  version, tag, stage, stale, truncated. `test_the_failure_classes_match_the_runtimes`
+  holds this list to `runtime/c/situ.h` and holds the other three runtimes to
+  it as well -- a class C can report and Rust cannot is a condition a Rust
+  consumer has no way to express, and `truncated` had to be added to four
+  runtimes by hand to find that out.
+- **`truncated` is not `bounds`.** The bytes so far are a valid prefix and more
+  are needed, which a stream reader sees on every partial read; bounds means a
+  read went outside the buffer, which is a bug or an attack. A receiver that
+  cannot tell them apart treats normal progress as hostile.
 - **An accessor whose extent comes from the data bounds itself.** The
   amortised frame check (above) covers offsets the frame is known to contain,
   and a length read from a field is not one: the message chooses it. Such an
@@ -2824,7 +2834,7 @@ the fix was to call it. And all three treated a *constant*-sized array as
 data-sized, because `u8 id[DEVICE_ID_BYTES]` sets `sized_by` as well; they
 looked for a field of that name and dropped the member. The honest question is
 whether the *data* decides, which `array_count` answers, and it lives in
-`traverse.classify` where all three ask it (invariant 44).
+`traverse.classify` where all three ask it (invariant 43).
 
 **Every one of these declines rather than guesses**, and says so in the file it
 writes. A generated artifact that quietly omits a member is indistinguishable
@@ -4439,6 +4449,37 @@ the toolchain purge" is a strategy for C and C++ only. That is a reason to
 keep the lattice-driven rule -- emit the second family only where the first
 one's vector is weak -- rather than a reason to abandon the split.
 
+### 26.29 One list, four runtimes
+
+The framing work needed a new failure class, `truncated`, and adding it meant
+editing four runtimes by hand. Nothing would have caught a fourth omission, so
+section 20.2's list of the classes is now held to `runtime/c/situ.h` *and* the
+other three runtimes are held to it.
+
+It found two holes on its first run, neither of them recent:
+
+- **C++ had no `stale`.** The C runtime has named it since section 12.3 was
+  written -- a view outliving a write that shifted layout under it -- and the
+  C++ `err` enum did not, so a caller could not name the condition it was
+  being protected from.
+- **Python reported the stage gate as `TagError`.** A tag that fails to
+  verify is a hostile or corrupt message; reaching a sealed interior without
+  opening the gate is a bug in the caller. A receiver that cannot tell them
+  apart logs the second as an attack and the first as a typo. It has a
+  `StageError` now.
+
+One exemption, written into the test rather than left implicit: **Rust has no
+`Stale`**, because invalidation there is the borrow checker (26.18) -- a view
+outliving such a write does not compile, and there is no run-time condition to
+name. Having the exemption in the test is what makes a second one something
+that has to be argued for.
+
+The general point is the one section 0 keeps making, at a level above the
+document: a *runtime* can drift from another runtime as easily as a table can
+drift from the code, and four hand-edited copies of anything will disagree
+eventually. What made this checkable is that the C enum is the definition and
+the other three claim to mirror it -- where that is true, say it in a test.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -4576,6 +4617,11 @@ one's vector is weak -- rather than a reason to abandon the split.
    tag or an invariant warned on sight. `-D warnings` on generated output is
    worth keeping green for the same reason `-Werror` is on the runtime: the
    first ignorable warning makes the next one ignorable too.
+
+   Stated here and enforced nowhere for a long time: the Rust test harness
+   did not pass `-D warnings`, so three latent warnings accumulated behind an
+   invariant that said they must not. It passes it now. An invariant nobody
+   checks is section 0's rule 6 one level up.
 24. **A guard against non-termination is not a comment.** A record whose
    members are all delimited and all empty occupies no bytes, and a walk that
    advanced by that would not return on input somebody chose. That is a denial
@@ -4754,7 +4800,18 @@ one's vector is weak -- rather than a reason to abandon the split.
    nothing for the caller who did not ask. Neither substitutes for the other,
    and picking one is how a fix reads finished while half the problem stands.
 
-43. **A capability nothing exercised hid a check nothing emitted.** Making a
+43. **"This backend cannot resolve it" is a claim worth re-reading.** Three
+   backends dropped a member with that note, and neither reason held. A length
+   field behind a variable-length member has no constant to be read at -- and
+   its own accessor knows where it is, and every backend already emitted one;
+   only the static read had been tried. And a *constant*-sized array sets
+   `sized_by` too, so all three looked for a field named `DEVICE_ID_BYTES`,
+   found none, and dropped `u8 device_id[DEVICE_ID_BYTES]` from the generated
+   API. A note saying why is much better than silence and is not the same as
+   being right: it records the shape of the attempt, not the shape of the
+   problem.
+
+44. **A capability nothing exercised hid a check nothing emitted.** Making a
    variant walkable immediately showed that `default: error` was enforced by
    no backend, in a language whose spec had said it was since section 14.5 was
    written, with an error code reserved for it and returned by nothing. Dead
@@ -4954,3 +5011,7 @@ about it.
 | walk | traversing a run by adding each element's extent, there being no count to index by |
 | wire signature | the committed, diffable record of the byte-level contract; distinct from the capability map, which records cost (19.3) |
 | declared weakening | a capability weakening a schema asserts because the layout does not imply it (11.5) |
+| located member | one placed where a field says, from the start of the message rather than after the member before it; a reference, contributing nothing to the enclosing extent (9.8) |
+| framing | deciding from a prefix whether a whole message is present, and if not how many bytes are needed (20.3) |
+| accessor family | one of the ways a schema's bytes can be reached -- zero-copy views, or a materialized parse -- chosen by the consumer rather than the schema (decision 0022) |
+| materialized | parsed once into owned storage, trading RAM for random access and cheap editing; the opposite of zero-copy, and worth generating only where the zero-copy vector is weak |

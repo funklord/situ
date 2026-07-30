@@ -44,6 +44,10 @@ enum class err : int {
 	version    = SITU_ERR_VERSION,
 	tag        = SITU_ERR_TAG,
 	stage      = SITU_ERR_STAGE,
+	/* A view outlived a write that shifted layout under it (section 12.3).
+	   Absent here for a long time while the C runtime had it, so a C++
+	   caller could not name the condition it was being protected from. */
+	stale      = SITU_ERR_STALE,
 	/* Not an error in the way the others are: the bytes so far are a valid
 	 * prefix and more are needed. Separate from `bounds`, which means a read
 	 * went outside the buffer -- a bug or an attack. Conflating them makes a
