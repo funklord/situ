@@ -4912,7 +4912,18 @@ found, and it was there before any of this work began.
    attempts at a faster path measured *slower* than what they replaced before
    the cause turned up -- which is the only reason it turned up at all.
 
-46. **A capability nothing exercised hid a check nothing emitted.** Making a
+46. **A safety fix in one backend is a bug report about the other three.**
+   `situ_remaining_u32` was added to C because a `[remaining]` length wrapped;
+   the same unsaturating subtraction sat in every other backend's scan limit
+   and nobody looked. `start` there is a sum of length fields the message
+   chooses, so a `u16` claiming 65535 in a ten-byte frame put the scan base
+   past the end and handed the search four billion bytes: C++ read out of
+   bounds, Rust panicked on the slice before any limit applied, Python
+   returned a wrong number. Found by asking what else the fix should have
+   touched -- which is a question worth asking on the day rather than months
+   later.
+
+47. **A capability nothing exercised hid a check nothing emitted.** Making a
    variant walkable immediately showed that `default: error` was enforced by
    no backend, in a language whose spec had said it was since section 14.5 was
    written, with an error code reserved for it and returned by nothing. Dead

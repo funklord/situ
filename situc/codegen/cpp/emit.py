@@ -780,8 +780,16 @@ class Emitter:
 			return ["", f"\t/* {placement.path}: this backend cannot resolve"
 			        " where the scan starts. */"]
 
-		limit = (f"limit() - ({start})" if placement.delimiter_cap is None
-		         else f"situ_min_u32({placement.delimiter_cap}u, limit() - ({start}))")
+		# Saturating. `start` is a sum of length fields the message chooses,
+		# so it can exceed the frame -- `u16 n` claiming 65535 in a ten-byte
+		# view puts the scan base past the end, and an unsaturating
+		# subtraction then hands `scan` about four billion bytes to search.
+		# Measured as an AddressSanitizer SEGV before this line changed; the
+		# C backend has been saturating here since the `[remaining]` fix and
+		# these three were not.
+		room  = f"situ_remaining_u32(limit(), {start})"
+		limit = (room if placement.delimiter_cap is None
+		         else f"situ_min_u32({placement.delimiter_cap}u, {room})")
 
 		# With `[trim]` the framing and the value are different numbers: the
 		# scan says where the next member starts, and the value is what is

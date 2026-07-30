@@ -704,11 +704,21 @@ class Emitter:
 		        f"{quote}, {escape})")
 
 	def _scan_slice(self, placement: Placement, start: str) -> str:
-		"""The bytes the scan may look at: to the cap, or to the end."""
+		"""The bytes the scan may look at: to the cap, or to the end.
+
+		The start is clamped as well as the end. `start` is a sum of length
+		fields the message chooses, so it can exceed the slice -- and
+		`&bytes[start..]` panics before any limit is applied, which is
+		memory-safe and is still a message an attacker sends to stop the
+		process. C++ read out of bounds on the same input; this panicked;
+		Python returned a wrong number. All three now answer as C does, which
+		is an empty scan.
+		"""
+		begin = f"core::cmp::min({start}, self.bytes.len())"
 		if placement.delimiter_cap is None:
-			return f"&self.bytes[({start})..]"
-		return (f"&self.bytes[({start})..core::cmp::min("
-		        f"({start}) + {placement.delimiter_cap}, self.bytes.len())]")
+			return f"&self.bytes[{begin}..]"
+		return (f"&self.bytes[{begin}..core::cmp::min("
+		        f"{begin} + {placement.delimiter_cap}, self.bytes.len())]")
 
 	def _delimited(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -729,9 +739,16 @@ class Emitter:
 			        " where the scan starts."]
 
 		sliced = self._scan_slice(placement, start)
-		limit  = (f"(self.bytes.len() - ({start}))" if placement.delimiter_cap is None
-		          else f"core::cmp::min({placement.delimiter_cap}, "
-		               f"self.bytes.len() - ({start}))")
+		# Saturating. `start` is a sum of length fields the message chooses,
+		# so it can exceed the frame -- `u16 n` claiming 65535 in a ten-byte
+		# view puts the scan base past the end, and an unsaturating
+		# subtraction then hands `scan` about four billion bytes to search.
+		# Measured as an AddressSanitizer SEGV before this line changed; the
+		# C backend has been saturating here since the `[remaining]` fix and
+		# these three were not.
+		room   = f"self.bytes.len().saturating_sub({start})"
+		limit  = (room if placement.delimiter_cap is None
+		          else f"core::cmp::min({placement.delimiter_cap}, {room})")
 
 		# With `[trim]` the framing and the value are different numbers.
 		scan = _ident(f"{base}_raw_len" if placement.trimmed else f"{base}_len")

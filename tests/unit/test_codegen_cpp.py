@@ -916,3 +916,57 @@ int main()
 
 	run = subprocess.run([str(binary)], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- a base the message puts past the end -----------------------------------
+
+OVERREACHING = 'struct s { u16 n; u8 a[n]; u8 b[] until ";"; }'
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_scan_base_past_the_frame_reads_nothing(tmp_path: Path) -> None:
+	"""`n` is a `u16` the message chooses, so `b`'s base can sit past the end
+	of a ten-byte frame. The scan limit was `len - base`, which underflows to
+	about four billion, and the scan then searched that much memory.
+
+	C++ read out of bounds -- an AddressSanitizer SEGV. Rust panicked on the
+	slice before any limit applied. Python returned a wrong number. C had been
+	saturating here since the `[remaining]` fix and the other three were not.
+	All four now answer as C does: an empty scan."""
+	result = compiles(tmp_path, OVERREACHING, extra="""
+#include <cstdlib>
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	/* Ten bytes on the heap, so a read past them is a fault ASan sees. */
+	auto *buf = static_cast<std::uint8_t *>(std::malloc(10));
+	if (buf == nullptr)
+		return 1;
+	std::memset(buf, 0, 10);
+	buf[0] = 0xFF; buf[1] = 0xFF;		/* n = 65535 */
+
+	const ::situ::s held{ situ_view_t{ buf, 10, 0 } };
+	const std::uint32_t len = held.b_len();
+	std::free(buf);
+
+	return len == 0u ? 0 : 2;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 "-fsanitize=address",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

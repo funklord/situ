@@ -621,3 +621,35 @@ fn main() {
 
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- a base the message puts past the end -----------------------------------
+
+OVERREACHING = 'struct s { u16 n; u8 a[n]; u8 b[] until ";"; }'
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_scan_base_past_the_frame_reads_nothing(tmp_path: Path) -> None:
+	"""`n` is a `u16` the message chooses, so `b`'s base can sit past the end
+	of a ten-byte frame. The scan limit was `len - base`, which underflows to
+	about four billion, and the scan then searched that much memory.
+
+	C++ read out of bounds -- an AddressSanitizer SEGV. Rust panicked on the
+	slice before any limit applied. Python returned a wrong number. C had been
+	saturating here since the `[remaining]` fix and the other three were not.
+	All four now answer as C does: an empty scan."""
+	built = build(tmp_path, OVERREACHING, main="""
+fn main() {
+	let mut buf = [0u8; 10];
+	buf[0] = 0xFF;
+	buf[1] = 0xFF;			// n = 65535 in a ten-byte frame
+
+	let held = unit::S::new(&buf).unwrap();
+	assert_eq!(held.b_offset(), 65537);
+	assert_eq!(held.b_len(), 0);
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

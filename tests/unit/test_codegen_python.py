@@ -719,3 +719,27 @@ def test_a_length_behind_a_variable_member_resolves(tmp_path: Path) -> None:
 	assert held.b_offset == 7
 	assert bytes(held.b) == b"xy"
 	assert module.s.required(bytes(raw)) == len(raw)
+
+
+# -- a base the message puts past the end -----------------------------------
+
+OVERREACHING = 'struct s { u16 n; u8 a[n]; u8 b[] until ";"; }'
+
+
+def test_a_scan_base_past_the_frame_reads_nothing(tmp_path: Path) -> None:
+	"""`n` is a `u16` the message chooses, so `b`'s base can sit past the end
+	of a ten-byte frame. The scan limit was `len - base`, which underflows to
+	about four billion, and the scan then searched that much memory.
+
+	C++ read out of bounds -- an AddressSanitizer SEGV. Rust panicked on the
+	slice before any limit applied. Python returned a wrong number. C had been
+	saturating here since the `[remaining]` fix and the other three were not.
+	All four now answer as C does: an empty scan."""
+	module = load(tmp_path, OVERREACHING)
+	raw    = bytearray(10)
+	raw[0] = raw[1] = 0xFF		# n = 65535 in a ten-byte frame
+
+	held = module.s.at(module.Message(raw), 0, 10)
+
+	assert held.b_offset == 65537
+	assert held.b_len == 0
