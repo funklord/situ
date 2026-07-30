@@ -37,7 +37,7 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, arm_members, classify_check, declares_its_own_length,
+	Check, arm_members, arm_of, classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, matched_values, obligation, obligations,
 	own_members,
@@ -1266,23 +1266,12 @@ class Emitter:
 		`default` arm, which is present exactly when no `case` matched and so
 		needs the negation of all of them.
 		"""
-		local = placement.path[len(struct.name) + 1:]
-		if "." not in local:
+		found = arm_of(struct, placement)
+		if found is None:
 			return None
+		variant, arm = found
 
-		head = local.split(".")[0]
-		variant = next((held for held in self._top_level(struct)
-		                if held.kind == "variant" and held.name == head), None)
-		if variant is None or variant.discriminant is None:
-			return None
-
-		arm = next((one for one, member in arm_members(struct, variant)
-		            if member is not None and member.path == placement.path),
-		           None)
-		if arm is None:
-			return None
-
-		held = self._over_fields(struct, variant.discriminant, "view")
+		held = self._over_fields(struct, variant.discriminant or "", "view")
 		if arm.value is None:
 			# A `default` arm: present when nothing else matched.
 			matched = matched_values(variant)

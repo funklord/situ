@@ -550,3 +550,30 @@ def declares_its_own_length(placement: Placement) -> bool:
 	        and placement.array_count is None
 	        and placement.delimiter is None
 	        and placement.located is None)
+
+
+def arm_of(struct: ResolvedStruct,
+		placement: Placement) -> tuple[Placement, Arm] | None:
+	"""The variant this member is an arm of, and which arm, or None.
+
+	A fact about the layout, so it is asked once rather than in each backend:
+	four of them need it to guard an arm's accessor, and the only part that
+	differs between them is how the discriminant is read.
+
+	None where the member is not in an arm at all, or where the variant has
+	no discriminant this can name.
+	"""
+	local = placement.path[len(struct.name) + 1:]
+	if "." not in local:
+		return None
+
+	head = local.split(".")[0]
+	variant = next((held for held in own_members(struct)
+	                if held.kind == "variant" and held.name == head), None)
+	if variant is None or variant.discriminant is None:
+		return None
+
+	for arm, member in arm_members(struct, variant):
+		if member is not None and member.path == placement.path:
+			return variant, arm
+	return None

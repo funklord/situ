@@ -1033,3 +1033,59 @@ int main()
 	assert built_.returncode == 0, built_.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- reaching into a variant's arms (section 9.6) ---------------------------
+
+ARMS = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_each_arm_refuses_when_it_is_not_the_one_present(tmp_path: Path) -> None:
+	"""`err::version` is what an unrecognised discriminant gets, and reading
+	the arm that is not present is the same mistake from the other end."""
+	result = compiles(tmp_path, ARMS, extra="""
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t text[] = { 3, 'w', 'w', 'w' };
+	std::uint8_t ptr[]  = { 0xC0, 0x0C };
+	::situ::rt::bytes b;
+	std::uint8_t low;
+
+	const ::situ::label a{ situ_view_t{ text, sizeof text, 0 } };
+	if (a.body_text(b) != ::situ::rt::err::ok)                return 1;
+	if (b.size() != 3 || std::memcmp(b.data(), "www", 3) != 0) return 2;
+	if (a.body_pointer_low(low) != ::situ::rt::err::version)  return 3;
+
+	const ::situ::label c{ situ_view_t{ ptr, sizeof ptr, 0 } };
+	if (c.body_pointer_low(low) != ::situ::rt::err::ok)       return 4;
+	if (low != 0x0Cu)                                          return 5;
+	if (c.body_text(b) != ::situ::rt::err::version)            return 6;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

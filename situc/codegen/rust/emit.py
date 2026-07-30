@@ -28,7 +28,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Arm, Placement
 from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
@@ -243,6 +243,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._getter(struct, entry))
 
+		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._validate(struct))
@@ -278,6 +279,77 @@ class Emitter:
 		return [*types, *lines]
 
 	# -- reads ---------------------------------------------------------
+
+	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
+		"""Each variant arm's members, guarded by the discriminant (9.6)."""
+		lines: list[str] = []
+		for variant in own_members(struct):
+			if variant.kind != "variant":
+				continue
+			for arm, member in arm_members(struct, variant):
+				if member is not None:
+					lines.extend(self._arm_member(struct, variant, arm, member))
+		return lines
+
+	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
+		"""One arm member, as a `Result`: the arm may not be the one there.
+
+		`Error::Version` is what an unrecognised discriminant gets, and
+		reading an arm that is not present is the same mistake from the other
+		end.
+		"""
+		held = self._over_fields(struct, variant.discriminant or "", "self")
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return []
+			test = " || ".join(f"{held} == {one.value}" for one in matched)
+		else:
+			test = f"{held} != {arm.value}"
+
+		name   = _ident(c_name(local_name(struct, placement)))
+		scalar = placement.scalar
+		start  = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+
+		head = [
+			"",
+			f"\t/// `{placement.path}`, present when the discriminant selects",
+			f"\t/// `{arm.source or arm.value}`; `Error::Version` otherwise.",
+		]
+		refuse = [f"\t\tif {self._unparen(test)} {{",
+		          "\t\t\treturn Err(Error::Version);",
+		          "\t\t}"]
+
+		if scalar is not None and placement.array_count is None \
+				and placement.sized_by is None:
+			return [
+				*head,
+				f"\tpub fn {name}(&self) -> Result<{self._rust_type(scalar)}> {{",
+				*refuse,
+				# `as` the field's type: `read_be` hands back a `u64` and
+				# the ordinary getter casts the same way.
+				f"\t\tOk({self._unparen(self._raw_load(placement, scalar))}"
+				f" as {self._rust_type(scalar)})",
+				"\t}",
+			]
+
+		if scalar is not None and scalar.bits == BITS_PER_BYTE:
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return []
+			return [
+				*head,
+				f"\tpub fn {name}(&self) -> Result<&[u8]> {{",
+				*refuse,
+				f"\t\tlet at = {self._unparen(start)};",
+				f"\t\tlet n  = {self._unparen(length)};",
+				"\t\tOk(&self.bytes[at..at + n])",
+				"\t}",
+			]
+		return []
 
 	def _getter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement

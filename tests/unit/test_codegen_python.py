@@ -798,3 +798,36 @@ def test_a_run_is_walked_once_rather_than_per_index(tmp_path: Path) -> None:
 
 	assert one == all_
 	assert len(all_) == 41
+
+
+# -- reaching into a variant's arms (section 9.6) ---------------------------
+
+ARMS = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+"""
+
+
+def test_each_arm_refuses_when_it_is_not_the_one_present(tmp_path: Path) -> None:
+	"""Raises rather than returning a code, which is this backend's
+	convention: `VersionError` is what an unrecognised discriminant gets, and
+	reading the arm that is not there is the same mistake from the other
+	end."""
+	module = load(tmp_path, ARMS)
+
+	text = module.label.at(module.Message(bytearray(b"\x03www")), 0, 4)
+	assert bytes(text.body_text) == b"www"
+	with pytest.raises(module.VersionError):
+		text.body_pointer_low
+
+	ptr = module.label.at(module.Message(bytearray(b"\xC0\x0C")), 0, 2)
+	assert ptr.body_pointer_low == 0x0C
+	with pytest.raises(module.VersionError):
+		ptr.body_text

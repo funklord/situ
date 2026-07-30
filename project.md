@@ -1124,6 +1124,11 @@ situ_err_t situ_label_body_text_ptr(situ_view_t view,
 /* SITU_ERR_VERSION unless `form` selects this arm. */
 ```
 
+All four backends emit them, each refusing in its own way -- an `err` in C and
+C++, a `VersionError` in Python, an `Err(Error::Version)` in Rust -- and the
+question "which arm is this member in" is `traverse.arm_of`, asked once rather
+than answered four times.
+
 The check is per access, and that is what the construct costs: which arm is
 present is a fact about the message, and nothing about the frame records the
 answer. Reading another arm's bytes stays inside the view -- the extent bounds

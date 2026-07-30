@@ -25,7 +25,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Arm, Placement
 from situc.names import over_fields, render_delimiter, translate_operators
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -205,6 +205,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._extent_property(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
@@ -419,6 +420,72 @@ class Emitter:
 		]
 
 	# -- members -------------------------------------------------------
+
+	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
+		"""Each variant arm's members, guarded by the discriminant (9.6).
+
+		Walked explicitly because an arm's member is nested by path and the
+		own-member walk rightly leaves it out -- an arm is not a type, so
+		there is no other class it could be emitted on.
+		"""
+		lines: list[str] = []
+		for variant in own_members(struct):
+			if variant.kind != "variant":
+				continue
+			for arm, member in arm_members(struct, variant):
+				if member is not None:
+					lines.extend(self._arm_member(struct, variant, arm, member))
+		return lines
+
+	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
+		"""One arm member, raising where the arm is not the one present.
+
+		Raises rather than returning a code, which is this backend's
+		convention: `VersionError` is what an unrecognised discriminant gets,
+		and reading the arm that is not there is the same mistake from the
+		other end.
+		"""
+		held = self._over_fields(struct, variant.discriminant or "", "self")
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return []
+			test = " or ".join(f"{held} == {one.value}" for one in matched)
+		else:
+			test = f"{held} != {arm.value}"
+
+		name   = c_name(local_name(struct, placement))
+		scalar = placement.scalar
+		start  = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+
+		head = [
+			"", "\t@property",
+			f"\tdef {name}(self) -> {'int' if scalar is not None and placement.array_count is None and placement.sized_by is None else 'memoryview'}:",
+			f'\t\t"""{placement.path}, present when the discriminant selects',
+			f'\t\t`{arm.source or arm.value}`. Raises VersionError otherwise."""',
+			f"\t\tif {test}:",
+			f'\t\t\traise VersionError("{placement.path}: that arm is not'
+			' the one present")',
+		]
+
+		if scalar is not None and placement.array_count is None \
+				and placement.sized_by is None:
+			return [*head, f"\t\treturn {self._raw_load(placement, scalar)}"]
+
+		if scalar is not None and scalar.bits == BITS_PER_BYTE:
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return []
+			return [
+				*head,
+				"\t\tself._check()",
+				f"\t\tstart = self._at + ({start})",
+				f"\t\treturn self._msg.buffer[start:start + ({length})]",
+			]
+		return []
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement

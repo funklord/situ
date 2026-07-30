@@ -30,7 +30,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Arm, Placement
 from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -195,6 +195,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
@@ -1671,6 +1672,107 @@ class Emitter:
 			"\t}",
 		])
 		return lines
+
+	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
+		"""Each variant arm's members, guarded by the discriminant (9.6).
+
+		Walked explicitly because an arm's member is nested by path and
+		`own_entries` rightly leaves it out -- but an arm is not a type, so
+		there is no other section it could be emitted in.
+		"""
+		lines: list[str] = []
+		for variant in own_members(struct):
+			if variant.kind != "variant":
+				continue
+			for arm, member in arm_members(struct, variant):
+				if member is None:
+					continue
+				lines.extend(self._arm_member(struct, variant, arm, member))
+		return lines
+
+	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
+		"""One arm member, behind the test that its arm is the one present.
+
+		Reading another arm's bytes stays inside the view -- the extent
+		bounds it -- and means nothing, which is a wrong answer rather than a
+		fault. `err::version` is what `default: error` returns, being the
+		same mistake from the other end.
+		"""
+		held = self._over_fields(struct, variant.discriminant or "")
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return []
+			test = "(" + " || ".join(f"{held} == {one.value}u"
+			                         for one in matched) + ")"
+		else:
+			test = f"{held} != {arm.value}u"
+
+		name   = c_name(local_name(struct, placement))
+		scalar = placement.scalar
+		start  = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+
+		head = [
+			"",
+			f"\t/* {placement.path}, present when the discriminant selects"
+			f" `{arm.source or arm.value}`. */",
+		]
+		refuse = [f"\t\tif ({test}) {{",
+		          "\t\t\treturn ::situ::rt::err::version;",
+		          "\t\t}"]
+
+		if scalar is not None and placement.array_count is None \
+				and placement.sized_by is None:
+			ctype = self._field_ctype(placement)
+			return [
+				*head,
+				f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out)"
+				" const noexcept",
+				"\t{",
+				*refuse,
+				f"\t\tout = {self._load(scalar, placement, None)};",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			]
+
+		if scalar is not None and scalar.bits == BITS_PER_BYTE:
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return [*head, "\t/* ...and its length is not one this can"
+				        " compute. */"]
+			return [
+				*head,
+				f"\t[[nodiscard]] ::situ::rt::err {name}"
+				"(::situ::rt::bytes &out) const noexcept",
+				"\t{",
+				*refuse,
+				f"\t\tout = ::situ::rt::bytes(base() + ({start}), {length});",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			]
+
+		nested = self.resolved.structs.get(placement.type_name or "")
+		if nested is not None and nested.layout.is_fixed_size:
+			return [
+				*head,
+				f"\t[[nodiscard]] ::situ::rt::err {name}"
+				f"(::{self.namespace}::{c_name(nested.name)} &out)"
+				" const noexcept",
+				"\t{",
+				*refuse,
+				f"\t\tout = ::{self.namespace}::{c_name(nested.name)}("
+				"situ_view_t{",
+				f"\t\t\tbase() + ({start}), "
+				f"{c_name(nested.name)}::size_bytes, raw().generation }}); ",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			]
+
+		return [*head, f"\t/* ...and `{placement.name}` is not a shape this"
+		        " backend reaches into yet. */"]
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement

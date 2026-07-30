@@ -722,3 +722,39 @@ fn main() {
 
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- reaching into a variant's arms (section 9.6) ---------------------------
+
+ARMS = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_each_arm_refuses_when_it_is_not_the_one_present(tmp_path: Path) -> None:
+	"""A `Result`, because the arm may not be the one there. `Error::Version`
+	is what an unrecognised discriminant gets."""
+	built = build(tmp_path, ARMS, main="""
+fn main() {
+	let text = unit::Label::new(&[3, b'w', b'w', b'w']).unwrap();
+	assert_eq!(text.body_text().unwrap(), b"www");
+	assert!(text.body_pointer_low().is_err());
+
+	let ptr = unit::Label::new(&[0xC0, 0x0C]).unwrap();
+	assert_eq!(ptr.body_pointer_low().unwrap(), 0x0C);
+	assert!(ptr.body_text().is_err());
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr
