@@ -84,6 +84,9 @@ class Member(Enum):
 	#: `x at expr` -- reached from the start of the message rather than from
 	#: this frame, so none of the offset machinery applies (9.8).
 	LOCATED   = "located"
+	#: A `coded` region: bytes on the wire that mean something else, and the
+	#: transform between them (13.5).
+	CODED     = "coded"
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
 	#: variant, an opaque or indexed span. Each needs its own machinery.
 	REGION    = "region"
@@ -144,6 +147,13 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	if placement.kind in ("coded", "sealed") \
 			and placement.delimiter is not None:
 		return Member.DELIMITED
+
+	# ...and one without a delimiter is still a region of bytes with a
+	# transform over them. It answered `REGION` and three backends emitted
+	# nothing, so the bytes on the wire were unreachable -- which C, not
+	# asking here, has never been.
+	if placement.kind == "coded":
+		return Member.CODED
 
 	if placement.kind != "field":
 		return Member.REGION
@@ -592,3 +602,21 @@ def arm_of(struct: ResolvedStruct,
 		if member is not None and member.path == placement.path:
 			return variant, arm
 	return None
+
+
+def decode_bound(codec: object, placement: Placement) -> int | None:
+	"""How many bytes the decoded form of this region can occupy.
+
+	The codec's declared ratio against the region's largest encoded form, so
+	a caller can size the buffer the decode writes into. None where either is
+	unknown -- and a bound nobody can compute is a decode nobody can call
+	safely, which is why the accessor is not emitted then.
+
+	Here rather than in four backends because it is arithmetic over two
+	declared numbers, and the only thing that differs is how each spells the
+	result.
+	"""
+	ratio: tuple[int, int] | None = getattr(codec, "ratio", None)
+	if ratio is None or not ratio[0] or placement.size_max_bits is None:
+		return None
+	return (placement.size_max_bits // BITS_PER_BYTE) * ratio[1] // ratio[0]

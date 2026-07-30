@@ -914,3 +914,32 @@ def test_a_coded_region_is_framed_like_any_delimited_member(tmp_path: Path) -> N
 	assert held.body_len == 17
 	assert held.body_span == 22
 	assert held.body_terminated
+
+
+# -- a coded region's bytes, and its transform (13.5) -----------------------
+
+CODED_PRE  = 'target buffer;\nendian big;\nbit_order msb_first;\ncodec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester); }\nimpl halve derived;\n'
+CODED_BODY = 'struct S { coded body(halve) { u8 raw[4]; } }'
+
+
+def test_a_coded_region_hands_back_its_encoded_bytes(tmp_path: Path) -> None:
+	"""A region with no delimiter emitted nothing at all, so the bytes on the
+	wire were unreachable -- odd for a treat-as-bytes region, and true only of
+	that case: the scan path emits an accessor for the delimited one."""
+	module = load(tmp_path, CODED_BODY, preamble=CODED_PRE)
+	raw    = bytearray(range(8))
+	held   = module.S.at(module.Message(raw), 0)
+
+	assert bytes(held.body) == bytes(range(8))
+
+
+def test_and_says_why_the_decode_is_not_here(tmp_path: Path) -> None:
+	"""C++ links the C codec for free and Rust declares it `extern "C"`; this
+	one would have to load a shared object from a path situ has no convention
+	for, and inventing one in a code generator is a policy decision. So the
+	module says what to call and how large the buffer must be."""
+	module = emit(CODED_BODY, CODED_PRE)
+
+	assert "No `body_decode`" in module
+	assert "situ_halve_decode" in module
+	assert "4 bytes is what it needs" in module

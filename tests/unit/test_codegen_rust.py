@@ -878,3 +878,81 @@ fn main() {
 
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- a coded region's bytes, and its transform (13.5) -----------------------
+
+CODED_PRE  = 'target buffer;\nendian big;\nbit_order msb_first;\ncodec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester); }\nimpl halve derived;\n'
+CODED_BODY = 'struct S { coded body(halve) { u8 raw[4]; } }'
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_coded_region_decodes_through_the_c_codec(tmp_path: Path) -> None:
+	"""The codec is C's (decision 0017), so this goes through `extern "C"`
+	and therefore through `unsafe` -- and section 26.18 says where that
+	belongs: at the call site with a note saying what is being promised,
+	rather than buried in a helper."""
+	schema   = parse_text(CODED_PRE + CODED_BODY)
+	resolved = resolve(schema, solve(schema))
+	module   = generate_rs(schema, resolved, "unit").module
+
+	assert 'extern "C" {' in module
+	assert "fn situ_halve_decode(" in module
+	assert "// SAFETY: the codec is the C implementation" in module
+
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "unit.rs").write_text(module, encoding="ascii")
+
+	from situc.codegen.c import derived, generate as generate_c
+	(tmp_path / "unit.h").write_text(
+		generate_c(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "unit_derived.c").write_text(
+		derived.generate(schema, "unit"), encoding="ascii")
+
+	cc = shutil.which("gcc") or shutil.which("cc")
+	if cc is None:
+		pytest.skip("no C compiler to build the codec")
+	built = subprocess.run(
+		[cc, "-c", "-O2", f"-I{ROOT / 'runtime' / 'c'}", f"-I{tmp_path}",
+		 str(tmp_path / "unit_derived.c"), "-o", str(tmp_path / "derived.o")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	(src / "main.rs").write_text("""
+mod situ_rt;
+mod unit;
+
+extern "C" { fn situ_halve_encode(i: *const u8, b: u32, o: *mut u8) -> u32; }
+
+fn main() {
+	let plain = [0xA5u8, 0x3C, 0xF0, 0x0F];
+	let mut buf = [0u8; 8];
+	unsafe { situ_halve_encode(plain.as_ptr(), 32, buf.as_mut_ptr()); }
+
+	let v = unit::S::new(&buf).unwrap();
+	assert_eq!(v.body().len(), 8);
+
+	let mut out = [0u8; unit::S::BODY_DECODED_MAX];
+	assert_eq!(v.body_decode(&mut out).unwrap(), 4);
+	assert_eq!(&out[..4], &plain);
+
+	// A byte short is refused rather than half-filled.
+	let mut small = [0u8; 3];
+	assert!(v.body_decode(&mut small).is_err());
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	compiled = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", str(src / "main.rs"),
+		 "-o", str(tmp_path / "out"),
+		 "-C", f"link-arg={tmp_path / 'derived.o'}"],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert compiled.returncode == 0, compiled.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

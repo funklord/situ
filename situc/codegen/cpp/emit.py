@@ -37,7 +37,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, classify, classify_check, declares_its_own_length,
+	Check, Member, arm_members, decode_bound, classify, classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
@@ -77,6 +77,7 @@ class Emitter:
 		self.basename  = basename
 		self.namespace = namespace
 		self.enums     = {decl.name: decl for decl in schema.enums()}
+		self.codecs    = {decl.name: decl for decl in schema.codecs()}
 		self.structs   = set(resolved.structs)
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
@@ -98,6 +99,7 @@ class Emitter:
 			"",
 			'#include "situ.hpp"',
 			"",
+			*self._codec_prototypes(),
 			f"namespace {self.namespace} {{",
 		]
 
@@ -1708,6 +1710,100 @@ class Emitter:
 		])
 		return lines
 
+	def _codec_prototypes(self) -> list[str]:
+		"""Decoders this header calls, at file scope with C linkage.
+
+		The implementation is C whichever tier it came from (decision 0017),
+		so the declaration has to say so -- and it cannot go inside the class
+		that calls it, because a linkage specification is not allowed in a
+		block.
+		"""
+		wanted = sorted({
+			held.codec for struct in self.resolved.structs.values()
+			for held in own_members(struct)
+			if held.kind == "coded" and held.codec
+			and self._decodes(held)})
+		if not wanted:
+			return []
+
+		return ['extern "C" {', *[
+			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
+			" std::uint32_t bits, std::uint8_t *out);"
+			for name in wanted], "}", ""]
+
+	def _decodes(self, placement: Placement) -> bool:
+		"""Whether a decode accessor is emitted for this region."""
+		codec = self.codecs.get(placement.codec or "")
+		return (codec is not None and codec.kernel is not None
+		        and codec.kernel.family is ast.KernelFamily.TABLE
+		        and decode_bound(codec, placement) is not None)
+
+	def _coded_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The encoded bytes of a coded region, and the decode beside them.
+
+		A region with no delimiter answered `REGION` in the shared classifier
+		and this backend emitted nothing, so the bytes on the wire were
+		unreachable -- odd for a treat-as-bytes region, and true only of that
+		case: the scan path emits a pointer for the delimited one.
+		"""
+		name  = c_name(local_name(struct, placement))
+		start = self._offset_expression(struct, placement)
+		if start is None or placement.size_max_bits is None \
+				or placement.size_bits % BITS_PER_BYTE:
+			return ["", f"\t/* No accessor for {placement.path}: its encoded",
+			        f"\t * extent is {placement.codec}'s to report. */"]
+
+		size  = placement.size_bits // BITS_PER_BYTE
+		lines = [
+			"",
+			f"\t/* {placement.path} is `{placement.codec}` output: the bytes on",
+			"\t * the wire rather than the value. What they mean is behind the",
+			"\t * transform (13.5), which is what `stage = TransformTime`"
+			" says. */",
+			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
+			"\t{",
+			f"\t\treturn ::situ::rt::bytes(base() + ({start}), {size}u);",
+			"\t}",
+		]
+
+		codec = self.codecs.get(placement.codec or "")
+		bound = None if codec is None else decode_bound(codec, placement)
+		if codec is None or codec.kernel is None or bound is None \
+				or codec.kernel.family is not ast.KernelFamily.TABLE:
+			# The decoder's shape is the kernel's, and only `table`'s is
+			# settled. Guessing one for the families that are described and
+			# not yet generated would name a function nobody agreed to write.
+			return lines
+
+		ratio = codec.ratio
+		assert ratio is not None
+		return [
+			*lines,
+			"",
+			f"\t/* The decoded bytes, into a buffer the caller owns. Nothing",
+			"\t * here allocates, so the capacity is a parameter and the bound",
+			f"\t * is `{name}_decoded_max` -- {ratio[0]}:{ratio[1]}, so the"
+			" value is that",
+			"\t * much smaller than the wire form. A short buffer is refused",
+			"\t * rather than half-filled. */",
+			f"\tstatic constexpr std::uint32_t {name}_decoded_max = {bound}u;",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_decode(std::uint8_t *out,",
+			"\t\t\tstd::uint32_t cap, std::uint32_t &len) const noexcept",
+			"\t{",
+			f"\t\tconst std::uint32_t need = {size}u * {ratio[1]}u"
+			f" / {ratio[0]}u;",
+			"",
+			"\t\tif (cap < need) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\tlen = situ_{c_name(placement.codec or '')}_decode("
+			f"{name}().data(),",
+			f"\t\t\t{size}u * 8u, out) / 8u;",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
+
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
 		"""Each variant arm's members, guarded by the discriminant (9.6).
 
@@ -1821,6 +1917,8 @@ class Emitter:
 			        f"\t/* {placement.path} is reserved: no accessor, and"
 			        f" `validate` holds it to",
 			        "\t * the pattern the schema declares. */"]
+		if kind is Member.CODED:
+			return self._coded_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:

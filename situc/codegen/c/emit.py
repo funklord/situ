@@ -38,6 +38,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, arm_members, arm_of, classify_check, declares_its_own_length,
+	decode_bound,
 	extent_parts,
 	has_computable_extent, matched_values, obligation, obligations,
 	own_members,
@@ -2430,9 +2431,7 @@ class Emitter:
 		           if placement.delimiter is not None
 		           else self._length_expression(struct, placement))
 		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
-		limit   = placement.size_max_bits
-		bound   = (None if limit is None
-		           else (limit // BITS_PER_BYTE) * ratio[1] // ratio[0])
+		bound   = decode_bound(codec, placement)
 
 		out = [
 			"",

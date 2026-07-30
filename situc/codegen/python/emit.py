@@ -32,7 +32,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, classify, classify_check, declares_its_own_length,
+	Check, Member, arm_members, decode_bound, classify, classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	own_entries, own_members,
@@ -85,6 +85,7 @@ class Emitter:
 		self.resolved = resolved
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
+		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 		self.structs  = set(resolved.structs)
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
@@ -421,6 +422,53 @@ class Emitter:
 
 	# -- members -------------------------------------------------------
 
+	def _coded_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The encoded bytes of a coded region, and why the decode is not here.
+
+		The bytes need no transform to reach and this backend hands them
+		back. The *decode* is a call into the C implementation, which
+		decision 0017 makes the only one there is -- and where C++ links it
+		for free and Rust declares it `extern "C"`, this one would have to
+		load a shared object at run time, from a path situ has no convention
+		for. Inventing one here would be a policy decision made in a code
+		generator, so the accessor says what to do instead.
+		"""
+		name  = c_name(local_name(struct, placement))
+		start = self._offset_expression(struct, placement)
+		if start is None or placement.size_max_bits is None \
+				or placement.size_bits % BITS_PER_BYTE:
+			return ["", f"\t# No accessor for {placement.path}: its encoded",
+			        f"\t# extent is {placement.codec}'s to report."]
+
+		size  = placement.size_bits // BITS_PER_BYTE
+		lines = [
+			"", "\t@property",
+			f"\tdef {name}(self) -> memoryview:",
+			f'\t\t"""{placement.path}: `{placement.codec}` output.',
+			"",
+			"\t\tThe bytes on the wire rather than the value. What they mean",
+			'\t\tis behind the transform (13.5)."""',
+			"\t\tself._check()",
+			f"\t\tstart = self._at + ({start})",
+			f"\t\treturn self._msg.buffer[start:start + {size}]",
+		]
+
+		codec = self.codecs.get(placement.codec or "")
+		bound = None if codec is None else decode_bound(codec, placement)
+		if bound is None:
+			return lines
+
+		return [
+			*lines,
+			"",
+			f"\t# No `{name}_decode`: the codec is C's (decision 0017), and",
+			"\t# calling it from here means loading a shared object from a",
+			"\t# path this generator would have to invent. Build the C",
+			f"\t# runtime and call `situ_{c_name(placement.codec or '')}_decode`",
+			f"\t# through ctypes; {bound} bytes is what it needs.",
+		]
+
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
 		"""Each variant arm's members, guarded by the discriminant (9.6).
 
@@ -516,6 +564,8 @@ class Emitter:
 		if kind is Member.RESERVED:
 			return ["", f"\t# {placement.path} is reserved: no accessor, and",
 			        "\t# validate() holds it to the pattern the schema declares."]
+		if kind is Member.CODED:
+			return self._coded_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:

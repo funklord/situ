@@ -35,7 +35,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, arm_members, classify, classify_check, declares_its_own_length,
+	Check, Member, arm_members, decode_bound, classify, classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
@@ -111,13 +111,14 @@ class Emitter:
 		self.resolved = resolved
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
+		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 		self.structs  = set(resolved.structs)
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
 		self.materialize = materialize
 
 	def module(self) -> str:
-		body: list[str] = []
+		body: list[str] = list(self._codec_externs())
 		for decl in self.schema.enums():
 			body.extend(self._enum(decl))
 		for name in sorted(self.structs):
@@ -285,6 +286,100 @@ class Emitter:
 
 	# -- reads ---------------------------------------------------------
 
+	def _coded_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The encoded bytes of a coded region, and the decode beside them.
+
+		The decode calls the C implementation, which decision 0017 makes the
+		only one there is -- so it goes through `extern "C"` and therefore
+		through `unsafe`, and section 26.18 says where that `unsafe` belongs:
+		at the call site, with a note saying what the caller is promising,
+		rather than buried in a helper.
+		"""
+		name  = _ident(c_name(local_name(struct, placement)))
+		start = self._offset_expression(struct, placement)
+		if start is None or placement.size_max_bits is None \
+				or placement.size_bits % BITS_PER_BYTE:
+			return ["", f"\t// No accessor for {placement.path}: its encoded",
+			        f"\t// extent is {placement.codec}'s to report."]
+
+		size  = placement.size_bits // BITS_PER_BYTE
+		lines = [
+			"",
+			f"\t/// `{placement.path}` is `{placement.codec}` output: the bytes",
+			"\t/// on the wire rather than the value. What they mean is behind",
+			"\t/// the transform (13.5).",
+			f"\tpub fn {name}(&self) -> &[u8] {{",
+			f"\t\tlet at = {self._unparen(start)};",
+			f"\t\t&self.bytes[at..at + {size}]",
+			"\t}",
+		]
+
+		codec = self.codecs.get(placement.codec or "")
+		bound = None if codec is None else decode_bound(codec, placement)
+		if codec is None or codec.kernel is None or bound is None \
+				or codec.kernel.family is not ast.KernelFamily.TABLE:
+			return lines
+
+		ratio = codec.ratio
+		assert ratio is not None
+		sym = f"situ_{c_name(placement.codec or '')}_decode"
+		return [
+			*lines,
+			"",
+			f"\t/// The decoded bytes of `{placement.path}`, into a buffer the",
+			"\t/// caller owns. Nothing here allocates, so the capacity is a",
+			f"\t/// parameter and `{name.upper()}_DECODED_MAX` is the bound --",
+			f"\t/// {ratio[0]}:{ratio[1]}, so the value is that much smaller"
+			" than the wire",
+			"\t/// form. A short buffer is refused rather than half-filled.",
+			f"\tpub const {name.upper()}_DECODED_MAX: usize = {bound};",
+			"",
+			f"\tpub fn {name}_decode(&self, out: &mut [u8])"
+			" -> Result<usize> {",
+			f"\t\tconst NEED: usize = {size} * {ratio[1]} / {ratio[0]};",
+			"",
+			"\t\tif out.len() < NEED {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			"\t\t// SAFETY: the codec is the C implementation (decision 0017)",
+			"\t\t// and this is the one call that crosses to it. Both slices",
+			"\t\t// are checked above -- the input is this region's own bytes",
+			"\t\t// and the output is at least what the ratio says it needs.",
+			"\t\tlet bits = unsafe {",
+			f"\t\t\t{sym}(self.{name}().as_ptr(), {size} as u32 * 8,",
+			"\t\t\t\tout.as_mut_ptr())",
+			"\t\t};",
+			"\t\tOk(bits as usize / 8)",
+			"\t}",
+		]
+
+	def _codec_externs(self) -> list[str]:
+		"""Decoders this module calls, declared once at module scope."""
+		wanted = sorted({
+			held.codec for struct in self.resolved.structs.values()
+			for held in own_members(struct)
+			if held.kind == "coded" and held.codec and self._decodes(held)})
+		if not wanted:
+			return []
+
+		return [
+			"",
+			# `//` and not `///`: a doc comment on an `extern` block is an
+			# `unused_doc_comments` warning, and warnings are errors here.
+			"// The codec implementations, which are C's (decision 0017).",
+			'extern "C" {',
+			*[f"\tfn situ_{c_name(name)}_decode(input: *const u8, bits: u32,"
+			  " out: *mut u8) -> u32;" for name in wanted],
+			"}",
+		]
+
+	def _decodes(self, placement: Placement) -> bool:
+		codec = self.codecs.get(placement.codec or "")
+		return (codec is not None and codec.kernel is not None
+		        and codec.kernel.family is ast.KernelFamily.TABLE
+		        and decode_bound(codec, placement) is not None)
+
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
 		"""Each variant arm's members, guarded by the discriminant (9.6)."""
 		lines: list[str] = []
@@ -380,6 +475,8 @@ class Emitter:
 			return ["",
 			        f"\t// {placement.path} is reserved: no accessor, and",
 			        "\t// validate() holds it to the declared pattern."]
+		if kind is Member.CODED:
+			return self._coded_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:

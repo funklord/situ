@@ -1228,3 +1228,63 @@ int main()
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- a coded region's bytes, and its transform (13.5) -----------------------
+
+CODED_PRE  = 'target buffer;\nendian big;\nbit_order msb_first;\ncodec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester); }\nimpl halve derived;\n'
+CODED_BODY = 'struct S { coded body(halve) { u8 raw[4]; } }'
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_coded_region_decodes_into_the_callers_buffer(tmp_path: Path) -> None:
+	"""The decoder is C's (decision 0017), declared at file scope with C
+	linkage -- it cannot go inside the class that calls it, a linkage
+	specification not being allowed in a block."""
+	schema   = parse_text(CODED_PRE + CODED_BODY)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+
+	from situc.codegen.c import derived
+	(tmp_path / "unit_derived.c").write_text(
+		derived.generate(schema, "unit"), encoding="ascii")
+	(tmp_path / "unit.h").write_text(
+		generate_c(schema, resolved, "unit").header, encoding="ascii")
+
+	(tmp_path / "main.cpp").write_text("""
+#include <cstring>
+#include "unit.hpp"
+
+extern "C" std::uint32_t situ_halve_encode(const std::uint8_t *, std::uint32_t,
+                                           std::uint8_t *);
+
+int main()
+{
+	std::uint8_t plain[4] = { 0xA5, 0x3C, 0xF0, 0x0F };
+	std::uint8_t buf[8], out[::situ::S::body_decoded_max];
+	std::uint32_t len = 0;
+
+	situ_halve_encode(plain, 32u, buf);
+	const ::situ::S v{ situ_view_t{ buf, sizeof buf, 0 } };
+
+	if (v.body().size() != 8u)                                     return 1;
+	if (::situ::S::body_decoded_max != 4u)                         return 2;
+	if (v.body_decode(out, sizeof out, len) != ::situ::rt::err::ok) return 3;
+	if (len != 4u || std::memcmp(out, plain, 4) != 0)               return 4;
+	/* A byte short is refused rather than half-filled. */
+	if (v.body_decode(out, 3u, len) != ::situ::rt::err::bounds)     return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(tmp_path / "unit_derived.c"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

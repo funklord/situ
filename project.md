@@ -1955,6 +1955,21 @@ are described and not yet generated (13.4). Guessing a signature for those
 would be a header that names a function nobody agreed to write. The note
 above such a region already says the transform is the caller's.
 
+All four backends hand back the encoded bytes. Three of them decode, and the
+one that does not says why:
+
+| | the decode |
+|---|---|
+| C | calls the C implementation directly |
+| C++ | the same, declared at file scope with C linkage -- a linkage specification is not allowed in a block, so it cannot go inside the class that calls it |
+| Rust | `extern "C"` and therefore `unsafe`, at the call site with a note saying what is promised (26.18) |
+| Python | **not emitted.** It would mean loading a shared object from a path situ has no convention for, and inventing one in a code generator is a policy decision. The module says what to call through ctypes and how large the buffer must be |
+
+That split is decision 0017 arriving where it said it would: one
+implementation, in C, and each language reaching it by whatever it already
+has. C++ links it for free, Rust crosses an FFI boundary it can name, and
+Python is the one that pays in a build step.
+
 The encoded bytes are reachable in either case. They were not: a coded region
 with no delimiter got a comment header and nothing else, so the bytes on the
 wire were unreachable -- a strange thing for a treat-as-bytes region, and true
