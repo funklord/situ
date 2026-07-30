@@ -31,7 +31,7 @@ from situc.capability import Axis
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Placement, TlvGrammar, ValueRule
 from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
@@ -45,7 +45,7 @@ from situc.traverse import (
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
-from situc.types import ScalarKind, ScalarType
+from situc.types import ScalarKind, ScalarType, lookup
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -921,6 +921,10 @@ class Emitter:
 			lines.extend(self._variant_note(struct, placement))
 			return lines
 
+		if placement.kind == "tlv":
+			lines.extend(self._tlv_region(struct, placement))
+			return lines
+
 		if placement.kind in ("opaque", "indexed"):
 			lines.extend(self._region_note(struct, entry))
 			return lines
@@ -1096,6 +1100,352 @@ class Emitter:
 			        f" decode and encode,",
 			        f" * and the value runs from 0 to {scalar.decimal_max}."]
 		return []
+
+	def _tlv_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run of tag-length-value items, walked as the schema describes them.
+
+		The walk is generated rather than called into: `situ.h` carries the
+		primitives -- a varint read, a bounds-checked sub-view -- and the loop
+		that knows what a tag decodes to and how each wire type sizes its value
+		belongs to the schema. It used to be the other way round. A cursor with
+		`tag >> 3` and protobuf's four wire types hardcoded sat in the runtime,
+		generated code never called it, and the one test that used it
+		hand-wrote the field dispatch that `known` already declares.
+
+		Every item is found by walking from the start, which is what
+		`access = Sequential` means and why the by-name accessors are O(n). The
+		cursor is the honest shape of the construct.
+		"""
+		grammar = placement.tlv_grammar
+		if grammar is None or not grammar.walkable:
+			return self._unwalkable_tlv(placement)
+
+		local = c_name(self._local(struct, placement))
+		item  = ident(self.prefix, struct.name, local, "item_t")
+
+		lines = self._tlv_item_type(struct, placement, grammar, item)
+		lines.extend(self._tlv_read(struct, placement, grammar, item, local))
+		lines.extend(self._tlv_cursor(struct, placement, item, local))
+		lines.extend(self._tlv_by_name(struct, placement, grammar, item, local))
+		return lines
+
+	def _unwalkable_tlv(self, placement: Placement) -> list[str]:
+		"""A region that does not describe how to find its own items."""
+		return [
+			f"/* No accessors for `{placement.name}`: the region says how its",
+			" * items are tagged and not how long their values are, so a walk",
+			" * has nowhere to put the second item. Give it a `value_size`",
+			" * dispatch, or a `length_type` for the simple form. */",
+		]
+
+	def _tlv_tag_bytes(self, placement: Placement) -> int:
+		"""How many bytes the tag varint may occupy, from its declared width.
+
+		Derived rather than the 10 a 64-bit leb128 happens to need: a schema
+		that bounds its tags at 16 bits gets a bound the walk can use, and one
+		that does not is not silently held to protobuf's.
+		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.tlv_tag_varint), None)
+		bits = declared.max_bits if declared is not None else 64
+		return (bits + 6) // 7
+
+	def _tlv_item_type(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar, item: str) -> list[str]:
+		"""The cursor: one item's extent, and what its tag decoded to.
+
+		The decoded parts are members named by the schema. That is the point of
+		reading the item grammar: `field` and `wire` are this schema's words for
+		them, and a backend that invented its own would be describing protobuf
+		rather than the region in front of it.
+		"""
+		parts = [f"\tuint32_t    {c_name(part.name)};"
+		         f"\t/* {part.source} */" for part in grammar.tag_decode]
+
+		return [
+			f"/* One item of `{placement.name}`, and where the next one starts.",
+			" *",
+			" * `at` and `next` bound the item; `value_at` and `value_len` bound",
+			" * its value. Both are offsets into the same view, so nothing here",
+			" * outlives the bytes it describes. */",
+			f"typedef struct {{",
+			"\tsitu_view_t view;",
+			"\tuint32_t    at;",
+			"\tuint32_t    next;",
+			f"\tuint64_t    tag;\t/* the raw tag, as read */",
+			*parts,
+			"\tuint32_t    value_at;",
+			"\tuint32_t    value_len;",
+			f"}} {item};",
+			"",
+		]
+
+	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar, item: str, local: str) -> list[str]:
+		"""Read the item at `at`: its tag, its parts, and where its value ends."""
+		read     = ident(self.prefix, struct.name, local, "read")
+		max_tag  = self._tlv_tag_bytes(placement)
+
+		# The parts are named by the schema, so how wide the column has to be
+		# is not knowable until here.
+		assigned = ["view", "at", "tag"] + [c_name(part.name)
+		                                    for part in grammar.tag_decode]
+		width    = max(len(name) for name in assigned)
+		stored   = [f"\tout->{name.ljust(width)} = {value};" for name, value in
+		            (("view", "view"), ("at", "at"), ("tag", "tag"))]
+		stored  += [f"\tout->{c_name(part.name).ljust(width)}"
+		            f" = (uint32_t)({part.source});"
+		            for part in grammar.tag_decode]
+
+		lines = [
+			f"/* Read the item at `at`. SITU_ERR_BOUNDS where the region ends or",
+			" * an item runs past it; SITU_ERR_CONSTRAINT for a wire type this",
+			" * schema does not describe. */",
+			f"static inline situ_err_t {read}(situ_view_t view, uint32_t at,",
+			f"\t\t{item} *out)",
+			"{",
+			"\tuint64_t tag  = 0;",
+			"\tuint32_t used = 0u;",
+			"\tuint32_t size = 0u;",
+			"",
+			"\tif (at >= view.limit) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"",
+			f"\tused = situ_varint_get(view.base + at, view.limit - at, {max_tag}u, &tag);",
+			"\tif (used == 0u) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"",
+			*stored,
+			"\tat = at + used;",
+			"",
+		]
+
+		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
+		lines.extend([
+			"",
+			"\tif (size > view.limit - at) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"",
+			"\tout->value_at  = at;",
+			"\tout->value_len = size;",
+			"\tout->next      = at + size;",
+			"\treturn SITU_OK;",
+			"}",
+			"",
+		])
+		return lines
+
+	def _tlv_value_extent(self, grammar: TlvGrammar, max_tag: int,
+			endian: ast.Endian | None) -> list[str]:
+		"""Where the value ends, dispatched exactly as the schema dispatches it.
+
+		The simple form has no dispatch: one `length_type` sizes every value,
+		so there is nothing to switch on.
+		"""
+		if grammar.selector is None:
+			return self._tlv_prefixed_size(grammar.length_type or "u8", "\t",
+			                               endian)
+
+		lines = [f"\tswitch (out->{c_name(grammar.selector)}) {{"]
+		for rule in grammar.rules:
+			if rule.label is None:
+				continue
+			lines.append(f"\tcase {rule.label}u:")
+			lines.extend(self._tlv_one_rule(rule, max_tag, endian))
+
+		default = next((rule for rule in grammar.rules if rule.label is None), None)
+		lines.append("\tdefault:")
+		if default is None or default.kind == "error":
+			lines.extend([
+				"\t\t/* `default: error`: a wire type this schema does not",
+				"\t\t * describe, so where the value ends is not knowable. */",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+			])
+		else:
+			lines.extend(self._tlv_one_rule(default, max_tag, endian))
+		lines.append("\t}")
+		return lines
+
+	def _tlv_one_rule(self, rule: ValueRule, max_tag: int,
+			endian: ast.Endian | None) -> list[str]:
+		"""One arm of the dispatch, sizing a value the way section 9.5 says."""
+		if rule.kind == "fixed":
+			return [f"\t\tsize = {rule.size}u;", "\t\tbreak;"]
+
+		if rule.kind == "error":
+			return ["\t\treturn SITU_ERR_CONSTRAINT;"]
+
+		if rule.kind == "self_delimiting":
+			# The value carries its own extent, so reading it *is* measuring
+			# it: the bytes it occupies are the bytes the read consumed.
+			return [
+				"\t\t{",
+				"\t\t\tuint64_t carried = 0;",
+				f"\t\t\tused = situ_varint_get(view.base + at, view.limit - at,"
+				f" {max_tag}u, &carried);",
+				"\t\t\tif (used == 0u) {",
+				"\t\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t\t}",
+				"\t\t\tsize = used;",
+				"\t\t}",
+				"\t\tbreak;",
+			]
+
+		return [*self._tlv_prefixed_size(rule.length_type or "u8", "\t\t",
+		                                 endian),
+		        "\t\tbreak;"]
+
+	def _tlv_prefixed_size(self, length_type: str, indent: str,
+			endian: ast.Endian | None) -> list[str]:
+		"""`prefixed(T)`: a length in T, then that many bytes.
+
+		The length is read where the value would start, and the value starts
+		after it -- so `at` moves twice for one item, which is the shape that
+		makes a length prefix different from a fixed width.
+		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == length_type), None)
+
+		if declared is not None:
+			width = (declared.max_bits + 6) // 7
+			return [
+				f"{indent}{{",
+				f"{indent}\tuint64_t length = 0;",
+				f"{indent}\tused = situ_varint_get(view.base + at,"
+				f" view.limit - at, {width}u, &length);",
+				f"{indent}\tif (used == 0u) {{",
+				f"{indent}\t\treturn SITU_ERR_BOUNDS;",
+				f"{indent}\t}}",
+				f"{indent}\tat = at + used;",
+				f"{indent}\tif (length > (uint64_t)(view.limit - at)) {{",
+				f"{indent}\t\treturn SITU_ERR_BOUNDS;",
+				f"{indent}\t}}",
+				f"{indent}\tsize = (uint32_t)length;",
+				f"{indent}}}",
+			]
+
+		scalar = lookup(length_type)
+		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
+		return [
+			f"{indent}{{",
+			f"{indent}\tif (view.limit - at < {width}u) {{",
+			f"{indent}\t\treturn SITU_ERR_BOUNDS;",
+			f"{indent}\t}}",
+			f"{indent}\tsize = {self._fixed_length_read(width, endian)};",
+			f"{indent}\tat = at + {width}u;",
+			f"{indent}}}",
+		]
+
+	def _fixed_length_read(self, width: int,
+			endian: ast.Endian | None) -> str:
+		"""A length prefix of a fixed width, in the region's byte order."""
+		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
+		if suffix is None:
+			return "(uint32_t)view.base[at]"
+		order = "be" if endian is ast.Endian.BIG else "le"
+		return f"(uint32_t)situ_get_{order}{suffix}(view.base + at)"
+
+	def _tlv_cursor(self, struct: ResolvedStruct, placement: Placement,
+			item: str, local: str) -> list[str]:
+		"""`first` and `next`: the region walked from its own start."""
+		read  = ident(self.prefix, struct.name, local, "read")
+		first = ident(self.prefix, struct.name, local, "first")
+		nxt   = ident(self.prefix, struct.name, local, "next")
+		count = ident(self.prefix, struct.name, local, "count")
+		base  = self._base_expression(struct, placement, gated=False)
+
+		return [
+			f"/* The first item, or SITU_ERR_BOUNDS if the region is empty. */",
+			f"static inline situ_err_t {first}(situ_view_t view, {item} *out)",
+			"{",
+			f"\treturn {read}(view, {base}, out);",
+			"}",
+			"",
+			f"/* The item after this one. The cursor carries its own view, so",
+			" * walking needs nothing the caller has to keep in step. */",
+			f"static inline situ_err_t {nxt}({item} *item)",
+			"{",
+			f"\treturn {read}(item->view, item->next, item);",
+			"}",
+			"",
+			f"/* How many items are present. A walk, like everything else here:",
+			" * nothing in the region records a count. */",
+			f"static inline uint32_t {count}(situ_view_t view)",
+			"{",
+			f"\t{item} item;",
+			f"\tuint32_t n = 0u;",
+			f"\tsitu_err_t err = {first}(view, &item);",
+			"",
+			"\twhile (err == SITU_OK) {",
+			"\t\tn   = n + 1u;",
+			f"\t\terr = {nxt}(&item);",
+			"\t}",
+			"\treturn n;",
+			"}",
+			"",
+		]
+
+	def _tlv_by_name(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar, item: str, local: str) -> list[str]:
+		"""`find`, and one accessor per tag the schema names.
+
+		The identity part is decision 0023's: which decoded part a `known` key
+		matches is declared where more than one could be meant, because an
+		accessor comparing the wrong part still finds an item.
+		"""
+		if not grammar.known:
+			return []
+
+		first = ident(self.prefix, struct.name, local, "first")
+		nxt   = ident(self.prefix, struct.name, local, "next")
+		find  = ident(self.prefix, struct.name, local, "find")
+		keyed = (f"item->{c_name(grammar.identity)}" if grammar.identity
+		         else "(uint32_t)item->tag")
+		named = ("the part `%s` decodes to" % grammar.identity if grammar.identity
+		         else "the raw tag")
+
+		lines = [
+			f"/* The first item whose tag is `tag`, matched against {named}",
+			" * (decision 0023). O(n): the region is walked from the start,",
+			" * which is what `access = Sequential` costs. */",
+			f"static inline situ_err_t {find}(situ_view_t view, uint32_t tag,",
+			f"\t\t{item} *item)",
+			"{",
+			f"\tsitu_err_t err = {first}(view, item);",
+			"",
+			"\twhile (err == SITU_OK) {",
+			f"\t\tif ({keyed} == tag) {{",
+			"\t\t\treturn SITU_OK;",
+			"\t\t}",
+			f"\t\terr = {nxt}(item);",
+			"\t}",
+			"\treturn err;",
+			"}",
+			"",
+		]
+
+		for known in grammar.known:
+			accessor = ident(self.prefix, struct.name, local, c_name(known.name))
+			described = f"tag {known.tag}"
+			if known.wire is not None:
+				described += f", wire type {known.wire}"
+			if known.type_name is not None:
+				described += f", carrying {known.type_name}"
+				described += "[]" if known.repeated else ""
+			lines.extend([
+				f"/* `{known.name}`: {described}. */",
+				f"static inline situ_err_t {accessor}(situ_view_t view, {item} *item)",
+				"{",
+				f"\treturn {find}(view, {known.tag}u, item);",
+				"}",
+				"",
+			])
+
+		return lines
 
 	def _region_note(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""An opaque or indexed region: bytes now, structure later.

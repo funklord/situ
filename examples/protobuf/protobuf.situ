@@ -29,6 +29,11 @@ struct proto_message {
 	tlv fields (
 		tag_type       = pb_varint,
 		tag_decode     = { field = tag >> 3, wire = tag & 0x7 },
+		// Which part a `known` key is. The tag decodes into two and only one
+		// of them names an item; matching on the other would find an item and
+		// not the one asked for, which nothing about the message would say
+		// (decision 0023).
+		tag_identity   = field,
 		value_size     = switch (wire) {
 			case 0: self_delimiting,
 			case 1: 8,

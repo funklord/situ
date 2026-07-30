@@ -424,6 +424,7 @@ def _message(message: Message, imported: Imported) -> str:
 		"\ttlv fields (",
 		"\t\ttag_type       = pb_varint,",
 		"\t\ttag_decode     = { field = tag >> 3, wire = tag & 0x7 },",
+		"\t\ttag_identity   = field,         // what a `known` key is (0023)",
 		"\t\tvalue_size     = switch (wire) {",
 		"\t\t\tcase 0: self_delimiting,",
 		"\t\t\tcase 1: 8,",

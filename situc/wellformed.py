@@ -182,8 +182,48 @@ def check_tlv_grammar(schema: ast.Schema) -> None:
 
 def _check_one_tlv(region: ast.Tlv, varints: set[str]) -> None:
 	_check_tag_decode(region)
+	_check_identity(region)
 	_check_value_size(region, varints)
 	_check_known_tags(region)
+
+
+def _check_identity(region: ast.Tlv) -> None:
+	"""Which decoded part a `known` key matches has to be decidable.
+
+	Inferred where only one part could be meant and declared where more than
+	one could. The wrong choice here is undetectable at runtime -- an accessor
+	matching a wire type where a field number was meant finds an item, just not
+	that one -- which is what invariant 9 refuses to take a silent default on.
+	See docs/decisions/0023-tlv-tag-identity.md.
+	"""
+	names = [part.name for part in region.tag_decode]
+
+	if region.identity is not None:
+		if region.part(region.identity) is None:
+			raise error(
+				f"`tag_identity` names `{region.identity}`, which the tag does"
+				f" not decode",
+				region.span,
+				label = f"no `{region.identity}` part here",
+				notes = [f"`tag_decode` produces {', '.join(f'`{n}`' for n in names)}"
+				         if names else
+				         "this region declares no `tag_decode` at all, so a"
+				         " `known` key matches the raw tag"],
+			)
+		return
+
+	if len(names) > 1 and region.known:
+		listed = ", ".join(f"`{name}`" for name in names)
+		raise error(
+			f"`{region.name}` does not say which part of the tag names an item",
+			region.span,
+			label = f"{len(names)} parts, and a `known` map",
+			notes = [f"`tag_decode` produces {listed}",
+			         "add `tag_identity = <part>` to say which one a `known`"
+			         " key matches",
+			         "guessing would be undetectable: an accessor matching the"
+			         " wrong part still finds an item"],
+		)
 
 
 def _check_tag_decode(region: ast.Tlv) -> None:

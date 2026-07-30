@@ -407,6 +407,7 @@ attr          = ident [ "=" expr ] ;
    attr }` and the only thing anything read out of a `switch` was its labels. *)
 tlv_args      = tlv_arg { "," tlv_arg } ;
 tlv_arg       = "tag_decode" "=" tag_decode
+              | "tag_identity" "=" ident    (* decision 0023 *)
               | "value_size" "=" value_size
               | "known"      "=" known_tags
               | attr ;
@@ -1133,6 +1134,33 @@ three parsed. Each is now refused where it is written:
 
 The grammar for all of it is in section 7, and `situc dump-ast` prints what
 situ made of a dispatch rather than leaving a reader to re-read the schema.
+
+Which decoded part a `known` key matches is declared with `tag_identity`, and
+required exactly where more than one answer is possible -- see
+`docs/decisions/0023-tlv-tag-identity.md`. Every candidate yields a walk that
+runs and returns *an* item, so a guess here is wrong in the way invariant 9
+exists to refuse: undetectably.
+
+**The walk is generated, and the runtime holds no format.** C emits, per
+region, a cursor over one item (`first`, `next`, `count`), a `find` keyed on
+the identity part, and one accessor per named tag. The tag decode appears as
+the schema wrote it -- `(uint32_t)(tag >> 3)` -- and each wire type is sized by
+the arm that sizes it, `default: error` becoming `SITU_ERR_CONSTRAINT` because
+a wire type the schema refuses has no extent to guess at.
+
+It went the other way round for a long time, and that is the more useful half
+of this section. `runtime/c/situ.h` carried a `situ_tlv_iter_t` with `tag >> 3`,
+`tag & 0x7` and protobuf's four wire types written into it: a description of
+one format, in the runtime, beside the schema language whose purpose is to
+describe formats. Generated code never called it. Its only caller was
+`tests/generated/test_protobuf.c`, which hand-wrote a dispatch over field
+numbers it `#define`d itself -- numbers the `known` map already declares.
+
+Three descriptions of the protobuf wire format in one tree, and the schema's
+was the one nobody read. The runtime cursor is gone, the test walks the
+generated accessors, and what stays in `situ.h` is what the walk is built out
+of: a varint read and the bounds-checked view operations. A runtime that knows
+a wire type is a runtime that will disagree with a schema eventually.
 
 ### 9.6 variant
 
@@ -4722,17 +4750,20 @@ trusting this list to have aged well.
 
 **One construct no backend reaches into.**
 
-`tlv` interiors. `examples/protobuf`'s `proto_message.fields` gets no accessor
-anywhere -- situ describes the region, gives it a capability vector, and
-cannot walk its items. Section 9.7 argues situ must be able to describe
-protobuf; it describes it without being able to read it. `indexed` is the same
-shape one step behind: the offset table is never walked, and the header says
+`indexed` interiors. The offset table is never walked, and the header says
 insertion is not an operation at all.
 
-**Five where C is ahead of the other three.**
+`tlv` was here too, and was the sharper case of it: `examples/protobuf`'s
+`proto_message.fields` got no accessor anywhere, so section 9.7 could argue
+situ must be able to describe protobuf while situ described it without being
+able to read it. C walks one now (9.5), which moves it down a list rather than
+off this page.
+
+**Six where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
+| a `tlv` region's items | `proto_message.fields` |
 | crypto regions -- `tag`, `sealed` | `packet` |
 | an endian marker | `tiff_header.byte_order` |
 | a fixed-width text number | `reply_line.code` |

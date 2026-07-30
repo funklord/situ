@@ -2555,3 +2555,189 @@ def test_a_kernel_whose_decoder_is_not_generated_gets_no_accessor() -> None:
 
 	assert "transform is the caller's to run" in header
 	assert "situ_S_body_decode" not in header
+
+
+# -- tlv regions (section 9.5) ----------------------------------------------
+
+TLV_PREAMBLE = (PREAMBLE
+	+ "varint_type pb_varint { encoding = leb128; max_bits = 64; }\n")
+
+TLV = """struct S {
+	tlv fields (
+		tag_type     = pb_varint,
+		tag_decode   = { field = tag >> 3, wire = tag & 0x7 },
+		tag_identity = field,
+		value_size   = switch (wire) {
+			case 0: self_delimiting,
+			case 1: 8,
+			case 2: prefixed(pb_varint),
+			case 5: 4,
+			default: error,
+		},
+		known = {
+			1 : { name = user_id, wire = 0, type = pb_varint },
+			2 : { name = label,   wire = 2, type = u8 },
+		},
+		unknown = preserve
+	);
+}"""
+
+
+def test_a_tlv_region_gets_a_walk() -> None:
+	"""It got nothing at all before: the region fell through every branch to
+	the scalar accessors, which emit nothing for a placement with no scalar.
+	So the one construct the language exists to describe -- section 9.7 makes
+	protobuf the conformance gate -- was described and unreadable."""
+	header, _ = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "situ_S_fields_first" in header
+	assert "situ_S_fields_next" in header
+	assert "situ_S_fields_count" in header
+
+
+def test_the_decoded_parts_are_named_by_the_schema() -> None:
+	"""`field` and `wire` are this schema's words. A backend inventing its own
+	would be describing protobuf rather than the region in front of it."""
+	header, _ = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "uint32_t    field;" in header
+	assert "uint32_t    wire;" in header
+	assert "out->field = (uint32_t)(tag >> 3);" in header
+	assert "out->wire  = (uint32_t)(tag & 0x7);" in header
+
+
+def test_each_wire_type_is_sized_as_the_dispatch_says() -> None:
+	header, _ = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "switch (out->wire) {" in header
+	assert "case 1u:" in header and "size = 8u;" in header
+	assert "case 5u:" in header and "size = 4u;" in header
+
+
+def test_a_refused_wire_type_stops_the_walk() -> None:
+	"""`default: error` is a rejection rather than a gap: protobuf's groups
+	have no extent this schema can compute, so guessing one would walk into
+	the middle of an item."""
+	header, _ = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "return SITU_ERR_CONSTRAINT;" in header
+
+
+def test_each_known_tag_gets_an_accessor() -> None:
+	header, _ = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "situ_S_fields_user_id(situ_view_t view" in header
+	assert "situ_S_fields_label(situ_view_t view" in header
+	assert "situ_S_fields_find(view, 1u, item)" in header
+
+
+def test_by_name_accessors_match_the_identity_part() -> None:
+	"""Decision 0023. Matching `wire` where `field` was meant finds an item
+	and not the one asked for, which nothing about the message would say."""
+	header, _ = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "if (item->field == tag) {" in header
+
+
+def test_the_tag_width_comes_from_the_varint_type() -> None:
+	"""Not the 10 bytes a 64-bit leb128 happens to need: a schema that bounds
+	its tags at 16 bits gets a bound the walk can use."""
+	narrow = TLV.replace("tag_type     = pb_varint", "tag_type     = small")
+	header, _ = emit(narrow, preamble=TLV_PREAMBLE
+		+ "varint_type small { encoding = leb128; max_bits = 16; }\n")
+
+	assert "view.limit - at, 3u, &tag)" in header
+
+
+def test_a_region_that_does_not_size_its_values_says_so() -> None:
+	"""A grammar with no `value_size` and no `length_type` has nowhere to put
+	the second item."""
+	header, _ = emit("""struct S {
+		tlv fields (
+			tag_type   = pb_varint,
+			tag_decode = { field = tag >> 3 },
+			unknown    = error
+		);
+	}""", preamble=TLV_PREAMBLE)
+
+	assert "No accessors for `fields`" in header
+	assert "not how long their values are" in header
+
+
+def test_the_simple_form_sizes_every_value_the_same_way() -> None:
+	"""`length_type = u8` and no dispatch: there is nothing to switch on."""
+	header, _ = emit("""struct S {
+		tlv opts (
+			tag_type    = u8,
+			length_type = u8,
+			known       = { 1 : mtu, 2 : window },
+			unknown     = error
+		);
+	}""", preamble=TLV_PREAMBLE)
+
+	assert "switch (out->" not in header
+	assert "situ_S_opts_mtu" in header
+	# No `tag_decode`, so a `known` key is the raw tag itself.
+	assert "if ((uint32_t)item->tag == tag) {" in header
+
+
+def test_the_generated_walk_compiles(tmp_path: Path) -> None:
+	compile_generated(tmp_path, TLV, preamble=TLV_PREAMBLE)
+
+
+def test_the_generated_walk_reads_protoc_output(tmp_path: Path) -> None:
+	"""The vectors are the ones in tests/generated/test_protobuf.c, which came
+	out of protoc. A description that agrees only with its own compiler has
+	demonstrated nothing."""
+	if HOST_CC is None:
+		pytest.skip("no C compiler")
+
+	header, source = emit(TLV, preamble=TLV_PREAMBLE)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+/* protoc --encode=User <<< 'user_id: 150; username: "situ"' */
+static const uint8_t WIRE[] = {
+	0x08, 0x96, 0x01,
+	0x12, 0x04, 0x73, 0x69, 0x74, 0x75,
+};
+
+int main(void)
+{
+	uint8_t buf[sizeof(WIRE)];
+	situ_msg_t msg;
+	situ_view_t view;
+	situ_S_fields_item_t item;
+	uint64_t user_id = 0;
+
+	memcpy(buf, WIRE, sizeof(WIRE));
+	situ_msg_init(&msg, buf, sizeof(buf));
+	if (situ_view_at(&msg, 0, sizeof(WIRE), &view) != SITU_OK) return 1;
+
+	if (situ_S_fields_count(view) != 2u) return 2;
+
+	if (situ_S_fields_user_id(view, &item) != SITU_OK) return 3;
+	if (item.wire != 0u) return 4;
+	situ_varint_get(view.base + item.value_at, item.value_len, 10u, &user_id);
+	if (user_id != 150u) return 5;
+
+	if (situ_S_fields_label(view, &item) != SITU_OK) return 6;
+	if (item.wire != 2u || item.value_len != 4u) return 7;
+	if (memcmp(view.base + item.value_at, "situ", 4) != 0) return 8;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

@@ -1284,7 +1284,23 @@ class Parser:
 			tag_decode = self._tag_decode,
 			value_size = sizes,
 			known      = self._known,
+			identity   = self._tlv_identity(args),
 		)
+
+	def _tlv_identity(self, args: list[ast.Attr]) -> str | None:
+		"""`tag_identity = field`, which names a part and nothing else."""
+		for arg in args:
+			if arg.name != "tag_identity":
+				continue
+			if not isinstance(arg.value, ast.NameRef):
+				raise error(
+					"`tag_identity` names a decoded tag part",
+					arg.span,
+					label = "expected a part name here",
+					notes = ["it says which part a `known` key matches"],
+				)
+			return arg.value.name
+		return None
 
 	def parse_tlv_argument(self) -> ast.Attr:
 		"""One `key = value` of a tlv argument list.

@@ -521,6 +521,25 @@ class Tlv(Member):
 	value_size: ValueSize | None	= None
 	#: The tags this schema names, in the order written.
 	known: tuple[KnownTag, ...]	= ()
+	#: `tag_identity = field`: which decoded part a `known` key matches.
+	#: See docs/decisions/0023-tlv-tag-identity.md. None where it was not
+	#: written, which `identity_part` resolves and `wellformed` refuses where
+	#: it cannot be.
+	identity: str | None		= None
+
+	def identity_part(self) -> str | None:
+		"""The part a `known` key matches, or None for the raw tag.
+
+		Declared where more than one part could be meant, inferred where only
+		one could. Guessing is what this exists to avoid: matching on a wire
+		type where a field number was meant returns the wrong item, and
+		nothing about the message says so.
+		"""
+		if self.identity is not None:
+			return self.identity
+		if len(self.tag_decode) == 1:
+			return self.tag_decode[0].name
+		return None
 
 	def part(self, name: str) -> TagPart | None:
 		return next((part for part in self.tag_decode if part.name == name), None)

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TypeVar
 
-from situc import ast
+from situc import ast, unparse
 from situc.diagnostics import SituError, Span, error
 from situc.expr import Env, Interval, build_env, evaluate, interval_of, scalar_interval
 from situc.invariant import paths_in
@@ -44,6 +44,80 @@ class BitPosition:
 	width: int
 	shift: int
 	straddles: bool
+
+
+@dataclass(frozen=True)
+class TagPart:
+	"""One part decoded out of a raw tag, as schema source over `tag`.
+
+	Source rather than a node, for the reason `Arm.source` and `discriminant`
+	are: the expression's shape is the schema's and identical in every target,
+	so what a backend needs is the arithmetic and its own name for the tag.
+	"""
+
+	name: str
+	source: str
+
+
+@dataclass(frozen=True)
+class ValueRule:
+	"""How one item's value extent is found, for one wire type.
+
+	`label` is None for the dispatch's `default`. `kind` is one of "fixed",
+	"prefixed", "self_delimiting" or "error", which are section 9.5's four
+	ways for a value to say where it ends -- the last of them by refusing.
+	"""
+
+	label: int | None
+	kind: str
+	size: int | None		= None
+	length_type: str | None		= None
+
+
+@dataclass(frozen=True)
+class KnownTag:
+	"""A tag the schema names, and what it says an item with it carries."""
+
+	tag: int
+	name: str
+	wire: int | None		= None
+	type_name: str | None		= None
+	repeated: bool			= False
+
+
+@dataclass(frozen=True)
+class TlvGrammar:
+	"""How a tlv region's items are found (section 9.5).
+
+	Everything a walk needs and nothing about policy: the policies say whether
+	the region can be canonical, and this says where the next item starts.
+	Held as one record rather than four fields on `Placement`, because it is
+	one thing -- a region either describes its items or does not.
+	"""
+
+	tag_decode: tuple[TagPart, ...]		= ()
+	#: Which decoded part the value dispatch selects on. None for the simple
+	#: form, whose every value is sized the same way.
+	selector: str | None			= None
+	rules: tuple[ValueRule, ...]		= ()
+	known: tuple[KnownTag, ...]		= ()
+	#: The simple form's `length_type = u8`: one length before every value.
+	length_type: str | None			= None
+	#: Which decoded part a `known` key matches, or None for the raw tag
+	#: (decision 0023).
+	identity: str | None			= None
+
+	def rule_for(self, wire: int) -> ValueRule | None:
+		"""The arm an item with this wire type takes, `default` last."""
+		for rule in self.rules:
+			if rule.label == wire:
+				return rule
+		return next((rule for rule in self.rules if rule.label is None), None)
+
+	@property
+	def walkable(self) -> bool:
+		"""Whether this says enough for a walk to find the next item."""
+		return bool(self.rules) or self.length_type is not None
 
 
 @dataclass(frozen=True)
@@ -133,6 +207,9 @@ class Placement:
 	tlv_tag_varint: str | None	= None
 	tlv_tag_minimal: bool		= True
 	tlv_wire_types: tuple[int, ...]	= ()
+	# How the region's items are found. Empty until the front end read the
+	# item grammar, which is why nothing walked one for a long time.
+	tlv_grammar: TlvGrammar | None	= None
 	# The codec transforming this region, or the one whose region contains it.
 	codec: str | None		= None
 	# The authenticated and sealed regions this member sits inside, outermost
@@ -937,6 +1014,7 @@ class Solver:
 			tlv_tag_varint = tag_varint.name if tag_varint else None,
 			tlv_tag_minimal = tag_varint.minimal if tag_varint else True,
 			tlv_wire_types = member.wire_types,
+			tlv_grammar   = _tlv_grammar(member),
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
@@ -2031,6 +2109,39 @@ def _arm_name(arm: ast.VariantArm) -> str:
 	if isinstance(arm.member, ast.Field):
 		return arm.member.name
 	return "arm"
+
+
+def _tlv_grammar(member: ast.Tlv) -> TlvGrammar:
+	"""The region's item grammar, as a backend needs it.
+
+	The AST nodes carry spans and the schema's own expression trees; a backend
+	needs the arithmetic and the numbers. This is the same lowering `Arm` gets
+	for a variant, for the same reason.
+	"""
+	length = member.argument("length_type")
+
+	return TlvGrammar(
+		tag_decode  = tuple(TagPart(part.name, unparse.expr_to_source(part.value))
+		                    for part in member.tag_decode),
+		selector    = member.value_size.selector if member.value_size else None,
+		rules       = tuple(_value_rule(case) for case in
+		                    (member.value_size.cases if member.value_size else ())),
+		known       = tuple(KnownTag(tag.tag, tag.name, tag.wire, tag.type_name,
+		                             tag.repeated) for tag in member.known),
+		length_type = length.name if isinstance(length, ast.NameRef) else None,
+		identity    = member.identity_part(),
+	)
+
+
+def _value_rule(case: ast.ValueCase) -> ValueRule:
+	if isinstance(case.rule, ast.FixedValue):
+		return ValueRule(case.label, "fixed", size=case.rule.size)
+	if isinstance(case.rule, ast.PrefixedValue):
+		return ValueRule(case.label, "prefixed",
+		                 length_type=case.rule.length_type)
+	if isinstance(case.rule, ast.SelfDelimiting):
+		return ValueRule(case.label, "self_delimiting")
+	return ValueRule(case.label, "error")
 
 
 def _render_extent(size: Interval) -> str:

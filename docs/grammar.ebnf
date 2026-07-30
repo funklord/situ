@@ -180,6 +180,7 @@ register_member	= ( "width" | "access_width" ) "=" digits ";"
 (* A tlv region's item grammar (section 9.5). *)
 tlv_args	= tlv_arg { "," tlv_arg } ;
 tlv_arg		= "tag_decode" "=" tag_decode
+	| "tag_identity" "=" ident
 	| "value_size" "=" value_size
 	| "known"      "=" known_tags
 	| attr ;

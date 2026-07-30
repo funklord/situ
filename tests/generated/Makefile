@@ -103,7 +103,7 @@ OBJS_test_runtime	:=
 OBJS_test_header	:= $(GEN_DIR)/header.o
 OBJS_test_tiff		:= $(GEN_DIR)/tiff.o
 OBJS_test_message	:= $(GEN_DIR)/message.o
-OBJS_test_protobuf	:=
+OBJS_test_protobuf	:= $(GEN_DIR)/protobuf.o
 OBJS_test_packet	:= $(GEN_DIR)/packet.o
 OBJS_test_kernels	:= $(GEN_DIR)/kernels.o $(GEN_DIR)/kernels_derived.o
 

@@ -24,10 +24,16 @@
 
 #include "situ.h"
 
-/* Field numbers from user.proto. */
-#define FIELD_USER_ID	1u
-#define FIELD_USERNAME	2u
-#define FIELD_SCORE	3u
+#include "protobuf.h"
+
+/* The tlv half of this file walks items through the accessors situc generated
+ * from examples/protobuf/protobuf.situ. It used to walk them through a cursor
+ * hand-written in the runtime, with `tag >> 3` and protobuf's four wire types
+ * baked into it, and dispatch on field numbers this file defined itself --
+ * three descriptions of one wire format, of which the schema's was the one
+ * nobody read. There is one now, and these tests are what hold it to protoc.
+ */
+typedef situ_proto_message_fields_item_t item_t;
 
 /* protoc --encode=User <<< 'user_id: 150; username: "situ"; score: 1.5' */
 static const uint8_t ALL_THREE[] = {
@@ -166,18 +172,10 @@ static void test_iterates_every_item(void **state)
 	uint8_t scratch[sizeof(ALL_THREE)];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
-	uint32_t seen = 0;
-
 	(void)state;
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
-	situ_tlv_begin(&it, view);
 
-	while (situ_tlv_next(&it) == SITU_OK) {
-		seen++;
-	}
-
-	assert_int_equal(seen, 3);
+	assert_int_equal(situ_proto_message_fields_count(view), 3);
 }
 
 static void test_finds_the_fields_protoc_wrote(void **state)
@@ -185,46 +183,33 @@ static void test_finds_the_fields_protoc_wrote(void **state)
 	uint8_t scratch[sizeof(ALL_THREE)];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
+	item_t item;
 
 	uint64_t user_id = 0;
 	char username[8];
-	uint32_t score_bits = 0;
-	uint32_t username_len = 0;
 
 	(void)state;
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
-	situ_tlv_begin(&it, view);
 
-	while (situ_tlv_next(&it) == SITU_OK) {
-		switch (situ_tlv_field(&it)) {
-		case FIELD_USER_ID:
-			assert_int_equal(situ_tlv_wire(&it), SITU_WIRE_VARINT);
-			assert_int_equal(situ_varint_get(situ_tlv_value(&it),
-			                                 it.value_len, 10, &user_id),
-			                 it.value_len);
-			break;
-		case FIELD_USERNAME:
-			assert_int_equal(situ_tlv_wire(&it), SITU_WIRE_LENGTH);
-			username_len = it.value_len;
-			memcpy(username, situ_tlv_value(&it), it.value_len);
-			username[it.value_len] = '\0';
-			break;
-		case FIELD_SCORE:
-			assert_int_equal(situ_tlv_wire(&it), SITU_WIRE_32BIT);
-			/* protobuf fixed32 is little endian on the wire. */
-			score_bits = situ_get_le32(situ_tlv_value(&it));
-			break;
-		default:
-			fail_msg("unexpected field %u", situ_tlv_field(&it));
-		}
-	}
-
+	/* One accessor per tag the schema names, each keyed on the part
+	 * `tag_identity` picks out (decision 0023). */
+	assert_int_equal(situ_proto_message_fields_user_id(view, &item), SITU_OK);
+	assert_int_equal(item.wire, 0);
+	assert_int_equal(situ_varint_get(view.base + item.value_at, item.value_len,
+	                                 10, &user_id), item.value_len);
 	assert_int_equal(user_id, 150);
-	assert_int_equal(username_len, 4);
+
+	assert_int_equal(situ_proto_message_fields_username(view, &item), SITU_OK);
+	assert_int_equal(item.wire, 2);
+	assert_int_equal(item.value_len, 4);
+	memcpy(username, view.base + item.value_at, item.value_len);
+	username[item.value_len] = '\0';
 	assert_string_equal(username, "situ");
-	/* 1.5f is 0x3FC00000. */
-	assert_int_equal(score_bits, 0x3FC00000u);
+
+	assert_int_equal(situ_proto_message_fields_score(view, &item), SITU_OK);
+	assert_int_equal(item.wire, 5);
+	/* protobuf fixed32 is little endian on the wire; 1.5f is 0x3FC00000. */
+	assert_int_equal(situ_get_le32(view.base + item.value_at), 0x3FC00000u);
 }
 
 static void test_item_extents_match_the_wire(void **state)
@@ -232,26 +217,25 @@ static void test_item_extents_match_the_wire(void **state)
 	uint8_t scratch[sizeof(ALL_THREE)];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
+	item_t item;
 
 	(void)state;
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
-	situ_tlv_begin(&it, view);
 
 	/* Each item's value sits exactly where protoc put it. */
-	assert_int_equal(situ_tlv_next(&it), SITU_OK);
-	assert_int_equal(it.value_off, 1);
-	assert_int_equal(it.value_len, 2);
+	assert_int_equal(situ_proto_message_fields_first(view, &item), SITU_OK);
+	assert_int_equal(item.value_at, 1);
+	assert_int_equal(item.value_len, 2);
 
-	assert_int_equal(situ_tlv_next(&it), SITU_OK);
-	assert_int_equal(it.value_off, 5);
-	assert_int_equal(it.value_len, 4);
+	assert_int_equal(situ_proto_message_fields_next(&item), SITU_OK);
+	assert_int_equal(item.value_at, 5);
+	assert_int_equal(item.value_len, 4);
 
-	assert_int_equal(situ_tlv_next(&it), SITU_OK);
-	assert_int_equal(it.value_off, 10);
-	assert_int_equal(it.value_len, 4);
+	assert_int_equal(situ_proto_message_fields_next(&item), SITU_OK);
+	assert_int_equal(item.value_at, 10);
+	assert_int_equal(item.value_len, 4);
 
-	assert_int_equal(situ_tlv_next(&it), SITU_ERR_BOUNDS);
+	assert_int_equal(situ_proto_message_fields_next(&item), SITU_ERR_BOUNDS);
 }
 
 static void test_same_size_item_mutation_is_in_place(void **state)
@@ -260,22 +244,17 @@ static void test_same_size_item_mutation_is_in_place(void **state)
 	uint8_t expected[sizeof(ALL_THREE)];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
+	item_t item;
 
 	(void)state;
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
 	memcpy(expected, ALL_THREE, sizeof(expected));
 
-	situ_tlv_begin(&it, view);
-	while (situ_tlv_next(&it) == SITU_OK) {
-		if (situ_tlv_field(&it) != FIELD_USERNAME) {
-			continue;
-		}
+	assert_int_equal(situ_proto_message_fields_username(view, &item), SITU_OK);
 
-		/* Four bytes for four bytes: `mutate = InPlaceSlack` says this stays
-		 * put, and nothing around it moves. */
-		memcpy(scratch + it.value_off, "SITU", 4);
-	}
+	/* Four bytes for four bytes: `mutate = InPlaceSlack` says this stays
+	 * put, and nothing around it moves. */
+	memcpy(scratch + item.value_at, "SITU", 4);
 
 	memcpy(expected + 5, "SITU", 4);
 	assert_memory_equal(scratch, expected, sizeof(expected));
@@ -286,28 +265,25 @@ static void test_a_longer_value_would_not_fit(void **state)
 	uint8_t scratch[sizeof(ALL_THREE)];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
+	item_t item;
+	uint32_t trailing;
+	uint32_t grown;
 
 	(void)state;
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
-	situ_tlv_begin(&it, view);
 
-	while (situ_tlv_next(&it) == SITU_OK) {
-		if (situ_tlv_field(&it) != FIELD_USERNAME) {
-			continue;
-		}
+	assert_int_equal(situ_proto_message_fields_username(view, &item), SITU_OK);
 
-		/* The other half of InPlaceSlack: a longer value does not fit where
-		 * the old one was, so everything after it would have to move. Growing
-		 * "situ" to five bytes needs one byte of slack at the end of the
-		 * region, and this region is exactly full. */
-		uint32_t trailing = view.limit - (it.value_off + it.value_len);
-		uint32_t grown    = it.value_off + it.value_len + 1u + trailing;
+	/* The other half of InPlaceSlack: a longer value does not fit where the
+	 * old one was, so everything after it would have to move. Growing "situ"
+	 * to five bytes needs one byte of slack at the end of the region, and this
+	 * region is exactly full. */
+	trailing = view.limit - (item.value_at + item.value_len);
+	grown    = item.value_at + item.value_len + 1u + trailing;
 
-		assert_int_equal(trailing, 5);		/* the fixed32 item */
-		assert_true(grown > view.limit);
-		assert_false(situ_in_bounds(view, 0, grown));
-	}
+	assert_int_equal(trailing, 5);		/* the fixed32 item */
+	assert_true(grown > view.limit);
+	assert_false(situ_in_bounds(view, 0, grown));
 }
 
 static void test_truncated_input_is_refused(void **state)
@@ -315,16 +291,16 @@ static void test_truncated_input_is_refused(void **state)
 	uint8_t scratch[sizeof(ALL_THREE)];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
-	situ_err_t err = SITU_OK;
+	item_t item;
+	situ_err_t err;
 
 	(void)state;
 	/* Everything but the last two bytes of the fixed32. */
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE) - 2u, scratch);
-	situ_tlv_begin(&it, view);
 
-	while ((err = situ_tlv_next(&it)) == SITU_OK) {
-		/* walk to the end */
+	err = situ_proto_message_fields_first(view, &item);
+	while (err == SITU_OK) {
+		err = situ_proto_message_fields_next(&item);
 	}
 
 	assert_int_equal(err, SITU_ERR_BOUNDS);
@@ -338,13 +314,13 @@ static void test_a_group_wire_type_is_refused(void **state)
 	uint8_t scratch[sizeof(group)];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
+	item_t item;
 
 	(void)state;
 	view = view_over(&msg, group, sizeof(group), scratch);
-	situ_tlv_begin(&it, view);
 
-	assert_int_equal(situ_tlv_next(&it), SITU_ERR_CONSTRAINT);
+	assert_int_equal(situ_proto_message_fields_first(view, &item),
+	                 SITU_ERR_CONSTRAINT);
 }
 
 static void test_an_empty_region_yields_nothing(void **state)
@@ -352,14 +328,14 @@ static void test_an_empty_region_yields_nothing(void **state)
 	uint8_t scratch[1];
 	situ_msg_t msg;
 	situ_view_t view;
-	situ_tlv_iter_t it;
+	item_t item;
 
 	(void)state;
 	situ_msg_init(&msg, scratch, 0);
 	assert_int_equal(situ_view_at(&msg, 0, 0, &view), SITU_OK);
 
-	situ_tlv_begin(&it, view);
-	assert_int_equal(situ_tlv_next(&it), SITU_ERR_BOUNDS);
+	assert_int_equal(situ_proto_message_fields_first(view, &item),
+	                 SITU_ERR_BOUNDS);
 }
 
 int main(void)

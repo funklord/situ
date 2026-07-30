@@ -31,6 +31,7 @@ GENERAL = PREAMBLE + """struct m {
 	tlv fields (
 		tag_type   = pb_varint,
 		tag_decode = { field = tag >> 3, wire = tag & 0x7 },
+		tag_identity = field,
 		value_size = switch (wire) {
 			case 0: self_delimiting,
 			case 1: 8,
@@ -290,6 +291,75 @@ def test_an_unknown_known_tag_attribute_is_refused() -> None:
 		"\t\tunknown = error"))
 
 	assert "unknown attribute `packed` on a known tag" in report
+
+
+# -- which part names an item (decision 0023) -------------------------------
+
+
+def test_the_identity_part_is_declared() -> None:
+	assert region(GENERAL).identity_part() == "field"
+
+
+def test_one_part_needs_no_declaration() -> None:
+	"""Nothing to be ambiguous about, so nothing to say."""
+	fields = region(one_region(
+		"\t\ttag_type = pb_varint,\n"
+		"\t\ttag_decode = { field = tag >> 3 },\n"
+		"\t\tvalue_size = switch (field) { case 0: self_delimiting },\n"
+		"\t\tknown = { 1 : { name = a, wire = 0 } },\n"
+		"\t\tunknown = error"))
+
+	assert fields.identity is None
+	assert fields.identity_part() == "field"
+
+
+def test_the_simple_form_keys_on_the_raw_tag() -> None:
+	fields = region(one_region(
+		"\t\ttag_type = u8, length_type = u8,\n"
+		"\t\tknown = { 1 : Mtu },\n"
+		"\t\tunknown = error"))
+
+	assert fields.identity_part() is None
+
+
+def test_two_parts_and_a_known_map_must_say_which() -> None:
+	"""The wrong choice finds an item and not the one asked for, which is why
+	this is an error rather than a default."""
+	report = rendered(one_region(
+		"\t\ttag_type = pb_varint,\n"
+		"\t\ttag_decode = { field = tag >> 3, wire = tag & 0x7 },\n"
+		"\t\tvalue_size = switch (wire) { case 0: self_delimiting },\n"
+		"\t\tknown = { 1 : { name = a, wire = 0 } },\n"
+		"\t\tunknown = error"))
+
+	assert "does not say which part of the tag names an item" in report
+	assert "`field`, `wire`" in report
+	assert "add `tag_identity = <part>`" in report
+	assert "still finds an item" in report
+
+
+def test_two_parts_without_a_known_map_need_not_say() -> None:
+	"""Nothing is keyed by identity, so requiring an answer would be asking for
+	one nothing uses."""
+	fields = region(one_region(
+		"\t\ttag_type = pb_varint,\n"
+		"\t\ttag_decode = { field = tag >> 3, wire = tag & 0x7 },\n"
+		"\t\tvalue_size = switch (wire) { case 0: self_delimiting },\n"
+		"\t\tunknown = error"))
+
+	assert fields.identity_part() is None
+
+
+def test_an_identity_naming_no_part_is_refused() -> None:
+	report = rendered(one_region(
+		"\t\ttag_type = pb_varint,\n"
+		"\t\ttag_decode = { field = tag >> 3, wire = tag & 0x7 },\n"
+		"\t\ttag_identity = nonesuch,\n"
+		"\t\tvalue_size = switch (wire) { case 0: self_delimiting },\n"
+		"\t\tunknown = error"))
+
+	assert "`tag_identity` names `nonesuch`, which the tag does not decode" in report
+	assert "`field`, `wire`" in report
 
 
 def test_a_value_rule_that_is_not_one_is_refused() -> None:
