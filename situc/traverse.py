@@ -130,6 +130,21 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	if placement.located is not None:
 		return Member.LOCATED
 
+	# Before the region check, and only for the two region kinds that can
+	# carry one. A `coded` or `sealed` region that ends at a delimiter is
+	# framed exactly like any other delimited member -- the scan is over the
+	# encoded bytes either way, which is the order SMTP's dot-stuffing
+	# specifies (13.6). What the codec does inside is a separate question and
+	# a separate note.
+	#
+	# C reaches `_delimited` for anything with a delimiter and does not use
+	# this function, so it has always emitted the scan accessors for one. The
+	# other three asked here, got `REGION`, and emitted nothing -- so a
+	# dot-stuffed body was unreachable in three backends out of four.
+	if placement.kind in ("coded", "sealed") \
+			and placement.delimiter is not None:
+		return Member.DELIMITED
+
 	if placement.kind != "field":
 		return Member.REGION
 

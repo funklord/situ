@@ -1330,15 +1330,6 @@ class Emitter:
 				        "a run of records ends at a terminator this cannot tell"
 				        " apart from the end of the bytes so far")
 
-			if placement.kind in ("coded", "sealed"):
-				# A coded region that is also delimited: C emits the scan
-				# accessors for one and this backend does not, so the
-				# helpers this would call are not there. Declining beats
-				# naming them -- and the accessors themselves are the gap
-				# worth closing.
-				return self._unframeable(struct,
-				        f"`{placement.name}` is a {placement.kind} region and"
-				        " this backend emits no scan accessors for one")
 
 			length = self._length_expression(struct, placement)
 			if length is None:
@@ -2209,14 +2200,6 @@ class Emitter:
 		"""
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []		# checked under the element's own struct
-
-		if placement.kind in ("coded", "sealed"):
-			# This backend emits no scan accessors for a coded region, so
-			# there is no `_terminated` to call. `examples/smtp`'s
-			# dot-stuffed body is one, and this named it anyway.
-			return ["\t\t/* " + placement.path + ": a "
-			        + placement.kind + " region, whose delimiter this backend",
-			        "\t\t * does not scan for yet. */"]
 
 		name  = c_name(local_name(struct, placement))
 		delim = placement.delimiter

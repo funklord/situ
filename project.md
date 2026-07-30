@@ -4971,7 +4971,17 @@ found, and it was there before any of this work began.
    A backend that emits a language with a compiler must be held to that
    compiler, over the schemas people actually read.
 
-47. **A construct nothing exercised was broken in two backends at once.**
+47. **A gap in three backends can be one wrong answer in the shared part.**
+   A `coded` region that ends at a delimiter got no scan accessors in C++,
+   Python or Rust, and it read as three backends being behind C. They were
+   not: `traverse.classify` answered `REGION` before it asked about the
+   delimiter, and all three believed it. C reaches its delimited emitter for
+   anything with a delimiter and does not use that function, which is exactly
+   why the one wrong answer looked like three separate omissions. Before
+   porting a feature to N backends, check whether they are all reading the
+   same thing.
+
+48. **A construct nothing exercised was broken in two backends at once.**
    Section 9.6's own example uses an enum discriminant -- `case
    msg_type.hello:` -- and neither C++ nor Rust compiled such a schema at
    all. Both getters hand back something that does not compare to a number

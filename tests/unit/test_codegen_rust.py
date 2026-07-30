@@ -842,3 +842,39 @@ def test_every_example_generates() -> None:
 		resolved = resolve(parsed, solve(parsed))
 
 		assert generate_rs(parsed, resolved, schema.stem).module
+
+
+# -- a coded region that ends at a delimiter (13.6) -------------------------
+
+CODED = 'codec dot_stuffing {\n\tkernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);\n}\nimpl dot_stuffing derived;\nstruct data_block {\n\tcoded body(dot_stuffing) until "\\r\\n.\\r\\n" {\n\t\tu8 content[remaining];\n\t}\n}\n'
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_coded_region_is_framed_like_any_delimited_member(tmp_path: Path) -> None:
+	"""A coded region that ends at a delimiter is framed like any other
+	delimited member: the scan is over the *encoded* bytes, which is the order
+	the format specifies -- a stuffing code protects its own terminator, so
+	the sequence is unambiguous here and would not be after decoding (13.6).
+
+	Three backends emitted nothing for one, because `traverse.classify`
+	answered `REGION` before it asked about the delimiter. C reaches its
+	delimited emitter for anything with a delimiter and does not use that
+	function, so it had the accessors all along -- which is why the gap read
+	as three backends being behind rather than one classifier being wrong.
+
+	`Hello\\r\\n..dotted\\r\\n` then the terminator: 17 bytes of content,
+	22 including it. All four agree."""
+	built = build(tmp_path, CODED, main="""
+fn main() {
+	let raw = b"Hello\\r\\n..dotted\\r\\n\\r\\n.\\r\\nX";
+	let v = unit::DataBlock::new(raw).unwrap();
+
+	assert_eq!(v.body_len(), 17);
+	assert_eq!(v.body_span(), 22);
+	assert!(v.body_terminated());
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr
