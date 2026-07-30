@@ -732,6 +732,38 @@ class Emitter:
 
 		return " + ".join([str(constant), *terms])
 
+	def _offset_body(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
+		"""The offset accessor's body, accumulating rather than summing.
+
+		`_offset_expression` builds `0 + a_span() + b_span()`, and each of
+		those re-derives its own base by rescanning everything before it, so
+		the expression costs far more than the terms in it. An expression
+		cannot hold a running total; this is the same sum written as
+		statements, with each span given the offset already reached.
+		"""
+		if placement.offset_bits is not None:
+			return None		# a constant; nothing to accumulate
+
+		lines    = ["\t\tstd::uint32_t at = 0;"]
+		constant = 0
+		for other in own_members(struct):
+			if other.path == placement.path:
+				break
+			if other.is_fixed_size:
+				constant += other.size_bits // BITS_PER_BYTE
+				continue
+			if constant:
+				lines.append(f"\t\tat += {constant};")
+				constant = 0
+			length = self._length_expression(struct, other, running="at")
+			if length is None:
+				return None
+			lines.append(f"\t\tat += {length};")
+		if constant:
+			lines.append(f"\t\tat += {constant};")
+		return [*lines, "\t\treturn at;"]
+
 	# -- delimited members (section 8.6) --------------------------------
 
 	def _delimiter_array(self, placement: Placement) -> str:
@@ -791,6 +823,16 @@ class Emitter:
 		limit = (room if placement.delimiter_cap is None
 		         else f"situ_min_u32({placement.delimiter_cap}u, {room})")
 
+		# The same two, over a base the caller hands in. Every loop that sums
+		# offsets has the running total and called the plain form, which
+		# re-derives the base by rescanning everything before this member --
+		# so a sum over M members cost far more than the M scans it added up.
+		# Measured on an eight-member record: 620ms, against 45ms in C once C
+		# had this.
+		room_at  = "situ_remaining_u32(limit(), at)"
+		limit_at = (room_at if placement.delimiter_cap is None
+		            else f"situ_min_u32({placement.delimiter_cap}u, {room_at})")
+
 		# With `[trim]` the framing and the value are different numbers: the
 		# scan says where the next member starts, and the value is what is
 		# left after the whitespace at either end. Without it they are one.
@@ -802,19 +844,35 @@ class Emitter:
 			f" {render_delimiter(delim)}. */",
 			f"\t[[nodiscard]] std::uint32_t {name}_offset() const noexcept",
 			"\t{",
-			f"\t\treturn {start};",
+			*(self._offset_body(struct, placement) or [f"\t\treturn {start};"]),
+			"\t}",
+			f"\t[[nodiscard]] std::uint32_t {scan}_from(std::uint32_t at)"
+			" const noexcept",
+			"\t{",
+			f"\t\treturn {self._scan_expression(placement, 'base() + at', limit_at)};",
 			"\t}",
 			f"\t[[nodiscard]] std::uint32_t {scan}() const noexcept",
 			"\t{",
-			f"\t\treturn {self._scan_expression(placement, f'base() + {name}_offset()', limit)};",
+			f"\t\treturn {scan}_from({name}_offset());",
+			"\t}",
+			f"\t[[nodiscard]] bool {name}_terminated_from(std::uint32_t at)"
+			" const noexcept",
+			"\t{",
+			f"\t\treturn {scan}_from(at) < ({limit_at});",
 			"\t}",
 			f"\t[[nodiscard]] bool {name}_terminated() const noexcept",
 			"\t{",
-			f"\t\treturn {scan}() < ({limit});",
+			f"\t\treturn {name}_terminated_from({name}_offset());",
+			"\t}",
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from(std::uint32_t at)"
+			" const noexcept",
+			"\t{",
+			f"\t\treturn {scan}_from(at) + "
+			f"({name}_terminated_from(at) ? {len(delim)}u : 0u);",
 			"\t}",
 			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
 			"\t{",
-			f"\t\treturn {scan}() + ({name}_terminated() ? {len(delim)}u : 0u);",
+			f"\t\treturn {name}_span_from({name}_offset());",
 			"\t}",
 		]
 
@@ -1362,7 +1420,7 @@ class Emitter:
 		return chain
 
 	def _length_expression(self, struct: ResolvedStruct,
-			placement: Placement) -> str | None:
+			placement: Placement, running: str | None = None) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)
@@ -1379,7 +1437,14 @@ class Emitter:
 		# The same call serves a byte array and a run of records -- one name
 		# for "how far this member reaches", whichever it is.
 		if placement.delimiter is not None or placement.repeat_while is not None:
-			return f"{c_name(local_name(struct, placement))}_span()"
+			name = c_name(local_name(struct, placement))
+			# `_from` only for a delimited byte array: a record run's span is
+			# a walk that resolves its own base the same way and has no such
+			# helper, so asking for one would name a method that is not there.
+			if running is not None and placement.delimiter is not None \
+					and placement.type_name not in self.structs:
+				return f"{name}_span_from({running})"
+			return f"{name}_span()"
 
 		# A nested struct with no single size. Without this the sum treated
 		# it as zero bytes wide and placed whatever follows on top of it.
@@ -1465,7 +1530,8 @@ class Emitter:
 		          f"\t/* {placement.path}: offset and extent both from the data. */",
 		          f"\t[[nodiscard]] std::uint32_t {name}_offset() const noexcept",
 		          "\t{",
-		          f"\t\treturn {start};",
+		          *(self._offset_body(struct, placement)
+		            or [f"\t\treturn {start};"]),
 		          "\t}"]
 
 		if nested is None:

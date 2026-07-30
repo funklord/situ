@@ -828,6 +828,13 @@ class Emitter:
 		         else f"min({placement.delimiter_cap}, {room})")
 		data  = f"self._msg.buffer[self._at + ({start}):]"
 
+		# The same two over a base handed in, so the loops that accumulate
+		# offsets stop re-deriving one per term.
+		room_at  = "max(0, self._len - at)"
+		limit_at = (room_at if placement.delimiter_cap is None
+		            else f"min({placement.delimiter_cap}, {room_at})")
+		data_at  = "self._msg.buffer[self._at + at:]"
+
 		# With `[trim]` the framing and the value are different numbers: the
 		# scan says where the next member starts, and the value is what is
 		# left after the whitespace at either end.
@@ -838,12 +845,24 @@ class Emitter:
 			f"\t@property",
 			f"\tdef {name}_offset(self) -> int:",
 			f'\t\t"""{placement.path}: where the scan starts."""',
-			f"\t\treturn {start}",
+			*(self._offset_body(struct, placement) or [f"\t\treturn {start}"]),
+			"",
+			f"\tdef {scan}_from(self, at: int) -> int:",
+			f'\t\t"""The scan, from a base the caller already knows."""',
+			f"\t\treturn {self._scan_call(placement, data_at, limit_at)}",
 			"",
 			"\t@property",
 			f"\tdef {scan}(self) -> int:",
 			f'\t\t"""To the first {render_delimiter(delim)}, or the whole run."""',
-			f"\t\treturn {self._scan_call(placement, data, limit)}",
+			f"\t\treturn self.{scan}_from(self.{name}_offset)",
+			"",
+			f"\tdef {name}_terminated_from(self, at: int) -> bool:",
+			f"\t\treturn self.{scan}_from(at) < ({limit_at})",
+			"",
+			f"\tdef {name}_span_from(self, at: int) -> int:",
+			f'\t\t"""Content plus delimiter, from a known base."""',
+			f"\t\treturn self.{scan}_from(at) + ({len(delim)}"
+			f" if self.{name}_terminated_from(at) else 0)",
 			"",
 			"\t@property",
 			f"\tdef {name}_terminated(self) -> bool:",
@@ -854,8 +873,7 @@ class Emitter:
 			"\t@property",
 			f"\tdef {name}_span(self) -> int:",
 			f'\t\t"""Content plus delimiter: where the next member starts."""',
-			f"\t\treturn self.{scan} + ({len(delim)} if self.{name}_terminated"
-			" else 0)",
+			f"\t\treturn self.{name}_span_from(self.{name}_offset)",
 			"",
 			"\t@property",
 			f"\tdef {name}_raw(self) -> memoryview:",
@@ -1345,8 +1363,40 @@ class Emitter:
 			         else f"({length} if {held} == {arm.value} else {chain})")
 		return chain
 
+	def _offset_body(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
+		"""The offset accessor's body, accumulating rather than summing.
+
+		`_offset_expression` builds `0 + a_span + b_span`, and each of those
+		re-derives its own base by rescanning everything before it, so the
+		expression costs far more than the terms in it. An expression cannot
+		hold a running total; this is the same sum as statements, with each
+		span given the offset already reached.
+		"""
+		if placement.offset_bits is not None:
+			return None
+
+		lines    = ["\t\tat = 0"]
+		constant = 0
+		for other in own_members(struct):
+			if other.path == placement.path:
+				break
+			if other.is_fixed_size:
+				constant += other.size_bits // BITS_PER_BYTE
+				continue
+			if constant:
+				lines.append(f"\t\tat += {constant}")
+				constant = 0
+			length = self._length_expression(struct, other, running="at")
+			if length is None:
+				return None
+			lines.append(f"\t\tat += {length}")
+		if constant:
+			lines.append(f"\t\tat += {constant}")
+		return [*lines, "\t\treturn at"]
+
 	def _length_expression(self, struct: ResolvedStruct,
-			placement: Placement) -> str | None:
+			placement: Placement, running: str | None = None) -> str | None:
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)
 
@@ -1354,7 +1404,11 @@ class Emitter:
 		# be, and `_span` is the member's own answer. One name for "how far
 		# this member reaches", whether it is a byte run or a run of records.
 		if placement.delimiter is not None or placement.repeat_while is not None:
-			return f"self.{c_name(local_name(struct, placement))}_span"
+			name = c_name(local_name(struct, placement))
+			if running is not None and placement.delimiter is not None \
+					and placement.type_name not in self.structs:
+				return f"self.{name}_span_from({running})"
+			return f"self.{name}_span"
 
 		# Arithmetic over a field rather than a reference to one. Without this
 		# the member fell through to the scalar case and this backend read one

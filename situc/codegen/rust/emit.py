@@ -750,6 +750,11 @@ class Emitter:
 		limit  = (room if placement.delimiter_cap is None
 		          else f"core::cmp::min({placement.delimiter_cap}, {room})")
 
+		sliced_at = self._scan_slice(placement, "at")
+		room_at   = "self.bytes.len().saturating_sub(at)"
+		limit_at  = (room_at if placement.delimiter_cap is None
+		             else f"core::cmp::min({placement.delimiter_cap}, {room_at})")
+
 		# With `[trim]` the framing and the value are different numbers.
 		scan = _ident(f"{base}_raw_len" if placement.trimmed else f"{base}_len")
 
@@ -758,17 +763,38 @@ class Emitter:
 			f"\t/// `{placement.path}` runs to the first"
 			f" {render_delimiter(delim)}.",
 			f"\tpub fn {_ident(f'{base}_offset')}(&self) -> usize {{",
-			f"\t\t{start}",
+			*(self._offset_body(struct, placement)
+			  or [f"\t\t{self._unparen(start)}"]),
+			"\t}",
+			"",
+			"\t/// The scan, from a base the caller already knows. Every loop",
+			"\t/// that sums offsets has one, and the plain form below",
+			"\t/// re-derives it by rescanning everything before this member.",
+			f"\tpub fn {scan}_from(&self, at: usize) -> usize {{",
+			f"\t\t{self._scan_call(placement, sliced_at)}",
 			"\t}",
 			"",
 			f"\tpub fn {scan}(&self) -> usize {{",
-			f"\t\t{self._scan_call(placement, sliced)}",
+			f"\t\tself.{scan}_from(self.{_ident(f'{base}_offset')}())",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(f'{base}_terminated_from')}(&self, at: usize)"
+			" -> bool {",
+			f"\t\tself.{scan}_from(at) < {limit_at}",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(f'{base}_span_from')}(&self, at: usize)"
+			" -> usize {",
+			f"\t\tself.{scan}_from(at) + "
+			f"if self.{_ident(f'{base}_terminated_from')}(at)"
+			f" {{ {len(delim)} }} else {{ 0 }}",
 			"\t}",
 			"",
 			"\t/// Whether the delimiter is there. It is not when the frame was",
 			"\t/// cut short, which is the only thing parse can catch here.",
 			f"\tpub fn {_ident(f'{base}_terminated')}(&self) -> bool {{",
-			f"\t\tself.{scan}() < {limit}",
+			f"\t\tself.{_ident(f'{base}_terminated_from')}"
+			f"(self.{_ident(f'{base}_offset')}())",
 			"\t}",
 			"",
 			"\t/// Content plus delimiter: where the next member starts.",
@@ -1388,15 +1414,52 @@ class Emitter:
 			              f" else {{ {chain} }}")
 		return chain if chain == "0" else f"({chain})"
 
+	def _offset_body(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
+		"""The offset accessor's body, accumulating rather than summing.
+
+		`_offset_expression` builds `0 + a_span() + b_span()`, and each of
+		those re-derives its own base by rescanning everything before it, so
+		the expression costs far more than the terms in it. Measured on an
+		eight-member record: 1590ms, against 57ms once the sum keeps a
+		running total. An expression cannot hold one; this is the same sum as
+		statements.
+		"""
+		if placement.offset_bits is not None:
+			return None
+
+		lines    = ["\t\tlet mut at = 0usize;"]
+		constant = 0
+		for other in own_members(struct):
+			if other.path == placement.path:
+				break
+			if other.is_fixed_size:
+				constant += other.size_bits // BITS_PER_BYTE
+				continue
+			if constant:
+				lines.append(f"\t\tat += {constant};")
+				constant = 0
+			length = self._length_expression(struct, other, running="at")
+			if length is None:
+				return None
+			lines.append(f"\t\tat += {self._unparen(length)};")
+		if constant:
+			lines.append(f"\t\tat += {constant};")
+		return [*lines, "\t\tat"]
+
 	def _length_expression(self, struct: ResolvedStruct,
-			placement: Placement) -> str | None:
+			placement: Placement, running: str | None = None) -> str | None:
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)
 
 		# Wherever the delimiter turns out to be. One name for "how far this
 		# member reaches", whether it is a byte run or a run of records.
 		if placement.delimiter is not None or placement.repeat_while is not None:
-			return (f"self.{_ident(c_name(local_name(struct, placement)) + '_span')}()")
+			name = c_name(local_name(struct, placement))
+			if running is not None and placement.delimiter is not None \
+					and placement.type_name not in self.structs:
+				return f"self.{_ident(name + '_span_from')}({running})"
+			return f"self.{_ident(name + '_span')}()"
 
 		# Arithmetic over a field rather than a reference to one. Without this
 		# the member fell through to the scalar case and this backend read one

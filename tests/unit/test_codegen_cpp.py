@@ -322,12 +322,18 @@ def test_a_variable_struct_is_told_its_extent() -> None:
 
 def test_a_dynamic_offset_sums_what_precedes_it() -> None:
 	"""The same walk the C backend does: constants for the fixed members, and
-	a runtime read for each variable one."""
+	a runtime read for each variable one.
+
+	Statements rather than one expression, because the running total has to
+	be a variable: each term's own accessor otherwise re-derives its base by
+	rescanning everything before it, and the sum costs more than the terms.
+	"""
 	header = emit("struct h { u8 v; u16 n; }\nstruct r { u32 id; }\n"
 	              "struct s { h hdr; u8 opts[hdr.n]; r recs[hdr.n]; }\n")
 
 	assert "std::uint32_t recs_offset() const noexcept" in header
-	assert "return 3 + (" in header
+	assert "std::uint32_t at = 0;" in header
+	assert "at += 3;" in header
 
 
 def test_an_element_is_bounded_by_the_count_not_just_the_view() -> None:

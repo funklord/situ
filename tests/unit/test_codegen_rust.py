@@ -653,3 +653,15 @@ fn main() {
 
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+def test_an_offset_sum_keeps_a_running_total() -> None:
+	"""Statements rather than one expression, because the running total has
+	to be a variable. `0 + a_span + b_span` re-derives each term's base by
+	rescanning everything before it, so the sum costs far more than the terms
+	in it -- an eight-member record measured 1590ms, then 53ms."""
+	module = emit('struct s { u8 a[] until ";"; u8 b[] until ";"; u8 c[] until ";"; }')
+
+	assert "let mut at = 0usize;" in module
+	assert "at += self.a_span_from(at);" in module
+	assert "0 + self.a_span()" not in module
