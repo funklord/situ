@@ -329,6 +329,15 @@ def _size(placement: Placement) -> str:
 		return f"to {shown}"
 	if placement.sized_by is not None:
 		return f"[{placement.sized_by}]"
+	if placement.kind == "variant" and placement.discriminant is not None:
+		# The fixed-size branch below reported `size_bits`, which for a
+		# variant is the *smallest* arm -- printed as "0 bytes" beside a
+		# diagram saying "(variable)", in a column where every other variable
+		# member says how its length is decided. A true number answering a
+		# question nobody asked, which is the `array_count` lesson again.
+		return f"by {placement.discriminant}"
+	if placement.repeat_while is not None:
+		return f"while {placement.repeat_while}"
 	if placement.size_bits % BITS_PER_BYTE:
 		bits = placement.size_bits
 		return f"{bits} bit" if bits == 1 else f"{bits} bits"

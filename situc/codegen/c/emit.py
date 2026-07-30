@@ -2864,7 +2864,14 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 
+		# An element's own members are checked under the element's struct, not
+		# here -- the same rule the delimiter case applies below, and the same
+		# reason: the discriminant is a field of `label`, not of the struct
+		# holding a run of them, so this emitted a comparison against a name
+		# that is not in scope.
 		if placement.kind == "variant":
+			if "." in placement.path[len(struct.name) + 1:]:
+				return []
 			return self._discriminant_check(struct, placement)
 
 		# A delimited member's delimiter has to be there. That is the one thing

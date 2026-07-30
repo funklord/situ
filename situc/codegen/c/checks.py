@@ -156,6 +156,10 @@ INSTANCE_COUNT = 2
 #: Bytes left over for a trailing `remaining` member, so it has somewhere to be.
 INSTANCE_TAIL = 8
 
+#: Floor for an instance whose tail cannot be sized, so a run walking it has
+#: room for more than the one element nobody is claiming it has.
+MIN_INSTANCE = 32
+
 
 def _element_bytes(resolved: ResolvedSchema, placement: Placement) -> int | None:
 	"""How many bytes one element of an array member takes."""
@@ -206,6 +210,14 @@ def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 	if placement.sized_by is not None:
 		each = _element_bytes(resolved, placement)
 		return None if each is None else each * chosen[placement.sized_by]
+	if placement.repeat_while is not None:
+		# How many elements a `while` run has is decided by the bytes, and
+		# this instance is zeroed -- so whether the run ends at the first
+		# element is a question about the predicate, which this does not
+		# evaluate. Falling through below answered "one element", which is the
+		# `array_count` lie by another route: the members after it were then
+		# placed at an offset the run walks straight past.
+		return None
 	if placement.array_count is not None:
 		each = _element_bytes(resolved, placement)
 		return None if each is None else each * placement.array_count
@@ -247,15 +259,25 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	# Walk the members, giving each the size the chosen values imply.
 	offsets: list[tuple[Placement, int]] = []
 	at = 0
+	unpinned: str | None = None
 	for placement in members:
 		size = _member_bytes(resolved, placement, chosen)
 		if size is None:
-			suite.skip(struct.name,
-			           f"`{placement.path}` has no size this can pin down, so the"
-			           " members after it cannot be placed")
-			return
+			# Stop asserting here rather than abandoning the struct. Where
+			# *this* member starts is still known and still worth pinning; it
+			# is everything after it that is not, so the walk records the
+			# member and stops.
+			offsets.append((placement, at))
+			unpinned = placement.path
+			break
 		offsets.append((placement, at))
 		at += size
+
+	if unpinned is not None:
+		# The buffer still has to hold something the accessors can walk. The
+		# minimum is what the layout guarantees, doubled so a run has room for
+		# more than the one element it is not being asserted to have.
+		at = max(at * 2, struct.layout.size_bytes * 2, MIN_INSTANCE)
 
 	total = at
 	body  = [
@@ -329,7 +351,15 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 		 " *",
 		 " * The expected offsets are added up from the chosen sizes; the",
 		 " * accessors sum length fields at run time. Two routes to the same",
-		 " * number, so a disagreement is a real one. */"])
+		 " * number, so a disagreement is a real one."
+		 + ("" if unpinned is not None else " */"),
+		 *([] if unpinned is None else [
+			 " *",
+			 f" * Assertions stop at `{unpinned}`: how far it reaches is",
+			 " * decided by the bytes rather than by a length this can",
+			 " * choose, so where the members after it start is not a",
+			 " * number to assert. */"]),
+		 ])
 
 
 def _instance_assertions(struct: ResolvedStruct, placement: Placement,
@@ -347,7 +377,13 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 	# so the condition passed for the wrong reason and the right thing
 	# happened by accident. Removing that lie exposed it, and only the
 	# compile step noticed: pytest was green and the generated C was not.
+	#
+	# Then exactly the same thing for a `while` run, which carried the same
+	# false count for the same reason, and fell through to the nested-struct
+	# branch the moment it stopped. A run has `_count` and `_at`; it has no
+	# `_view`, because there is no one instance to take a view of.
 	if placement.delimiter is not None or placement.sized_by is not None \
+			or placement.repeat_while is not None \
 			or placement.array_count is not None:
 		# A delimited byte run has a pointer and a length like any other; only
 		# a run of *records* has a count and an indexed accessor. The element
@@ -383,6 +419,11 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 			f"\tassert_int_equal({at}(view, 0u, &{first}), SITU_OK);",
 			f"\tassert_int_equal((uint32_t)({first}.base - view.base), {offset}u);",
 		])
+		if placement.repeat_while is not None:
+			# How many there are depends on the bytes, and this instance is
+			# zeroed. Where the first one starts is the question this check
+			# asks, and the only one it can answer.
+			return lines
 		if placement.sized_by and placement.sized_by != "remaining":
 			count = ident(prefix, struct.name, local, "count")
 			lines.append(f"\tassert_int_equal({count}(view),"
@@ -882,6 +923,12 @@ def _nested_placement_check(suite: Suite, resolved: ResolvedSchema,
 	if placement.offset_bits is None or placement.array_count is not None:
 		return
 	if placement.sized_by is not None or placement.type_name is None:
+		return
+	# A run is not a nested struct, however few elements it has. It carried a
+	# false `array_count = 1` and was excluded above for the wrong reason; the
+	# right one is that a run has `_at`, and `_instance_assertions` is where
+	# runs are checked.
+	if placement.repeat_while is not None or placement.delimiter is not None:
 		return
 	if placement.offset_bits % BITS_PER_BYTE != 0:
 		return

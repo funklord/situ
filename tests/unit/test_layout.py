@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import pytest
 
+from dataclasses import fields
+
 from situc.diagnostics import SituError
-from situc.layout import BITS_PER_BYTE, SchemaLayout, solve
+from situc.layout import BITS_PER_BYTE, Placement, SchemaLayout, solve
 from situc.parser import parse_text
 
 PREAMBLE = "endian big;\nbit_order msb_first;\n"
@@ -491,3 +493,47 @@ def test_the_same_field_is_fine_before_the_dynamic_member() -> None:
 
 	assert packed
 	assert all(p.offset_bits is not None for p in packed)
+
+
+# -- a member seen from its parent ------------------------------------------
+
+RUN_IN_A_STRUCT = """
+struct label { u2 form; u6 rest; u8 text[rest]; }
+struct name { label labels[] while (form == 0) max 8; }
+struct question { name qname; }
+"""
+
+
+def placement_at(body: str, path: str) -> Placement:
+	schema = parse_text(PREAMBLE + body)
+	found  = solve(schema)
+	return next(held
+	            for layout in found.structs.values()
+	            for held in layout.placements
+	            if held.path == path)
+
+
+def test_a_while_run_claims_no_element_count() -> None:
+	"""How many there are is whichever one first fails the condition, which is
+	not a number the layout knows. It recorded 1 -- the same lie `until`
+	carried, with a different construct in front of it (invariant 25)."""
+	assert placement_at(RUN_IN_A_STRUCT, "name.labels").array_count is None
+	assert placement_at(RUN_IN_A_STRUCT, "name.labels").repeat_while is not None
+
+
+def test_the_copy_in_the_parent_is_the_same_member() -> None:
+	"""The nested copy carried a hand-written list of fields and had fallen
+	six behind, `repeat_while` among them -- so a run inside a nested struct
+	stopped being a run when the parent looked at it. It read `Sequential`
+	anyway, because the false `array_count` above made the generic
+	variable-element row fire and reach the same answer by accident. Removing
+	one without the other is how the accident showed.
+	"""
+	own    = placement_at(RUN_IN_A_STRUCT, "name.labels")
+	seen   = placement_at(RUN_IN_A_STRUCT, "question.qname.labels")
+	differ = {"path", "offset_bits", "frame_relative", "frame_base_dynamic",
+	          "dynamic_cause", "dynamic_cause_span", "dynamic_cause_size"}
+
+	for slot in fields(Placement):
+		if slot.name not in differ:
+			assert getattr(own, slot.name) == getattr(seen, slot.name), slot.name

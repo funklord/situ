@@ -4404,7 +4404,27 @@ not describe DNS names "statically at all", which was wrong by a wide margin.
    at compile time, ask whether it is knowable at run time before recording
    that it is unknowable.
 
-38. **A capability nothing exercised hid a check nothing emitted.** Making a
+38. **A false fact is load-bearing by the time you find it.** `array_count =
+   1` on a `while` run was the same lie invariant 25 removed from delimited
+   members, left behind on the other construct that carries it. Removing it
+   broke four things, and every one of them had been right by accident:
+   `gen-checks` classified the run as a nested struct and called a `_view` that
+   is not emitted for one; the instance walk placed the member after the run at
+   an offset the run walks straight past; `doc` labelled it `x[1]`; and the
+   nested copy of the placement had been getting `access = Sequential` from the
+   generic variable-element row rather than from the run's own. The map came
+   out identical before and after, which is the part worth remembering: two
+   errors cancelling is indistinguishable from correctness until you fix one.
+
+39. **A hand-maintained list of "which facts to carry" is wrong already.** The
+   nested copy of a placement -- the same member seen from its parent --
+   enumerated the fields to carry across, and had fallen six behind, among
+   them `repeat_while`. Use `dataclasses.replace` and name what *differs*
+   instead: for a copy that is the same bytes seen from somewhere else, that
+   is the path, the offset, and what it cost to reach. The list of differences
+   is short and stable; the list of samenesses grows with every field added.
+
+40. **A capability nothing exercised hid a check nothing emitted.** Making a
    variant walkable immediately showed that `default: error` was enforced by
    no backend, in a language whose spec had said it was since section 14.5 was
    written, with an error code reserved for it and returned by nothing. Dead

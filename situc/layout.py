@@ -1318,9 +1318,14 @@ class Solver:
 			# and misaligned the rest of the packet, and gen-checks sized an
 			# instance from it. Four consumers, one lie, and each of them
 			# needed its own code to disbelieve it.
+			# ...and a `while` run is the same lie with a different construct
+			# in front of it. How many elements there are is whichever one
+			# first fails the condition, which is not a number this knows.
 			array_count    = (count.value()
 			                  if count.is_point and member.array
-			                  and member.until is None else None),
+			                  and member.until is None
+			                  and getattr(member, "repeat", None) is None
+			                  else None),
 			element_bits   = element.lo if element.is_point else None,
 			bit_position   = position,
 			frame_relative = False,
@@ -1591,41 +1596,23 @@ class Solver:
 			else:
 				offset = cursor.lo + inner.offset_bits
 
-			layout.placements.append(Placement(
+			# `replace` rather than a field list. What differs between a
+			# member and the same member seen from its parent is the path, the
+			# offset it is measured from, and what it cost to reach -- and
+			# nothing else, because it is the same bytes.
+			#
+			# The list this replaces was hand-maintained and had fallen
+			# behind by six fields, among them `repeat_while`: a run inside a
+			# nested struct lost the fact that it was a run, and read
+			# `access=Random` in the parent's map while the identical bytes
+			# read `access=Sequential` under their own struct. It survived
+			# because `array_count` was also being set to a false 1, and the
+			# generic array row happened to reach the same answer.
+			layout.placements.append(replace(
+				inner,
 				path           = f"{path}{suffix}{tail}",
-				name           = inner.name,
-				kind           = inner.kind,
-				type_name      = inner.type_name,
 				offset_bits    = offset,
-				size_bits      = inner.size_bits,
-				size_max_bits  = inner.size_max_bits,
-				scalar         = inner.scalar,
-				endian         = inner.endian,
-				bit_order      = inner.bit_order,
-				span           = inner.span,
-				attrs          = inner.attrs,
-				marker         = inner.marker,
-				array_count    = inner.array_count,
-				element_bits   = inner.element_bits,
-				bit_position   = inner.bit_position,
 				frame_relative = framed or inner.frame_relative,
-				sized_by       = inner.sized_by,
-				# Carried, not recomputed. The copy is the same member seen
-				# from the parent, so what it costs to reach is the same too:
-				# without these `block.fields[].value` read `offset=Dynamic`
-				# while `field.value` -- the identical bytes, under their own
-				# struct -- read `offset=Scanned`. Two answers about one field
-				# in one map.
-				delimiter        = inner.delimiter,
-				delimiter_quote  = inner.delimiter_quote,
-				delimiter_escape = inner.delimiter_escape,
-				delimiter_cap    = inner.delimiter_cap,
-				radix            = inner.radix,
-				radix_minimal    = inner.radix_minimal,
-				trimmed          = inner.trimmed,
-				case_insensitive = inner.case_insensitive,
-				scan_cause       = inner.scan_cause,
-				scan_cause_span  = inner.scan_cause_span,
 				frame_base_dynamic = base_dynamic or inner.frame_base_dynamic,
 				dynamic_cause      = cause[0] if cause else None,
 				dynamic_cause_span = cause[1] if cause else None,

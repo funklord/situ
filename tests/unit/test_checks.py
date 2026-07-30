@@ -482,3 +482,38 @@ def test_each_obligation_gets_its_own_coverage_check() -> None:
 	# The discharge differs: a tag is finalized, a derived field recomputed.
 	assert "situ_s_tag_finalize(&msg);" in source
 	assert "situ_s_total_recompute(&msg, view);" in source
+
+
+# -- a run whose length the instance cannot choose --------------------------
+
+WHILE_RUN = """
+struct link { u8 kind; u8 len; u8 data[len]; }
+struct chain { link items[] while (kind == 0x11) max 6; u8 tail[remaining]; }
+"""
+
+
+def test_a_while_run_stops_the_offset_walk_rather_than_the_check() -> None:
+	"""Where the run starts is known; where anything after it starts is not.
+
+	The instance is zeroed, so whether the run ends at the first element is a
+	question about the predicate, which this does not evaluate. It used to
+	answer "one element" -- via a false `array_count`, and then via
+	`size_bits`, which is the minimum and means the same thing -- and place
+	the members after it at an offset the run walks straight past. That check
+	asserted 8 while the accessor said 16.
+	"""
+	text = emit(WHILE_RUN)
+
+	assert "chain_items_at(view, 0u, &first_items)" in text
+	assert "Assertions stop at `chain.items`" in text
+	assert "chain_tail_ptr" not in text
+
+
+def test_a_run_gets_no_sub_view_check() -> None:
+	"""It has `_at`, not `_view`: there is no one instance to take a view of.
+	The nested-struct check excluded it for the wrong reason -- a false
+	`array_count` -- and called an accessor that was never emitted the moment
+	that went."""
+	text = emit(WHILE_RUN)
+
+	assert "chain_items_view" not in text
