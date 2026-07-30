@@ -606,12 +606,20 @@ def test_a_varint_gets_no_accessor() -> None:
 
 
 def test_a_variant_gets_no_single_accessor() -> None:
+	"""There is no one thing to hand back -- but its arms' members are
+	reachable now, each behind the discriminant that selects it.
+
+	A struct-typed arm is still declined, and says so: reaching into one
+	means the arm's own members under a path that is not a type, which is a
+	further step. A scalar or byte-array arm is generated.
+	"""
 	header, _ = emit("enum K : u8 { a = 1, b = 2, }"
 	                 "struct A { u16 x; } struct B { u32 y; }"
 	                 "struct S { K k; variant v switch (k) "
 	                 "{ case K.a: A p; case K.b: B q; } }")
 	assert "exactly one of" in header
-	assert "read the discriminant and take the matching" in header
+	assert "S.v.p, present when the discriminant selects `K.a`" in header
+	assert "`p` is not a shape this backend reaches into yet" in header
 
 
 def test_an_indexed_region_says_insertion_is_not_an_operation() -> None:
@@ -2270,3 +2278,95 @@ def test_an_uncapped_record_run_says_what_would_buy_an_index() -> None:
 
 	assert "No index for `fields`" in header
 	assert "Add `max N`" in header
+
+
+# -- reaching into a variant's arms (section 9.6) ---------------------------
+
+ARMS = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 128; }
+"""
+
+
+def test_an_arm_member_asks_the_discriminant_first() -> None:
+	"""A variant's members had no accessors at all: situ could measure one and
+	validate its discriminant, and its contents were unreachable.
+
+	Each arm's members are this struct's to emit -- an arm is not a type, so
+	there is nowhere else they could go -- and each asks whether its arm is
+	the one present. Reading another arm's bytes stays inside the view, so it
+	is a wrong answer rather than a fault, which is the kind situ refuses.
+	"""
+	header, _ = emit(ARMS)
+
+	assert "situ_label_body_text_ptr(situ_view_t view, const uint8_t **out," \
+		in header
+	assert "if (situ_label_form_get(view) != 0u) {" in header
+	assert "if (situ_label_form_get(view) != 3u) {" in header
+	assert "return SITU_ERR_VERSION;" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_both_arms_read_and_the_wrong_one_refuses(tmp_path: Path) -> None:
+	"""A suffix-compressed DNS name: one text label, then a pointer."""
+	header, source = emit(ARMS)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t buf[] = { 3, 'w', 'w', 'w', 0xC0, 0x0C };
+	situ_msg_t msg;
+	situ_view_t view, l;
+	const uint8_t *p;
+	uint32_t n;
+	uint8_t low;
+
+	situ_msg_init(&msg, buf, (uint32_t)sizeof buf);
+	if (situ_name_view(&msg, 0, (uint32_t)sizeof buf, &view) != SITU_OK)
+		return 1;
+
+	/* Element 0 selects the text arm. */
+	if (situ_name_labels_at(view, 0, &l) != SITU_OK)
+		return 2;
+	if (situ_label_body_text_ptr(l, &p, &n) != SITU_OK)
+		return 3;
+	if (n != 3u || memcmp(p, "www", 3) != 0)
+		return 4;
+	if (situ_label_body_pointer_low_get(l, &low) != SITU_ERR_VERSION)
+		return 5;
+
+	/* Element 1 selects the pointer arm. */
+	if (situ_name_labels_at(view, 1, &l) != SITU_OK)
+		return 6;
+	if (situ_label_body_pointer_low_get(l, &low) != SITU_OK)
+		return 7;
+	/* The member's own byte, not the arm's first: 0x0C, not 0xC0. */
+	if (low != 0x0Cu)
+		return 8;
+	if (situ_label_body_text_ptr(l, &p, &n) != SITU_ERR_VERSION)
+		return 9;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

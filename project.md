@@ -1111,6 +1111,29 @@ discriminant fails `validate` with the "unknown version or variant
 discriminant" error, in every backend. Stating this because it was true of the
 specification and of nothing else for a long time -- see 11.6.
 
+**The arms' members have accessors, and each asks the discriminant first.** A
+variant has none of its own -- there is no one thing to hand back -- and for a
+long time that meant its contents were unreachable: situ could measure a
+variant and reject a bad discriminant, and a caller could not read the arm
+that was there. The members are the enclosing struct's to emit, an arm not
+being a type, and each is guarded:
+
+```c
+situ_err_t situ_label_body_text_ptr(situ_view_t view,
+                                    const uint8_t **out, uint32_t *len);
+/* SITU_ERR_VERSION unless `form` selects this arm. */
+```
+
+The check is per access, and that is what the construct costs: which arm is
+present is a fact about the message, and nothing about the frame records the
+answer. Reading another arm's bytes stays inside the view -- the extent bounds
+it -- so it is a wrong answer rather than a fault, which is the kind situ
+refuses rather than the kind it cannot prevent.
+
+An arm whose member is a struct is still declined and says so. Reaching into
+one means its members under a path that is not a type, which is a further
+step.
+
 ---
 
 ### 9.7 Describing protobuf

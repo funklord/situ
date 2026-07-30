@@ -866,6 +866,13 @@ class Emitter:
 		# belongs to this struct, and the region's own type is a codec rather
 		# than something with a section of its own. Checked before the reserved
 		# case, or a nested reserved region would be noted twice.
+		# An arm's members are nested by path and are this struct's to emit:
+		# an arm is not a type, so there is no other section they could go in.
+		# Each is guarded by the discriminant that selects its arm.
+		guard = self._arm_guard(struct, placement)
+		if guard is not None:
+			return self._arm_member(struct, placement, *guard)
+
 		nested = "." in placement.path[len(struct.name) + 1 :]
 		if nested and placement.sealed_by is None:
 			return []
@@ -910,7 +917,7 @@ class Emitter:
 			return lines
 
 		if placement.kind == "variant":
-			lines.extend(self._variant_note(placement))
+			lines.extend(self._variant_note(struct, placement))
 			return lines
 
 		if placement.kind in ("opaque", "indexed"):
@@ -1115,20 +1122,131 @@ class Emitter:
 			"}",
 		]
 
-	def _variant_note(self, placement: Placement) -> list[str]:
+	def _variant_note(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
 		"""A variant has no accessor of its own: exactly one arm is present.
 
-		Which one depends on the discriminant, so reaching the members means
-		reading it first and taking the matching arm's view. Arm dispatch is
-		later phase 6 codegen work.
+		Its *members* do, and each asks the discriminant first. Reading one
+		arm's bytes while another is present stays inside the view -- the
+		extent bounds it -- and means nothing, which is the kind of wrong
+		answer situ exists to refuse. `SITU_ERR_VERSION` is the same code
+		`default: error` returns, because it is the same mistake seen from
+		the other end.
 		"""
 		arms = ", ".join(f"`{name}`" for name, _ in placement.arm_sizes)
 		return [
-			f"/* No accessor: `{placement.name}` is a variant, so exactly one of",
-			f" * its arms is present{f' ({arms})' if arms else ''}. Arm dispatch",
-			" * is not generated yet; read the discriminant and take the matching",
-			" * arm's view. */",
+			f"/* `{placement.name}` is a variant: exactly one of"
+			f"{f' {arms}' if arms else ' its arms'} is",
+			" * present, and which one is in the discriminant. The variant has no",
+			" * accessor of its own -- there is no one thing to hand back -- and",
+			" * each arm's members are below, guarded. */",
 		]
+
+	def _arm_member(self, struct: ResolvedStruct, placement: Placement,
+			test: str, arm: str) -> list[str]:
+		"""One member of one variant arm, behind the test that it is present.
+
+		The check is per access rather than once, and that is what the
+		construct costs: which arm is there is a fact about the message, and
+		nothing about the frame or the view records the answer. A caller who
+		has already dispatched pays for the branch twice, which is the price
+		of an accessor that cannot be used wrongly.
+		"""
+		local  = c_name(self._local(struct, placement))
+		scalar = placement.scalar
+		base   = self._base_expression(struct, placement)
+
+		head = [
+			"",
+			f"/* {placement.path}, present when the discriminant selects"
+			f" `{arm}`.",
+			" *",
+			" * Reading another arm's bytes as this one's stays inside the view",
+			" * and means nothing, so the accessor asks first and refuses. The",
+			" * code is `default: error`'s, being the same mistake from the",
+			" * other end. */",
+		]
+
+		if scalar is not None and placement.array_count is None \
+				and placement.sized_by is None:
+			ctype = self._field_ctype(placement)
+			# The placement's own base and offset, the way the ordinary
+			# scalar getter reads one. Passing the member's byte offset as
+			# the *pointer* produced `(1u)[1u]`, and passing `offset=0`
+			# silently read the arm's first byte instead of its own.
+			loaded = self._load_expression(
+				scalar, placement, self._value_base(struct, placement),
+				offset=self._value_offset(placement))
+			return [
+				*head,
+				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'get')}"
+				f"(situ_view_t view, {ctype} *out)",
+				"{",
+				f"\tif ({test}) {{",
+				"\t\treturn SITU_ERR_VERSION;",
+				"\t}",
+				f"\t*out = ({ctype})({loaded});",
+				"\treturn SITU_OK;",
+				"}",
+			]
+
+		if scalar is not None and scalar.bits == BITS_PER_BYTE:
+			length = (self._length_expression(struct, placement)
+			          if self._has_length(struct, placement) else None)
+			if length is None:
+				return [*head, "/* ...and its length is not one this can"
+				        " compute, so no accessor. */"]
+			return [
+				*head,
+				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'ptr')}"
+				"(situ_view_t view, const uint8_t **out, uint32_t *len)",
+				"{",
+				f"\tif ({test}) {{",
+				"\t\treturn SITU_ERR_VERSION;",
+				"\t}",
+				f"\t*out = view.base + {base};",
+				f"\t*len = {length};",
+				"\treturn SITU_OK;",
+				"}",
+			]
+
+		return [*head, f"/* ...and `{placement.name}` is not a shape this"
+		        " backend reaches into yet. */"]
+
+	def _arm_guard(self, struct: ResolvedStruct,
+			placement: Placement) -> tuple[str, str] | None:
+		"""The test that this arm is the one present, and the arm's name.
+
+		None where the member is not in a variant arm, or where the variant
+		is one this cannot dispatch on -- an unresolvable discriminant, or a
+		`default` arm, which is present exactly when no `case` matched and so
+		needs the negation of all of them.
+		"""
+		local = placement.path[len(struct.name) + 1:]
+		if "." not in local:
+			return None
+
+		head = local.split(".")[0]
+		variant = next((held for held in self._top_level(struct)
+		                if held.kind == "variant" and held.name == head), None)
+		if variant is None or variant.discriminant is None:
+			return None
+
+		arm = next((one for one, member in arm_members(struct, variant)
+		            if member is not None and member.path == placement.path),
+		           None)
+		if arm is None:
+			return None
+
+		held = self._over_fields(struct, variant.discriminant, "view")
+		if arm.value is None:
+			# A `default` arm: present when nothing else matched.
+			matched = matched_values(variant)
+			if not matched:
+				return None
+			test = " || ".join(f"{held} == {one.value}u" for one in matched)
+			return f"({test})", arm.source or "default"
+		return f"{held} != {arm.value}u", arm.source or str(arm.value)
 
 	def _varint_note(self, placement: Placement) -> list[str]:
 		"""A varint has no constant-offset accessor to generate.
