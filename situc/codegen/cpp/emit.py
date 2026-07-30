@@ -1375,6 +1375,8 @@ class Emitter:
 			        f"\t/* {placement.path} is reserved: no accessor, and"
 			        f" `validate` holds it to",
 			        "\t * the pattern the schema declares. */"]
+		if kind is Member.LOCATED:
+			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:
 			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
@@ -1591,6 +1593,48 @@ class Emitter:
 		        f" {scalar.bits}, static_cast<std::uint64_t>({value}));")
 
 	# -- aggregates ----------------------------------------------------
+
+	def _located(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""A member the data positions, reached from the message (9.8).
+
+		Takes the message as well as `this`, for the reason the C backend
+		does: `::situ::rt::view` wraps a `situ_view_t` and nothing else, so it
+		cannot say where offset zero is. Python needs no such parameter, its
+		view already holding the message -- which is a difference in the
+		runtimes rather than in the construct.
+		"""
+		name   = c_name(local_name(struct, placement))
+		offset = self._over_fields(struct, placement.located or "")
+		length = self._length_expression(struct, placement)
+		if length is None and placement.is_fixed_size \
+				and placement.size_bits % BITS_PER_BYTE == 0:
+			length = str(placement.size_bits // BITS_PER_BYTE)
+		if length is None:
+			return ["",
+			        f"\t/* No accessor for {placement.path}: it is placed by",
+			        f"\t * `{placement.located}`, and how long it is is not",
+			        "\t * something this backend can work out. */"]
+
+		return [
+			"",
+			f"\t/* {placement.path}, at `{placement.located}` bytes from the start",
+			"\t * of the *message* rather than of this view. The offset is the",
+			"\t * message's, so nothing about this frame says it is inside the",
+			"\t * buffer -- checked here, on every call, which is what",
+			"\t * `offset = DataPlaced` in the map costs. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}(const situ_msg_t *msg,",
+			"\t\t\t::situ::rt::bytes &out) const noexcept",
+			"\t{",
+			f"\t\tconst std::uint32_t at = static_cast<std::uint32_t>({offset});",
+			f"\t\tconst std::uint32_t n  = static_cast<std::uint32_t>({length});",
+			"",
+			"\t\tif (n > msg->size || at > msg->size - n) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"\t\tout = ::situ::rt::bytes(msg->base + at, n);",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
 
 	def _nested(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))

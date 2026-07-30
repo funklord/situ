@@ -81,6 +81,9 @@ class Member(Enum):
 
 	#: No accessor; `validate` holds it to the declared pattern.
 	RESERVED  = "reserved"
+	#: `x at expr` -- reached from the start of the message rather than from
+	#: this frame, so none of the offset machinery applies (9.8).
+	LOCATED   = "located"
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
 	#: variant, an opaque or indexed span. Each needs its own machinery.
 	REGION    = "region"
@@ -119,6 +122,14 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	"""
 	if placement.kind == "reserved":
 		return Member.RESERVED
+
+	# Before everything else. A located member may also be an array, or sized
+	# by a field, or a run -- and none of that changes the first thing a
+	# backend has to know about it, which is that it is not in this frame.
+	# Asking later means every branch below needs its own guard.
+	if placement.located is not None:
+		return Member.LOCATED
+
 	if placement.kind != "field":
 		return Member.REGION
 

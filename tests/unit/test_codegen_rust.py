@@ -513,3 +513,37 @@ fn main() {
 
 	let_run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert let_run.returncode == 0, let_run.stderr
+
+
+# -- a member the data positions (section 9.8) ------------------------------
+
+LOCATED = "struct s { u32 off; u16 n; u8 body[n] at off; u16 after; }"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_located_member_borrows_the_message_not_the_frame(tmp_path: Path) -> None:
+	"""A generated struct holds the frame slice, and a located member is not
+	in it -- so the returned slice borrows the message, which is a lifetime
+	the signature has to say out loud."""
+	built = build(tmp_path, LOCATED, main="""
+fn main() {
+	let mut buf = [0u8; 28];
+	buf[4 + 3] = 16;
+	buf[4 + 5] = 4;
+	buf[4 + 6] = 0xBE; buf[4 + 7] = 0xEF;
+	buf[16..20].copy_from_slice(b"DATA");
+
+	let held = unit::S::new(&buf[4..28]).unwrap();
+	assert_eq!(held.after(), 0xBEEF);
+	assert_eq!(held.body(&buf).unwrap(), b"DATA");
+
+	let mut bad = buf;
+	bad[4 + 3] = 200;
+	let held = unit::S::new(&bad[4..28]).unwrap();
+	assert!(held.body(&bad).is_err());
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

@@ -633,3 +633,41 @@ def test_a_declared_length_is_clamped_and_reported(tmp_path: Path) -> None:
 	assert len(held.body) == 13		# 16 bytes, 3 before the body
 	with pytest.raises(module.ConstraintError):
 		held.validate()
+
+
+# -- a member the data positions (section 9.8) ------------------------------
+
+LOCATED = "struct s { u32 off; u16 n; u8 body[n] at off; u16 after; }"
+
+
+def test_a_located_member_needs_no_extra_parameter_here(tmp_path: Path) -> None:
+	"""A `View` already holds the `Message` it came from, so this backend can
+	answer "where is offset zero" on its own. C, C++ and Rust carry a frame
+	and nothing else and all three take the message. The asymmetry is in the
+	runtimes, not in the construct."""
+	module = load(tmp_path, LOCATED)
+	raw    = bytearray(28)
+	raw[4 + 3] = 16			# off = 16, from the message base
+	raw[4 + 5] = 4			# n = 4
+	raw[4 + 6], raw[4 + 7] = 0xBE, 0xEF
+	raw[16:20] = b"DATA"
+
+	held = module.s.at(module.Message(raw), 4)
+
+	assert held.after == 0xBEEF	# placed as if `body` were not declared
+	assert bytes(held.body) == b"DATA"
+
+
+def test_and_the_offset_is_checked_on_every_read(tmp_path: Path) -> None:
+	"""The frame starts at 4, not at 0. With it at 0 the frame base and the
+	message base are the same address, and reading the offset from the wrong
+	one gives the right answer -- which is how the C version of this test
+	passed against a generator that used the frame."""
+	module = load(tmp_path, LOCATED)
+	raw    = bytearray(28)
+	raw[4 + 5] = 4
+	held   = module.s.at(module.Message(raw), 4)
+
+	raw[4 + 3] = 200		# points outside the message
+	with pytest.raises(module.BoundsError):
+		held.body

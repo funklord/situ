@@ -2761,6 +2761,13 @@ Principles:
 - **`SITU_CHECKED`** compile-time flag enables bounds checks, generation
   checks, and constraint validation; release builds compile them out. The
   checked and unchecked builds must be ABI-compatible.
+- **Build with `-ffunction-sections -fdata-sections -Wl,--gc-sections`** (or
+  LTO) if binary size matters. Nearly everything situ emits is `static inline`
+  in the header and costs nothing when unused -- 31 to 40 functions per schema
+  across the worked examples. What is left is `validate`, which is out-of-line
+  because it is large, and those *do* survive into a binary that never calls
+  them: measured at four symbols and 648 bytes on `examples/message`. situ has
+  no way to fix this from the generator side and had never said so.
 
 ### 20.3 Additional generated artifacts
 
@@ -4363,6 +4370,32 @@ Two tests were pinning the bug rather than the behaviour: a cross-architecture
 probe asserted a body length of 42 in a six-byte buffer, and three unit tests
 asserted the unsaturating subtraction. An assertion that records what the code
 does is not a test of what it should do.
+
+### 26.28 Where a generated artifact cannot be purged
+
+Decision 0022 measured what removes an unused accessor. Two of the four
+languages cannot do it fully, and the position taken is to accept that rather
+than contort the generator around it:
+
+- **Rust** eliminates everything unused in a binary crate and keeps 33 symbols
+  in a library one, because `pub` is the public API and dead-code elimination
+  may not touch it. A consumer who cares uses the module inside their own
+  crate, where it is eliminated, or a feature gate.
+- **Python** eliminates nothing, ever. Every method and property exists at
+  import; there is no flag, and there is no version of this generator that
+  changes that.
+
+Both are properties of the language rather than of situ, and the alternatives
+-- generating a subset from a declared use-list, or splitting every struct into
+its own module -- cost the user a thing to maintain in exchange for bytes that
+matter in neither language's usual deployment. C and C++ are the targets where
+size is the argument, and there the answer is a linker flag, now documented in
+20.2.
+
+The consequence for the accessor families of 0022 is that "emit both and let
+the toolchain purge" is a strategy for C and C++ only. That is a reason to
+keep the lattice-driven rule -- emit the second family only where the first
+one's vector is weak -- rather than a reason to abandon the split.
 
 ### Invariants to hold across all phases
 

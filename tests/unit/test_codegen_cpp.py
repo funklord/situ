@@ -701,3 +701,59 @@ int main()
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- a member the data positions (section 9.8) ------------------------------
+
+LOCATED = "struct s { u32 off; u16 n; u8 body[n] at off; u16 after; }"
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_located_member_is_reached_through_the_message(tmp_path: Path) -> None:
+	"""The frame starts at 4, not at 0. With it at 0 the frame base and the
+	message base are the same address, and reading the offset from the wrong
+	one gives the right answer -- which is how the C version of this test
+	passed against a generator that used the frame."""
+	result = compiles(tmp_path, LOCATED, extra="""
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t buf[28] = { 0 };
+	buf[4 + 3] = 16; buf[4 + 5] = 4;
+	buf[4 + 6] = 0xBE; buf[4 + 7] = 0xEF;
+	std::memcpy(buf + 16, "DATA", 4);
+
+	situ_msg_t msg;
+	situ_msg_init(&msg, buf, sizeof buf);
+
+	const ::situ::s held{ situ_view_t{ buf + 4, 24, msg.generation } };
+	::situ::rt::bytes body;
+
+	/* `after` sits where it would if `body` were not declared at all. */
+	if (held.after() != 0xBEEF)
+		return 1;
+	if (held.body(&msg, body) != ::situ::rt::err::ok)
+		return 2;
+	if (body.data() != buf + 16 || body.size() != 4u)
+		return 3;
+
+	buf[4 + 3] = 200;
+	if (held.body(&msg, body) != ::situ::rt::err::bounds)
+		return 4;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

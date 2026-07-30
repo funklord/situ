@@ -102,7 +102,8 @@ class Emitter:
 			"import enum",
 			"",
 			"from situ_runtime import (",
-			"\tConstraintError, Gate, Message, VersionError, View, acquire,",
+			"\tBoundsError, ConstraintError, Gate, Message, VersionError, View,",
+			"\tacquire,",
 			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
 			"\tcompose, nul_len, open_gate, utf8_valid,",
@@ -421,6 +422,8 @@ class Emitter:
 		if kind is Member.RESERVED:
 			return ["", f"\t# {placement.path} is reserved: no accessor, and",
 			        "\t# validate() holds it to the pattern the schema declares."]
+		if kind is Member.LOCATED:
+			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:
 			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
@@ -616,6 +619,44 @@ class Emitter:
 		if placement.type_name in self.enums:
 			return f"{c_name(placement.type_name)} | int"
 		return "int"
+
+	def _located(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""A member the data positions, reached from the message (9.8).
+
+		This backend needs no extra parameter, unlike C, C++ and Rust: a
+		`View` already holds the `Message` it came from, so where offset zero
+		is is something it can already answer. The asymmetry is worth naming
+		rather than hiding -- the other three carry a frame and nothing else.
+		"""
+		name   = c_name(local_name(struct, placement))
+		offset = self._over_fields(struct, placement.located or "", "self")
+		length = self._length_expression(struct, placement)
+		if length is None and placement.is_fixed_size \
+				and placement.size_bits % BITS_PER_BYTE == 0:
+			length = str(placement.size_bits // BITS_PER_BYTE)
+		if length is None:
+			return ["",
+			        f"\t# No accessor for {placement.path}: it is placed by",
+			        f"\t# `{placement.located}`, and how long it is is not",
+			        "\t# something this backend can work out."]
+
+		return [
+			"", "\t@property",
+			f"\tdef {name}(self) -> memoryview:",
+			f'\t\t"""{placement.path}, at `{placement.located}` bytes from the',
+			"",
+			"\t\tstart of the *message* rather than of this view. The offset is",
+			"\t\tthe message's, so nothing about this frame says it is inside",
+			"\t\tthe buffer -- checked here, on every read, which is what",
+			'\t\t`offset = DataPlaced` in the map costs."""',
+			"\t\tself._check()",
+			f"\t\tat = {offset}",
+			f"\t\tn  = {length}",
+			"\t\tif at + n > len(self._msg.buffer):",
+			f'\t\t\traise BoundsError("{placement.path}: `{placement.located}`'
+			' points outside the message")',
+			"\t\treturn self._msg.buffer[at:at + n]",
+		]
 
 	def _nested(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))

@@ -265,6 +265,8 @@ class Emitter:
 			return ["",
 			        f"\t// {placement.path} is reserved: no accessor, and",
 			        "\t// validate() holds it to the declared pattern."]
+		if kind is Member.LOCATED:
+			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:
 			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
@@ -1154,6 +1156,50 @@ class Emitter:
 					return expr		# the opener closed early
 			expr = expr[1:-1]
 		return expr
+
+	def _located(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A member the data positions, reached from the message (9.8).
+
+		Takes the message bytes as well as `self`, because a generated struct
+		holds the *frame* slice and a located member is not in it. The
+		returned slice borrows the message rather than the frame, which is the
+		lifetime the signature has to say out loud.
+		"""
+		name   = _ident(c_name(local_name(struct, placement)))
+		offset = self._over_fields(struct, placement.located or "", "self")
+		length = self._length_expression(struct, placement)
+		if length is None and placement.is_fixed_size \
+				and placement.size_bits % BITS_PER_BYTE == 0:
+			length = str(placement.size_bits // BITS_PER_BYTE)
+		if length is None:
+			return ["",
+			        f"\t// No accessor for {placement.path}: it is placed by",
+			        f"\t// `{placement.located}`, and how long it is is not",
+			        "\t// something this backend can work out."]
+
+		return [
+			"",
+			f"\t/// {placement.path}, at `{placement.located}` bytes from the",
+			"\t/// start of the *message* rather than of this frame.",
+			"\t///",
+			"\t/// The offset is the message's, so nothing about this frame",
+			"\t/// says it is inside the buffer -- checked here, on every",
+			"\t/// call, which is what `offset = DataPlaced` in the map costs.",
+			f"\tpub fn {name}<'m>(&self, msg: &'m [u8]) -> Result<&'m [u8]> {{",
+			# `let x = (expr);` is `unused_parens` too, which is a hard error
+			# under `-D warnings`. Same helper as the variant chain: the
+			# sub-expressions arrive parenthesised because that is how a
+			# generator stays composable, and Rust objects to it everywhere.
+			f"\t\tlet at = {self._unparen(offset)};",
+			f"\t\tlet n  = {self._unparen(length)};",
+			"",
+			"\t\tif n > msg.len() || at > msg.len() - n {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			"\t\tOk(&msg[at..at + n])",
+			"\t}",
+		]
 
 	def _variant_length(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
