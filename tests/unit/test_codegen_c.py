@@ -2189,3 +2189,84 @@ int main(void)
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+CAPPED_BLOCK = """
+struct hf  { u8 name[] until ":"; u8 value[] until "\\r\\n"; }
+struct blk { hf fields[] until "\\r\\n" max 64; }
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_record_run_is_indexable_too(tmp_path: Path) -> None:
+	"""A header block is the case that wants this most, and it was left out:
+	the index took a `while` run's cap and a record run carries its own.
+
+	The two walks differ -- one stops on a condition, the other where the
+	terminator stands in for an element -- so each shares its own prologue
+	with the index rather than the index carrying a third copy.
+	"""
+	header, source = materialized(CAPPED_BLOCK)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	static char raw[2048];
+	uint32_t n = 0, i, count;
+	situ_msg_t msg;
+	situ_view_t view, walked, got;
+	situ_blk_fields_index_t idx;
+
+	for (i = 0; i < 30; i++)
+		n += (uint32_t)sprintf(raw + n, "X-H%02u: v%02u\\r\\n", i, i);
+	n += (uint32_t)sprintf(raw + n, "\\r\\n");
+
+	situ_msg_init(&msg, (uint8_t *)raw, n);
+	if (situ_blk_view(&msg, 0, n, &view) != SITU_OK)
+		return 1;
+
+	count = situ_blk_fields_count(view);
+	if (count != 30u)
+		return 2;
+	if (situ_blk_fields_index(view, &idx) != SITU_OK || idx.count != count)
+		return 3;
+
+	for (i = 0; i < count; i++) {
+		if (situ_blk_fields_at(view, i, &walked) != SITU_OK)
+			return 4;
+		if (situ_blk_fields_indexed(&idx, view, i, &got) != SITU_OK)
+			return 5;
+		if (got.base != walked.base || got.limit != walked.limit)
+			return 6;
+	}
+	if (situ_blk_fields_indexed(&idx, view, count, &got) != SITU_ERR_BOUNDS)
+		return 7;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_an_uncapped_record_run_says_what_would_buy_an_index() -> None:
+	"""HTTP's header block has no `max`, so it gets the note rather than the
+	index -- and capping a header count is worth doing on its own account."""
+	header, _ = materialized(
+		'struct hf { u8 v[] until "\\r\\n"; }\n'
+		'struct blk { hf fields[] until "\\r\\n"; }')
+
+	assert "No index for `fields`" in header
+	assert "Add `max N`" in header

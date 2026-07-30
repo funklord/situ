@@ -4491,8 +4491,8 @@ at them; a copy is strictly slower and costs the memory too. What is expensive
 in a weak vector is not reading the bytes, it is *finding* them -- so what the
 second family materializes is the **walk**, not the data.
 
-Concretely, `situc build --materialize` emits, per capped run, an index of
-where each element starts:
+Concretely, `situc build --materialize` emits, per capped run -- a `while` run
+or a run of records, either one -- an index of where each element starts:
 
 ```c
 #define SITU_NAME_LABELS_CAP 128u
@@ -4505,8 +4505,19 @@ situ_err_t situ_name_labels_indexed(const ... *idx, situ_view_t view,
                                     uint32_t index, situ_view_t *out);
 ```
 
-Forty-one labels, every element visited, measured: **103 ms walking, 5 ms
-indexed**, the build included.
+Measured, the build included in both cases:
+
+| | walking | indexed |
+|---|---|---|
+| forty-one DNS labels, every one | 103 ms | 5 ms |
+| thirty header fields, every one, 300 times | 20 ms | 1 ms |
+
+The two runs walk differently -- one stops on a condition, the other where the
+terminator stands in for an element -- so each shares *its own* loop with the
+index rather than the index carrying a third copy. An index that disagreed
+with the walk about where an element starts would be worse than none, and two
+copies of a loop with three break conditions is how they would come to
+disagree.
 
 Three things that fell out of building it:
 

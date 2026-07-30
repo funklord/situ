@@ -1568,7 +1568,7 @@ class Emitter:
 		if not self.materialize:
 			return []
 
-		cap = placement.repeat_cap
+		cap = placement.repeat_cap or placement.delimiter_cap
 		if cap is None:
 			return [
 				"",
@@ -1587,10 +1587,22 @@ class Emitter:
 		if element is None or extent is None:
 			return []
 
-		cond   = self._element_condition(element, placement)
-		walk   = self._walk_prologue(
-			self._base_expression(struct, placement, gated=False),
-			f" && n < {cap}u", extent)
+		base = self._base_expression(struct, placement, gated=False)
+		if placement.repeat_while is not None:
+			cond = self._element_condition(element, placement)
+			walk = self._walk_prologue(base, f" && n < {cap}u", extent)
+		else:
+			# A record run stops where the terminator stands rather than on a
+			# condition, so it shares that walk instead. The cap is the
+			# scan's, and it bounds the index for the same reason.
+			delim = placement.delimiter
+			assert delim is not None
+			cond = None
+			walk = self._record_prologue(
+				base, delim,
+				ident(self.prefix, struct.name,
+				      c_name(self._local(struct, placement)), "delim"),
+				extent)
 
 		local  = c_name(self._local(struct, placement))
 		kind   = ident(self.prefix, struct.name, local, "index_t")
@@ -1636,7 +1648,12 @@ class Emitter:
 			"		out->start[n] = at;",
 			"		at = at + size;",
 			"		n  = n + 1u;",
-			f"		if (!({cond})) {{",
+			*([] if cond is None else [
+				f"		if (!({cond})) {{",
+				"			break;",
+				"		}",
+			]),
+			"		if (n == " + str(cap) + "u) {",
 			"			break;",
 			"		}",
 			"	}",
@@ -1792,13 +1809,51 @@ class Emitter:
 		return over_fields(names, source, lambda name:
 			f"{ident(self.prefix, struct.name, c_name(name), 'get')}({held})")
 
+	def _record_prologue(self, base: str, delim: bytes, sym: str,
+			extent: str) -> list[str]:
+		"""The head of a record run's loop, shared with its index.
+
+		The `while` run's equivalent is `_walk_prologue`; the difference is
+		this one asks whether the terminator stands where an element would
+		before measuring anything. Both are shared for the same reason: an
+		index built by a second copy of the walk would eventually disagree
+		with the walk about where an element starts.
+		"""
+		return [
+			f"\tuint32_t at = {base};",
+			"\tuint32_t n  = 0u;",
+			"",
+			f"\twhile (at + {len(delim)}u <= view.limit) {{",
+			"\t\tsitu_view_t element;",
+			"\t\tuint32_t    size;",
+			"",
+			"\t\t/* The terminator only terminates where an element would",
+			"\t\t * start. Inside one it is that element's own byte. */",
+			f"\t\tif (situ_scan(view.base + at, {len(delim)}u, {sym}, "
+			f"{len(delim)}u) == 0u) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			" != SITU_OK) {",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tsize = {extent};",
+			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\t\t/* A zero-extent element would walk here forever, and one",
+			"\t\t\t * running past the limit was never in this frame. */",
+			"\t\t\tbreak;",
+			"\t\t}",
+		]
+
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element.
 
 		Three functions, and a walk in each rather than one cached count: a
-		view is a value and situ never allocates, so there is nowhere to put a
-		table of offsets. `indexed` is the construct for a caller who needs
+		view is a value and situ never allocates, so there is nowhere *here*
+		to put a table of offsets. There is somewhere in the caller, which is
+		what `--materialize` uses -- `max N` on the run bounds the array and
+		the caller owns it. `indexed` is the construct for a caller who needs
 		O(1), and the map says `access = Sequential` here so nobody reaches for
 		this expecting it.
 
@@ -1824,37 +1879,14 @@ class Emitter:
 		at    = ident(self.prefix, struct.name, local, "at")
 		span  = ident(self.prefix, struct.name, local, "span")
 
-		walk = [
-			f"\tuint32_t at = {base};",
-			"\tuint32_t n  = 0u;",
-			"",
-			f"\twhile (at + {len(delim)}u <= view.limit) {{",
-			"\t\tsitu_view_t element;",
-			"\t\tuint32_t    size;",
-			"",
-			"\t\t/* The terminator only terminates where an element would",
-			"\t\t * start. Inside one it is that element's own byte. */",
-			f"\t\tif (situ_scan(view.base + at, {len(delim)}u, {sym}, "
-			f"{len(delim)}u) == 0u) {{",
-			"\t\t\tbreak;",
-			"\t\t}",
-			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
-			" != SITU_OK) {",
-			"\t\t\tbreak;",
-			"\t\t}",
-			f"\t\tsize = {extent}(element);",
-			"\t\tif (size == 0u || at + size > view.limit) {",
-			"\t\t\t/* A zero-extent element would walk here forever, and one",
-			"\t\t\t * running past the limit was never in this frame. */",
-			"\t\t\tbreak;",
-			"\t\t}",
-		]
+		walk = self._record_prologue(base, delim, sym, f"{extent}(element)")
 
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
-			f" * {render_delimiter(delim)} stands in for one. Walked, not indexed:",
-			" * a view is a value and nothing here allocates, so there is nowhere",
-			" * to keep a table of offsets. Use `indexed` where O(1) matters. */",
+			f" * {render_delimiter(delim)} stands in for one. Walked rather than",
+			" * indexed: a view is a value and nothing here allocates, so there",
+			" * is nowhere in this header to keep a table of offsets. Build with",
+			" * `--materialize` and a `max` on the run for one the caller owns. */",
 			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
 			"",
 			f"static inline uint32_t {count}(situ_view_t view)",
