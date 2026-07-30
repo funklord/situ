@@ -503,3 +503,20 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	if constant_bits % BITS_PER_BYTE:
 		return None		# not a whole number of bytes; nothing to walk by
 	return constant_bits // BITS_PER_BYTE, variable
+
+
+def declares_its_own_length(placement: Placement) -> bool:
+	"""Whether the message, rather than the schema, says how long this is.
+
+	The distinction the length checks turn on: a count from the schema is a
+	number the frame was sized around, and a count from a field is a number an
+	attacker chooses. Only the second can exceed the frame it sits in.
+
+	`[remaining]` is excluded because it *is* what is left -- it cannot claim
+	more -- and a delimited member because its extent is where the scan
+	stopped, which is inside the view by construction.
+	"""
+	return (placement.sized_by is not None
+	        and placement.sized_by != "remaining"
+	        and placement.array_count is None
+	        and placement.delimiter is None)

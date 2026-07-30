@@ -2684,6 +2684,11 @@ Principles:
 - **Errors are return codes**, never `errno`, never longjmp. A single
   `situ_err_t` enum with distinct codes per failure class (bounds, constraint,
   version, tag, stage).
+- **An accessor whose extent comes from the data bounds itself.** The
+  amortised frame check (above) covers offsets the frame is known to contain,
+  and a length read from a field is not one: the message chooses it. Such an
+  accessor returns what is *there*, and `validate` reports that the message
+  claimed more. Invariants 41 and 42, and section 26.27 for how it was found.
 - **Getters for `MemoryIdentical` fields may return by value or by pointer;
   getters for `ValueConverted` fields return by value only.** A pointer into a
   byte-swapped field is a bug waiting to happen; do not offer one.
@@ -4242,6 +4247,63 @@ are append-only by nature: an entry never becomes wrong, it only fails to
 appear, and a missing glossary term costs a reader a search rather than a
 wrong build.
 
+### 26.27 What fuzzing every schema found
+
+`gen-fuzz` emits a harness per schema and the build compiled two of them. The
+Makefile comment beside that list already recorded why it had been one: a
+harness that declared `buf[SITU_X_SIZE_FIXED]` did not compile for anything
+with a length field, and nothing noticed, because the one schema built was
+fixed-size throughout. The answer at the time was to add a second schema
+carrying the missing shapes.
+
+Which held until a variant turned up. Building all of them instead found five
+generator bugs and one memory-safety hole, in that order:
+
+1. `gen-fuzz` reached for a sub-view a `variant` does not have -- the fifth
+   consumer of "does this member have a `_view`", and the fourth to answer it
+   on its own.
+2. A run of *records* bounded by a length field got the byte-array accessors,
+   `_len` and `_ptr`, in a schema that had been in the tree since phase 5.
+3. A schema of nothing but `tlv` regions reads no scalar, so the sink was
+   emitted and never called, which is `-Werror` under `-Wunused-function`.
+4. MMIO registers were fuzzed at all. A register is a bus transaction: it has
+   no view, no `validate`, and its accessors take a device handle.
+   `gen-dissector` had excluded them since it was written.
+5. A fixed-width text number -- `decimal u16 code[3]`, one number in three
+   digits -- was read as three numbers through an index and a `_COUNT` macro
+   that is not emitted for one.
+
+And then the harness segfaulted, which is the reason this section exists.
+
+**A length the message declares was never checked against the frame.** `u8
+opts[hdr.length]` with a `u16` length in a 32-byte frame: the accessor returned
+65535 beside a pointer at the frame base, and `validate` said the message was
+fine. Section 20.2 amortises the bounds check at the frame boundary, and that
+argument is sound for offsets the frame is known to contain -- it does not
+cover a length the message chooses, and nothing had noticed the gap. A
+`[remaining]` member had the same hole one step further on: its length is
+`limit - offset`, and the offset is arithmetic over the same fields, so in
+`uint32_t` it wrapped to about four billion.
+
+Both are fixed the same way, and the shape is worth stating because it is two
+answers rather than one:
+
+- **the accessor clamps**, so a caller who skips validation is memory-safe;
+- **`validate` reports `bounds`**, so a caller who does not skip it learns the
+  message is *malformed* rather than short.
+
+Clamping alone silently turns a lie into a truncation, and reporting alone
+leaves the unvalidated path reading out of bounds. All four backends now do
+both. They had three different behaviours before: C and C++ read out of
+bounds, Rust panicked, Python clamped in silence -- and a Rust panic in a
+`no_std` build is an abort, which is a denial of service rather than a
+mitigation.
+
+Two tests were pinning the bug rather than the behaviour: a cross-architecture
+probe asserted a body length of 42 in a six-byte buffer, and three unit tests
+asserted the unsaturating subtraction. An assertion that records what the code
+does is not a test of what it should do.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -4533,7 +4595,31 @@ wrong build.
    is the path, the offset, and what it cost to reach. The list of differences
    is short and stable; the list of samenesses grows with every field added.
 
-40. **A capability nothing exercised hid a check nothing emitted.** Making a
+40. **An artifact compiled for a sample of schemas is tested for whatever
+   constructs that sample happens to contain.** And which constructs those are
+   is not something anyone chose -- it is a fact about two files picked years
+   ago for other reasons. `gen-fuzz` was built for two schemas out of
+   twenty-two; building all of them found five generator bugs and a
+   memory-safety hole in an afternoon. The cost was about twenty seconds of
+   build time. Generate for every schema, or admit in writing which
+   constructs are untested.
+
+41. **The bounds argument has a boundary.** Section 20.2 amortises the check
+   at the frame: acquire a view once, and the accessors inside it are constant
+   offsets needing no further check. That is sound, and it is sound *for
+   offsets the frame is known to contain*. A length that comes from a field is
+   not one of those -- it is a number the message chooses, and the frame was
+   never sized around it. Every generated accessor whose extent comes from the
+   data needs its own bound, and the amortised check is not it.
+
+42. **Safety and diagnosis are different answers, and a construct needs
+   both.** Clamping a declared length to the frame keeps a caller who skipped
+   validation memory-safe, and silently turns a malformed message into a short
+   one. Reporting it from `validate` tells the caller the truth, and does
+   nothing for the caller who did not ask. Neither substitutes for the other,
+   and picking one is how a fix reads finished while half the problem stands.
+
+43. **A capability nothing exercised hid a check nothing emitted.** Making a
    variant walkable immediately showed that `default: error` was enforced by
    no backend, in a language whose spec had said it was since section 14.5 was
    written, with an error code reserved for it and returned by nothing. Dead

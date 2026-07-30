@@ -194,7 +194,14 @@ static void test_text_number(void)
 
 	check("digits parse", situ_texty_count_get(view, &parsed), SITU_OK);
 	check("digits value", parsed, 42);
-	check("body length", situ_texty_body_len(view), 42);
+
+	/* The message says 42 and carries 2. This asserted 42 -- the number the
+	 * message claims -- beside a pointer at the frame base, which is the
+	 * out-of-bounds read a fuzzer found on the same shape elsewhere. The
+	 * accessor now reports what is there, and `validate` reports that the
+	 * message is malformed rather than short. */
+	check("body length", situ_texty_body_len(view), 2);
+	check("texty validate", situ_texty_validate(view), SITU_ERR_BOUNDS);
 }
 
 static void test_versioned(void)

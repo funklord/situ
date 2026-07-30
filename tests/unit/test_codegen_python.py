@@ -612,3 +612,24 @@ def test_an_unrecognised_discriminant_is_rejected(tmp_path: Path) -> None:
 
 	with pytest.raises(module.ConstraintError):
 		held.labels(0).validate()
+
+
+# -- a length the message declares, and the frame it has to fit -------------
+
+OVERLONG = "struct s { u8 n; u16 want; u8 body[want]; u8 tail[remaining]; }"
+
+
+def test_a_declared_length_is_clamped_and_reported(tmp_path: Path) -> None:
+	"""Python's slice already clamped, so this backend was memory-safe and
+	silent: a message claiming 1000 bytes in a 16-byte frame handed back 13
+	and said nothing. The other three were not safe, and none of the four
+	reported it. Both halves now, in all four."""
+	module = load(tmp_path, OVERLONG)
+	raw    = bytearray(16)
+	raw[1], raw[2] = 0x03, 0xE8		# says 1000 bytes of body
+
+	held = module.s.at(module.Message(raw), 0, len(raw))
+
+	assert len(held.body) == 13		# 16 bytes, 3 before the body
+	with pytest.raises(module.ConstraintError):
+		held.validate()

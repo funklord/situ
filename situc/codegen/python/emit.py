@@ -32,7 +32,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, classify, classify_check, extent_parts,
+	Check, Member, arm_members, classify, classify_check, declares_its_own_length,
+	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	own_entries, own_members,
 )
@@ -1100,6 +1101,33 @@ class Emitter:
 
 		return " + ".join([str(constant), *terms])
 
+	def _fits_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A length the message declares must fit the frame it is in.
+
+		Nothing checked this in any backend: `u8 opts[hdr.length]` with a
+		`u16` length in a 32-byte frame parsed clean. The accessor clamps,
+		which is what keeps a caller who skips validation safe; this is what
+		tells a caller who does not that the message is malformed rather than
+		short. Clamping alone silently turns a lie into a truncation.
+		"""
+		if not declares_its_own_length(placement):
+			return []
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+
+		declared = self._length_expression(struct, placement)
+		start    = self._offset_expression(struct, placement)
+		if declared is None or start is None:
+			return []
+		return [
+			f"\t\t# {placement.path}: the length the message declares has to",
+			"\t\t# fit the frame it is in.",
+			f"\t\tif self._len - ({start}) < ({declared}):",
+			f'\t\t\traise ConstraintError("{placement.path}: declared length'
+			' does not fit")',
+		]
+
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""`default: error` -- the discriminant must select an arm.
@@ -1293,6 +1321,9 @@ class Emitter:
 
 		check = classify_check(struct, placement, self.structs)
 
+		fits = self._fits_check(struct, placement)
+		if fits:
+			return fits
 		if check is Check.DISCRIMINANT:
 			return self._discriminant_check(struct, placement)
 		if check is Check.DELIMITED:

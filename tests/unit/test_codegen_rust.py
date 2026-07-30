@@ -486,3 +486,30 @@ fn main() {
 	# which is how the extent bug survived its first test.
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- a length the message declares, and the frame it has to fit -------------
+
+OVERLONG = "struct s { u8 n; u16 want; u8 body[want]; u8 tail[remaining]; }"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_declared_length_is_clamped_and_reported(tmp_path: Path) -> None:
+	"""`&bytes[at..at + declared]` panics rather than reading out of bounds,
+	which is memory-safe and is still a denial of service in a `no_std` build
+	where a panic aborts. A message chooses that length."""
+	built = build(tmp_path, OVERLONG, main="""
+fn main() {
+	let mut buf = [0u8; 16];
+	buf[1] = 0x03; buf[2] = 0xE8;		// says 1000 bytes of body
+
+	let held = unit::S::new(&buf).unwrap();
+
+	assert_eq!(held.body().len(), 13);
+	assert!(held.validate().is_err());
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	let_run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert let_run.returncode == 0, let_run.stderr

@@ -37,7 +37,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, classify, classify_check, extent_parts,
+	Check, Member, arm_members, classify, classify_check, declares_its_own_length,
+	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
@@ -1137,6 +1138,33 @@ class Emitter:
 		         and "." not in entry.placement.path[len(struct.name) + 1:]]
 		return over_fields(names, source, lambda name: f"{c_name(name)}()")
 
+	def _fits_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A length the message declares must fit the frame it is in.
+
+		Nothing checked this in any backend: `u8 opts[hdr.length]` with a
+		`u16` length in a 32-byte frame parsed clean. The accessor clamps,
+		which is what keeps a caller who skips validation safe; this is what
+		tells a caller who does not that the message is malformed rather than
+		short. Clamping alone silently turns a lie into a truncation.
+		"""
+		if not declares_its_own_length(placement):
+			return []
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+
+		declared = self._length_expression(struct, placement)
+		start    = self._offset_expression(struct, placement)
+		if declared is None or start is None:
+			return []
+		return [
+			f"\t\t/* {placement.path}: the length the message declares has to",
+			"\t\t * fit the frame it is in. */",
+			f"\t\tif (situ_remaining_u32(limit(), {start}) < ({declared})) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+		]
+
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""`default: error` -- the discriminant must select an arm.
@@ -1289,10 +1317,17 @@ class Emitter:
 		          "\t}"]
 
 		if nested is None:
+			# Clamped to what the view holds. The length is a field, so it is
+			# whatever the message says: `u8 opts[hdr.length]` with a `u16`
+			# length claims up to 65535 bytes, and this handed out a raw
+			# pointer and that number. `validate` reports the message as
+			# malformed; this is what keeps a caller who skipped it safe.
 			lines.extend([
 				f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 				"\t{",
-				f"\t\treturn ::situ::rt::bytes(base() + {name}_offset(), {length});",
+				f"\t\treturn ::situ::rt::bytes(base() + {name}_offset(),",
+				f"\t\t\tsitu_min_u32({length},",
+				f"\t\t\t\tsitu_remaining_u32(limit(), {name}_offset())));",
 				"\t}",
 			])
 			return lines
@@ -1723,6 +1758,9 @@ class Emitter:
 
 		if check is Check.NOTHING:
 			return []
+		fits = self._fits_check(struct, placement)
+		if fits:
+			return fits
 		if check is Check.DISCRIMINANT:
 			return self._discriminant_check(struct, placement)
 		if check is Check.DELIMITED:

@@ -68,14 +68,22 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 VECTOR_SCHEMAS	:= header
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 
-# Fuzz harnesses. `header` is fixed-size and `edges` is not, which is the
-# distinction that matters: the harness declared `buf[SITU_X_SIZE_FIXED]` for
-# every struct, and that macro exists only where a struct has one size. So
-# `gen-fuzz` emitted C that did not compile for anything with a length field,
-# a `[remaining]` tail or a delimiter -- the structs most likely to have a
-# parsing bug -- and nothing noticed, because the only harness built here was
+# Fuzz harnesses, for every schema. This was `header` alone once: the harness
+# declared `buf[SITU_X_SIZE_FIXED]` for every struct, and that macro exists
+# only where a struct has one size, so `gen-fuzz` emitted C that did not
+# compile for anything with a length field, a `[remaining]` tail or a
+# delimiter -- and nothing noticed, because the one harness built here was
 # over a schema that had none of them.
-FUZZ_SCHEMAS	:= header edges
+#
+# The answer then was to add `edges`, one schema carrying the shapes that had
+# been missing. Which held until a variant turned up: `gen-fuzz` reached for a
+# sub-view a variant does not have, and nothing noticed, because neither of
+# the two schemas built here had one.
+#
+# So: all of them, the way CHECK_BINS already does. An artifact compiled for a
+# sample of schemas is tested for the constructs that sample happens to
+# contain, and which constructs those are is not a thing anyone chose.
+FUZZ_SCHEMAS	:= $(GEN_NAMES)
 FUZZ_BINS	:= $(FUZZ_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
 
 # The capability-conformance suites, one per schema, generated from the schema
@@ -171,9 +179,8 @@ $(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ $(SITUC_SOURCES)
 $(GEN_DIR)/codecs_codec_tests.o: $(GEN_DIR)/codecs_codec_tests.c
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
-$(GEN_DIR)/%_fuzz.c: $(REPO_ROOT)/tests/schemas/%.situ $(SITUC_SOURCES)
-	@mkdir -p '$(GEN_DIR)'
-	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz 'tests/schemas/$*.situ' \
+$(GEN_DIR)/%_fuzz.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
+	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' \
 		--out '$(abspath $(GEN_DIR))'
 
 # The derived implementations, generated beside the accessors from the same

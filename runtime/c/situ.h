@@ -459,6 +459,20 @@ static inline uint32_t situ_min_u32(uint32_t a, uint32_t b)
 	return a < b ? a : b;
 }
 
+/* How many bytes remain in a view from `at`. Saturating, and that is the whole
+ * of it: `at` is arithmetic over length fields the message controls, so it can
+ * exceed the limit whatever the schema says. `limit - at` in `uint32_t` then
+ * reports about four billion bytes remaining, and a `[remaining]` member hands
+ * out that length with a pointer aimed past the end of the buffer.
+ *
+ * Found by fuzzing a schema that had a `[remaining]` tail after two
+ * attacker-controlled lengths -- and found only once every schema started
+ * being fuzzed rather than two of them. */
+static inline uint32_t situ_remaining_u32(uint32_t limit, uint32_t at)
+{
+	return at >= limit ? 0u : limit - at;
+}
+
 /* Delimited members (section 8.6.1).
  *
  * `situ_scan` returns the offset of the first occurrence of `delim` within

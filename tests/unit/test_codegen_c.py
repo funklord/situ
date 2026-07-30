@@ -542,7 +542,10 @@ def test_dynamic_offset_resolves_from_the_driving_field() -> None:
 def test_remaining_measures_to_the_end_of_the_view() -> None:
 	header, _ = emit("struct S { u8 a; u8 rest[remaining]; }")
 	assert "situ_S_rest_len(situ_view_t view)" in header
-	assert "view.limit - 1u" in header
+	# Saturating. It was `view.limit - 1u`, which wraps when the members
+	# before it claim more than the view holds -- and a `[remaining]` member
+	# then reports about four billion bytes with a pointer past the end.
+	assert "situ_remaining_u32(view.limit, 1u)" in header
 
 
 def test_array_of_structs_gets_an_indexed_element_view() -> None:
@@ -1007,7 +1010,7 @@ def test_the_recompute_evaluates_the_expression() -> None:
 	3 plus whatever the view has left."""
 	header, _ = emit(INVARIANT)
 
-	assert "(3u + view.limit - 5u)" in header
+	assert "(3u + situ_remaining_u32(view.limit, 5u))" in header
 
 
 def test_what_the_invariant_reads_is_marked_covered() -> None:
@@ -1093,7 +1096,7 @@ def test_a_capped_scan_stops_at_the_smaller_of_cap_and_buffer() -> None:
 	check established, so the cap alone is not the limit."""
 	header, _ = emit('struct s { u8 line[] until "\\r\\n" max 16; u8 rest[remaining]; }')
 
-	assert "situ_min_u32(16u, view.limit - 0u)" in header
+	assert "situ_min_u32(16u, situ_remaining_u32(view.limit, 0u))" in header
 
 
 def test_a_relaxed_delimiter_scans_for_an_inert_one() -> None:
@@ -1639,3 +1642,91 @@ def test_the_check_names_the_arms_as_the_schema_spelled_them() -> None:
 
 	assert "an arm for k.a, k.b" in source
 	assert "!= 1u" in source and "!= 2u" in source
+
+
+# -- a length the message declares, and the frame it has to fit -------------
+
+OVERLONG = "struct s { u8 n; u16 want; u8 body[want]; u8 tail[remaining]; }"
+
+
+def test_a_declared_length_is_clamped_to_the_frame() -> None:
+	"""`u8 body[want]` with a `u16` length claims up to 65535 bytes. The
+	accessor returned that number beside a pointer at the frame base, so
+	`ptr(view)[len(view) - 1]` read 65 kilobytes past a 32-byte frame.
+
+	Section 20.2 amortises the bounds check at the frame boundary, and that
+	argument holds for offsets the frame is known to contain. A length the
+	*message* chooses is not one of those, and nothing had noticed the gap.
+	"""
+	header, _ = emit(OVERLONG)
+
+	assert "situ_min_u32((uint32_t)(situ_get_be16(view.base + 1u))," in header
+	assert "situ_remaining_u32(view.limit," in header
+
+
+def test_and_validate_calls_such_a_message_malformed() -> None:
+	"""Clamping alone silently turns a lie into a truncation. The accessor
+	keeps a caller who skipped validation safe; this is what tells a caller
+	who did not that the message is wrong rather than short."""
+	_, source = emit(OVERLONG)
+
+	assert "the length the message declares has to fit" in source
+	assert "return SITU_ERR_BOUNDS;" in source
+
+
+def test_a_remaining_member_saturates_rather_than_wrapping() -> None:
+	"""Its length is `limit - offset`, and the offset is arithmetic over
+	fields the message controls. In `uint32_t` that wrapped to about four
+	billion, with a pointer past the end -- which is how a fuzzer found this,
+	on a schema that had been in the tree since phase 5 and had never been
+	fuzzed."""
+	header, _ = emit(OVERLONG)
+
+	assert "situ_remaining_u32(view.limit," in header
+	assert "view.limit -" not in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_two_answers_agree_on_a_real_message(tmp_path: Path) -> None:
+	"""Run, because both halves are about what happens at run time."""
+	header, source = emit(OVERLONG)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	/* Says 1000 bytes of body; the frame is 16. */
+	uint8_t buf[16] = { 0 };
+	situ_msg_t msg;
+	situ_view_t view;
+
+	buf[1] = 0x03; buf[2] = 0xE8;
+
+	situ_msg_init(&msg, buf, (uint32_t)sizeof buf);
+	if (situ_s_view(&msg, 0, (uint32_t)sizeof buf, &view) != SITU_OK)
+		return 1;
+
+	/* 16 bytes of frame, 3 before the body: 13 are really there. */
+	if (situ_s_body_len(view) != 13u)
+		return 2;
+	/* And the last byte it hands out is inside the buffer. */
+	if (situ_s_body_ptr(view) + situ_s_body_len(view) > buf + sizeof buf)
+		return 3;
+	/* The message is malformed, not short, and validate says so. */
+	if (situ_s_validate(view) != SITU_ERR_BOUNDS)
+		return 4;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

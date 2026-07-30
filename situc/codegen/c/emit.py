@@ -37,7 +37,8 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, arm_members, classify_check, extent_parts,
+	Check, arm_members, classify_check, declares_its_own_length,
+	extent_parts,
 	has_computable_extent, matched_values, obligation, obligations,
 	own_members,
 )
@@ -1844,10 +1845,11 @@ class Emitter:
 	def _scan_limit(self, placement: Placement, base: str) -> str:
 		"""How far the scan may run: to the cap, or to the end of the buffer."""
 		if placement.delimiter_cap is None:
-			return f"view.limit - {base}"
+			return f"situ_remaining_u32(view.limit, {base})"
 		# The smaller of the two, not the cap alone: a cap larger than what is
 		# left would read past the extent the one bounds check established.
-		return f"situ_min_u32({placement.delimiter_cap}u, view.limit - {base})"
+		return (f"situ_min_u32({placement.delimiter_cap}u, "
+		        f"situ_remaining_u32(view.limit, {base}))")
 
 	def _scan_call(self, placement: Placement, data: str, limit: str,
 			sym: str) -> str:
@@ -1933,6 +1935,35 @@ class Emitter:
 			" *",
 			" * A `length_preserving` codec, or one with a fixed or exact-ratio",
 			" * expansion, keeps the members after it addressable. */",
+		]
+
+	def _fits_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A length the message declares must fit the frame it is in.
+
+		Nothing checked this, so `u8 opts[hdr.length]` with a `u16` length in a
+		32-byte frame was a message that parsed clean and handed out a pointer
+		to 65535 bytes. The accessor clamps, which is what keeps a caller who
+		skips validation memory-safe; this is what tells a caller who does not
+		skip it that the message is malformed rather than short.
+
+		The two are different answers and both are needed. Clamping alone
+		silently turns a lie into a truncation.
+		"""
+		if not declares_its_own_length(placement):
+			return []
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+
+		declared = self._length_expression(struct, placement)
+		base     = self._base_expression(struct, placement)
+		return [
+			f"\t/* {placement.path}: the length the message declares has to fit",
+			"\t * the frame it is in. The accessor clamps; this is where a",
+			"\t * message that does not fit is called malformed. */",
+			f"\tif (situ_remaining_u32(view.limit, {base}) < ({declared})) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
 		]
 
 	def _discriminant_check(self, struct: ResolvedStruct,
@@ -2065,8 +2096,11 @@ class Emitter:
 		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
 
 		if placement.sized_by == "remaining":
-			return (f"{held}.limit - "
-			        f"{self._base_expression(struct, placement, gated)}")
+			# Saturating. A plain subtraction wraps when the members before it
+			# claim more than the view holds, which is a length the message
+			# chooses rather than one the schema does.
+			return (f"situ_remaining_u32({held}.limit, "
+			        f"{self._base_expression(struct, placement, gated)})")
 
 		count = self._count_expression(struct, placement, held)
 		return f"(uint32_t){count}" if element == 1 else f"(uint32_t){count} * {element}u"
@@ -2313,7 +2347,8 @@ class Emitter:
 				"{",
 				"\tsitu_view_t whole;",
 				"",
-				f"\tif (situ_view_sub(view, {base}, view.limit - {base}, &whole)"
+				f"\tif (situ_view_sub(view, {base}, "
+				f"situ_remaining_u32(view.limit, {base}), &whole)"
 				" != SITU_OK) {",
 				"\t\treturn 0u;",
 				"\t}",
@@ -2330,7 +2365,8 @@ class Emitter:
 				"\tsitu_view_t whole;",
 				"\tsitu_err_t  e;",
 				"",
-				f"\te = situ_view_sub(view, {base}, view.limit - {base}, &whole);",
+				f"\te = situ_view_sub(view, {base}, "
+				f"situ_remaining_u32(view.limit, {base}), &whole);",
 				"\tif (e != SITU_OK) {",
 				"\t\treturn e;",
 				"\t}",
@@ -2372,11 +2408,26 @@ class Emitter:
 		else:
 			# A run-time length: the count comes from the field that drives it,
 			# and `remaining` measures to the end of the view.
+			#
+			# Clamped to what the view holds, because the field is the
+			# message's. `u8 opts[hdr.length]` with a `u16` length claims up to
+			# 65535 bytes, and this returned that number beside a pointer at
+			# the frame base -- so a caller reading `ptr(view)[len(view) - 1]`
+			# read 65 kilobytes past a 32-byte frame. Section 20.2 amortises
+			# the bounds check at the frame boundary, and that argument holds
+			# only for offsets the frame is known to contain; a length the
+			# message chooses is not one.
+			#
+			# `validate` is where a malformed message is *reported*. This is
+			# what keeps the accessor safe for a caller who did not ask.
 			lines.extend([
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'len')}({taken})",
 				"{",
-				f"\treturn {self._length_expression(struct, placement, held)};",
+				f"\treturn situ_min_u32("
+				f"{self._length_expression(struct, placement, held)},",
+				f"\t\tsitu_remaining_u32({held}.limit, "
+				f"{self._base_expression(struct, placement, gated=gate is not None)}));",
 				"}",
 			])
 
@@ -2873,6 +2924,10 @@ class Emitter:
 			if "." in placement.path[len(struct.name) + 1:]:
 				return []
 			return self._discriminant_check(struct, placement)
+
+		fits = self._fits_check(struct, placement)
+		if fits:
+			return fits
 
 		# A delimited member's delimiter has to be there. That is the one thing
 		# parse can check about it: the content cannot contain the delimiter,

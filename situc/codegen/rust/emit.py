@@ -35,7 +35,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, arm_members, classify, classify_check, extent_parts,
+	Check, Member, arm_members, classify, classify_check, declares_its_own_length,
+	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
@@ -1083,6 +1084,33 @@ class Emitter:
 
 		return " + ".join([str(constant), *terms])
 
+	def _fits_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A length the message declares must fit the frame it is in.
+
+		Nothing checked this in any backend: `u8 opts[hdr.length]` with a
+		`u16` length in a 32-byte frame parsed clean. The accessor clamps,
+		which is what keeps a caller who skips validation safe; this is what
+		tells a caller who does not that the message is malformed rather than
+		short. Clamping alone silently turns a lie into a truncation.
+		"""
+		if not declares_its_own_length(placement):
+			return []
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+
+		declared = self._length_expression(struct, placement)
+		start    = self._offset_expression(struct, placement)
+		if declared is None or start is None:
+			return []
+		return [
+			f"\t\t// {placement.path}: the length the message declares has to",
+			"\t\t// fit the frame it is in.",
+			f"\t\tif self.bytes.len().saturating_sub({start}) < ({declared}) {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+		]
+
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""`default: error` -- the discriminant must select an arm.
@@ -1255,11 +1283,19 @@ class Emitter:
 		]
 
 		if nested is None:
+			# Clamped to what the slice holds. The length is a field, so it is
+			# whatever the message says, and `&bytes[at..at + declared]`
+			# *panics* on a message that claims more than it carries -- which
+			# is memory-safe and is still a denial of service in a `no_std`
+			# build where a panic aborts. `validate` reports it as malformed;
+			# this is what keeps a caller who skipped it running.
 			lines.extend([
 				"",
 				f"\tpub fn {name}(&self) -> &[u8] {{",
 				f"\t\tlet at = self.{_ident(base + '_offset')}();",
-				f"\t\t&self.bytes[at..at + ({length})]",
+				f"\t\tlet n  = core::cmp::min({length},",
+				"\t\t\tself.bytes.len().saturating_sub(at));",
+				"\t\t&self.bytes[at..at + n]",
 				"\t}",
 			])
 			return lines
@@ -1569,6 +1605,10 @@ class Emitter:
 			check = classify_check(struct, placement, self.structs)
 
 			if check is Check.NOTHING:
+				continue
+			fits = self._fits_check(struct, placement)
+			if fits:
+				checks.extend(fits)
 				continue
 			if check is Check.DISCRIMINANT:
 				checks.extend(self._discriminant_check(struct, placement))

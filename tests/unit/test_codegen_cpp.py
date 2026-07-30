@@ -658,3 +658,46 @@ int main()
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- a length the message declares, and the frame it has to fit -------------
+
+OVERLONG = "struct s { u8 n; u16 want; u8 body[want]; u8 tail[remaining]; }"
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_declared_length_is_clamped_and_reported(tmp_path: Path) -> None:
+	"""This backend handed out a raw pointer and the length the message
+	claimed, which is the same out-of-bounds read the C backend had."""
+	result = compiles(tmp_path, OVERLONG, extra="""
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t buf[16] = { 0 };
+	buf[1] = 0x03; buf[2] = 0xE8;		/* says 1000 bytes of body */
+
+	const ::situ::s held{ situ_view_t{ buf, sizeof buf, 0 } };
+	const auto body = held.body();
+
+	if (body.size() != 13u)
+		return 1;
+	if (body.data() + body.size() > buf + sizeof buf)
+		return 2;
+	if (held.validate() != ::situ::rt::err::bounds)
+		return 3;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

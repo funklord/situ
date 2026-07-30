@@ -187,11 +187,13 @@ def _diagram(struct: ResolvedStruct) -> list[str]:
 			_place(row, flush, width, at, start - at, "unused")
 			at = start
 
-		# A delimited member has no fixed extent either: `size_bits` is the
-		# delimiter's own width, which is the one number that is not the
-		# member's size. Drawn as a fixed box it read as a one-byte field.
-		if (placement.sized_by is not None or placement.size_bits == 0
-				or placement.delimiter is not None):
+		# One question, asked once: does this member have a single size? It
+		# used to enumerate three ways of not having one -- sized by a field,
+		# zero bits, delimited -- which missed two more. A `while` run was
+		# drawn as a one-byte box, and a variant reached the right branch only
+		# because its smallest arm happens to be empty; one whose smallest arm
+		# were two bytes would have been drawn as a two-byte field.
+		if not placement.is_fixed_size:
 			# A variable member starting mid-row takes the rest of that row.
 			# Flushing first would pad it with blanks, which reads as unused
 			# space exactly where the member actually begins.
