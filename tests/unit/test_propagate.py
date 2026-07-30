@@ -307,6 +307,57 @@ def test_reserved_defaults_to_canonical() -> None:
 	               Axis.CANONICAL) == Value("Canonical")
 
 
+# -- row: declared non-canonical (section 11.5) -----------------------------
+
+NON_CANONICAL = \
+	'struct S { u8 a [non_canonical = "the same name has many spellings"]; }'
+
+
+def test_a_schema_may_declare_its_own_encoding_non_canonical() -> None:
+	"""The escape hatch for a format situ can describe but cannot infer this
+	about. DNS name compression is the case: every construct in the schema is
+	canonical on its own, and the format still admits many encodings of one
+	name, because the redundancy is between a name and bytes elsewhere in the
+	message that situ never sees together."""
+	assert axis_of(NON_CANONICAL, "S.a", Axis.CANONICAL) == Value("NonCanonical")
+	assert rules_for(NON_CANONICAL, "S.a", Axis.CANONICAL) \
+	       == ["declared-non-canonical"]
+
+
+def test_the_declared_reason_reaches_the_blame_chain() -> None:
+	"""An assertion nobody can act on is worse than none, and the schema
+	author is the only one who knows why -- so their words are carried through
+	rather than replaced with a category name."""
+	entry = entries(NON_CANONICAL)["S.a"]
+	why   = " ".join(w.effect.because for w in entry.blame(Axis.CANONICAL))
+
+	assert "the same name has many spellings" in why
+
+
+def test_declaring_it_cannot_strengthen_anything() -> None:
+	"""Invariant 2, and the reason the attribute is safe to add: an attribute
+	that only ever meets can only ever weaken. Asserting it on a field that is
+	already non-canonical for a reason of its own must not restore it, and
+	must not drop the reason it already had."""
+	body = ('struct S [allow_host_dependent, endian = native] '
+		'{ u32 a [non_canonical = "and this too"]; }')
+
+	assert axis_of(body, "S.a", Axis.CANONICAL, preamble="") == Value("NonCanonical")
+	assert sorted(rules_for(body, "S.a", Axis.CANONICAL, preamble="")) \
+	       == ["declared-non-canonical", "endian-native"]
+
+
+def test_it_touches_no_other_axis() -> None:
+	"""One axis, named in the attribute. A blanket "this is weird" would make
+	the vector useless for anything else."""
+	plain = entries("struct S { u8 a; }")["S.a"].vector
+	said  = entries(NON_CANONICAL)["S.a"].vector
+
+	for axis in Axis:
+		if axis is not Axis.CANONICAL:
+			assert said.get(axis) == plain.get(axis), axis
+
+
 # -- row: enum default = pass -----------------------------------------------
 
 
@@ -437,6 +488,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"register-rmw-unsafe",
 		"register-side-effect",
 		# Section 8.6.1, delimiter-framed data.
+		"declared-non-canonical",
 		"repeat-while",
 		"delimited-member",
 		"unbounded-scan",

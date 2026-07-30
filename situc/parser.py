@@ -112,6 +112,8 @@ ATTRIBUTE_NAMES = frozenset({
 	"trim", "case_insensitive",
 	# section 19.4: one file, more than one version of the protocol
 	"since", "version",
+	# section 11.5: a weakening the lattice cannot derive
+	"non_canonical",
 	# section 8.3: host-dependent byte order
 	"allow_host_dependent",
 	# section 8.8: reserved behaviour

@@ -269,6 +269,11 @@ def _is_unbounded_size(context: Context) -> bool:
 	return context.placement.size_max_bits is None
 
 
+def _is_declared_non_canonical(context: Context) -> bool:
+	return any(attr.name == "non_canonical"
+	           for attr in context.placement.attrs)
+
+
 def _is_repeat_while(context: Context) -> bool:
 	return context.placement.repeat_while is not None
 
@@ -661,6 +666,15 @@ TABLE: tuple[Row, ...] = (
 			            "recompute, which is the one thing that may set it",
 		),
 		applies = _is_derived,
+	),
+	Row(
+		rule = Rule(
+			name      = "declared-non-canonical",
+			construct = "a schema saying its encoding is not canonical",
+			effects   = (),		# the reason is the schema's; see below
+			remedy    = "",
+		),
+		applies = _is_declared_non_canonical,
 	),
 	Row(
 		rule = Rule(
@@ -1478,7 +1492,9 @@ def apply(context: Context) -> Resolved:
 			continue
 
 		effects = row.rule.effects
-		if row.rule.name == "endian-marker-scope":
+		if row.rule.name == "declared-non-canonical":
+			effects = _declared_effects(context)
+		elif row.rule.name == "endian-marker-scope":
 			effects = _marker_effects(context)
 		elif row.rule.name == "dynamic-predecessor":
 			effects = _predecessor_effects(context)
@@ -1674,6 +1690,37 @@ def _parameterise(effect: Effect, placement: Placement) -> Effect:
 			render_size(placement.size_max_bits))), effect.because)
 
 	return effect
+
+
+def _declared_effects(context: Context) -> tuple[Effect, ...]:
+	"""A weakening the schema states because the lattice cannot derive it.
+
+	Section 11.5. Everything else on this axis is inferred from a construct
+	situ understands -- a capacity-sized string, optional whitespace, a
+	non-minimal varint -- and some formats are non-canonical for reasons that
+	are nowhere in the layout. A DNS name may be spelled uncompressed or as a
+	pointer to any earlier occurrence of any suffix of it, which is many byte
+	sequences for one value and not a fact about where the bytes are.
+
+	Safe by construction, and that is the whole argument for allowing it:
+	invariant 2 says no construct may *strengthen* an axis, so a declaration
+	that can only move down the lattice cannot make the map claim more than
+	situ can back. It can only make it claim less, which is what an honest
+	schema does when it knows something the compiler does not.
+
+	The reason is required. A weakening with no reason is a shrug, and the
+	blame chain is where a reader finds out why a field costs what it does.
+	"""
+	from situc.unparse import expr_to_source
+
+	for attr in context.placement.attrs:
+		if attr.name != "non_canonical":
+			continue
+		reason = ("no reason given" if attr.value is None
+		          else expr_to_source(attr.value).strip('"'))
+		return (Effect(Axis.CANONICAL, Value("NonCanonical"),
+		               f"the schema says so: {reason}"),)
+	return ()
 
 
 def _marker_effects(context: Context) -> tuple[Effect, ...]:
