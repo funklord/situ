@@ -1141,8 +1141,21 @@ class Emitter:
 		names = [entry.placement.name for entry in element.entries
 		         if entry.placement.scalar is not None
 		         and "." not in entry.placement.path[len(element.name) + 1:]]
-		return over_fields(names, placement.repeat_while or "",
-		                   lambda name: f"element.{c_name(name)}()")
+
+		# The same enum problem `_over_fields` has, in the other rewriter:
+		# `next_header == 43` over an `enum class` does not compile, and
+		# `examples/ipv6ext` is exactly that. Two rewriters, one rule.
+		by_name = {entry.placement.name: entry.placement
+		           for entry in element.entries}
+
+		def read(name: str) -> str:
+			held = by_name.get(name)
+			if held is not None and held.type_name in self.enums \
+					and held.scalar is not None:
+				return f"({self._load(held.scalar, held, None, on='element')})"
+			return f"element.{c_name(name)}()"
+
+		return over_fields(names, placement.repeat_while or "", read)
 
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -1316,6 +1329,16 @@ class Emitter:
 				return self._unframeable(struct,
 				        "a run of records ends at a terminator this cannot tell"
 				        " apart from the end of the bytes so far")
+
+			if placement.kind in ("coded", "sealed"):
+				# A coded region that is also delimited: C emits the scan
+				# accessors for one and this backend does not, so the
+				# helpers this would call are not there. Declining beats
+				# naming them -- and the accessors themselves are the gap
+				# worth closing.
+				return self._unframeable(struct,
+				        f"`{placement.name}` is a {placement.kind} region and"
+				        " this backend emits no scan accessors for one")
 
 			length = self._length_expression(struct, placement)
 			if length is None:
@@ -1687,7 +1710,7 @@ class Emitter:
 			f"\t\t\t{inner}::size_bytes, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
-			f"\t\t\tout = ::{self.namespace}::{inner}(raw);",
+			f"\t\t\tout = {inner}(raw);",
 			"\t\t}",
 			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",
@@ -1965,8 +1988,13 @@ class Emitter:
 		return " | ".join(names) if names else "0u"
 
 	def _load(self, scalar: ScalarType, placement: Placement,
-			offset: str | None = None) -> str:
-		base   = f"base() + {offset if offset is not None else placement.offset_bytes}"
+			offset: str | None = None, on: str = "") -> str:
+		"""`on` names another view to read through -- `element` inside a run's
+		walk, where `base()` alone would be this struct's rather than the
+		element's."""
+		prefix = f"{on}." if on else ""
+		base   = (f"{prefix}base() + "
+		          f"{offset if offset is not None else placement.offset_bytes}")
 		ctype  = self._ctype(scalar)
 
 		if scalar.is_bcd:
@@ -2181,6 +2209,14 @@ class Emitter:
 		"""
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []		# checked under the element's own struct
+
+		if placement.kind in ("coded", "sealed"):
+			# This backend emits no scan accessors for a coded region, so
+			# there is no `_terminated` to call. `examples/smtp`'s
+			# dot-stuffed body is one, and this named it anyway.
+			return ["\t\t/* " + placement.path + ": a "
+			        + placement.kind + " region, whose delimiter this backend",
+			        "\t\t * does not scan for yet. */"]
 
 		name  = c_name(local_name(struct, placement))
 		delim = placement.delimiter

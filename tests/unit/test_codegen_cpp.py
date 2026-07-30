@@ -1144,3 +1144,36 @@ int main()
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- every example, compiled ------------------------------------------------
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_every_example_compiles(tmp_path: Path) -> None:
+	"""The C suite has had this since phase 4 and this one had not, which is
+	how three examples came to not compile at all: `message` had a counted
+	array of structs whose element type was qualified twice, `ipv6ext` a run
+	whose condition compared an `enum class` to an int, and `smtp` a coded
+	region whose scan helpers this backend does not emit.
+
+	Generating is not compiling. Every backend that emits a language with a
+	compiler should be held to its compiler.
+	"""
+	for schema in sorted((ROOT / "examples").glob("*/*.situ")):
+		parsed   = parse_text(schema.read_text(encoding="utf-8"))
+		resolved = resolve(parsed, solve(parsed))
+		built    = generate_cpp(parsed, resolved, schema.stem)
+
+		(tmp_path / f"{schema.stem}.hpp").write_text(built.header,
+		                                             encoding="ascii")
+		main = tmp_path / f"main_{schema.stem}.cpp"
+		main.write_text(f'#include "{schema.stem}.hpp"\nint main() {{ return 0; }}\n',
+		                encoding="ascii")
+
+		result = subprocess.run(
+			[HOST_CXX or "g++", *WARNINGS,
+			 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+			 str(main)],
+			capture_output=True, text=True)
+		assert result.returncode == 0, f"{schema.stem}: {result.stderr}"

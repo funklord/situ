@@ -129,7 +129,12 @@ class Emitter:
 		# was the reasoning for guarding `Dirty` and stopped there. A schema
 		# of nothing but registers uses none of the four, and the module did
 		# not build under `-D warnings`.
-		text = "\n".join(body)
+		# Comments stripped first: `Dirty` appears in a doc comment on every
+		# struct that explains what a dirty bit is, so a bare substring
+		# search imported it for schemas that never touch one -- and
+		# `unused_imports` is an error under `-D warnings`.
+		text = "\n".join(line for line in body
+		                 if not line.lstrip().startswith(("//", "///", "//!")))
 		used = [name for name, token in (
 			("self", "situ_rt::"),
 			("Dirty", "Dirty"),
@@ -1267,6 +1272,14 @@ class Emitter:
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []		# checked under the element's own struct
 
+		if placement.kind in ("coded", "sealed"):
+			# No scan accessors for a coded region here, so there is no
+			# `_terminated` to call. `examples/smtp`'s dot-stuffed body is
+			# one, and this named it anyway.
+			return [f"\t\t// {placement.path}: a {placement.kind} region,"
+			        " whose delimiter this",
+			        "\t\t// backend does not scan for yet."]
+
 		base  = c_name(local_name(struct, placement))
 		lines = [
 			f"\t\tif !self.{_ident(f'{base}_terminated')}() {{",
@@ -1339,6 +1352,14 @@ class Emitter:
 				return self._unframeable(struct,
 				        "a run of records ends at a terminator this cannot tell"
 				        " apart from the end of the bytes so far")
+
+			if placement.kind in ("coded", "sealed"):
+				# No scan accessors for a coded region in this backend, so the
+				# helpers this would call are not there. `examples/smtp`'s
+				# dot-stuffed body is one.
+				return self._unframeable(struct,
+				        f"`{placement.name}` is a {placement.kind} region and"
+				        " this backend emits no scan accessors for one")
 
 			length = self._length_expression(struct, placement)
 			if length is None:

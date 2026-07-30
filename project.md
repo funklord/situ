@@ -2944,6 +2944,7 @@ promise.
 | fuzz | libFuzzer | generated harnesses run in CI for a bounded time |
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
 | backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
+| every example, in every backend | pytest + each toolchain | each worked example generated *and compiled* -- C since phase 4, the other three only recently, which is how three C++ examples and two Rust ones came to be broken with the suite green. Generating is not compiling, and the examples are the schemas anyone reads |
 | compiler mutation | by hand, recorded in 26.13a | deliberate bugs in the generator, judged by what a *user's* suite catches rather than situ's own. Not automated: choosing the mutation is the work, and a mutation nobody thought of is the gap that survives |
 | test mutation | by hand, at the point of writing | a probe that walks generated code is run once against a deliberately wrong expectation, to find out whether it is a test or a compile check. Three of mine were the latter -- `-fsyntax-only`, a `main` nobody executed, an `assert!` in an unrun binary -- and each passed identically before and after the fix it was written for (invariant 35) |
 
@@ -4961,7 +4962,16 @@ found, and it was there before any of this work began.
    attempts at a faster path measured *slower* than what they replaced before
    the cause turned up -- which is the only reason it turned up at all.
 
-46. **A construct nothing exercised was broken in two backends at once.**
+46. **Generating is not compiling.** The C suite compiled every worked
+   example from phase 4; the other three checked that generation did not
+   raise. So three C++ examples did not compile at all -- a counted array of
+   structs whose element type was qualified twice, a run whose condition
+   compared an `enum class` to an int, a coded region whose scan helpers that
+   backend does not emit -- and two Rust ones, with the whole suite green.
+   A backend that emits a language with a compiler must be held to that
+   compiler, over the schemas people actually read.
+
+47. **A construct nothing exercised was broken in two backends at once.**
    Section 9.6's own example uses an enum discriminant -- `case
    msg_type.hello:` -- and neither C++ nor Rust compiled such a schema at
    all. Both getters hand back something that does not compare to a number

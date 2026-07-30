@@ -801,3 +801,44 @@ fn main() {
 
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+# -- every example, compiled ------------------------------------------------
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_every_example_compiles(tmp_path: Path) -> None:
+	"""The C suite has had this since phase 4 and this one had not, which is
+	how `packet` came to import a name it never used and `smtp` to call scan
+	helpers this backend does not emit. Generating is not compiling."""
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+
+	for schema in sorted((ROOT / "examples").glob("*/*.situ")):
+		parsed   = parse_text(schema.read_text(encoding="utf-8"))
+		resolved = resolve(parsed, solve(parsed))
+		module   = generate_rs(parsed, resolved, schema.stem).module
+
+		(src / "unit.rs").write_text(module, encoding="ascii")
+		(src / "lib.rs").write_text("pub mod situ_rt;\npub mod unit;\n",
+		                            encoding="ascii")
+
+		assert RUSTC is not None
+		result = subprocess.run(
+			[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type",
+			 "lib", str(src / "lib.rs"), "-o", str(tmp_path / "out")],
+			capture_output=True, text=True, cwd=tmp_path)
+		assert result.returncode == 0, f"{schema.stem}: {result.stderr}"
+
+
+def test_every_example_generates() -> None:
+	"""Python's equivalent is importing the module, which the suite does
+	elsewhere; this one is the compile."""
+	for schema in sorted((ROOT / "examples").glob("*/*.situ")):
+		parsed   = parse_text(schema.read_text(encoding="utf-8"))
+		resolved = resolve(parsed, solve(parsed))
+
+		assert generate_rs(parsed, resolved, schema.stem).module
