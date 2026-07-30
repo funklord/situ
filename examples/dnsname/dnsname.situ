@@ -1,0 +1,80 @@
+// DNS name compression (RFC 1035 section 4.1.4).
+//
+// Here for the boundary. A compressed name is the one shape in this directory
+// that situ describes completely and cannot follow, and the difference
+// between those two is worth a whole example.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+// A label, and the discriminant is the top two bits of its first byte:
+//
+//   00  a length, 0 to 63, followed by that many bytes
+//   11  a pointer, whose low 14 bits are an offset from the start of the
+//       *message* to where the rest of the name continues
+//   01, 10  reserved, and `default = error` refuses them rather than
+//       guessing which of the two they resemble
+struct label {
+	u2  form;
+	u6  rest;
+
+	variant body switch (form) {
+		case 0:  u8  text[rest];
+		case 3:  u8  pointer_low;
+		default: error;
+	}
+}
+
+// A name is labels until one ends it, and two things do: the root label,
+// which is a length of zero, and a pointer, which is always last.
+//
+// `while (form == 0 && rest != 0)` says exactly that -- continue while this
+// was a non-empty length label -- and the element that ends the run is part
+// of it, which is right for both terminators (8.6.6).
+//
+// `max 128` bounds the walk. RFC 1035 caps a name at 255 bytes, so 128 labels
+// cannot be reached by a well-formed message and can be by a hostile one.
+struct name {
+	label  labels[] while (form == 0 && rest != 0) max 128
+		[non_canonical = "a name may be spelled uncompressed, or as a pointer to any earlier occurrence of any suffix of it"];
+}
+
+struct question {
+	name  qname;
+	u16   qtype;
+	u16   qclass;
+}
+
+struct header {
+	u16  id;
+	u16  flags;
+	u16  qdcount;
+	u16  ancount;
+	u16  nscount;
+	u16  arcount;
+}
+
+require size(header) == 12;
+require absolute_static(header.id);
+
+// What situ does not do here, said where a reader meets it.
+//
+// It describes a name completely: every label, both forms of the first byte,
+// the two terminators, and the pointer's value. What it does not do is
+// *follow* the pointer, and that is the view model rather than a gap. A view
+// is a base and a limit (section 12), and a pointer is an offset from the
+// start of the message -- so following one means addressing outside the view
+// that found it, which is the property the bounds discipline is built on.
+//
+// So a caller gets the labels up to the pointer and the offset it names, and
+// resolves it themselves against the whole message. That is a small loop and
+// a real security decision: RFC 1035 permits a pointer to any earlier offset,
+// nothing stops one pointing at another pointer, and a resolver that follows
+// them without a bound has a decompression loop. Situ handing over the offset
+// rather than the bytes puts that decision where somebody has to make it.
+//
+// The declaration above is the other half. Compression means one name has
+// many encodings, which is exactly what `canonical` is for -- and nothing in
+// the *layout* says so, so the lattice cannot derive it and the map would
+// otherwise claim Canonical, which is false. Section 11.5.

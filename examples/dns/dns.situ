@@ -1,13 +1,16 @@
 // DNS message header (RFC 1035).
 //
-// Twelve bytes of header in front of a body that situ cannot describe
-// statically at all: DNS names use length-prefixed labels with a compression
-// scheme that lets a name point backwards into the message. That is a pointer
-// graph, not a layout, and it is exactly the kind of thing project.md
-// section 2 puts out of scope.
+// Twelve bytes of header, in front of a body this file does not describe.
 //
-// The header is worth describing anyway, and the honest boundary is worth
-// recording. See the note at the bottom.
+// It used to say situ "cannot describe [DNS names] statically at all", which
+// was too strong and is now demonstrably so: `examples/dnsname` describes one
+// completely -- every label, both forms of the first byte, the two
+// terminators, and the pointer's value. What situ does not do is *follow* the
+// pointer, which is a much smaller claim and a different one.
+//
+// A gap declared larger than it is sends a reader designing around a limit
+// that is not there (invariant 12), and this one stood for as long as nobody
+// tried. See `examples/dnsname` for what the boundary actually is.
 
 target buffer;
 endian big;

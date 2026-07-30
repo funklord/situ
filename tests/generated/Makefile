@@ -50,7 +50,7 @@ GEN_DIR		:= $(BUILD_DIR)/gen
 # language had generated code that compiled and had never run.
 SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   examples/arp/arp.situ examples/bmp/bmp.situ \
-		   examples/dns/dns.situ examples/ethernet/ethernet.situ examples/http/http.situ \
+		   examples/dns/dns.situ examples/dnsname/dnsname.situ examples/ethernet/ethernet.situ examples/http/http.situ \
 		   examples/icmp/icmp.situ examples/ipv6ext/ipv6ext.situ examples/ipv4/ipv4.situ \
 		   examples/message/message.situ examples/ntp/ntp.situ \
 		   examples/packet/packet.situ examples/protobuf/protobuf.situ \

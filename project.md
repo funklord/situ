@@ -1303,6 +1303,59 @@ message.trailer          offset=Dynamic            size=Bounded(0,...)
 `require in_place(message.recs[].value)` passes. `require absolute_static(message.recs)`
 fails with blame on `message.opts`.
 
+### 11.5 Declared weakening
+
+The propagation table (11.3) infers a vector from constructs. It is sound for
+what it can see, and there are formats where what it can see is not the whole
+argument.
+
+DNS name compression is the case that forced this. A name is a run of labels,
+each a length byte and that many text bytes, ended by a zero -- and a label
+whose top two bits are `11` is instead a pointer to a name earlier in the same
+message. Every construct in `examples/dnsname/dnsname.situ` is canonical taken
+alone: a `u2`, a `u6`, a byte run, a `while`. And the format still admits many
+encodings of one name, because the redundancy is not inside the name at all --
+it is between the name and bytes elsewhere in the message that no per-member
+rule ever sees together.
+
+So a schema may say so:
+
+```situ
+struct name {
+    label labels[] while (form == 0 && rest != 0) max 128
+        [non_canonical = "a name may be spelled uncompressed, or as a pointer
+                          to any earlier occurrence of any suffix of it"];
+}
+```
+
+The attribute names one axis and one value, and the reason is required and
+carried verbatim into the blame chain -- `situc explain` prints *the schema
+says so:* followed by the author's words, because a weakening nobody can act on
+is worse than none, and the author is the only one who knows why.
+
+Three properties make it safe to add:
+
+1. **It can only weaken.** It enters propagation as another effect, met with
+   the rest (invariant 2). Asserting it on a field that is already
+   non-canonical for a reason of its own neither restores it nor displaces the
+   reason it already had; both appear in the blame.
+2. **It touches one axis.** A blanket "this is unusual" would make the vector
+   useless for every other question asked of it.
+3. **It is visible.** It is a row in the table like any other, it appears in
+   the `.situ.map`, and a diff shows it arriving or leaving.
+
+What it is not is a way to silence a diagnostic. Every *inferred* weakening
+stands regardless; this can only add. A schema that wants a stronger vector has
+to change the layout, which is the whole point of the lattice.
+
+The complementary limit is worth stating plainly, because it bounds situ rather
+than the attribute: situ can *describe* a compressed name completely, and
+cannot *follow* the pointer. Resolving one means re-entering the parser at an
+arbitrary earlier offset, with a cycle check and a budget -- control flow, not
+layout. The schema says where the pointer is and what it means; a consumer
+follows it. That boundary is much narrower than "situ cannot describe this",
+and naming it precisely is the difference between a limit and a shrug.
+
 ---
 
 ## 12. Staging and typestate
@@ -4114,6 +4167,27 @@ shape.
    is 0 there. Rust refusing it is the useful signal: the same expression over
    a `u32` field wraps in both languages, and only one of them said so. Where
    generated arithmetic depends on a width the schema did not state, state it.
+
+34. **Two modules deciding the same thing separately will decide it
+   differently.** The C emitter worked out whether a struct's extent could be
+   measured from its own bytes, and `gen-checks` worked it out again to decide
+   whether a check could call the accessor. They disagreed on a nested struct
+   whose only member was an unwalkable run: the emitter declined to write the
+   sub-view, the check suite called it anyway, and the generated tests failed
+   to compile -- which is the same class of wrong as the header failing to.
+   The fix was not to copy the guard across; it was to notice the predicate is
+   a fact about the *layout*, not about C, and move it to `traverse.py` where
+   both ask one function. Whenever two backends need the same answer, that is
+   evidence the question belongs to neither.
+
+35. **A probe that only compiles asserts that the names exist.** The test for
+   the bit-packed extent wrote a C probe checking that the second element of a
+   run sits three bytes after the first, and compiled it with `-c`. It passed
+   before the fix and after it, because `main` was never run. Changing the
+   expected offset to a wrong number and watching the test still pass is the
+   cheapest way to find out which kind of test you have written -- and I had
+   to do it, having got the same thing wrong in the assertion right above it,
+   where I guessed the shape of the emitted arithmetic instead of reading it.
 
 ---
 

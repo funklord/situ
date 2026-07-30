@@ -1,0 +1,35 @@
+# situ wire signature v0
+# schema: dnsname.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct header size=12
+  @0x0000   2         u16        id  big
+  @0x0002   2         u16        flags  big
+  @0x0004   2         u16        qdcount  big
+  @0x0006   2         u16        ancount  big
+  @0x0008   2         u16        nscount  big
+  @0x000a   2         u16        arcount  big
+
+struct label size=1..64
+  @0x0000   2bit      u2         form  msb_first
+  @0x0000:2 6bit      u6         rest  msb_first
+  @0x0001   0..63     variant    body
+
+struct name size=1..8192
+  @0x0000   1..8192   label      labels
+
+struct question size=5..8196
+  @0x0000   1..8192   name       qname
+  ~         2         u16        qtype  big
+  ~         2         u16        qclass  big
