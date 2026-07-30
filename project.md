@@ -4961,7 +4961,17 @@ found, and it was there before any of this work began.
    attempts at a faster path measured *slower* than what they replaced before
    the cause turned up -- which is the only reason it turned up at all.
 
-46. **Numbers from different benchmarks do not belong in one table.** Four
+46. **A construct nothing exercised was broken in two backends at once.**
+   Section 9.6's own example uses an enum discriminant -- `case
+   msg_type.hello:` -- and neither C++ nor Rust compiled such a schema at
+   all. Both getters hand back something that does not compare to a number
+   (`enum class` in one, `Option<T>` in the other), and every use was wrong:
+   the extent chain, the `default: error` check, and the arm guards. Three
+   constructs, two backends, one missing test -- and it was missing because
+   the schema in every test happened to use a bit field as its discriminant.
+   Cover the *documented* example, not the convenient one.
+
+47. **Numbers from different benchmarks do not belong in one table.** Four
    measurements of "the same" feature across four backends were taken on
    three different element counts and two different iteration counts, and
    presented side by side. The result read as a language ranking -- C slower

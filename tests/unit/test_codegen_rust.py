@@ -758,3 +758,46 @@ fn main() {
 
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
 	assert run.returncode == 0, run.stderr
+
+
+ENUM_ARMS = """
+enum K : u8 { a = 1, b = 2, }
+struct A { u16 x; }
+struct B { u32 y; }
+struct S {
+	K k;
+	variant v switch (k) {
+		case K.a: A p;
+		case K.b: B q;
+		default:  error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_an_enum_discriminant_compiles_and_selects(tmp_path: Path) -> None:
+	"""An enum discriminant, which no test in this file had.
+
+	Section 9.6's own example uses one -- `case msg_type.hello:` -- and this
+	backend did not compile such a schema at all: the extent chain, the
+	`default: error` check and the arm guards all compared the enum getter
+	against a number, and that getter hands back `Option<K>`, which `as usize` cannot cast. Three separate
+	constructs, one missing test."""
+	built = build(tmp_path, ENUM_ARMS, main="""
+fn main() {
+	let a = [1u8, 0xBE, 0xEF, 0, 0, 0, 0, 0];
+	let s = unit::S::new(&a).unwrap();
+	assert_eq!(s.v_p().unwrap().x(), 0xBEEF);
+	assert!(s.v_q().is_err());
+
+	let b = [2u8, 0xDE, 0xAD, 0xBE, 0xEF, 0, 0, 0];
+	let s = unit::S::new(&b).unwrap();
+	assert_eq!(s.v_q().unwrap().y(), 0xDEAD_BEEF);
+	assert!(s.v_p().is_err());
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

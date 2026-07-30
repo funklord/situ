@@ -831,3 +831,32 @@ def test_each_arm_refuses_when_it_is_not_the_one_present(tmp_path: Path) -> None
 	assert ptr.body_pointer_low == 0x0C
 	with pytest.raises(module.VersionError):
 		ptr.body_text
+
+
+ENUM_ARMS = """
+enum K : u8 { a = 1, b = 2, }
+struct A { u16 x; }
+struct B { u32 y; }
+struct S {
+	K k;
+	variant v switch (k) {
+		case K.a: A p;
+		case K.b: B q;
+		default:  error;
+	}
+}
+"""
+
+
+def test_an_enum_discriminant_selects(tmp_path: Path) -> None:
+	"""This backend was the one that worked, and only because it emits
+	`enum.IntEnum` -- so `K.a != 1` is False and the comparison means what it
+	reads as. C++ and Rust hand back types that do not compare to a number,
+	and neither compiled such a schema at all.
+	"""
+	module = load(tmp_path, ENUM_ARMS)
+	held   = module.S.at(module.Message(bytearray([1, 0xBE, 0xEF, 0, 0])), 0, 5)
+
+	assert held.v_p.x == 0xBEEF
+	with pytest.raises(module.VersionError):
+		held.v_q

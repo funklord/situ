@@ -437,6 +437,15 @@ class Emitter:
 					lines.extend(self._arm_member(struct, variant, arm, member))
 		return lines
 
+	def _arm_hint(self, placement: Placement, scalar: ScalarType | None) -> str:
+		"""What an arm accessor hands back, as an annotation."""
+		if scalar is not None and placement.array_count is None \
+				and placement.sized_by is None:
+			return "int"
+		if scalar is not None:
+			return "memoryview"
+		return c_name(placement.type_name or "object")
+
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, raising where the arm is not the one present.
@@ -463,7 +472,7 @@ class Emitter:
 
 		head = [
 			"", "\t@property",
-			f"\tdef {name}(self) -> {'int' if scalar is not None and placement.array_count is None and placement.sized_by is None else 'memoryview'}:",
+			f"\tdef {name}(self) -> {self._arm_hint(placement, scalar)}:",
 			f'\t\t"""{placement.path}, present when the discriminant selects',
 			f'\t\t`{arm.source or arm.value}`. Raises VersionError otherwise."""',
 			f"\t\tif {test}:",
@@ -484,6 +493,18 @@ class Emitter:
 				"\t\tself._check()",
 				f"\t\tstart = self._at + ({start})",
 				f"\t\treturn self._msg.buffer[start:start + ({length})]",
+			]
+
+		# A struct-typed arm -- `case msg_type.hello: Hello hello;`, section
+		# 9.6's own example. Its members belong to its type, so handing back
+		# one of those is the whole of the work.
+		nested = self.resolved.structs.get(placement.type_name or "")
+		if nested is not None and nested.layout.is_fixed_size:
+			inner = c_name(nested.name)
+			return [
+				*head,
+				f"\t\treturn {inner}(self._msg, self._at + ({start}),",
+				f"\t\t\t{inner}.SIZE_BYTES)",
 			]
 		return []
 

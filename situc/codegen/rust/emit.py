@@ -349,6 +349,20 @@ class Emitter:
 				"\t\tOk(&self.bytes[at..at + n])",
 				"\t}",
 			]
+
+		# A struct-typed arm: its members belong to its type, so handing back
+		# one of those is the whole of the work.
+		nested = self.resolved.structs.get(placement.type_name or "")
+		if nested is not None and nested.layout.is_fixed_size:
+			inner = _pascal(nested.name)
+			return [
+				*head,
+				f"\tpub fn {name}(&self) -> Result<{inner}<'_>> {{",
+				*refuse,
+				f"\t\tlet at = {self._unparen(start)};",
+				f"\t\t{inner}::new(&self.bytes[at..at + {inner}::SIZE])",
+				"\t}",
+			]
 		return []
 
 	def _getter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
@@ -982,9 +996,27 @@ class Emitter:
 		# expression correctly only because integer promotion widens it to
 		# `int` first, which is a rule this backend does not have and a
 		# guarantee C stops giving above 16 bits.
-		return over_fields(names, source,
-		                   lambda name: f"({held}.{_ident(c_name(name))}()"
-		                                " as usize)")
+		# An enum-typed field's getter hands back `Option<T>`, because
+		# section 8.7 admits a value no member names -- and `Option<T> as
+		# usize` is not a cast Rust has. So an expression over one reads the
+		# backing bytes directly, which is what the expression means anyway:
+		# a discriminant is compared against numbers.
+		#
+		# Every use of this was wrong for an enum discriminant -- the extent
+		# chain, the `default: error` check, the arm guards -- so a schema
+		# with `case K.a:` did not compile at all. No Rust test had one.
+		by_path = {entry.placement.name: entry.placement
+		           for entry in struct.entries}
+
+		def read(name: str) -> str:
+			held_at = by_path.get(name)
+			if held_at is not None and held_at.type_name in self.enums \
+					and held_at.scalar is not None:
+				raw = self._raw_load(held_at, held_at.scalar)
+				return f"({self._unparen(raw)} as usize)"
+			return f"({held}.{_ident(c_name(name))}() as usize)"
+
+		return over_fields(names, source, read)
 
 
 	def _run_index(self, struct: ResolvedStruct, placement: Placement,

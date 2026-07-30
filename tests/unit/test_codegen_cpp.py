@@ -1089,3 +1089,58 @@ int main()
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+ENUM_ARMS = """
+enum K : u8 { a = 1, b = 2, }
+struct A { u16 x; }
+struct B { u32 y; }
+struct S {
+	K k;
+	variant v switch (k) {
+		case K.a: A p;
+		case K.b: B q;
+		default:  error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_an_enum_discriminant_compiles_and_selects(tmp_path: Path) -> None:
+	"""An enum discriminant, which no test in this file had.
+
+	Section 9.6's own example uses one -- `case msg_type.hello:` -- and this
+	backend did not compile such a schema at all: the extent chain, the
+	`default: error` check and the arm guards all compared the enum getter
+	against a number, and that getter hands back an `enum class`, which has no implicit conversion. Three separate
+	constructs, one missing test."""
+	result = compiles(tmp_path, ENUM_ARMS, extra="""
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t buf[8] = { 0 };
+	buf[0] = 1; buf[1] = 0xBE; buf[2] = 0xEF;
+
+	const ::situ::S s{ situ_view_t{ buf, sizeof buf, 0 } };
+	::situ::A a{ situ_view_t{ buf, sizeof buf, 0 } };
+	::situ::B b{ situ_view_t{ buf, sizeof buf, 0 } };
+
+	if (s.v_p(a) != ::situ::rt::err::ok || a.x() != 0xBEEF) return 1;
+	if (s.v_q(b) != ::situ::rt::err::version)               return 2;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

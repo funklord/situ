@@ -1426,7 +1426,28 @@ class Emitter:
 		names = [entry.placement.name for entry in struct.entries
 		         if entry.placement.scalar is not None
 		         and "." not in entry.placement.path[len(struct.name) + 1:]]
-		return over_fields(names, source, lambda name: f"{c_name(name)}()")
+
+		# An enum-typed field's getter hands back an `enum class`, which has
+		# no implicit conversion -- `k() != 1u` does not compile. So an
+		# expression over one reads the backing bytes, which is what the
+		# expression means anyway: a discriminant is compared against
+		# numbers, and section 8.7 admits values no member names.
+		#
+		# Every use of this was wrong for an enum discriminant -- the extent
+		# chain, the `default: error` check, the arm guards -- so a schema
+		# with `case K.a:` did not compile at all. No C++ test had one, and
+		# neither did Rust, which had the same bug in its own spelling.
+		by_name = {entry.placement.name: entry.placement
+		           for entry in struct.entries}
+
+		def read(name: str) -> str:
+			held = by_name.get(name)
+			if held is not None and held.type_name in self.enums \
+					and held.scalar is not None:
+				return f"({self._load(held.scalar, held, None)})"
+			return f"{c_name(name)}()"
+
+		return over_fields(names, source, read)
 
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
