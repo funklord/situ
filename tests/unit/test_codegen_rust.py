@@ -382,3 +382,49 @@ def test_a_constrained_field_at_a_dynamic_offset_is_validated() -> None:
 
 	assert "pub fn after(&self) -> u16 {" in module
 	assert "!= 7 {" in module
+
+
+# -- a member nothing can measure -------------------------------------------
+
+UNMEASURABLE = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 8; }
+struct question { name qname; u16 qtype; }
+"""
+
+
+def test_an_unmeasurable_nested_member_gets_no_accessor() -> None:
+	"""A struct whose extent nothing can compute gets no accessor.
+
+`label` is a variant on its top two bits, so how long one is depends on the
+arm the discriminant selects; `name` is a run of those, so its own length is
+unknown in turn; and `question.qname` is one of *those*. Each backend emitted
+the accessor anyway and reached for an extent it had declined to emit --
+rustc caught it, which is the only mercy in it.
+
+Nothing after such a member can be placed either, which is why `qtype` goes
+with it: its offset is the extent nobody can compute.
+"""
+	source = emit(UNMEASURABLE)
+
+	# The member names still appear -- in the note saying why each was
+	# declined, which is the whole point of emitting one.
+	assert "fn qname_extent" not in source
+	assert "fn qtype" not in source
+	assert "question.qname: one `name` has no" in source
+	assert "extent this backend can compute" in source
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_and_the_module_compiles(tmp_path: Path) -> None:
+	"""It did not: no method named `extent` on `Name`."""
+	built = build(tmp_path, UNMEASURABLE)
+	assert built.returncode == 0, built.stderr

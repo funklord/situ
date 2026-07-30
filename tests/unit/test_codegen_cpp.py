@@ -505,3 +505,49 @@ def test_a_constrained_field_at_a_dynamic_offset_is_validated() -> None:
 
 	assert "std::uint16_t after() const noexcept" in header
 	assert "if (after() != 7) {" in header
+
+
+# -- a member nothing can measure -------------------------------------------
+
+UNMEASURABLE = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 8; }
+struct question { name qname; u16 qtype; }
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_an_unmeasurable_nested_member_gets_no_accessor(tmp_path: Path) -> None:
+	"""A struct whose extent nothing can compute gets no accessor.
+
+`label` is a variant on its top two bits, so how long one is depends on the
+arm the discriminant selects; `name` is a run of those, so its own length is
+unknown in turn; and `question.qname` is one of *those*. Each backend emitted
+the accessor anyway and reached for an extent it had declined to emit --
+the header did not compile.
+
+Nothing after such a member can be placed either, which is why `qtype` goes
+with it: its offset is the extent nobody can compute.
+"""
+	header = emit(UNMEASURABLE)
+
+	# The member names still appear -- in the note saying why each was
+	# declined, which is the whole point of emitting one.
+	assert "qname_extent()" not in header
+	assert "qtype() const" not in header
+	assert "question.qname: one `name` has no" in header
+	assert "question.qtype: its offset cannot be resolved" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_and_the_header_compiles(tmp_path: Path) -> None:
+	"""It did not: `class situ::name has no member named extent`."""
+	assert compiles(tmp_path, UNMEASURABLE).returncode == 0

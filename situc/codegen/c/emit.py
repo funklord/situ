@@ -37,7 +37,8 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	has_computable_extent, obligation, obligations, own_members,
+	extent_parts, has_computable_extent, obligation, obligations,
+	own_members,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
@@ -1282,32 +1283,18 @@ class Emitter:
 		# confident zero.
 		if not self._is_run_element(struct.name):
 			return []
-		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+		# The arithmetic is shared (traverse.extent_parts); only rendering the
+		# per-member lengths is C's business.
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is None:
 			return []
+		constant, variable = parts
 
-		# Accumulated in bits and divided once. Per member it truncated: a
-		# `u2` and a `u6` are one byte together and were zero apart, so a
-		# struct that opens with a packed pair had an extent short by it --
-		# and a run of those walks over the same element forever, which the
-		# zero-extent guard catches only by refusing to move at all.
-		constant_bits = 0
 		terms: list[str] = []
-
-		for placement in self._top_level(struct):
-			if placement.is_fixed_size:
-				constant_bits += placement.size_bits
-				continue
-			if placement.sized_by == "remaining":
-				# It runs to the end of whatever view it is given, so an
-				# instance of this struct is exactly that view. Nothing after
-				# it can be walked to, which is what `[remaining]` means.
-				return []
+		for placement in variable:
 			if not self._has_length(struct, placement):
 				return []
 			terms.append(self._length_expression(struct, placement))
-
-		if constant_bits % BITS_PER_BYTE:
-			return []		# not a whole number of bytes; nothing to walk by
 
 		lines = [
 			"",
@@ -1319,7 +1306,7 @@ class Emitter:
 			f"static inline uint32_t {ident(self.prefix, struct.name, 'extent')}"
 			"(situ_view_t view)",
 			"{",
-			f"\tuint32_t extent = {constant_bits // BITS_PER_BYTE}u;",
+			f"\tuint32_t extent = {constant}u;",
 		]
 		lines.extend(f"\textent = extent + ({term});" for term in terms)
 		if not terms:

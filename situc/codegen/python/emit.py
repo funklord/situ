@@ -32,8 +32,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, classify, classify_check, local_name, obligation,
-	own_entries, own_members,
+	Check, Member, classify, classify_check, extent_parts,
+	has_computable_extent, local_name, obligation, own_entries, own_members,
 )
 from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarType
@@ -624,7 +624,17 @@ class Emitter:
 			# `SIZE_BYTES` is a class attribute only where a struct has one
 			# size, so this raised `AttributeError` on the first access -- a
 			# crash at the point of use rather than at generation, which is
-			# the worst place for it to arrive.
+			# the worst place for it to arrive. `_extent` is the same trap one
+			# round further on: emitted only where the struct can be measured
+			# from its own bytes, and read here whether it was or not.
+			if not has_computable_extent(self.resolved.structs, inner):
+				return [
+					"",
+					f"\t# No accessor for {placement.path}: one "
+					f"`{placement.type_name}` has no",
+					"\t# extent this backend can compute, so nothing can say"
+					" where it ends.",
+				]
 			return [
 				"", "\t@property",
 				f"\tdef {name}_extent(self) -> int:",
@@ -1027,21 +1037,20 @@ class Emitter:
 
 	def _extent_expression(self, struct: ResolvedStruct) -> str | None:
 		"""How many bytes one instance of a variable struct occupies."""
-		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+		# The arithmetic and the refusals are shared
+		# (traverse.extent_parts); rendering one length is Python's business.
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is None:
 			return None
+		constant, variable = parts
 
-		terms: list[str] = []
-		for placement in own_members(struct):
-			if placement.is_fixed_size:
-				terms.append(str(placement.size_bits // BITS_PER_BYTE))
-				continue
-			if placement.sized_by == "remaining":
-				return None
+		terms = [str(constant)]
+		for placement in variable:
 			length = self._length_expression(struct, placement)
 			if length is None:
 				return None
 			terms.append(length)
-		return " + ".join(terms) if terms else None
+		return " + ".join(terms)
 
 	def _extent_property(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
@@ -1110,6 +1119,8 @@ class Emitter:
 				and placement.kind == "field"
 				and placement.array_count is None
 				and placement.sized_by is None):
+			if not has_computable_extent(self.resolved.structs, inner):
+				return None		# and so nothing after it can be placed
 			return f"self.{c_name(local_name(struct, placement))}_extent"
 
 		if placement.sized_by == "remaining":
@@ -1228,6 +1239,13 @@ class Emitter:
 		if check is Check.REPEATED:
 			return self._array_check(struct, placement, scalar, name)
 		if check is Check.NESTED:
+			# Only where the accessor exists. Validation reaching for a
+			# member the emitter declined to expose is the same crash as any
+			# other, arriving on the path people are least likely to test.
+			inner = self.resolved.structs.get(placement.type_name or "")
+			if inner is not None and not inner.layout.is_fixed_size \
+					and not has_computable_extent(self.resolved.structs, inner):
+				return [f"\t\t# {placement.path}: no accessor to validate through."]
 			return [f"\t\tself.{name}.validate()"]
 
 		assert scalar is not None

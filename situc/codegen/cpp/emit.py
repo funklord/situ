@@ -37,8 +37,9 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, classify, classify_check, local_name, obligation,
-	obligations, own_entries, own_members,
+	Check, Member, classify, classify_check, extent_parts,
+	has_computable_extent, local_name, obligation, obligations, own_entries,
+	own_members,
 )
 from situc.types import ScalarKind, ScalarType
 from situc.unparse import expr_to_source as unparse_expr
@@ -1085,17 +1086,18 @@ class Emitter:
 		]
 
 	def _extent_terms(self, struct: ResolvedStruct) -> list[str] | None:
-		"""The lengths one instance of a variable struct sums to, or None."""
-		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
-			return None
+		"""The lengths one instance of a variable struct sums to, or None.
 
-		terms: list[str] = []
-		for placement in own_members(struct):
-			if placement.is_fixed_size:
-				terms.append(str(placement.size_bits // BITS_PER_BYTE))
-				continue
-			if placement.sized_by == "remaining":
-				return None		# consumes its view; nothing follows one
+		The arithmetic and the refusals are shared (traverse.extent_parts);
+		what is left here is rendering one length in C++.
+		"""
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is None:
+			return None
+		constant, variable = parts
+
+		terms = [str(constant)]
+		for placement in variable:
 			length = self._length_expression(struct, placement)
 			if length is None:
 				return None
@@ -1159,6 +1161,8 @@ class Emitter:
 				and placement.kind == "field"
 				and placement.array_count is None
 				and placement.sized_by is None):
+			if not has_computable_extent(self.resolved.structs, inner):
+				return None		# and so nothing after it can be placed
 			return f"{c_name(local_name(struct, placement))}_extent()"
 
 		if placement.sized_by == "remaining":
@@ -1506,6 +1510,18 @@ class Emitter:
 			# compile. The extent comes from the bytes instead: hand the
 			# member everything that is left, ask how much of it is one of
 			# these, and hand back that.
+			#
+			# And `extent()` is emitted on the same condition, so asking for
+			# one that was never emitted is the identical failure a round
+			# later -- which is how it arrived the second time.
+			if not has_computable_extent(self.resolved.structs, inner):
+				return [
+					"",
+					f"\t/* No accessor for {placement.path}: one "
+					f"`{placement.type_name}` has no",
+					"\t * extent this backend can compute, so nothing can say"
+					" where it ends. */",
+				]
 			return [
 				"",
 				f"\t/* {placement.path}. No one size, so its extent is read from",
@@ -1654,6 +1670,12 @@ class Emitter:
 			assert scalar is not None
 			return self._array_checks(struct, placement, scalar)
 		if check is Check.NESTED:
+			# Only where the accessor exists.
+			inner = self.resolved.structs.get(placement.type_name or "")
+			if inner is not None and not inner.layout.is_fixed_size \
+					and not has_computable_extent(self.resolved.structs, inner):
+				return [f"\t\t/* {placement.path}: no accessor to validate"
+				        " through. */"]
 			name = c_name(local_name(struct, placement))
 			return [
 				f"\t\tif (const ::situ::rt::err e = {name}().validate();"

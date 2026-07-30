@@ -392,3 +392,37 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 				and not has_computable_extent(structs, element):
 			return False
 	return True
+
+
+def extent_parts(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct) -> tuple[int, list[Placement]] | None:
+	"""What one instance of `struct` measures: constant bytes, plus members.
+
+	None where it cannot be measured at all. Otherwise the caller renders a
+	length expression for each returned placement in its own language and adds
+	them to the constant -- which is the only part of this that differs
+	between backends, the arithmetic being arithmetic.
+
+	The constant is accumulated in *bits* and divided once at the end. Divided
+	per member it truncates, and a `u2` and a `u6` are one byte together and
+	zero apart: a struct opening with a packed pair came out short by exactly
+	the byte its discriminant lives in, and a run over those walks the same
+	element until it hits `max`. All four backends had this separately.
+	"""
+	if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+		return None
+	if not has_computable_extent(structs, struct):
+		return None
+
+	constant_bits = 0
+	variable: list[Placement] = []
+
+	for placement in own_members(struct):
+		if placement.is_fixed_size:
+			constant_bits += placement.size_bits
+		else:
+			variable.append(placement)
+
+	if constant_bits % BITS_PER_BYTE:
+		return None		# not a whole number of bytes; nothing to walk by
+	return constant_bits // BITS_PER_BYTE, variable

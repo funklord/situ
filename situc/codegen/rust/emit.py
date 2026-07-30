@@ -35,8 +35,9 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, classify, classify_check, local_name, obligation,
-	obligations, own_entries, own_members,
+	Check, Member, classify, classify_check, extent_parts,
+	has_computable_extent, local_name, obligation, obligations, own_entries,
+	own_members,
 )
 from situc.types import ScalarType
 from situc.unparse import expr_to_source as unparse_expr
@@ -292,6 +293,19 @@ class Emitter:
 				# the member *after* it: with no extent to add, its offset
 				# could not be resolved and it was silently left out of the
 				# generated module entirely.
+				#
+				# `extent` is emitted on a stricter condition than this one,
+				# so where the inner struct cannot be measured at all these
+				# call a method that does not exist -- caught by rustc rather
+				# than by anyone reading, which is the only mercy in it.
+				if not has_computable_extent(self.resolved.structs, inner):
+					return [
+						"",
+						f"\t// No accessor for {placement.path}: one "
+						f"`{placement.type_name}` has no",
+						"\t// extent this backend can compute, so nothing"
+						" can say where it ends.",
+					]
 				return [
 					"",
 					f"\t/// How many bytes {placement.path} occupies here, read",
@@ -1009,21 +1023,20 @@ class Emitter:
 
 	def _extent_expression(self, struct: ResolvedStruct) -> str | None:
 		"""How many bytes one instance of a variable struct occupies."""
-		if struct.layout.is_fixed_size or not struct.layout.is_byte_sized:
+		# The arithmetic and the refusals are shared
+		# (traverse.extent_parts); rendering one length is Rust's business.
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is None:
 			return None
+		constant, variable = parts
 
-		terms: list[str] = []
-		for placement in own_members(struct):
-			if placement.is_fixed_size:
-				terms.append(str(placement.size_bits // BITS_PER_BYTE))
-				continue
-			if placement.sized_by == "remaining":
-				return None
+		terms = [str(constant)]
+		for placement in variable:
 			length = self._length_expression(struct, placement)
 			if length is None:
 				return None
 			terms.append(length)
-		return " + ".join(terms) if terms else None
+		return " + ".join(terms)
 
 	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
@@ -1090,6 +1103,8 @@ class Emitter:
 				and placement.kind == "field"
 				and placement.array_count is None
 				and placement.sized_by is None):
+			if not has_computable_extent(self.resolved.structs, inner):
+				return None		# and so nothing after it can be placed
 			name = _ident(c_name(local_name(struct, placement)) + "_extent")
 			return f"self.{name}()"
 		if placement.sized_by == "remaining":
@@ -1474,6 +1489,14 @@ class Emitter:
 				checks.extend(self._array_checks(placement, name))
 				continue
 			if check is Check.NESTED:
+				# Only where the accessor exists.
+				inner = self.resolved.structs.get(placement.type_name or "")
+				if inner is not None and not inner.layout.is_fixed_size \
+						and not has_computable_extent(
+							self.resolved.structs, inner):
+					checks.append(f"\t\t// {placement.path}: no accessor to"
+					              " validate through.")
+					continue
 				checks.append(f"\t\tself.{name}().validate()?;")
 				continue
 

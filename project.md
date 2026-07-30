@@ -4189,6 +4189,17 @@ shape.
    to do it, having got the same thing wrong in the assertion right above it,
    where I guessed the shape of the emitted arithmetic instead of reading it.
 
+36. **Fixing it in one backend finds it; fixing it in one backend is not
+   fixing it.** The nested member reaching for an extent that was never
+   emitted was found in C, and the same three lines were wrong in C++, Python
+   and Rust -- each with a comment recording an *earlier* round of the same
+   mistake, patched by tightening the condition on the accessor and never on
+   the thing it called. Three sites per backend: the accessor, the offset of
+   whatever follows it, and `validate`, which reaches through the accessor on
+   the path least likely to be exercised. The lesson is not "check the other
+   backends" but the one above it: the condition was duplicated because the
+   predicate was, and the predicate had no business being in a backend.
+
 ---
 
 ## 27. Questions, and how they were settled

@@ -517,3 +517,48 @@ def test_validate_reports_a_short_frame_before_the_digits(tmp_path: Path) -> Non
 
 	with pytest.raises(runtime().ConstraintError, match="the frame stops first"):
 		view.validate()
+
+
+# -- a member nothing can measure -------------------------------------------
+
+UNMEASURABLE = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 8; }
+struct question { name qname; u16 qtype; }
+"""
+
+
+def test_an_unmeasurable_nested_member_gets_no_accessor(tmp_path: Path) -> None:
+	"""A struct whose extent nothing can compute gets no accessor.
+
+`label` is a variant on its top two bits, so how long one is depends on the
+arm the discriminant selects; `name` is a run of those, so its own length is
+unknown in turn; and `question.qname` is one of *those*. Each backend emitted
+the accessor anyway and reached for an extent it had declined to emit --
+an `AttributeError` on first access here.
+
+Nothing after such a member can be placed either, which is why `qtype` goes
+with it: its offset is the extent nobody can compute.
+"""
+	module = load(tmp_path, UNMEASURABLE)
+
+	assert not hasattr(module.question, "qname")
+	assert not hasattr(module.question, "qname_extent")
+	assert not hasattr(module.question, "qtype")
+
+
+def test_and_validating_one_does_not_reach_through_it(tmp_path: Path) -> None:
+	"""The path least likely to be exercised, and the one where an
+	`AttributeError` would surface as a parse failure on real input."""
+	module = load(tmp_path, UNMEASURABLE)
+	raw    = bytes([3]) + b"www" + bytes([0])
+
+	module.question.at(module.Message(bytearray(raw)), 0, len(raw)).validate()
