@@ -37,7 +37,8 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	extent_parts, has_computable_extent, obligation, obligations,
+	Check, arm_members, classify_check, extent_parts,
+	has_computable_extent, matched_values, obligation, obligations,
 	own_members,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -1934,6 +1935,72 @@ class Emitter:
 			" * expansion, keeps the members after it addressable. */",
 		]
 
+	def _discriminant_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`default: error` -- the discriminant must select an arm.
+
+		Section 14.5 says an unrecognised discriminant is rejected on parse,
+		and until now nothing rejected it. `SITU_ERR_VERSION` has meant
+		"unknown version or variant discriminant" since the runtime header was
+		written and was returned by nothing.
+		"""
+		if classify_check(struct, placement, self.structs) \
+				is not Check.DISCRIMINANT:
+			return []
+
+		values = matched_values(placement)
+		if not values or placement.discriminant is None:
+			return []
+
+		held = self._over_fields(struct, placement.discriminant, "view")
+		test = " && ".join(f"{held} != {arm.value}u" for arm in values)
+		named = ", ".join(arm.source or str(arm.value) for arm in values)
+		return [
+			f"\t/* {placement.path}: an arm for {named}, and"
+			f" `default: error` for the rest. */",
+			f"\tif ({test}) {{",
+			"\t\treturn SITU_ERR_VERSION;",
+			"\t}",
+		]
+
+	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "view") -> str | None:
+		"""How many bytes the selected arm occupies, as one expression.
+
+		A ternary chain rather than a `switch`, because callers want this
+		inside a sum -- the extent of the struct around it, or the offset of
+		whatever follows. C has no statement-expression that is not an
+		extension, and a helper function per variant would need the same
+		chain inside it anyway.
+
+		An unmatched discriminant yields zero. That is not a claim that such a
+		message is empty; it is the value the walk already refuses to advance
+		by, so `default: error` arrives as the run stopping rather than as a
+		length nobody can justify.
+		"""
+		if not placement.arm_cases or placement.discriminant is None:
+			return None
+
+		held_disc = self._over_fields(struct, placement.discriminant, held)
+
+		chain = "0u"		# no arm matched
+		for arm, member in reversed(arm_members(struct, placement)):
+			if member is None:
+				continue		# `default: error`; falls to the zero above
+			if member.is_fixed_size:
+				length = f"{member.size_bits // BITS_PER_BYTE}u"
+			elif not self._has_length(struct, member):
+				return None
+			else:
+				length = f"({self._length_expression(struct, member, held)})"
+
+			if arm.value is None:
+				chain = length		# `default:` with an arm; matches anything
+			else:
+				chain = (f"({held_disc} == {arm.value}u"
+				         f" ? {length} : {chain})")
+		return chain
+
 	def _length_expression(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view") -> str:
 		"""How many bytes a variable-length member occupies, at runtime.
@@ -1970,6 +2037,11 @@ class Emitter:
 			assert self._struct_extent(nested), "_has_length checks this first"
 			local = c_name(self._local(struct, placement))
 			return f"{ident(self.prefix, struct.name, local, 'extent')}({held})"
+
+		if placement.kind == "variant":
+			chain = self._variant_length(struct, placement, held)
+			assert chain is not None, "callers check _has_length first"
+			return chain
 
 		if placement.kind in ("coded", "sealed"):
 			length = self._region_length(struct, placement, held)
@@ -2073,13 +2145,8 @@ class Emitter:
 					or self._is_record_run(placement) or nested_member):
 				return has_computable_extent(self.resolved.structs, element)
 
-		# A variant's does not: it is whichever arm the discriminant selects,
-		# and the arms differ in length -- that is what a variant is. The sum
-		# treated it as zero, so a struct containing one reported an extent
-		# missing the whole variant, and a run of those walked over the same
-		# bytes repeatedly.
 		if placement.kind == "variant":
-			return False
+			return self._variant_length(struct, placement) is not None
 		if placement.kind not in ("coded", "sealed"):
 			return True
 		return self._region_length(struct, placement) is not None
@@ -2796,6 +2863,9 @@ class Emitter:
 	def _checks_for(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
+
+		if placement.kind == "variant":
+			return self._discriminant_check(struct, placement)
 
 		# A delimited member's delimiter has to be there. That is the one thing
 		# parse can check about it: the content cannot contain the delimiter,

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from situc.ast import Schema
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Arm, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
 
@@ -189,6 +189,8 @@ class Check(Enum):
 	CONSTRAINED = "constrained"
 	#: The delimiter is there, and for a text number, that the digits parse.
 	DELIMITED  = "delimited"
+	#: The discriminant selects an arm that exists (`default: error`).
+	DISCRIMINANT = "discriminant"
 	#: Nothing to check.
 	NOTHING    = "nothing"
 
@@ -204,6 +206,18 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 	# the caller's choice, as with any other array of structs.
 	if placement.repeat_while is not None:
 		return Check.NOTHING
+
+	# `default: error` is the whole of what section 14.5 says a variant does
+	# with a discriminant it does not recognise, and no backend emitted it:
+	# `SITU_ERR_VERSION` was defined, commented "unknown version or variant
+	# discriminant", and returned by nothing. It stayed invisible while a
+	# variant's extent was unknowable, because nothing walked one. It stopped
+	# being invisible the moment the extent became a switch on the
+	# discriminant, which for an unrecognised one selects nothing and reports
+	# a length no arm justifies.
+	if placement.kind == "variant":
+		return (Check.NOTHING if unmatched_values_pass(placement)
+		        else Check.DISCRIMINANT)
 
 	if placement.delimiter is not None:
 		return (Check.NOTHING if placement.type_name in structs
@@ -369,19 +383,31 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 	and the generated suite failing to build is the same class of wrong as the
 	header failing to.
 
-	False where any member's own length is unknown. A `variant`'s is: it is
-	whichever arm the discriminant selects, and the arms differ in length,
-	which is what a variant is for. A `[remaining]` member's is the view's
-	rather than the struct's, so an instance of the struct is exactly whatever
-	view it was handed and there is nothing after it to place.
+	False where any member's own length is unknown. A `[remaining]` member's
+	is the view's rather than the struct's, so an instance of the struct is
+	exactly whatever view it was handed and there is nothing after it to
+	place.
+
+	A `variant` is measurable when every arm is. This read "never" at first,
+	on the reasoning that a variant's extent is whichever arm the discriminant
+	selects and the arms differ in length -- which is true, and is an argument
+	that the extent is a *switch* rather than that there is none. Getting it
+	wrong cost the DNS example its point: a compressed name is a run of labels
+	and a label is a variant on its top two bits, so refusing variants refused
+	the run, and the schema described a name nothing could walk.
 	"""
 	for placement in own_members(struct):
 		if placement.is_fixed_size:
 			continue
-		if placement.kind == "variant" or placement.sized_by == "remaining":
+		if placement.sized_by == "remaining":
 			return False
 		if placement.kind in ("coded", "sealed") and placement.delimiter is None:
 			return False		# the extent is the codec's expansion, not a length
+
+		if placement.kind == "variant":
+			if not _variant_is_measurable(structs, struct, placement):
+				return False
+			continue
 
 		element = structs.get(placement.type_name or "")
 		if element is None or element is struct:
@@ -389,6 +415,57 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 
 		# A run or a nested struct is only as measurable as its element.
 		if not element.layout.is_fixed_size \
+				and not has_computable_extent(structs, element):
+			return False
+	return True
+
+
+def unmatched_values_pass(variant: Placement) -> bool:
+	"""Whether some arm accepts a discriminant no `case` names.
+
+	True for a `default` arm that selects a member, or an `opaque` one that
+	swallows the rest. False for `default: error` and for a variant with no
+	default at all, which mean the same thing.
+	"""
+	return any(arm.value is None and arm.member is not None
+	           for arm in variant.arm_cases)
+
+
+def matched_values(variant: Placement) -> tuple[Arm, ...]:
+	"""The arms with a discriminant value of their own, in schema order."""
+	return tuple(arm for arm in variant.arm_cases if arm.value is not None)
+
+
+def arm_members(struct: ResolvedStruct,
+		variant: Placement) -> list[tuple[Arm, Placement | None]]:
+	"""Each arm of `variant`, against the member it selects."""
+	by_path = {held.path: held for held in struct.layout.placements}
+	return [(arm, None if arm.member is None else by_path.get(arm.member))
+	        for arm in variant.arm_cases]
+
+
+def _variant_is_measurable(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct, variant: Placement) -> bool:
+	"""Every arm measurable, and none of them unbounded.
+
+	An `opaque` default consumes whatever is left, so a variant carrying one
+	is exactly as long as the view it was handed -- `[remaining]` by another
+	spelling, and refused for the same reason. The layout already says so by
+	leaving the variant with no maximum.
+	"""
+	if variant.size_max_bits is None:
+		return False
+
+	for _, member in arm_members(struct, variant):
+		if member is None:
+			continue		# `default: error`; no arm, so no length to know
+		if member.is_fixed_size:
+			continue
+		if member.sized_by == "remaining":
+			return False
+
+		element = structs.get(member.type_name or "")
+		if element is not None and not element.layout.is_fixed_size \
 				and not has_computable_extent(structs, element):
 			return False
 	return True

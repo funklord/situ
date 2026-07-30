@@ -205,6 +205,17 @@ def test_it_compiles_clean(tmp_path: Path, body: str) -> None:
 
 	assert result.returncode == 0, result.stderr
 
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
 
 @pytest.mark.skipif(HOST_CXX is None or not LIBSITU.exists(),
 	reason="no host C++ compiler or runtime not built")
@@ -386,6 +397,17 @@ def test_the_interior_is_reachable_through_the_check(tmp_path: Path) -> None:
 
 	assert result.returncode == 0, result.stderr
 
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
 def test_forging_a_gate_does_not_compile(tmp_path: Path) -> None:
@@ -463,6 +485,17 @@ def test_register_composition_produces_the_right_bits(tmp_path: Path) -> None:
 
 	assert result.returncode == 0, result.stderr
 
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
 @pytest.mark.parametrize("expression", [
@@ -515,8 +548,7 @@ struct label {
 	u6 rest;
 	variant body switch (form) {
 		case 0:  u8 text[rest];
-		case 3:  u8 pointer_low;
-		default: error;
+		default: opaque;
 	}
 }
 struct name { label labels[] while (form == 0 && rest != 0) max 8; }
@@ -528,9 +560,9 @@ struct question { name qname; u16 qtype; }
 def test_an_unmeasurable_nested_member_gets_no_accessor(tmp_path: Path) -> None:
 	"""A struct whose extent nothing can compute gets no accessor.
 
-`label` is a variant on its top two bits, so how long one is depends on the
-arm the discriminant selects; `name` is a run of those, so its own length is
-unknown in turn; and `question.qname` is one of *those*. Each backend emitted
+`label` ends in an `opaque` default arm, which swallows whatever is left, so
+one is exactly as long as the view it was handed; `name` is a run of those, so
+its own length is unknown in turn; and `question.qname` is one of *those*. Each backend emitted
 the accessor anyway and reached for an extent it had declined to emit --
 the header did not compile.
 
@@ -551,3 +583,78 @@ with it: its offset is the extent nobody can compute.
 def test_and_the_header_compiles(tmp_path: Path) -> None:
 	"""It did not: `class situ::name has no member named extent`."""
 	assert compiles(tmp_path, UNMEASURABLE).returncode == 0
+
+
+# -- a run whose element is a variant ---------------------------------------
+
+DNS_LABEL = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 128; }
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_compressed_name_walks(tmp_path: Path) -> None:
+	"""The four shapes a DNS name comes in, against a hand-checked count and
+	extent -- the same table the C suite walks, because agreeing with the
+	other backends is the property under test."""
+	# Compiled *and run*: `compiles` is -fsyntax-only, and a `main` returning
+	# 1 that nobody executes is a test of nothing.
+	result = compiles(tmp_path, DNS_LABEL, extra="""
+#include "unit.hpp"
+
+static bool walk(const std::uint8_t *b, std::uint32_t n, std::uint32_t labels,
+                 std::uint32_t extent, ::situ::rt::err want)
+{
+	situ_view_t raw{ const_cast<std::uint8_t *>(b), n, 0 };
+	::situ::name held{ raw };
+
+	if (held.labels_count() != labels || held.labels_span() != extent)
+		return false;
+
+	for (std::uint32_t i = 0; i < labels; i++) {
+		::situ::label one{ raw };
+		if (held.labels(i, one) != ::situ::rt::err::ok)
+			return false;
+		if (one.validate() != want)
+			return false;
+	}
+	return true;
+}
+
+int main()
+{
+	const std::uint8_t plain[]  = { 3,'w','w','w', 7,'e','x','a','m','p','l','e',
+	                                3,'c','o','m', 0 };
+	const std::uint8_t whole[]  = { 0xC0, 0x0C };
+	const std::uint8_t suffix[] = { 3,'w','w','w', 0xC0, 0x0C };
+	const std::uint8_t bad[]    = { 0x40, 0x00 };
+
+	return (walk(plain,  sizeof plain,  4, 17, ::situ::rt::err::ok)
+	     && walk(whole,  sizeof whole,  1,  2, ::situ::rt::err::ok)
+	     && walk(suffix, sizeof suffix, 2,  6, ::situ::rt::err::ok)
+	     && walk(bad,    sizeof bad,    1,  1, ::situ::rt::err::version))
+	     ? 0 : 1;
+}
+""")
+
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

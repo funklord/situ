@@ -403,12 +403,29 @@ def test_so_can_one_sized_by_its_own_field() -> None:
 	assert measurable("struct s { u8 n; u8 body[n]; }", "s")
 
 
-def test_a_variant_cannot_be() -> None:
+def test_a_variant_can_be_when_every_arm_can() -> None:
 	"""Its extent is whichever arm the discriminant selects, and the arms
-	differ in length -- which is what a variant is for."""
-	assert not measurable(
+	differ in length. That is an argument for a switch, not for giving up:
+	this read `not measurable` first, and refusing variants refused every run
+	over one -- which cost the DNS example the thing it exists to show."""
+	assert measurable(
 		"struct s { u8 k; variant v switch (k) { case 0: u8 a; "
 		"case 1: u32 b; default: error; } }", "s")
+
+
+def test_an_opaque_default_arm_cannot_be() -> None:
+	"""It swallows whatever is left, which is `[remaining]` spelled
+	differently and refused for the same reason."""
+	assert not measurable(
+		"struct s { u8 k; variant v switch (k) { case 0: u8 a; "
+		"default: opaque; } }", "s")
+
+
+def test_nor_can_an_arm_whose_own_member_cannot() -> None:
+	"""Measurability is only as good as the worst arm."""
+	assert not measurable(
+		"struct s { u8 k; variant v switch (k) { case 0: u8 a; "
+		"case 1: u8 rest[remaining]; default: error; } }", "s")
 
 
 def test_a_remaining_member_cannot_be() -> None:
@@ -421,7 +438,7 @@ def test_it_asks_the_same_of_a_nested_struct() -> None:
 	"""The bug that produced this function. `name`'s extent is its labels'
 	extent, so a parent holding one is only as measurable as it is."""
 	body = ("struct inner { u8 k; variant v switch (k) { case 0: u8 a; "
-	        "case 1: u32 b; default: error; } }\n"
+	        "default: opaque; } }\n"
 	        "struct outer { inner one; u16 after; }")
 
 	assert not measurable(body, "outer")
@@ -432,7 +449,7 @@ def test_an_element_reached_only_through_a_run_is_still_asked() -> None:
 	be measured makes the run unwalkable -- and the parent holding the run
 	unmeasurable in turn."""
 	body = ("struct e { u8 k; variant v switch (k) { case 0: u8 a; "
-	        "case 1: u32 b; default: error; } }\n"
+	        "default: opaque; } }\n"
 	        "struct outer { e run[] while (k == 0) max 8; }")
 
 	assert not measurable(body, "outer")

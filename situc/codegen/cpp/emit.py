@@ -37,9 +37,9 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, classify, classify_check, extent_parts,
-	has_computable_extent, local_name, obligation, obligations, own_entries,
-	own_members,
+	Check, Member, arm_members, classify, classify_check, extent_parts,
+	has_computable_extent, local_name, matched_values, obligation,
+	obligations, own_entries, own_members,
 )
 from situc.types import ScalarKind, ScalarType
 from situc.unparse import expr_to_source as unparse_expr
@@ -1137,9 +1137,68 @@ class Emitter:
 		         and "." not in entry.placement.path[len(struct.name) + 1:]]
 		return over_fields(names, source, lambda name: f"{c_name(name)}()")
 
+	def _discriminant_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`default: error` -- the discriminant must select an arm.
+
+		Section 14.5 says an unrecognised discriminant is rejected on parse,
+		and no backend rejected it. It stayed invisible while a variant had no
+		computable extent, because nothing walked one.
+		"""
+		values = matched_values(placement)
+		if not values or placement.discriminant is None:
+			return []
+
+		held = self._over_fields(struct, placement.discriminant)
+		test = " && ".join(f"{held} != {arm.value}u" for arm in values)
+		named = ", ".join(arm.source or str(arm.value) for arm in values)
+		return [
+			f"\t\t/* {placement.path}: an arm for {named}, and"
+			f" `default: error` for the rest. */",
+			f"\t\tif ({test}) {{",
+			"\t\t\treturn ::situ::rt::err::version;",
+			"\t\t}",
+		]
+
+	def _variant_length(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""How many bytes the selected arm occupies, as one expression.
+
+		A conditional chain rather than a statement `switch`, because callers
+		want this inside a sum -- the extent of the struct around it, or the
+		offset of whatever follows.
+
+		An unmatched discriminant yields zero, which is not a claim that such
+		a message is empty: `default: error` says there is no such message,
+		and `validate` is where that is said. Zero is the value the run walk
+		already refuses to advance by.
+		"""
+		if not placement.arm_cases or placement.discriminant is None:
+			return None
+
+		held  = self._over_fields(struct, placement.discriminant)
+		chain = "0u"
+		for arm, member in reversed(arm_members(struct, placement)):
+			if member is None:
+				continue		# `default: error`; falls to the zero above
+			if member.is_fixed_size:
+				length = f"{member.size_bits // BITS_PER_BYTE}u"
+			else:
+				rendered = self._length_expression(struct, member)
+				if rendered is None:
+					return None
+				length = f"({rendered})"
+
+			chain = (length if arm.value is None
+			         else f"({held} == {arm.value}u ? {length} : {chain})")
+		return chain
+
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
+		if placement.kind == "variant":
+			return self._variant_length(struct, placement)
+
 		# A size that is arithmetic over a field rather than a reference to
 		# one. `sized_by` holds a path and holds nothing for this, so the
 		# member fell through to the scalar case and this backend handed back
@@ -1664,6 +1723,8 @@ class Emitter:
 
 		if check is Check.NOTHING:
 			return []
+		if check is Check.DISCRIMINANT:
+			return self._discriminant_check(struct, placement)
 		if check is Check.DELIMITED:
 			return self._delimiter_check(struct, placement)
 		if check is Check.REPEATED:

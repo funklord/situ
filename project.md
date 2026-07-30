@@ -1349,12 +1349,55 @@ stands regardless; this can only add. A schema that wants a stronger vector has
 to change the layout, which is the whole point of the lattice.
 
 The complementary limit is worth stating plainly, because it bounds situ rather
-than the attribute: situ can *describe* a compressed name completely, and
-cannot *follow* the pointer. Resolving one means re-entering the parser at an
-arbitrary earlier offset, with a cycle check and a budget -- control flow, not
-layout. The schema says where the pointer is and what it means; a consumer
+than the attribute: situ can *describe* a compressed name completely and *walk*
+one, and cannot *follow* the pointer. Resolving one means re-entering the parser
+at an arbitrary earlier offset, with a cycle check and a budget -- control flow,
+not layout. The schema says where the pointer is and what it means; a consumer
 follows it. That boundary is much narrower than "situ cannot describe this",
 and naming it precisely is the difference between a limit and a shrug.
+
+### 11.6 A variant's extent
+
+Walking the run above needs each label's length, and a label is a `variant` on
+its top two bits. For a while the answer was that a variant has no computable
+extent: it is whichever arm the discriminant selects, and the arms differ in
+length, which is what a variant is for.
+
+That is true of the *constant* and false of the value. Each arm has a length,
+and which arm applies is a question generated code can ask. So the extent of a
+variant is a conditional chain over the discriminant, in whichever form the
+target spells one -- a ternary in C and C++, a conditional expression in
+Python, an `if`/`else` expression in Rust:
+
+```c
+extent = 1u + (form_get(view) == 0u ? rest_get(view)
+             : form_get(view) == 3u ? 1u : 0u);
+```
+
+A variant is measurable when every arm is. An `opaque` default arm is the
+exception and is refused, because it swallows whatever is left -- `[remaining]`
+spelled differently, and the layout already says so by leaving the variant with
+no maximum.
+
+The comparison is against the discriminant folded to an integer. `case k.a:`
+has to become a comparison in four languages and each spells an enum member
+differently, so the compiler resolves it once and the generated comment keeps
+the name the author wrote.
+
+Two consequences worth naming, because both were latent until something walked
+a variant:
+
+1. **`default: error` had to start being enforced.** Section 14.5 has always
+   said an unrecognised discriminant is rejected on parse, and no backend
+   rejected it -- `SITU_ERR_VERSION` was defined, commented "unknown version or
+   variant discriminant", and returned by nothing. Nothing noticed while a
+   variant had no extent, because nothing reached one. It stops being
+   ignorable the moment a length depends on the discriminant.
+2. **An unmatched discriminant contributes zero, and that is not a claim.** It
+   is the value the run walk already refuses to advance by, so the run stops
+   rather than looping. It is not a claim that such a message is empty --
+   `default: error` says there is no such message, and `validate` is where that
+   is said. The two answer different questions and the walk must stay total.
 
 ---
 
@@ -4199,6 +4242,22 @@ shape.
    the path least likely to be exercised. The lesson is not "check the other
    backends" but the one above it: the condition was duplicated because the
    predicate was, and the predicate had no business being in a backend.
+
+37. **"It cannot be computed" is often "it is not a constant".** A variant's
+   extent was refused outright on the grounds that it depends on the
+   discriminant -- which is an argument that the extent is a switch, not that
+   there is none. The refusal propagated: no extent meant no run over a
+   variant, which meant the DNS example could describe a compressed name and
+   not walk one, which is the thing it exists to show. When a fact is unknown
+   at compile time, ask whether it is knowable at run time before recording
+   that it is unknowable.
+
+38. **A capability nothing exercised hid a check nothing emitted.** Making a
+   variant walkable immediately showed that `default: error` was enforced by
+   no backend, in a language whose spec had said it was since section 14.5 was
+   written, with an error code reserved for it and returned by nothing. Dead
+   ends hide their own bugs: the reason nobody noticed is that nothing could
+   reach a variant closely enough to care what an unmatched discriminant did.
 
 ---
 

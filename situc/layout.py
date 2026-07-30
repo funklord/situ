@@ -47,6 +47,26 @@ class BitPosition:
 
 
 @dataclass(frozen=True)
+class Arm:
+	"""One `case` of a variant, as a walk needs it.
+
+	`value` is the discriminant folded to an integer, because `case K.a:` has
+	to become a comparison in four languages and each spells an enum member
+	differently. Resolving it here means no backend needs an enum-name
+	renderer; `source` is kept so the generated code can still say `K.a` in
+	the comment beside the number.
+
+	`member` is the path of the member this arm selects, and None for
+	`default: error` -- an arm that selects nothing, whose extent is not zero
+	but undefined, there being no such message.
+	"""
+
+	source: str | None
+	value: int | None
+	member: str | None
+
+
+@dataclass(frozen=True)
 class Placement:
 	"""One field or reserved region, resolved."""
 
@@ -93,6 +113,16 @@ class Placement:
 	# For a variant: each arm's name and worst-case size, so the advisor can
 	# cost equalizing them.
 	arm_sizes: tuple[tuple[str, int], ...] = ()
+	#: For a variant: the discriminant, as schema source, and one entry per
+	#: arm -- the value it matches (None for `default`) against the path of
+	#: the member it selects (None for `default: error`, which has none).
+	#:
+	#: `arm_sizes` is the worst case, which is what the advisor costs. This is
+	#: what a *walk* needs: how long this instance is, which is whichever arm
+	#: the discriminant picked, and the picking has to be in the generated
+	#: code rather than in the compiler.
+	discriminant: str | None		= None
+	arm_cases: tuple[Arm, ...]		= ()
 	# For a tlv region: the policies that decide whether it can be canonical.
 	tlv_unknown: str | None		= None
 	tlv_duplicates: str | None	= None
@@ -1008,18 +1038,28 @@ class Solver:
 		# reads container-then-contents like every other aggregate.
 		slot = len(layout.placements)
 
+		from situc.unparse import expr_to_source	# circular at module scope
+
 		low: int | None  = None
 		high: int | None = 0
 		arm_sizes: list[tuple[str, int]] = []
+		arm_cases: list[Arm] = []
 
 		for arm in variant.arms:
+			source = None if arm.value is None else expr_to_source(arm.value)
+			value  = (None if arm.value is None
+			          else evaluate(arm.value, self.result.env))
+
 			if arm.member is None:
 				# `error` rejects the message and `opaque` consumes the rest;
 				# neither contributes a fixed extent of its own.
 				if arm.is_opaque:
 					high = None
+				arm_cases.append(Arm(source, value, None))
 				continue
 
+			arm_cases.append(Arm(source, value,
+			                     f"{prefix}.{variant.name}.{_arm_name(arm)}"))
 			extent = self.arm_extent(decl, arm, scope, layout, prefix, variant, state)
 			low    = extent.lo if low is None else min(low, extent.lo)
 			if extent.hi is None or high is None:
@@ -1061,6 +1101,8 @@ class Solver:
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
 			arm_sizes     = tuple(arm_sizes),
+			discriminant  = expr_to_source(variant.discriminant),
+			arm_cases     = tuple(arm_cases),
 		))
 
 		if state.cause is None and total.hi != total.lo:

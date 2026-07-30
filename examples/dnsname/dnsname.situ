@@ -1,8 +1,14 @@
 // DNS name compression (RFC 1035 section 4.1.4).
 //
 // Here for the boundary. A compressed name is the one shape in this directory
-// that situ describes completely and cannot follow, and the difference
-// between those two is worth a whole example.
+// that situ describes completely, walks, and cannot follow -- and the
+// difference between the last two is worth a whole example.
+//
+// Walking it needs a label's length, and a label is a variant, so this is also
+// where a variant's extent stopped being "unknowable" and became a switch on
+// the discriminant (section 11.6). Following the pointer is the part that
+// stays out: it means re-entering the parser at an earlier offset with a cycle
+// check and a budget, which is control flow rather than layout.
 
 target buffer;
 endian big;

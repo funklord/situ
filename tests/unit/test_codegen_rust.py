@@ -392,8 +392,7 @@ struct label {
 	u6 rest;
 	variant body switch (form) {
 		case 0:  u8 text[rest];
-		case 3:  u8 pointer_low;
-		default: error;
+		default: opaque;
 	}
 }
 struct name { label labels[] while (form == 0 && rest != 0) max 8; }
@@ -404,9 +403,9 @@ struct question { name qname; u16 qtype; }
 def test_an_unmeasurable_nested_member_gets_no_accessor() -> None:
 	"""A struct whose extent nothing can compute gets no accessor.
 
-`label` is a variant on its top two bits, so how long one is depends on the
-arm the discriminant selects; `name` is a run of those, so its own length is
-unknown in turn; and `question.qname` is one of *those*. Each backend emitted
+`label` ends in an `opaque` default arm, which swallows whatever is left, so
+one is exactly as long as the view it was handed; `name` is a run of those, so
+its own length is unknown in turn; and `question.qname` is one of *those*. Each backend emitted
 the accessor anyway and reached for an extent it had declined to emit --
 rustc caught it, which is the only mercy in it.
 
@@ -428,3 +427,62 @@ def test_and_the_module_compiles(tmp_path: Path) -> None:
 	"""It did not: no method named `extent` on `Name`."""
 	built = build(tmp_path, UNMEASURABLE)
 	assert built.returncode == 0, built.stderr
+
+
+# -- a run whose element is a variant ---------------------------------------
+
+DNS_LABEL = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 128; }
+"""
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_compressed_name_walks(tmp_path: Path) -> None:
+	"""The four shapes a DNS name comes in, against a hand-checked count and
+	extent -- the same table the C suite walks, because agreeing with the
+	other backends is the property under test."""
+	built = build(tmp_path, DNS_LABEL, main="""
+fn walk(b: &[u8], labels: usize, extent: usize, ok: bool) -> bool {
+	let held = match unit::Name::new(b) { Ok(v) => v, Err(_) => return false };
+
+	if held.labels_count() != labels || held.labels_span() != extent {
+		return false;
+	}
+	for i in 0..labels {
+		match held.labels(i) {
+			Ok(one) => if one.validate().is_ok() != ok { return false },
+			Err(_)  => return false,
+		}
+	}
+	true
+}
+
+fn main() {
+	let plain  = [3,b'w',b'w',b'w', 7,b'e',b'x',b'a',b'm',b'p',b'l',b'e',
+	              3,b'c',b'o',b'm', 0];
+	let whole  = [0xC0u8, 0x0C];
+	let suffix = [3,b'w',b'w',b'w', 0xC0, 0x0C];
+	let bad    = [0x40u8, 0x00];
+
+	assert!(walk(&plain,  4, 17, true));
+	assert!(walk(&whole,  1,  2, true));
+	assert!(walk(&suffix, 2,  6, true));
+	assert!(walk(&bad,    1,  1, false));
+}
+""")
+
+	assert built.returncode == 0, built.stderr
+
+	# Built *and run*. `assert!` in a binary nobody executes asserts nothing,
+	# which is how the extent bug survived its first test.
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr

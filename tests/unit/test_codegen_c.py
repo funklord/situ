@@ -1505,3 +1505,137 @@ int main(void)
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- a run whose element is a variant ---------------------------------------
+
+DNS_LABEL = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 128; }
+"""
+
+
+def test_a_variants_extent_is_a_switch_on_the_discriminant() -> None:
+	"""It was "unknowable", which is true of the *constant* and false of the
+	value: each arm has a length, and which one applies is a question the
+	generated code can ask. Refusing the whole class refused every run over a
+	variant, which is most of what a compressed DNS name is."""
+	header, _ = emit(DNS_LABEL)
+
+	assert "situ_label_form_get(view) == 0u ?" in header
+	assert "situ_label_form_get(view) == 3u ? 1u" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_compressed_name_walks(tmp_path: Path) -> None:
+	"""The four shapes a DNS name comes in, against a hand-checked count and
+	extent. Uncompressed ends at the root label; a pointer ends the run
+	wherever it appears, including at the front.
+
+	Not a grep: an extent that is short by one still emits every accessor and
+	still compiles, and only walking real bytes says which byte it stopped on.
+	"""
+	header, source = emit(DNS_LABEL)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+static int walk(uint8_t *b, uint32_t n, uint32_t labels, uint32_t extent,
+                situ_err_t want)
+{
+	situ_msg_t msg;
+	situ_view_t view, element;
+	uint32_t i;
+
+	situ_msg_init(&msg, b, n);
+	if (situ_name_view(&msg, 0, n, &view) != SITU_OK)
+		return 1;
+	if (situ_name_labels_count(view) != labels)
+		return 2;
+	if (situ_name_labels_span(view) != extent)
+		return 3;
+
+	for (i = 0; i < labels; i++) {
+		if (situ_name_labels_at(view, i, &element) != SITU_OK)
+			return 4;
+		if (situ_label_validate(element) != want)
+			return 5;
+	}
+	return 0;
+}
+
+int main(void)
+{
+	uint8_t plain[]  = { 3,'w','w','w', 7,'e','x','a','m','p','l','e',
+	                     3,'c','o','m', 0 };
+	uint8_t whole[]  = { 0xC0, 0x0C };
+	uint8_t suffix[] = { 3,'w','w','w', 0xC0, 0x0C };
+	uint8_t bad[]    = { 0x40, 0x00 };
+
+	/* www + example + com + the root label, and 4+8+4+1 bytes. */
+	if (walk(plain, sizeof plain, 4, 17, SITU_OK))
+		return 1;
+	/* A pointer is a whole name by itself: one label, two bytes. */
+	if (walk(whole, sizeof whole, 1, 2, SITU_OK))
+		return 2;
+	/* www, then a pointer to the rest. */
+	if (walk(suffix, sizeof suffix, 2, 6, SITU_OK))
+		return 3;
+	/* form 1 selects no arm, and `default: error` says so. */
+	if (walk(bad, sizeof bad, 1, 1, SITU_ERR_VERSION))
+		return 4;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_an_unrecognised_discriminant_is_rejected() -> None:
+	"""Section 14.5 has always said `default: error` rejects one, and no
+	backend rejected it: `SITU_ERR_VERSION` was defined, commented "unknown
+	version or variant discriminant", and returned by nothing. It stayed
+	invisible while a variant had no extent, because nothing walked one."""
+	_, source = emit(DNS_LABEL)
+
+	assert "return SITU_ERR_VERSION;" in source
+	assert "situ_label_form_get(view) != 0u" in source
+	assert "situ_label_form_get(view) != 3u" in source
+
+
+def test_an_arm_for_every_value_needs_no_such_check() -> None:
+	"""A `default` arm that selects a member accepts anything, so there is no
+	unrecognised discriminant to reject."""
+	_, source = emit("struct s { u8 k; variant v switch (k) { case 0: u8 a; "
+	                 "default: u32 b; } }")
+
+	assert "SITU_ERR_VERSION" not in source
+
+
+def test_the_check_names_the_arms_as_the_schema_spelled_them() -> None:
+	"""The comparison is against the folded integer, because `case K.a:` has
+	to become one in four languages and each spells an enum member
+	differently. The comment keeps the name the author wrote."""
+	_, source = emit("enum k : u8 { a = 1, b = 2 }\n"
+	                 "struct s { k which; variant v switch (which) "
+	                 "{ case k.a: u8 p; case k.b: u32 q; default: error; } }")
+
+	assert "an arm for k.a, k.b" in source
+	assert "!= 1u" in source and "!= 2u" in source

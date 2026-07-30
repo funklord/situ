@@ -35,9 +35,9 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, classify, classify_check, extent_parts,
-	has_computable_extent, local_name, obligation, obligations, own_entries,
-	own_members,
+	Check, Member, arm_members, classify, classify_check, extent_parts,
+	has_computable_extent, local_name, matched_values, obligation,
+	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType
 from situc.unparse import expr_to_source as unparse_expr
@@ -1083,8 +1083,96 @@ class Emitter:
 
 		return " + ".join([str(constant), *terms])
 
+	def _discriminant_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`default: error` -- the discriminant must select an arm.
+
+		Section 14.5 says an unrecognised discriminant is rejected on parse,
+		and no backend rejected it. It stayed invisible while a variant had no
+		computable extent, because nothing walked one.
+		"""
+		values = matched_values(placement)
+		if not values or placement.discriminant is None:
+			return []
+
+		held = self._over_fields(struct, placement.discriminant, "self")
+		test = " && ".join(f"{held} != {arm.value}" for arm in values)
+		named = ", ".join(arm.source or str(arm.value) for arm in values)
+		return [
+			f"\t\t// {placement.path}: an arm for {named}, and"
+			f" `default: error` for the rest.",
+			f"\t\tif {test} {{",
+			"\t\t\treturn Err(Error::Version);",
+			"\t\t}",
+		]
+
+	@staticmethod
+	def _unparen(expr: str) -> str:
+		"""Strip parentheses that enclose the whole expression.
+
+		`unused_parens` is a hard error under `-D warnings`, and it fires on
+		the tail expression of a block and on a match arm alike -- so an
+		`if`/`else` chain cannot carry a length expression that arrived
+		already wrapped, which every one of them does.
+
+		Only a pair that encloses everything: `(a) + (b)` opens and closes
+		twice and keeps both.
+		"""
+		while expr.startswith("(") and expr.endswith(")"):
+			depth = 0
+			for index, char in enumerate(expr):
+				depth += (char == "(") - (char == ")")
+				if depth == 0 and index < len(expr) - 1:
+					return expr		# the opener closed early
+			expr = expr[1:-1]
+		return expr
+
+	def _variant_length(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""How many bytes the selected arm occupies, as one expression.
+
+		A conditional chain rather than a statement `switch`, because callers
+		want this inside a sum -- the extent of the struct around it, or the
+		offset of whatever follows.
+
+		An unmatched discriminant yields zero, which is not a claim that such
+		a message is empty: `default: error` says there is no such message,
+		and `validate` is where that is said. Zero is the value the run walk
+		already refuses to advance by.
+		"""
+		if not placement.arm_cases or placement.discriminant is None:
+			return None
+
+		held  = self._over_fields(struct, placement.discriminant, "self")
+		chain = "0"
+		for arm, member in reversed(arm_members(struct, placement)):
+			if member is None:
+				continue		# `default: error`; falls to the zero above
+			if member.is_fixed_size:
+				length = str(member.size_bits // BITS_PER_BYTE)
+			else:
+				rendered = self._length_expression(struct, member)
+				if rendered is None:
+					return None
+				# A branch body is a block and `-D warnings` rejects
+				# parentheses around its value, however they got there.
+				length = self._unparen(rendered)
+
+			# `if` is an expression here, so this nests the same way the
+			# ternary does in C. Built without parentheses of its own and
+			# wrapped once at the end: each round puts the previous chain in
+			# an `else` block, and a parenthesised block value is the error
+			# `_unparen` exists for.
+			chain = (length if arm.value is None
+			         else f"if {held} == {arm.value} {{ {length} }}"
+			              f" else {{ {chain} }}")
+		return chain if chain == "0" else f"({chain})"
+
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
+		if placement.kind == "variant":
+			return self._variant_length(struct, placement)
+
 		# Wherever the delimiter turns out to be. One name for "how far this
 		# member reaches", whether it is a byte run or a run of records.
 		if placement.delimiter is not None or placement.repeat_while is not None:
@@ -1481,6 +1569,9 @@ class Emitter:
 			check = classify_check(struct, placement, self.structs)
 
 			if check is Check.NOTHING:
+				continue
+			if check is Check.DISCRIMINANT:
+				checks.extend(self._discriminant_check(struct, placement))
 				continue
 			if check is Check.DELIMITED:
 				checks.extend(self._delimiter_checks(struct, placement))

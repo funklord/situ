@@ -527,8 +527,7 @@ struct label {
 	u6 rest;
 	variant body switch (form) {
 		case 0:  u8 text[rest];
-		case 3:  u8 pointer_low;
-		default: error;
+		default: opaque;
 	}
 }
 struct name { label labels[] while (form == 0 && rest != 0) max 8; }
@@ -539,9 +538,9 @@ struct question { name qname; u16 qtype; }
 def test_an_unmeasurable_nested_member_gets_no_accessor(tmp_path: Path) -> None:
 	"""A struct whose extent nothing can compute gets no accessor.
 
-`label` is a variant on its top two bits, so how long one is depends on the
-arm the discriminant selects; `name` is a run of those, so its own length is
-unknown in turn; and `question.qname` is one of *those*. Each backend emitted
+`label` ends in an `opaque` default arm, which swallows whatever is left, so
+one is exactly as long as the view it was handed; `name` is a run of those, so
+its own length is unknown in turn; and `question.qname` is one of *those*. Each backend emitted
 the accessor anyway and reached for an extent it had declined to emit --
 an `AttributeError` on first access here.
 
@@ -562,3 +561,54 @@ def test_and_validating_one_does_not_reach_through_it(tmp_path: Path) -> None:
 	raw    = bytes([3]) + b"www" + bytes([0])
 
 	module.question.at(module.Message(bytearray(raw)), 0, len(raw)).validate()
+
+
+# -- a run whose element is a variant ---------------------------------------
+
+DNS_LABEL = """
+struct label {
+	u2 form;
+	u6 rest;
+	variant body switch (form) {
+		case 0:  u8 text[rest];
+		case 3:  u8 pointer_low;
+		default: error;
+	}
+}
+struct name { label labels[] while (form == 0 && rest != 0) max 128; }
+"""
+
+NAMES = [
+	# bytes, labels, extent
+	(bytes([3]) + b"www" + bytes([7]) + b"example" + bytes([3]) + b"com"
+	 + bytes([0]), 4, 17),
+	(bytes([0xC0, 0x0C]), 1, 2),			# a pointer is a whole name
+	(bytes([3]) + b"www" + bytes([0xC0, 0x0C]), 2, 6),	# www, then a pointer
+]
+
+
+def test_a_compressed_name_walks(tmp_path: Path) -> None:
+	"""The four shapes a DNS name comes in, against a hand-checked count and
+	extent -- the same table the C suite walks, because agreeing with the
+	other backends is the property under test."""
+	module = load(tmp_path, DNS_LABEL)
+
+	for raw, labels, extent in NAMES:
+		held = module.name.at(module.Message(bytearray(raw)), 0, len(raw))
+
+		assert held.labels_count == labels, raw
+		assert held.labels_span == extent, raw
+		for index in range(labels):
+			held.labels(index).validate()
+
+
+def test_an_unrecognised_discriminant_is_rejected(tmp_path: Path) -> None:
+	"""`form == 1` selects no arm, and `default: error` says there is no such
+	message. Nothing rejected it before: the check had never been emitted by
+	any backend, because nothing walked a variant to notice."""
+	module = load(tmp_path, DNS_LABEL)
+	raw    = bytes([0x40, 0x00])
+	held   = module.name.at(module.Message(bytearray(raw)), 0, len(raw))
+
+	with pytest.raises(module.ConstraintError):
+		held.labels(0).validate()
