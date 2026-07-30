@@ -2771,9 +2771,15 @@ Principles:
 - **`SITU_CHECKED`** compile-time flag enables bounds checks, generation
   checks, and constraint validation; release builds compile them out. The
   checked and unchecked builds must be ABI-compatible.
-- **Build with `-ffunction-sections -fdata-sections -Wl,--gc-sections`** (or
-  LTO) if binary size matters. Nearly everything situ emits is `static inline`
-  in the header and costs nothing when unused -- 31 to 40 functions per schema
+- **Build with LTO if speed matters, and with
+  `-ffunction-sections -fdata-sections -Wl,--gc-sections` if size does.** The
+  runtime's `situ_view_sub` lives in `situ.c`, so every element of a walk is a
+  call across a translation unit without it. Measured on a forty-one element
+  run, walked two thousand times: C 9.8ms to 7.2ms and C++ 8.5ms to 5.2ms,
+  which is where C++ meets Rust -- a single crate has no such boundary.
+
+  For size, the same flags in the other direction: nearly everything situ
+  emits is `static inline` in the header and costs nothing when unused -- 31 to 40 functions per schema
   across the worked examples. What is left is `validate`, which is out-of-line
   because it is large, and those *do* survive into a binary that never calls
   them: measured at four symbols and 648 bytes on `examples/message`. situ has
@@ -4926,7 +4932,18 @@ found, and it was there before any of this work began.
    attempts at a faster path measured *slower* than what they replaced before
    the cause turned up -- which is the only reason it turned up at all.
 
-46. **A safety fix in one backend is a bug report about the other three.**
+46. **Numbers from different benchmarks do not belong in one table.** Four
+   measurements of "the same" feature across four backends were taken on
+   three different element counts and two different iteration counts, and
+   presented side by side. The result read as a language ranking -- C slower
+   than C++ slower than Rust -- and was an artefact of a walk that is
+   quadratic in the element count being given three times as many elements in
+   one of them. Matched, the three compiled backends are within a factor of
+   two, and most of the remaining spread is a call across a translation unit
+   that LTO removes. A table implies a controlled comparison whether or not
+   one was run.
+
+47. **A safety fix in one backend is a bug report about the other three.**
    `situ_remaining_u32` was added to C because a `[remaining]` length wrapped;
    the same unsaturating subtraction sat in every other backend's scan limit
    and nobody looked. `start` there is a sum of length fields the message
