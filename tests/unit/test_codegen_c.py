@@ -2445,3 +2445,113 @@ int main(void)
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- running the transform once (section 13.5) ------------------------------
+
+CODED_TABLE = """
+codec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester); }
+impl halve derived;
+struct S {
+	coded body(halve) { u8 raw[4]; }
+}
+"""
+
+
+def test_a_coded_region_has_its_encoded_bytes() -> None:
+	"""A coded region with no delimiter got a comment header and nothing
+	else, so the bytes on the wire were unreachable -- a strange thing for a
+	treat-as-bytes region. The delimited case has had a pointer all along,
+	because the scan path emits one and this path emitted nothing.
+	"""
+	header, _ = emit("struct S { coded body(halve) { u8 raw[4]; } }",
+	                 preamble=PREAMBLE + CODED_TABLE.split("struct")[0])
+
+	assert "situ_S_body_ptr(situ_view_t view)" in header
+	assert "situ_S_body_len(situ_view_t view)" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_decode_runs_once_into_the_callers_buffer(tmp_path: Path) -> None:
+	"""The interior of a coded region is `stage = TransformTime`: the
+	plaintext is not in the message, so this is the one accessor that needs
+	somewhere to put its answer. Nothing allocates, so the buffer is the
+	caller's and the bound is a macro beside it.
+
+	Only for a `table` kernel -- the generated decoder's shape is settled
+	there, `(in, bits, out) -> bits`, and it is not for the families that are
+	described and not yet generated.
+	"""
+	schema   = parse_text(PREAMBLE + CODED_TABLE)
+	resolved = resolve(schema, solve(schema))
+	built    = generate(schema, resolved, "unit")
+
+	(tmp_path / "unit.h").write_text(built.header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(built.source, encoding="ascii")
+
+	from situc.codegen.c import derived
+	(tmp_path / "unit_derived.c").write_text(
+		derived.generate(schema, "unit"), encoding="ascii")
+
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t plain[4] = { 0xA5, 0x3C, 0xF0, 0x0F };
+	uint8_t buf[8];
+	uint8_t out[SITU_S_BODY_DECODED_MAX];
+	uint32_t len = 0;
+	situ_msg_t msg;
+	situ_view_t view;
+
+	situ_halve_encode(plain, 32u, buf);
+	situ_msg_init(&msg, buf, (uint32_t)sizeof buf);
+	if (situ_S_view(&msg, 0, &view) != SITU_OK)
+		return 1;
+
+	/* Eight bytes on the wire, four of value: the codec is 2:1. */
+	if (situ_S_body_len(view) != 8u)
+		return 2;
+	if (SITU_S_BODY_DECODED_MAX != 4u)
+		return 3;
+	if (situ_S_body_decode(view, out, (uint32_t)sizeof out, &len) != SITU_OK)
+		return 4;
+	if (len != 4u || memcmp(out, plain, 4) != 0)
+		return 5;
+
+	/* A buffer one byte short is refused rather than half-filled: half a
+	 * decode is not a shorter message. */
+	if (situ_S_body_decode(view, out, 3u, &len) != SITU_ERR_BOUNDS)
+		return 6;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(tmp_path / "unit_derived.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_a_kernel_whose_decoder_is_not_generated_gets_no_accessor() -> None:
+	"""SMTP's dot-stuffing is one: the properties are derived and correct and
+	the implementation is not generated, so the decoder's signature is not
+	something to guess at from here. The note above it already says the
+	transform is the caller's."""
+	header, _ = emit(
+		'struct S { coded body(stuff) until "\\r\\n" '
+		'{ u8 content[remaining]; } }',
+		preamble=PREAMBLE + "codec stuff { kernel = stuffing(worst_case = 4,"
+		                    " per = 3, unit = stream, code = smtp_dot); }\n"
+		                    "impl stuff derived;\n")
+
+	assert "transform is the caller's to run" in header
+	assert "situ_S_body_decode" not in header

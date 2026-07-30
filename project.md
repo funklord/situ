@@ -1932,6 +1932,37 @@ never learns an algorithm
 
 ---
 
+### 13.6a Reaching the decoded bytes
+
+The interior of a coded region is `stage = TransformTime`: the plaintext is
+not in the message. So the decode is the one accessor situ generates that
+needs somewhere to put its answer, and since nothing allocates (invariant 4)
+that somewhere is the caller's:
+
+```c
+#define SITU_S_BODY_DECODED_MAX 4u
+situ_err_t situ_S_body_decode(situ_view_t view, uint8_t *out,
+                              uint32_t cap, uint32_t *len);
+```
+
+The bound is the schema's, from the codec's declared ratio against the
+region's largest encoded form. A buffer short of it is refused rather than
+half-filled: half a decode is not a shorter message.
+
+**Only for a `table` kernel**, because the generated decoder's shape is
+settled there -- `(in, bits, out) -> bits` -- and is not for the families that
+are described and not yet generated (13.4). Guessing a signature for those
+would be a header that names a function nobody agreed to write. The note
+above such a region already says the transform is the caller's.
+
+The encoded bytes are reachable in either case. They were not: a coded region
+with no delimiter got a comment header and nothing else, so the bytes on the
+wire were unreachable -- a strange thing for a treat-as-bytes region, and true
+only of the non-delimited case, because the scan path has always emitted a
+pointer.
+
+---
+
 ## 14. Cryptographic model
 
 The first real use case is compact encrypted protocols, so this is not an

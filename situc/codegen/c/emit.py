@@ -973,6 +973,15 @@ class Emitter:
 				lines.extend(self._covered_pointer_note(struct, placement))
 			return lines
 
+		# A coded region with no delimiter. It fell through every branch
+		# below and got a comment header and nothing else -- so the encoded
+		# bytes of one were unreachable, which is a strange thing for a
+		# treat-as-bytes region. The delimited case has had a pointer all
+		# along, because the scan path emits one.
+		if placement.kind == "coded" and placement.delimiter is None:
+			lines.extend(self._coded_region(struct, placement))
+			return lines
+
 		if placement.type_name in self.structs:
 			if self._is_array(placement):
 				lines.extend(self._element_view(struct, placement))
@@ -2351,7 +2360,122 @@ class Emitter:
 			" the",
 			" * sequence is unambiguous here and would not be after"
 			" decoding. */",
+			*self._decode_accessor(struct, placement),
 		]
+
+	def _coded_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The encoded bytes of a coded region, and the decode beside them."""
+		local = c_name(self._local(struct, placement))
+		base  = self._base_expression(struct, placement)
+		if placement.size_max_bits is None \
+				or placement.size_bits % BITS_PER_BYTE:
+			return [
+				f"/* No accessor for `{placement.name}`: its encoded extent is",
+				f" * {placement.codec}'s to report and not a number this"
+				" knows. */",
+			]
+
+		size = placement.size_bits // BITS_PER_BYTE
+		return [
+			"",
+			f"/* `{placement.name}` is `{placement.codec}` output, and these"
+			" are the",
+			" * bytes on the wire rather than the value. What they mean is"
+			" behind",
+			" * the transform (13.5), which is what `stage = TransformTime`"
+			" says. */",
+			f"static inline uint32_t "
+			f"{ident(self.prefix, struct.name, local, 'len')}(situ_view_t view)",
+			"{",
+			"\t(void)view;",
+			f"\treturn {size}u;",
+			"}",
+			f"static inline const uint8_t *"
+			f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
+			"{",
+			f"\treturn view.base + {base};",
+			"}",
+			*self._decode_accessor(struct, placement),
+		]
+
+	def _decode_accessor(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Run the codec once, into a buffer the caller owns (13.5).
+
+		The interior of a coded region is `stage = TransformTime`: the
+		plaintext is not in the message, so unlike every other accessor here
+		this one has somewhere to put the answer only if the caller says
+		where. Nothing allocates (invariant 4), so the buffer and its capacity
+		are parameters, and the bound the caller needs is a macro beside them.
+
+		Only for a `table` kernel. The generated decoder's shape is settled
+		there -- `(in, bits, out) -> bits` -- and it is not for the families
+		that are described and not yet generated, whose signature is not
+		something to guess at from here.
+		"""
+		codec = self.codecs.get(placement.codec or "")
+		if codec is None or codec.kernel is None:
+			return []
+		if codec.kernel.family is not ast.KernelFamily.TABLE:
+			return []		# the decoder's shape is the kernel's, and only
+					# `table`'s is settled
+
+		ratio = codec.ratio
+		if ratio is None or ratio[0] == 0:
+			return []
+
+		local   = c_name(self._local(struct, placement))
+		span    = (f"{ident(self.prefix, struct.name, local, 'span')}(view)"
+		           if placement.delimiter is not None
+		           else self._length_expression(struct, placement))
+		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
+		limit   = placement.size_max_bits
+		bound   = (None if limit is None
+		           else (limit // BITS_PER_BYTE) * ratio[1] // ratio[0])
+
+		out = [
+			"",
+			f"/* The decoded bytes of `{placement.name}`, into a buffer the"
+			" caller owns.",
+			" *",
+			" * Its interior is `stage = TransformTime` (13.5): the plaintext"
+			" is not",
+			" * in the message, so this is the one accessor here that needs"
+			" somewhere",
+			" * to put its answer. Nothing allocates, so the buffer is the"
+			" caller's",
+			f" * and `{decoded}` is how large it has to be.",
+			" *",
+			f" * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so the decoded"
+			" form is that much",
+			" * smaller than the bytes on the wire. */",
+		]
+		if bound is not None:
+			out.append(f"#define {decoded} {bound}u")
+		out.extend([
+			f"extern uint32_t {ident(self.prefix, placement.codec or '', 'decode')}"
+			"(const uint8_t *in, uint32_t bits, uint8_t *out);",
+			"",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'decode')}"
+			"(situ_view_t view, uint8_t *out, uint32_t cap, uint32_t *len)",
+			"{",
+			f"\tconst uint32_t encoded = {span};",
+			f"\tconst uint32_t need    = encoded * {ratio[1]}u / {ratio[0]}u;",
+			"",
+			"\tif (cap < need) {",
+			"\t\t/* Not room for what the codec will produce. Reported rather",
+			"\t\t * than truncated: half a decode is not a shorter message. */",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			f"\t*len = {ident(self.prefix, placement.codec or '', 'decode')}("
+			f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
+			"\t\tencoded * 8u, out) / 8u;",
+			"\treturn SITU_OK;",
+			"}",
+		])
+		return out
 
 	def _token_compare(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
