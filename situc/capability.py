@@ -47,7 +47,12 @@ class Axis(Enum):
 # the parameters are unioned rather than picked between -- see SET_VALUED.
 DOMAINS: dict[Axis, tuple[str, ...]] = {
 	Axis.SIZE:	("Fixed", "Bounded", "Unbounded"),
-	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "Dynamic", "Scanned"),
+	# `DataPlaced` sits between `Dynamic` and `Scanned`: reaching it is one
+	# read and an addition, so it is not a search -- but the number comes from
+	# the message rather than from the members before it, so nothing about the
+	# frame bounds it and it may point anywhere.
+	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "Dynamic", "DataPlaced",
+			 "Scanned"),
 	Axis.ACCESS:	("Random", "Sequential"),
 	Axis.MUTATE:	("InPlaceFixed", "InPlaceSlack", "Shifting",
 			 "RewriteRequired", "Immutable"),

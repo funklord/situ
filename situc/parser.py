@@ -1492,11 +1492,12 @@ class Parser:
 		# field was added most recently.
 		return ast.Field(self.span_from(start), field.name, field.type_ref,
 		                 array  = field.array,
-		                 pin    = field.pin,
-		                 attrs  = field.attrs,
-		                 until  = field.until,
-		                 repeat = field.repeat,
-		                 radix  = radix)
+		                 pin     = field.pin,
+		                 attrs   = field.attrs,
+		                 until   = field.until,
+		                 repeat  = field.repeat,
+		                 radix   = radix,
+		                 located = field.located)
 
 	def parse_field(self) -> ast.Field:
 		start    = self.current
@@ -1505,11 +1506,27 @@ class Parser:
 		array    = self.parse_array_spec()
 		until    = self.parse_until()
 		repeat   = self.parse_while()
+		located  = self.parse_located()
 		pin      = self.parse_pin()
 		attrs    = self.parse_attrs()
 		self.expect_symbol(";", "after the field declaration")
 		return ast.Field(self.span_from(start), name.text, type_ref, array, pin,
-		                 attrs, until, repeat)
+		                 attrs, until, repeat, located=located)
+
+	def parse_located(self) -> ast.Expr | None:
+		"""`at hdr.pixel_offset` -- where the data says this member sits.
+
+		A word rather than reusing `@`, which is `pin` and means the opposite:
+		an assertion about the offset the solver computed. Overloading the
+		symbol would make two constructs that place nothing and place
+		everything look identical, which is the mistake decision 0006 is
+		about.
+		"""
+		if not self.current.is_ident("at"):
+			return None
+
+		self.advance()
+		return self.parse_expr()
 
 	def parse_while(self) -> ast.While | None:
 		"""`while (next_header == 43 || next_header == 44)`.

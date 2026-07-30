@@ -1730,3 +1730,101 @@ int main(void)
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- a member the data positions (section 9.8) ------------------------------
+
+LOCATED = "struct s { u32 off; u16 n; u8 body[n] at off; u16 after; }"
+
+
+def test_a_located_member_takes_the_message_as_well_as_the_view() -> None:
+	"""`situ_view_t` is `{ base, limit, generation }` and carries no message
+	origin; only `situ_msg_t` knows where offset zero is. An offset measured
+	from the start of the message therefore needs both.
+
+	The alternative was a fourth word in every view, growing the core type by
+	half for a construct few schemas use.
+	"""
+	header, _ = emit(LOCATED)
+
+	assert ("static inline situ_err_t situ_s_body_view(const situ_msg_t *msg,"
+	        " situ_view_t view, situ_view_t *out)") in header
+
+
+def test_it_places_nothing_after_itself() -> None:
+	"""The property that makes the construct worth having, rather than a
+	variable-length member with extra steps. A located member joins no offset
+	chain, so `after` is where it would be if `body` were not written at
+	all."""
+	header, _ = emit(LOCATED)
+
+	assert "s.after : u16  at AbsoluteStatic(0x06)" in header
+	assert "static inline uint16_t situ_s_after_get(situ_view_t view)" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_offset_is_checked_on_every_use(tmp_path: Path) -> None:
+	"""Section 20.2 amortises the bounds check at the frame boundary, and that
+	covers offsets the frame is known to contain. This one is a number the
+	message chooses and can point anywhere, so it is checked per call -- which
+	is what `offset = DataPlaced` in the map is telling you it costs.
+	"""
+	header, source = emit(LOCATED)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	/* The struct starts at 4, not at 0. With it at 0 the view base and the
+	 * message base are the same pointer, and reading the offset from the
+	 * wrong one gives the right answer -- which is how the first version of
+	 * this test passed against a generator that used the view. */
+	uint8_t buf[28] = { 0 };
+	situ_msg_t msg;
+	situ_view_t view, body;
+
+	buf[4 + 3] = 16;		/* off = 16, from the message base */
+	buf[4 + 5] = 4;			/* n = 4 */
+	buf[4 + 6] = 0xBE; buf[4 + 7] = 0xEF;	/* after */
+	memcpy(buf + 16, "DATA", 4);
+
+	situ_msg_init(&msg, buf, (uint32_t)sizeof buf);
+	if (situ_s_view(&msg, 4, &view) != SITU_OK)
+		return 1;
+
+	/* `after` sits where it would if `body` were not declared at all. */
+	if (situ_s_after_get(view) != 0xBEEF)
+		return 2;
+
+	if (situ_s_body_view(&msg, view, &body) != SITU_OK)
+		return 3;
+	if (body.base != buf + 16 || body.limit != 4u)
+		return 4;
+	if (memcmp(body.base, "DATA", 4) != 0)
+		return 5;
+
+	/* An offset the message chooses, pointing outside the buffer. */
+	buf[4 + 3] = 200;
+	if (situ_s_body_view(&msg, view, &body) != SITU_ERR_BOUNDS)
+		return 6;
+
+	/* And one whose length runs off the end from a legal start. */
+	buf[4 + 3] = 26; buf[4 + 5] = 8;
+	if (situ_s_body_view(&msg, view, &body) != SITU_ERR_BOUNDS)
+		return 7;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

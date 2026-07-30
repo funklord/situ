@@ -311,6 +311,37 @@ def test_reserved_defaults_to_canonical() -> None:
 	               Axis.CANONICAL) == Value("Canonical")
 
 
+# -- row: data-placed (section 9.8) -----------------------------------------
+
+LOCATED = "struct s { u32 off; u8 body[4] at off; u16 after; }"
+
+
+def test_a_located_member_is_placed_by_the_data() -> None:
+	"""Not `Dynamic`, which is the sum of what precedes it, and not `Scanned`,
+	which is a search that can fail. One read and an addition -- but the number
+	is the message's, so nothing about the frame says the member is inside
+	it."""
+	assert axis_of(LOCATED, "s.body", Axis.OFFSET) == Value("DataPlaced")
+	assert rules_for(LOCATED, "s.body", Axis.OFFSET) == ["data-placed"]
+
+
+def test_it_is_still_randomly_accessible() -> None:
+	"""The distinction from `Scanned`. Reaching it costs one read, not a walk
+	of everything before it."""
+	assert axis_of(LOCATED, "s.body", Axis.ACCESS) == Value("Random")
+	assert axis_of(LOCATED, "s.body", Axis.ADDRESS) == Value("Unstable")
+
+
+def test_and_it_does_not_poison_what_follows_it() -> None:
+	"""The property that makes the construct worth having. A located member
+	joins no offset chain, so the member after it is where it always was --
+	unlike a variable-length member, which makes everything after it Dynamic.
+	"""
+	assert axis_of(LOCATED, "s.after", Axis.OFFSET) \
+	       == Value("AbsoluteStatic", ("0x04",))
+	assert axis_of(LOCATED, "s.after", Axis.ADDRESS) == Value("Stable")
+
+
 # -- row: declared non-canonical (section 11.5) -----------------------------
 
 NON_CANONICAL = \
@@ -456,6 +487,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"enum-default-pass",
 		"secret-field",
 		"endian-marker-scope",
+		"data-placed",
 		"dynamic-predecessor",
 		"frame-relative",
 		"bounded-size",

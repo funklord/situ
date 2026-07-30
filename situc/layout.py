@@ -154,6 +154,10 @@ class Placement:
 	#: The invariant that maintains this field, if one does. Such a field
 	#: is not the author's to write: only a recompute may.
 	derived_by: str | None		= None
+	#: `at hdr.pixel_offset`: the member sits where this field says, measured
+	#: from the start of the message. It joins no offset chain and contributes
+	#: nothing to the enclosing extent -- see section 9.8.
+	located: str | None		= None
 	#: `until "\r\n"`: the member ends at the first occurrence of these bytes,
 	#: found by scanning rather than computed. Everything after it has
 	#: `offset = Scanned` rather than `Dynamic` -- a search that can fail,
@@ -1298,7 +1302,11 @@ class Solver:
 			name           = name,
 			kind           = "field" if isinstance(member, ast.Field) else "reserved",
 			type_name      = member.type_ref.name,
-			offset_bits    = cursor.lo if cursor.is_exact else None,
+			# None for a located member: its offset is whatever the field
+			# says, and the cursor position where it was *written* is a
+			# different number that reads like an answer.
+			offset_bits    = (None if getattr(member, "located", None) is not None
+			                  else cursor.lo if cursor.is_exact else None),
 			size_bits      = total.lo,
 			size_max_bits  = total.hi,
 			scalar         = scalar,
@@ -1352,6 +1360,7 @@ class Solver:
 			delimiter_cap      = self._scan_cap(member),
 			scan_cause         = state.scan[0] if state.scan else None,
 			scan_cause_span    = state.scan[1] if state.scan else None,
+			located            = _located_source(member),
 		))
 
 		if member.until is not None and state.scan is None:
@@ -1369,6 +1378,18 @@ class Solver:
 
 		if member.array is not None and isinstance(member.array.size, ast.Remaining):
 			state.closed_by = name
+
+		if getattr(member, "located", None) is not None:
+			# A located member is a *reference*: it sits where a field says,
+			# so it neither follows the member before it nor puts anything
+			# after it. Advancing the cursor past it would place the next
+			# member at an offset nothing means -- the sum of a running
+			# position and an absolute one.
+			#
+			# It also cannot make anything after it dynamic, for the same
+			# reason: what follows a located member is whatever followed the
+			# member before it.
+			return
 
 		if state.cause is None and total.hi != total.lo:
 			state.cause = (name, member.span, _render_extent(total))
@@ -2153,6 +2174,13 @@ def _size_source(member: ast.Field | ast.Reserved) -> str | None:
 		return None
 
 	return expr_to_source(array.size)
+
+
+def _located_source(member: ast.Field | ast.Reserved) -> str | None:
+	from situc.unparse import expr_to_source
+
+	located = getattr(member, "located", None)
+	return None if located is None else expr_to_source(located)
 
 
 def _repeat_source(member: ast.Field | ast.Reserved) -> str | None:

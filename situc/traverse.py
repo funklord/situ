@@ -515,8 +515,15 @@ def declares_its_own_length(placement: Placement) -> bool:
 	`[remaining]` is excluded because it *is* what is left -- it cannot claim
 	more -- and a delimited member because its extent is where the scan
 	stopped, which is inside the view by construction.
+
+	A *located* member is excluded too, and for a different reason: its bytes
+	are not in this frame at all. Asking whether its length fits the frame is
+	the wrong question, and the right one -- does it fit the message -- is
+	asked by its accessor, on every call, because the offset is the message's
+	as well (section 9.8).
 	"""
 	return (placement.sized_by is not None
 	        and placement.sized_by != "remaining"
 	        and placement.array_count is None
-	        and placement.delimiter is None)
+	        and placement.delimiter is None
+	        and placement.located is None)

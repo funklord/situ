@@ -868,6 +868,13 @@ class Emitter:
 		lines = ["", *self._field_comment(entry)]
 		lines.extend(self._scale_macros(struct, placement))
 
+		# A located member is reached from the message rather than from the
+		# frame, so none of the offset machinery below applies to it: it has no
+		# place in the offset chain and nothing follows it.
+		if placement.located is not None:
+			lines.extend(self._located_accessor(struct, placement))
+			return lines
+
 		if placement.kind in ("tag", "checksum"):
 			# A tag lands after everything it covers, so its own offset is
 			# usually dynamic and has to be resolved before either its bytes or
@@ -1904,6 +1911,65 @@ class Emitter:
 
 		lines.extend(["", "\treturn offset;", "}"])
 		return lines
+
+	def _located_accessor(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A member the data positions, reached through the message.
+
+		`situ_view_t` is `{ base, limit, generation }` and carries no message
+		origin -- only `situ_msg_t` knows where offset zero is. So an accessor
+		for a located member takes both, which is a different signature from
+		every other accessor here and is the honest one: the offset is
+		measured from the start of the message, and a view is a window part
+		way into it.
+
+		The alternative was a fourth word in every view, growing the core type
+		by half for a construct few schemas use. Section 9.8.
+		"""
+		local  = c_name(self._local(struct, placement))
+		offset = self._over_fields(struct, placement.located or "", "view")
+		length = (str(placement.size_bits // BITS_PER_BYTE)
+		          if placement.is_fixed_size
+		          and placement.size_bits % BITS_PER_BYTE == 0
+		          else self._length_expression(struct, placement)
+		          if self._has_length(struct, placement) else None)
+		if length is None:
+			return [
+				f"/* No accessor for `{placement.name}`: it is placed by"
+				f" `{placement.located}`,",
+				" * and how long it is is not something this can work out. */",
+			]
+
+		return [
+			"",
+			f"/* `{placement.name}` sits at `{placement.located}` bytes from the",
+			" * start of the *message*, not from this view. Both are taken:"
+			" the view",
+			" * reads the offset field, the message says where zero is.",
+			" *",
+			" * The offset is the message's, so nothing about this frame says"
+			" it is",
+			" * inside the buffer. That is checked here, on every call, rather"
+			" than",
+			" * once at the frame boundary -- which is what `offset ="
+			" DataPlaced` in",
+			" * the map is telling you it costs. */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'view')}"
+			"(const situ_msg_t *msg, situ_view_t view, situ_view_t *out)",
+			"{",
+			f"\tconst uint32_t at = (uint32_t)({offset});",
+			f"\tconst uint32_t n  = (uint32_t)({length});",
+			"",
+			"\tif (n > msg->size || at > msg->size - n) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"\tout->base       = msg->base + at;",
+			"\tout->limit      = n;",
+			"\tout->generation = msg->generation;",
+			"\treturn SITU_OK;",
+			"}",
+		]
 
 	def _offset_blocker(self, struct: ResolvedStruct,
 			placement: Placement) -> Placement | None:

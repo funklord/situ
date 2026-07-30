@@ -335,6 +335,10 @@ def _is_case_insensitive(context: Context) -> bool:
 	return context.placement.case_insensitive
 
 
+def _is_data_placed(context: Context) -> bool:
+	return context.placement.located is not None
+
+
 def _is_past_a_scan(context: Context) -> bool:
 	return context.placement.scan_cause is not None
 
@@ -829,6 +833,27 @@ TABLE: tuple[Row, ...] = (
 			            "literal is the bug this attribute exists to name",
 		),
 		applies = _is_case_insensitive,
+	),
+	Row(
+		rule = Rule(
+			name      = "data-placed",
+			construct = "a member the data positions, rather than the members before it",
+			effects   = (
+				Effect(Axis.OFFSET, Value("DataPlaced"),
+				       "where it starts is a number in the message rather "
+				       "than the sum of what precedes it, so nothing about "
+				       "the frame says where it is or that it is inside one"),
+				Effect(Axis.ADDRESS, Value("Unstable"),
+				       "a pointer to it moves whenever the field holding its "
+				       "offset is written, which is a single field far away "
+				       "from the bytes that move"),
+			),
+			remedy = "a member placed after the one before it keeps a static "
+			         "or dynamic offset, and the bounds check at the frame "
+			         "boundary covers it; an offset the message chooses has "
+			         "to be checked on every use",
+		),
+		applies = _is_data_placed,
 	),
 	Row(
 		rule = Rule(

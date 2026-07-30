@@ -1171,6 +1171,64 @@ fields in their original positions. A Situ description of protobuf can parse and
 report unknown fields; round-tripping them byte-identically requires
 `unknown = preserve` plus an explicit ordering rule, and the compiler will say so.
 
+### 9.8 A member the data positions
+
+```situ
+struct bmp {
+    bitmap_file_header  hdr;
+    bitmap_info_header  info;
+    u8  pixels[info.image_size] at hdr.pixel_offset;
+}
+```
+
+`at expr` places a member where a field says, measured from the start of the
+*message*, rather than after the member before it. Three formats asked for it:
+BMP's `pixel_offset`, TIFF's `ifd_offset`, and DNS name compression's pointer
+-- which is worth noting because two of those are file formats and one is a
+protocol, so the capability does not follow the file/protocol line and there is
+no `target file` for it to hang off.
+
+**It is a reference, not a member in the ordinary sense.** It joins no offset
+chain: it contributes nothing to the enclosing struct's extent, and the member
+declared after it sits where it would if the located member were not there. A
+variable-length member makes everything after it `Dynamic`; this makes nothing
+after it anything. That is the whole reason it is a separate construct rather
+than an unusually-sized member.
+
+**A word rather than `@`.** `@ expr` is `pin`, which asserts the offset the
+solver computed and places nothing -- the opposite meaning. Overloading the
+symbol would make the two indistinguishable at a glance, which is the mistake
+decision 0006 exists to avoid.
+
+**On the lattice** it is `offset := DataPlaced`, a value between `Dynamic` and
+`Scanned`: reaching it is one read and an addition, so it is not a search, but
+the number comes from the message rather than from what precedes it. And
+`address := Unstable`, because writing one field moves bytes far away from it.
+
+**The bounds check cannot be amortised.** Section 20.2 amortises at the frame
+boundary, and that argument holds for offsets the frame is known to contain
+(invariant 41). This one is a number the message chooses and may point
+anywhere, so it is checked on every call. `offset = DataPlaced` in the map is
+exactly the notice that it costs that.
+
+**The accessor takes the message as well as the view.** `situ_view_t` is
+`{ base, limit, generation }` and carries no message origin; only `situ_msg_t`
+knows where offset zero is. So:
+
+```c
+situ_err_t situ_bmp_pixels_view(const situ_msg_t *msg, situ_view_t view,
+                                situ_view_t *out);
+```
+
+The alternative was a fourth word in every view, growing the core type by half
+for a construct few schemas use. Taking both is the honest signature: the view
+reads the offset field, the message says where zero is.
+
+**What it does not do is follow a pointer.** The DNS case needs the offset
+resolved *and* the parser re-entered there with a cycle check and a budget,
+which is control flow rather than layout (11.5). `at` gives a schema the first
+half and says so.
+
 ## 10. Expression language
 
 Used for array sizes, variant discriminants, offset pins, constraints, and
@@ -1214,7 +1272,7 @@ weakening order. Constructs weaken axes; nothing strengthens them.
 | Axis | Domain (strongest to weakest) | Meaning |
 |---|---|---|
 | `size` | `Fixed(n)` > `Bounded(lo,hi)` > `Unbounded` | byte extent |
-| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `Scanned` is a search that can fail (8.6.1) |
+| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `DataPlaced` is one read of an offset the message chose and so cannot be bounds-checked at the frame (9.8), `Scanned` is a search that can fail (8.6.1) |
 | `access` | `Random` > `Sequential` | can reach element N directly |
 | `mutate` | `InPlaceFixed` > `InPlaceSlack` > `Shifting` > `RewriteRequired` > `Immutable` | write cost |
 | `address` | `Stable` > `FrameStable` > `Unstable` | can a pointer be held |
@@ -1298,6 +1356,7 @@ output can be read against this table directly.
 |---|---|---|
 | `bounded-size` | a member whose length comes from an earlier field | `size := Bounded`, `mutate := Shifting` |
 | `unbounded-size` | a member with no upper bound on its length | computed from the construct |
+| `data-placed` | a member the data positions, rather than the members before it | `offset := DataPlaced`, `address := Unstable` |
 | `dynamic-predecessor` | a dynamically sized member earlier in the same frame | `offset := Dynamic`, `address := Unstable` |
 | `frame-relative` | a member of a frame, addressed from the frame base | `offset := FrameStatic` |
 | `dynamic-element-type` | an array whose element type is variable-sized | `access := Sequential` |
@@ -2962,6 +3021,7 @@ keeping. They are referenced from the sections they bear on; this is the index.
 | 0019 | What a codec must be before it may seal |
 | 0020 | The lattice models delimiter-framed data |
 | 0021 | The generated dissector is Lua, not a C plugin |
+| 0022 | Accessor families, and what actually purges the unused ones |
 
 0004 and 0007 look contradictory and are not. 0004 made aarch64 compile-only
 and deferred a revisit; 0007 closes that revisit once user-mode emulation was

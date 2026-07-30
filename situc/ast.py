@@ -252,6 +252,15 @@ class Field(Member):
 	#: gives the value's domain, not its width in the buffer, because a text
 	#: number's width in the buffer depends on the number (section 8.6.2).
 	radix: int | None		= None
+	#: `u8 pixels[n] at hdr.pixel_offset` -- the member sits where a field
+	#: says, measured from the start of the message rather than from the
+	#: member before it. Distinct from `pin`, which asserts the offset the
+	#: solver computed and never places anything.
+	#:
+	#: Such a member is a *reference* rather than a member in the ordinary
+	#: sense: it contributes nothing to the enclosing struct's extent, and
+	#: nothing is placed after it.
+	located: Expr | None		= None
 
 
 @dataclass(frozen=True)

@@ -57,7 +57,11 @@ struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 member		= field | reserved | marker_field | block | variant | tag_field ;
 
 field		= [ radix ] type_ref ident [ array_spec ] [ until | repeat ]
-		  [ pin ] [ attrs ] ";" ;
+		  [ located ] [ pin ] [ attrs ] ";" ;
+(* `at expr` places the member where the data says, measured from the start of
+ * the message. Distinct from `pin`, which asserts the offset the solver
+ * computed and places nothing -- section 9.8. *)
+located		= "at" expr ;
 repeat		= "while" "(" expr ")" [ "max" expr ] ;	(* section 8.6.6 *)
 radix		= "decimal" | "hex" ;		(* section 8.6.2 *)
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
