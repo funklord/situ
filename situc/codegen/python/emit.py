@@ -102,7 +102,8 @@ class Emitter:
 			"import enum",
 			"",
 			"from situ_runtime import (",
-			"\tBoundsError, ConstraintError, Gate, Message, VersionError, View,",
+			"\tBoundsError, ConstraintError, Gate, Message, TruncatedError,",
+			"\tVersionError, View,",
 			"\tacquire,",
 			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
@@ -201,6 +202,7 @@ class Emitter:
 			lines.extend(self._member(struct, entry))
 
 		lines.extend(self._extent_property(struct))
+		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
@@ -1077,6 +1079,116 @@ class Emitter:
 			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
 			f"\t\treturn {inner}(self._msg, self._at + starts[index],",
 			"\t\t\tstarts[index + 1] - starts[index])",
+		]
+
+	def _required(self, struct: ResolvedStruct) -> list[str]:
+		"""Framing: is a whole message here, and if not how many bytes? (20.3)
+
+		Raises rather than returning a pair, which is this backend's
+		convention everywhere else -- and `TruncatedError` carries `needed`,
+		so the caller who wants the number has it without a tuple to unpack.
+
+		A classmethod over raw bytes: framing is asked before there is a view
+		to ask. The length expressions are instance reads, so it builds one
+		over the prefix, which costs a `Message` and a `View` and nothing
+		else.
+		"""
+		if struct.layout.register is not None:
+			return []
+
+		name = c_name(struct.name)
+		head = [
+			"", "\t@classmethod",
+			"\tdef required(cls, data: bytes | bytearray | memoryview) -> int:",
+			f'\t\t"""How many bytes a whole `{struct.name}` needs, given these.',
+			"",
+			"\t\tReturns the total length when a complete one is present, and",
+			"\t\traises `TruncatedError` otherwise -- whose `needed` is a lower",
+			'\t\tbound on that total, so the next read can be sized."""',
+			"\t\thave = len(data)",
+		]
+
+		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+			return [*head,
+			        "\t\tif have < cls.SIZE_BYTES:",
+			        f'\t\t\traise TruncatedError("{struct.name}: "',
+			        '\t\t\t\tf"{cls.SIZE_BYTES} bytes needed, {have} here",',
+			        "\t\t\t\tcls.SIZE_BYTES)",
+			        "\t\treturn cls.SIZE_BYTES"]
+
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is None:
+			return self._unframeable(struct)
+
+		constant, variable = parts
+		if constant == 0 and not variable:
+			return self._unframeable(struct,
+			        "a complete one can be zero bytes, so every buffer already"
+			        " holds one")
+
+		steps: list[str] = []
+		for placement in variable:
+			if placement.delimiter is not None \
+					and placement.type_name in self.structs:
+				return self._unframeable(struct,
+				        "a run of records ends at a terminator this cannot tell"
+				        " apart from the end of the bytes so far")
+
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return self._unframeable(struct)
+
+			local = c_name(local_name(struct, placement))
+			steps.extend([
+				"",
+				f"\t\t# {placement.path}: reading its length means reading",
+				"\t\t# bytes that have to be here first.",
+				"\t\tif have < at:",
+				f'\t\t\traise TruncatedError("{placement.path}: '
+				'incomplete", at)',
+			])
+			if placement.delimiter is not None:
+				steps.extend([
+					f"\t\tif not probe.{local}_terminated:",
+					"\t\t\t# The delimiter is not in what we have, and how"
+					" much more",
+					"\t\t\t# is the sender's to know. One byte is the honest"
+					" bound.",
+					f'\t\t\traise TruncatedError("{placement.path}: '
+					'no delimiter yet", have + 1)',
+				])
+			steps.append(f"\t\tat += {length.replace('self.', 'probe.')}")
+
+		return [
+			*head,
+			f"\t\tat = {constant}",
+			"\t\tif have < cls.SIZE_MIN:",
+			f'\t\t\traise TruncatedError("{struct.name}: incomplete",'
+			" cls.SIZE_MIN)",
+			"",
+			"\t\t# A view over what has arrived, so every length below reads",
+			"\t\t# through the same bounds the accessors do.",
+			"\t\tprobe = cls(Message(bytearray(data)), 0, have)",
+			*steps,
+			"",
+			"\t\tif have < at:",
+			f'\t\t\traise TruncatedError("{struct.name}: incomplete", at)',
+			"\t\treturn at",
+		]
+
+	def _unframeable(self, struct: ResolvedStruct,
+			why: str | None = None) -> list[str]:
+		if struct.layout.register is not None:
+			return []
+		reason = why or (
+			"it ends where the view ends, so how long one is is the"
+			" transport's answer rather than the message's"
+			if any(held.sized_by == "remaining" for held in own_members(struct))
+			else "one of its members has no length this can compute")
+		return [
+			"",
+			f"\t# No `required`: {reason}.",
+			"\t# Framing such a message is the layer below's job.",
 		]
 
 	def _extent_expression(self, struct: ResolvedStruct) -> str | None:

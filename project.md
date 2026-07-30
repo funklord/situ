@@ -2799,12 +2799,26 @@ reader gets it on every partial read; bounds means a read went outside the
 buffer, which is a bug or an attack, and conflating them makes a receiver treat
 normal progress as hostile.
 
+All four backends emit it, and the shape of the answer is each language's:
+`situ_err_t` with an out-parameter in C and C++, a `TruncatedError` carrying
+`needed` in Python, and a `Framing { Complete(n), Need(n) }` enum in Rust --
+`Result<usize>` would have to drop one of the two numbers or smuggle it
+through the error, and a caller needs both: one to consume, one to size the
+next read.
+
 Three shapes are declined, each saying so where the function would have been:
 a `[remaining]` tail, because it ends where the view ends and how long one is
 is the transport's answer rather than the message's; a run of records, because
 the walk that finds its terminator stops just as readily at the end of what has
 arrived and nothing distinguishes the two; and a struct whose complete form can
 be zero bytes, because then every buffer already holds one.
+
+It also inherits whatever a backend cannot measure. C++ does not resolve a
+length field at a dynamic offset -- it says so where that member's accessor
+would be, and has since before framing existed -- so `required` declines there
+too. That is the right answer rather than a second limitation: a framing
+function that skipped the member it could not measure would report a total
+short by exactly that member.
 
 **Every one of these declines rather than guesses**, and says so in the file it
 writes. A generated artifact that quietly omits a member is indistinguishable

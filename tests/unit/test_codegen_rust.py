@@ -60,8 +60,12 @@ def build(tmp_path: Path, body: str, main: str = "",
 		entry, kind = src / "lib.rs", ["--crate-type", "lib"]
 
 	assert RUSTC is not None
+	# `-D warnings`, because a great deal of CI does and generated code that
+	# only compiles without it is generated code that fails for the user. It
+	# was absent here, and `unused_parens` in a clamp went unnoticed until a
+	# hand-run probe used the flag.
 	return subprocess.run(
-		[RUSTC, "--edition", "2021", *kind, str(entry),
+		[RUSTC, "--edition", "2021", "-D", "warnings", *kind, str(entry),
 		 "-o", str(tmp_path / "out")],
 		capture_output=True, text=True, check=False, cwd=tmp_path)
 
@@ -541,6 +545,48 @@ fn main() {
 	bad[4 + 3] = 200;
 	let held = unit::S::new(&bad[4..28]).unwrap();
 	assert!(held.body(&bad).is_err());
+}
+""")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True, text=True)
+	assert run.returncode == 0, run.stderr
+
+
+# -- framing a stream -------------------------------------------------------
+
+STREAM_FRAMED = "struct s { u8 version; u16 n; u8 body[n]; u16 trailer; }"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_required_never_reads_a_length_that_has_not_arrived(tmp_path: Path) -> None:
+	"""`Framing` rather than `Result<usize>`: both arms carry a number and
+	they mean different things -- one is the length, the other a lower bound
+	on it. A caller framing a stream needs both."""
+	built = build(tmp_path, STREAM_FRAMED, main="""
+use situ_rt::Framing;
+
+fn main() {
+	let whole = [1u8, 0, 4, b'D', b'A', b'T', b'A', 0xBE, 0xEF];
+
+	for have in 0..whole.len() {
+		match unit::S::required(&whole[..have]) {
+			Framing::Complete(_) => panic!("complete at {}", have),
+			Framing::Need(n) => {
+				assert!(n > have && n <= whole.len());
+				// `n` not wholly here: the minimum is all that can be said.
+				if have < 3 { assert_eq!(n, unit::S::SIZE_MIN); }
+				// Past the gate: `n` has been read and the answer is exact.
+				if have >= unit::S::SIZE_MIN { assert_eq!(n, whole.len()); }
+			}
+		}
+	}
+
+	assert_eq!(unit::S::required(&whole), Framing::Complete(whole.len()));
+
+	let mut longer = whole.to_vec();
+	longer.extend_from_slice(b"next");
+	assert_eq!(unit::S::required(&longer), Framing::Complete(whole.len()));
 }
 """)
 	assert built.returncode == 0, built.stderr

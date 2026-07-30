@@ -46,6 +46,23 @@ pub enum Error {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// The answer to "is a whole message here yet, and if not how many bytes?"
+///
+/// Its own type rather than `Result<usize>`, because both arms carry a number
+/// and they mean different things: one is the message's length, the other is
+/// a lower bound on it. A `Result` would have to drop one of them or smuggle
+/// it through the error, and a caller framing a stream needs both -- the
+/// first to consume, the second to size the next read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Framing {
+	/// A whole message is present, and this is how long it is. Anything
+	/// beyond it belongs to the next one.
+	Complete(usize),
+	/// Not yet. At least this many bytes are needed in total -- not this
+	/// many more.
+	Need(usize),
+}
+
 /// The obligations outstanding over a buffer: tags that no longer match the
 /// bytes (section 14.2), and fields that no longer equal what they derive
 /// from (section 16.1). One word for both, because a message is either ready

@@ -192,6 +192,7 @@ class Emitter:
 			lines.extend(self._member(struct, entry))
 
 		lines.extend(self._extent_method(struct))
+		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
@@ -1084,6 +1085,137 @@ class Emitter:
 			"\t\t}",
 			f"\t\treturn at - ({start});",
 			"\t}",
+		]
+
+	def _required(self, struct: ResolvedStruct) -> list[str]:
+		"""Framing: is a whole message here, and if not how many bytes? (20.3)
+
+		Static, because it is asked of bytes rather than of a message that has
+		already been acquired -- there is nothing to be a member of yet. The
+		length expressions are member functions, so it builds a temporary over
+		the prefix and reads through that: the class is a view and a view is
+		two words, so the temporary is free.
+		"""
+		if struct.layout.register is not None:
+			return []
+
+		name = c_name(struct.name)
+
+		# Two functions rather than one. The length expressions below are
+		# member calls -- `base()` is `this->base()` -- so the work has to
+		# happen on an object, and framing is asked of bytes that are not one
+		# yet. So: an instance method over a view, and a static that makes the
+		# view. `framed` is worth having on its own, being "is what I already
+		# hold a complete message?".
+		head = [
+			"",
+			"\t/* How many bytes a whole one needs, given the ones this view",
+			"\t * holds.",
+			"\t *",
+			"\t * ok        a complete one is present; `need` is its length",
+			"\t * truncated not yet; `need` is a lower bound on the total */",
+			"\t[[nodiscard]] ::situ::rt::err framed(std::uint32_t &need)"
+			" const noexcept",
+			"\t{",
+			"\t\tconst std::uint32_t have = limit();",
+		]
+		tail = [
+			"",
+			"\t/* The same question asked of bytes that are not a view yet,"
+			" which is",
+			"\t * the shape a stream reader wants. */",
+			"\t[[nodiscard]] static ::situ::rt::err required("
+			"const std::uint8_t *data,",
+			"\t\t\tstd::uint32_t have, std::uint32_t &need) noexcept",
+			"\t{",
+			f"\t\treturn {name}{{ situ_view_t{{",
+			"\t\t\tconst_cast<std::uint8_t *>(data), have, 0u } }"
+			".framed(need);",
+			"\t}",
+		]
+
+		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+			return [*head,
+			        "\t\tneed = size_bytes;",
+			        "\t\treturn have >= size_bytes ? ::situ::rt::err::ok",
+			        "\t\t                          : ::situ::rt::err::truncated;",
+			        "\t}", *tail]
+
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is None:
+			return self._unframeable(struct)
+
+		constant, variable = parts
+		if constant == 0 and not variable:
+			return self._unframeable(struct,
+			        "a complete one can be zero bytes, so every buffer already"
+			        " holds one")
+
+		steps: list[str] = []
+		for placement in variable:
+			if placement.delimiter is not None \
+					and placement.type_name in self.structs:
+				return self._unframeable(struct,
+				        "a run of records ends at a terminator this cannot tell"
+				        " apart from the end of the bytes so far")
+
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return self._unframeable(struct)
+
+			name_of = c_name(local_name(struct, placement))
+			steps.extend([
+				"",
+				f"\t\t/* {placement.path}: reading its length means reading",
+				"\t\t * bytes that have to be here first. */",
+				"\t\tif (have < at) {",
+				"\t\t\tneed = at;",
+				"\t\t\treturn ::situ::rt::err::truncated;",
+				"\t\t}",
+			])
+			if placement.delimiter is not None:
+				steps.extend([
+					f"\t\tif (!{name_of}_terminated()) {{",
+					"\t\t\t/* The delimiter is not in what we have, and how"
+					" much more",
+					"\t\t\t * is the sender's to know. One byte is the honest"
+					" bound. */",
+					"\t\t\tneed = have + 1u;",
+					"\t\t\treturn ::situ::rt::err::truncated;",
+					"\t\t}",
+				])
+			steps.append(f"\t\tat = at + ({length});")
+
+		return [
+			*head,
+			f"\t\tstd::uint32_t at = {constant}u;",
+			"",
+			"\t\tif (have < size_min) {",
+			"\t\t\tneed = size_min;",
+			"\t\t\treturn ::situ::rt::err::truncated;",
+			"\t\t}",
+			*steps,
+			"",
+			"\t\tneed = at;",
+			"\t\treturn have >= at ? ::situ::rt::err::ok",
+			"\t\t                  : ::situ::rt::err::truncated;",
+			"\t}",
+			*tail,
+		]
+
+	def _unframeable(self, struct: ResolvedStruct,
+			why: str | None = None) -> list[str]:
+		if struct.layout.register is not None:
+			return []
+		reason = why or (
+			"it ends where the view ends, so how long one is is the"
+			" transport's answer rather than the message's"
+			if any(held.sized_by == "remaining" for held in own_members(struct))
+			else "one of its members has no length this can compute")
+		return [
+			"",
+			f"\t/* No `required`: {reason}.",
+			"\t * Framing such a message is the layer below's job. */",
 		]
 
 	def _extent_terms(self, struct: ResolvedStruct) -> list[str] | None:

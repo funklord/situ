@@ -757,3 +757,78 @@ int main()
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- framing a stream -------------------------------------------------------
+
+STREAM_FRAMED = "struct s { u8 version; u16 n; u8 body[n]; u16 trailer; }"
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_required_never_reads_a_length_that_has_not_arrived(tmp_path: Path) -> None:
+	"""Fed one byte at a time. Until `n` has wholly arrived the only honest
+	answer is the minimum -- reading it from byte 1 alone would say 0x0004 or
+	0x0400 depending on which byte turned up first, and that guess would size
+	the next read. The same table the C suite walks."""
+	result = compiles(tmp_path, STREAM_FRAMED, extra="""
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t whole[9] = { 1, 0, 4, 'D','A','T','A', 0xBE, 0xEF };
+	std::uint32_t have, need;
+
+	for (have = 0; have < sizeof whole; have++) {
+		if (::situ::s::required(whole, have, need) != ::situ::rt::err::truncated)
+			return 1;
+		if (need > sizeof whole || need <= have)
+			return 2;
+		if (have < 3u && need != ::situ::s::size_min)
+			return 3;
+		if (have >= ::situ::s::size_min && need != sizeof whole)
+			return 4;
+	}
+
+	if (::situ::s::required(whole, sizeof whole, need) != ::situ::rt::err::ok)
+		return 5;
+	if (need != sizeof whole)
+		return 6;
+	if (::situ::s::required(whole, 64u, need) != ::situ::rt::err::ok
+			|| need != sizeof whole)
+		return 7;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"
+
+
+def test_framing_inherits_this_backend_s_limits_and_says_so() -> None:
+	"""`m` sits at `2 + n`, and this backend cannot resolve a length field at
+	a dynamic offset -- it says so where `b`'s accessor would be, and has
+	since before framing existed. `required` therefore declines too, which is
+	the right answer rather than a second limitation: a framing function that
+	skipped the member it cannot measure would report a total short by it.
+
+	The C backend does resolve this, so the equivalent test there is an ASan
+	probe of the per-member guard. Naming the asymmetry here rather than
+	contriving a schema that hides it.
+	"""
+	header = emit(TWO_LENGTHS)
+
+	assert "sized by `m`, which this backend cannot resolve yet" in header
+	assert "No `required`: one of its members has no length this can compute" \
+		in header

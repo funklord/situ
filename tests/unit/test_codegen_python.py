@@ -671,3 +671,34 @@ def test_and_the_offset_is_checked_on_every_read(tmp_path: Path) -> None:
 	raw[4 + 3] = 200		# points outside the message
 	with pytest.raises(module.BoundsError):
 		held.body
+
+
+# -- framing a stream -------------------------------------------------------
+
+STREAM_FRAMED = "struct s { u8 version; u16 n; u8 body[n]; u16 trailer; }"
+
+
+def test_required_never_reads_a_length_that_has_not_arrived(tmp_path: Path) -> None:
+	"""Fed one byte at a time. Until `n` has wholly arrived the only honest
+	answer is the minimum -- reading it from byte 1 alone would say 0x0004 or
+	0x0400 depending on which byte turned up first, and that guess would size
+	the next read. The same table the C suite walks."""
+	module = load(tmp_path, STREAM_FRAMED)
+	whole  = bytes([1, 0, 4]) + b"DATA" + bytes([0xBE, 0xEF])
+
+	for have in range(len(whole)):
+		with pytest.raises(module.TruncatedError) as caught:
+			module.s.required(whole[:have])
+
+		needed = caught.value.needed
+		assert have < needed <= len(whole)
+		if have < 3:
+			# `n` is not wholly here, so the minimum is all that can be said.
+			assert needed == module.s.SIZE_MIN
+		elif have >= module.s.SIZE_MIN:
+			# Past the gate, so `n` has been read and the answer is exact.
+			assert needed == len(whole)
+
+	assert module.s.required(whole) == len(whole)
+	# More than a whole message is still one, and the answer is where it ends.
+	assert module.s.required(whole + b"next") == len(whole)
