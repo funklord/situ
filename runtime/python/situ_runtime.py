@@ -529,3 +529,40 @@ def zigzag_decode(raw: int) -> int:
 
 def zigzag_encode(value: int) -> int:
 	return (value << 1) ^ (value >> 63) if value < 0 else value << 1
+
+
+def varint_be_get(data: bytes, at: int, max_bytes: int,
+		terminal_bits: int) -> tuple[int, int] | None:
+	"""Decode one big-endian base-128 varint: the high group first.
+
+	ASN.1's identifier octets, MIDI's delta times and SQLite's record varints
+	are all this. `terminal_bits` is what the last permitted byte carries;
+	where that is eight there is no spare bit for a continuation flag, so the
+	byte is read whole and ends the value whatever its high bit says.
+	"""
+	acc = 0
+
+	for i in range(max_bytes):
+		if at + i >= len(data):
+			return None
+		byte = data[at + i]
+
+		if terminal_bits == 8 and i + 1 == max_bytes:
+			return (acc << 8) | byte, i + 1
+
+		acc = (acc << 7) | (byte & 0x7F)
+		if not byte & 0x80:
+			return acc, i + 1
+
+	return None
+
+
+def varint_be_len(value: int, max_bytes: int, terminal_bits: int) -> int:
+	"""The bytes `value` needs under `varint_be_get`'s rules."""
+	n = 1
+	while value >= 0x80:
+		value >>= 7
+		n += 1
+	if terminal_bits == 8 and n > max_bytes:
+		n = max_bytes
+	return n

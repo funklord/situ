@@ -1176,3 +1176,37 @@ def test_a_varint_may_size_an_array(tmp_path: Path) -> None:
 
 	assert (held.payload_size, held.rowid) == (7, 1)
 	assert bytes(held.payload)[2:] == b"alpha"
+
+
+BE128 = "varint_type sq { encoding = be128; max_bits = 64; max_bytes = 9; }"
+CELL  = BE128 + "struct cell { sq payload_size; sq rowid; u8 payload[payload_size]; }"
+
+
+def test_a_be128_field_uses_the_big_endian_reader() -> None:
+	module = emit(BE128 + "struct S { sq n; u16 after; }")
+
+	assert "varint_be_get(data, at, 9, 8)" in module
+	assert "\tvarint_be_get," in module
+
+
+def test_a_be128_field_reads_what_sqlite_wrote(tmp_path: Path) -> None:
+	"""2^56-1 is the longest eight-byte value and 2^60-1 needs the ninth,
+	whose eight bits and absent continuation flag are the whole of what
+	distinguishes this encoding from every other base-128."""
+	module = load(tmp_path, CELL)
+	rt     = runtime()
+
+	small = module.cell.at(rt.Message(bytearray(
+		bytes([0x07, 0x01, 0x02, 0x17]) + b"alpha")), 0, 9)
+	assert small.rowid == 1
+	assert bytes(small.payload)[2:] == b"alpha"
+
+	eight = bytearray(bytes([0x03] + [0xFF] * 7 + [0x7F, 0x02, 0x0F]) + b"x")
+	held  = module.cell.at(rt.Message(eight), 0, len(eight))
+	assert held.rowid == (1 << 56) - 1
+	assert held.rowid_len == 8
+
+	nine = bytearray(bytes([0x03, 0x87] + [0xFF] * 8 + [0x02, 0x0F]) + b"y")
+	held = module.cell.at(rt.Message(nine), 0, len(nine))
+	assert held.rowid == (1 << 60) - 1
+	assert held.rowid_len == 9

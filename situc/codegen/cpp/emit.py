@@ -2483,14 +2483,13 @@ class Emitter:
 	def _reads_varint(self, placement: Placement) -> bool:
 		"""Whether this backend can read the varint this member is.
 
-		A member sized by one it cannot read has no length either, so the
-		refusal has to reach the offset chain: emitting the call anyway names
-		an accessor the guard above declined to write.
+		A member sized by one it cannot has no length either, so the refusal
+		reaches the offset chain rather than naming an accessor nobody wrote.
+		Both encodings are read now; the check stays because the next one to
+		arrive should reach the same place rather than find it removed.
 		"""
-		declared = next((decl for decl in self.schema.varints()
-		                 if decl.name == placement.varint), None)
-		return (declared is not None
-		        and declared.encoding is ast.VarintEncoding.LEB128)
+		return any(decl.name == placement.varint
+		           for decl in self.schema.varints())
 
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2508,16 +2507,6 @@ class Emitter:
 		if declared is None:
 			return []
 
-		# A backend with only the leb128 reader must say so rather than use it:
-		# the groups come from the other end, so a `be128` value decoded as
-		# leb128 is a plausible number and not the one on the wire.
-		if declared.encoding is not ast.VarintEncoding.LEB128:
-			return ["", f"\t/* {placement.path}: `{declared.encoding.value}`"
-			        " is not an encoding this",
-			        f"\t/* backend reads yet. The `leb128` reader would take"
-			        " the groups from",
-			        f"\t/* the wrong end and hand back a plausible number."]
-
 		name   = c_name(local_name(struct, placement))
 		start  = self._offset_expression(struct, placement)
 		if start is None:
@@ -2529,6 +2518,16 @@ class Emitter:
 		ctype  = "std::int64_t" if signed else "std::uint64_t"
 		decoded = ("static_cast<std::int64_t>(situ_zigzag_decode(raw))"
 		           if signed else "raw")
+		big    = declared.encoding is ast.VarintEncoding.BE128
+
+		# The two encodings differ in which end the groups come from, and the
+		# big-endian one in what its last permitted byte carries.
+		read = (f"situ_varint_be_get(base() + at, limit() - at, {width}u,"
+		        f" {declared.terminal_bits}u, &raw)" if big else
+		        f"situ_varint_get(base() + at, limit() - at, {width}u, &raw)")
+		encoded = (f"situ_varint_be_len(raw, {width}u,"
+		           f" {declared.terminal_bits}u)" if big else
+		           "situ_varint_len(raw)")
 
 		minimal = ([
 			"",
@@ -2562,7 +2561,7 @@ class Emitter:
 			"\t\t}",
 			"",
 			f"\t\t{'used = ' if declared.minimal else 'const std::uint32_t used = '}"
-			f"situ_varint_get(base() + at, limit() - at, {width}u, &raw);",
+			f"{read};",
 			"\t\tif (used == 0u) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
@@ -2584,8 +2583,7 @@ class Emitter:
 			"\t\tif (at >= limit()) {",
 			"\t\t\treturn 0u;",
 			"\t\t}",
-			f"\t\treturn situ_varint_get(base() + at, limit() - at,"
-			f" {width}u, &raw);",
+			f"\t\treturn {read};",
 			"\t}",
 			"",
 			"\t/* The same value where an error cannot be returned: the length",

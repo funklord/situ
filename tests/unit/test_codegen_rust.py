@@ -1203,3 +1203,52 @@ fn main() {
 """)
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+BE128 = "varint_type sq { encoding = be128; max_bits = 64; max_bytes = 9; }"
+
+
+def test_a_be128_field_uses_the_big_endian_reader() -> None:
+	module = emit(BE128 + "struct S { sq n; u16 after; }")
+
+	assert "situ_rt::varint_be_get(self.bytes, at, 9, 8)" in module
+
+
+def test_a_member_after_a_be128_is_placed_past_it() -> None:
+	module = emit(BE128 + "struct S { sq n; u16 after; }")
+
+	assert "self.n_len()" in module
+	assert "its offset cannot be resolved" not in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_be128_field_reads_what_sqlite_wrote(tmp_path: Path) -> None:
+	"""2^56-1 is the longest eight-byte value and 2^60-1 needs the ninth,
+	whose eight bits and absent continuation flag are the whole of what
+	distinguishes this encoding from every other base-128."""
+	result = build(tmp_path,
+	               BE128 + "struct cell { sq payload_size; sq rowid;"
+	               " u8 payload[payload_size]; }",
+	               main="""
+fn main() {
+	// sqlite3, rowid 1
+	let small: &[u8] = &[0x07, 0x01, 0x02, 0x17, b'a', b'l', b'p', b'h', b'a'];
+	let c = unit::Cell::new(small).unwrap();
+	assert_eq!(c.rowid().unwrap(), 1);
+	assert_eq!(&c.payload()[2..], b"alpha");
+
+	// sqlite3, rowid 2^56-1: eight bytes
+	let eight: &[u8] = &[0x03, 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x7F, 0x02,0x0F, b'x'];
+	let c = unit::Cell::new(eight).unwrap();
+	assert_eq!(c.rowid().unwrap(), 72057594037927935);
+	assert_eq!(c.rowid_len(), 8);
+
+	// sqlite3, rowid 2^60-1: nine
+	let nine: &[u8] = &[0x03, 0x87,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, 0x02,0x0F, b'y'];
+	let c = unit::Cell::new(nine).unwrap();
+	assert_eq!(c.rowid().unwrap(), 1152921504606846975);
+	assert_eq!(c.rowid_len(), 9);
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0

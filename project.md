@@ -1242,7 +1242,8 @@ walk (9.5) reads a varint to *size* an item and hands the caller an offset and
 a length, never a value -- which is why the gap survived the construct that
 looks most like it would have found it.
 
-Both are closed now, so the cell is a struct and `cells_at` hands one back.
+Both are closed in all four backends, so the cell is a struct and `cells_at`
+hands one back.
 The example's test walks a page sqlite3 wrote through to the strings in its
 rows, and a separate case checks the nine-byte varint against rowids sqlite3
 produced for 2^56-1 and 2^60-1 -- the boundary where this encoding stops
@@ -5017,10 +5018,12 @@ Each says so in the generated output. None of them is a design question; they
 are the C backend having gone first and the others not having caught up on
 that construct.
 
-**`be128` is C-only.** Both encodings are describable (8.1.1) and all four
-backends read `leb128`; C alone reads the big-endian one. The other three
-refuse it and say so rather than running the `leb128` reader over it, which
-would take the groups from the wrong end and hand back a plausible number.
+The last two off this list -- a `tlv` region's items, then a varint field and
+its `be128` encoding -- both had the same shape when they came off it. Three
+backends refuse a construct through the shared classifier and say so; C, which
+answers on its own, either misplaces it or reads it wrongly. The refusal is the
+safe half and the silence is not: what the port is worth is as much in what it
+finds in C as in what it adds to the other three.
 
 **Two kernel families that are described and not generated.**
 

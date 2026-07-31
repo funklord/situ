@@ -474,3 +474,51 @@ pub fn zigzag_decode(raw: u64) -> i64 {
 pub fn zigzag_encode(value: i64) -> u64 {
 	((value << 1) ^ (value >> 63)) as u64
 }
+
+/// Decode one big-endian base-128 varint: the high group first, otherwise the
+/// same shape as leb128. ASN.1's identifier octets, MIDI's delta times and
+/// SQLite's record varints are all this.
+///
+/// `max_bytes` is where the encoding stops and `terminal_bits` is what the last
+/// permitted byte carries. Where that is eight there is no spare bit for a
+/// continuation flag, so the byte is read whole and ends the value whatever its
+/// high bit says -- SQLite's ninth byte, and the reason nine bytes hold
+/// sixty-four bits where seven-bit groups would need ten.
+#[inline]
+pub fn varint_be_get(bytes: &[u8], at: usize, max_bytes: usize,
+		terminal_bits: u32) -> Option<(u64, usize)> {
+	let mut acc: u64 = 0;
+	let mut i = 0;
+
+	while i < max_bytes && at + i < bytes.len() {
+		let byte = bytes[at + i];
+
+		if terminal_bits == 8 && i + 1 == max_bytes {
+			return Some(((acc << 8) | byte as u64, i + 1));
+		}
+
+		acc = (acc << 7) | (byte & 0x7F) as u64;
+		i += 1;
+
+		if byte & 0x80 == 0 {
+			return Some((acc, i));
+		}
+	}
+
+	None
+}
+
+/// The bytes `value` needs under `varint_be_get`'s rules, for the minimality
+/// check: a longer encoding of one value is a second encoding.
+#[inline]
+pub fn varint_be_len(mut value: u64, max_bytes: usize, terminal_bits: u32) -> usize {
+	let mut n = 1;
+	while value >= 0x80 {
+		value >>= 7;
+		n += 1;
+	}
+	if terminal_bits == 8 && n > max_bytes {
+		n = max_bytes;
+	}
+	n
+}

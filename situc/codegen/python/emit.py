@@ -436,12 +436,20 @@ class Emitter:
 		varints    = [p for p in placements if p.varint is not None]
 		declared   = {decl.name: decl for decl in self.schema.varints()}
 
+		def held(name: str) -> list[ast.VarintDecl]:
+			return [declared[p.varint] for p in varints
+			        if p.varint in declared
+			        and declared[p.varint].encoding.value == name]
+
 		needed = []
-		if self._tlv_items() or varints:
+		if self._tlv_items() or held("leb128"):
 			needed.append("varint_get")
-		if any(declared[p.varint].minimal for p in varints
-		       if p.varint in declared):
+		if held("be128"):
+			needed.append("varint_be_get")
+		if any(decl.minimal for decl in held("leb128")):
 			needed.append("varint_len")
+		if any(decl.minimal for decl in held("be128")):
+			needed.append("varint_be_len")
 		if any(declared[p.varint].transform is not None for p in varints
 		       if p.varint in declared):
 			needed.append("zigzag_decode")
@@ -887,14 +895,13 @@ class Emitter:
 	def _reads_varint(self, placement: Placement) -> bool:
 		"""Whether this backend can read the varint this member is.
 
-		A member sized by one it cannot read has no length either, so the
-		refusal has to reach the offset chain: emitting the call anyway names
-		an accessor the guard above declined to write.
+		A member sized by one it cannot has no length either, so the refusal
+		reaches the offset chain rather than naming an accessor nobody wrote.
+		Both encodings are read now; the check stays because the next one to
+		arrive should reach the same place rather than find it removed.
 		"""
-		declared = next((decl for decl in self.schema.varints()
-		                 if decl.name == placement.varint), None)
-		return (declared is not None
-		        and declared.encoding is ast.VarintEncoding.LEB128)
+		return any(decl.name == placement.varint
+		           for decl in self.schema.varints())
 
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -910,16 +917,6 @@ class Emitter:
 		if declared is None:
 			return []
 
-		# A backend with only the leb128 reader must say so rather than use it:
-		# the groups come from the other end, so a `be128` value decoded as
-		# leb128 is a plausible number and not the one on the wire.
-		if declared.encoding is not ast.VarintEncoding.LEB128:
-			return ["", f"\t# {placement.path}: `{declared.encoding.value}`"
-			        " is not an encoding this",
-			        f"\t# backend reads yet. The `leb128` reader would take"
-			        " the groups from",
-			        f"\t# the wrong end and hand back a plausible number."]
-
 		name  = c_name(local_name(struct, placement))
 		start = self._offset_expression(struct, placement)
 		if start is None:
@@ -929,6 +926,12 @@ class Emitter:
 		width   = declared.max_bytes
 		signed  = declared.transform is ast.VarintTransform.ZIGZAG
 		decoded = "zigzag_decode(raw)" if signed else "raw"
+		big     = declared.encoding is ast.VarintEncoding.BE128
+
+		read = (f"varint_be_get(data, at, {width}, {declared.terminal_bits})"
+		        if big else f"varint_get(data, at, {width})")
+		encoded = (f"varint_be_len(raw, {width}, {declared.terminal_bits})"
+		           if big else "varint_len(raw)")
 
 		minimal = ([
 			"",
@@ -937,7 +940,7 @@ class Emitter:
 			"\t\tif used != varint_len(raw):",
 			"\t\t\traise ConstraintError(",
 			f'\t\t\t\tf"{placement.path} is encoded in {{used}} bytes and needs"',
-			'\t\t\t\tf" {varint_len(raw)}; `minimal` admits one encoding")',
+			f'\t\t\t\tf" {{{encoded}}}; `minimal` admits one encoding")',
 		] if declared.minimal else [])
 
 		return [
@@ -960,7 +963,7 @@ class Emitter:
 			f'\t\t\traise BoundsError(f"{placement.path} starts at {{at}},'
 			f' past the frame")',
 			"",
-			f"\t\tread = varint_get(data, at, {width})",
+			f"\t\tread = {read}",
 			"\t\tif read is None:",
 			f'\t\t\traise BoundsError(f"{placement.path} runs past the frame")',
 			f"\t\traw, {'used' if declared.minimal else '_'} = read",
@@ -979,7 +982,7 @@ class Emitter:
 			"",
 			"\t\tif at >= len(data):",
 			"\t\t\treturn 0",
-			f"\t\tread = varint_get(data, at, {width})",
+			f"\t\tread = {read}",
 			"\t\treturn 0 if read is None else read[1]",
 			"",
 			"\t@property",
