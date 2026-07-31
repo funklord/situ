@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
+from situc.codegen.c import derived
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
@@ -3108,24 +3109,48 @@ class Emitter:
 		where. Nothing allocates (invariant 4), so the buffer and its capacity
 		are parameters, and the bound the caller needs is a macro beside them.
 
-		Only for a `table` kernel. The generated decoder's shape is settled
-		there -- `(in, bits, out) -> bits` -- and it is not for the families
-		that are described and not yet generated, whose signature is not
-		something to guess at from here.
+		For a `table` or a `stuffing` kernel, which are the two whose derived
+		decoder this build emits with a settled shape: `(in, count, out) ->
+		count`. It was `table` alone, on the argument that the other families
+		were described and not generated -- which stopped being true without
+		this note noticing.
+
+		What differs between them is what `count` measures, and that is not a
+		guess: a `table` kernel is bit-oriented by construction, and a
+		`stuffing` kernel declares `unit`, because HDLC counts bits where COBS
+		scans bytes. Getting it wrong would pass a byte count to a bit loop and
+		decode an eighth of the region.
 		"""
 		codec = self.codecs.get(placement.codec or "")
 		if codec is None or codec.kernel is None:
 			return []
-		if codec.kernel.family is not ast.KernelFamily.TABLE:
-			return []		# the decoder's shape is the kernel's, and only
-					# `table`'s is settled
+		if codec.kernel.family not in (ast.KernelFamily.TABLE,
+		                               ast.KernelFamily.STUFFING):
+			return []		# the decoder's shape is the kernel's, and
+					# these two are the settled ones
+		if codec.kernel.family is ast.KernelFamily.STUFFING \
+				and _named_stuffing(codec) is None:
+			return []		# a named code with no derived implementation
 
 		ratio = codec.ratio
 		if ratio is None or ratio[0] == 0:
 			return []
 
+		# A bit-oriented kernel counts bits; a byte or stream one counts
+		# bytes. The region's span is bytes either way, so exactly one of
+		# these two needs the conversion.
+		bitwise = (codec.kernel.family is ast.KernelFamily.TABLE
+		           or _stuffing_unit(codec) == "bit")
+		scale   = " * 8u" if bitwise else ""
+		unscale = " / 8u" if bitwise else ""
+
 		local   = c_name(self._local(struct, placement))
-		span    = (f"{ident(self.prefix, struct.name, local, 'span')}(view)"
+		# `_len` and not `_span`: the span includes the delimiter, and the
+		# delimiter is not the codec's to transform. Decoding it as content
+		# put SMTP's `CRLF . CRLF` through the unstuffer and handed back two
+		# extra bytes -- which nothing caught while the accessor was emitted
+		# for `table` kernels alone and no delimited region used one.
+		span    = (f"{ident(self.prefix, struct.name, local, 'len')}(view)"
 		           if placement.delimiter is not None
 		           else self._length_expression(struct, placement))
 		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
@@ -3152,7 +3177,8 @@ class Emitter:
 			out.append(f"#define {decoded} {bound}u")
 		out.extend([
 			f"extern uint32_t {ident(self.prefix, placement.codec or '', 'decode')}"
-			"(const uint8_t *in, uint32_t bits, uint8_t *out);",
+			f"(const uint8_t *in, uint32_t {'bits' if bitwise else 'len'},"
+			f" uint8_t *out);",
 			"",
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'decode')}"
@@ -3168,7 +3194,7 @@ class Emitter:
 			"\t}",
 			f"\t*len = {ident(self.prefix, placement.codec or '', 'decode')}("
 			f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
-			"\t\tencoded * 8u, out) / 8u;",
+			f"\t\tencoded{scale}, out){unscale};",
 			"\treturn SITU_OK;",
 			"}",
 		])
@@ -4832,3 +4858,19 @@ def _bit_assembly(endian: ast.Endian | None) -> str:
 	if endian is ast.Endian.NATIVE:
 		return "ne"
 	return "lsb" if endian is ast.Endian.LITTLE else "msb"
+
+
+
+def _named_stuffing(codec: ast.CodecDecl) -> str | None:
+	"""The stuffing code this codec names, where one is generated for it."""
+	kernel = codec.kernel
+	value  = kernel.argument("code") if kernel is not None else None
+	name   = value.name if isinstance(value, ast.NameRef) else None
+	return name if name in derived.DERIVED_STUFFING else None
+
+
+def _stuffing_unit(codec: ast.CodecDecl) -> str:
+	"""What the trigger examines: HDLC counts bits, COBS scans bytes."""
+	kernel = codec.kernel
+	value  = kernel.argument("unit") if kernel is not None else None
+	return value.name if isinstance(value, ast.NameRef) else "stream"

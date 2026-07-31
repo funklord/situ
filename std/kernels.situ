@@ -166,6 +166,18 @@ codec hdlc_bit_stuffing {
 }
 impl hdlc_bit_stuffing derived;
 
+// SMTP dot-stuffing, RFC 5321 section 4.5.2. A line beginning with a period is
+// sent with two and the receiver removes one, which is what leaves `CRLF . CRLF`
+// unambiguous as the end of a DATA body.
+//
+// `unit = stream` and not `byte`: the trigger is "the start of a line", which
+// cannot be evaluated from one byte without knowing what preceded it. The worst
+// case is a body of nothing but `.CRLF` lines -- three bytes in, four out.
+codec smtp_dot_stuffing {
+	kernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);
+}
+impl smtp_dot_stuffing derived;
+
 // ---------------------------------------------------------------------------
 // A pipeline, composing pointwise and conservatively.
 //

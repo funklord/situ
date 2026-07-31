@@ -2202,6 +2202,29 @@ which is `ratio_exact(2, 1)` *and* `+64` at once. A composed signature may
 carry both; a hand-written one still gives one form
 (`docs/decisions/0016-composed-expansion.md`).
 
+**What is generated, and what a decoder is handed.** All six families emit an
+implementation, and the twenty codecs in `std/kernels.situ` do so without a
+refusal among them. The interface is one shape -- `(in, count, out) -> count`
+-- and what differs is what `count` measures. A `table` kernel is bit-oriented
+by construction; the byte families count bytes; and `stuffing` declares `unit`,
+because HDLC counts bits where COBS scans bytes. That is not a detail a
+generated call may guess at: passing a byte count to a bit loop decodes an
+eighth of the region and returns confidently.
+
+A `stuffing` kernel names its code, and only a named code somebody wrote is
+generated -- `cobs`, `hdlc`, `smtp_dot`. The list lives in one place now. It
+lived in two, the dispatch and the prototype gate, and adding a code to one of
+them emitted a definition that nothing declared.
+
+The decode accessor on a coded region (13.5) covers `table` and `stuffing`,
+which are the shapes settled here. It was `table` alone, on the argument that
+the other families were described and not generated -- an argument that stopped
+being true without the comment stating it noticing. Building the rest of it
+found that the accessor decoded `_span` rather than `_len`, so it ran the
+codec over the delimiter as well as the content: SMTP's `CRLF . CRLF` went
+through the unstuffer and came back as two extra bytes. Nothing caught it while
+the accessor existed only for `table` kernels and no delimited region used one.
+
 **Bit phase.** Sub-byte granularity codes force a change in the layout solver:
 a region may begin at a bit offset rather than a byte offset, and its length may
 not be a whole number of bytes. Manchester over an odd number of input bits
@@ -5025,14 +5048,19 @@ answers on its own, either misplaces it or reads it wrongly. The refusal is the
 safe half and the silence is not: what the port is worth is as much in what it
 finds in C as in what it adds to the other three.
 
-**Two kernel families that are described and not generated.**
+**Every kernel family generates.** This page said two of them did not, and
+that `examples/smtp`'s dot-stuffed body was the one real coded region in the
+tree and the one that could not be decoded. None of it was true by the time
+anyone read it back: all six families dispatch, and all twenty codecs in
+`std/kernels.situ` emit an implementation with no refusal among them.
 
-`stuffing`, `permutation`, `linear_block` and `shift_register` derive correct
-properties and emit no code, so `examples/smtp`'s dot-stuffed body is the one
-real coded region in the tree and the one that cannot be decoded. Only `table`
-and `polynomial` generate. That is also why the decode accessor is `table`-only
--- the decoder's shape is the kernel's, and guessing one would name a function
-nobody agreed to write.
+What was true, narrowly, is that one *named code* had none -- `smtp_dot`, in
+the `stuffing` family -- and that the decode accessor on a coded region was
+`table`-only. Both are closed (13.4), so the dot-stuffed body decodes.
+
+This entry is the reason section 0 says to re-derive this list from the
+generated output rather than trust it. It was written when it was right, and
+the work that made it wrong did not think to come back here.
 
 **Smaller, known, and deliberate.**
 

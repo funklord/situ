@@ -2671,20 +2671,62 @@ int main(void)
 	assert subprocess.run([str(binary)]).returncode == 0
 
 
-def test_a_kernel_whose_decoder_is_not_generated_gets_no_accessor() -> None:
-	"""SMTP's dot-stuffing is one: the properties are derived and correct and
-	the implementation is not generated, so the decoder's signature is not
-	something to guess at from here. The note above it already says the
-	transform is the caller's."""
-	header, _ = emit(
-		'struct S { coded body(stuff) until "\\r\\n" '
-		'{ u8 content[remaining]; } }',
-		preamble=PREAMBLE + "codec stuff { kernel = stuffing(worst_case = 4,"
-		                    " per = 3, unit = stream, code = smtp_dot); }\n"
+STUFFED = ('struct S { coded body(stuff) until "\\r\\n" '
+	'{ u8 content[remaining]; } }')
+STUFF_PREAMBLE = (PREAMBLE + "codec stuff { kernel = stuffing(worst_case = 4,"
+	" per = 3, unit = stream, code = smtp_dot); }\n"
+	"impl stuff derived;\n")
+
+
+def test_a_stuffing_kernel_gets_a_decode_accessor() -> None:
+	"""It got none, on the argument that the decoder's shape is settled only
+	for `table` because the other families were described and not generated.
+	They were generated; the note had not noticed."""
+	header, _ = emit(STUFFED, preamble=STUFF_PREAMBLE)
+
+	assert "situ_S_body_decode(situ_view_t view, uint8_t *out," in header
+	assert "situ_stuff_decode(situ_S_body_ptr(view)," in header
+
+
+def test_a_byte_kernel_is_handed_bytes_and_a_bit_kernel_bits() -> None:
+	"""`unit` decides, and getting it wrong passes a byte count to a bit loop
+	and decodes an eighth of the region. HDLC counts bits where COBS scans
+	bytes, and both are `stuffing`."""
+	stream, _ = emit(STUFFED, preamble=STUFF_PREAMBLE)
+	bitwise, _ = emit(
+		STUFFED,
+		preamble=PREAMBLE + "codec stuff { kernel = stuffing(worst_case = 6,"
+		                    " per = 5, unit = bit, code = hdlc); }\n"
 		                    "impl stuff derived;\n")
 
-	assert "transform is the caller's to run" in header
+	assert "encoded, out);" in stream
+	assert "uint32_t len, uint8_t *out);" in stream
+	assert "encoded * 8u, out) / 8u;" in bitwise
+	assert "uint32_t bits, uint8_t *out);" in bitwise
+
+
+def test_the_decode_runs_over_the_content_and_not_the_delimiter() -> None:
+	"""`_span` includes the delimiter and `_len` does not. Decoding the span
+	put SMTP's `CRLF . CRLF` through the unstuffer, which nothing caught while
+	the accessor was emitted for `table` kernels alone and no delimited region
+	used one."""
+	header, _ = emit(STUFFED, preamble=STUFF_PREAMBLE)
+
+	assert "const uint32_t encoded = situ_S_body_len(view);" in header
+	assert "situ_S_body_span(view);" not in header
+
+
+def test_a_stuffing_code_with_no_implementation_gets_no_decode() -> None:
+	"""The family's shape is settled; a named code nobody generates still has
+	no function to call."""
+	header, _ = emit(
+		STUFFED,
+		preamble=PREAMBLE + "codec stuff { kernel = stuffing(worst_case = 2,"
+		                    " per = 1, unit = stream, code = nonesuch); }\n"
+		                    "impl stuff derived;\n")
+
 	assert "situ_S_body_decode" not in header
+	assert "transform is the caller's to run" in header
 
 
 # -- tlv regions (section 9.5) ----------------------------------------------

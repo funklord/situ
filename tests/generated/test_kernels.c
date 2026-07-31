@@ -548,6 +548,69 @@ static void test_a_block_of_the_wrong_length_is_refused(void **state)
 	assert_int_equal(situ_reed_solomon_255_223_encode(block, 222, block), 0);
 }
 
+
+/* -- SMTP dot-stuffing ----------------------------------------------------- */
+
+/* RFC 5321 section 4.5.2, which is two sentences long and turns on exactly
+ * these cases: a line beginning with a period is sent with two, and the
+ * receiver removes one. */
+static void test_dot_stuffing_doubles_a_leading_period(void **state)
+{
+	static const struct { const char *plain, *wire; } CASES[] = {
+		{ "hello\r\n",            "hello\r\n" },
+		{ ".hello\r\n",           "..hello\r\n" },
+		{ ".\r\n",                "..\r\n" },
+		{ "a.b\r\n",              "a.b\r\n" },      /* not at a line start */
+		{ ".a\r\n.b\r\n",         "..a\r\n..b\r\n" },
+		{ "x\r\n.y\r\nz\r\n",     "x\r\n..y\r\nz\r\n" },
+		{ "\r\n.q\r\n",           "\r\n..q\r\n" },
+	};
+	uint8_t out[64];
+	uint8_t back[64];
+	size_t i;
+
+	(void)state;
+	for (i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+		const uint32_t plain = (uint32_t)strlen(CASES[i].plain);
+		const uint32_t wire  = (uint32_t)strlen(CASES[i].wire);
+		uint32_t written;
+
+		written = situ_smtp_dot_stuffing_encode(
+			(const uint8_t *)CASES[i].plain, plain, out);
+		assert_int_equal(written, wire);
+		assert_memory_equal(out, CASES[i].wire, wire);
+
+		assert_int_equal(situ_smtp_dot_stuffing_decode(
+			(const uint8_t *)CASES[i].wire, wire, back), plain);
+		assert_memory_equal(back, CASES[i].plain, plain);
+	}
+}
+
+static void test_dot_stuffing_meets_its_declared_worst_case(void **state)
+{
+	/* `ratio_bounded(4, 3)`: a body of nothing but `.CRLF` lines, three bytes
+	 * in and four out. The properties and the code come from one description,
+	 * so a mismatch here would mean the map is wrong about the wire. */
+	uint8_t out[16];
+
+	(void)state;
+	assert_int_equal(situ_smtp_dot_stuffing_encode((const uint8_t *)".\r\n", 3,
+	                                               out), 4);
+}
+
+static void test_dot_stuffing_carries_line_state_across_the_buffer(void **state)
+{
+	/* `unit = stream`: the trigger is the start of a line, and the body starts
+	 * at one. A decoder that only looked at bytes could not tell the first
+	 * period of the body from one in the middle of a line. */
+	uint8_t out[32];
+
+	(void)state;
+	assert_int_equal(situ_smtp_dot_stuffing_decode((const uint8_t *)"..x\r\n", 5,
+	                                               out), 4);
+	assert_memory_equal(out, ".x\r\n", 4);
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
@@ -559,6 +622,9 @@ int main(void)
 		cmocka_unit_test(test_the_multiplicative_scrambler_is_not_an_involution),
 		cmocka_unit_test(test_the_interleaver_spreads_adjacent_bytes),
 		cmocka_unit_test(test_the_interleaver_refuses_a_partial_block),
+		cmocka_unit_test(test_dot_stuffing_doubles_a_leading_period),
+		cmocka_unit_test(test_dot_stuffing_meets_its_declared_worst_case),
+		cmocka_unit_test(test_dot_stuffing_carries_line_state_across_the_buffer),
 		cmocka_unit_test(test_hdlc_inserts_a_zero_after_five_ones),
 		cmocka_unit_test(test_hdlc_refuses_six_ones),
 		cmocka_unit_test(test_base64_matches_rfc_4648_vectors),

@@ -79,6 +79,14 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	return "\n".join(lines) + "\n"
 
 
+#: Stuffing codes this build derives an implementation for.
+#:
+#: One list because there were two: the dispatch in `_stuffing` and the
+#: prototype gate in `_byte_declarations`, and adding a code to one of them
+#: emitted a definition nothing declared.
+DERIVED_STUFFING = ("cobs", "hdlc", "smtp_dot")
+
+
 def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 	"""The prototypes the header needs for what `generate` emits."""
 	derived = {impl.codec for impl in schema.impls()
@@ -615,8 +623,7 @@ def _byte_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
 		]
 
 	if kernel.family is ast.KernelFamily.STUFFING:
-		code = _named_code(decl)
-		if code not in ("cobs", "hdlc"):
+		if _named_code(decl) not in DERIVED_STUFFING:
 			return []
 		return [
 			"",
@@ -990,11 +997,93 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	code = _named_code(decl)
+	if code not in DERIVED_STUFFING:
+		return None
 	if code == "cobs":
 		return _cobs(decl, prefix)
 	if code == "hdlc":
 		return _hdlc(decl, prefix)
+	if code == "smtp_dot":
+		return _smtp_dot(decl, prefix)
 	return None
+
+
+def _smtp_dot(decl: ast.CodecDecl, prefix: str) -> list[str]:
+	"""SMTP dot-stuffing, RFC 5321 section 4.5.2.
+
+	A line beginning with a period is sent with two, and the receiver removes
+	one. That is what makes `CRLF . CRLF` an unambiguous terminator: a body
+	line of a single dot arrives as two dots, so the only bare dot on its own
+	line is the one that ends the body.
+
+	`unit = stream` rather than `byte`, and the schema says why: the trigger is
+	"the start of a line", which cannot be evaluated from one byte without
+	knowing what preceded it. Both directions here carry that state in a flag
+	rather than looking backwards, so neither needs the buffer to be a whole
+	message.
+
+	The terminator is not written or consumed here. The region is delimited
+	*and* coded, and the scan runs on the encoded bytes -- which is the order
+	the stuffing exists to make safe (13.6).
+	"""
+	name = ident(prefix, decl.name)
+
+	return [
+		"",
+		f"/* {decl.name}: SMTP dot-stuffing (RFC 5321 section 4.5.2).",
+		" *",
+		" * A line beginning with `.` is sent with two. The receiver removes"
+		" one,",
+		" * which is what leaves `CRLF . CRLF` unambiguous as a terminator.",
+		" *",
+		" * `out` needs len + the number of dot-led lines, which the declared",
+		" * `ratio_bounded(4, 3)` bounds at one added byte per three: a body of",
+		" * nothing but `.CRLF` is the worst case. Returns the length written.",
+		" */",
+		f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"	uint32_t read;",
+		"	uint32_t written = 0;",
+		"	int at_line_start = 1;	/* the body starts at the start of a line */",
+		"",
+		"	for (read = 0; read < len; read++) {",
+		"		if (at_line_start && in[read] == (uint8_t)'.') {",
+		"			out[written++] = (uint8_t)'.';",
+		"		}",
+		"		out[written++] = in[read];",
+		"",
+		"		/* A line ends at LF. Testing for it rather than for CRLF is what",
+		"		 * keeps this a stream: a CR at the end of one call and an LF at",
+		"		 * the start of the next would otherwise be missed. */",
+		"		at_line_start = in[read] == (uint8_t)'\\n';",
+		"	}",
+		"",
+		"	return written;",
+		"}",
+		"",
+		f"/* The inverse. A line of `..` becomes `.`; a line of one `.` is the",
+		" * terminator and never reaches here, because the scan that framed the",
+		" * region stopped at it. */",
+		f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"	uint32_t read;",
+		"	uint32_t written = 0;",
+		"	int at_line_start = 1;",
+		"",
+		"	for (read = 0; read < len; read++) {",
+		"		if (at_line_start && in[read] == (uint8_t)'.') {",
+		"			/* Drop the added one and keep whatever follows, which for a",
+		"			 * line that was `.` alone is the CRLF. */",
+		"			at_line_start = 0;",
+		"			continue;",
+		"		}",
+		"		out[written++] = in[read];",
+		"		at_line_start = in[read] == (uint8_t)'\\n';",
+		"	}",
+		"",
+		"	return written;",
+		"}",
+	]
 
 
 def _cobs(decl: ast.CodecDecl, prefix: str) -> list[str]:
