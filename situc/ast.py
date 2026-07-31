@@ -339,6 +339,22 @@ class Opaque(Member):
 	attrs: tuple[Attr, ...] = ()
 
 
+class IndexBase(Enum):
+	"""What an offset in the table is measured from (decision 0024).
+
+	`REGION` is the default and the safe one: an offset that cannot mean
+	anything outside the region is one the region's own extent bounds. The
+	other two can name bytes anywhere in the message, so they are declared.
+	"""
+
+	#: From the start of the indexed region -- the table's own first byte.
+	REGION  = "region"
+	#: From the start of the message, which is what `at expr` means (9.8).
+	MESSAGE = "message"
+	#: From the start of a member declared before the region.
+	MEMBER  = "member"
+
+
 @dataclass(frozen=True)
 class Indexed(Member):
 	"""An offset table followed by elements, FlatBuffers style (section 9.3).
@@ -351,6 +367,11 @@ class Indexed(Member):
 	name: str
 	args: tuple[Attr, ...]
 	members: tuple[Member, ...]
+	#: What the offsets are measured from. `base` names it; absent means the
+	#: region itself, which is the only choice that cannot reach outside it.
+	base: IndexBase		= IndexBase.REGION
+	#: The member `base` names, for `IndexBase.MEMBER` and nothing else.
+	base_member: str | None	= None
 
 	def argument(self, name: str) -> Expr | None:
 		for arg in self.args:

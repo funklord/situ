@@ -153,7 +153,10 @@ def _member(member: ast.Member, depth: int) -> list[str]:
 		return lines
 
 	if isinstance(member, ast.Indexed):
-		lines = [_indent(depth, f"indexed {member.name}")]
+		described = f"indexed {member.name} base={member.base.value}"
+		if member.base_member is not None:
+			described += f"({member.base_member})"
+		lines = [_indent(depth, described)]
 		lines.extend(_members(member.members, depth + 1))
 		return lines
 

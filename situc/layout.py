@@ -121,6 +121,29 @@ class TlvGrammar:
 
 
 @dataclass(frozen=True)
+class IndexTable:
+	"""An `indexed` region's offset table, as a walk needs it (section 9.3).
+
+	The table is `count` entries of `entry_bits`, and the elements follow it.
+	Reaching element N is one read of entry N plus `base`, which is what buys
+	Random access over elements that need not be the same size.
+	"""
+
+	#: Width of one table entry, in bits. Always a whole number of bytes.
+	entry_bits: int
+	#: Where the count comes from, as a member path. None where it is a
+	#: literal, which `count_fixed` then carries.
+	count_path: str | None		= None
+	count_fixed: int | None		= None
+	#: What an offset is measured from (decision 0024).
+	base: str			= "region"
+	#: The member `base` names, for `base == "member"`.
+	base_member: str | None		= None
+	#: The element type, where it is a struct this backend can frame.
+	element: str | None		= None
+
+
+@dataclass(frozen=True)
 class Arm:
 	"""One `case` of a variant, as a walk needs it.
 
@@ -210,6 +233,8 @@ class Placement:
 	# How the region's items are found. Empty until the front end read the
 	# item grammar, which is why nothing walked one for a long time.
 	tlv_grammar: TlvGrammar | None	= None
+	# For an `indexed` region: the offset table, so a backend can walk it.
+	index_table: IndexTable | None	= None
 	# The codec transforming this region, or the one whose region contains it.
 	codec: str | None		= None
 	# The authenticated and sealed regions this member sits inside, outermost
@@ -1087,6 +1112,15 @@ class Solver:
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			sized_by      = _path_of(count_expr),
+			index_table   = IndexTable(
+				entry_bits  = width.bits,
+				count_path  = _path_of(count_expr),
+				count_fixed = count.lo if count.is_point else None,
+				base        = member.base.value,
+				base_member = member.base_member,
+				element     = (element.type_ref.name
+				               if isinstance(element, ast.Field) else None),
+			),
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,

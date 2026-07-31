@@ -1103,7 +1103,35 @@ class Parser:
 			)
 
 		name = members[0].name if isinstance(members[0], ast.Field) else "entries"
-		return ast.Indexed(self.span_from(start), name, tuple(args), members)
+		base, holder = self._index_base(args)
+		return ast.Indexed(self.span_from(start), name, tuple(args), members,
+		                   base, holder)
+
+	def _index_base(self, args: list[ast.Attr]) -> tuple[ast.IndexBase, str | None]:
+		"""`base = region`, `base = message`, or `base = <member>` (0024).
+
+		Absent means the region, which is the one answer that cannot name a
+		byte outside it. Section 9.3 has written `base = table_start` since
+		before there was a parser for it, and nothing read the argument at all.
+		"""
+		for arg in args:
+			if arg.name != "base":
+				continue
+			if not isinstance(arg.value, ast.NameRef):
+				raise error(
+					"`base` names what the offsets are measured from",
+					arg.span,
+					label = "expected a name here",
+					notes = ["one of `region`, `message`, or a member declared"
+					         " before this one"],
+				)
+			if arg.value.name == "region":
+				return ast.IndexBase.REGION, None
+			if arg.value.name == "message":
+				return ast.IndexBase.MESSAGE, None
+			return ast.IndexBase.MEMBER, arg.value.name
+
+		return ast.IndexBase.REGION, None
 
 	def parse_coded(self) -> ast.Coded:
 		"""`coded body(aes_ctr_128) { u16 kind; u8 rest[remaining]; }`

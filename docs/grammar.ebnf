@@ -198,7 +198,12 @@ known_attr	= "name" "=" ident
 (* Referenced by the productions above but never given in section 7. *)
 ref_list	= ident { "," ident } ;
 codec_args	= ident { "," attr } ;
-index_args	= attr { "," attr } ;
+(* Section 9.3. `base` says what an offset is measured from; absent means the
+ * region itself, which is the only choice bounded by the region's own extent.
+ * See docs/decisions/0024-index-offset-base.md. *)
+index_args	= index_arg { "," index_arg } ;
+index_arg	= "base" "=" ( "region" | "message" | ident )
+	| attr ;
 capability_expr	= ident "(" expr { "," expr } ")" | expr ;
 ratio		= "ratio_exact" "(" digits "," digits ")"
 	| "ratio_bounded" "(" digits "," digits ")" ;

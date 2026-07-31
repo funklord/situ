@@ -425,6 +425,13 @@ known_attr    = "name" "=" ident
               | "wire" "=" digits
               | "type" "=" ident [ "[" "]" ] ;
 
+(* Section 9.3. `base` says what an offset in the table is measured from.
+   Absent means the region itself, which is the only choice bounded by the
+   region's own extent -- see docs/decisions/0024-index-offset-base.md. *)
+index_args    = index_arg { "," index_arg } ;
+index_arg     = "base" "=" ( "region" | "message" | ident )
+              | attr ;
+
 (* `array_spec` and `attrs` both open with "[", so this grammar is ambiguous as
    written: `u8 x [foo];` is either an array of `foo` elements or a scalar
    carrying the flag `foo`. Resolved by the attribute vocabulary, which is
@@ -1050,6 +1057,34 @@ indexed(offset_type = u16, count = hdr.n, base = table_start) {
 Capabilities: O(1) random access to elements (one indirection), elements need
 not be fixed-size, element mutation is in-place if the element itself is fixed
 size and same-size, insertion is not supported (offsets would shift).
+
+**`base` says what an offset is measured from**, and defaults to the region:
+
+| written | measured from |
+|---|---|
+| nothing, or `base = region` | the start of the region -- the table's first byte |
+| `base = message` | the start of the message, as `at expr` means it (9.8) |
+| `base = <member>` | the start of that member, declared before the region |
+
+It had been written here as `base = table_start` since before there was a
+parser for it, and the parser never read the argument at all -- which went
+unnoticed because no backend walked the table, so nothing needed to know where
+an offset pointed. Real formats disagree about the answer: a FlatBuffers vtable
+measures from the table, a TIFF IFD and a ZIP central directory from the start
+of the file, and TrueType's `loca` from the start of a different table. Situ
+describes formats it did not design, so all four have to be sayable.
+
+Which one is silent is invariant 9's rule rather than a preference. An offset
+measured from the region cannot name a byte outside it, so the region's own
+extent bounds it and a malformed table is caught by the check that is there
+anyway; the other two can name anything in the message. The safe option is
+silent and the unsafe option is loud. See
+`docs/decisions/0024-index-offset-base.md`.
+
+A member named by `base` must be declared before the region -- the rule a size
+expression follows, and for the same reason: the base has to be readable when
+the table is walked. Naming a later member, or one that is not there, is an
+error listing what is in scope.
 
 ### 9.4 opaque
 

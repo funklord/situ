@@ -59,6 +59,7 @@ def check(schema: ast.Schema) -> None:
 	check_no_recursive_types(schema)
 	check_delimiters(schema)
 	check_tlv_grammar(schema)
+	check_index_bases(schema)
 	check_repeats(schema)
 	check_versions(schema)
 	check_invariants(schema)
@@ -344,6 +345,56 @@ def _check_known_tags(region: ast.Tlv) -> None:
 				         else "`value_size` sizes no wire type at all",
 				         "an item with this tag could be named and never read"],
 			)
+
+
+def check_index_bases(schema: ast.Schema) -> None:
+	"""`base` on an `indexed` region names something the parser can reach.
+
+	The region is the default and needs no check: it is where the table
+	already is. `message` is a fixed point. A member has to exist and to be
+	declared before the region, for the same reason a size expression may only
+	name an earlier field -- the base has to be readable at the moment the
+	table is walked (decision 0024).
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			if isinstance(member, ast.Indexed) \
+					and member.base is ast.IndexBase.MEMBER:
+				_check_one_index_base(struct, member)
+
+
+def _check_one_index_base(struct: ast.StructDecl, region: ast.Indexed) -> None:
+	named   = region.base_member or ""
+	earlier = [str(getattr(held, "name", ""))
+	           for held in _before(struct.members, region)
+	           if getattr(held, "name", None)]
+
+	if named in earlier:
+		return
+
+	later = any(getattr(held, "name", None) == named
+	            for held in _flatten(struct.members))
+	if later:
+		raise error(
+			f"`base` names `{named}`, which is declared after this region",
+			region.span,
+			label = f"`{named}` comes later",
+			notes = ["the base has to be readable at the moment the table is"
+			         " walked, which is the rule a size expression follows too",
+			         f"move `{named}` before the region, or measure from"
+			         " `region` or `message`"],
+		)
+
+	options = ", ".join(f"`{held}`" for held in earlier)
+	raise error(
+		f"`base` names `{named}`, which is not a member of `{struct.name}`",
+		region.span,
+		label = f"no `{named}` here",
+		notes = ([f"declared before this region: {options}"] if options else
+		         ["nothing is declared before this region"]) +
+		        ["`region` measures from the table itself and `message` from"
+		         " the start of the message"],
+	)
 
 
 def check_repeats(schema: ast.Schema) -> None:
