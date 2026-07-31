@@ -5034,9 +5034,27 @@ offset an entry holds, and a view over the element it reaches.
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**None. Every construct in the language is reachable in all four backends.**
+**One, and it is narrower than it was: a member placed after a `coded` or
+`sealed` region.**
 
-The last of them was the `--materialize` offset cache, and re-deriving the
+| construct | example |
+|---|---|
+| anything after a region a codec sizes | `packet.tag` |
+
+Only C computes such a region's length -- its extent is the interior put
+through the codec's expansion, and `_region_length` exists in one backend. So
+the three can place nothing after one, and `examples/packet`'s tag, which sits
+after the sealed region, reports that its offset cannot be resolved in all
+three.
+
+This was recorded as closed after the tag machinery landed, and it was not: the
+tag work was verified against a frame whose members are all fixed-size, and the
+entry it was closing named `packet.tag`. A construct verified on a schema
+written for the test is verified on that schema. The worked example is the
+claim.
+
+The rest of the list is closed. The last of them was the `--materialize` offset
+cache, and re-deriving the
 entry narrowed it first: 26.30's table claims the second accessor family in
 four languages, and the *run index* half of it was there in all four --
 `x_index`/`x_indexed` in C and C++, `x_indexed` in Rust, `x_all` in Python. It
