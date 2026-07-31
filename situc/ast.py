@@ -806,7 +806,12 @@ class EnumDecl(Decl):
 
 
 class VarintEncoding(Enum):
+	#: Base-128, low group first, continuation bit set on every byte but the
+	#: last. DWARF's, protobuf's.
 	LEB128 = "leb128"
+	#: Base-128, high group first, otherwise the same. ASN.1's identifier
+	#: octets, MIDI's delta times, SQLite's record varints.
+	BE128  = "be128"
 
 
 class VarintTransform(Enum):
@@ -829,11 +834,38 @@ class VarintDecl(Decl):
 	max_bits: int
 	minimal: bool
 	transform: VarintTransform | None = None
+	#: A declared ceiling on the encoded length, where the format sets one
+	#: shorter than seven bits per byte would need. See `terminal_bits`.
+	declared_max_bytes: int | None = None
 
 	@property
 	def max_bytes(self) -> int:
-		"""Worst-case encoded length: seven payload bits per byte."""
+		"""Worst-case encoded length.
+
+		Seven payload bits per byte unless the format says otherwise, which
+		some do: SQLite's varint stops at nine bytes where seven-bit groups
+		would need ten.
+		"""
+		if self.declared_max_bytes is not None:
+			return self.declared_max_bytes
 		return (self.max_bits + 6) // 7
+
+	@property
+	def terminal_bits(self) -> int:
+		"""How many bits the last permitted byte carries.
+
+		The bytes before it carry seven each, so the last carries whatever is
+		left. Usually that is seven or fewer and the byte looks like any other;
+		where it is exactly eight there is no spare bit for a continuation
+		flag, and the byte is read whole. That is SQLite's ninth byte, and it
+		falls out of the arithmetic rather than being a second flag to declare.
+		"""
+		return self.max_bits - 7 * (self.max_bytes - 1)
+
+	@property
+	def terminal_is_whole(self) -> bool:
+		"""Whether the last permitted byte carries all eight of its bits."""
+		return self.terminal_bits == 8
 
 
 class Seekable(Enum):

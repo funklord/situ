@@ -542,6 +542,26 @@ this is exactly the construct users reach for without understanding the cost:
   the reason "non-minimal varint encodings accepted".
 - `access` of an array of varints is `Sequential`, never `Random`
 
+**Two encodings, and what a declared `max_bytes` means.** `be128` is the same
+shape with the high group first: ASN.1's identifier octets, MIDI's delta times,
+SQLite's record varints. A format may also cap the encoded length below what
+seven-bit groups would need, and `max_bytes` says so:
+
+```situ
+varint_type sqlite_varint {
+    encoding  = be128;
+    max_bits  = 64;
+    max_bytes = 9;      // the ninth byte carries eight bits and ends the value
+}
+```
+
+The bytes before the last carry seven bits each and the last carries what is
+left -- here 64 - 7x8 = 8. Eight bits leaves no spare bit for a continuation
+flag, so that byte is read whole and ends the value whatever its high bit says.
+That is SQLite's ninth byte, and it falls out of the arithmetic rather than
+being a second thing to declare. Too few bytes for `max_bits` is an error, and
+so is a byte the range can never reach.
+
 The advisor's varint suggestion (18.2) applies here: if a varint field carries a
 `max` constraint, report the fixed-width alternative and its true cost. For
 `max = 1500` a varint costs two bytes across most of its range anyway, so `u16`
@@ -1199,11 +1219,11 @@ so the check at the frame boundary still covers it. The propagation row now
 weakens `address` for the message base alone. It had been written for both,
 which was true of the dangerous one and pessimistic about the other.
 
-**What the example asked for and did not get.** Its elements are `u8 cells[]`
-rather than a `cell` struct, and that is not a modelling choice. A SQLite table
-leaf cell is `varint payload_size; varint rowid; u8 payload[payload_size]`, and
-situ cannot describe it for two independent reasons, neither of them about
-`indexed`:
+**What the example asked for, and got.** It landed with elements of `u8
+cells[]` rather than a `cell` struct, and that was not a modelling choice. A
+SQLite table leaf cell is `varint payload_size; varint rowid; u8
+payload[payload_size]`, and situ could not describe it for two independent
+reasons, neither of them about `indexed`:
 
 1. A SQLite varint is big-endian base-128, up to nine bytes, the ninth
    contributing eight bits rather than seven. `varint_type` has one encoding
@@ -1222,9 +1242,27 @@ walk (9.5) reads a varint to *size* an item and hands the caller an offset and
 a length, never a value -- which is why the gap survived the construct that
 looks most like it would have found it.
 
-So the generated header emits `cells_count` and `cells_offset` and not
-`cells_at`: an entry gives where a cell starts and nothing says how far it
-runs. That is the honest output, and the note above it says so.
+Both are closed now, so the cell is a struct and `cells_at` hands one back.
+The example's test walks a page sqlite3 wrote through to the strings in its
+rows, and a separate case checks the nine-byte varint against rowids sqlite3
+produced for 2^56-1 and 2^60-1 -- the boundary where this encoding stops
+agreeing with every other base-128.
+
+Building that turned up two more things neither of which was about varints.
+`gen-fuzz` declared `uint8_t buf[SITU_X_SIZE_MAX]` for a struct whose maximum
+is 2^64-1 bytes, which is a constant too large for its type before it is an
+allocation nobody can make; it caps at the same 4096 an unbounded struct gets.
+And C emitted structs in the solver's insertion order, on the argument that the
+solver resolves dependencies before their dependents -- true of containment,
+false of an `indexed` element, whose type the region's extent does not depend
+on. The first schema declaring its element after its container produced a
+header that called an `extent` defined below it.
+
+That ordering is `traverse.containment_order` now, which C++ and Python had a
+copy of each and C had none. Both copies walked own members only, so a
+variant's arm types came out in the right place *by alphabet* -- `sorted` roots
+happened to put `A` and `B` before `S` -- and would not have for a schema
+naming them the other way round.
 
 ### 9.4 opaque
 
@@ -4979,9 +5017,10 @@ Each says so in the generated output. None of them is a design question; they
 are the C backend having gone first and the others not having caught up on
 that construct.
 
-**A varint is described in one encoding.** `leb128` is the only one, so a
-big-endian base-128 varint -- SQLite's, ASN.1's -- cannot be described. All
-four backends read a `leb128` field (8.1.1); none can read the other kind.
+**`be128` is C-only.** Both encodings are describable (8.1.1) and all four
+backends read `leb128`; C alone reads the big-endian one. The other three
+refuse it and say so rather than running the `leb128` reader over it, which
+would take the groups from the wrong end and hand back a plausible number.
 
 **Two kernel families that are described and not generated.**
 

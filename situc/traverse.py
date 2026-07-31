@@ -15,7 +15,7 @@ backend reads the same way.
 
 from __future__ import annotations
 
-from collections.abc import Container
+from collections.abc import Container, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -360,6 +360,52 @@ class Obligation:
 		bytes, and a field no longer equals what it is defined to equal.
 		"""
 		return "DIRTY" if self.kind == "tag" else "STALE"
+
+
+def containment_order(structs: dict[str, "ResolvedStruct"],
+		roots: Sequence[str]) -> list[str]:
+	"""Struct names, each placed after every struct it names.
+
+	Three backends need this and each had its own answer. A C++ class has to be
+	complete before another names it by value; a Python class body names its
+	members at definition time; and a C accessor that narrows to an element
+	calls that element's `extent`, which is `static inline` and has to be
+	defined above the call.
+
+	C had no copy at all: it emitted in the solver's insertion order, on the
+	argument that the solver resolves dependencies before their dependents. That
+	held while the only dependency was containment -- an inner struct has to be
+	laid out before the outer one that contains it. An `indexed` region's
+	element is not a layout dependency, because the region's extent does not
+	depend on it, so the first schema declaring its element type after its
+	container emitted a header that did not compile.
+
+	Every entry rather than `own_entries`: a variant's arms are nested by path
+	and are not the struct's own members, but a backend emits an accessor
+	handing one back and needs its type first. Both copies of this walked the
+	own members only, so an arm type came out in the right place by alphabet --
+	`sorted` roots, `A` and `B` before `S` -- and would not have for a schema
+	that named them the other way round.
+
+	`roots` is the caller's own top-level order, kept because it is visible in
+	the output and each backend had already chosen one.
+	"""
+	order: list[str] = []
+	seen: set[str]   = set()
+
+	def visit(name: str) -> None:
+		if name in seen or name not in structs:
+			return
+		seen.add(name)
+		for entry in structs[name].entries:
+			named = entry.placement.type_name
+			if named is not None and named != name:
+				visit(named)
+		order.append(name)
+
+	for name in roots:
+		visit(name)
+	return order
 
 
 def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:

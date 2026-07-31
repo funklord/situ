@@ -39,7 +39,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, decode_bound, classify, classify_check, declares_its_own_length,
+	Check, Member, arm_members, containment_order, decode_bound, classify,
+	classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
@@ -123,22 +124,7 @@ class Emitter:
 		the schema is not required to respect containment, so it is sorted here
 		rather than demanded of the author.
 		"""
-		order: list[str] = []
-		seen: set[str]   = set()
-
-		def visit(name: str) -> None:
-			if name in seen:
-				return
-			seen.add(name)
-			for entry in own_entries(self.resolved.structs[name]):
-				nested = entry.placement.type_name
-				if nested in self.structs and nested != name:
-					visit(nested)
-			order.append(name)
-
-		for name in sorted(self.structs):
-			visit(name)
-		return order
+		return containment_order(self.resolved.structs, sorted(self.structs))
 
 	# -- enums ---------------------------------------------------------
 
@@ -1593,6 +1579,8 @@ class Emitter:
 			return f"{c_name(local_name(struct, placement))}_extent()"
 
 		if placement.varint is not None:
+			if not self._reads_varint(placement):
+				return None
 			return f"{c_name(local_name(struct, placement))}_len()"
 
 		if placement.sized_by == "remaining":
@@ -1622,6 +1610,8 @@ class Emitter:
 		# `scalar is None` check, which is why a length-prefixed field -- the
 		# thing a varint is usually for -- could not be sized by one.
 		if driver.placement.varint is not None:
+			if not self._reads_varint(driver.placement):
+				return None
 			name = c_name(local_name(struct, driver.placement))
 			return f"static_cast<std::uint32_t>({name}_value())"
 
@@ -2490,6 +2480,18 @@ class Emitter:
 			"\t}",
 		]
 
+	def _reads_varint(self, placement: Placement) -> bool:
+		"""Whether this backend can read the varint this member is.
+
+		A member sized by one it cannot read has no length either, so the
+		refusal has to reach the offset chain: emitting the call anyway names
+		an accessor the guard above declined to write.
+		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.varint), None)
+		return (declared is not None
+		        and declared.encoding is ast.VarintEncoding.LEB128)
+
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Decode a varint field, and say how wide it turned out to be.
@@ -2505,6 +2507,16 @@ class Emitter:
 		                 if decl.name == placement.varint), None)
 		if declared is None:
 			return []
+
+		# A backend with only the leb128 reader must say so rather than use it:
+		# the groups come from the other end, so a `be128` value decoded as
+		# leb128 is a plausible number and not the one on the wire.
+		if declared.encoding is not ast.VarintEncoding.LEB128:
+			return ["", f"\t/* {placement.path}: `{declared.encoding.value}`"
+			        " is not an encoding this",
+			        f"\t/* backend reads yet. The `leb128` reader would take"
+			        " the groups from",
+			        f"\t/* the wrong end and hand back a plausible number."]
 
 		name   = c_name(local_name(struct, placement))
 		start  = self._offset_expression(struct, placement)
@@ -2543,14 +2555,14 @@ class Emitter:
 			"\t{",
 			f"\t\tconst std::uint32_t at = {start};",
 			"\t\tstd::uint64_t raw = 0;",
-			"\t\tstd::uint32_t used = 0;",
+			*(["\t\tstd::uint32_t used = 0;"] if declared.minimal else []),
 			"",
 			"\t\tif (at >= limit()) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
-			f"\t\tused = situ_varint_get(base() + at, limit() - at,"
-			f" {width}u, &raw);",
+			f"\t\t{'used = ' if declared.minimal else 'const std::uint32_t used = '}"
+			f"situ_varint_get(base() + at, limit() - at, {width}u, &raw);",
 			"\t\tif (used == 0u) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",

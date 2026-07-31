@@ -975,6 +975,62 @@ static inline uint32_t situ_varint_get(const uint8_t *p, uint32_t avail,
 	return 0;
 }
 
+/* Decode one big-endian base-128 varint: the high group first, otherwise the
+ * same shape as leb128. ASN.1's identifier octets, MIDI's delta times and
+ * SQLite's record varints are all this.
+ *
+ * `max_bytes` is where the encoding stops, and `terminal_bits` is what the last
+ * permitted byte carries. Where that is eight there is no spare bit for a
+ * continuation flag, so the byte is read whole and ends the value whatever its
+ * high bit says -- SQLite's ninth byte, and the reason a nine-byte varint holds
+ * sixty-four bits where seven-bit groups would need ten.
+ *
+ * Returns bytes consumed, or 0 if the buffer ends mid-value. */
+static inline uint32_t situ_varint_be_get(const uint8_t *p, uint32_t avail,
+		uint32_t max_bytes, uint32_t terminal_bits, uint64_t *out)
+{
+	uint64_t acc = 0;
+	uint32_t i;
+
+	for (i = 0; i < avail && i < max_bytes; i++) {
+		uint8_t byte = p[i];
+
+		if (terminal_bits == 8u && i + 1u == max_bytes) {
+			*out = (acc << 8) | (uint64_t)byte;
+			return i + 1u;
+		}
+
+		acc = (acc << 7) | (uint64_t)(byte & 0x7Fu);
+		if ((byte & 0x80u) == 0u) {
+			*out = acc;
+			return i + 1u;
+		}
+	}
+
+	return 0;
+}
+
+/* Encoded length of a value under `situ_varint_be_get`'s rules, for the
+ * minimality check: a longer encoding of the same value is a second encoding. */
+static inline uint32_t situ_varint_be_len(uint64_t value, uint32_t max_bytes,
+		uint32_t terminal_bits)
+{
+	uint32_t n = 1;
+
+	while (value >= 0x80u) {
+		value >>= 7;
+		n++;
+	}
+
+	/* The whole-byte terminal form encodes one more value per length than the
+	 * grouped one, so a value needing every grouped byte fits in the terminal
+	 * byte instead. */
+	if (terminal_bits == 8u && n > max_bytes) {
+		n = max_bytes;
+	}
+	return n;
+}
+
 /* Encoded length of a value, so a writer can tell whether it still fits. */
 static inline uint32_t situ_varint_len(uint64_t value)
 {

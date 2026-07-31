@@ -2952,3 +2952,119 @@ int main(void)
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+BE128 = ("varint_type sq { encoding = be128; max_bits = 64; max_bytes = 9; }")
+
+
+def test_a_be128_field_uses_the_big_endian_reader() -> None:
+	"""The groups come from the other end, so decoding one as leb128 gives a
+	plausible number and not the one on the wire."""
+	header, _ = emit(BE128 + "struct S { sq n; }")
+
+	assert "situ_varint_be_get(view.base + at, view.limit - at, 9u, 8u, &raw)" \
+		in header
+
+
+def test_the_nine_byte_form_is_what_max_bytes_produces() -> None:
+	"""`max_bytes = 9` with `max_bits = 64` leaves eight bits for the last
+	byte, and eight bits leaves no room for a continuation flag. SQLite's ninth
+	byte falls out of the arithmetic rather than being a second flag."""
+	header, _ = emit(BE128 + "struct S { sq n; }")
+
+	assert ", 9u, 8u, &raw)" in header
+
+
+def test_a_be128_that_fits_seven_bit_groups_has_an_ordinary_last_byte() -> None:
+	header, _ = emit("varint_type t { encoding = be128; max_bits = 32;"
+	                 " max_bytes = 5; }struct S { t n; }")
+
+	assert ", 5u, 4u, &raw)" in header
+
+
+def test_a_type_too_narrow_for_its_bits_is_refused() -> None:
+	with pytest.raises(SituError) as caught:
+		emit("varint_type t { encoding = be128; max_bits = 64; max_bytes = 8; }"
+		     "struct S { t n; }")
+
+	report = caught.value.diagnostic.render()
+	assert "cannot hold 64 bits in 8 bytes" in report
+	assert "the last byte would have to carry 15" in report
+
+
+def test_a_type_with_a_byte_it_cannot_reach_is_refused() -> None:
+	with pytest.raises(SituError) as caught:
+		emit("varint_type t { encoding = be128; max_bits = 8; max_bytes = 4; }"
+		     "struct S { t n; }")
+
+	report = caught.value.diagnostic.render()
+	assert "declares more bytes than 8 bits can fill" in report
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_be128_field_reads_what_sqlite_wrote(tmp_path: Path) -> None:
+	"""The nine-byte form against rowids sqlite3 produced. 2^56-1 is the
+	longest eight-byte value and 2^60-1 needs the ninth byte, which is the
+	boundary distinguishing this encoding from every other base-128."""
+	header, source = emit(
+		BE128 + "struct cell { sq payload_size; sq rowid; u8 payload[payload_size]; }")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+static int check(const uint8_t *bytes, uint32_t len, uint64_t want)
+{
+	uint8_t buf[32];
+	situ_msg_t msg;
+	situ_view_t view;
+	uint64_t rowid = 0;
+
+	memcpy(buf, bytes, len);
+	situ_msg_init(&msg, buf, len);
+	if (situ_cell_view(&msg, 0, len, &view) != SITU_OK) return 1;
+	if (situ_cell_rowid_get(view, &rowid) != SITU_OK) return 2;
+	return rowid == want ? 0 : 3;
+}
+
+int main(void)
+{
+	/* sqlite3, rowid 1: 07 01 then the record */
+	static const uint8_t SMALL[] = { 0x07, 0x01, 0x02, 0x17, 'a','l','p','h','a' };
+	/* sqlite3, rowid 2^56-1: eight bytes */
+	static const uint8_t EIGHT[] = { 0x03, 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x7F,
+	                                 0x02, 0x0F, 'x' };
+	/* sqlite3, rowid 2^60-1: nine, the last carrying all eight of its bits */
+	static const uint8_t NINE[] = { 0x03, 0x87,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+	                                0x02, 0x0F, 'y' };
+
+	if (check(SMALL, sizeof(SMALL), 1u)) return 1;
+	if (check(EIGHT, sizeof(EIGHT), 72057594037927935ULL)) return 2;
+	if (check(NINE, sizeof(NINE), 1152921504606846975ULL)) return 3;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_a_struct_is_emitted_before_the_one_that_reaches_into_it() -> None:
+	"""C emitted in the solver's insertion order, on the argument that the
+	solver resolves dependencies before dependents. An `indexed` element is not
+	a layout dependency, so the first schema declaring one after its container
+	produced a header calling an `extent` defined below it."""
+	header, _ = emit("struct outer { u16 n;"
+	                 " indexed(offset_type = u16, count = n) { inner e[]; } }"
+	                 "struct inner { u16 len; u8 body[len]; }")
+
+	assert header.index("situ_inner_extent(situ_view_t") \
+		< header.index("situ_inner_extent(probe)")

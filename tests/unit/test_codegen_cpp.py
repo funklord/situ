@@ -1621,3 +1621,36 @@ int main()
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_a_be128_field_is_refused_rather_than_read_as_leb128() -> None:
+	"""The groups come from the other end, so the leb128 reader would hand
+	back a plausible number and not the one on the wire. C reads it; this
+	backend says so instead."""
+	header = emit("varint_type sq { encoding = be128; max_bits = 64;"
+	              " max_bytes = 9; }struct S { sq n; u16 after; }")
+
+	assert "`be128` is not an encoding this" in header
+	assert "the wrong end and hand back a plausible number" in header
+
+
+def test_a_member_sized_by_an_unreadable_varint_is_refused_too() -> None:
+	"""The refusal has to reach the offset chain: emitting the length call
+	anyway names an accessor the guard declined to write."""
+	header = emit("varint_type sq { encoding = be128; max_bits = 64;"
+	              " max_bytes = 9; }struct S { sq n; u16 after; }")
+
+	assert "S.after: its offset cannot be resolved" in header
+
+
+def test_the_arm_types_of_a_variant_come_before_it(tmp_path: Path) -> None:
+	"""Ordering was by containment over `own_entries`, which a variant's arms
+	are not in -- so an arm type came out in the right place by alphabet, and
+	would not have for a schema naming them the other way round."""
+	header = emit("enum K : u8 { a = 1, b = 2, }"
+	              "struct Zeta { u16 x; } struct Yank { u32 y; }"
+	              "struct S { K k;"
+	              " variant v switch (k) { case K.a: Zeta p; case K.b: Yank q; } }")
+
+	assert header.index("class Zeta") < header.index("class S")
+	assert header.index("class Yank") < header.index("class S")

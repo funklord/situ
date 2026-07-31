@@ -39,7 +39,8 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, arm_members, arm_of, classify_check, declares_its_own_length,
+	Check, arm_members, arm_of, classify_check, containment_order,
+	declares_its_own_length,
 	decode_bound,
 	extent_parts,
 	has_computable_extent, matched_values, obligation, obligations,
@@ -124,12 +125,16 @@ class Emitter:
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
 
-		# Declaration order, not alphabetical: a struct's sub-view accessor
-		# refers to the nested struct's SIZE_FIXED macro, so the nested one has
-		# to be emitted first. The solver resolves dependencies before their
-		# dependents, so its insertion order is already what C needs.
-		for struct in self.resolved.structs.values():
-			lines.extend(self._struct_header(struct))
+		# Containment order, not declaration order: a sub-view accessor names
+		# the nested struct's SIZE_FIXED macro and an indexed region calls its
+		# element's `extent`, both of which are `static inline` and have to be
+		# above the call. This trusted the solver's insertion order until the
+		# first schema whose indexed element was declared after its container
+		# emitted a header that did not compile -- an element is not a layout
+		# dependency, so the solver had no reason to place it first.
+		for name in containment_order(self.resolved.structs,
+		                              list(self.resolved.structs)):
+			lines.extend(self._struct_header(self.resolved.structs[name]))
 
 		lines.extend([
 			"",
@@ -1901,8 +1906,20 @@ class Emitter:
 		width  = declared.max_bytes
 		signed = declared.transform is ast.VarintTransform.ZIGZAG
 		ctype  = "int64_t" if signed else "uint64_t"
+		big    = declared.encoding is ast.VarintEncoding.BE128
 
 		decoded = ("(int64_t)situ_zigzag_decode(raw)" if signed else "raw")
+
+		# The two encodings differ in which end the groups come from, and the
+		# big-endian one in what its last permitted byte carries -- eight bits
+		# and no continuation flag where there is no spare bit for one.
+		read = (f"situ_varint_be_get(view.base + at, view.limit - at,"
+		        f" {width}u, {declared.terminal_bits}u, &raw)" if big else
+		        f"situ_varint_get(view.base + at, view.limit - at,"
+		        f" {width}u, &raw)")
+		encoded = (f"situ_varint_be_len(raw, {width}u,"
+		           f" {declared.terminal_bits}u)" if big else
+		           "situ_varint_len(raw)")
 
 		minimal = ([
 			"",
@@ -1910,7 +1927,7 @@ class Emitter:
 			"\t * encoding of the same value and this schema does not admit",
 			"\t * one. Without the check `canonical` would be a claim nothing",
 			"\t * enforced. */",
-			"\tif (used != situ_varint_len(raw)) {",
+			f"\tif (used != {encoded}) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 		] if declared.minimal else [])
@@ -1923,8 +1940,7 @@ class Emitter:
 			" * SITU_OK            decoded; *out is the value",
 			" * SITU_ERR_BOUNDS    the frame ends mid-value, or it is longer"
 			" than",
-			f" *                    the {width} bytes `max_bits ="
-			f" {declared.max_bits}` allows",
+			f" *                    the {width} bytes this type allows",
 			*([" * SITU_ERR_CONSTRAINT a non-minimal encoding, which `minimal`"
 			   " refuses"] if declared.minimal else []),
 			" */",
@@ -1938,8 +1954,7 @@ class Emitter:
 			"		return SITU_ERR_BOUNDS;",
 			"	}",
 			"",
-			f"	used = situ_varint_get(view.base + at, view.limit - at,"
-			f" {width}u, &raw);",
+			f"	used = {read};",
 			"	if (used == 0u) {",
 			"		return SITU_ERR_BOUNDS;",
 			"	}",
@@ -1982,8 +1997,7 @@ class Emitter:
 			"	if (at >= view.limit) {",
 			"		return 0u;",
 			"	}",
-			f"	return situ_varint_get(view.base + at, view.limit - at,"
-			f" {width}u, &raw);",
+			f"	return {read};",
 			"}",
 		]
 

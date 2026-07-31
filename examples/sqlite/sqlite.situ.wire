@@ -18,4 +18,9 @@ struct btree_leaf_page size=8..
   @0x0003   2         u16        cell_count  big
   @0x0005   2         u16        content_start  big
   @0x0007   1         u8         fragmented_free
-  @0x0008   0..       u8         cells  sized-by=cell_count
+  @0x0008   0..       table_leaf_cell cells  sized-by=cell_count
+
+struct table_leaf_cell size=2..18446744073709551633
+  @0x0000   1..9      sqlite_varint payload_size  varint=sqlite_varint
+  ~         1..9      sqlite_varint rowid  varint=sqlite_varint
+  ~         0..18446744073709551615 u8         payload  sized-by=payload_size

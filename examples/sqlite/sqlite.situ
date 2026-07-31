@@ -17,6 +17,20 @@
 target buffer;
 endian big;                     // SQLite is big-endian throughout
 
+// A SQLite varint: base-128, high group first, one to nine bytes. The ninth is
+// what makes it its own encoding rather than leb128 read backwards -- eight
+// bits and no continuation flag, because with `max_bytes = 9` there is no
+// spare bit left for one. Sixty-four bits in nine bytes where seven-bit groups
+// would need ten.
+//
+// Not `minimal`: SQLite's format does not require the shortest encoding, and
+// declaring it here would be a claim about the wire that sqlite3 does not make.
+varint_type sqlite_varint {
+	encoding  = be128;
+	max_bits  = 64;
+	max_bytes = 9;
+}
+
 // A message here is one page. SQLite reads pages, and the cell offsets are
 // measured from the start of one -- so a page is the frame that bounds them.
 //
@@ -40,8 +54,23 @@ struct btree_leaf_page {
 	// offsets are bounded by nothing this frame knows, and they are bounded by
 	// the page (decision 0024).
 	indexed(offset_type = u16, count = cell_count, base = page_type) {
-		u8 cells[];
+		table_leaf_cell cells[];
 	}
+}
+
+// One cell of a leaf table page. The payload is the record itself, which has
+// its own header of serial types -- a format inside this one, and not what
+// this example is about.
+//
+// Overflow is the honest omission: a payload larger than the page allows is
+// truncated here and continued on an overflow page, with a four-byte page
+// number after the local part. That is a second frame reached by a pointer,
+// and the schema says nothing about it -- so a cell whose payload overflows is
+// described here as shorter than it is.
+struct table_leaf_cell {
+	sqlite_varint  payload_size;
+	sqlite_varint  rowid;
+	u8             payload[payload_size];
 }
 
 // What holds, and is the useful half: the table is where it says it is, the

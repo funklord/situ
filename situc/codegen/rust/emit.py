@@ -726,6 +726,18 @@ class Emitter:
 
 		return lines
 
+	def _reads_varint(self, placement: Placement) -> bool:
+		"""Whether this backend can read the varint this member is.
+
+		A member sized by one it cannot read has no length either, so the
+		refusal has to reach the offset chain: emitting the call anyway names
+		an accessor the guard above declined to write.
+		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.varint), None)
+		return (declared is not None
+		        and declared.encoding is ast.VarintEncoding.LEB128)
+
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Decode a varint field, and say how wide it turned out to be.
@@ -738,6 +750,16 @@ class Emitter:
 		                 if decl.name == placement.varint), None)
 		if declared is None:
 			return []
+
+		# A backend with only the leb128 reader must say so rather than use it:
+		# the groups come from the other end, so a `be128` value decoded as
+		# leb128 is a plausible number and not the one on the wire.
+		if declared.encoding is not ast.VarintEncoding.LEB128:
+			return ["", f"\t// {placement.path}: `{declared.encoding.value}`"
+			        " is not an encoding this",
+			        f"\t// backend reads yet. The `leb128` reader would take"
+			        " the groups from",
+			        f"\t// the wrong end and hand back a plausible number."]
 
 		name  = c_name(local_name(struct, placement))
 		start = self._offset_expression(struct, placement)
@@ -778,8 +800,8 @@ class Emitter:
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"",
-			f"\t\tlet (raw, used) = situ_rt::varint_get(self.bytes, at,"
-			f" {width})",
+			f"\t\tlet (raw, {'used' if declared.minimal else '_'}) ="
+			f" situ_rt::varint_get(self.bytes, at, {width})",
 			"\t\t\t.ok_or(Error::Bounds)?;",
 			*minimal,
 			"",
@@ -2331,6 +2353,8 @@ class Emitter:
 			name = _ident(c_name(local_name(struct, placement)) + "_extent")
 			return f"self.{name}()"
 		if placement.varint is not None:
+			if not self._reads_varint(placement):
+				return None
 			name = c_name(local_name(struct, placement))
 			return f"self.{_ident(name + '_len')}()"
 
@@ -2357,6 +2381,8 @@ class Emitter:
 		# `scalar is None` check, which is why a length-prefixed field -- the
 		# thing a varint is usually for -- could not be sized by one.
 		if driver.placement.varint is not None:
+			if not self._reads_varint(driver.placement):
+				return None
 			name = _ident(c_name(local_name(struct, driver.placement)) + "_value")
 			return f"self.{name}() as usize"
 

@@ -135,9 +135,11 @@ def _fixed_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 	]
 
 
-#: How much of the fuzzer's input an unbounded struct is given.
+#: How much of the fuzzer's input an unbounded struct is given, and the ceiling
+#: on what a bounded one may ask for.
 #:
-#: There is no `SIZE_MAX` for one, and the harness has to declare a buffer.
+#: There is no `SIZE_MAX` for an unbounded struct, and the harness has to
+#: declare a buffer.
 #: Large enough that a scan or a length field has somewhere to run, small
 #: enough that a corpus entry stays a size a fuzzer will actually generate.
 UNBOUNDED_EXTENT = 4096
@@ -158,8 +160,14 @@ def _variable_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 	is also better fuzzing: the length that reaches the bounds check is one
 	the fuzzer chose and can shrink.
 	"""
+	# A bounded struct gets its own bound, unless the bound is one no stack
+	# will hold: a member sized by a 64-bit varint has a worst case of 2^64-1
+	# bytes, and `uint8_t buf[SITU_X_SIZE_MAX]` for that is a constant too
+	# large for its type before it is an allocation nobody can make. The
+	# fuzzer's own input length is what reaches the bounds check either way.
 	most = struct.layout.size_max_bytes
-	cap  = (macro(prefix, struct.name, "SIZE_MAX") if most is not None
+	cap  = (macro(prefix, struct.name, "SIZE_MAX")
+	        if most is not None and most <= UNBOUNDED_EXTENT
 	        else str(UNBOUNDED_EXTENT))
 	least = macro(prefix, struct.name, "SIZE_MIN")
 

@@ -203,6 +203,99 @@ static void test_a_count_larger_than_the_page_is_refused(void **state)
 	                 SITU_ERR_BOUNDS);
 }
 
+/* -- the cells the table reaches ------------------------------------------- */
+
+static void test_each_cell_decodes(void **state)
+{
+	uint8_t page[PAGE_SIZE];
+	situ_msg_t msg;
+	situ_view_t view, cell;
+	uint64_t size = 0, rowid = 0;
+
+	(void)state;
+	view = page_view(&msg, page);
+
+	/* The pointers are in key order, so cell N carries rowid N+1 -- while the
+	 * cells themselves sit in the page back to front. */
+	assert_int_equal(situ_btree_leaf_page_cells_at(view, 0, &cell), SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_payload_size_get(cell, &size), SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_rowid_get(cell, &rowid), SITU_OK);
+	assert_int_equal(size, 7);
+	assert_int_equal(rowid, 1);
+	assert_memory_equal(situ_table_leaf_cell_payload_ptr(cell) + 2, "alpha", 5);
+
+	assert_int_equal(situ_btree_leaf_page_cells_at(view, 1, &cell), SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_rowid_get(cell, &rowid), SITU_OK);
+	assert_int_equal(rowid, 2);
+	assert_memory_equal(situ_table_leaf_cell_payload_ptr(cell) + 2, "beta", 4);
+
+	assert_int_equal(situ_btree_leaf_page_cells_at(view, 2, &cell), SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_rowid_get(cell, &rowid), SITU_OK);
+	assert_int_equal(rowid, 3);
+	assert_memory_equal(situ_table_leaf_cell_payload_ptr(cell) + 2, "gamma", 5);
+}
+
+static void test_a_cell_is_narrowed_to_its_own_extent(void **state)
+{
+	uint8_t page[PAGE_SIZE];
+	situ_msg_t msg;
+	situ_view_t view, cell;
+
+	(void)state;
+	view = page_view(&msg, page);
+
+	/* Not to the rest of the page: the two varints plus the payload, which is
+	 * what `_extent` computes from the cell's own bytes. */
+	assert_int_equal(situ_btree_leaf_page_cells_at(view, 0, &cell), SITU_OK);
+	assert_int_equal(cell.limit, 9);	/* 1 + 1 + 7 */
+
+	assert_int_equal(situ_btree_leaf_page_cells_at(view, 1, &cell), SITU_OK);
+	assert_int_equal(cell.limit, 8);	/* 1 + 1 + 6 */
+}
+
+/* -- the nine-byte varint, which is what makes this its own encoding -------- */
+
+static void test_a_nine_byte_rowid_decodes(void **state)
+{
+	/* Cells sqlite3 wrote for rowids 2^56-1 and 2^60-1. The first is the
+	 * longest eight-byte form; the second needs the ninth byte, whose eight
+	 * bits and absent continuation flag distinguish this encoding from every
+	 * other base-128. Regenerate with:
+	 *
+	 *   sqlite3 t.db "CREATE TABLE t(a);
+	 *                 INSERT INTO t(rowid,a) VALUES(1152921504606846975,'y');"
+	 */
+	static const uint8_t EIGHT[] = {
+		0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x02, 0x0F, 'x',
+	};
+	static const uint8_t NINE[] = {
+		0x03, 0x87, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		0x02, 0x0F, 'y',
+	};
+	situ_msg_t msg;
+	situ_view_t view;
+	uint8_t scratch[16];
+	uint64_t rowid = 0;
+
+	(void)state;
+
+	memcpy(scratch, EIGHT, sizeof(EIGHT));
+	situ_msg_init(&msg, scratch, sizeof(EIGHT));
+	assert_int_equal(situ_table_leaf_cell_view(&msg, 0, sizeof(EIGHT), &view),
+	                 SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_rowid_get(view, &rowid), SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_rowid_len(view), 8);
+	assert_true(rowid == 72057594037927935ULL);
+
+	memcpy(scratch, NINE, sizeof(NINE));
+	situ_msg_init(&msg, scratch, sizeof(NINE));
+	assert_int_equal(situ_table_leaf_cell_view(&msg, 0, sizeof(NINE), &view),
+	                 SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_rowid_get(view, &rowid), SITU_OK);
+	assert_int_equal(situ_table_leaf_cell_rowid_len(view), 9);
+	assert_true(rowid == 1152921504606846975ULL);
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
@@ -214,6 +307,9 @@ int main(void)
 		cmocka_unit_test(test_an_offset_is_measured_from_the_start_of_the_page),
 		cmocka_unit_test(test_an_entry_past_the_end_is_refused),
 		cmocka_unit_test(test_a_count_larger_than_the_page_is_refused),
+		cmocka_unit_test(test_each_cell_decodes),
+		cmocka_unit_test(test_a_cell_is_narrowed_to_its_own_extent),
+		cmocka_unit_test(test_a_nine_byte_rowid_decodes),
 	};
 
 	return cmocka_run_group_tests(tests, NULL, NULL);

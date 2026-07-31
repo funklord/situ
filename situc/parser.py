@@ -866,6 +866,7 @@ class Parser:
 		encoding: ast.VarintEncoding | None  = None
 		transform: ast.VarintTransform | None = None
 		max_bits: int | None                  = None
+		max_bytes: int | None                 = None
 		minimal                               = False
 		seen: set[str] = set()
 
@@ -883,6 +884,16 @@ class Parser:
 			elif prop.text == "transform":
 				self.expect_symbol("=", "after `transform`")
 				transform = self._varint_enum(ast.VarintTransform, "transform")
+			elif prop.text == "max_bytes":
+				self.expect_symbol("=", "after `max_bytes`")
+				token = self.current
+				max_bytes = evaluate_literal(self.parse_expr())
+				if max_bytes is None or not 1 <= max_bytes <= 10:
+					raise error(
+						"`max_bytes` must be a literal from 1 to 10",
+						token.span,
+						label = "out of range",
+					)
 			elif prop.text == "max_bits":
 				self.expect_symbol("=", "after `max_bits`")
 				token = self.current
@@ -897,7 +908,8 @@ class Parser:
 				raise error(
 					f"unknown varint property `{prop.text}`",
 					prop.span,
-					label = "expected `encoding`, `transform`, `max_bits` or `minimal`",
+					label = "expected `encoding`, `transform`, `max_bits`,"
+					        " `max_bytes` or `minimal`",
 				)
 
 			self.expect_symbol(";", "after the varint property")
@@ -908,7 +920,7 @@ class Parser:
 			raise error(
 				f"varint type `{name.text}` does not declare an encoding",
 				self.span_from(start),
-				label = "expected `encoding = leb128;`",
+				label = "expected `encoding = leb128;` or `encoding = be128;`",
 			)
 		if max_bits is None:
 			raise error(
@@ -919,8 +931,43 @@ class Parser:
 				         "nothing downstream can be bounded"],
 			)
 
-		return ast.VarintDecl(self.span_from(start), name.text, encoding,
-		                      max_bits, minimal, transform)
+		decl = ast.VarintDecl(self.span_from(start), name.text, encoding,
+		                      max_bits, minimal, transform, max_bytes)
+		self._check_varint_width(decl, name)
+		return decl
+
+	def _check_varint_width(self, decl: ast.VarintDecl, name: Token) -> None:
+		"""A declared `max_bytes` has to be able to hold `max_bits`.
+
+		The bytes before the last carry seven bits each and the last carries
+		what is left, so too few bytes is a type that cannot represent its own
+		range. Too many is a type with a byte that can never be reached.
+		"""
+		if decl.declared_max_bytes is None:
+			return
+
+		left = decl.terminal_bits
+		if left > 8:
+			raise error(
+				f"`{name.text}` cannot hold {decl.max_bits} bits in"
+				f" {decl.max_bytes} bytes",
+				decl.span,
+				label = f"the last byte would have to carry {left}",
+				notes = [f"the first {decl.max_bytes - 1} carry seven bits each,"
+				         f" and the last carries what is left",
+				         f"{decl.max_bits} bits needs at least"
+				         f" {(decl.max_bits + 6) // 7} bytes"],
+			)
+		if left < 1:
+			raise error(
+				f"`{name.text}` declares more bytes than {decl.max_bits} bits"
+				f" can fill",
+				decl.span,
+				label = f"{decl.max_bytes} bytes is at least"
+				        f" {7 * (decl.max_bytes - 1) + 1} bits",
+				notes = ["a byte that can never be reached is a byte a decoder"
+				         " would have to refuse, which is a rule nobody wrote"],
+			)
 
 	def _varint_enum(self, enum: type[EnumT], described: str) -> EnumT:
 		token = self.expect_ident(f"a varint {described}")

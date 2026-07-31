@@ -15,3 +15,8 @@ struct btree_leaf_page size=8 mutate=Shifting address=FrameStable repr=ValueConv
   btree_leaf_page.content_start          offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   btree_leaf_page.fragmented_free        offset=AbsoluteStatic(0x07) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   btree_leaf_page.cells                  offset=AbsoluteStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+
+struct table_leaf_cell size=2 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  table_leaf_cell.payload_size           offset=AbsoluteStatic(0x00) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  table_leaf_cell.rowid                  offset=Dynamic size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  table_leaf_cell.payload                offset=Dynamic size=Bounded(0, 18446744073709551615) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
