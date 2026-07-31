@@ -1101,11 +1101,28 @@ building it:
    region allows, ask the element how long it is, and narrow to that. Handing
    back the provisional view would give the caller the rest of the region and
    call it an element.
-3. **`_is_run_element` decided whether to emit an extent function at all**, and
-   knew about runs and nested members. An indexed region asked for an extent
+3. **The gate on emitting an extent function at all** knew about runs and
+   nested members and not about this. An indexed region asked for an extent
    that was never emitted, and reported that it could not compute one -- a
    declared gap that was not a real one, which is invariant 12's failure mode
-   arriving from the other direction.
+   arriving from the other direction. All four backends had their own copy of
+   that gate and all four were wrong the same way, which is invariant 13
+   again: `traverse.classify` says what kind of member a placement is, and the
+   four lists of what needs an element's extent were four places to forget.
+
+**One walk, four shapes**, as with the tlv walk and for the same reasons:
+
+| | element handed back as | offsets from the message |
+|---|---|---|
+| C | a `situ_view_t` out-parameter | the accessor takes the message too |
+| C++ | the element's own class, out-parameter | the same, via `::at` |
+| Rust | `Result<Element<'_>>` | not emitted -- a struct borrows the frame it was framed against, not the buffer |
+| Python | the element's class, returned | anchored at the buffer rather than the view |
+
+Rust is the one that refuses, and the refusal is the borrow checker being
+honest rather than a gap: an element reached from the message outlives the
+region's slice, so handing one back from `&self` would be claiming a lifetime
+this view does not have.
 
 `base` outside the region also weakens the region's addressing, which the
 propagation table now records: `address := Unstable` where an offset can name
@@ -4852,16 +4869,15 @@ trusting this list to have aged well.
 **None. The list is empty for the first time.**
 
 `indexed` interiors were the last of them: the offset table was never walked,
-and the header said so and stopped. C walks one now (9.3) -- a count, the
-offset an entry holds, and a view over the element it reaches -- which leaves
-the other three backends behind on it rather than every backend.
+and the header said so and stopped. All four walk one now (9.3) -- a count, the
+offset an entry holds, and a view over the element it reaches.
 
 `tlv` was here too, and was the sharper case of it: `examples/protobuf`'s
 `proto_message.fields` got no accessor anywhere, so section 9.7 could argue
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**Six where C is ahead of the other three.**
+**Five where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
@@ -4869,7 +4885,6 @@ able to read it. All four walk one now (9.5), against the same protoc vectors.
 | an endian marker | `tiff_header.byte_order` |
 | a fixed-width text number | `reply_line.code` |
 | an array of struct elements | `telemetry_frame.readings` |
-| an `indexed` region's table | any offset table -- no worked example yet |
 | the `--materialize` offset cache | any delimited chain |
 
 Each says so in the generated output. None of them is a design question; they

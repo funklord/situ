@@ -1051,3 +1051,67 @@ def test_the_item_repr_names_its_parts(tmp_path: Path) -> None:
 	assert repr(held.fields_first()) == (
 		"S_fields_item(at=0, next=3, tag=8, field=1, wire=0, "
 		"value_at=1, value_len=2)")
+
+
+# -- indexed regions (section 9.3) ------------------------------------------
+
+INDEXED = ("struct R { u32 id; u16 kind; }"
+	"struct V { u16 len; u8 body[len]; }"
+	"struct S { u16 n; indexed(offset_type = u16, count = n)"
+	" { R fixed[]; } }"
+	"struct T { u16 n; indexed(offset_type = u16, count = n)"
+	" { V varying[]; } }")
+
+S_BYTES = bytes([0, 3,
+	0, 0x12, 0, 0x06, 0, 0x0C,
+	0, 0, 0, 0xBB, 0, 2,
+	0, 0, 0, 0xCC, 0, 3,
+	0, 0, 0, 0xAA, 0, 1])
+T_BYTES = bytes([0, 2, 0, 4, 0, 0x0B]) + bytes([0, 5]) + b"hello" \
+	+ bytes([0, 2]) + b"hi"
+
+
+def test_an_indexed_region_gets_its_table_walked() -> None:
+	"""It answered REGION in the shared classifier and this backend said "not
+	emitted by this backend yet" -- the fallthrough note, for the last
+	construct no backend reached into."""
+	module = emit(INDEXED)
+
+	assert "def fixed_count(self) -> int:" in module
+	assert "def fixed_offset(self, index: int) -> int:" in module
+	assert "def fixed_at(self, index: int) -> R:" in module
+	assert "not emitted by this backend yet" not in module
+
+
+def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
+	module = emit(INDEXED)
+
+	assert 'int.from_bytes(self.bytes[at:at + 2], "big")' in module
+
+
+def test_the_index_reaches_elements_in_any_order(tmp_path: Path) -> None:
+	"""Offsets deliberately out of order: a walk over an ascending table would
+	prove nothing about a construct that exists to reach them in any."""
+	module = load(tmp_path, INDEXED)
+	held   = module.S.at(runtime().Message(bytearray(S_BYTES)), 0, len(S_BYTES))
+
+	assert held.fixed_count == 3
+	assert held.fixed_offset(0) == 0x12
+	assert [held.fixed_at(i).id for i in range(3)] == [170, 187, 204]
+
+
+def test_an_index_over_variable_elements_measures_one(tmp_path: Path) -> None:
+	"""The construct exists for elements that are not the same size, so each
+	is narrowed to its own extent rather than to the rest of the region."""
+	module = load(tmp_path, INDEXED)
+	held   = module.T.at(runtime().Message(bytearray(T_BYTES)), 0, len(T_BYTES))
+
+	assert [bytes(held.varying_at(i).body) for i in range(2)] == [b"hello", b"hi"]
+
+
+def test_an_entry_past_the_end_is_refused(tmp_path: Path) -> None:
+	module = load(tmp_path, INDEXED)
+	held   = module.S.at(runtime().Message(bytearray(S_BYTES)), 0, len(S_BYTES))
+
+	with pytest.raises(IndexError):
+		held.fixed_at(3)

@@ -1067,3 +1067,74 @@ fn main() {
 """)
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+# -- indexed regions (section 9.3) ------------------------------------------
+
+INDEXED = ("struct R { u32 id; u16 kind; }"
+	"struct V { u16 len; u8 body[len]; }"
+	"struct S { u16 n; indexed(offset_type = u16, count = n)"
+	" { R fixed[]; } }"
+	"struct T { u16 n; indexed(offset_type = u16, count = n)"
+	" { V varying[]; } }")
+
+
+def test_an_indexed_region_gets_its_table_walked() -> None:
+	module = emit(INDEXED)
+
+	assert "pub fn fixed_count(&self) -> usize" in module
+	assert "pub fn fixed_offset(&self, index: usize) -> Result<usize>" in module
+	assert "pub fn fixed_at(&self, index: usize) -> Result<R<'_>>" in module
+	assert "not in the static subset yet" not in module
+
+
+def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
+	module = emit(INDEXED)
+
+	assert "situ_rt::read_be(self.bytes, at, 2)" in module
+
+
+def test_an_index_over_variable_elements_measures_one() -> None:
+	module = emit(INDEXED)
+
+	assert "let probe = V { bytes: &self.bytes[start..] };" in module
+	assert "let size  = probe.extent();" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_index_reaches_elements_in_any_order(tmp_path: Path) -> None:
+	"""Offsets deliberately out of order: a walk over an ascending table would
+	prove nothing about a construct that exists to reach them in any."""
+	result = build(tmp_path, INDEXED, main="""
+const S_BYTES: &[u8] = &[
+	0x00, 0x03,
+	0x00, 0x12, 0x00, 0x06, 0x00, 0x0C,
+	0x00, 0x00, 0x00, 0xBB, 0x00, 0x02,
+	0x00, 0x00, 0x00, 0xCC, 0x00, 0x03,
+	0x00, 0x00, 0x00, 0xAA, 0x00, 0x01,
+];
+const T_BYTES: &[u8] = &[
+	0x00, 0x02,
+	0x00, 0x04, 0x00, 0x0B,
+	0x00, 0x05, b'h', b'e', b'l', b'l', b'o',
+	0x00, 0x02, b'h', b'i',
+];
+
+fn main() {
+	let s = unit::S::new(S_BYTES).unwrap();
+	assert_eq!(s.fixed_count(), 3);
+	assert_eq!(s.fixed_offset(0).unwrap(), 0x12);
+	assert_eq!(s.fixed_at(0).unwrap().id(), 170);
+	assert_eq!(s.fixed_at(1).unwrap().id(), 187);
+	assert_eq!(s.fixed_at(2).unwrap().id(), 204);
+	assert!(s.fixed_at(3).is_err());
+
+	// Each element is narrowed to its own extent, not to the rest.
+	let t = unit::T::new(T_BYTES).unwrap();
+	assert_eq!(t.varying_at(0).unwrap().body(), b"hello");
+	assert_eq!(t.varying_at(1).unwrap().body(), b"hi");
+	assert!(t.varying_at(2).is_err());
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0

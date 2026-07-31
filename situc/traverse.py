@@ -90,8 +90,11 @@ class Member(Enum):
 	#: A `tlv` region: a run of self-describing items, walked as the region's
 	#: own item grammar says (9.5).
 	TLV       = "tlv"
+	#: An `indexed` region: an offset table, then the elements it reaches
+	#: (9.3).
+	INDEXED   = "indexed"
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
-	#: variant, an opaque or indexed span. Each needs its own machinery.
+	#: variant, an opaque span. Each needs its own machinery.
 	REGION    = "region"
 	#: Ends at a delimiter: `x[] until "D"`, and a text number, which is a
 	#: delimited run read as digits.
@@ -164,6 +167,13 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# ask here, which is why it was the only one that could walk one.
 	if placement.kind == "tlv":
 		return Member.TLV
+
+	# Same reason as the two above: it answered REGION, and three backends
+	# emitted their fallthrough note for the last construct none of them
+	# reached into. C does not ask here, which is why it was the only one that
+	# could walk a table.
+	if placement.kind == "indexed":
+		return Member.INDEXED
 
 	if placement.kind != "field":
 		return Member.REGION

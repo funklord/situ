@@ -28,7 +28,9 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Arm, Placement, TlvGrammar, ValueRule
+from situc.layout import (
+	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
+)
 from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
@@ -289,6 +291,160 @@ class Emitter:
 		return [*types, *lines]
 
 	# -- reads ---------------------------------------------------------
+
+	def _indexed_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""An offset table, then the elements it reaches (section 9.3).
+
+		The region answered `REGION` in the shared classifier and this backend
+		emitted "not in the static subset yet" -- the fallthrough note, for the
+		last construct no backend reached into.
+		"""
+		table = placement.index_table
+		if table is None:
+			return []
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the region starts."]
+
+		name    = c_name(local_name(struct, placement))
+		width   = table.entry_bits // BITS_PER_BYTE
+		element = self.resolved.structs.get(table.element or "")
+		reader  = "read_be" if placement.endian is ast.Endian.BIG else "read_le"
+
+		# A literal count needs no read; a field-driven one is the driver's own
+		# accessor, which already lands in `usize`.
+		count = self._count_expression(struct, placement)
+		if count is None:
+			fixed = table.count_fixed
+			if fixed is None:
+				return ["", f"\t// {placement.path}: this backend cannot resolve"
+				        " how many entries",
+				        "\t// the table holds, so nothing below could be"
+				        " bounded."]
+			count = str(fixed)
+
+		lines = [
+			"",
+			f"\t/// `{placement.path}` is an offset table of {width}-byte"
+			f" entries, then",
+			"\t/// the elements it reaches. Element N is one read of entry N"
+			" plus a",
+			"\t/// base, whatever the elements weigh -- which is why `access`"
+			" stays",
+			"\t/// Random through a region whose elements need not be the same"
+			" size.",
+			"\t///",
+			"\t/// Insertion is not an operation here: every offset after the",
+			"\t/// insertion point would have to move.",
+			f"\tpub fn {_ident(f'{name}_count')}(&self) -> usize {{",
+			f"\t\t{count}",
+			"\t}",
+			"",
+			"\t/// The offset held in entry `index`, as written -- measured"
+			" from",
+			f"\t/// {self._index_base_noun(table)}.",
+			f"\tpub fn {_ident(f'{name}_offset')}(&self, index: usize)"
+			f" -> Result<usize> {{",
+			f"\t\tlet at = {start} + index * {width};",
+			"",
+			f"\t\tif index >= self.{_ident(f'{name}_count')}() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tif at + {width} > self.bytes.len() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			"",
+			f"\t\tOk(situ_rt::{reader}(self.bytes, at, {width}) as usize)",
+			"\t}",
+		]
+		lines.extend(self._index_element(struct, placement, table, name,
+		                                 element, start))
+		return lines
+
+	def _index_base_noun(self, table: IndexTable) -> str:
+		if table.base == "message":
+			return "the start of the *message*"
+		if table.base == "member":
+			return f"the start of `{table.base_member}`"
+		return "the start of this region"
+
+	def _index_element(self, struct: ResolvedStruct, placement: Placement,
+			table: IndexTable, name: str, element: ResolvedStruct | None,
+			start: str) -> list[str]:
+		"""`at`: the element an entry reaches, as a borrowed view over it."""
+		if element is None or (not element.layout.is_fixed_size
+		                       and self._extent_expression(element) is None):
+			held = table.element or placement.type_name
+			return ["", f"\t// No `{name}_at`: one `{held}` has no extent this"
+			        " backend can",
+			        "\t// compute, so an entry gives a position and not a view."
+			        " The offsets",
+			        "\t// are still readable above."]
+
+		if table.base == "message":
+			return ["", f"\t// No `{name}_at`: these offsets are measured from"
+			        " the message, and",
+			        "\t// a struct here borrows the frame it was framed"
+			        " against rather than",
+			        "\t// the whole buffer -- so the element is not this"
+			        " view's to hand out.",
+			        "\t// The offsets are readable above."]
+
+		inner  = _pascal(element.name)
+		origin = (self._index_member_base(struct, table)
+		          if table.base == "member" else start)
+
+		return [
+			"",
+			"\t/// Element `index`, whose offset is measured from",
+			f"\t/// {self._index_base_noun(table)}.",
+			f"\tpub fn {_ident(f'{name}_at')}(&self, index: usize)"
+			f" -> Result<{inner}<'_>> {{",
+			f"\t\tlet start = {origin} + self.{_ident(f'{name}_offset')}(index)?;",
+			"",
+			"\t\tif start > self.bytes.len() {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			*self._index_element_extent(element, inner),
+			"\t}",
+		]
+
+	def _index_member_base(self, struct: ResolvedStruct,
+			table: IndexTable) -> str:
+		found = self.resolved.find(f"{struct.name}.{table.base_member}")
+		if found is None:
+			return "0"
+		return self._offset_expression(struct, found.placement) or "0"
+
+	def _index_element_extent(self, element: ResolvedStruct,
+			inner: str) -> list[str]:
+		"""Narrow to one element, measuring it first where it varies."""
+		if element.layout.is_fixed_size:
+			return [
+				f"\t\tif start + {inner}::SIZE > self.bytes.len() {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\tOk({inner} {{ bytes: &self.bytes[start..start"
+				f" + {inner}::SIZE] }})",
+			]
+
+		return [
+			"",
+			"\t\t// The extent is in the element's own bytes, so it takes a"
+			" view to",
+			"\t\t// read and a view is what it decides. Measure over the rest"
+			" of the",
+			"\t\t// region, then narrow.",
+			f"\t\tlet probe = {inner} {{ bytes: &self.bytes[start..] }};",
+			"\t\tlet size  = probe.extent();",
+			"\t\tif start + size > self.bytes.len() {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tOk({inner} {{ bytes: &self.bytes[start..start + size] }})",
+		]
 
 	def _tlv_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -763,6 +919,8 @@ class Emitter:
 			return self._coded_region(struct, placement)
 		if kind is Member.TLV:
 			return self._tlv_region(struct, placement)
+		if kind is Member.INDEXED:
+			return self._indexed_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:
@@ -1826,7 +1984,8 @@ class Emitter:
 		"""Emitted only for a type something walks a run of."""
 		# A run walks them and a nested member sizes its slice from one.
 		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED)
+		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
+		               Member.INDEXED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):

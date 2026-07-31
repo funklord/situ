@@ -30,7 +30,9 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Arm, Placement, TlvGrammar, ValueRule
+from situc.layout import (
+	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
+)
 from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -1415,10 +1417,14 @@ class Emitter:
 		"""How many bytes one instance occupies, for a run that walks them."""
 		# A run walks them and a nested member sizes its view from one. Gated
 		# on the run alone, the nested case reached for `size_bytes` instead.
-		# A run walks them, a `while` run walks them, and a nested member
-		# sizes its view from one. All three read the same method.
+		# A run walks them, a `while` run walks them, a nested member sizes its
+		# view from one, and an `indexed` region narrows an offset to one. All
+		# four read the same method -- and the fourth was missing, so an
+		# indexed region reported an extent it could not compute when the
+		# extent was simply not emitted.
 		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED)
+		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
+		               Member.INDEXED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
@@ -1737,6 +1743,200 @@ class Emitter:
 		return (codec is not None and codec.kernel is not None
 		        and codec.kernel.family is ast.KernelFamily.TABLE
 		        and decode_bound(codec, placement) is not None)
+
+	def _indexed_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""An offset table, then the elements it reaches (section 9.3).
+
+		The region answered `REGION` in the shared classifier and this backend
+		emitted "not in the static subset yet" -- the fallthrough note, for the
+		last construct no backend reached into.
+
+		Insertion is still not an operation, for the reason it never was: every
+		offset after the insertion point would have to move.
+		"""
+		table = placement.index_table
+		if table is None:
+			return []
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the region starts. */"]
+
+		name    = c_name(local_name(struct, placement))
+		count   = self._count_expression(struct, placement)
+		width   = table.entry_bits // BITS_PER_BYTE
+		element = self.resolved.structs.get(table.element or "")
+
+		lines = [
+			"",
+			f"\t/* {placement.path} is an offset table of {width}-byte entries,",
+			"\t * then the elements it reaches. Element N is one read of entry"
+			" N plus",
+			"\t * a base, whatever the elements weigh -- which is why `access`"
+			" stays",
+			"\t * Random through a region whose elements need not be the same"
+			" size.",
+			"\t *",
+			"\t * Insertion is not an operation here: every offset after the",
+			"\t * insertion point would have to move. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+			"\t{",
+			f"\t\treturn {count};",
+			"\t}",
+			"",
+			"\t/* The offset held in entry `index`, as written -- measured from",
+			f"\t * {self._index_base_noun(table)}. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_offset(std::uint32_t index,",
+			"\t\t\tstd::uint32_t &out) const noexcept",
+			"\t{",
+			f"\t\tconst std::uint32_t at = {start} + index * {width}u;",
+			"",
+			f"\t\tif (index >= {name}_count()) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\tif (!situ_in_bounds(this->raw(), at, {width}u)) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"",
+			f"\t\tout = {self._index_entry_read(placement, width)};",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
+		lines.extend(self._index_element(struct, placement, table, name,
+		                                 element, start))
+		return lines
+
+	def _index_entry_read(self, placement: Placement, width: int) -> str:
+		"""One table entry, in the region's byte order."""
+		if width == 1:
+			return "static_cast<std::uint32_t>(base()[at])"
+		order = "be" if placement.endian is ast.Endian.BIG else "le"
+		return (f"static_cast<std::uint32_t>"
+		        f"(situ_get_{order}{width * 8}(base() + at))")
+
+	def _index_base_noun(self, table: IndexTable) -> str:
+		if table.base == "message":
+			return "the start of the *message*"
+		if table.base == "member":
+			return f"the start of `{table.base_member}`"
+		return "the start of this region"
+
+	def _index_element(self, struct: ResolvedStruct, placement: Placement,
+			table: IndexTable, name: str, element: ResolvedStruct | None,
+			start: str) -> list[str]:
+		"""`at`: a view over the element an entry reaches.
+
+		Emitted only where the element's extent is computable. An offset with
+		no length is a position and not a frame.
+		"""
+		if element is None or (not element.layout.is_fixed_size
+		                       and self._extent_terms(element) is None):
+			held = table.element or placement.type_name
+			return ["", f"\t/* No `{name}_at`: one `{held}` has no extent this"
+			        " backend can",
+			        "\t * compute, so an entry gives a position and not a view."
+			        " The offsets",
+			        "\t * are still readable above. */"]
+
+		if table.base == "message" and not element.layout.is_fixed_size:
+			return ["", f"\t/* No `{name}_at`: `{element.name}` has no fixed"
+			        " size and these",
+			        "\t * offsets are measured from the message, so narrowing"
+			        " to one element",
+			        "\t * would mean measuring it through a view this frame"
+			        " cannot bound. */"]
+
+		inner  = c_name(element.name)
+		origin = (self._index_member_base(struct, table)
+		          if table.base == "member" else start)
+
+		if table.base == "message":
+			return [
+				"",
+				"\t/* A view over element `index`. Its offset is measured from"
+				" the",
+				"\t * start of the *message*, so the message is taken as well:"
+				" only it",
+				"\t * knows where offset zero is. */",
+				f"\t[[nodiscard]] ::situ::rt::err {name}_at("
+				f"::situ::rt::message &owner,",
+				f"\t\t\tstd::uint32_t index, {inner} &out) const noexcept",
+				"\t{",
+				"\t\tstd::uint32_t found = 0;",
+				f"\t\tconst ::situ::rt::err e = {name}_offset(index, found);",
+				"",
+				"\t\tif (e != ::situ::rt::err::ok) {",
+				"\t\t\treturn e;",
+				"\t\t}",
+				f"\t\treturn ::situ::{inner}::at(owner, found,",
+				f"\t\t\t{inner}::size_bytes, out);",
+				"\t}",
+			]
+
+		return [
+			"",
+			"\t/* A view over element `index`, whose offset is measured from",
+			f"\t * {self._index_base_noun(table)}. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,",
+			f"\t\t\t{inner} &out) const noexcept",
+			"\t{",
+			"\t\tstd::uint32_t found = 0;",
+			f"\t\tconst ::situ::rt::err e = {name}_offset(index, found);",
+			"\t\tsitu_view_t raw;",
+			"",
+			"\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\treturn e;",
+			"\t\t}",
+			f"\t\tconst std::uint32_t start = {origin} + found;",
+			*self._index_element_extent(element),
+			"\t}",
+		]
+
+	def _index_member_base(self, struct: ResolvedStruct,
+			table: IndexTable) -> str:
+		found = self.resolved.find(f"{struct.name}.{table.base_member}")
+		if found is None:
+			return "0"
+		return self._offset_expression(struct, found.placement) or "0"
+
+	def _index_element_extent(self, element: ResolvedStruct) -> list[str]:
+		"""Narrow to one element, measuring it first where it varies."""
+		inner = c_name(element.name)
+
+		if element.layout.is_fixed_size:
+			return [
+				f"\t\tif (situ_view_sub(this->raw(), start,"
+				f" {inner}::size_bytes, &raw)",
+				"\t\t\t\t!= SITU_OK) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				f"\t\tout = ::situ::{inner}(raw);",
+				"\t\treturn ::situ::rt::err::ok;",
+			]
+
+		return [
+			"",
+			"\t\t/* The extent is in the element's own bytes, so it takes a"
+			" view to",
+			"\t\t * read and a view is what it decides. Measure over the rest"
+			" of the",
+			"\t\t * region, then narrow. */",
+			"\t\tif (start > limit()) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"\t\tif (situ_view_sub(this->raw(), start, limit() - start, &raw)",
+			"\t\t\t\t!= SITU_OK) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\tif (situ_view_sub(this->raw(), start,",
+			f"\t\t\t\t::situ::{inner}(raw).extent(), &raw) != SITU_OK) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\tout = ::situ::{inner}(raw);",
+			"\t\treturn ::situ::rt::err::ok;",
+		]
 
 	def _tlv_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2217,6 +2417,8 @@ class Emitter:
 			return self._coded_region(struct, placement)
 		if kind is Member.TLV:
 			return self._tlv_region(struct, placement)
+		if kind is Member.INDEXED:
+			return self._indexed_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:

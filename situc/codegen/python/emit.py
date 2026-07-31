@@ -25,7 +25,9 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Arm, Placement, TlvGrammar, ValueRule
+from situc.layout import (
+	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
+)
 from situc.names import over_fields, render_delimiter, translate_operators
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -443,6 +445,143 @@ class Emitter:
 	def _tlv_imports(self) -> list[str]:
 		"""`varint_get`, where something walks a tlv region."""
 		return ["\tvarint_get,"] if self._tlv_items() else []
+
+	def _indexed_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""An offset table, then the elements it reaches (section 9.3).
+
+		The region answered `REGION` in the shared classifier and this backend
+		said "not emitted by this backend yet" -- the fallthrough note, for the
+		last construct no backend reached into.
+		"""
+		table = placement.index_table
+		if table is None:
+			return []
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the region starts."]
+
+		name    = c_name(local_name(struct, placement))
+		width   = table.entry_bits // BITS_PER_BYTE
+		element = self.resolved.structs.get(table.element or "")
+		order   = "big" if placement.endian is ast.Endian.BIG else "little"
+
+		count = self._count_expression(struct, placement)
+		if count is None:
+			if table.count_fixed is None:
+				return ["", f"\t# {placement.path}: this backend cannot resolve"
+				        " how many entries",
+				        "\t# the table holds, so nothing below could be"
+				        " bounded."]
+			count = str(table.count_fixed)
+
+		lines = [
+			"",
+			"\t@property",
+			f"\tdef {name}_count(self) -> int:",
+			f'\t\t"""How many entries the table holds.',
+			"",
+			f"\t\t`{placement.path}` is an offset table of {width}-byte"
+			f" entries, then",
+			"\t\tthe elements it reaches. Element N is one read of entry N"
+			" plus a",
+			"\t\tbase, whatever the elements weigh -- which is why `access`"
+			" stays",
+			"\t\tRandom through a region whose elements need not be the same"
+			" size.",
+			"",
+			"\t\tInsertion is not an operation here: every offset after the",
+			'\t\tinsertion point would have to move."""',
+			f"\t\treturn {count}",
+			"",
+			f"\tdef {name}_offset(self, index: int) -> int:",
+			f'\t\t"""The offset held in entry `index`, as written -- measured',
+			f'\t\tfrom {self._index_base_noun(table)}."""',
+			"\t\tself._check()",
+			f"\t\tif not 0 <= index < self.{name}_count:",
+			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+			"",
+			f"\t\tat = {start} + index * {width}",
+			f"\t\tif at + {width} > self._len:",
+			f'\t\t\traise BoundsError(f"entry {{index}} runs past the region")',
+			"",
+			f"\t\treturn int.from_bytes(self.bytes[at:at + {width}],"
+			f' "{order}")',
+		]
+		lines.extend(self._index_element(struct, placement, table, name,
+		                                 element, start))
+		return lines
+
+	def _index_base_noun(self, table: IndexTable) -> str:
+		if table.base == "message":
+			return "the start of the *message*"
+		if table.base == "member":
+			return f"the start of `{table.base_member}`"
+		return "the start of this region"
+
+	def _index_element(self, struct: ResolvedStruct, placement: Placement,
+			table: IndexTable, name: str, element: ResolvedStruct | None,
+			start: str) -> list[str]:
+		"""`at`: the element an entry reaches."""
+		if element is None or (not element.layout.is_fixed_size
+		                       and self._extent_expression(element) is None):
+			held = table.element or placement.type_name
+			return ["", f"\t# No `{name}_at`: one `{held}` has no extent this"
+			        " backend can",
+			        "\t# compute, so an entry gives a position and not a view."
+			        " The offsets",
+			        "\t# are still readable above."]
+
+		inner  = c_name(element.name)
+		origin = (self._index_member_base(struct, table)
+		          if table.base == "member" else
+		          "0" if table.base == "message" else start)
+		# A message-relative offset is measured from the buffer, not from this
+		# frame, so the element is taken over the message rather than over the
+		# region. `self._at` is where this view begins.
+		anchor = ("0" if table.base == "message" else "self._at")
+
+		return [
+			"",
+			f"\tdef {name}_at(self, index: int) -> {inner}:",
+			f'\t\t"""Element `index`, whose offset is measured from',
+			f'\t\t{self._index_base_noun(table)}."""',
+			f"\t\tstart = {origin} + self.{name}_offset(index)",
+			*self._index_element_extent(element, inner, anchor),
+		]
+
+	def _index_member_base(self, struct: ResolvedStruct,
+			table: IndexTable) -> str:
+		found = self.resolved.find(f"{struct.name}.{table.base_member}")
+		if found is None:
+			return "0"
+		return self._offset_expression(struct, found.placement) or "0"
+
+	def _index_element_extent(self, element: ResolvedStruct, inner: str,
+			anchor: str) -> list[str]:
+		"""Narrow to one element, measuring it first where it varies."""
+		if element.layout.is_fixed_size:
+			return [
+				f"\t\treturn {inner}(self._msg, {anchor} + start,"
+				f" {inner}.SIZE_BYTES)",
+			]
+
+		return [
+			"",
+			"\t\t# The extent is in the element's own bytes, so it takes a"
+			" view to",
+			"\t\t# read and a view is what it decides. Measure over the rest"
+			" of the",
+			"\t\t# region, then narrow.",
+			"\t\tif start > self._len:",
+			f'\t\t\traise BoundsError(f"element {{index}} starts past the'
+			f' region")',
+			f"\t\tprobe = {inner}(self._msg, {anchor} + start,"
+			f" self._len - start)",
+			f"\t\treturn {inner}(self._msg, {anchor} + start, probe._extent)",
+		]
 
 	def _tlv_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -890,6 +1029,8 @@ class Emitter:
 			return self._coded_region(struct, placement)
 		if kind is Member.TLV:
 			return self._tlv_region(struct, placement)
+		if kind is Member.INDEXED:
+			return self._indexed_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:
@@ -1742,7 +1883,8 @@ class Emitter:
 		"""Emitted only for a type something walks a run of."""
 		# A run walks them and a nested member sizes itself from one.
 		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED)
+		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
+		               Member.INDEXED)
 		           and entry.placement.type_name == struct.name
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):

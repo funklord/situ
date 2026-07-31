@@ -1423,3 +1423,109 @@ int main()
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- indexed regions (section 9.3) ------------------------------------------
+
+INDEXED = ("struct R { u32 id; u16 kind; }"
+	"struct V { u16 len; u8 body[len]; }"
+	"struct S { u16 n; indexed(offset_type = u16, count = n)"
+	" { R fixed[]; } }"
+	"struct T { u16 n; indexed(offset_type = u16, count = n)"
+	" { V varying[]; } }")
+
+
+def test_an_indexed_region_gets_its_table_walked() -> None:
+	"""It answered REGION in the shared classifier and this backend emitted
+	"not in the static subset yet" -- the fallthrough note, for the last
+	construct no backend reached into."""
+	header = emit(INDEXED)
+
+	assert "fixed_count() const noexcept" in header
+	assert "fixed_offset(std::uint32_t index," in header
+	assert "fixed_at(std::uint32_t index," in header
+	assert "not in the static subset yet" not in header
+
+
+def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
+	header = emit(INDEXED)
+
+	assert "situ_get_be16(base() + at)" in header
+
+
+def test_an_index_over_variable_elements_measures_one() -> None:
+	"""`_extent_method` gated the extent on runs and nested members, so an
+	indexed region asked for one that was never emitted."""
+	header = emit(INDEXED)
+
+	assert "::situ::V(raw).extent()" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_index_reaches_elements_in_any_order(tmp_path: Path) -> None:
+	"""The whole point of the table. A walk over an ascending table proves
+	nothing, so the offsets here are deliberately out of order."""
+	schema   = parse_text(PREAMBLE + INDEXED)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text('''
+#include <cstring>
+#include "unit.hpp"
+
+static const std::uint8_t S_BYTES[] = {
+	0x00, 0x03,
+	0x00, 0x12, 0x00, 0x06, 0x00, 0x0C,
+	0x00, 0x00, 0x00, 0xBB, 0x00, 0x02,
+	0x00, 0x00, 0x00, 0xCC, 0x00, 0x03,
+	0x00, 0x00, 0x00, 0xAA, 0x00, 0x01,
+};
+static const std::uint8_t T_BYTES[] = {
+	0x00, 0x02,
+	0x00, 0x04, 0x00, 0x0B,
+	0x00, 0x05, 'h', 'e', 'l', 'l', 'o',
+	0x00, 0x02, 'h', 'i',
+};
+
+int main()
+{
+	std::uint8_t buf[64];
+
+	std::memcpy(buf, S_BYTES, sizeof(S_BYTES));
+	situ::rt::message owner(buf, sizeof(S_BYTES));
+	situ::S s;
+	if (situ::S::at(owner, 0, sizeof(S_BYTES), s) != situ::rt::err::ok) return 1;
+	if (s.fixed_count() != 3u) return 2;
+
+	situ::R e;
+	if (s.fixed_at(0, e) != situ::rt::err::ok || e.id() != 170u) return 3;
+	if (s.fixed_at(1, e) != situ::rt::err::ok || e.id() != 187u) return 4;
+	if (s.fixed_at(2, e) != situ::rt::err::ok || e.id() != 204u) return 5;
+	if (s.fixed_at(3, e) != situ::rt::err::bounds) return 6;
+
+	std::memcpy(buf, T_BYTES, sizeof(T_BYTES));
+	situ::rt::message other(buf, sizeof(T_BYTES));
+	situ::T t;
+	if (situ::T::at(other, 0, sizeof(T_BYTES), t) != situ::rt::err::ok) return 7;
+
+	/* Each element is narrowed to its own extent, not to the rest. */
+	situ::V v;
+	if (t.varying_at(0, v) != situ::rt::err::ok || v.limit() != 7u) return 8;
+	if (std::memcmp(v.body().data(), "hello", 5) != 0) return 9;
+	if (t.varying_at(1, v) != situ::rt::err::ok || v.limit() != 4u) return 10;
+	if (std::memcmp(v.body().data(), "hi", 2) != 0) return 11;
+
+	return 0;
+}
+''', encoding="ascii")
+
+	assert HOST_CXX is not None
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True, check=False)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
