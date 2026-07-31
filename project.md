@@ -5034,15 +5034,22 @@ offset an entry holds, and a view over the element it reaches.
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**Five where C is ahead of the other three.**
+**Four where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
-| crypto regions -- `tag`, `sealed` | `packet` |
+| a `tag`'s coverage, dirty bit and finalize | `packet.tag` |
 | an endian marker | `tiff_header.byte_order` |
 | a fixed-width text number | `reply_line.code` |
-| an array of struct elements | `telemetry_frame.readings` |
 | the `--materialize` offset cache | any delimited chain |
+
+Re-deriving this from the output moved two things off it. An array of struct
+elements was not C-ahead-of-three: C, Rust and Python all emitted one and C++
+said "element type is not in the static subset yet", which the subset had
+nothing to do with -- its array branch wanted a byte scalar, and a struct
+element has no scalar at all. And the `sealed` gate is in all four; the entry
+said "crypto regions -- `tag`, `sealed`" and only the tag machinery is
+C-only.
 
 Each says so in the generated output. None of them is a design question; they
 are the C backend having gone first and the others not having caught up on

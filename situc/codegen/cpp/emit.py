@@ -2943,6 +2943,14 @@ class Emitter:
 		scalar = placement.scalar
 		count  = placement.array_count or 0
 
+		# An array of structs: one accessor taking an index, which is what the
+		# other three backends emit and this one called "not in the static
+		# subset yet". The subset had nothing to do with it -- the branch
+		# below wants a byte scalar, and a struct element has no scalar at all.
+		element = self.resolved.structs.get(placement.type_name or "")
+		if scalar is None and element is not None:
+			return self._element_array(struct, placement, element)
+
 		if scalar is None or scalar.bits != BITS_PER_BYTE:
 			return ["", f"\t/* {placement.path}: element type"
 			        f" {placement.type_name} is not in the static subset yet. */"]
@@ -2969,6 +2977,53 @@ class Emitter:
 				"\t}",
 			])
 		return lines
+
+	def _element_array(self, struct: ResolvedStruct, placement: Placement,
+			element: ResolvedStruct) -> list[str]:
+		"""`reading readings[8]`: one accessor, bounded by the count.
+
+		Bounded by the count and not only by the extent, because bytes after
+		the array are inside the view and are not elements -- which is the
+		distinction an index check makes and a pointer does not.
+		"""
+		if not element.layout.is_fixed_size:
+			return ["", f"\t/* {placement.path}: one {placement.type_name} has"
+			        " no single size,",
+			        "\t * so element N is not at a constant stride. */"]
+
+		name  = c_name(local_name(struct, placement))
+		inner = c_name(element.name)
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the array starts. */"]
+
+		count = placement.array_count or 0
+
+		return [
+			"",
+			f"\t/* Element `index` of {count}. Bounded by the count as well as",
+			"\t * the extent: bytes after the array are inside the view and are",
+			"\t * not elements. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,",
+			f"\t\t\t{inner} &out) const noexcept",
+			"\t{",
+			f"\t\tif (index >= {count}u) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"",
+			f"\t\tsitu_view_t raw;",
+			f"\t\tconst std::uint32_t at = ({start})"
+			f" + index * {inner}::size_bytes;",
+			"",
+			f"\t\tif (situ_view_sub(this->raw(), at, {inner}::size_bytes,"
+			" &raw) != SITU_OK) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\tout = ::situ::{inner}(raw);",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
 
 	# -- validation ----------------------------------------------------
 

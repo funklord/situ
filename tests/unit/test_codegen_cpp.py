@@ -1749,3 +1749,101 @@ int main()
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- an array of struct elements --------------------------------------------
+
+ELEMENTS = ("struct reading { i16 value; u8 channel; }"
+	"struct frame { u8 version; reading readings[8]; u32 checksum; }")
+
+
+def test_an_array_of_structs_gets_an_indexed_accessor() -> None:
+	"""It said "element type reading is not in the static subset yet", which
+	the subset had nothing to do with: the branch wanted a byte scalar and a
+	struct element has no scalar at all. The other three all emitted one."""
+	header = emit(ELEMENTS)
+
+	assert "readings(std::uint32_t index," in header
+	assert "not in the static subset yet" not in header
+
+
+def test_an_element_index_is_bounded_by_the_count() -> None:
+	"""Bounded by the count and not only by the extent: bytes after the array
+	are inside the view and are not elements."""
+	header = emit(ELEMENTS)
+
+	assert "if (index >= 8u) {" in header
+	assert "reading::size_bytes" in header
+
+
+def test_an_element_of_no_single_size_is_refused() -> None:
+	"""Element N is not at a constant stride, so there is no index to compute."""
+	header = emit("struct v { u8 n; u8 body[n]; }"
+	              "struct frame { v items[4]; }")
+
+	assert "has no single size" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_elements_are_where_c_puts_them(tmp_path: Path) -> None:
+	"""The claim every backend carries: that it describes the same bytes as
+	the C. Written through C's accessors and read back through this one."""
+	schema   = parse_text(PREAMBLE + ELEMENTS)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "unit.h").write_text(
+		generate_c(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(
+		generate_c(schema, resolved, "unit").source, encoding="ascii")
+	(tmp_path / "main.cpp").write_text('''
+#include <cstring>
+#include "unit.hpp"
+extern "C" {
+#include "unit.h"
+}
+
+int main()
+{
+	std::uint8_t buf[64];
+	std::memset(buf, 0, sizeof buf);
+
+	situ_msg_t msg;
+	situ_view_t view;
+	situ_msg_init(&msg, buf, sizeof buf);
+	if (situ_frame_view(&msg, 0, &view) != SITU_OK) return 1;
+
+	for (std::uint32_t i = 0; i < 8; i++) {
+		situ_view_t e;
+		if (situ_frame_readings_at(view, i, &e) != SITU_OK) return 2;
+		situ_reading_channel_set(e, static_cast<std::uint8_t>(i + 1));
+		situ_reading_value_set(e, static_cast<std::int16_t>(-i));
+	}
+
+	situ::rt::message owner(buf, sizeof buf);
+	situ::frame f;
+	if (situ::frame::at(owner, 0, f) != situ::rt::err::ok) return 3;
+
+	for (std::uint32_t i = 0; i < 8; i++) {
+		situ::reading r;
+		if (f.readings(i, r) != situ::rt::err::ok) return 4;
+		if (r.channel() != i + 1) return 5;
+		if (r.value() != -static_cast<std::int16_t>(i)) return 6;
+	}
+
+	situ::reading r;
+	if (f.readings(8, r) != situ::rt::err::bounds) return 7;
+	return 0;
+}
+''', encoding="ascii")
+
+	assert HOST_CXX is not None
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True, check=False)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
