@@ -943,3 +943,111 @@ def test_and_says_why_the_decode_is_not_here(tmp_path: Path) -> None:
 	assert "No `body_decode`" in module
 	assert "situ_halve_decode" in module
 	assert "4 bytes is what it needs" in module
+
+
+# -- tlv regions (section 9.5) ----------------------------------------------
+
+TLV_PREAMBLE = (PREAMBLE
+	+ "varint_type pb_varint { encoding = leb128; max_bits = 64; }\n")
+
+TLV = """struct S {
+	tlv fields (
+		tag_type     = pb_varint,
+		tag_decode   = { field = tag >> 3, wire = tag & 0x7 },
+		tag_identity = field,
+		value_size   = switch (wire) {
+			case 0: self_delimiting,
+			case 1: 8,
+			case 2: prefixed(pb_varint),
+			case 5: 4,
+			default: error,
+		},
+		known = {
+			1 : { name = user_id, wire = 0, type = pb_varint },
+			2 : { name = label,   wire = 2, type = u8 },
+		},
+		unknown = preserve
+	);
+}"""
+
+# protoc --encode=User <<< 'user_id: 150; username: "situ"; score: 1.5'
+WIRE = (bytes([0x08, 0x96, 0x01, 0x12, 0x04]) + b"situ"
+	+ bytes([0x1D, 0x00, 0x00, 0xC0, 0x3F]))
+
+
+def test_a_tlv_region_gets_a_walk() -> None:
+	"""It answered REGION in the shared classifier and this backend said "not
+	emitted by this backend yet" -- the fallthrough note, for the one construct
+	section 9.7 makes the conformance gate."""
+	module = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "def fields_first(self):" in module
+	assert "def fields_next(self, item):" in module
+	assert "not emitted by this backend yet" not in module
+
+
+def test_iteration_is_a_generator() -> None:
+	"""Where this backend departs from the other three on purpose: `for item
+	in msg.fields()` is the shape a Python caller reaches for."""
+	module = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "\t\t\t\tyield item" in module
+
+
+def test_the_item_is_not_a_dataclass() -> None:
+	"""A dataclass resolves its annotations through
+	`sys.modules[cls.__module__]` under `from __future__ import annotations`,
+	so a module loaded by `exec_module` on a spec -- which is how the example
+	suite loads these -- raises on the class body. Generated code should not
+	care how it was imported."""
+	module = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "@dataclass" not in module
+	assert "from dataclasses import" not in module
+	assert '__slots__ = ("at", "next", "tag", "field", "wire",' in module
+
+
+def test_the_walk_reads_protoc_output(tmp_path: Path) -> None:
+	module = load(tmp_path, TLV, preamble=TLV_PREAMBLE)
+	held   = module.S.at(runtime().Message(bytearray(WIRE)), 0, len(WIRE))
+
+	assert held.fields_count() == 3
+	# Where each item starts, not where its value does.
+	assert [item.at for item in held.fields()] == [0, 3, 9]
+
+	item = held.user_id()
+	assert item.wire == 0
+	assert runtime().varint_get(bytes(held.fields_value(item)), 0, 10)[0] == 150
+
+	item = held.label()
+	assert item.wire == 2
+	assert bytes(held.fields_value(item)) == b"situ"
+
+
+def test_a_refused_wire_type_raises(tmp_path: Path) -> None:
+	"""`default: error` is a rejection rather than a gap: groups have no
+	extent this schema can compute."""
+	module = load(tmp_path, TLV, preamble=TLV_PREAMBLE)
+	held   = module.S.at(runtime().Message(bytearray([0x0B])), 0, 1)
+
+	with pytest.raises(runtime().ConstraintError) as caught:
+		held.fields_first()
+
+	assert "wire type 3 is not one this schema sizes" in str(caught.value)
+
+
+def test_a_missing_tag_raises(tmp_path: Path) -> None:
+	module = load(tmp_path, TLV, preamble=TLV_PREAMBLE)
+	held   = module.S.at(runtime().Message(bytearray(WIRE)), 0, len(WIRE))
+
+	with pytest.raises(runtime().BoundsError):
+		held.fields_find(9)
+
+
+def test_the_item_repr_names_its_parts(tmp_path: Path) -> None:
+	module = load(tmp_path, TLV, preamble=TLV_PREAMBLE)
+	held   = module.S.at(runtime().Message(bytearray(WIRE)), 0, len(WIRE))
+
+	assert repr(held.fields_first()) == (
+		"S_fields_item(at=0, next=3, tag=8, field=1, wire=0, "
+		"value_at=1, value_len=2)")

@@ -1162,6 +1162,36 @@ generated accessors, and what stays in `situ.h` is what the walk is built out
 of: a varint read and the bounds-checked view operations. A runtime that knows
 a wire type is a runtime that will disagree with a schema eventually.
 
+**One walk, four shapes.** All four backends emit it, and as with the second
+accessor family (26.30) what each emits is its own language's answer:
+
+| | the item | iteration |
+|---|---|---|
+| C | a `struct` the caller declares | `first`/`next` on a cursor |
+| C++ | the same, nested in the view class | the same, `err` returned |
+| Rust | a module-scope struct; `_value` hands back a `&[u8]` | `Result<Item>`, returned rather than filled in |
+| Python | a `__slots__` class | `first`/`next`, **and** a generator |
+
+Rust returns the item because a cursor is a value there and an out-parameter
+would be C's shape wearing Rust's syntax; it can also hand back the value as a
+borrowed slice, which is the one thing the other three cannot say. Python
+carries both protocols on purpose: `for item in msg.fields()` is what a Python
+caller reaches for, and the cursor pair is what makes the four comparable.
+
+Two things the port found. The Rust walk derived an item's start by
+subtracting the tag's width, which is wrong for a length-prefixed value --
+`used` is shadowed inside the dispatch arms and the cursor has already moved
+past the prefix. It is asserted now, in all four, that `at` is where the item
+starts and not where its value does. And the Python item was a `@dataclass`,
+which resolves its annotations through `sys.modules[cls.__module__]` under
+`from __future__ import annotations`: a module loaded by `exec_module` on a
+spec -- which is how the example suite loads them -- raised on the class body.
+Generated code should not care how it was imported.
+
+The varint read had to be added to the Rust and Python runtimes, neither of
+which had one. That is the correct direction for this file: a primitive, not a
+format.
+
 ### 9.6 variant
 
 Discriminated union selected by an expression over an already-parsed field:
@@ -4756,14 +4786,12 @@ insertion is not an operation at all.
 `tlv` was here too, and was the sharper case of it: `examples/protobuf`'s
 `proto_message.fields` got no accessor anywhere, so section 9.7 could argue
 situ must be able to describe protobuf while situ described it without being
-able to read it. C walks one now (9.5), which moves it down a list rather than
-off this page.
+able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**Six where C is ahead of the other three.**
+**Five where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
-| a `tlv` region's items | `proto_message.fields` |
 | crypto regions -- `tag`, `sealed` | `packet` |
 | an endian marker | `tiff_header.byte_order` |
 | a fixed-width text number | `reply_line.code` |

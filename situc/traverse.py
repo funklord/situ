@@ -87,6 +87,9 @@ class Member(Enum):
 	#: A `coded` region: bytes on the wire that mean something else, and the
 	#: transform between them (13.5).
 	CODED     = "coded"
+	#: A `tlv` region: a run of self-describing items, walked as the region's
+	#: own item grammar says (9.5).
+	TLV       = "tlv"
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
 	#: variant, an opaque or indexed span. Each needs its own machinery.
 	REGION    = "region"
@@ -154,6 +157,13 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# asking here, has never been.
 	if placement.kind == "coded":
 		return Member.CODED
+
+	# Before the region check, like the two coded cases above and for the same
+	# reason: a tlv region answered REGION, and three backends emitted nothing
+	# for the one construct section 9.7 makes the conformance gate. C does not
+	# ask here, which is why it was the only one that could walk one.
+	if placement.kind == "tlv":
+		return Member.TLV
 
 	if placement.kind != "field":
 		return Member.REGION

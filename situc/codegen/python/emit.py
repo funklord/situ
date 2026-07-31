@@ -25,7 +25,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Arm, Placement
+from situc.layout import BITS_PER_BYTE, Arm, Placement, TlvGrammar, ValueRule
 from situc.names import over_fields, render_delimiter, translate_operators
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -37,8 +37,8 @@ from situc.traverse import (
 	has_computable_extent, local_name, matched_values, obligation,
 	own_entries, own_members,
 )
+from situc.types import ScalarType, lookup
 from situc.unparse import expr_to_source as unparse_expr
-from situc.types import ScalarType
 
 
 def _pythonic(source: str) -> str:
@@ -113,6 +113,7 @@ class Emitter:
 			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
 			"\tcompose, nul_len, open_gate, utf8_valid,",
+			*self._tlv_imports(),
 			*self._delimited_imports(),
 			")",
 			"",
@@ -126,10 +127,27 @@ class Emitter:
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
 
+		# The item records first, at module scope. A nested class would work in
+		# Python and would put a type a caller names inside the class it is
+		# reached through, which reads as private.
+		for struct, placement in self._tlv_items():
+			assert placement.tlv_grammar is not None
+			lines.extend(self._tlv_item_class(struct, placement,
+			                                  placement.tlv_grammar))
+
 		for name in self._order():
 			lines.extend(self._struct(self.resolved.structs[name]))
 
 		return "\n".join(lines) + "\n"
+
+	def _tlv_items(self) -> list[tuple[ResolvedStruct, Placement]]:
+		"""Every walkable tlv region, with the struct that holds it."""
+		return [(struct, entry.placement)
+		        for struct in self.resolved.structs.values()
+		        for entry in struct.entries
+		        if entry.placement.kind == "tlv"
+		        and entry.placement.tlv_grammar is not None
+		        and entry.placement.tlv_grammar.walkable]
 
 	def _delimited_imports(self) -> list[str]:
 		"""The section 8.6 helpers, imported only where something uses one.
@@ -422,6 +440,310 @@ class Emitter:
 
 	# -- members -------------------------------------------------------
 
+	def _tlv_imports(self) -> list[str]:
+		"""`varint_get`, where something walks a tlv region."""
+		return ["\tvarint_get,"] if self._tlv_items() else []
+
+	def _tlv_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run of tag-length-value items, walked as the schema describes them.
+
+		The region answered `REGION` in the shared classifier and this backend
+		said "not emitted by this backend yet" -- the fallthrough note, for the
+		one construct section 9.7 makes the conformance gate.
+
+		Iteration is a generator, which is where this backend departs from the
+		other three on purpose: `for item in msg.fields()` is the shape a
+		Python caller reaches for, and `first`/`next` is a cursor protocol
+		three languages need because they have no other way to say it. Both are
+		here -- the cursor because parity across backends is what makes them
+		comparable, the generator because a module nobody enjoys using is a
+		module nobody checks against the wire.
+		"""
+		grammar = placement.tlv_grammar
+		if grammar is None or not grammar.walkable:
+			return ["", f"\t# No accessors for {placement.path}: the region"
+			        " says how its items are",
+			        "\t# tagged and not how long their values are, so a walk"
+			        " has nowhere to",
+			        "\t# put the second item."]
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the region starts."]
+
+		name = c_name(local_name(struct, placement))
+
+		lines = self._tlv_read(placement, grammar, name)
+		lines.extend(self._tlv_cursor(name, start))
+		lines.extend(self._tlv_by_name(grammar, name))
+		return lines
+
+	def _tlv_item_class(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar) -> list[str]:
+		"""The item, at module scope beside the struct classes.
+
+		`__slots__` and a written-out `__init__` rather than a dataclass. A
+		dataclass resolves its annotations through `sys.modules[cls.__module__]`
+		under `from __future__ import annotations`, so a module loaded any way
+		that does not register it there -- `exec_module` on a spec, which is
+		how the example suite loads these -- raises on the class body. A
+		generated module should not care how it was imported.
+		"""
+		fields = (["at", "next", "tag"]
+		          + [part.name for part in grammar.tag_decode]
+		          + ["value_at", "value_len"])
+		width  = max(len(name) for name in fields)
+		listed = ", ".join(f'"{name}"' for name in fields)
+		noted  = {part.name: part.source for part in grammar.tag_decode}
+
+		return [
+			"",
+			"",
+			f"class {self._tlv_item_name(placement)}:",
+			f'\t"""One item of {placement.path}, and where the next starts.',
+			"",
+			"\tThe decoded parts are named by the schema; a backend inventing",
+			'\tits own would be describing protobuf rather than this region."""',
+			"",
+			f"\t__slots__ = ({listed},)",
+			"",
+			f"\tdef __init__(self, {', '.join(f'{name}: int' for name in fields)}"
+			f") -> None:",
+			*[f"\t\tself.{name.ljust(width)} = {name}"
+			  + (f"\t# {noted[name]}" if name in noted else "")
+			  for name in fields],
+			"",
+			"\tdef __repr__(self) -> str:",
+			f'\t\treturn ("{self._tlv_item_name(placement)}("',
+			*[f'\t\t        f"{name}={{self.{name}}}'
+			  + (')")' if name == fields[-1] else ', "') for name in fields],
+			"",
+		]
+
+	def _tlv_tag_bytes(self, placement: Placement) -> int:
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.tlv_tag_varint), None)
+		bits = declared.max_bits if declared is not None else 64
+		return (bits + 6) // 7
+
+	def _tlv_item_name(self, placement: Placement) -> str:
+		holder = placement.path.partition(".")[0]
+		return f"{c_name(holder)}_{c_name(placement.name)}_item"
+
+	def _tlv_read(self, placement: Placement, grammar: TlvGrammar,
+			name: str) -> list[str]:
+		"""Read the item at `at`: its tag, its parts, and where its value ends."""
+		item     = self._tlv_item_name(placement)
+		max_tag  = self._tlv_tag_bytes(placement)
+		decoded  = [f"\t\t\t{part.name} = ({part.source}),"
+		            for part in grammar.tag_decode]
+
+		lines = [
+			"",
+			f"\tdef _{name}_read(self, at: int) -> \"{item}\":",
+			f'\t\t"""The item at `at`.',
+			"",
+			"\t\tRaises BoundsError where the region ends or an item runs past",
+			"\t\tit, and ConstraintError for a wire type this schema does not",
+			'\t\tdescribe."""',
+			"\t\tdata = self.bytes",
+			"\t\tif at >= len(data):",
+			f'\t\t\traise BoundsError(f"no item at {{at}}: the region ends at'
+			f' {{len(data)}}")',
+			"",
+			f"\t\tread = varint_get(data, at, {max_tag})",
+			"\t\tif read is None:",
+			f'\t\t\traise BoundsError(f"the tag at {{at}} runs past the region")',
+			"\t\ttag, used = read",
+			"\t\tstart = at",
+			"\t\tat = at + used",
+			"",
+		]
+
+		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
+		lines.extend([
+			"",
+			"\t\tif size > len(data) - at:",
+			f'\t\t\traise BoundsError(f"an item of {{size}} bytes at {{at}}'
+			f' runs past the region")',
+			"",
+			f"\t\treturn {item}(",
+			"\t\t\tat = start,",
+			"\t\t\tnext = at + size,",
+			"\t\t\ttag = tag,",
+			*decoded,
+			"\t\t\tvalue_at = at,",
+			"\t\t\tvalue_len = size,",
+			"\t\t)",
+		])
+		return lines
+
+	def _tlv_value_extent(self, grammar: TlvGrammar, max_tag: int,
+			endian: ast.Endian | None) -> list[str]:
+		"""Where the value ends, dispatched as the schema dispatches it."""
+		if grammar.selector is None:
+			return self._tlv_prefixed_size(grammar.length_type or "u8",
+			                               "\t\t", endian)
+
+		selector = next((part for part in grammar.tag_decode
+		                 if part.name == grammar.selector), None)
+		lines = [f"\t\tchosen = ({selector.source if selector else 'tag'})"]
+
+		first = True
+		for rule in grammar.rules:
+			if rule.label is None:
+				continue
+			lines.append(f"\t\t{'if' if first else 'elif'} chosen"
+			             f" == {rule.label}:")
+			lines.extend(self._tlv_one_rule(rule, max_tag, endian))
+			first = False
+
+		default = next((rule for rule in grammar.rules if rule.label is None),
+		               None)
+		lines.append("\t\telse:" if not first else "\t\tif True:")
+		if default is None or default.kind == "error":
+			lines.extend([
+				"\t\t\t# `default: error`: a wire type this schema does not",
+				"\t\t\t# describe, so where the value ends is not knowable.",
+				"\t\t\traise ConstraintError(",
+				'\t\t\t\tf"wire type {chosen} is not one this schema sizes")',
+			])
+		else:
+			lines.extend(self._tlv_one_rule(default, max_tag, endian))
+		return lines
+
+	def _tlv_one_rule(self, rule: ValueRule, max_tag: int,
+			endian: ast.Endian | None) -> list[str]:
+		if rule.kind == "fixed":
+			return [f"\t\t\tsize = {rule.size}"]
+		if rule.kind == "error":
+			return ["\t\t\traise ConstraintError(",
+			        '\t\t\t\tf"wire type {chosen} is not one this schema sizes")']
+		if rule.kind == "self_delimiting":
+			# The value carries its own extent, so reading it is measuring it.
+			return [
+				f"\t\t\tcarried = varint_get(data, at, {max_tag})",
+				"\t\t\tif carried is None:",
+				'\t\t\t\traise BoundsError(',
+				'\t\t\t\t\tf"a self-delimiting value at {at} runs past the'
+				' region")',
+				"\t\t\tsize = carried[1]",
+			]
+		return self._tlv_prefixed_size(rule.length_type or "u8", "\t\t\t",
+		                               endian)
+
+	def _tlv_prefixed_size(self, length_type: str, indent: str,
+			endian: ast.Endian | None) -> list[str]:
+		"""`prefixed(T)`: a length in T, then that many bytes."""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == length_type), None)
+
+		if declared is not None:
+			width = (declared.max_bits + 6) // 7
+			return [
+				f"{indent}prefix = varint_get(data, at, {width})",
+				f"{indent}if prefix is None:",
+				f'{indent}\traise BoundsError(',
+				f'{indent}\t\tf"a length prefix at {{at}} runs past the region")',
+				f"{indent}length, used = prefix",
+				f"{indent}at = at + used",
+				f"{indent}if length > len(data) - at:",
+				f'{indent}\traise BoundsError(',
+				f'{indent}\t\tf"a value of {{length}} bytes at {{at}} runs past'
+				f' the region")',
+				f"{indent}size = length",
+			]
+
+		scalar = lookup(length_type)
+		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
+		order  = "big" if endian is ast.Endian.BIG else "little"
+		return [
+			f"{indent}if len(data) - at < {width}:",
+			f'{indent}\traise BoundsError(',
+			f'{indent}\t\tf"a length prefix at {{at}} runs past the region")',
+			f"{indent}size = int.from_bytes(data[at:at + {width}], \"{order}\")",
+			f"{indent}at = at + {width}",
+		]
+
+	def _tlv_cursor(self, name: str, start: str) -> list[str]:
+		"""The cursor, the generator over it, and the value's bytes."""
+		return [
+			"",
+			f"\tdef {name}_first(self):",
+			f'\t\t"""The first item. Raises BoundsError if the region is'
+			f' empty."""',
+			f"\t\treturn self._{name}_read({start})",
+			"",
+			f"\tdef {name}_next(self, item):",
+			f'\t\t"""The item after this one."""',
+			f"\t\treturn self._{name}_read(item.next)",
+			"",
+			f"\tdef {name}_value(self, item) -> memoryview:",
+			f'\t\t"""This item\'s value. Zero copy, like every other read'
+			f' here."""',
+			"\t\treturn self.bytes[item.value_at:item.value_at + item.value_len]",
+			"",
+			f"\tdef {name}(self):",
+			f'\t\t"""Every item, in order.',
+			"",
+			"\t\tA generator: the region is walked either way, and stopping",
+			"\t\tearly should not have cost a walk to the end. Ends at the",
+			'\t\tfirst item that does not parse, like the cursor does."""',
+			f"\t\ttry:",
+			f"\t\t\titem = self.{name}_first()",
+			"\t\t\twhile True:",
+			"\t\t\t\tyield item",
+			f"\t\t\t\titem = self.{name}_next(item)",
+			"\t\texcept (BoundsError, ConstraintError):",
+			"\t\t\treturn",
+			"",
+			f"\tdef {name}_count(self) -> int:",
+			f'\t\t"""How many items are present. A walk: nothing in the region',
+			'\t\trecords a count."""',
+			f"\t\treturn sum(1 for _ in self.{name}())",
+		]
+
+	def _tlv_by_name(self, grammar: TlvGrammar, name: str) -> list[str]:
+		"""`find`, and one accessor per tag the schema names."""
+		if not grammar.known:
+			return []
+
+		keyed = f"item.{grammar.identity}" if grammar.identity else "item.tag"
+		named = (f"the part `{grammar.identity}` decodes to" if grammar.identity
+		         else "the raw tag")
+
+		lines = [
+			"",
+			f"\tdef {name}_find(self, tag: int):",
+			f'\t\t"""The first item whose tag is `tag`, matched against {named}',
+			"\t\t(decision 0023).",
+			"",
+			"\t\tO(n): the region is walked from the start, which is what",
+			'\t\t`access = Sequential` costs."""',
+			f"\t\tfor item in self.{name}():",
+			f"\t\t\tif {keyed} == tag:",
+			"\t\t\t\treturn item",
+			f'\t\traise BoundsError(f"no item with tag {{tag}} in this region")',
+		]
+
+		for known in grammar.known:
+			described = f"tag {known.tag}"
+			if known.wire is not None:
+				described += f", wire type {known.wire}"
+			if known.type_name is not None:
+				described += f", carrying {known.type_name}"
+				described += "[]" if known.repeated else ""
+			lines.extend([
+				"",
+				f"\tdef {c_name(known.name)}(self):",
+				f'\t\t"""`{known.name}`: {described}."""',
+				f"\t\treturn self.{name}_find({known.tag})",
+			])
+
+		return lines
+
 	def _coded_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The encoded bytes of a coded region, and why the decode is not here.
@@ -566,6 +888,8 @@ class Emitter:
 			        "\t# validate() holds it to the pattern the schema declares."]
 		if kind is Member.CODED:
 			return self._coded_region(struct, placement)
+		if kind is Member.TLV:
+			return self._tlv_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:

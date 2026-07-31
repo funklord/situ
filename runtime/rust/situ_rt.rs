@@ -419,3 +419,33 @@ pub fn bcd_valid(packed: u64, digits: usize) -> bool {
 	}
 	true
 }
+
+/// Decode one varint at `at`. Returns the value and the bytes it occupied, or
+/// `None` if the slice ends mid-value or the value needs more than `max_bytes`.
+///
+/// A primitive, not a format: what a `tlv` region does with the number it reads
+/// is the region's own grammar (section 9.5), and the generated walk carries
+/// that. The C runtime once carried a whole tlv cursor with protobuf's wire
+/// types written into it, which is the shape this deliberately is not.
+#[inline]
+pub fn varint_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	let mut acc: u64 = 0;
+	let mut shift = 0;
+	let mut i = 0;
+
+	while i < max_bytes && at + i < bytes.len() {
+		let byte = bytes[at + i];
+
+		if shift < 64 {
+			acc |= ((byte & 0x7F) as u64) << shift;
+		}
+		shift += 7;
+		i += 1;
+
+		if byte & 0x80 == 0 {
+			return Some((acc, i));
+		}
+	}
+
+	None
+}

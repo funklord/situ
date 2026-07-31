@@ -1288,3 +1288,138 @@ int main()
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- tlv regions (section 9.5) ----------------------------------------------
+
+TLV_PREAMBLE = (PREAMBLE
+	+ "varint_type pb_varint { encoding = leb128; max_bits = 64; }\n")
+
+TLV = """struct S {
+	tlv fields (
+		tag_type     = pb_varint,
+		tag_decode   = { field = tag >> 3, wire = tag & 0x7 },
+		tag_identity = field,
+		value_size   = switch (wire) {
+			case 0: self_delimiting,
+			case 1: 8,
+			case 2: prefixed(pb_varint),
+			case 5: 4,
+			default: error,
+		},
+		known = {
+			1 : { name = user_id, wire = 0, type = pb_varint },
+			2 : { name = label,   wire = 2, type = u8 },
+		},
+		unknown = preserve
+	);
+}"""
+
+
+def test_a_tlv_region_gets_a_walk() -> None:
+	"""It answered REGION in the shared classifier and this backend emitted
+	"not in the static subset yet" -- the fallthrough note, for the one
+	construct section 9.7 makes the conformance gate."""
+	header = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "fields_first(fields_item &out)" in header
+	assert "fields_next(fields_item &item)" in header
+	assert "fields_count()" in header
+	assert "not in the static subset yet" not in header
+
+
+def test_the_item_is_a_nested_struct() -> None:
+	"""A cursor into bytes somebody else owns. Giving it the view's interface
+	would suggest it were a frame of its own."""
+	header = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "struct fields_item {" in header
+	assert "std::uint32_t field;\t/* tag >> 3 */" in header
+	assert "std::uint32_t wire;\t/* tag & 0x7 */" in header
+
+
+def test_each_wire_type_is_sized_as_the_dispatch_says() -> None:
+	header = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "switch (out.wire) {" in header
+	assert "size = 8u;" in header and "size = 4u;" in header
+	assert "return ::situ::rt::err::constraint;" in header
+
+
+def test_each_known_tag_gets_an_accessor() -> None:
+	header = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "user_id(fields_item &item)" in header
+	assert "label(fields_item &item)" in header
+	assert "fields_find(1u, item)" in header
+
+
+def test_by_name_accessors_match_the_identity_part() -> None:
+	"""Decision 0023."""
+	header = emit(TLV, preamble=TLV_PREAMBLE)
+
+	assert "if (item.field == tag) {" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_generated_walk_compiles(tmp_path: Path) -> None:
+	result = compiles(tmp_path, TLV, preamble=TLV_PREAMBLE)
+	assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_generated_walk_reads_protoc_output(tmp_path: Path) -> None:
+	"""The same vectors the C suite uses, which came out of protoc."""
+	schema   = parse_text(TLV_PREAMBLE + TLV)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text('''
+#include <cstring>
+#include "unit.hpp"
+
+static const std::uint8_t WIRE[] = {
+	0x08, 0x96, 0x01,
+	0x12, 0x04, 's', 'i', 't', 'u',
+	0x1d, 0x00, 0x00, 0xC0, 0x3F,
+};
+
+int main()
+{
+	std::uint8_t buf[sizeof(WIRE)];
+	std::memcpy(buf, WIRE, sizeof(WIRE));
+
+	situ::rt::message owner(buf, sizeof(buf));
+	situ::S msg;
+	if (situ::S::at(owner, 0, sizeof(WIRE), msg) != situ::rt::err::ok) return 1;
+	if (msg.fields_count() != 3u) return 2;
+
+	situ::S::fields_item item{};
+	if (msg.user_id(item) != situ::rt::err::ok) return 3;
+	if (item.wire != 0u || item.at != 0u) return 4;
+
+	if (msg.label(item) != situ::rt::err::ok) return 5;
+	if (item.wire != 2u || item.value_len != 4u || item.at != 3u) return 6;
+	if (std::memcmp(msg.base() + item.value_at, "situ", 4) != 0) return 7;
+
+	/* A wire type the schema refuses. */
+	std::uint8_t group[] = { 0x0B };
+	situ::rt::message other(group, sizeof(group));
+	situ::S bad;
+	if (situ::S::at(other, 0, 1, bad) != situ::rt::err::ok) return 8;
+	if (bad.fields_first(item) != situ::rt::err::constraint) return 9;
+
+	return 0;
+}
+''', encoding="ascii")
+
+	assert HOST_CXX is not None
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True, check=False)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

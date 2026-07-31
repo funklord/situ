@@ -28,7 +28,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Arm, Placement
+from situc.layout import BITS_PER_BYTE, Arm, Placement, TlvGrammar, ValueRule
 from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
@@ -40,7 +40,7 @@ from situc.traverse import (
 	has_computable_extent, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
-from situc.types import ScalarType
+from situc.types import ScalarType, lookup
 from situc.unparse import expr_to_source as unparse_expr
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -211,6 +211,10 @@ class Emitter:
 		for held in own_members(struct):
 			if held.repeat_while is not None or held.delimiter is not None:
 				types.extend(self._run_index_type(struct, held))
+			if held.kind == "tlv" and held.tlv_grammar is not None \
+					and held.tlv_grammar.walkable:
+				types.extend(self._tlv_item_type(struct, held,
+				                                 held.tlv_grammar))
 
 		name  = _pascal(struct.name)
 		fixed = layout.is_fixed_size
@@ -285,6 +289,286 @@ class Emitter:
 		return [*types, *lines]
 
 	# -- reads ---------------------------------------------------------
+
+	def _tlv_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run of tag-length-value items, walked as the schema describes them.
+
+		The region answered `REGION` in the shared classifier and this backend
+		emitted "not in the static subset yet", which reads as a missing
+		feature rather than the fallthrough it was.
+
+		The accessors return the item rather than filling one out: a cursor is
+		a value here, and an out-parameter would be C's shape wearing Rust's
+		syntax.
+		"""
+		grammar = placement.tlv_grammar
+		if grammar is None or not grammar.walkable:
+			return ["", f"\t// No accessors for {placement.path}: the region"
+			        " says how its items are",
+			        "\t// tagged and not how long their values are, so a walk"
+			        " has nowhere to",
+			        "\t// put the second item."]
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the region starts."]
+
+		name = c_name(local_name(struct, placement))
+		item = _pascal(struct.name) + _pascal(name) + "Item"
+
+		lines = list(self._tlv_read(placement, grammar, item, name))
+		lines.extend(self._tlv_cursor(item, name, start))
+		lines.extend(self._tlv_by_name(grammar, item, name))
+		return lines
+
+	def _tlv_item_type(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar) -> list[str]:
+		"""The item struct, at module scope: Rust has no nested types.
+
+		Emitted beside the struct's own types rather than inside the `impl`,
+		which is where the rest of this backend puts a type it needs.
+		"""
+		name  = c_name(local_name(struct, placement))
+		item  = _pascal(struct.name) + _pascal(name) + "Item"
+		parts = [f"\tpub {_ident(part.name)}: u32,\t// {part.source}"
+		         for part in grammar.tag_decode]
+
+		return [
+			"",
+			f"/// One item of `{placement.path}`, and where the next one starts.",
+			"///",
+			"/// The decoded parts are named by the schema; a backend inventing",
+			"/// its own would be describing protobuf rather than this region.",
+			"#[derive(Clone, Copy, Debug, Default)]",
+			f"pub struct {item} {{",
+			"\tpub at: usize,",
+			"\tpub next: usize,",
+			"\tpub tag: u64,",
+			*parts,
+			"\tpub value_at: usize,",
+			"\tpub value_len: usize,",
+			"}",
+		]
+
+	def _tlv_tag_bytes(self, placement: Placement) -> int:
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.tlv_tag_varint), None)
+		bits = declared.max_bits if declared is not None else 64
+		return (bits + 6) // 7
+
+	def _tlv_read(self, placement: Placement, grammar: TlvGrammar,
+			item: str, name: str) -> list[str]:
+		"""Read the item at `at`: its tag, its parts, and where its value ends."""
+		max_tag = self._tlv_tag_bytes(placement)
+		decoded = [f"\t\t\t{_ident(part.name)}: ({part.source}) as u32,"
+		           for part in grammar.tag_decode]
+
+		# `at` only moves a second time where a length prefix sits between the
+		# tag and the value. Declaring it `mut` regardless is an unused-mut
+		# warning, and this backend builds under `-D warnings`.
+		moves = (grammar.selector is None
+		         or any(rule.kind == "prefixed" for rule in grammar.rules))
+		binding = "let mut at" if moves else "let at"
+
+		lines = [
+			"",
+			f"\t/// Read the item at `at`. `Error::Bounds` where the region",
+			"\t/// ends or an item runs past it; `Error::Constraint` for a wire",
+			"\t/// type this schema does not describe.",
+			f"\tpub fn {name}_read(&self, at: usize) -> Result<{item}> {{",
+			"\t\tif at >= self.bytes.len() {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			"",
+			f"\t\tlet (tag, used) = situ_rt::varint_get(self.bytes, at,"
+			f" {max_tag})",
+			"\t\t\t.ok_or(Error::Bounds)?;",
+			"\t\tlet start = at;",
+			f"\t\t{binding} = at + used;",
+			"\t\tlet size;",
+			"",
+		]
+
+		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
+		lines.extend([
+			"",
+			"\t\tif size > self.bytes.len() - at {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			"",
+			f"\t\tOk({item} {{",
+			"\t\t\tat: start,",
+			*decoded,
+			"\t\t\ttag,",
+			"\t\t\tvalue_at: at,",
+			"\t\t\tvalue_len: size,",
+			"\t\t\tnext: at + size,",
+			"\t\t})",
+			"\t}",
+		])
+		return lines
+
+	def _tlv_value_extent(self, grammar: TlvGrammar, max_tag: int,
+			endian: ast.Endian | None) -> list[str]:
+		"""Where the value ends, dispatched as the schema dispatches it."""
+		if grammar.selector is None:
+			return self._tlv_prefixed_size(grammar.length_type or "u8",
+			                               "\t\t", endian)
+
+		selector = next((part for part in grammar.tag_decode
+		                 if part.name == grammar.selector), None)
+		chosen = selector.source if selector else "tag"
+		lines  = [f"\t\tmatch ({chosen}) as u32 {{"]
+		for rule in grammar.rules:
+			if rule.label is None:
+				continue
+			lines.append(f"\t\t\t{rule.label} => {{")
+			lines.extend(self._tlv_one_rule(rule, max_tag, endian))
+			lines.append("\t\t\t}")
+
+		default = next((rule for rule in grammar.rules if rule.label is None),
+		               None)
+		lines.append("\t\t\t_ => {")
+		if default is None or default.kind == "error":
+			lines.extend([
+				"\t\t\t\t// `default: error`: a wire type this schema does not",
+				"\t\t\t\t// describe, so where the value ends is not knowable.",
+				"\t\t\t\treturn Err(Error::Constraint);",
+			])
+		else:
+			lines.extend(self._tlv_one_rule(default, max_tag, endian))
+		lines.extend(["\t\t\t}", "\t\t}"])
+		return lines
+
+	def _tlv_one_rule(self, rule: ValueRule, max_tag: int,
+			endian: ast.Endian | None) -> list[str]:
+		if rule.kind == "fixed":
+			return [f"\t\t\t\tsize = {rule.size};"]
+		if rule.kind == "error":
+			return ["\t\t\t\treturn Err(Error::Constraint);"]
+		if rule.kind == "self_delimiting":
+			# The value carries its own extent, so reading it is measuring it.
+			return [
+				f"\t\t\t\tlet (_, used) = situ_rt::varint_get(self.bytes, at,"
+				f" {max_tag})",
+				"\t\t\t\t\t.ok_or(Error::Bounds)?;",
+				"\t\t\t\tsize = used;",
+			]
+		return self._tlv_prefixed_size(rule.length_type or "u8", "\t\t\t\t",
+		                               endian)
+
+	def _tlv_prefixed_size(self, length_type: str, indent: str,
+			endian: ast.Endian | None) -> list[str]:
+		"""`prefixed(T)`: a length in T, then that many bytes."""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == length_type), None)
+
+		if declared is not None:
+			width = (declared.max_bits + 6) // 7
+			return [
+				f"{indent}let (length, used) = situ_rt::varint_get(self.bytes,"
+				f" at, {width})",
+				f"{indent}\t.ok_or(Error::Bounds)?;",
+				f"{indent}at += used;",
+				f"{indent}if length > (self.bytes.len() - at) as u64 {{",
+				f"{indent}\treturn Err(Error::Bounds);",
+				f"{indent}}}",
+				f"{indent}size = length as usize;",
+			]
+
+		scalar = lookup(length_type)
+		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
+		reader = "read_be" if endian is ast.Endian.BIG else "read_le"
+		return [
+			f"{indent}if self.bytes.len() - at < {width} {{",
+			f"{indent}\treturn Err(Error::Bounds);",
+			f"{indent}}}",
+			f"{indent}size = situ_rt::{reader}(self.bytes, at, {width})"
+			f" as usize;",
+			f"{indent}at += {width};",
+		]
+
+	def _tlv_cursor(self, item: str, name: str, start: str) -> list[str]:
+		"""`first`, `next`, `count`, and the value's bytes."""
+		return [
+			"",
+			"\t/// The first item, or `Error::Bounds` if the region is empty.",
+			f"\tpub fn {name}_first(&self) -> Result<{item}> {{",
+			f"\t\tself.{name}_read({start})",
+			"\t}",
+			"",
+			"\t/// The item after this one.",
+			f"\tpub fn {name}_next(&self, item: &{item}) -> Result<{item}> {{",
+			f"\t\tself.{name}_read(item.next)",
+			"\t}",
+			"",
+			"\t/// This item's value. A slice rather than an offset pair, which",
+			"\t/// is the borrow the other three backends cannot express.",
+			f"\tpub fn {name}_value(&self, item: &{item}) -> &[u8] {{",
+			"\t\t&self.bytes[item.value_at..item.value_at + item.value_len]",
+			"\t}",
+			"",
+			"\t/// How many items are present. A walk: nothing in the region",
+			"\t/// records a count.",
+			f"\tpub fn {name}_count(&self) -> usize {{",
+			"\t\tlet mut n = 0usize;",
+			f"\t\tlet mut held = self.{name}_first();",
+			"",
+			"\t\twhile let Ok(item) = held {",
+			"\t\t\tn += 1;",
+			f"\t\t\theld = self.{name}_next(&item);",
+			"\t\t}",
+			"\t\tn",
+			"\t}",
+		]
+
+	def _tlv_by_name(self, grammar: TlvGrammar, item: str,
+			name: str) -> list[str]:
+		"""`find`, and one accessor per tag the schema names."""
+		if not grammar.known:
+			return []
+
+		keyed = (f"item.{_ident(grammar.identity)}" if grammar.identity
+		         else "item.tag as u32")
+		named = (f"the part `{grammar.identity}` decodes to" if grammar.identity
+		         else "the raw tag")
+
+		lines = [
+			"",
+			f"\t/// The first item whose tag is `tag`, matched against {named}",
+			"\t/// (decision 0023). O(n): the region is walked from the start,",
+			"\t/// which is what `access = Sequential` costs.",
+			f"\tpub fn {name}_find(&self, tag: u32) -> Result<{item}> {{",
+			f"\t\tlet mut held = self.{name}_first();",
+			"",
+			"\t\twhile let Ok(item) = held {",
+			f"\t\t\tif {keyed} == tag {{",
+			"\t\t\t\treturn Ok(item);",
+			"\t\t\t}",
+			f"\t\t\theld = self.{name}_next(&item);",
+			"\t\t}",
+			"\t\tErr(held.unwrap_err())",
+			"\t}",
+		]
+
+		for known in grammar.known:
+			described = f"tag {known.tag}"
+			if known.wire is not None:
+				described += f", wire type {known.wire}"
+			if known.type_name is not None:
+				described += f", carrying {known.type_name}"
+				described += "[]" if known.repeated else ""
+			lines.extend([
+				"",
+				f"\t/// `{known.name}`: {described}.",
+				f"\tpub fn {_ident(known.name)}(&self) -> Result<{item}> {{",
+				f"\t\tself.{name}_find({known.tag})",
+				"\t}",
+			])
+
+		return lines
 
 	def _coded_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -477,6 +761,8 @@ class Emitter:
 			        "\t// validate() holds it to the declared pattern."]
 		if kind is Member.CODED:
 			return self._coded_region(struct, placement)
+		if kind is Member.TLV:
+			return self._tlv_region(struct, placement)
 		if kind is Member.LOCATED:
 			return self._located(struct, placement)
 		if kind is Member.REPEAT_WHILE:

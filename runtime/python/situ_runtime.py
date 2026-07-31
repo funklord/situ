@@ -481,3 +481,27 @@ def bcd_encode(value: int, digits: int) -> int:
 
 def bcd_valid(packed: int, digits: int) -> bool:
 	return all(((packed >> (4 * i)) & 0xF) <= 9 for i in range(digits))
+
+
+def varint_get(data: bytes, at: int, max_bytes: int) -> tuple[int, int] | None:
+	"""Decode one varint at `at`: the value, and the bytes it occupied.
+
+	None where the buffer ends mid-value or the value needs more than
+	`max_bytes`. A primitive, not a format -- what a `tlv` region does with the
+	number is its own grammar's business (section 9.5), which the generated
+	walk carries rather than this file.
+	"""
+	acc   = 0
+	shift = 0
+
+	for i in range(max_bytes):
+		if at + i >= len(data):
+			return None
+		byte = data[at + i]
+		if shift < 64:
+			acc |= (byte & 0x7F) << shift
+		shift += 7
+		if not byte & 0x80:
+			return acc, i + 1
+
+	return None
