@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
+from situc.codegen.doc import extractable
 from situc.diagnostics import Diagnostic
 from situc.expr import evaluate
 from situc.layout import (
@@ -118,7 +119,7 @@ class Emitter:
 
 		lines.extend(["", f"}}  /* namespace {self.namespace} */", "",
 		              f"#endif /* {guard} */"])
-		return "\n".join(lines) + "\n"
+		return "\n".join(extractable(lines, indent="\t")) + "\n"
 
 	def _struct_order(self) -> list[str]:
 		"""Structs before the structs that contain them.

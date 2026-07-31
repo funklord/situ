@@ -5168,6 +5168,12 @@ the work that made it wrong did not think to come back here.
 - A record run keeps the quadratic `_span`, having no `_from` helper. Measured
   as marginal; it is the one place the offset fix did not reach.
 - `gen-dissector` is never executed -- no Lua interpreter in the build.
+- No Doxygen in the build either, so nothing runs over the C and C++ headers to
+  prove it extracts them. The generated comments open with `/**` and sit
+  against a declaration, which is what a tool needs; the tests hold that
+  structure rather than the extraction, which is the same bargain the
+  dissector makes with Lua (26.14). Rust and Python need none of this, `///`
+  and a docstring being their languages' own.
 - Big-endian aarch64 is compile-only (decisions 0004, 0007).
 - Python emits no decode for a coded region, deliberately: it would mean
   loading a shared object from a path this generator would have to invent

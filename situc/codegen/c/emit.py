@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
+from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
@@ -146,7 +147,7 @@ class Emitter:
 			"",
 			f"#endif /* {guard} */",
 		])
-		return "\n".join(lines) + "\n"
+		return "\n".join(extractable(lines)) + "\n"
 
 	def _banner(self) -> list[str]:
 		return [
