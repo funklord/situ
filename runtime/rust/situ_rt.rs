@@ -449,3 +449,28 @@ pub fn varint_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usi
 
 	None
 }
+
+/// The number of bytes `value` needs, encoded minimally. What a `minimal`
+/// varint type is held to: a longer encoding of the same value is a second
+/// encoding, and a schema that declares `minimal` does not admit one.
+#[inline]
+pub fn varint_len(mut value: u64) -> usize {
+	let mut n = 1;
+	while value >= 0x80 {
+		value >>= 7;
+		n += 1;
+	}
+	n
+}
+
+/// ZigZag, as protobuf's sint32 and sint64 use it: a small magnitude stays
+/// short whether it is positive or negative.
+#[inline]
+pub fn zigzag_decode(raw: u64) -> i64 {
+	((raw >> 1) as i64) ^ -((raw & 1) as i64)
+}
+
+#[inline]
+pub fn zigzag_encode(value: i64) -> u64 {
+	((value << 1) ^ (value >> 63)) as u64
+}

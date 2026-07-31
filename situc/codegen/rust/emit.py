@@ -726,6 +726,88 @@ class Emitter:
 
 		return lines
 
+	def _varint_field(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Decode a varint field, and say how wide it turned out to be.
+
+		It classified as `NOTHING` and this backend emitted nothing at all --
+		not an accessor and not a note. The member after it said its offset
+		could not be resolved, which is the safe half of the same gap.
+		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.varint), None)
+		if declared is None:
+			return []
+
+		name  = c_name(local_name(struct, placement))
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where it starts."]
+
+		width  = declared.max_bytes
+		signed = declared.transform is ast.VarintTransform.ZIGZAG
+		rtype  = "i64" if signed else "u64"
+		decoded = "situ_rt::zigzag_decode(raw)" if signed else "raw"
+
+		minimal = ([
+			"",
+			"\t\t// `minimal` is declared, so a padded encoding is a second",
+			"\t\t// encoding of one value and this schema does not admit it.",
+			"\t\tif used != situ_rt::varint_len(raw) {",
+			"\t\t\treturn Err(Error::Constraint);",
+			"\t\t}",
+		] if declared.minimal else [])
+
+		return [
+			"",
+			f"\t/// `{placement.path}`: a `{placement.varint}`, 1 to {width}"
+			f" bytes, and",
+			"\t/// how many is in the bytes themselves.",
+			"\t///",
+			"\t/// `Error::Bounds` where the frame ends mid-value;"
+			" `Error::Constraint`",
+			"\t/// where a padded encoding is refused. Everything after it in"
+			" this",
+			"\t/// frame is measured through `_len`, which is what",
+			"\t/// `offset = Dynamic` costs here -- a read, not a scan.",
+			f"\tpub fn {_ident(name)}(&self) -> Result<{rtype}> {{",
+			f"\t\tlet at = {start};",
+			"",
+			"\t\tif at >= self.bytes.len() {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			"",
+			f"\t\tlet (raw, used) = situ_rt::varint_get(self.bytes, at,"
+			f" {width})",
+			"\t\t\t.ok_or(Error::Bounds)?;",
+			*minimal,
+			"",
+			f"\t\tOk({decoded})",
+			"\t}",
+			"",
+			f"\t/// How many bytes `{placement.path}` occupies. Zero where it",
+			"\t/// cannot be read at all, which keeps every offset derived from",
+			"\t/// it inside the frame.",
+			f"\tpub fn {_ident(name + '_len')}(&self) -> usize {{",
+			f"\t\tlet at = {start};",
+			"",
+			"\t\tif at >= self.bytes.len() {",
+			"\t\t\treturn 0;",
+			"\t\t}",
+			f"\t\tmatch situ_rt::varint_get(self.bytes, at, {width}) {{",
+			"\t\t\tSome((_, used)) => used,",
+			"\t\t\tNone => 0,",
+			"\t\t}",
+			"\t}",
+			"",
+			"\t/// The same value where an error cannot be returned: the length",
+			"\t/// arithmetic downstream is not fallible.",
+			f"\tpub fn {_ident(name + '_value')}(&self) -> {rtype} {{",
+			f"\t\tself.{_ident(name)}().unwrap_or(0)",
+			"\t}",
+		]
+
 	def _coded_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The encoded bytes of a coded region, and the decode beside them.
@@ -943,6 +1025,8 @@ class Emitter:
 				        "\t// discriminant that selects it. The variant itself",
 				        "\t// has no accessor."]
 			return ["", f"\t// {placement.path}: not in the static subset yet."]
+		if kind is Member.VARINT:
+			return self._varint_field(struct, placement)
 		if kind is Member.NOTHING:
 			return []
 
@@ -2246,6 +2330,10 @@ class Emitter:
 				return None		# and so nothing after it can be placed
 			name = _ident(c_name(local_name(struct, placement)) + "_extent")
 			return f"self.{name}()"
+		if placement.varint is not None:
+			name = c_name(local_name(struct, placement))
+			return f"self.{_ident(name + '_len')}()"
+
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
 			return None if start is None else f"(self.bytes.len() - ({start}))"
@@ -2261,7 +2349,18 @@ class Emitter:
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
-		if driver is None or driver.placement.scalar is None:
+		if driver is None:
+			return None
+
+		# A varint driver has no scalar and no constant offset, so neither the
+		# guard above nor the load below applies to it. It was refused by the
+		# `scalar is None` check, which is why a length-prefixed field -- the
+		# thing a varint is usually for -- could not be sized by one.
+		if driver.placement.varint is not None:
+			name = _ident(c_name(local_name(struct, driver.placement)) + "_value")
+			return f"self.{name}() as usize"
+
+		if driver.placement.scalar is None:
 			return None
 
 		# Digits, not bits, and behind the scans of everything before it --

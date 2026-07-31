@@ -115,6 +115,9 @@ class Member(Enum):
 	#: backend can place. Note that a *scalar* at a dynamic offset is `SCALAR`,
 	#: not this -- whether the offset can be resolved is the backend's business.
 	UNPLACED  = "unplaced"
+	#: A variable-length integer (8.1.1): one value, whose width is in its own
+	#: bytes rather than in the schema.
+	VARINT    = "varint"
 	#: One value.
 	SCALAR    = "scalar"
 	#: Nothing to emit.
@@ -225,6 +228,13 @@ def classify(struct: ResolvedStruct, placement: Placement,
 
 	if placement.type_name in structs:
 		return Member.NESTED
+
+	# Before SCALAR, which it is not -- a varint has no `scalar` and so fell
+	# past every branch to NOTHING, and three backends emitted nothing at all
+	# for it: not an accessor, and not the note saying why. A member that
+	# simply vanishes is the one shape a reader cannot ask about.
+	if placement.varint is not None:
+		return Member.VARINT
 
 	# A scalar is a scalar whatever its offset. Whether the backend can
 	# *resolve* a dynamic one is the backend's business -- classifying it as

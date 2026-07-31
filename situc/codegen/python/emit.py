@@ -444,7 +444,22 @@ class Emitter:
 
 	def _tlv_imports(self) -> list[str]:
 		"""`varint_get`, where something walks a tlv region."""
-		return ["\tvarint_get,"] if self._tlv_items() else []
+		placements = [entry.placement
+		              for struct in self.resolved.structs.values()
+		              for entry in struct.entries]
+		varints    = [p for p in placements if p.varint is not None]
+		declared   = {decl.name: decl for decl in self.schema.varints()}
+
+		needed = []
+		if self._tlv_items() or varints:
+			needed.append("varint_get")
+		if any(declared[p.varint].minimal for p in varints
+		       if p.varint in declared):
+			needed.append("varint_len")
+		if any(declared[p.varint].transform is not None for p in varints
+		       if p.varint in declared):
+			needed.append("zigzag_decode")
+		return [f"\t{', '.join(needed)}," ] if needed else []
 
 	def _indexed_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -883,6 +898,93 @@ class Emitter:
 
 		return lines
 
+	def _varint_field(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Decode a varint field, and say how wide it turned out to be.
+
+		It classified as `NOTHING` and this backend emitted nothing at all --
+		not an accessor and not a note. A property that raises is the shape
+		here: a caller who ignores a return code is the thing this backend
+		refuses to make easy, and a truncated varint is exactly that case.
+		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.varint), None)
+		if declared is None:
+			return []
+
+		name  = c_name(local_name(struct, placement))
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where it starts."]
+
+		width   = declared.max_bytes
+		signed  = declared.transform is ast.VarintTransform.ZIGZAG
+		decoded = "zigzag_decode(raw)" if signed else "raw"
+
+		minimal = ([
+			"",
+			"\t\t# `minimal` is declared, so a padded encoding is a second",
+			"\t\t# encoding of one value and this schema does not admit it.",
+			"\t\tif used != varint_len(raw):",
+			"\t\t\traise ConstraintError(",
+			f'\t\t\t\tf"{placement.path} is encoded in {{used}} bytes and needs"',
+			'\t\t\t\tf" {varint_len(raw)}; `minimal` admits one encoding")',
+		] if declared.minimal else [])
+
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}(self) -> int:",
+			f'\t\t"""{placement.path}: a `{placement.varint}`, 1 to {width}'
+			f' bytes, and',
+			"\t\thow many is in the bytes themselves.",
+			"",
+			"\t\tRaises BoundsError where the frame ends mid-value"
+			+ (", and\n\t\tConstraintError where a padded encoding is refused."
+			   if declared.minimal else ".")
+			+ '"""',
+			"\t\tself._check()",
+			f"\t\tat   = {start}",
+			"\t\tdata = self.bytes",
+			"",
+			"\t\tif at >= len(data):",
+			f'\t\t\traise BoundsError(f"{placement.path} starts at {{at}},'
+			f' past the frame")',
+			"",
+			f"\t\tread = varint_get(data, at, {width})",
+			"\t\tif read is None:",
+			f'\t\t\traise BoundsError(f"{placement.path} runs past the frame")',
+			"\t\traw, used = read",
+			*minimal,
+			"",
+			f"\t\treturn {decoded}",
+			"",
+			"\t@property",
+			f"\tdef {name}_len(self) -> int:",
+			f'\t\t"""How many bytes {placement.path} occupies. Zero where it',
+			"\t\tcannot be read at all, which keeps every offset derived from",
+			'\t\tit inside the frame."""',
+			"\t\tself._check()",
+			f"\t\tat   = {start}",
+			"\t\tdata = self.bytes",
+			"",
+			"\t\tif at >= len(data):",
+			"\t\t\treturn 0",
+			f"\t\tread = varint_get(data, at, {width})",
+			"\t\treturn 0 if read is None else read[1]",
+			"",
+			"\t@property",
+			f"\tdef _{name}_value(self) -> int:",
+			f'\t\t"""The same value where an exception cannot be raised: the',
+			"\t\tlength arithmetic downstream is not fallible, and making it",
+			'\t\tso would put a try around every accessor after this one."""',
+			"\t\ttry:",
+			f"\t\t\treturn self.{name}",
+			"\t\texcept (BoundsError, ConstraintError):",
+			"\t\t\treturn 0",
+		]
+
 	def _coded_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The encoded bytes of a coded region, and why the decode is not here.
@@ -1045,6 +1147,8 @@ class Emitter:
 			return self._nested(struct, placement)
 		if kind is Member.ARRAY:
 			return self._array(struct, placement)
+		if kind is Member.VARINT:
+			return self._varint_field(struct, placement)
 		if kind is Member.SCALAR:
 			return self._scalar(struct, entry)
 		if kind is Member.NOTHING:
@@ -2073,6 +2177,9 @@ class Emitter:
 				return None		# and so nothing after it can be placed
 			return f"self.{c_name(local_name(struct, placement))}_extent"
 
+		if placement.varint is not None:
+			return f"self.{c_name(local_name(struct, placement))}_len"
+
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
 			return None if start is None else f"(self._len - ({start}))"
@@ -2091,7 +2198,17 @@ class Emitter:
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
-		if driver is None or driver.placement.scalar is None:
+		if driver is None:
+			return None
+
+		# A varint driver has no scalar and no constant offset, so neither the
+		# guard above nor the load below applies to it. It was refused by the
+		# `scalar is None` check, which is why a length-prefixed field -- the
+		# thing a varint is usually for -- could not be sized by one.
+		if driver.placement.varint is not None:
+			return f"self._{c_name(local_name(struct, driver.placement))}_value"
+
+		if driver.placement.scalar is None:
 			return None
 
 		# A text driver holds digits, not bits, and sits behind the scans of

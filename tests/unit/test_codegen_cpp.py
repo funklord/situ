@@ -1529,3 +1529,95 @@ int main()
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- varint fields (section 8.1.1) ------------------------------------------
+
+VARINT = "varint_type v { encoding = leb128; max_bits = 64; minimal; }"
+
+
+def test_a_varint_field_decodes() -> None:
+	"""It classified as NOTHING and this backend emitted nothing at all --
+	not an accessor and not a note, so the member simply was not there."""
+	header = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+
+	assert "n(std::uint64_t &out) const noexcept" in header
+	assert "n_len() const noexcept" in header
+
+
+def test_a_member_after_a_varint_is_placed_past_it() -> None:
+	"""It used to say "its offset cannot be resolved" and emit nothing, which
+	is the safe half of the gap -- C placed it at zero instead and read the
+	varint's own bytes."""
+	header = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+
+	assert "base() + 1 + n_len()" in header
+	assert "s.after: its offset cannot be resolved" not in header
+
+
+def test_a_varint_may_size_an_array() -> None:
+	header = emit(VARINT + "struct S { v n; u8 payload[n]; }")
+
+	assert "n_value()" in header
+	assert "cannot resolve" not in header
+
+
+def test_a_minimal_varint_refuses_a_padded_encoding() -> None:
+	header = emit(VARINT + "struct S { v n; }")
+
+	assert "if (used != situ_varint_len(raw)) {" in header
+	assert "return ::situ::rt::err::constraint;" in header
+
+
+def test_a_zigzag_varint_decodes_signed() -> None:
+	header = emit("varint_type z { encoding = leb128; max_bits = 64;"
+	              " transform = zigzag; }struct S { z n; }")
+
+	assert "n(std::int64_t &out) const noexcept" in header
+	assert "situ_zigzag_decode(raw)" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_a_varint_reads_the_bytes_after_it(tmp_path: Path) -> None:
+	schema   = parse_text(PREAMBLE + VARINT
+	                      + "struct S { u8 kind; v n; u16 after; }")
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text('''
+#include "unit.hpp"
+
+int main()
+{
+	/* kind = 1, n = 300 (leb128 AC 02), after = 0xBEEF */
+	std::uint8_t buf[] = { 0x01, 0xAC, 0x02, 0xBE, 0xEF };
+	situ::rt::message owner(buf, sizeof(buf));
+	situ::S s;
+	if (situ::S::at(owner, 0, sizeof(buf), s) != situ::rt::err::ok) return 1;
+
+	std::uint64_t n = 0;
+	if (s.n(n) != situ::rt::err::ok || n != 300u) return 2;
+	if (s.n_len() != 2u) return 3;
+	if (s.after() != 0xBEEFu) return 4;
+
+	/* A padded encoding of 1, which `minimal` refuses. */
+	std::uint8_t padded[] = { 0x01, 0x81, 0x00, 0xBE, 0xEF };
+	situ::rt::message other(padded, sizeof(padded));
+	situ::S p;
+	if (situ::S::at(other, 0, sizeof(padded), p) != situ::rt::err::ok) return 5;
+	if (p.n(n) != situ::rt::err::constraint) return 6;
+
+	return 0;
+}
+''', encoding="ascii")
+
+	assert HOST_CXX is not None
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True, check=False)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

@@ -505,3 +505,27 @@ def varint_get(data: bytes, at: int, max_bytes: int) -> tuple[int, int] | None:
 			return acc, i + 1
 
 	return None
+
+
+def varint_len(value: int) -> int:
+	"""The number of bytes `value` needs, encoded minimally.
+
+	What a `minimal` varint type is held to: a longer encoding of the same
+	value is a second encoding, and a schema declaring `minimal` does not admit
+	one.
+	"""
+	n = 1
+	while value >= 0x80:
+		value >>= 7
+		n += 1
+	return n
+
+
+def zigzag_decode(raw: int) -> int:
+	"""ZigZag, as protobuf's sint32 and sint64 use it: a small magnitude stays
+	short whether it is positive or negative."""
+	return (raw >> 1) ^ -(raw & 1)
+
+
+def zigzag_encode(value: int) -> int:
+	return (value << 1) ^ (value >> 63) if value < 0 else value << 1

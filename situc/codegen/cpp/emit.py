@@ -1592,6 +1592,9 @@ class Emitter:
 				return None		# and so nothing after it can be placed
 			return f"{c_name(local_name(struct, placement))}_extent()"
 
+		if placement.varint is not None:
+			return f"{c_name(local_name(struct, placement))}_len()"
+
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
 			return None if start is None else f"(limit() - ({start}))"
@@ -1611,7 +1614,18 @@ class Emitter:
 			placement: Placement) -> str | None:
 		"""The value of the field that sizes a member, read at run time."""
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
-		if driver is None or driver.placement.scalar is None:
+		if driver is None:
+			return None
+
+		# A varint driver has no scalar and no constant offset, so neither the
+		# guard above nor the load below applies to it. It was refused by the
+		# `scalar is None` check, which is why a length-prefixed field -- the
+		# thing a varint is usually for -- could not be sized by one.
+		if driver.placement.varint is not None:
+			name = c_name(local_name(struct, driver.placement))
+			return f"static_cast<std::uint32_t>({name}_value())"
+
+		if driver.placement.scalar is None:
 			return None
 
 		# A text driver's value is digits, not bits, and it has no fixed
@@ -2433,6 +2447,8 @@ class Emitter:
 			return self._nested(struct, placement)
 		if kind is Member.ARRAY:
 			return self._array(struct, placement)
+		if kind is Member.VARINT:
+			return self._varint_field(struct, placement)
 		if kind is Member.SCALAR:
 			return self._scalar(struct, entry)
 		if kind is Member.NOTHING:
@@ -2471,6 +2487,104 @@ class Emitter:
 			"\t\t}",
 			f"\t\tout = {load};",
 			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
+
+	def _varint_field(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Decode a varint field, and say how wide it turned out to be.
+
+		It classified as `NOTHING` and this backend emitted nothing at all --
+		not an accessor and not a note, so the member simply was not there. The
+		member *after* it fared better: its offset could not be resolved and
+		said so, which is the safe half of the same gap. (C, which does not ask
+		the shared classifier, placed it at zero instead and read the varint's
+		own bytes.)
+		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.varint), None)
+		if declared is None:
+			return []
+
+		name   = c_name(local_name(struct, placement))
+		start  = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where it starts. */"]
+
+		width  = declared.max_bytes
+		signed = declared.transform is ast.VarintTransform.ZIGZAG
+		ctype  = "std::int64_t" if signed else "std::uint64_t"
+		decoded = ("static_cast<std::int64_t>(situ_zigzag_decode(raw))"
+		           if signed else "raw")
+
+		minimal = ([
+			"",
+			"\t\t/* `minimal` is declared, so a padded encoding is a second",
+			"\t\t * encoding of one value and this schema does not admit it.",
+			"\t\t * A canonicality claim nothing enforced would be a"
+			" comment. */",
+			"\t\tif (used != situ_varint_len(raw)) {",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		] if declared.minimal else [])
+
+		return [
+			"",
+			f"\t/* {placement.path}: a `{placement.varint}`, 1 to {width} bytes,",
+			"\t * and how many is in the bytes themselves.",
+			"\t *",
+			"\t * `bounds` where the frame ends mid-value; `constraint` where",
+			"\t * a padded encoding is refused. Everything after it in this",
+			"\t * frame is measured through `_len`, which is what",
+			"\t * `offset = Dynamic` costs here -- a read, not a scan. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out)"
+			" const noexcept",
+			"\t{",
+			f"\t\tconst std::uint32_t at = {start};",
+			"\t\tstd::uint64_t raw = 0;",
+			"\t\tstd::uint32_t used = 0;",
+			"",
+			"\t\tif (at >= limit()) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"",
+			f"\t\tused = situ_varint_get(base() + at, limit() - at,"
+			f" {width}u, &raw);",
+			"\t\tif (used == 0u) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			*minimal,
+			"",
+			f"\t\tout = {decoded};",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+			"",
+			f"\t/* How many bytes {placement.path} occupies. Zero where it",
+			"\t * cannot be read at all, which keeps every offset derived from",
+			"\t * it inside the frame -- a width guessed at the maximum would",
+			"\t * push them past the end. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
+			"\t{",
+			f"\t\tconst std::uint32_t at = {start};",
+			"\t\tstd::uint64_t raw = 0;",
+			"",
+			"\t\tif (at >= limit()) {",
+			"\t\t\treturn 0u;",
+			"\t\t}",
+			f"\t\treturn situ_varint_get(base() + at, limit() - at,"
+			f" {width}u, &raw);",
+			"\t}",
+			"",
+			"\t/* The same value where an error cannot be returned: the length",
+			"\t * arithmetic downstream is not fallible, and making it so would",
+			"\t * put an error path in every accessor after this one. */",
+			f"\t[[nodiscard]] {ctype} {name}_value() const noexcept",
+			"\t{",
+			f"\t\t{ctype} value = 0;",
+			"",
+			f"\t\t(void){name}(value);",
+			"\t\treturn value;",
 			"\t}",
 		]
 

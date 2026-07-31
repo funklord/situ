@@ -1115,3 +1115,64 @@ def test_an_entry_past_the_end_is_refused(tmp_path: Path) -> None:
 
 	with pytest.raises(IndexError):
 		held.fixed_at(3)
+
+
+# -- varint fields (section 8.1.1) ------------------------------------------
+
+VARINT = "varint_type v { encoding = leb128; max_bits = 64; minimal; }"
+
+
+def test_a_varint_field_decodes() -> None:
+	"""It classified as NOTHING and this backend emitted nothing at all --
+	not an accessor and not a note."""
+	module = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+
+	assert "def n(self) -> int:" in module
+	assert "def n_len(self) -> int:" in module
+
+
+def test_a_member_after_a_varint_is_placed_past_it() -> None:
+	module = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+
+	assert "self.n_len" in module
+	assert "its offset cannot be resolved" not in module
+
+
+def test_a_zigzag_varint_decodes_signed() -> None:
+	module = emit("varint_type z { encoding = leb128; max_bits = 64;"
+	              " transform = zigzag; }struct S { z n; }")
+
+	assert "zigzag_decode(raw)" in module
+
+
+def test_a_varint_reads_the_bytes_after_it(tmp_path: Path) -> None:
+	module = load(tmp_path, VARINT + "struct S { u8 kind; v n; u16 after; }")
+	held   = module.S.at(
+		runtime().Message(bytearray([0x01, 0xAC, 0x02, 0xBE, 0xEF])), 0, 5)
+
+	assert held.n == 300
+	assert held.n_len == 2
+	assert held.after == 0xBEEF
+
+
+def test_a_minimal_varint_refuses_a_padded_encoding(tmp_path: Path) -> None:
+	module = load(tmp_path, VARINT + "struct S { u8 kind; v n; u16 after; }")
+	held   = module.S.at(
+		runtime().Message(bytearray([0x01, 0x81, 0x00, 0xBE, 0xEF])), 0, 5)
+
+	with pytest.raises(runtime().ConstraintError) as caught:
+		_ = held.n
+
+	assert "`minimal` admits one encoding" in str(caught.value)
+
+
+def test_a_varint_may_size_an_array(tmp_path: Path) -> None:
+	"""A real SQLite cell: `varint payload_size; varint rowid; u8 payload[]`,
+	which was refused outright with "no fields are in scope at this point"."""
+	module = load(tmp_path, VARINT
+	              + "struct cell { v payload_size; v rowid; u8 payload[payload_size]; }")
+	held   = module.cell.at(
+		runtime().Message(bytearray([0x07, 0x01, 0x02, 0x17]) + b"alpha"), 0, 9)
+
+	assert (held.payload_size, held.rowid) == (7, 1)
+	assert bytes(held.payload)[2:] == b"alpha"

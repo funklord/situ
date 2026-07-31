@@ -1138,3 +1138,68 @@ fn main() {
 """)
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+# -- varint fields (section 8.1.1) ------------------------------------------
+
+VARINT = "varint_type v { encoding = leb128; max_bits = 64; minimal; }"
+
+
+def test_a_varint_field_decodes() -> None:
+	"""It classified as NOTHING and this backend emitted nothing at all --
+	not an accessor and not a note."""
+	module = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+
+	assert "pub fn n(&self) -> Result<u64>" in module
+	assert "pub fn n_len(&self) -> usize" in module
+
+
+def test_a_member_after_a_varint_is_placed_past_it() -> None:
+	module = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+
+	assert "self.n_len()" in module
+	assert "its offset cannot be resolved" not in module
+
+
+def test_a_varint_may_size_an_array() -> None:
+	module = emit(VARINT + "struct S { v n; u8 payload[n]; }")
+
+	assert "self.n_value() as usize" in module
+
+
+def test_a_minimal_varint_refuses_a_padded_encoding() -> None:
+	module = emit(VARINT + "struct S { v n; }")
+
+	assert "if used != situ_rt::varint_len(raw) {" in module
+	assert "return Err(Error::Constraint);" in module
+
+
+def test_a_zigzag_varint_decodes_signed() -> None:
+	module = emit("varint_type z { encoding = leb128; max_bits = 64;"
+	              " transform = zigzag; }struct S { z n; }")
+
+	assert "pub fn n(&self) -> Result<i64>" in module
+	assert "situ_rt::zigzag_decode(raw)" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_varint_reads_the_bytes_after_it(tmp_path: Path) -> None:
+	result = build(tmp_path, VARINT + "struct S { u8 kind; v n; u16 after; }",
+	               main="""
+fn main() {
+	// kind = 1, n = 300 (leb128 AC 02), after = 0xBEEF
+	let buf: &[u8] = &[0x01, 0xAC, 0x02, 0xBE, 0xEF];
+	let s = unit::S::new(buf).unwrap();
+
+	assert_eq!(s.n().unwrap(), 300);
+	assert_eq!(s.n_len(), 2);
+	assert_eq!(s.after(), 0xBEEF);
+
+	// A padded encoding of 1, which `minimal` refuses.
+	let padded: &[u8] = &[0x01, 0x81, 0x00, 0xBE, 0xEF];
+	let p = unit::S::new(padded).unwrap();
+	assert!(matches!(p.n(), Err(situ_rt::Error::Constraint)));
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0

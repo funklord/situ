@@ -579,6 +579,27 @@ either. What kept it invisible is that no example used a varint field: protobuf
 declares `pb_varint` as a tlv `tag_type`, which the walk reads without ever
 placing a member. `examples/sqlite` is what asked for it (9.3).
 
+**The other three backends had the same hole and a different bottom.** A varint
+classified as `Member.NOTHING` -- it has no `scalar`, so it fell past every
+branch -- and C++, Rust and Python emitted *nothing at all* for the member: not
+an accessor, and not the note saying why. A member that simply vanishes is the
+one shape a reader cannot ask about. But the member *after* it fared better
+than C's: all three said "its offset cannot be resolved" and emitted nothing,
+which is the safe half of the same gap. C, which does not ask the shared
+classifier, placed it at zero instead.
+
+So the assumption that three backends shared C's bug was wrong, and the reason
+they did not is invariant 20 pointing the right way for once: they ask
+`traverse.classify`, which had no answer for a varint and said so, while C
+answered on its own and answered wrongly. There is a `Member.VARINT` now.
+
+Each reads one in its own idiom: an `err` and an out-parameter in C++, a
+`Result<u64>` in Rust, a property that raises in Python. All four refuse a
+truncated value, refuse a padded one where `minimal` is declared, and decode
+`zigzag` as signed. Checked against the cells in `examples/sqlite/vectors.txt`,
+whose varints are one byte each -- where `leb128` and SQLite's encoding agree,
+and nowhere above 127.
+
 ### 8.2 Bit packing
 
 - Fields narrower than 8 bits, and any `bit`, pack into the current byte
@@ -4959,8 +4980,8 @@ are the C backend having gone first and the others not having caught up on
 that construct.
 
 **A varint is described in one encoding.** `leb128` is the only one, so a
-big-endian base-128 varint -- SQLite's, ASN.1's -- cannot be described. C reads
-a `leb128` field now (8.1.1); the other three backends do not.
+big-endian base-128 varint -- SQLite's, ASN.1's -- cannot be described. All
+four backends read a `leb128` field (8.1.1); none can read the other kind.
 
 **Two kernel families that are described and not generated.**
 
