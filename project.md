@@ -5034,11 +5034,22 @@ offset an entry holds, and a view over the element it reaches.
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**One where C is ahead of the other three.**
+**None. Every construct in the language is reachable in all four backends.**
 
-| construct | example |
-|---|---|
-| the `--materialize` offset cache | any delimited chain |
+The last of them was the `--materialize` offset cache, and re-deriving the
+entry narrowed it first: 26.30's table claims the second accessor family in
+four languages, and the *run index* half of it was there in all four --
+`x_index`/`x_indexed` in C and C++, `x_indexed` in Rust, `x_all` in Python. It
+was the offset cache, the other half, that C alone emitted.
+
+It does the same job in each: the per-member offset resolves one by summing
+what precedes it, so reading three members of an HTTP request line scans the
+target twice, and this is that sum once. `traverse.offset_plan` decides the
+order and the arithmetic; what a length expression *is* stays each backend's,
+being the one part that genuinely differs. Python returns a dict rather than a
+record type -- the caller has one already, and a class per struct would be
+ceremony for a mapping the language spells inline -- with the member names as
+keys so a reader of one language's output recognises the other's.
 
 The tag machinery came off it, and the shape was the one this page keeps
 producing: all three emitted the dirty bit a covered write sets, and the

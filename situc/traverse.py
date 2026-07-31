@@ -15,7 +15,7 @@ backend reads the same way.
 
 from __future__ import annotations
 
-from collections.abc import Container, Sequence
+from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -391,6 +391,74 @@ class Obligation:
 		bytes, and a field no longer equals what it is defined to equal.
 		"""
 		return "DIRTY" if self.kind == "tag" else "STALE"
+
+
+@dataclass(frozen=True)
+class OffsetStep:
+	"""One step of resolving every dynamic offset in a struct, in order.
+
+	`kind` is "record" -- this member's offset is the running total -- or
+	"advance", which moves the total on by `size` bytes where that is a
+	constant and by `placement`'s own length where it is not.
+	"""
+
+	kind: str
+	placement: Placement | None	= None
+	size: int			= 0
+
+
+def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
+		has_length: "Callable[[Placement], bool]") -> list[OffsetStep] | None:
+	"""How to resolve every dynamic offset in one pass, or None.
+
+	`_offset` resolves one member by summing what precedes it, so reading
+	three members of an HTTP request line rescans the target twice. This is
+	that sum once, for all of them -- the other half of what
+	`access = Sequential` costs.
+
+	None where some member's length cannot be computed: the offsets after it
+	cannot be resolved in one pass any more than one at a time.
+
+	The order and the arithmetic are shared; what a length expression *is*
+	stays each backend's, being the one part that differs. A running constant
+	is flushed where it belongs rather than summed up front -- a fixed member
+	after a variable one is not part of the offsets before it, and totalling
+	first put every recorded offset ahead of itself by the width of everything
+	that followed.
+	"""
+	dynamic = {held.path for held in members
+	           if held.offset_bits is None and held.located is None}
+	if not dynamic:
+		return []		# every offset is already a constant
+
+	steps: list[OffsetStep] = []
+	pending = 0
+
+	def flush() -> None:
+		nonlocal pending
+		if pending:
+			steps.append(OffsetStep("advance", size=pending))
+			pending = 0
+
+	for held in members:
+		if held.path in dynamic:
+			flush()
+			steps.append(OffsetStep("record", held))
+		if held.is_fixed_size:
+			pending += held.size_bits // BITS_PER_BYTE
+			continue
+		if not has_length(held):
+			return None
+		flush()
+		steps.append(OffsetStep("advance", held))
+
+	# Trailing advances move a total nobody reads again. Harmless in C and an
+	# `unused_assignments` error in Rust, which builds under `-D warnings` --
+	# and dead arithmetic either way.
+	while steps and steps[-1].kind == "advance":
+		steps.pop()
+
+	return steps
 
 
 def covered_run(struct: "ResolvedStruct",

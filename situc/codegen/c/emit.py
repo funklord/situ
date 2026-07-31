@@ -40,7 +40,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, arm_members, arm_of, classify_check, containment_order,
-	covered_run,
+	covered_run, offset_plan,
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
@@ -3287,36 +3287,30 @@ class Emitter:
 		# front: a fixed member *after* a variable one is not part of the
 		# offsets before it, and totalling them all first put every recorded
 		# offset ahead of itself by the width of everything that followed.
-		pending  = 0
+		plan = offset_plan(struct, self._top_level(struct),
+		                   lambda held: self._has_length(struct, held))
+		if plan is None:
+			return [
+				"",
+				f"/* No offset cache for `{struct.name}`: a member has no"
+				" length this",
+				" * can compute, so the offsets after it cannot be resolved in"
+				" one",
+				" * pass any more than one at a time. */",
+			]
+
 		steps: list[str] = []
-		wanted   = {held.path for held in dynamic}
-
-		def flush() -> None:
-			nonlocal pending
-			if pending:
-				steps.append(f"\tat = at + {pending}u;")
-				pending = 0
-
-		for other in self._top_level(struct):
-			if other.path in wanted:
-				flush()
-				local = c_name(self._local(struct, other))
+		for step in plan:
+			if step.kind == "record":
+				assert step.placement is not None
+				local = c_name(self._local(struct, step.placement))
 				steps.append(f"\tout->{local} = at;")
-			if other.is_fixed_size:
-				pending += other.size_bits // BITS_PER_BYTE
-				continue
-			if not self._has_length(struct, other):
-				return [
-					"",
-					f"/* No offset cache for `{struct.name}`:"
-					f" `{other.name}` has no length",
-					" * this can compute, so the offsets after it cannot be"
-					" resolved",
-					" * in one pass any more than one at a time. */",
-				]
-			flush()
-			steps.append("\tat = at + ("
-				+ self._length_expression(struct, other, running="at") + ");")
+			elif step.placement is None:
+				steps.append(f"\tat = at + {step.size}u;")
+			else:
+				steps.append("\tat = at + ("
+					+ self._length_expression(struct, step.placement,
+					                          running="at") + ");")
 
 		kind    = ident(self.prefix, struct.name, "offsets_t")
 		build   = ident(self.prefix, struct.name, "offsets")

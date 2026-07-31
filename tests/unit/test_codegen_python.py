@@ -38,11 +38,20 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_py(schema, resolved, "unit").module
 
 
+def emit_materialized(body: str, preamble: str = PREAMBLE) -> str:
+	"""The second accessor family as well (decision 0022)."""
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	return generate_py(schema, resolved, "unit", materialize=True).module
+
+
 def load(tmp_path: Path, body: str, preamble: str = PREAMBLE,
-		module_text: str | None = None) -> ModuleType:
+		module_text: str | None = None, materialize: bool = False) -> ModuleType:
 	"""Generate the module, import it, and hand it back."""
-	(tmp_path / "unit.py").write_text(module_text or emit(body, preamble),
-	                                  encoding="ascii")
+	if module_text is None:
+		module_text = (emit_materialized(body, preamble) if materialize
+		               else emit(body, preamble))
+	(tmp_path / "unit.py").write_text(module_text, encoding="ascii")
 
 	runtime()			# so the generated import finds the cached one
 	sys.path.insert(0, str(tmp_path))
@@ -1363,3 +1372,35 @@ def test_the_span_and_the_bit_behave(tmp_path: Path) -> None:
 	assert held.mac_is_dirty()
 	held.mac_finalize()
 	assert not held.mac_is_dirty()
+
+
+# -- the offset cache (decision 0022) ---------------------------------------
+
+CHAIN = ('struct line { u8 method[] until " "; u8 target[] until " ";'
+	' u8 version[] until "\\r\\n"; }')
+
+
+def test_the_offset_cache_is_behind_the_flag() -> None:
+	assert "resolve_offsets" not in emit(CHAIN)
+
+
+def test_the_offset_cache_is_a_dict() -> None:
+	"""Where this backend departs from the other three: the caller has one
+	already, and a class per struct would be ceremony for a mapping Python
+	spells inline. The keys are the member names, so a reader of one
+	language's generated code recognises the other's."""
+	module = emit_materialized(CHAIN)
+
+	assert "def resolve_offsets(self) -> dict[str, int]:" in module
+	assert 'found["target"] = at' in module
+
+
+def test_the_cache_agrees_with_the_per_member_offsets(tmp_path: Path) -> None:
+	module = load(tmp_path, CHAIN, materialize=True)
+	line   = b"GET /index.html HTTP/1.1\r\n"
+	held   = module.line.at(runtime().Message(bytearray(line)), 0, len(line))
+
+	off = held.resolve_offsets()
+	assert off == {"target": 4, "version": 16}
+	assert off["target"] == held.target_offset
+	assert off["version"] == held.version_offset

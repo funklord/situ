@@ -41,7 +41,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, Member, arm_members, containment_order, covered_run,
-	decode_bound,
+	decode_bound, offset_plan,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts,
@@ -190,6 +190,7 @@ class Emitter:
 			lines.extend(self._member(struct, entry))
 
 		lines.extend(self._arm_accessors(struct))
+		lines.extend(self._offsets(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
@@ -3194,6 +3195,76 @@ class Emitter:
 		if index is not None and index + 1 < len(members):
 			return self._offset_expression(struct, members[index + 1]) or "limit()"
 		return "limit()"
+
+	def _offsets(self, struct: ResolvedStruct) -> list[str]:
+		"""Every dynamic offset in this struct, resolved in one pass.
+
+		The other half of what `access = Sequential` costs. A run makes
+		reaching element N a walk of the N-1 before it; a scan makes reaching
+		member N a rescan of the N-1 before it, and the per-member offset does
+		that on every call -- so reading three members of an HTTP request line
+		scans the target twice.
+
+		The memory is the caller's, which is why this is behind
+		`--materialize` and not the default: one word per dynamically-placed
+		member, and the schema decides how many that is.
+		"""
+		if not self.materialize:
+			return []
+
+		members = [entry.placement for entry in own_entries(struct)]
+		dynamic = [held for held in members
+		           if held.offset_bits is None and held.located is None]
+		if not dynamic:
+			return []
+
+		plan = offset_plan(struct, members,
+		                   lambda held: self._length_expression(struct, held)
+		                   is not None or held.is_fixed_size)
+		if plan is None:
+			return ["",
+			        f"\t/* No offset cache for {struct.name}: a member has no",
+			        "\t * length this can compute, so the offsets after it",
+			        "\t * cannot be resolved in one pass any more than one at",
+			        "\t * a time. */"]
+
+		steps: list[str] = []
+		for step in plan:
+			if step.kind == "record":
+				assert step.placement is not None
+				steps.append(f"\t\tout.{c_name(local_name(struct, step.placement))}"
+				             " = at;")
+			elif step.placement is None:
+				steps.append(f"\t\tat += {step.size};")
+			else:
+				length = self._length_expression(struct, step.placement,
+				                                 running="at")
+				steps.append(f"\t\tat += {length};")
+
+		fields = [f"\t\tstd::uint32_t {c_name(local_name(struct, held))};"
+		          for held in dynamic]
+
+		return [
+			"",
+			f"\t/* Where each dynamically-placed member of {struct.name}"
+			" starts.",
+			"\t *",
+			"\t * The per-member offset resolves one by summing what precedes",
+			"\t * it, so it rescans every delimited member ahead of the one",
+			"\t * asked for, on every call. This is that sum once, for all of",
+			"\t * them. The memory is the caller's: one word per member. */",
+			"\tstruct offsets {",
+			*fields,
+			"\t};",
+			"",
+			"\tvoid resolve_offsets(offsets &out) const noexcept",
+			"\t{",
+			"\t\tstd::uint32_t at = 0;",
+			"",
+			*steps,
+			"\t\t(void)at;",
+			"\t}",
+		]
 
 	def _array(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))

@@ -67,6 +67,13 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_cpp(schema, resolved, "unit").header
 
 
+def emit_materialized(body: str, preamble: str = PREAMBLE) -> str:
+	"""The second accessor family as well (decision 0022)."""
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	return generate_cpp(schema, resolved, "unit", materialize=True).header
+
+
 def compiles(tmp_path: Path, body: str, extra: str = "",
 		preamble: str = "") -> subprocess.CompletedProcess[str]:
 	"""Generate the header, compile it, and hand back the result."""
@@ -2055,3 +2062,33 @@ int main()
 }
 ''')
 	assert compiled.returncode == 0, compiled.stderr
+
+
+# -- the offset cache (decision 0022) ---------------------------------------
+
+CHAIN = ('struct line { u8 method[] until " "; u8 target[] until " ";'
+	' u8 version[] until "\\r\\n"; }')
+
+
+def test_the_offset_cache_is_behind_the_flag() -> None:
+	"""Memory the caller did not ask for, which is a deployment decision and
+	not a schema one (0022)."""
+	assert "resolve_offsets" not in emit(CHAIN)
+
+
+def test_the_offset_cache_resolves_every_dynamic_member() -> None:
+	header = emit_materialized(CHAIN)
+
+	assert "struct offsets {" in header
+	assert "std::uint32_t target;" in header
+	assert "std::uint32_t version;" in header
+	assert "void resolve_offsets(offsets &out) const noexcept" in header
+
+
+def test_the_last_advance_is_trimmed() -> None:
+	"""It moves a total nobody reads again -- dead arithmetic, and an
+	`unused_assignments` error in Rust, which builds under `-D warnings`."""
+	header = emit_materialized(CHAIN)
+	body   = header.split("resolve_offsets")[1]
+
+	assert body.count("at +=") == 2	# method and target; not version

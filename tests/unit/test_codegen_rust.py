@@ -36,8 +36,16 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_rs(schema, resolved, "unit").module
 
 
-def build(tmp_path: Path, body: str, main: str = "",
-		preamble: str = "", link: str = "") -> subprocess.CompletedProcess[str]:
+def emit_materialized(body: str, preamble: str = PREAMBLE) -> str:
+	"""The second accessor family as well (decision 0022)."""
+	schema   = parse_text(preamble + body)
+	resolved = resolve(schema, solve(schema))
+	return generate_rs(schema, resolved, "unit", materialize=True).module
+
+
+def build(tmp_path: Path, body: str, main: str = "", preamble: str = "",
+		link: str = "", materialize: bool = False
+		) -> subprocess.CompletedProcess[str]:
 	"""Generate, lay out a crate, and compile it.
 
 	`link` names a directory holding a static archive of the C codec
@@ -51,8 +59,9 @@ def build(tmp_path: Path, body: str, main: str = "",
 	(src / "situ_rt.rs").write_text(
 		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 		encoding="ascii")
-	(src / "unit.rs").write_text(emit(body, preamble or PREAMBLE),
-	                            encoding="ascii")
+	(src / "unit.rs").write_text(
+		emit_materialized(body, preamble or PREAMBLE) if materialize
+		else emit(body, preamble or PREAMBLE), encoding="ascii")
 
 	if main:
 		(src / "main.rs").write_text(
@@ -1466,6 +1475,43 @@ fn main() {
 	assert!(unit::S::mac_is_dirty(&dirty));
 	unit::S::mac_finalize(&mut dirty);
 	assert!(!unit::S::mac_is_dirty(&dirty));
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+# -- the offset cache (decision 0022) ---------------------------------------
+
+CHAIN = ('struct line { u8 method[] until " "; u8 target[] until " ";'
+	' u8 version[] until "\\r\\n"; }')
+
+
+def test_the_offset_cache_is_behind_the_flag() -> None:
+	assert "resolve_offsets" not in emit(CHAIN)
+
+
+def test_the_offset_cache_resolves_every_dynamic_member() -> None:
+	module = emit_materialized(CHAIN)
+
+	assert "pub struct LineOffsets {" in module
+	assert "pub target: usize," in module
+	assert "pub fn resolve_offsets(&self) -> LineOffsets" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_cache_agrees_with_the_per_member_offsets(tmp_path: Path) -> None:
+	"""Which is the whole point: one pass instead of a rescan per member, and
+	the same answer."""
+	result = build(tmp_path, CHAIN, materialize=True, main="""
+fn main() {
+	let line: &[u8] = b"GET /index.html HTTP/1.1\\r\\n";
+	let r = unit::Line::new(line).unwrap();
+	let off = r.resolve_offsets();
+
+	assert_eq!(off.target, r.target_offset());
+	assert_eq!(off.version, r.version_offset());
+	assert_eq!((off.target, off.version), (4, 16));
 }
 """)
 	assert result.returncode == 0, result.stderr

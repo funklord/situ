@@ -38,7 +38,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, arm_members, covered_run, decode_bound,
+	Check, Member, arm_members, covered_run, decode_bound, offset_plan,
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
 	extent_parts,
@@ -266,6 +266,7 @@ class Emitter:
 		lines.extend(self._gate_opens(struct))
 		lines.extend(["}", ""])
 		lines.extend(self._gates(struct))
+		lines.extend(self._offsets(struct))
 
 		lines.extend([
 			f"impl<'a> {name}Mut<'a> {{",
@@ -740,6 +741,93 @@ class Emitter:
 		"""
 		return any(decl.name == placement.varint
 		           for decl in self.schema.varints())
+
+	def _offsets(self, struct: ResolvedStruct) -> list[str]:
+		"""Every dynamic offset in this struct, resolved in one pass.
+
+		A scan makes reaching member N a rescan of the N-1 before it, and the
+		per-member offset does that on every call. This is that sum once. The
+		memory is the caller's, which is why it is behind `--materialize`.
+		"""
+		if not self.materialize:
+			return []
+
+		members = [entry.placement for entry in own_entries(struct)]
+		dynamic = [held for held in members
+		           if held.offset_bits is None and held.located is None]
+		if not dynamic:
+			return []
+
+		plan = offset_plan(struct, members,
+		                   lambda held: self._length_expression(struct, held)
+		                   is not None or held.is_fixed_size)
+		if plan is None:
+			return ["",
+			        f"\t// No offset cache for {struct.name}: a member has no",
+			        "\t// length this can compute, so the offsets after it",
+			        "\t// cannot be resolved in one pass any more than one at",
+			        "\t// a time."]
+
+		steps: list[str] = []
+		for step in plan:
+			if step.kind == "record":
+				assert step.placement is not None
+				steps.append(f"\t\t\t{_ident(c_name(local_name(struct, step.placement)))}"
+				             ": at,")
+			elif step.placement is None:
+				steps.append(f"\t\tat += {step.size};")
+			else:
+				length = self._length_expression(struct, step.placement,
+				                                 running="at")
+				steps.append(f"\t\tat += {length};")
+
+		# The record steps become struct fields at the end rather than
+		# assignments as they are reached: a Rust struct is built whole, so the
+		# running total is captured into a local at each point instead.
+		body: list[str] = []
+		captured: list[str] = []
+		for step in plan:
+			if step.kind == "record":
+				assert step.placement is not None
+				local = _ident(c_name(local_name(struct, step.placement)))
+				body.append(f"\t\tlet {local} = at;")
+				captured.append(local)
+			elif step.placement is None:
+				body.append(f"\t\tat += {step.size};")
+			else:
+				length = self._length_expression(struct, step.placement,
+				                                 running="at")
+				body.append(f"\t\tat += {length};")
+
+		name   = _pascal(struct.name) + "Offsets"
+		fields = [f"\tpub {_ident(c_name(local_name(struct, held)))}: usize,"
+		          for held in dynamic]
+
+		return [
+			"",
+			f"/// Where each dynamically-placed member of `{struct.name}`"
+			" starts.",
+			"///",
+			"/// The per-member offset resolves one by summing what precedes",
+			"/// it, so it rescans every delimited member ahead of the one",
+			"/// asked for, on every call. This is that sum once, for all of",
+			"/// them.",
+			"#[derive(Clone, Copy, Debug, Default)]",
+			f"pub struct {name} {{",
+			*fields,
+			"}",
+			"",
+			f"impl<'a> {_pascal(struct.name)}<'a> {{",
+			f"\tpub fn resolve_offsets(&self) -> {name} {{",
+			"\t\t#[allow(unused_mut)]",
+			"\t\tlet mut at = 0usize;",
+			"",
+			*body,
+			"",
+			f"\t\t{name} {{ " + ", ".join(captured) + " }",
+			"\t}",
+			"}",
+		]
 
 	def _tag(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		"""A tag's bytes, the span it covers, and its dirty bit (14.2).

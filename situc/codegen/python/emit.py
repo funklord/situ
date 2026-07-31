@@ -36,7 +36,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, Member, arm_members, containment_order, covered_run,
-	decode_bound,
+	decode_bound, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts,
@@ -214,6 +214,7 @@ class Emitter:
 		lines = ["", f"class {name}(View):", *self._class_doc(struct)]
 		lines.extend(self._acquire(struct))
 		lines.extend(self._dirty_constants(struct))
+		lines.extend(self._offsets(struct))
 
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
@@ -1027,6 +1028,72 @@ class Emitter:
 			if found is not None:
 				return found
 		return "self._len"
+
+	def _offsets(self, struct: ResolvedStruct) -> list[str]:
+		"""Every dynamic offset in this struct, resolved in one pass.
+
+		A scan makes reaching member N a rescan of the N-1 before it, and the
+		per-member offset does that on every call. This is that sum once.
+
+		A dict rather than a record type, which is where this backend departs
+		from the other three: the caller has one already and a class per struct
+		would be three lines of ceremony for a mapping Python spells inline.
+		The keys are the member names, so a reader of one language's generated
+		code recognises the other's.
+		"""
+		if not self.materialize:
+			return []
+
+		members = [entry.placement for entry in own_entries(struct)]
+		dynamic = [held for held in members
+		           if held.offset_bits is None and held.located is None]
+		if not dynamic:
+			return []
+
+		plan = offset_plan(struct, members,
+		                   lambda held: self._length_expression(struct, held)
+		                   is not None or held.is_fixed_size)
+		if plan is None:
+			return ["",
+			        f"\t# No offset cache for {struct.name}: a member has no",
+			        "\t# length this can compute, so the offsets after it",
+			        "\t# cannot be resolved in one pass any more than one at",
+			        "\t# a time."]
+
+		steps: list[str] = []
+		for step in plan:
+			if step.kind == "record":
+				assert step.placement is not None
+				name = c_name(local_name(struct, step.placement))
+				steps.append(f'\t\tfound["{name}"] = at')
+			elif step.placement is None:
+				steps.append(f"\t\tat += {step.size}")
+			else:
+				length = self._length_expression(struct, step.placement,
+				                                 running="at")
+				steps.append(f"\t\tat += {length}")
+
+		listed = ", ".join(f"`{c_name(local_name(struct, held))}`"
+		                   for held in dynamic)
+
+		return [
+			"",
+			"\tdef resolve_offsets(self) -> dict[str, int]:",
+			f'\t\t"""Where each dynamically-placed member of {struct.name}'
+			f' starts: {listed}.',
+			"",
+			"\t\tThe per-member offset resolves one by summing what precedes",
+			"\t\tit, so it rescans every delimited member ahead of the one",
+			"\t\tasked for, on every call. This is that sum once, for all of",
+			'\t\tthem."""',
+			"\t\tself._check()",
+			"\t\tfound: dict[str, int] = {}",
+			"\t\tat = 0",
+			"",
+			*steps,
+			"",
+			"\t\treturn found",
+		]
 
 	def _fixed_text_number(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
