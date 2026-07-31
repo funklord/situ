@@ -730,18 +730,25 @@ Capability consequences, which are mercifully narrow:
 
 ### 8.5 Arrays
 
-Four forms, with sharply different capability consequences:
+Five forms, with sharply different capability consequences:
 
 | Form | Size | Consequence |
 |---|---|---|
 | `T x[N]` | compile-time constant | fully static |
 | `T x[expr]` | parse-time from a prior field | frame-relative static elements; everything after becomes dynamic |
 | `T x[remaining]` | to end of enclosing frame | must be last in its frame |
-| `T x[] until (cond)` | delimited | sequential access only; OPEN, defer to phase 6 |
+| `T x[] until "D"` | ends where the terminator would be an element | sequential access only (8.6.3) |
+| `T x[] while (cond)` | ends after the element failing `cond` | sequential access only (8.6.6) |
 
 Element type must have a fixed size for indexed access to be O(1). If the
 element size is dynamic, the array is sequential-access only and the compiler
 says so.
+
+The last two rows read `T x[] until (cond)` here, marked OPEN and deferred to
+phase 6, until long after phase 6 delivered them -- as two constructs rather
+than one, and with `while` for the predicate because `until` had been given to
+the terminator. A row nobody checks is a comment (section 0), and this one was
+a comment claiming an open question that had been settled twice over.
 
 ### 8.6 Strings and bytes
 
@@ -3387,7 +3394,16 @@ families agree about where a member starts, which is the property a wrong
 index would break.
 
 Implementation language for `situc`: **Python 3.11+, standard library only**,
-with full type annotations checked by mypy in strict mode. Rationale: the
+with full type annotations checked by mypy in strict mode. The floor is stated
+twice -- here and as mypy's `python_version` -- and was false for six phases:
+one f-string in the C++ backend split an expression across lines, which is PEP
+701 and therefore 3.12, and the machine this was written on runs 3.13.
+`ast.parse(feature_version=...)` does not catch that, PEP 701 being a tokenizer
+change, so `test_every_module_parses_at_the_declared_floor` runs a real
+interpreter of the declared version over every module and skips where that
+version is not installed. It found the f-string the day it was written, in
+generated-code terms: a vendored toolchain on the version this promises would
+have failed to import. Rationale: the
 compiler is a symbolic solver and a text generator, both of which Python does
 well; no dependencies means the toolchain vendors trivially into an embedded
 build environment; and rewriting in Rust later is a known, bounded option once
@@ -3399,6 +3415,10 @@ the semantics are settled. Do not add a dependency without recording a decision.
 
 ```
 situ/
+  README.md                   what situ is, in a page: the pitch, a worked
+                              schema, the commands, and what the suite needs
+  CMakeLists.txt              the CMake entry point, beside the Makefile, and
+                              `situ_generate()` for a consuming build
   project.md                  this document
   bin/
     situc                     the command: a launcher that finds its own
@@ -3562,8 +3582,18 @@ first is part of what a decision log is for.
 
 ## 24. Build system
 
-Both CMake and GNU Make, maintained in parallel, as separate and independently
-usable entry points.
+Both CMake and GNU Make, as separate and independently usable entry points --
+`make` and `cmake -B build` each build the runtime and install the same five
+things under a prefix.
+
+That sentence was here for a long time before either half of it was true of
+CMake: `git log --all` had never seen a `CMakeLists.txt`, and nothing checked.
+`tests/unit/test_cmake.py` is the check now, and it holds the three claims
+worth holding -- the top-level build installs what `make install` installs, the
+runtime builds standalone the way every sub-project here must, and
+`situ_generate()` turns a schema into a library target in a consuming project,
+with the schema a dependency of what reads it. Writing it found something else
+again, which is the entry below.
 
 - Sub-projects (compiler, runtime, generated-code tests) must be fully
   self-contained. The parent injects values via environment export for Make and
@@ -3593,11 +3623,24 @@ The top-level entry points:
 ```
 make            build the C runtime
 make test       pytest, mypy strict, lint, cmocka, cross
+make bench      what the offset cache costs, in all four backends (26.30)
 make cross      aarch64 build of the runtime
 make cross-test generated accessors run on aarch64 under emulation
 make install    situc, the runtime and its header under PREFIX
 make help       everything else
+
+cmake -B build && cmake --build build && cmake --install build
 ```
+
+Cross-compiling under CMake goes through `-DCMAKE_TOOLCHAIN_FILE` rather than
+`CROSS_COMPILE`: a build system's users know its own convention, and a second
+one invented here would be a third thing to keep in sync.
+
+What a consuming project wants is not to build situ but to *run* it, so the
+CMake side carries `situ_generate(name SCHEMA path TARGET c)`. A schema becomes
+a static library target with the generated directory on its include path, and
+the schema is a dependency of it -- editing the schema rebuilds what reads it,
+which is the one thing checking generated code into a repository gets wrong.
 
 `situc` itself is `bin/situc`: a launcher that finds its own package, works in
 place or symlinked into a PATH directory, and works again from

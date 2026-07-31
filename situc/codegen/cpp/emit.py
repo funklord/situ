@@ -1861,9 +1861,13 @@ class Emitter:
 			name = c_name(local_name(struct, driver.placement))
 			return f"static_cast<std::uint32_t>({name}())"
 
-		return (f"static_cast<std::uint32_t>("
-		        f"{self._raw_load(driver.placement.scalar, driver.placement, 'base() + '
-		        f'{driver.placement.offset_bytes}')})")
+		# The address as a separate name rather than a nested f-string: an
+		# expression split across lines inside `{...}` is PEP 701, which is
+		# Python 3.12, and this project's floor is 3.11 (section 22).
+		address = f"base() + {driver.placement.offset_bytes}"
+		load    = self._raw_load(driver.placement.scalar, driver.placement,
+		                         address)
+		return f"static_cast<std::uint32_t>({load})"
 
 	def _element_bytes(self, placement: Placement) -> int | None:
 		nested = self.resolved.structs.get(placement.type_name or "")

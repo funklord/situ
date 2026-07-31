@@ -3,3 +3,6 @@ __pycache__/
 *.py[co]
 .mypy_cache/
 .pytest_cache/
+# A stray link output: a compile check that forgot `-o` once put one here,
+# and it was committed before anybody noticed.
+/a.out

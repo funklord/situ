@@ -4,10 +4,14 @@ suite, not only by `make lint`, so a violation fails CI wherever it enters."""
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+
+import pytest
 
 import lint_conventions  # noqa: E402
 
@@ -168,3 +172,60 @@ def test_the_failure_classes_match_the_runtimes() -> None:
 		# type -- `StaleViewError` for `stale`, and so on.
 		assert re.search(rf"^class {name.capitalize()}\w*Error", python, re.M), \
 			f"Python lacks `{name}`"
+
+
+# -- the interpreter floor --------------------------------------------------
+
+
+def declared_floor() -> str:
+	"""The oldest Python this compiler claims to run on, from the one place
+	that states it as data: mypy's `python_version` in `pyproject.toml`."""
+	text  = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+	found = re.search(r'^python_version\s*=\s*"(\d+\.\d+)"', text, re.M)
+	assert found is not None, "pyproject.toml no longer declares python_version"
+	return found.group(1)
+
+
+def test_section_22_and_pyproject_agree_on_the_floor() -> None:
+	"""Two statements of one number, and the section is the one people read."""
+	spec = (ROOT / "project.md").read_text(encoding="utf-8")
+
+	assert f"Python {declared_floor()}+" in spec
+
+
+def test_every_module_parses_at_the_declared_floor() -> None:
+	"""An interpreter of the declared version, over every module here.
+
+	`situc` claims Python 3.11 and had not run on it for six phases: one f-string
+	in the C++ backend split an expression across lines, which is PEP 701 and
+	therefore 3.12. Nothing noticed, because the machine this was written on runs
+	3.13 and every test passed there.
+
+	`ast.parse(feature_version=...)` does not catch it -- PEP 701 is a tokenizer
+	change and the flag does not reach the tokenizer -- so this runs the real
+	interpreter, and skips where that version is not installed. The claim is
+	worth a check that sometimes skips: it is the difference between vendoring
+	into an embedded build environment and not.
+	"""
+	floor  = declared_floor()
+	python = shutil.which(f"python{floor}")
+	if python is None:
+		pytest.skip(f"no python{floor} on PATH")
+
+	modules = [ROOT / "bin" / "situc",
+	           *sorted(ROOT.glob("situc/**/*.py")),
+	           *sorted(ROOT.glob("tools/*.py"))]
+
+	failed = []
+	for path in modules:
+		result = subprocess.run(
+			[python, "-c", "import ast, sys; ast.parse(open(sys.argv[1]).read())",
+			 str(path)],
+			capture_output=True, text=True)
+		if result.returncode != 0:
+			failed.append(f"{path.relative_to(ROOT)}: "
+			              f"{result.stderr.strip().splitlines()[-1]}")
+
+	assert not failed, (
+		f"these do not parse on python{floor}, which section 22 and "
+		f"pyproject.toml both promise:\n  " + "\n  ".join(failed))

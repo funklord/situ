@@ -1194,8 +1194,12 @@ def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 	main.write_text(f'#include "{schema.stem}.hpp"\nint main() {{ return 0; }}\n',
 	                encoding="ascii")
 
+	# `-fsyntax-only`, because linking is what this was doing: without it g++
+	# produced an `a.out` in whatever directory pytest was run from, and one
+	# of them was committed to this repository. The header is header-only and
+	# `main` calls nothing, so the link resolved no symbol and proved nothing.
 	result = subprocess.run(
-		[HOST_CXX or "g++", *WARNINGS,
+		[HOST_CXX or "g++", *WARNINGS, "-fsyntax-only",
 		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
 		 str(main)],
 		capture_output=True, text=True)
