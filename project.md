@@ -547,6 +547,38 @@ The advisor's varint suggestion (18.2) applies here: if a varint field carries a
 `max = 1500` a varint costs two bytes across most of its range anyway, so `u16`
 is free and restores static offsets for everything after it.
 
+**Reading one, and the bug that hid behind not reading one.** C emits two
+accessors per varint field, because a varint answers two questions and a caller
+usually wants one of them: `_get` decodes the value, and `_len` says how many
+bytes it occupied. Everything after it in the frame is measured through `_len`,
+which is what `offset := Dynamic` costs here -- a read, not a scan. `_get`
+refuses a truncated value with `SITU_ERR_BOUNDS`, and where the type declares
+`minimal`, a padded encoding with `SITU_ERR_CONSTRAINT`: a canonicality claim
+nothing enforced would be a comment.
+
+There was no accessor at all before, and the note said so on a defensible
+argument -- emitting one would pretend the width is fixed. The note was the
+smaller half of the problem. Three separate places computed a length for a
+varint and all three returned **zero**:
+
+| | consequence |
+|---|---|
+| `_length_expression` | every member after a varint was placed as though it occupied nothing, and read the varint's own bytes |
+| `_count_expression` | `u8 payload[n]` for a varint `n` was a zero-length field |
+| the field scope | a varint never entered it, so `u8 payload[n]` was refused with "no fields are in scope at this point" |
+
+The first is the one that matters. `struct s { u8 kind; v n; u16 after; }`
+generated an `after` accessor that looked like every other one and returned the
+varint's bytes -- no diagnostic, no refusal, a plausible number. Situ's whole
+argument is that an operation it cannot support is absent rather than wrong,
+and here the absence of a varint accessor was read as "this construct is not
+finished" while the members *around* it went on being generated confidently.
+
+A gap that is declared in one place and silently wrong in another is worse than
+either. What kept it invisible is that no example used a varint field: protobuf
+declares `pb_varint` as a tlv `tag_type`, which the walk reads without ever
+placing a member. `examples/sqlite` is what asked for it (9.3).
+
 ### 8.2 Bit packing
 
 - Fields narrower than 8 bits, and any `bit`, pack into the current byte
@@ -4926,21 +4958,9 @@ Each says so in the generated output. None of them is a design question; they
 are the C backend having gone first and the others not having caught up on
 that construct.
 
-**A varint is described and cannot be read.**
-
-`varint_type` is a first-class construct, the lattice reasons about it
-correctly, and no backend emits an accessor for a varint field -- the C note
-has said "varint decoding is not generated yet" since phase 4. Worse, nothing
-may be *sized* by one: a varint member never enters the field scope, so
-`u8 payload[payload_size]` is refused with "no fields are in scope at this
-point". And there is one encoding, `leb128`, so a big-endian base-128 varint
-(SQLite's, ASN.1's) cannot be described at all.
-
-Section 9.7 argues describing protobuf is impossible without varints. Situ
-describes protobuf and cannot read a varint out of one: the tlv walk reads them
-to *size* an item and hands back an offset and a length, never a value. This
-was not on this list until `examples/sqlite` asked for it (9.3), which is what
-worked examples are for and an argument for finding one per construct.
+**A varint is described in one encoding.** `leb128` is the only one, so a
+big-endian base-128 varint -- SQLite's, ASN.1's -- cannot be described. C reads
+a `leb128` field now (8.1.1); the other three backends do not.
 
 **Two kernel families that are described and not generated.**
 

@@ -915,10 +915,6 @@ class Emitter:
 			lines.extend(self._marker(struct, placement))
 			return lines
 
-		if placement.varint is not None:
-			lines.extend(self._varint_note(placement))
-			return lines
-
 		if placement.kind == "variant":
 			lines.extend(self._variant_note(struct, placement))
 			return lines
@@ -946,6 +942,14 @@ class Emitter:
 			if blocker is not None:
 				return lines + self._unresolvable_offset(placement, blocker)
 			lines.extend(self._offset_function(struct, placement))
+
+		# After the offset block, not before it. A varint at a dynamic offset
+		# needs its own `_offset` emitted first -- the accessors below read
+		# from it, and returning early named a function that was never
+		# defined. The second varint of a pair is exactly that shape.
+		if placement.varint is not None:
+			lines.extend(self._varint_field(struct, placement))
+			return lines
 
 		if placement.radix is not None and placement.delimiter is None:
 			lines.extend(self._fixed_text_number(struct, placement))
@@ -1868,19 +1872,119 @@ class Emitter:
 			return f"({test})", arm.source or "default"
 		return f"{held} != {arm.value}u", arm.source or str(arm.value)
 
-	def _varint_note(self, placement: Placement) -> list[str]:
-		"""A varint has no constant-offset accessor to generate.
+	def _varint_field(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Decode a varint field, and say how wide it turned out to be.
 
-		Its width is not known until it is read, so there is no `base + K` for
-		this field and none for anything after it in the same frame. Decoding
-		them is phase 6 codegen work; refusing to emit an accessor is better
-		than emitting one that pretends the width is fixed.
+		Two accessors, because a varint answers two questions and a caller
+		usually wants one of them. `_get` decodes the value; `_len` says how
+		many bytes it occupied, which is what every member after it in this
+		frame is measured through. That is what `offset = Dynamic` costs here,
+		and it is a read rather than a scan.
+
+		There was no accessor at all until this, and the note said so -- but
+		the note was the smaller half of the problem. `_length_expression` had
+		no case for a varint either, so it fell through to the array branch and
+		returned a length of zero: every member after a varint got an offset
+		computed as though the varint were not there, and read the varint's own
+		bytes. Silently, and with an accessor that looked like any other.
 		"""
+		declared = next((decl for decl in self.schema.varints()
+		                 if decl.name == placement.varint), None)
+		if declared is None:
+			return []
+
+		local  = c_name(self._local(struct, placement))
+		get    = ident(self.prefix, struct.name, local, "get")
+		length = ident(self.prefix, struct.name, local, "len")
+		base   = self._base_expression(struct, placement, gated=False)
+		width  = declared.max_bytes
+		signed = declared.transform is ast.VarintTransform.ZIGZAG
+		ctype  = "int64_t" if signed else "uint64_t"
+
+		decoded = ("(int64_t)situ_zigzag_decode(raw)" if signed else "raw")
+
+		minimal = ([
+			"",
+			"\t/* `minimal` is declared, so a padded encoding is a different",
+			"\t * encoding of the same value and this schema does not admit",
+			"\t * one. Without the check `canonical` would be a claim nothing",
+			"\t * enforced. */",
+			"\tif (used != situ_varint_len(raw)) {",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		] if declared.minimal else [])
+
 		return [
-			f"/* No accessor: `{placement.name}` is a `{placement.varint}`, whose",
-			" * width is not known until it is read. Varint decoding is not",
-			" * generated yet; the capability map already records what the field",
-			" * costs. */",
+			f"/* `{placement.name}` is a `{placement.varint}`: 1 to {width}"
+			f" bytes, and how",
+			" * many is in the bytes themselves.",
+			" *",
+			" * SITU_OK            decoded; *out is the value",
+			" * SITU_ERR_BOUNDS    the frame ends mid-value, or it is longer"
+			" than",
+			f" *                    the {width} bytes `max_bits ="
+			f" {declared.max_bits}` allows",
+			*([" * SITU_ERR_CONSTRAINT a non-minimal encoding, which `minimal`"
+			   " refuses"] if declared.minimal else []),
+			" */",
+			f"static inline situ_err_t {get}(situ_view_t view, {ctype} *out)",
+			"{",
+			f"	uint32_t at = {base};",
+			"	uint64_t raw = 0;",
+			"	uint32_t used;",
+			"",
+			"	if (at >= view.limit) {",
+			"		return SITU_ERR_BOUNDS;",
+			"	}",
+			"",
+			f"	used = situ_varint_get(view.base + at, view.limit - at,"
+			f" {width}u, &raw);",
+			"	if (used == 0u) {",
+			"		return SITU_ERR_BOUNDS;",
+			"	}",
+			*minimal,
+			"",
+			f"	*out = {decoded};",
+			"	return SITU_OK;",
+			"}",
+			"",
+			f"/* The same value, read where an error cannot be returned: the",
+			" * length arithmetic downstream of this field is not fallible, and",
+			" * making it so would put an error path in every accessor after"
+			" it.",
+			" *",
+			" * `validate` is what makes this safe -- an unvalidated frame"
+			" reads",
+			" * zero, which is the bargain every other accessor makes with the",
+			" * bounds check it did not do. */",
+			f"static inline {ctype} "
+			f"{ident(self.prefix, struct.name, local, 'value')}(situ_view_t view)",
+			"{",
+			f"\t{ctype} value = 0;",
+			"",
+			f"\t(void){get}(view, &value);",
+			"\treturn value;",
+			"}",
+			"",
+			f"/* How many bytes `{placement.name}` occupies. Zero where it"
+			f" cannot be",
+			" * read at all, which keeps every offset derived from it inside"
+			" the",
+			" * frame -- a width guessed at the maximum would push them past"
+			" the end.",
+			" * A caller who needs to tell the two apart asks `_get`. */",
+			f"static inline uint32_t {length}(situ_view_t view)",
+			"{",
+			f"	uint32_t at = {base};",
+			"	uint64_t raw = 0;",
+			"",
+			"	if (at >= view.limit) {",
+			"		return 0u;",
+			"	}",
+			f"	return situ_varint_get(view.base + at, view.limit - at,"
+			f" {width}u, &raw);",
+			"}",
 		]
 
 	def _reserved_note(self, placement: Placement) -> list[str]:
@@ -3506,6 +3610,13 @@ class Emitter:
 			# are no elements to multiply by.
 			return f"(uint32_t){self._count_expression(struct, placement, held)}"
 
+		# A varint is as long as its own bytes say. Without this it fell to the
+		# count branch below, which found no `sized_by` and returned zero -- so
+		# everything after a varint was placed as though it occupied nothing.
+		if placement.varint is not None:
+			local = c_name(self._local(struct, placement))
+			return f"{ident(self.prefix, struct.name, local, 'len')}({held})"
+
 		# A size that is arithmetic over a field rather than a bare reference
 		# to one. `sized_by` holds a path and holds nothing for this, so the
 		# count branch below returned zero -- for `data[(len + 1) * 8 - 2]`,
@@ -3621,7 +3732,20 @@ class Emitter:
 			return f"{placement.array_count or 0}u"
 
 		target = self.resolved.find(f"{struct.name}.{placement.sized_by}")
-		if target is None or target.placement.scalar is None:
+		if target is None:
+			return f"{placement.array_count or 0}u"
+
+		# A varint driver has no scalar and no constant offset, so neither the
+		# load below nor the check above applies to it. It reached the `scalar
+		# is None` guard and returned zero, which made `u8 payload[n]` a
+		# zero-length field with a correctly computed offset -- the second of
+		# the two silent zeros a varint used to produce.
+		if target.placement.varint is not None:
+			local = c_name(self._local(struct, target.placement))
+			return (f"{ident(self.prefix, struct.name, local, 'value')}"
+			        f"({held})")
+
+		if target.placement.scalar is None:
 			return f"{placement.array_count or 0}u"
 
 		# A text driver's value is digits, not bits. Loading it with

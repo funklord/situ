@@ -597,12 +597,103 @@ def test_opaque_length_is_a_byte_count_not_an_element_count() -> None:
 	assert "return (uint32_t)(situ_get_be16(view.base + 0u));" in header
 
 
-def test_a_varint_gets_no_accessor() -> None:
-	"""Emitting one would pretend the width is fixed."""
-	header, _ = emit("varint_type v { encoding = leb128; max_bits = 64; minimal; }"
-	                 "struct S { u16 a; v n; }")
-	assert "No accessor" in header
-	assert "situ_S_n_get" not in header
+VARINT = "varint_type v { encoding = leb128; max_bits = 64; minimal; }"
+
+
+def test_a_varint_field_decodes() -> None:
+	"""It got no accessor at all, on the argument that emitting one would
+	pretend the width is fixed. The width is in the bytes, so the answer was
+	two accessors rather than none -- invariant 11 again, an assertion of
+	absence with a shelf life."""
+	header, _ = emit(VARINT + "struct S { u16 a; v n; }")
+
+	assert "situ_S_n_get(situ_view_t view, uint64_t *out)" in header
+	assert "situ_S_n_len(situ_view_t view)" in header
+
+
+def test_a_member_after_a_varint_is_placed_past_it() -> None:
+	"""The bug the accessor was hiding. `_length_expression` had no case for a
+	varint, so it fell to the array branch and returned zero: every member
+	after one was placed as though it occupied nothing, and read the varint's
+	own bytes. Silently, through an accessor that looked like any other."""
+	header, _ = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+
+	assert "offset = offset + (situ_S_n_len(view));" in header
+
+
+def test_a_varint_may_size_an_array() -> None:
+	"""What a varint is usually for. `u8 payload[n]` was refused outright --
+	a varint member never entered the field scope, so the error read "no
+	fields are in scope at this point"."""
+	header, _ = emit(VARINT + "struct S { v n; u8 payload[n]; }")
+
+	assert "situ_S_payload_size_value" in header or \
+	       "situ_S_n_value(view)" in header
+
+
+def test_a_minimal_varint_refuses_a_padded_encoding() -> None:
+	"""`minimal` is a canonicality claim, and one nothing enforced would be a
+	comment."""
+	header, _ = emit(VARINT + "struct S { v n; }")
+
+	assert "if (used != situ_varint_len(raw)) {" in header
+	assert "return SITU_ERR_CONSTRAINT;" in header
+
+
+def test_a_non_minimal_varint_makes_no_such_check() -> None:
+	header, _ = emit("varint_type w { encoding = leb128; max_bits = 64; }"
+	                 "struct S { w n; }")
+
+	assert "situ_varint_len" not in header
+
+
+def test_a_zigzag_varint_decodes_signed() -> None:
+	header, _ = emit("varint_type z { encoding = leb128; max_bits = 64;"
+	                 " transform = zigzag; }struct S { z n; }")
+
+	assert "situ_S_n_get(situ_view_t view, int64_t *out)" in header
+	assert "situ_zigzag_decode(raw)" in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_varint_reads_the_bytes_after_it(tmp_path: Path) -> None:
+	"""The whole point, and the regression that matters: `after` used to come
+	back as the varint's own bytes."""
+	header, source = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	/* kind = 1, n = 300 (leb128 AC 02), after = 0xBEEF */
+	uint8_t buf[] = { 0x01, 0xAC, 0x02, 0xBE, 0xEF };
+	situ_msg_t msg;
+	situ_view_t view;
+	uint64_t n = 0;
+
+	situ_msg_init(&msg, buf, sizeof(buf));
+	if (situ_S_view(&msg, 0, sizeof(buf), &view) != SITU_OK) return 1;
+
+	if (situ_S_n_get(view, &n) != SITU_OK || n != 300u) return 2;
+	if (situ_S_n_len(view) != 2u) return 3;
+	if (situ_S_after_offset(view) != 3u) return 4;
+	if (situ_S_after_get(view) != 0xBEEFu) return 5;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
 
 
 def test_a_variant_gets_no_single_accessor() -> None:

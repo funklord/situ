@@ -1606,6 +1606,20 @@ class Solver:
 			self.record_nested_intervals(member, state, name)
 			return
 
+		# A varint is a value like any other, and its range is what `max_bits`
+		# declares. It was recorded nowhere, so `u8 payload[n]` for a varint
+		# `n` was refused with "no fields are in scope at this point" -- which
+		# reads as though nothing preceded it. Section 9.7 calls describing
+		# protobuf impossible without varints, and a length-prefixed field is
+		# what a varint is usually for.
+		varint = self.varints.get(member.type_ref.name)
+		if varint is not None:
+			state.fields[name] = self.constrain(
+				scalar_interval(varint.max_bits,
+				                signed=varint.transform is not None),
+				member.attrs)
+			return
+
 		if scalar is None:
 			return
 
