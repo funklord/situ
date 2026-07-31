@@ -15,7 +15,7 @@ from pathlib import Path
 # Indentation is checked where we control the whole file. Markdown is excluded:
 # its list continuation and code-fence indentation is space-based by
 # specification, and fighting that would make the documents wrong.
-INDENT_SUFFIXES = frozenset({".py", ".c", ".h", ".situ", ".ebnf"})
+INDENT_SUFFIXES = frozenset({".py", ".c", ".h", ".situ", ".ebnf", ".lua"})
 # `bin/situc` is Python without the suffix, because it is a command rather
 # than a module. The conventions still apply to it.
 INDENT_NAMES = frozenset({"Makefile", "situc"})

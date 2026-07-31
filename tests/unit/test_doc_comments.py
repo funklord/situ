@@ -6,23 +6,31 @@ Doxygen does not extract at all, so a run over a generated header produced an
 entry per function with nothing against it while the reasons sat directly
 above in the file.
 
-There is no Doxygen in this build environment, so nothing here proves a tool
-extracts them. What it proves is the structure such a tool needs, which is the
-same bargain `gen-dissector` makes with Lua (26.14): the emitted artifact
-cannot be executed here, so the tests hold the claims that would make it
-correct if it were.
+Most of this file holds the *structure* such a tool needs, which is cheap and
+runs anywhere. The last tests run Doxygen itself over generated headers and
+read its XML, which is the only way to know the structure was the right guess:
+running it the first time found two things the structure tests could not see --
+every C++ class undocumented, because the promotion pass was told about members
+and not about classes, and `<reserved0>` read as an HTML tag, once per reserved
+field in the tree.
 
-The claim worth holding is the last one. A block promoted onto the wrong
-declaration is worse than one nobody extracts, because a reader is then shown
-a reason against a symbol it is not the reason for.
+The claim worth holding either way is the last one. A block promoted onto the
+wrong declaration is worse than one nobody extracts, because a reader is then
+shown a reason against a symbol it is not the reason for.
 """
 
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
+from every_schema import ROOT, SCHEMAS, ids
+from situc.cli import analyse
+from situc.parser import parse
 from situc.codegen.c import generate as generate_c
 from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.doc import extractable
@@ -146,3 +154,93 @@ def test_an_already_marked_block_is_left_alone() -> None:
 	twice = extractable(once)
 
 	assert once == twice
+
+
+# -- Doxygen itself (26.31) -------------------------------------------------
+
+DOXYGEN = shutil.which("doxygen")
+
+#: The one class of complaint this suite tolerates. A field's block documents
+#: the field, and its setter rides along under the same block rather than
+#: repeating the capability vector -- so `set_x`, the constructor and the size
+#: constant come out undocumented, in C++ as in C. That is a choice about what
+#: to write, not a failure to extract what was written; anything else Doxygen
+#: says is this generator emitting markup it did not mean to.
+TOLERATED = "is not documented"
+
+
+def doxygen(tmp_path: Path, schema: Path) -> tuple[str, str]:
+	"""Run Doxygen over one schema's C and C++ headers, and hand back its
+	warnings and the XML it produced."""
+	source, resolved, _ = analyse(schema)
+	parsed = parse(source)
+
+	inputs = tmp_path / "in"
+	inputs.mkdir()
+	(inputs / "unit.h").write_text(
+		generate_c(parsed, resolved, "unit").header, encoding="ascii")
+	(inputs / "unit.hpp").write_text(
+		generate_cpp(parsed, resolved, "unit").header, encoding="ascii")
+
+	# `EXTRACT_ALL = NO` on purpose: with it on, Doxygen lists every symbol
+	# whether or not anything documented it, and the check below would pass
+	# over a header with no comments in it at all.
+	(tmp_path / "Doxyfile").write_text(f"""\
+INPUT            = {inputs}
+FILE_PATTERNS    = *.h *.hpp
+OUTPUT_DIRECTORY = {tmp_path}
+GENERATE_HTML    = NO
+GENERATE_LATEX   = NO
+GENERATE_XML     = YES
+QUIET            = YES
+EXTRACT_ALL      = NO
+EXTRACT_STATIC   = YES
+""", encoding="ascii")
+
+	assert DOXYGEN is not None
+	result = subprocess.run([DOXYGEN, str(tmp_path / "Doxyfile")],
+	                        capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+
+	xml = "\n".join(path.read_text(encoding="utf-8")
+	                for path in sorted((tmp_path / "xml").glob("*.xml")))
+	return result.stderr, xml
+
+
+@pytest.mark.skipif(DOXYGEN is None, reason="no doxygen")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_doxygen_reads_the_generated_headers_without_complaint(
+		schema: Path, tmp_path: Path) -> None:
+	"""Every schema in the repository, in both languages Doxygen reads.
+
+	This is the check 26.31 said was missing, and it earned its keep on the
+	first run: `<reserved0>` -- the compiler's own label for a field the schema
+	did not name -- is markup to a documentation tool, and Doxygen said so once
+	per reserved field in the tree.
+	"""
+	warnings, _ = doxygen(tmp_path, schema)
+	unexpected = [line for line in warnings.splitlines()
+	              if line.strip() and TOLERATED not in line]
+
+	assert not unexpected, "\n".join(unexpected)
+
+
+@pytest.mark.skipif(DOXYGEN is None, reason="no doxygen")
+def test_doxygen_extracts_the_reasons_and_not_the_absences(
+		tmp_path: Path) -> None:
+	"""The two halves of the bargain, in the tool's own output.
+
+	What must arrive: the capability vector, against the accessor it describes.
+	What must not: a "No `x`: ..." block, which explains an accessor that is
+	*not there* and would otherwise be shown against whatever declaration came
+	next (`codegen/doc.py`).
+	"""
+	_, xml = doxygen(tmp_path, ROOT / "tests" / "schemas" / "edges.situ")
+
+	assert "repr=ValueConverted" in xml
+	assert "AbsoluteStatic" in xml
+	assert "reserved, no accessor" in xml	# against the reserved field itself
+
+	# The absences, which the generator writes and the tool must not attach.
+	assert "No setter" not in xml
+	assert "No `" not in xml

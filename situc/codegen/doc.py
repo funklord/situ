@@ -20,6 +20,8 @@ not about what the comment says.
 
 from __future__ import annotations
 
+import re
+
 #: A line that a documentation comment could attach to. Doxygen binds a block
 #: to the declaration immediately after it, so a block followed by anything
 #: else documents nothing and is left alone.
@@ -86,6 +88,23 @@ def _documents_an_absence(body: list[str]) -> bool:
 	comment nobody extracts beats one extracted onto the wrong thing.
 	"""
 	return bool(body) and body[0].lstrip().startswith("No ")
+
+
+#: `<reserved0>` is the compiler's own label for a field the schema did not
+#: name, and it is the only angle bracket that reaches a comment. Doxygen reads
+#: a documentation block as markup, so it took that for an HTML tag and said so
+#: -- "Unsupported xml/html tag <reserved0> found", once per reserved field in
+#: the tree. Backticks make it a code span, which is what it is.
+_SYNTHETIC = re.compile(r"(?<!`)<(\w+)>(?!`)")
+
+
+def _quoted(line: str) -> str:
+	"""A comment line with the markup a documentation tool would mis-read.
+
+	Only inside a promoted block: an unpromoted comment is read by people, and
+	people were never confused by this one.
+	"""
+	return _SYNTHETIC.sub(r"`<\1>`", line)
 
 
 def extractable(lines: list[str], indent: str = "") -> list[str]:
@@ -162,7 +181,7 @@ def extractable(lines: list[str], indent: str = "") -> list[str]:
 		for start, stop in blocks:
 			if body:
 				body.append("")
-			body.extend(_body(out, start, stop))
+			body.extend(_quoted(line) for line in _body(out, start, stop))
 
 		block = [indent + "/** " + body[0]] if body else [indent + "/**"]
 		block += [(indent + " * " + line).rstrip() for line in body[1:]]

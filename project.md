@@ -3366,16 +3366,17 @@ promise.
 | every example, in every backend | pytest + each toolchain | each worked example generated *and compiled* -- C since phase 4, the other three only recently, which is how three C++ examples and two Rust ones came to be broken with the suite green. Generating is not compiling, and the examples are the schemas anyone reads |
 | compiler mutation | by hand, recorded in 26.13a | deliberate bugs in the generator, judged by what a *user's* suite catches rather than situ's own. Not automated: choosing the mutation is the work, and a mutation nobody thought of is the gap that survives |
 | test mutation | by hand, at the point of writing | a probe that walks generated code is run once against a deliberately wrong expectation, to find out whether it is a test or a compile check. Three of mine were the latter -- `-fsyntax-only`, a `main` nobody executed, an `assert!` in an unrun binary -- and each passed identically before and after the fix it was written for (invariant 35) |
+| the emitted Lua | lua5.4 | parsed for every schema, and four dissected: a UDP header, an IPv4 header with its bit-packed first row, a DNS name walked label by label, and an HTTP request line found by scanning. Offsets and values are compared against the layout the accessors come from |
+| the emitted C and C++ comments | doxygen | run over every schema's headers in both languages, and its XML read back: the capability vector must arrive against the accessor it describes, and a reason for an accessor that does *not* exist must not be attached to whatever declaration follows it |
 
 **What the suite does not do**, stated because a reader would otherwise assume
-it: the emitted Lua is never executed (no Wireshark, no interpreter in the
-build environment), so `gen-dissector` is checked structurally and against the
-layout rather than against Wireshark's acceptance. `test_blocks_balance` is the
-cheapest guard against the one error that makes the file useless, and it is not
-a Lua parser. One semantic dependency rides on this and is worth naming: the
-emitted `a and b or c` idiom for a conditional length is correct *because zero
-is truthy in Lua*, which is exactly the sort of thing running it would check. And the aarch64 big-endian
-target is compile-only; only the little-endian one runs under emulation.
+it: no Wireshark runs here, so nothing proves Wireshark *accepts* a generated
+plugin. Everything short of that now happens -- `luac -p` parses every
+dissector this repository can generate, and four of them are executed over real
+packet bytes through the Wireshark stub in `tests/lua/dissect.lua`, which
+reports what each dissector showed and where. And the aarch64 big-endian target
+is compile-only; only the little-endian one runs under emulation.
+
 
 **Performance is measured and never asserted.** `tools/bench.py` builds a
 driver in each backend and reports what the offset cache of 26.30 costs and
@@ -3506,6 +3507,9 @@ situ/
     golden/                   pinned diagnostic text; message quality is the
                               product, so a regression in it is a regression
     propagation/              the 11.3 table's own fixtures
+    lua/                      a stub of the Wireshark API, big enough to run a
+                              generated dissector over real bytes and report
+                              what it showed (26.14)
     schemas/                  header.situ, the three in Section 5, and
                               edges.situ -- constructs no protocol here uses,
                               which exists so their generated code runs at all
@@ -4209,12 +4213,16 @@ a port or EtherType automatically, because the schema does not say which one
 and guessing would be wrong; the file shows how to bind it and the hint names
 the outermost struct rather than an inner one.
 
-**Not executed by the test suite.** There is no Lua interpreter or Wireshark in
-the build environment, so the tests check that the emitted Lua balances its
-blocks, uses valid identifiers, and that every `tvb(first, count)` in it is a
-span some member actually occupies. That last one is the claim worth holding: a
-dissector that loads and shows the wrong bytes is worse than one that fails to
-load.
+**Executed now, against a stub rather than against Wireshark.** The tests read
+the emitted text -- valid identifiers, and every `tvb(first, count)` a span some
+member actually occupies -- and then run it: `luac -p` parses every dissector,
+and `tests/lua/dissect.lua` stubs the twenty-odd Wireshark calls a generated
+dissector makes and reports what one *showed*, field by field, at absolute
+offsets. Four are run over real packets and their rows compared with the layout.
+
+What is still not checked is that Wireshark loads the plugin. What is checked
+is the claim worth holding: a dissector that loads and shows the wrong bytes is
+worse than one that fails to load.
 
 **Documentation generation is done.** `situc doc` renders RFC-style byte-layout
 diagrams and a field reference, in plain text or markdown. The diagrams come
@@ -5324,15 +5332,38 @@ prefix of a real HTTP request comes back truncated, with a bound greater than
 what is in hand and never greater than the message turns out to be. Run against
 the previous compiler, all four fail.
 
+**Both tools arrived, and both found something.** `gen-dissector` and the C and
+C++ documentation comments were the two artifacts nothing in this build could
+run, and the entry for each said the same thing: the tests hold the structure a
+tool would need, which is not the same as the tool reading it. Installing
+lua5.4 and doxygen turned that into a measurement, and the measurement found
+three things in an afternoon.
+
+Doxygen found two. Every C++ *class* came out undocumented -- the promotion
+pass in `codegen/doc.py` was told about members, which sit at one tab, and
+never about classes, which sit at none, so the struct comment above every class
+in every generated header was extracted by nothing. And `<reserved0>`, the
+compiler's own label for a field the schema did not name, is markup to a
+documentation tool: "Unsupported xml/html tag", once per reserved field in the
+tree. Both are fixed, and the check is Doxygen's own warnings plus its XML --
+the capability vector has to arrive against the accessor it describes, and a
+reason for an accessor that does *not* exist has to stay unattached.
+
+Lua found the third by removing an argument rather than by failing. Section 22
+named one semantic dependency riding on never executing the dissector: the
+`a and b or c` idiom for a conditional length, "correct *because* zero is
+truthy in Lua". Executed against `examples/dnsname`, the root label -- `form =
+0, rest = 0`, the byte that ends every DNS name -- walks correctly. It also
+turns out not to need Lua's truthiness: when the matched arm's length is zero
+the fallback chain evaluates to zero as well, so the idiom is safe for a
+narrower reason than the one written down. A dependency nobody can exercise is
+a dependency nobody has checked, including the person who wrote it down.
+
 **Smaller, known, and deliberate.**
 
-- `gen-dissector` is never executed -- no Lua interpreter in the build.
-- No Doxygen in the build either, so nothing runs over the C and C++ headers to
-  prove it extracts them. The generated comments open with `/**` and sit
-  against a declaration, which is what a tool needs; the tests hold that
-  structure rather than the extraction, which is the same bargain the
-  dissector makes with Lua (26.14). Rust and Python need none of this, `///`
-  and a docstring being their languages' own.
+- No Wireshark, so nothing proves it accepts a generated plugin. Everything
+  short of that runs: `luac -p` parses every dissector, and four are executed
+  over real packets against a stub of Wireshark's API (26.14).
 - Big-endian aarch64 is compile-only (decisions 0004, 0007).
 - Python emits no decode for a coded region, deliberately: it would mean
   loading a shared object from a path this generator would have to invent

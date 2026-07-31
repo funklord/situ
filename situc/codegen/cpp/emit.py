@@ -125,7 +125,12 @@ class Emitter:
 
 		lines.extend(["", f"}}  /* namespace {self.namespace} */", "",
 		              f"#endif /* {guard} */"])
-		return "\n".join(extractable(lines, indent="\t")) + "\n"
+		# Twice, because this backend documents two levels. A member sits at
+		# one tab and a class at none, and running it for members alone left
+		# every class undocumented -- which Doxygen said out loud the first
+		# time anybody ran it: "Compound situ::flags is not documented".
+		return "\n".join(
+			extractable(extractable(lines, indent="\t"))) + "\n"
 
 	def _struct_order(self) -> list[str]:
 		"""Structs before the structs that contain them.
