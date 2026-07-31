@@ -45,8 +45,8 @@ endif
 export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
-.PHONY: all runtime compiler test test-c test-py check lint bench cross \
-	cross-test install uninstall clean help
+.PHONY: all runtime compiler test test-c test-py check lint bench fuzz \
+	cross cross-test install uninstall clean help
 
 all: runtime
 
@@ -59,6 +59,7 @@ help:
 	@echo '  check      mypy strict over situc/'
 	@echo '  lint       source convention checks (indent, ASCII, whitespace)'
 	@echo '  bench      what the offset cache costs, in all four backends'
+	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  cross      compile-only build for aarch64'
 	@echo '  cross-test run generated accessors on aarch64 under emulation'
 	@echo '  install    install situc and the runtime under PREFIX'
@@ -89,6 +90,11 @@ bench:
 
 test-c: runtime
 	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' test
+
+# Not part of `test`: minutes rather than seconds, and a compiler `test` does
+# not need. FUZZ_SECONDS is per harness.
+fuzz:
+	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz
 
 # aarch64 has a cross compiler here but no cmocka build and no emulator, so
 # the cross target compiles the runtime warning-clean and stops there.

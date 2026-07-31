@@ -115,7 +115,7 @@ OBJS_test_sqlite	:= $(GEN_DIR)/sqlite.o
 # it (which is how test_kernels first failed).
 .SECONDEXPANSION:
 
-.PHONY: all test clean generate
+.PHONY: all test clean generate fuzz
 
 all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE)
 
@@ -220,7 +220,8 @@ test: all
 		case "$$t" in /*) "$$t";; *) "./$$t";; esac || exit 1; \
 	done
 	@# The fuzz harnesses get a handful of inputs each, enough to catch a
-	@# harness that no longer runs. Real fuzzing is a CI job, not a test run.
+	@# harness that no longer runs. Fuzzing them properly is `make fuzz`,
+	@# which needs a compiler with libFuzzer and takes as long as it is told.
 	@for t in $(FUZZ_BINS); do \
 		echo "--- $$t (smoke)"; \
 		for i in 0 1 2 3 4 5 6 7; do \
@@ -228,6 +229,42 @@ test: all
 				|| exit 1; \
 		done; \
 	done
+
+# -- fuzzing, for real ------------------------------------------------------
+#
+# The smoke run above proves a harness still executes. It is eight inputs, and
+# eight inputs from `/dev/urandom` reach nothing: a length field is a 1-in-2^16
+# guess and a varint is worse. This builds each harness against libFuzzer and
+# an address sanitizer and runs it for a bounded time, which is what section 22
+# means by fuzzing.
+#
+# Separate from `test` because it takes minutes rather than seconds, and
+# because it needs a compiler `test` does not: clang, or anything else that
+# understands `-fsanitize=fuzzer`.
+# Whichever clang is installed. Debian ships `clang-19` and no `clang` unless
+# the metapackage is there, and a target that fails with "No such file or
+# directory" for a tool the machine has is a target nobody runs twice.
+FUZZ_CC		?= $(firstword $(shell for c in clang clang-19 clang-18 clang-17; \
+			do command -v $$c && break; done) clang)
+FUZZ_SECONDS	?= 30
+FUZZ_DIR	:= $(BUILD_DIR)/fuzz
+FUZZ_CFLAGS	:= -g -O1 -fsanitize=fuzzer,address -fno-omit-frame-pointer
+FUZZ_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/%)
+
+$(FUZZ_DIR)/%: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.c
+	@mkdir -p '$(@D)'
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$^ '$(RUNTIME_INC)/situ.c' -o $@
+
+fuzz: $(FUZZ_RUNNERS)
+	@for t in $(FUZZ_RUNNERS); do \
+		corpus="$(FUZZ_DIR)/corpus/$$(basename $$t)"; \
+		mkdir -p "$$corpus"; \
+		echo "--- $$t ($(FUZZ_SECONDS)s)"; \
+		"$$t" -max_total_time=$(FUZZ_SECONDS) -print_final_stats=1 \
+			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
+	done
+	@echo 'no crash in $(words $(FUZZ_RUNNERS)) harnesses'
 
 clean:
 	rm -rf '$(BUILD_DIR)'

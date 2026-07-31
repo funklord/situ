@@ -26,9 +26,19 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	# no `validate`, and its accessors take a device handle rather than one.
 	# `gen-dissector` has excluded them since it was written and this did not,
 	# which cost nothing while no register schema was fuzzed.
+	# `size_bytes > 0` was here too, and it dropped the one schema whose
+	# whole point is a construct nothing else in the tree has:
+	# `examples/protobuf` is a bare `tlv` region, so its minimum size is zero
+	# and it was filtered out of fuzzing entirely. The harness still compiled,
+	# still ran under the smoke test, and exercised nothing -- 16 million
+	# executions at coverage 1, which is what an empty `LLVMFuzzerTestOneInput`
+	# looks like from the outside. A struct with nothing to read is skipped
+	# below, where that is decided by what it reads rather than by a bound.
 	structs = [struct for struct in resolved.structs.values()
-	           if struct.layout.is_byte_sized and struct.layout.size_bytes > 0
-	           and struct.layout.register is None]
+	           if struct.layout.is_byte_sized
+	           and struct.layout.register is None
+	           and not (struct.layout.is_fixed_size
+	                    and struct.layout.size_bytes == 0)]
 
 	# The harnesses first: whether the sink is needed is a question about what
 	# they read, and a `static` function nobody calls is `-Werror` under
@@ -171,6 +181,17 @@ def _variable_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 	        else str(UNBOUNDED_EXTENT))
 	least = macro(prefix, struct.name, "SIZE_MIN")
 
+	# Skipped where the minimum is zero, for the reason the accessors skip it:
+	# `size < 0u` is always false and `-Wtype-limits` says so under `-Werror`.
+	# A bare `tlv` region is exactly that struct, and it reached here the day
+	# the zero-minimum ones stopped being filtered out of fuzzing.
+	floor = [] if struct.layout.size_bytes == 0 else [
+		f"\tif (size < {least}) {{",
+		"\t\treturn;",
+		"\t}",
+		"",
+	]
+
 	return [
 		f"static void fuzz_{struct.name}(const uint8_t *data, size_t size)",
 		"{",
@@ -179,10 +200,7 @@ def _variable_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 		f"\tuint8_t     buf[{cap}];",
 		"\tuint32_t    extent;",
 		"",
-		f"\tif (size < {least}) {{",
-		"\t\treturn;",
-		"\t}",
-		"",
+		*floor,
 		"\t/* As much of the input as fits. The extent that reaches the bounds",
 		"\t * check is then one the fuzzer chose, and one it can shrink. */",
 		"\textent = size < sizeof buf ? (uint32_t)size : (uint32_t)sizeof buf;",
@@ -234,6 +252,14 @@ def _reads(struct: ResolvedStruct, prefix: str,
 		# fuzzer most wants: a count the data chooses and an offset it aims.
 		if placement.kind == "indexed":
 			lines.extend(_indexed_read(struct, local, prefix))
+			continue
+
+		# A `tlv` region: the tag, the length and the wire type all come off
+		# the wire, which makes the walk the most attacker-facing loop the
+		# language generates. It reached the `else` below and got a comment
+		# saying there was no sub-view to take.
+		if placement.kind == "tlv":
+			lines.extend(_tlv_read(struct, local, prefix))
 			continue
 
 		# A member the *data* sizes. `sized_by` alone is not that test: it
@@ -360,6 +386,36 @@ def _indexed_read(struct: ResolvedStruct, local: str,
 		"",
 		f"\t\t\tsitu_fuzz_sink((uint64_t){offset}(view, n, &past));",
 		"\t\t}",
+		"\t}",
+	]
+
+
+def _tlv_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:
+	"""Walk a `tlv` region item by item, and count it.
+
+	Every number in the loop is the message's: the tag is a varint the input
+	chooses, the length is another, and the value extent is where those two
+	put it. Walking to the end is what proves an item claiming more than the
+	region holds is refused rather than followed -- and `_count`, which walks
+	it again, is the same question asked by a second loop that has to agree.
+	"""
+	item  = ident(prefix, struct.name, local, "item_t")
+	first = ident(prefix, struct.name, local, "first")
+	nxt   = ident(prefix, struct.name, local, "next")
+	count = ident(prefix, struct.name, local, "count")
+
+	return [
+		"\t{",
+		f"\t\t{item} item;",
+		f"\t\tsitu_err_t walked = {first}(view, &item);",
+		"",
+		"\t\twhile (walked == SITU_OK) {",
+		"\t\t\tsitu_fuzz_sink((uint64_t)item.tag);",
+		"\t\t\tsitu_fuzz_sink((uint64_t)item.value_at);",
+		"\t\t\tsitu_fuzz_sink((uint64_t)item.value_len);",
+		f"\t\t\twalked = {nxt}(&item);",
+		"\t\t}",
+		f"\t\tsitu_fuzz_sink((uint64_t){count}(view));",
 		"\t}",
 	]
 

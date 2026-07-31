@@ -348,6 +348,39 @@ def test_fuzz_harness_covers_every_struct() -> None:
 	assert "data[0] % 2u" in text
 
 
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_fuzzable_struct_reaches_the_harness(path: Path) -> None:
+	"""A harness that dispatches to nothing is worse than none: it compiles,
+	it passes the smoke run, and it fuzzes air.
+
+	`examples/protobuf` was exactly that for as long as `gen-fuzz` has
+	existed. A bare `tlv` region has a minimum size of zero, the struct list
+	was filtered on `size_bytes > 0`, and the schema whose entire purpose is
+	the construct nothing else in the tree has got an empty
+	`LLVMFuzzerTestOneInput`. Sixteen million executions at coverage 1, which
+	is what nothing looks like from the outside.
+
+	Registers are the one exclusion and are excluded here too: a register is a
+	bus transaction, not bytes off a wire (26.27).
+	"""
+	from situc.codegen.c import fuzz
+
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	text     = fuzz.generate(schema, resolved, path.stem)
+
+	for name, struct in resolved.structs.items():
+		if struct.layout.register is not None or not struct.layout.is_byte_sized:
+			continue
+		if struct.layout.is_fixed_size and struct.layout.size_bytes == 0:
+			continue
+		assert f"static void fuzz_{name}(" in text, \
+			f"{path.name}: nothing fuzzes `{name}`"
+		assert f"fuzz_{name}(data + 1, size - 1u);" in text, \
+			f"{path.name}: the entry point never dispatches to `{name}`"
+
+
 def test_fuzz_harness_reads_every_accessor() -> None:
 	text = fuzz_source("struct S { u32 a; u8 b; u3 c; u5 d; }")
 	for field in ("a", "b", "c", "d"):

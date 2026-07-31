@@ -3367,7 +3367,7 @@ promise.
 | generated code behavior | cmocka | compile generated C and exercise it; use `--wrap` for syscall-level mocking where needed |
 | offset constancy | cmocka + disassembly check | verify view field access compiles to constant offsets |
 | round-trip | pytest + hex vectors | parse then re-emit must be byte-identical for canonical schemas |
-| fuzz | libFuzzer | generated harnesses run in CI for a bounded time |
+| fuzz | libFuzzer + ASan | `make fuzz` builds every generated harness with `-fsanitize=fuzzer,address` and runs each for `FUZZ_SECONDS`. Not part of `make test`: minutes rather than seconds, and a compiler `test` does not need. The suite still compiles every harness and smoke-runs it on eight inputs from `/dev/urandom`, which catches a harness that stopped running and reaches nothing else -- a length field is a 1-in-2^16 guess |
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
 | backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
 | every example, in every backend | pytest + each toolchain | each worked example generated *and compiled* -- C since phase 4, the other three only recently, which is how three C++ examples and two Rust ones came to be broken with the suite green. Generating is not compiling, and the examples are the schemas anyone reads |
@@ -4947,6 +4947,46 @@ probe asserted a body length of 42 in a six-byte buffer, and three unit tests
 asserted the unsaturating subtraction. An assertion that records what the code
 does is not a test of what it should do.
 
+**And then it was run properly, which is a different thing.** Everything above
+came from *compiling* every harness and smoke-running each on eight inputs from
+`/dev/urandom`. Eight random inputs reach nothing: a length field is a
+1-in-2^16 guess and a varint is worse, so what the smoke run proves is that a
+harness still executes.
+
+`make fuzz` builds each one against libFuzzer and an address sanitizer and runs
+it for a bounded time. Two things came out of the first three-second pass.
+
+**One harness was empty and had always been.** `gen-fuzz` filtered its struct
+list on `size_bytes > 0`, and a bare `tlv` region has a minimum size of zero,
+so `examples/protobuf` -- the schema whose whole purpose is the construct
+nothing else in the tree has -- got an `LLVMFuzzerTestOneInput` with `(void)
+data; (void) size; return 0;` in it. It compiled, it passed the smoke run, and
+libFuzzer reported sixteen million executions at coverage 1. The `tlv` walk is
+also the most attacker-facing loop this language generates: the tag, the wire
+type and the length are all varints the message chooses. It is walked now, and
+coverage went from 1 to 52.
+
+**And `examples/packet` reads out of bounds.** Three seconds in, on
+`01 ff ff ff ...`: `hdr.length` is `0xffff`, `packet.tag` sits after the sealed
+region that field sizes, and `situ_packet_tag_offset` returns `24 + 22 +
+65535`. `situ_packet_tag_ptr` hands back `view.base + 65581` without checking
+it against the view, and the harness dereferences it. AddressSanitizer stops
+there.
+
+This is 26.27's finding one step further on, and the same sentence covers it:
+*a number the message declares was never checked against the frame*. That round
+fixed **lengths**; an **offset** derived from a length field is the same
+problem, and every member placed after a variable-length region has one. All
+four backends have it, in the four shapes 26.27 already listed -- C reads out
+of bounds, C++ hands out a span pointing past the buffer, Rust panics (an abort
+in `no_std`), and Python clamps in silence.
+
+The fix has to be 26.27's, because the argument has not changed: the accessor
+clamps, so a caller who skips validation is memory-safe, *and* `validate`
+reports `bounds`, so a caller who does not learns the message is malformed
+rather than short. That is the next piece of work rather than this one, and it
+is on 26.31 until it is done.
+
 ### 26.28 Where a generated artifact cannot be purged
 
 Decision 0022 measured what removes an unused accessor. Two of the four
@@ -5414,7 +5454,15 @@ a dependency nobody has checked, including the person who wrote it down.
 
 **Known and open.**
 
-Empty. The last entry was 26.30's measurements, and closing it took a tool
+- **A member placed after a variable-length region has an offset the message
+  chooses, and no accessor checks it.** `examples/packet`'s tag sits after a
+  sealed region sized by `hdr.length`, so `0xffff` there puts
+  `situ_packet_tag_ptr` 65581 bytes into a 62-byte view. Found by `make fuzz`
+  three seconds into the first real run (26.27). All four backends, four
+  different shapes of wrong. The remedy is the one 26.27 settled for lengths --
+  the accessor clamps and `validate` reports `bounds` -- and it is not done.
+
+The entry before that was 26.30's measurements, and closing it took a tool
 rather than a paragraph: `tools/bench.py` builds a driver in all four
 languages and reports what the offset cache costs and what it saves. What
 replaces the entry is a caveat rather than a claim. The numbers are one
