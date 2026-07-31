@@ -1577,9 +1577,15 @@ def test_a_capped_run_stops_counting() -> None:
 
 
 def test_the_member_after_a_run_is_placed() -> None:
+	"""And placed through the run's `_from` helper, which it did not have.
+
+	The accumulating loop has the base in hand, and `_span` re-resolves one by
+	rescanning every member before the run -- the cost the delimited members
+	shed when `_span_from` landed and the runs kept for three more phases
+	(26.31)."""
 	header, _ = emit(CHAIN)
 
-	assert "offset = offset + (situ_s_chain_span(view));" in header
+	assert "offset = offset + (situ_s_chain_span_from(view, offset));" in header
 
 
 def test_the_fuzz_harness_walks_a_while_run() -> None:

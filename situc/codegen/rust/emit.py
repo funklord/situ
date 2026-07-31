@@ -2129,8 +2129,10 @@ class Emitter:
 		cond = self._over_fields(element, placement.repeat_while or "", "element")
 		cap  = ("" if placement.repeat_cap is None
 		        else f" && n < {placement.repeat_cap}")
-		walk = [
-			f"\t\tlet mut at = {start};",
+
+		def walk_from(from_: str) -> list[str]:
+			return [
+			f"\t\tlet mut at = {from_};",
 			"\t\tlet mut n  = 0usize;",
 			"",
 			f"\t\twhile at < self.bytes.len(){cap} {{",
@@ -2139,7 +2141,9 @@ class Emitter:
 			"\t\t\tif size == 0 || at + size > self.bytes.len() {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-		]
+			]
+
+		walk = walk_from(start)
 		tail = [
 			"\t\t\tat += size;",
 			"\t\t\tn  += 1;",
@@ -2170,10 +2174,17 @@ class Emitter:
 			"\t\tErr(Error::Bounds)",
 			"\t}",
 			"",
-			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
-			*walk, *tail,
+			"\t/// The walk, from a base the caller already knows: the same",
+			"\t/// helper every delimited member has, for the same reason.",
+			f"\tpub fn {_ident(f'{base}_span_from')}(&self, start: usize)"
+			" -> usize {",
+			*walk_from("start"), *tail,
 			"\t\tlet _ = n;",
-			f"\t\tat - ({start})",
+			"\t\tat - start",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+			f"\t\tself.{_ident(f'{base}_span_from')}({start})",
 			"\t}",
 			*self._run_index(struct, placement, walk, cond, inner),
 		]
@@ -2197,8 +2208,10 @@ class Emitter:
 			        " where the run starts."]
 
 		bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
-		walk = [
-			f"\t\tlet mut at = {start};",
+
+		def walk_from(from_: str) -> list[str]:
+			return [
+			f"\t\tlet mut at = {from_};",
 			"\t\tlet mut n  = 0usize;",
 			"",
 			f"\t\twhile at + {len(delim)} <= self.bytes.len() {{",
@@ -2212,7 +2225,9 @@ class Emitter:
 			"\t\t\t\t// one past the end was never in this frame.",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-		]
+			]
+
+		walk = walk_from(start)
 
 		return [
 			"",
@@ -2243,8 +2258,9 @@ class Emitter:
 			"",
 			"\t/// Every element plus the terminator: where the next member",
 			"\t/// starts. Where the run ran out of buffer there is none to add.",
-			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
-			*walk,
+			f"\tpub fn {_ident(f'{base}_span_from')}(&self, start: usize)"
+			" -> usize {",
+			*walk_from("start"),
 			"\t\t\tat += size;",
 			"\t\t\tn  += 1;",
 			"\t\t}",
@@ -2252,7 +2268,11 @@ class Emitter:
 			f"\t\tif at + {len(delim)} <= self.bytes.len() {{",
 			f"\t\t\tat += {len(delim)};",
 			"\t\t}",
-			f"\t\tat - ({start})",
+			"\t\tat - start",
+			"\t}",
+			"",
+			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+			f"\t\tself.{_ident(f'{base}_span_from')}({start})",
 			"\t}",
 		]
 
@@ -2697,8 +2717,11 @@ class Emitter:
 		# member reaches", whether it is a byte run or a run of records.
 		if placement.delimiter is not None or placement.repeat_while is not None:
 			name = c_name(local_name(struct, placement))
-			if running is not None and placement.delimiter is not None \
-					and placement.type_name not in self.structs:
+			# Every kind that reaches here has the `_from` form: a byte array's
+			# scan, a record run's walk and a `while` run's. The runs were the
+			# exception, and it cost a rescan of everything before the run on
+			# every accumulating pass over it.
+			if running is not None:
 				return f"self.{_ident(name + '_span_from')}({running})"
 			return f"self.{_ident(name + '_span')}()"
 
@@ -2810,7 +2833,12 @@ class Emitter:
 			"",
 			f"\t/// {placement.path}: offset and extent both from the data.",
 			f"\tpub fn {_ident(base + '_offset')}(&self) -> usize {{",
-			f"\t\t{start}",
+			# Accumulating, like the delimited members' own offset above.
+			# This summed instead, and every term in the sum re-derived its
+			# base by rescanning the members before it -- so the fix of 26.30
+			# had reached the delimited members here and nothing placed after
+			# them.
+			*(self._offset_body(struct, placement) or [f"\t\t{start}"]),
 			"\t}",
 		]
 

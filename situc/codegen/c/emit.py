@@ -2576,7 +2576,8 @@ class Emitter:
 		at    = ident(self.prefix, struct.name, local, "at")
 		span  = ident(self.prefix, struct.name, local, "span")
 
-		walk = self._walk_prologue(base, cap, extent)
+		walk  = self._walk_prologue(base, cap, extent)
+		from_ = self._walk_prologue("start", cap, extent)
 
 		return [
 			f"/* `{placement.name}` is a run of `{placement.type_name}` ending"
@@ -2615,9 +2616,12 @@ class Emitter:
 			"\treturn SITU_ERR_BOUNDS;",
 			"}",
 			"",
-			f"static inline uint32_t {span}(situ_view_t view)",
+			"/* The walk, from a base the caller already knows: the same",
+			" * helper every delimited member has, for the same reason. */",
+			f"static inline uint32_t {span}_from(situ_view_t view,"
+			" uint32_t start)",
 			"{",
-			*walk,
+			*from_,
 			"\t\tat = at + size;",
 			"\t\tn  = n + 1u;",
 			f"\t\tif (!({cond})) {{",
@@ -2625,7 +2629,12 @@ class Emitter:
 			"\t\t}",
 			"\t}",
 			"\t(void)n;",
-			f"\treturn at - {base};",
+			"\treturn at - start;",
+			"}",
+			"",
+			f"static inline uint32_t {span}(situ_view_t view)",
+			"{",
+			f"\treturn {span}_from(view, {base});",
 			"}",
 		]
 
@@ -2727,6 +2736,7 @@ class Emitter:
 		span  = ident(self.prefix, struct.name, local, "span")
 
 		walk = self._record_prologue(base, delim, sym, f"{extent}(element)")
+		from_ = self._record_prologue("start", delim, sym, f"{extent}(element)")
 
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
@@ -2758,9 +2768,16 @@ class Emitter:
 			"\treturn SITU_ERR_BOUNDS;",
 			"}",
 			"",
-			f"static inline uint32_t {span}(situ_view_t view)",
+			"/* The walk, from a base the caller already knows.",
+			" *",
+			" * Same bargain the delimited members make: everything that",
+			" * accumulates offsets has `at` in hand, and the plain `_span`",
+			" * re-resolves the base by rescanning every member before this",
+			" * one. This was the last member kind without the helper. */",
+			f"static inline uint32_t {span}_from(situ_view_t view,"
+			" uint32_t start)",
 			"{",
-			*walk,
+			*from_,
 			"\t\tat = at + size;",
 			"\t\tn  = n + 1u;",
 			"\t}",
@@ -2772,7 +2789,12 @@ class Emitter:
 			f"\tif (at + {len(delim)}u <= view.limit) {{",
 			f"\t\tat = at + {len(delim)}u;",
 			"\t}",
-			f"\treturn at - {base};",
+			"\treturn at - start;",
+			"}",
+			"",
+			f"static inline uint32_t {span}(situ_view_t view)",
+			"{",
+			f"\treturn {span}_from(view, {base});",
 			"}",
 		]
 
@@ -3607,13 +3629,12 @@ class Emitter:
 			# scans while reading as one pass -- which is what `_required`
 			# was doing, and what made the first offset cache slower than
 			# the per-call offsets it replaced.
-			# Only a delimited *byte array* emits the `_from` form. A record
-			# run's span is a walk of its elements, which resolves its own
-			# base the same way and would benefit equally -- it just does not
-			# have the helper yet, and asking for one that is not there is a
-			# header that does not compile rather than a slow one.
-			if running is not None and placement.delimiter is not None \
-					and placement.type_name not in self.structs:
+			# Every member kind that reaches here emits the `_from` form: a
+			# byte array's scan, a record run's walk and a `while` run's.
+			# The runs were the exception until the walks grew the helper,
+			# and the exception cost a full rescan of everything before the
+			# run on every accumulating pass over it.
+			if running is not None:
 				return f"{span}_from({held}, {running})"
 			return f"{span}({held})"
 

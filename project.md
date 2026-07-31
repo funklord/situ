@@ -5099,6 +5099,27 @@ that took it, so a threshold would be either loose enough to hold nothing or
 tight enough to fail on somebody else's laptop. The tool is a thing you run,
 and the machine is recorded beside the numbers.
 
+**The runs kept the old shape until last.** The `_span_from` fix above reached
+the delimited byte members and stopped there: a record run and a `while` run
+each compute their span by walking from a base they resolve themselves, so
+every accumulating pass over a struct holding one paid a full rescan of
+everything before the run. 26.31 recorded that as marginal, and what it was
+depended on the shape. With a 400-byte member ahead of a twenty-record run,
+resolving the offset of what follows the run is 1.6x, 1.7x and 1.5x faster in
+C, C++ and Rust once the runs have the helper too. Python is unchanged, and
+for a reason worth keeping: its walk builds a view object per element and that
+is what dominates there, while the scan it stops repeating is `bytes.find`.
+
+Measuring it found a second thing and a worse one. In Rust and Python the
+accumulating offset had reached the *delimited members' own* accessor and
+nothing else, so a member with a data-driven length placed after them summed
+`0 + head_span + entries_span` -- and every term in that sum re-derived its
+base by rescanning what precedes it. C and C++ had emitted the accumulating
+form for every dynamically placed member since the fix landed. Four backends,
+one schema, two costs: the divergence 26.32 is about, along the one axis
+`test_backends_refuse_the_same_members` cannot see, because both forms answer
+with the same number.
+
 ### 26.31 Where the frontier is
 
 Measured rather than remembered: every worked example generated in all four
@@ -5266,8 +5287,6 @@ and this one was skipping it in four languages at once.
 - `required` declines a run of records in all four: the walk cannot tell its
   terminator from the end of the bytes that have arrived, so an HTTP header
   block cannot be framed.
-- A record run keeps the quadratic `_span`, having no `_from` helper. Measured
-  as marginal; it is the one place the offset fix did not reach.
 - `gen-dissector` is never executed -- no Lua interpreter in the build.
 - No Doxygen in the build either, so nothing runs over the C and C++ headers to
   prove it extracts them. The generated comments open with `/**` and sit

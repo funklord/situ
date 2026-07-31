@@ -1916,9 +1916,14 @@ class Emitter:
 			        "\t# resolve yet."]
 
 		nested = self.resolved.structs.get(placement.type_name or "")
+		# Accumulating, like the delimited members' own offset elsewhere in
+		# this file. This summed instead, and every term in the sum re-derived
+		# its base by rescanning the members before it -- so the fix of 26.30
+		# had reached the delimited members here and nothing placed after them.
 		lines  = ["", "\t@property", f"\tdef {name}_offset(self) -> int:",
 		          f'\t\t"""{placement.path}: offset and extent both from the data."""',
-		          f"\t\treturn {start}"]
+		          *(self._offset_body(struct, placement)
+		            or [f"\t\treturn {start}"])]
 
 		if nested is None:
 			lines.extend([
@@ -2156,9 +2161,10 @@ class Emitter:
 
 		return [
 			"",
-			f"\tdef _{name}_walk(self) -> list[int]:",
+			f"\tdef _{name}_walk_from(self, start: int) -> list[int]:",
 			f'\t\t"""Where each `{placement.type_name}` starts, and where the'
-			" run ends.",
+			" run ends,",
+			"\t\tfrom a base the caller already knows.",
 			"",
 			f"\t\tThe run ends after the element for which",
 			f"\t\t`{placement.repeat_while}` is false -- that element is part",
@@ -2167,7 +2173,7 @@ class Emitter:
 			"\t\tBounded twice, by the buffer and by refusing to advance on a",
 			'\t\tzero-extent element."""',
 			"\t\tself._check()",
-			f"\t\tat     = {start}",
+			"\t\tat     = start",
 			"\t\tstarts = []",
 			"",
 			f"\t\twhile at < self._len{cap}:",
@@ -2183,13 +2189,23 @@ class Emitter:
 			"\t\tstarts.append(at)",
 			"\t\treturn starts",
 			"",
+			f"\tdef _{name}_walk(self) -> list[int]:",
+			f"\t\treturn self._{name}_walk_from({start})",
+			"",
 			"\t@property",
 			f"\tdef {name}_count(self) -> int:",
 			f"\t\treturn len(self._{name}_walk()) - 1",
 			"",
+			f"\tdef {name}_span_from(self, at: int) -> int:",
+			'\t\t"""The walk, from a base the caller already knows: the same',
+			"\t\thelper every delimited member has. An accumulating pass holds",
+			"\t\tthe base already, and the plain `_span` re-resolves it by",
+			'\t\trescanning every member before the run."""',
+			f"\t\treturn self._{name}_walk_from(at)[-1] - at",
+			"",
 			"\t@property",
 			f"\tdef {name}_span(self) -> int:",
-			f"\t\treturn self._{name}_walk()[-1] - ({start})",
+			f"\t\treturn self.{name}_span_from({start})",
 			"",
 			f"\tdef {name}(self, index: int) -> {inner}:",
 			f"\t\tstarts = self._{name}_walk()",
@@ -2252,9 +2268,10 @@ class Emitter:
 
 		return [
 			"",
-			f"\tdef _{name}_walk(self) -> list[int]:",
+			f"\tdef _{name}_walk_from(self, start: int) -> list[int]:",
 			f'\t\t"""Where each `{placement.type_name}` starts, and where the run'
-			" ends.",
+			" ends,",
+			"\t\tfrom a base the caller already knows.",
 			"",
 			f"\t\tThe terminator only terminates where an element would start;",
 			"\t\tinside one it is that element's own byte. Bounded twice over,",
@@ -2262,7 +2279,7 @@ class Emitter:
 			"\t\telement -- a record whose members are all delimited and all",
 			'\t\tempty occupies no bytes, and this would not return."""',
 			"\t\tself._check()",
-			f"\t\tat     = {start}",
+			"\t\tat     = start",
 			"\t\tstarts = []",
 			"",
 			f"\t\twhile at + {len(delim)} <= self._len:",
@@ -2280,15 +2297,24 @@ class Emitter:
 			" <= self._len else 0))",
 			"\t\treturn starts",
 			"",
+			f"\tdef _{name}_walk(self) -> list[int]:",
+			f"\t\treturn self._{name}_walk_from({start})",
+			"",
 			"\t@property",
 			f"\tdef {name}_count(self) -> int:",
 			f"\t\treturn len(self._{name}_walk()) - 1",
+			"",
+			f"\tdef {name}_span_from(self, at: int) -> int:",
+			'\t\t"""Every element plus the terminator, from a base the caller',
+			"\t\talready knows -- the same helper every delimited member has,",
+			'\t\tand for the same reason."""',
+			f"\t\treturn self._{name}_walk_from(at)[-1] - at",
 			"",
 			"\t@property",
 			f"\tdef {name}_span(self) -> int:",
 			f'\t\t"""Every element plus the terminator: where the next member'
 			' starts."""',
-			f"\t\treturn self._{name}_walk()[-1] - ({start})",
+			f"\t\treturn self.{name}_span_from({start})",
 			"",
 			f"\tdef {name}(self, index: int) -> {inner}:",
 			f'\t\t"""Element `index`. Walked, not indexed: a view is a value and',
@@ -2629,8 +2655,11 @@ class Emitter:
 		# this member reaches", whether it is a byte run or a run of records.
 		if placement.delimiter is not None or placement.repeat_while is not None:
 			name = c_name(local_name(struct, placement))
-			if running is not None and placement.delimiter is not None \
-					and placement.type_name not in self.structs:
+			# Every kind that reaches here has the `_from` form: a byte array's
+			# scan, a record run's walk and a `while` run's. The runs were the
+			# exception, and it cost a rescan of everything before the run on
+			# every accumulating pass over it.
+			if running is not None:
 				return f"self.{name}_span_from({running})"
 			return f"self.{name}_span"
 

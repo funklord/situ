@@ -1100,8 +1100,10 @@ class Emitter:
 
 		cap  = ("" if placement.repeat_cap is None
 		        else f" && n < {placement.repeat_cap}u")
-		walk = [
-			f"\t\tstd::uint32_t at = {start};",
+
+		def walk_from(base: str) -> list[str]:
+			return [
+			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
 			"",
 			f"\t\twhile (at < limit(){cap}) {{",
@@ -1115,7 +1117,10 @@ class Emitter:
 			"\t\t\tif (size == 0u || at + size > limit()) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-		]
+			]
+
+		walk  = walk_from(start)
+		from_ = walk_from("start")
 		tail = [
 			"\t\t\tat += size;",
 			"\t\t\tn  += 1;",
@@ -1155,11 +1160,19 @@ class Emitter:
 			"\t\treturn ::situ::rt::err::bounds;",
 			"\t}",
 			"",
+			"\t/* The walk, from a base the caller already knows: the same",
+			"\t * helper every delimited member has, for the same reason. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from(std::uint32_t start)"
+			" const noexcept",
+			"\t{",
+			*from_, *tail,
+			"\t\t(void)n;",
+			"\t\treturn at - start;",
+			"\t}",
+			"",
 			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
 			"\t{",
-			*walk, *tail,
-			"\t\t(void)n;",
-			f"\t\treturn at - ({start});",
+			f"\t\treturn {name}_span_from({start});",
 			"\t}",
 			*self._run_index(struct, placement, walk,
 			                 self._element_cond(element, placement), inner),
@@ -1213,8 +1226,10 @@ class Emitter:
 			        " where the run starts. */"]
 
 		array = self._delimiter_array(placement)
-		walk  = [
-			f"\t\tstd::uint32_t at = {start};",
+
+		def walk_from(base: str) -> list[str]:
+			return [
+			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
 			"",
 			f"\t\twhile (at + {len(delim)}u <= limit()) {{",
@@ -1235,7 +1250,10 @@ class Emitter:
 			"\t\t\t\t * one running past the limit was never in this frame. */",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-		]
+			]
+
+		walk  = walk_from(start)
+		from_ = walk_from("start")
 
 		return [
 			"",
@@ -1271,9 +1289,15 @@ class Emitter:
 			"\t\treturn ::situ::rt::err::bounds;",
 			"\t}",
 			"",
-			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+			"\t/* The walk, from a base the caller already knows -- the same",
+			"\t * helper every delimited member has. Everything that",
+			"\t * accumulates offsets holds `at` already, and the plain",
+			"\t * `_span` re-resolves it by rescanning every member before",
+			"\t * the run. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from(std::uint32_t start)"
+			" const noexcept",
 			"\t{",
-			*walk,
+			*from_,
 			"\t\t\tat += size;",
 			"\t\t\tn  += 1;",
 			"\t\t}",
@@ -1284,7 +1308,12 @@ class Emitter:
 			f"\t\tif (at + {len(delim)}u <= limit()) {{",
 			f"\t\t\tat += {len(delim)}u;",
 			"\t\t}",
-			f"\t\treturn at - ({start});",
+			"\t\treturn at - start;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+			"\t{",
+			f"\t\treturn {name}_span_from({start});",
 			"\t}",
 		]
 
@@ -1634,11 +1663,11 @@ class Emitter:
 		# for "how far this member reaches", whichever it is.
 		if placement.delimiter is not None or placement.repeat_while is not None:
 			name = c_name(local_name(struct, placement))
-			# `_from` only for a delimited byte array: a record run's span is
-			# a walk that resolves its own base the same way and has no such
-			# helper, so asking for one would name a method that is not there.
-			if running is not None and placement.delimiter is not None \
-					and placement.type_name not in self.structs:
+			# Every kind that reaches here has the `_from` form now: a byte
+			# array's scan, a record run's walk and a `while` run's. The runs
+			# were the exception, and it cost a rescan of everything before
+			# the run on every accumulating pass over it.
+			if running is not None:
 				return f"{name}_span_from({running})"
 			return f"{name}_span()"
 
