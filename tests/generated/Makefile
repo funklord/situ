@@ -31,7 +31,7 @@ CMOCKA_LIBS	?= -lcmocka
 # Every test is compiled twice: the checked build exercises the bounds and
 # generation assertions, the release build proves they compile out cleanly.
 TESTS		:= test_runtime test_header test_tiff test_message test_protobuf \
-		   test_packet test_kernels
+		   test_packet test_kernels test_sqlite
 BINS		:= $(TESTS:%=$(BUILD_DIR)/%) $(TESTS:%=$(BUILD_DIR)/%_checked)
 
 # Schemas whose generated accessors are exercised here. The code is generated
@@ -55,6 +55,7 @@ SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   examples/message/message.situ examples/ntp/ntp.situ \
 		   examples/packet/packet.situ examples/protobuf/protobuf.situ \
 		   examples/registers/registers.situ examples/rtc/rtc.situ examples/smtp/smtp.situ \
+		   examples/sqlite/sqlite.situ \
 		   examples/tcp/tcp.situ \
 		   examples/telemetry/telemetry.situ examples/tiff/tiff.situ \
 		   examples/udp/udp.situ std/kernels.situ
@@ -106,6 +107,7 @@ OBJS_test_message	:= $(GEN_DIR)/message.o
 OBJS_test_protobuf	:= $(GEN_DIR)/protobuf.o
 OBJS_test_packet	:= $(GEN_DIR)/packet.o
 OBJS_test_kernels	:= $(GEN_DIR)/kernels.o $(GEN_DIR)/kernels_derived.o
+OBJS_test_sqlite	:= $(GEN_DIR)/sqlite.o
 
 # The per-test object lists are named after the target, so the prerequisites
 # have to be expanded a second time to see them. Without this a test linking a

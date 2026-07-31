@@ -1,0 +1,87 @@
+// A SQLite b-tree leaf page: the offset table, and where the language stops.
+//
+// This is the worked example for `indexed` (project.md section 9.3), and it
+// arrived late for a reason worth recording. Every other construct in this
+// directory is demonstrated by a real format; `indexed` had none for a long
+// time, because bare offset tables are rare in the wild. The common shape is a
+// table of *records* -- an offset and a length side by side -- and that is an
+// array of structs, not this construct.
+//
+// SQLite's cell pointer array is the real thing: `cell_count` two-byte offsets,
+// measured from the start of the page, pointing at cells that fill the page
+// from the back. The pointers are in key order and the cells are not, which is
+// exactly what an offset table is for and what an array could not express.
+//
+// The vectors in vectors.txt come from sqlite3 itself, never from situ.
+
+target buffer;
+endian big;                     // SQLite is big-endian throughout
+
+// A message here is one page. SQLite reads pages, and the cell offsets are
+// measured from the start of one -- so a page is the frame that bounds them.
+//
+// This is a leaf table page (type 13). The interior types carry a twelfth
+// header byte for the rightmost child pointer, which is a `variant` on the
+// type byte and not what this example is about.
+struct btree_leaf_page {
+	u8   page_type       [must_eq = 13];
+	u16  first_freeblock;
+	u16  cell_count;
+	u16  content_start;             // where the cells begin, growing backwards
+	u8   fragmented_free;
+
+	// The cell pointer array. `base = page_type` is the honest spelling of
+	// "measured from the start of the page": `page_type` is the page's first
+	// byte, so its start is the page's start. Section 9.3 wrote this form as
+	// `base = table_start` before there was a parser for it.
+	//
+	// Not `base = region`: the region begins after this eight-byte header, and
+	// the offsets do not. Not `base = message` either -- that would say the
+	// offsets are bounded by nothing this frame knows, and they are bounded by
+	// the page (decision 0024).
+	indexed(offset_type = u16, count = cell_count, base = page_type) {
+		u8 cells[];
+	}
+}
+
+// What holds, and is the useful half: the table is where it says it is, the
+// count is one read, and reaching cell N is one more read and an addition
+// however the cells are arranged.
+require absolute_static(btree_leaf_page.cell_count);
+require random_access(btree_leaf_page.cells);
+
+// Asserted rather than required, and the report is the point: `FrameStable`,
+// not `Stable`. An element is reached through the table, so its address holds
+// exactly as long as the table does -- and it is the *frame* that bounds it,
+// which is what `base` naming a member of this struct buys over naming the
+// message. Pointing at the message would report `Unstable` instead.
+assert stable_address(btree_leaf_page.cells);
+
+// ---------------------------------------------------------------------------
+// What this example asked for and did not get.
+//
+// The elements are `u8 cells[]` rather than a `cell` struct, and that is not a
+// modelling choice. A SQLite table leaf cell is
+//
+//     varint payload_size; varint rowid; u8 payload[payload_size];
+//
+// and situ cannot describe it today, for two independent reasons:
+//
+//   1. A SQLite varint is big-endian base-128, up to nine bytes, with the
+//      ninth byte contributing eight bits rather than seven. `varint_type`
+//      has one encoding and it is `leb128`, which is the other byte order.
+//      Declaring it `leb128` would be a lie about the wire.
+//
+//   2. A varint field has no accessor in any backend, and nothing may be
+//      sized by one: `u8 payload[payload_size]` is refused with "no fields
+//      are in scope at this point". So even with the right encoding, a cell's
+//      extent would not be computable.
+//
+// The consequence is visible in the generated header: `cells_count` and
+// `cells_offset` are emitted and `cells_at` is not, because an entry gives
+// where a cell starts and nothing says how far it runs. That is the honest
+// output, and the note above it says so.
+//
+// Neither gap is about `indexed`. Both are about varints, which section 9.7
+// calls impossible to describe protobuf without -- situ has them as a type
+// that the lattice reasons about, and no backend can read one.

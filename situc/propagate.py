@@ -526,9 +526,17 @@ def _is_indexed(context: Context) -> bool:
 
 
 def _indexes_outside_the_region(context: Context) -> bool:
-	"""An index table whose offsets are not bounded by the region (0024)."""
+	"""An index table whose offsets are bounded by nothing the frame knows.
+
+	The message base and nothing else. A member base measures from a member of
+	this same struct, so an element is still inside the frame and the check at
+	the frame boundary still covers it -- it reaches outside the *region* and
+	not outside the frame, which is a weaker statement than this axis makes.
+	`examples/sqlite` is what made the distinction concrete: a cell pointer is
+	measured from the start of the page, which is a member of the page.
+	"""
 	table = context.placement.index_table
-	return table is not None and table.base != "region"
+	return table is not None and table.base == "message"
 
 
 def _has_unequal_arms(context: Context) -> bool:
@@ -1269,7 +1277,7 @@ TABLE: tuple[Row, ...] = (
 		rule = Rule(
 			name      = "indexed-outside-the-region",
 			construct = "an `indexed` region whose offsets are measured from "
-			            "outside it",
+			            "the start of the message",
 			# The construct's own row leaves address at FrameStable, which is
 			# true while an offset cannot name a byte outside the region: the
 			# region's extent bounds it, and the frame check covers it. It

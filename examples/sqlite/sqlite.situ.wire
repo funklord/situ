@@ -1,0 +1,21 @@
+# situ wire signature v0
+# schema: sqlite.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+struct btree_leaf_page size=8..
+  @0x0000   1         u8         page_type  must_eq=13
+  @0x0001   2         u16        first_freeblock  big
+  @0x0003   2         u16        cell_count  big
+  @0x0005   2         u16        content_start  big
+  @0x0007   1         u8         fragmented_free
+  @0x0008   0..       u8         cells  sized-by=cell_count

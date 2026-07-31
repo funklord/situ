@@ -985,6 +985,19 @@ def test_an_index_measured_from_the_region_keeps_a_frame_stable_address() -> Non
 	assert axis_of(INDEXED, "T.entries", Axis.ADDRESS) == Value("FrameStable")
 
 
+def test_an_index_measured_from_a_member_stays_frame_stable() -> None:
+	"""A member base reaches outside the *region* and not outside the frame, so
+	the check at the frame boundary still covers it. `examples/sqlite` is what
+	made the distinction concrete: a cell pointer is measured from the start of
+	the page, which is a member of the page."""
+	body = ("struct R { u32 id; }"
+	        "struct T { u32 head; u16 n;"
+	        " indexed(offset_type = u16, count = n, base = head)"
+	        " { R entries[]; } }")
+
+	assert axis_of(body, "T.entries", Axis.ADDRESS) == Value("FrameStable")
+
+
 def test_an_index_measured_from_the_message_is_unstable() -> None:
 	"""Section 9.8 makes this argument for `at expr`, and an index table is the
 	same shape with a table in front of it: nothing about the region says an

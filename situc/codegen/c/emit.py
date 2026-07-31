@@ -1551,12 +1551,15 @@ class Emitter:
 		bytes whose end is a guess is the kind of thing this refuses.
 		"""
 		if element is None:
+			held = table.element or placement.type_name
 			return [
-				f"/* No `{local}_at`: `{table.element or placement.type_name}`"
-				" is not a struct this",
-				" * build can frame, so an entry gives a position and not a"
-				" view. The",
-				" * offsets are still readable above. */",
+				f"/* No `{local}_at`: the element type is `{held}`, which is not"
+				" a struct this",
+				" * build can frame -- so an entry gives where an element starts"
+				" and not",
+				" * how far it runs. `view.base + <offset>` is the element;"
+				" what is in",
+				" * it is the caller's to know. */",
 			]
 
 		extent = self._element_extent_call(element)

@@ -1130,13 +1130,48 @@ any byte in the message, because nothing about the region says an element is
 inside it. That is section 9.8's argument for `at expr`, and an index table is
 the same shape with a table in front of it.
 
-**There is still no worked example.** Every other construct in the language is
-exercised by a real format in `examples/`, and this one is exercised by schemas
-written for its tests. Real offset tables are usually tables of *records* --
-offset plus length -- rather than bare offsets, so the construct as specified
-fits FlatBuffers vtables and TrueType `loca` and not much else in the tree.
-Whether that is a gap in the examples or in the construct is the open
-question.
+**The worked example is `examples/sqlite`**, and finding one took longer than
+building the construct. Bare offset tables are rare: the common shape in the
+wild is a table of *records* -- an offset and a length side by side -- which is
+an array of structs and not this. A SQLite b-tree page is the real thing. Its
+cell pointer array is `cell_count` two-byte offsets measured from the start of
+the page, and the pointers are in key order while the cells fill the page
+backwards, so element N is nowhere an array could have put it. The vectors come
+from sqlite3.
+
+It also settled `base`. The page's offsets are measured from the page, which is
+a *member* of the frame rather than the message, and that distinction turned
+out to matter: an offset measured from a member is still bounded by the frame,
+so the check at the frame boundary still covers it. The propagation row now
+weakens `address` for the message base alone. It had been written for both,
+which was true of the dangerous one and pessimistic about the other.
+
+**What the example asked for and did not get.** Its elements are `u8 cells[]`
+rather than a `cell` struct, and that is not a modelling choice. A SQLite table
+leaf cell is `varint payload_size; varint rowid; u8 payload[payload_size]`, and
+situ cannot describe it for two independent reasons, neither of them about
+`indexed`:
+
+1. A SQLite varint is big-endian base-128, up to nine bytes, the ninth
+   contributing eight bits rather than seven. `varint_type` has one encoding
+   and it is `leb128`, which is the other byte order. Declaring it `leb128`
+   would be a lie about the wire.
+2. **A varint field has no accessor in any backend, and nothing may be sized by
+   one.** `u8 payload[payload_size]` is refused with "no fields are in scope at
+   this point": a varint member does not enter the field scope at all. The C
+   backend's note has said "varint decoding is not generated yet" since phase
+   4, and nothing on this page recorded it.
+
+That second one is the larger finding, and it was not on this list. Section 9.7
+argues describing protobuf is impossible without varints; situ has them as a
+type the lattice reasons about correctly, and no backend can read one. The tlv
+walk (9.5) reads a varint to *size* an item and hands the caller an offset and
+a length, never a value -- which is why the gap survived the construct that
+looks most like it would have found it.
+
+So the generated header emits `cells_count` and `cells_offset` and not
+`cells_at`: an entry gives where a cell starts and nothing says how far it
+runs. That is the honest output, and the note above it says so.
 
 ### 9.4 opaque
 
@@ -1617,7 +1652,7 @@ output can be read against this table directly.
 | `tlv-unordered-duplicates` | a `tlv` region with `duplicate_tags = allowed` and no ordering rule | `canonical := NonCanonical` |
 | `opaque` | an `opaque` region | `access := Sequential`, `mutate := RewriteRequired` |
 | `indexed` | an `indexed` region | `address := FrameStable` |
-| `indexed-outside-the-region` | an `indexed` region whose offsets are measured from outside it | `address := Unstable` |
+| `indexed-outside-the-region` | an `indexed` region whose offsets are measured from the start of the message | `address := Unstable` |
 
 **Codecs (13)**
 
@@ -4890,6 +4925,22 @@ able to read it. All four walk one now (9.5), against the same protoc vectors.
 Each says so in the generated output. None of them is a design question; they
 are the C backend having gone first and the others not having caught up on
 that construct.
+
+**A varint is described and cannot be read.**
+
+`varint_type` is a first-class construct, the lattice reasons about it
+correctly, and no backend emits an accessor for a varint field -- the C note
+has said "varint decoding is not generated yet" since phase 4. Worse, nothing
+may be *sized* by one: a varint member never enters the field scope, so
+`u8 payload[payload_size]` is refused with "no fields are in scope at this
+point". And there is one encoding, `leb128`, so a big-endian base-128 varint
+(SQLite's, ASN.1's) cannot be described at all.
+
+Section 9.7 argues describing protobuf is impossible without varints. Situ
+describes protobuf and cannot read a varint out of one: the tlv walk reads them
+to *size* an item and hands back an offset and a length, never a value. This
+was not on this list until `examples/sqlite` asked for it (9.3), which is what
+worked examples are for and an argument for finding one per construct.
 
 **Two kernel families that are described and not generated.**
 

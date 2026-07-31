@@ -218,6 +218,16 @@ def _reads(struct: ResolvedStruct, prefix: str,
 			lines.extend(_walk_read(struct, local, prefix))
 			continue
 
+		# Before the data-sized branch, which this looks like from the
+		# outside: an `indexed` region is `sized_by` its count field and is
+		# not an array. It reached for `_len` and `_ptr`, which an offset
+		# table does not have, and the harness stopped compiling the day the
+		# first indexed example landed. What it does have is the pair a
+		# fuzzer most wants: a count the data chooses and an offset it aims.
+		if placement.kind == "indexed":
+			lines.extend(_indexed_read(struct, local, prefix))
+			continue
+
 		# A member the *data* sizes. `sized_by` alone is not that test: it
 		# also names a compile-time constant, and where the count is known the
 		# accessors are the fixed-array ones -- a `[CHANNEL_COUNT]` array got
@@ -311,6 +321,39 @@ def _has_sub_view(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return False
 	return nested.layout.is_fixed_size \
 		or has_computable_extent(resolved.structs, nested)
+
+
+def _indexed_read(struct: ResolvedStruct, local: str,
+		prefix: str) -> list[str]:
+	"""Read every entry of an offset table, and one past it.
+
+	The count comes from the data, so a hostile page can claim more entries
+	than the table holds; reading them all is what proves the bound is checked
+	rather than trusted.
+	"""
+	count  = ident(prefix, struct.name, local, "count")
+	offset = ident(prefix, struct.name, local, "offset")
+
+	return [
+		"\t{",
+		f"\t\tconst uint32_t n = {count}(view);",
+		"\t\tuint32_t i;",
+		"",
+		"\t\tsitu_fuzz_sink((uint64_t)n);",
+		"\t\tfor (i = 0; i < n; i++) {",
+		"\t\t\tuint32_t found = 0;",
+		"",
+		f"\t\t\tif ({offset}(view, i, &found) == SITU_OK) {{",
+		"\t\t\t\tsitu_fuzz_sink((uint64_t)found);",
+		"\t\t\t}",
+		"\t\t}",
+		"\t\t{",
+		"\t\t\tuint32_t past = 0;",
+		"",
+		f"\t\t\tsitu_fuzz_sink((uint64_t){offset}(view, n, &past));",
+		"\t\t}",
+		"\t}",
+	]
 
 
 def _walk_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:

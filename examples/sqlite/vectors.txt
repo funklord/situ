@@ -1,0 +1,45 @@
+# Golden vectors for the `indexed` worked example.
+#
+# Regenerate with sqlite3 itself, never with situ -- a description that agrees
+# only with its own compiler has demonstrated nothing:
+#
+#   sqlite3 t.db "PRAGMA page_size=512;
+#                 CREATE TABLE t(a TEXT);
+#                 INSERT INTO t VALUES('alpha'),('beta'),('gamma');"
+#   dd if=t.db bs=512 skip=1 count=1 | xxd -p
+#
+# Page 2 holds the table. Page 1 is the schema table and puts its b-tree header
+# at byte 100, after the hundred-byte file header -- the cell offsets are still
+# measured from byte 0 of the page either way, which is the thing worth knowing.
+#
+# The page is 512 bytes and all but the two ends are zero fill: the header and
+# the pointer array grow forwards from byte 0, the cells backwards from byte
+# 512. That gap is the free space `content_start` names.
+
+# page 2, bytes 0..13 -- the eight-byte leaf header, then three cell pointers
+header_and_pointers  0d0000000301e60001f701ef01e6
+
+# page 2, bytes 486..511 -- the three cells, in the order they sit in the page
+cells                0703021767616d6d61060202156265746107010217616c706861
+
+# What sqlite3 says is in there, and what the generated accessors must agree
+# with. The pointers are in key order; the cells are not, which is the whole
+# reason the format keeps a table instead of an array.
+#
+#   page_type      13      leaf table b-tree
+#   first_freeblock 0
+#   cell_count      3
+#   content_start   486    0x01e6
+#   fragmented_free 0
+#
+#   cells_offset(0) 503    0x01f7   rowid 1, "alpha"
+#   cells_offset(1) 495    0x01ef   rowid 2, "beta"
+#   cells_offset(2) 486    0x01e6   rowid 3, "gamma"
+#
+# Each cell is `varint payload_size; varint rowid; u8 payload[]`, which situ
+# cannot describe yet -- see the note at the end of sqlite.situ. Decoded by
+# hand from the bytes above:
+#
+#   503: 07 01 02 17 "alpha"    size 7, rowid 1
+#   495: 06 02 02 15 "beta"     size 6, rowid 2
+#   486: 07 03 02 17 "gamma"    size 7, rowid 3
