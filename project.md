@@ -5034,24 +5034,21 @@ offset an entry holds, and a view over the element it reaches.
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**One, and it is narrower than it was: a member placed after a `coded` or
-`sealed` region.**
+**None.**
 
-| construct | example |
-|---|---|
-| anything after a region a codec sizes | `packet.tag` |
+The last of them was a member placed after a `coded` or `sealed` region: only C
+computed such a region's length, so the three could place nothing after one and
+`examples/packet`'s tag reported that its offset could not be resolved. The
+rule is `traverse.region_extent` now -- the interior's fixed bytes, the members
+contributing a runtime length, and the codec's expansion resolved to numbers so
+that four backends do not each reimplement `ratio_padded`'s rounding. All four
+put the tag at 54 and its coverage at 4..54 for the same packet.
 
-Only C computes such a region's length -- its extent is the interior put
-through the codec's expansion, and `_region_length` exists in one backend. So
-the three can place nothing after one, and `examples/packet`'s tag, which sits
-after the sealed region, reports that its offset cannot be resolved in all
-three.
-
-This was recorded as closed after the tag machinery landed, and it was not: the
-tag work was verified against a frame whose members are all fixed-size, and the
-entry it was closing named `packet.tag`. A construct verified on a schema
-written for the test is verified on that schema. The worked example is the
-claim.
+That entry was recorded as closed once already, when the tag machinery landed,
+and it was not: that work was verified against a frame whose members are all
+fixed-size, while the entry named `packet.tag`. A construct verified on a
+schema written for its own test is verified on that schema. The worked example
+is the claim.
 
 An `opaque` region was on it too and was never listed: C hands back a pointer
 and a length, and the other three emitted the fallthrough note -- a claim that
