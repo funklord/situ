@@ -11,6 +11,7 @@ them field by field on the same buffer.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -19,11 +20,14 @@ import pytest
 
 from situc.codegen.c import generate as generate_c
 from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.cpp.names import PREFIXES, SUFFIXES
+from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-ROOT     = Path(__file__).resolve().parents[2]
+from every_schema import ROOT, SCHEMAS, ids
+
 RUNTIME  = ROOT / "runtime"
 HOST_CXX = shutil.which("g++") or shutil.which("clang++")
 LIBSITU  = ROOT / "build" / "host" / "runtime" / "libsitu.a"
@@ -1157,7 +1161,8 @@ int main()
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
-def test_every_example_compiles(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 	"""The C suite has had this since phase 4 and this one had not, which is
 	how three examples came to not compile at all: `message` had a counted
 	array of structs whose element type was qualified twice, `ipv6ext` a run
@@ -1166,24 +1171,29 @@ def test_every_example_compiles(tmp_path: Path) -> None:
 
 	Generating is not compiling. Every backend that emits a language with a
 	compiler should be held to its compiler.
+
+	It read `examples/` only until this list did, and the cost of that was
+	specific: `tests/schemas/edges.situ` did not compile here at all, because
+	`struct framed` and the framing method every view gets meet in a scope C++
+	will not let them share. The schema written to hold the awkward shapes is
+	the one a check globbing `examples/` skips (26.31).
 	"""
-	for schema in sorted((ROOT / "examples").glob("*/*.situ")):
-		parsed   = parse_text(schema.read_text(encoding="utf-8"))
-		resolved = resolve(parsed, solve(parsed))
-		built    = generate_cpp(parsed, resolved, schema.stem)
+	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	resolved = resolve(parsed, solve(parsed))
+	built    = generate_cpp(parsed, resolved, schema.stem)
 
-		(tmp_path / f"{schema.stem}.hpp").write_text(built.header,
-		                                             encoding="ascii")
-		main = tmp_path / f"main_{schema.stem}.cpp"
-		main.write_text(f'#include "{schema.stem}.hpp"\nint main() {{ return 0; }}\n',
-		                encoding="ascii")
+	(tmp_path / f"{schema.stem}.hpp").write_text(built.header,
+	                                             encoding="ascii")
+	main = tmp_path / f"main_{schema.stem}.cpp"
+	main.write_text(f'#include "{schema.stem}.hpp"\nint main() {{ return 0; }}\n',
+	                encoding="ascii")
 
-		result = subprocess.run(
-			[HOST_CXX or "g++", *WARNINGS,
-			 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
-			 str(main)],
-			capture_output=True, text=True)
-		assert result.returncode == 0, f"{schema.stem}: {result.stderr}"
+	result = subprocess.run(
+		[HOST_CXX or "g++", *WARNINGS,
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(main)],
+		capture_output=True, text=True)
+	assert result.returncode == 0, f"{schema.stem}: {result.stderr}"
 
 
 # -- a coded region that ends at a delimiter (13.6) -------------------------
@@ -2138,3 +2148,154 @@ def test_a_wide_element_gets_no_pointer() -> None:
 
 	assert "::situ::rt::bytes samples()" not in header
 	assert "would alias bytes that are not the value" in header
+
+
+# -- a class a member has taken the name of ---------------------------------
+
+
+def test_a_struct_named_for_one_of_its_members_is_renamed_and_aliased() -> None:
+	"""C++ declares a class's own name inside the class, so no member may take
+	it. `struct option { u8 option; ... }` is a shape a real protocol produces
+	without trying, and `class option { std::uint8_t option(); }` is not C++.
+
+	Refusing the schema was the alternative and it is the worse one: it would
+	make a struct illegal for a reason that has nothing to do with its bytes,
+	in one backend of four. So the class moves and the schema's name becomes an
+	alias for it -- every accessor keeps its name, and every other class goes
+	on naming this one the way the schema does."""
+	header = emit("struct option { u8 option; u8 length; }")
+
+	assert "class option_ : public ::situ::rt::view {" in header
+	assert "using option = option_;" in header
+	assert "std::uint8_t option() const noexcept" in header
+	assert "void set_option(std::uint8_t value) noexcept" in header
+
+
+def test_a_struct_named_for_a_method_every_view_has_is_renamed() -> None:
+	"""`framed` is not an accessor the schema asked for: every view gets one,
+	so nothing in the schema names it and nothing in the schema can avoid it.
+
+	This is the one `tests/schemas/edges.situ` carried. The file exists to hold
+	the constructs no worked example has, and the compile check globbed
+	`examples/`, so the backend went weeks emitting a header no C++ compiler
+	accepts (26.31)."""
+	header = emit('struct framed { u8 magic[4]; u8 label[] until "\\0"; }')
+
+	assert "class framed_ : public ::situ::rt::view {" in header
+	assert "using framed = framed_;" in header
+	assert "::situ::rt::err framed(std::uint32_t &need) const noexcept" in header
+	# The self-references inside the class body cannot use the alias: it is
+	# declared after the class, and a member of that name hides it anyway.
+	assert "framed_ &out) noexcept" in header
+	assert "return framed_{ situ_view_t{" in header
+
+
+def test_a_register_named_for_one_of_its_own_members_is_renamed_too() -> None:
+	"""A register is a class as much as a view is: `read()` and `write()` are
+	the two bus transactions, so a register called `read` meets the same rule.
+
+	It emits from its own branch, which returns before the rest of a struct is
+	built -- so the first version of this renamed the class and emitted no
+	alias, leaving a type nothing in the schema could name. Half a rename is
+	worse than either half alone."""
+	header = emit("""register read @ 0x00 {
+	width        = 32;
+	access_width = 32;
+	bit  enable  [rw];
+	u3   mode    [rw];
+	}
+	""", preamble=MMIO)
+
+	assert "class read_ {" in header
+	assert "using read = read_;" in header
+	assert "[[nodiscard]] word read() const noexcept" in header
+
+
+def test_a_struct_no_member_has_named_keeps_its_name() -> None:
+	"""The rename is not free -- it is a second name for one type -- so it is
+	emitted only where C++ requires it."""
+	header = emit("struct option { u8 kind; u8 length; }")
+
+	assert "class option : public ::situ::rt::view {" in header
+	assert "using option" not in header
+
+
+def test_a_rename_with_nowhere_to_go_is_a_diagnostic() -> None:
+	"""One underscore is free in every case but one: a schema holding both
+	`framed` and `framed_` would have the alias for the first and the class for
+	the second reach the same name. Two names one character apart is a
+	coincidence rather than a construct, so this says so and stops rather than
+	inventing a second escape nobody could predict."""
+	with pytest.raises(SituError) as raised:
+		emit('struct framed { u8 magic[4]; u8 label[] until "\\0"; }\n'
+		     "struct framed_ { u8 a; }")
+
+	assert "needs another name for its C++ class" in str(raised.value)
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_the_renamed_class_reads_the_same_bytes(tmp_path: Path) -> None:
+	"""The alias is the schema's name and the two are one type: a caller writes
+	`situ::option`, a container returns one, and neither is aware anything was
+	renamed."""
+	result = compiles(tmp_path, "struct option { u8 option; u8 length; }\n"
+	                            "struct frame { option first; u8 rest[2]; }",
+	                  extra="""
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t buf[4] = { 0x11, 0x22, 0x33, 0x44 };
+	situ::rt::message msg(buf, sizeof buf);
+
+	situ::option one;
+	if (situ::option::at(msg, 0, one) != situ::rt::err::ok) return 1;
+	if (one.option() != 0x11 || one.length() != 0x22)       return 2;
+
+	const situ::frame whole{ situ_view_t{ buf, sizeof buf, 0 } };
+	const situ::option held = whole.first();
+	if (held.option() != 0x11)                              return 3;
+
+	one.set_option(0x99);
+	if (one.option() != 0x99 || buf[0] != 0x99)             return 4;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_the_affixes_match_the_emitter() -> None:
+	"""Which classes move is decided from the schema rather than by reading the
+	emitted text back, which section 25 forbids. That costs completeness: the
+	rule has to know every shape a member name reaches, and the emitter is free
+	to add one.
+
+	So the lists are held to the emitter's own source. An accessor named
+	`{name}_capacity()` arriving in some later phase fails this until
+	`cpp/names.py` learns the suffix -- which is cheaper than the alternative,
+	a header that does not compile for a schema nobody in this tree has
+	written."""
+	source = (ROOT / "situc" / "codegen" / "cpp" / "emit.py").read_text(
+		encoding="ascii")
+
+	# Anything the emitter interpolates a name into, whatever the variable
+	# holding it is called: `{name}_len`, `set_{name}`, `{holder}_gate`. The
+	# free functions of the C runtime are not members and are dropped.
+	suffixes = {affix for affix in re.findall(r"\{\w+\}_([a-z][a-z0-9_]*)", source)
+	            if not affix.startswith("situ")}
+	prefixes = {affix for affix in re.findall(r"\b([a-z][a-z0-9_]*)_\{\w+\}", source)
+	            if not affix.startswith("situ")}
+
+	assert suffixes <= SUFFIXES, f"unlisted suffixes: {sorted(suffixes - SUFFIXES)}"
+	assert prefixes <= PREFIXES, f"unlisted prefixes: {sorted(prefixes - PREFIXES)}"

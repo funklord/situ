@@ -19,7 +19,8 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-ROOT    = Path(__file__).resolve().parents[2]
+from every_schema import ROOT, SCHEMAS, ids
+
 RUNTIME = ROOT / "runtime" / "rust" / "situ_rt.rs"
 RUSTC   = shutil.which("rustc")
 
@@ -821,41 +822,45 @@ fn main() {
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
-def test_every_example_compiles(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 	"""The C suite has had this since phase 4 and this one had not, which is
 	how `packet` came to import a name it never used and `smtp` to call scan
-	helpers this backend does not emit. Generating is not compiling."""
+	helpers this backend does not emit. Generating is not compiling.
+
+	Every schema rather than every example, for the reason the C++ suite
+	records: the file carrying the constructs no worked example has is the one
+	a check globbing `examples/` never reads (26.31)."""
 	src = tmp_path / "src"
 	src.mkdir(exist_ok=True)
 	(src / "situ_rt.rs").write_text(
 		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 		encoding="ascii")
 
-	for schema in sorted((ROOT / "examples").glob("*/*.situ")):
-		parsed   = parse_text(schema.read_text(encoding="utf-8"))
-		resolved = resolve(parsed, solve(parsed))
-		module   = generate_rs(parsed, resolved, schema.stem).module
+	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	resolved = resolve(parsed, solve(parsed))
+	module   = generate_rs(parsed, resolved, schema.stem).module
 
-		(src / "unit.rs").write_text(module, encoding="ascii")
-		(src / "lib.rs").write_text("pub mod situ_rt;\npub mod unit;\n",
-		                            encoding="ascii")
+	(src / "unit.rs").write_text(module, encoding="ascii")
+	(src / "lib.rs").write_text("pub mod situ_rt;\npub mod unit;\n",
+	                            encoding="ascii")
 
-		assert RUSTC is not None
-		result = subprocess.run(
-			[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type",
-			 "lib", str(src / "lib.rs"), "-o", str(tmp_path / "out")],
-			capture_output=True, text=True, cwd=tmp_path)
-		assert result.returncode == 0, f"{schema.stem}: {result.stderr}"
+	assert RUSTC is not None
+	result = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type",
+		 "lib", str(src / "lib.rs"), "-o", str(tmp_path / "out")],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert result.returncode == 0, f"{schema.stem}: {result.stderr}"
 
 
-def test_every_example_generates() -> None:
-	"""Python's equivalent is importing the module, which the suite does
-	elsewhere; this one is the compile."""
-	for schema in sorted((ROOT / "examples").glob("*/*.situ")):
-		parsed   = parse_text(schema.read_text(encoding="utf-8"))
-		resolved = resolve(parsed, solve(parsed))
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_generates(schema: Path) -> None:
+	"""The half that runs without rustc: generating is not compiling, but a
+	generator that raises does not get as far as either."""
+	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	resolved = resolve(parsed, solve(parsed))
 
-		assert generate_rs(parsed, resolved, schema.stem).module
+	assert generate_rs(parsed, resolved, schema.stem).module
 
 
 # -- a coded region that ends at a delimiter (13.6) -------------------------

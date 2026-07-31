@@ -38,15 +38,7 @@ from situc.parser import parse
 from situc.diagnostics import Source
 from situc.resolve import resolve
 
-ROOT = Path(__file__).resolve().parents[2]
-
-#: Every schema the repository builds, not a sample. Which constructs a sample
-#: happens to contain is not a thing anyone chose -- the same argument
-#: `gen-fuzz` makes for building a harness per schema (26.27).
-SCHEMAS = sorted(
-	[*ROOT.glob("examples/*/*.situ"),
-	 *ROOT.glob("std/*.situ"),
-	 *ROOT.glob("tests/schemas/*.situ")])
+from every_schema import ROOT, SCHEMAS, ids
 
 #: What each backend says when its dispatch runs out.
 FALLTHROUGH = re.compile(
@@ -72,10 +64,6 @@ def emitted(path: Path) -> dict[str, str]:
 		"python": generate_py(schema, resolved, name).module,
 		"rust":   generate_rs(schema, resolved, name).module,
 	}
-
-
-def ids(paths: list[Path]) -> list[str]:
-	return [path.parent.name + "/" + path.name for path in paths]
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))

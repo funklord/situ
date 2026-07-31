@@ -24,7 +24,8 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-ROOT    = Path(__file__).resolve().parents[2]
+from every_schema import ROOT, SCHEMAS, ids
+
 RUNTIME = ROOT / "runtime"
 HOST_CC = shutil.which("gcc") or shutil.which("cc")
 LIBSITU = ROOT / "build" / "host" / "runtime" / "libsitu.a"
@@ -874,25 +875,29 @@ def test_an_enum_discriminant_selects(tmp_path: Path) -> None:
 # -- every example, imported ------------------------------------------------
 
 
-def test_every_example_imports(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_imports(schema: Path, tmp_path: Path) -> None:
 	"""Python has no compiler, so importing is the check: it runs every class
 	body, every annotation and every default. The C suite has compiled every
 	example since phase 4 and the other three had no equivalent -- which is
-	how three C++ examples and two Rust ones came to be broken."""
+	how three C++ examples and two Rust ones came to be broken.
+
+	Every schema rather than every example, for the reason the C++ suite
+	records: `tests/schemas/edges.situ` holds the constructs no worked example
+	has, and a check globbing `examples/` never reads it (26.31)."""
 	runtime()
 	sys.path.insert(0, str(tmp_path))
 	try:
-		for schema in sorted((ROOT / "examples").glob("*/*.situ")):
-			parsed   = parse_text(schema.read_text(encoding="utf-8"))
-			resolved = resolve(parsed, solve(parsed))
-			module   = generate_py(parsed, resolved, schema.stem).module
+		parsed   = parse_text(schema.read_text(encoding="utf-8"))
+		resolved = resolve(parsed, solve(parsed))
+		module   = generate_py(parsed, resolved, schema.stem).module
 
-			path = tmp_path / f"{schema.stem}.py"
-			path.write_text(module, encoding="ascii")
+		path = tmp_path / f"{schema.stem}.py"
+		path.write_text(module, encoding="ascii")
 
-			spec = importlib.util.spec_from_file_location(schema.stem, path)
-			assert spec is not None and spec.loader is not None
-			spec.loader.exec_module(importlib.util.module_from_spec(spec))
+		spec = importlib.util.spec_from_file_location(schema.stem, path)
+		assert spec is not None and spec.loader is not None
+		spec.loader.exec_module(importlib.util.module_from_spec(spec))
 	finally:
 		sys.path.remove(str(tmp_path))
 

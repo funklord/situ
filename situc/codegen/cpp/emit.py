@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
+from situc.codegen.cpp.names import check_collisions, class_name, renamed
 from situc.codegen.doc import extractable
 from situc.diagnostics import Diagnostic
 from situc.expr import evaluate
@@ -69,6 +70,11 @@ class Generated:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		namespace: str = "situ", materialize: bool = False) -> Generated:
+	# Before anything is emitted: a class a member has taken the name of is
+	# renamed and aliased, and the one case where that rename has nowhere to go
+	# is a diagnostic rather than a header no compiler accepts.
+	check_collisions(schema, resolved)
+
 	return Generated(
 		header   = Emitter(schema, resolved, basename, namespace,
 		                   materialize).header(),
@@ -171,10 +177,10 @@ class Emitter:
 
 	def _struct(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
-		name   = c_name(struct.name)
+		name   = class_name(struct)
 
 		if layout.register is not None:
-			return self._register(struct)
+			return [*self._register(struct), *self._alias(struct)]
 
 		lines = ["", *self._struct_comment(struct),
 		         f"class {name} : public ::situ::rt::view {{", "public:"]
@@ -198,7 +204,35 @@ class Emitter:
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
 		lines.append("};")
+		lines.extend(self._alias(struct))
 		return lines
+
+	def _alias(self, struct: ResolvedStruct) -> list[str]:
+		"""The schema's name for a class that could not be called that.
+
+		Emitted only where a member has taken the name (`cpp/names.py`). It is
+		a namespace-scope alias rather than a base class or a subclass because
+		it has to be the same type: a caller writes `situ::framed` and a
+		containing class returns one, and neither is aware that anything was
+		renamed.
+		"""
+		if not renamed(struct):
+			return []
+
+		name = c_name(struct.name)
+		return [
+			"",
+			f"/* `{name}` is what the schema calls this, and what to write.",
+			" *",
+			f" * The class is `{class_name(struct)}` because a member of it is"
+			f" called `{name}` --",
+			" * an accessor this schema asked for, or one every view has. C++"
+			" declares a",
+			" * class's own name inside the class, so no member may take it."
+			" These two",
+			" * names are one type. */",
+			f"using {name} = {class_name(struct)};",
+		]
 
 	def _register(self, struct: ResolvedStruct) -> list[str]:
 		"""A memory-mapped register (section 15).
@@ -218,7 +252,7 @@ class Emitter:
 		info = struct.layout.register
 		assert info is not None
 
-		name  = c_name(struct.name)
+		name  = class_name(struct)
 		word  = self._ctype_for_bits(info.width)
 		lines = [
 			"",
@@ -497,7 +531,7 @@ class Emitter:
 		"""The factory. Fixed-size structs know their own extent; the rest are
 		told it, because nothing in the bytes says where the frame ends."""
 		layout = struct.layout
-		name   = c_name(struct.name)
+		name   = class_name(struct)
 
 		if layout.is_fixed_size:
 			return [
@@ -614,7 +648,7 @@ class Emitter:
 		lines.extend([
 			"",
 			"\tprivate:",
-			f"\t\tfriend class {c_name(struct.name)};",
+			f"\t\tfriend class {class_name(struct)};",
 			f"\t\texplicit constexpr {holder}(situ_view_t raw) noexcept"
 			f" : raw_(raw) {{}}",
 			"",
@@ -1266,7 +1300,7 @@ class Emitter:
 		if struct.layout.register is not None:
 			return []
 
-		name = c_name(struct.name)
+		name = class_name(struct)
 
 		# Two functions rather than one. The length expressions below are
 		# member calls -- `base()` is `this->base()` -- so the work has to

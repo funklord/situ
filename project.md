@@ -3448,7 +3448,9 @@ situ/
     codegen/
       c/                      emit, checks, vectors, fuzz harnesses, codec
                               tests, derived codec implementations, MMIO
-      cpp/                    the second backend
+      cpp/                    the second backend: emit, and the naming rule C++
+                              adds to decision 0013 -- a member may not be
+                              called what its class is called (decision 0025)
       python/                 the third
       rust/                   the fourth
     cli.py
@@ -3608,7 +3610,11 @@ into an embedded build environment (Section 22).
   What the compiler does check is that two constructs never generate the same C
   identifier, which is a property of flattening a path rather than of how
   either name is spelled (`docs/decisions/0013-identifier-conventions.md`).
-  `examples/telemetry/` is snake_case throughout, as the working proof.
+  `examples/telemetry/` is snake_case throughout, as the working proof. C++
+  adds one rule of its own -- a member may not be called what its class is
+  called, which `struct option { u8 option; }` reaches without trying -- and
+  that backend renames the class and aliases the schema's name to it rather
+  than refusing the schema (`docs/decisions/0025-cpp-class-and-member-names.md`).
 - Single source of truth: the AST is built once from the source text and all
   passes read it. Never re-parse generated output. Never mutate a file
   in a second pass without full knowledge of the first pass's state.
@@ -5170,6 +5176,24 @@ This entry is the reason section 0 says to re-derive this list from the
 generated output rather than trust it. It was written when it was right, and
 the work that made it wrong did not think to come back here.
 
+**`tests/schemas/edges.situ` compiles in C++.** It had not since delimited
+members landed, for a reason C++ adds on top of decision 0013: a class's own
+name is declared inside the class, so no member may take it. `struct framed`
+gets the framing method every view gets, and a class `framed` declaring
+`err framed(uint32_t &)` is read as a constructor with a return type. The class
+is `framed_` now, with `using framed = framed_;` after it, so every accessor
+keeps its name and every caller writes the schema's (decision 0025). The same
+rule covers `struct option { u8 option; u8 length; }`, which needs no unlucky
+name at all -- a TLV-shaped protocol produces it without trying.
+
+The half worth keeping is why nobody saw it. All four compile checks globbed
+`examples/`, and `edges.situ` lives in `tests/schemas/`, the directory that
+exists to carry the constructs the worked examples do not have. They read every
+schema in the repository now, from the list the two agreement checks above
+already read -- one list, in `tests/unit/every_schema.py`, rather than six. A
+check that skips the file written to be awkward is a check on the easy cases,
+and this one was skipping it in four languages at once.
+
 **Smaller, known, and deliberate.**
 
 - `required` declines a run of records in all four: the walk cannot tell its
@@ -5191,14 +5215,6 @@ the work that made it wrong did not think to come back here.
 
 **Known and open.**
 
-- `tests/schemas/edges.situ` does not compile in C++. `struct framed` collides
-  with the generated `framed()` framing method, and a class may not have a
-  member function of its own name. Decision 0013 governs C identifier
-  collisions; this is a C++ one and nothing checks it. The reason it went
-  unnoticed is the more useful half: `test_every_example_compiles` globs
-  `examples/` only, and `edges.situ` lives in `tests/schemas/` -- which exists
-  precisely to carry the shapes the examples do not have (26.27). The schema
-  written to catch awkward cases is the one the compile check skips.
 - 26.30's measurements are C's. The table records walking against indexed in
   four languages; the second accessor family reached the other three only
   after it was written, and none of them has been measured. It is the last

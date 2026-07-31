@@ -20,10 +20,9 @@ from situc.layout import solve
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
 
-ROOT     = Path(__file__).resolve().parents[2]
+from every_schema import ROOT, SCHEMAS, ids
+
 RUNTIME  = ROOT / "runtime" / "c"
-SCHEMAS  = ROOT / "tests" / "schemas"
-EXAMPLES = ROOT / "examples"
 
 PREAMBLE = "endian big;\nbit_order msb_first;\n"
 
@@ -258,31 +257,32 @@ def test_generated_code_compiles_for_aarch64(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
-def test_every_buildable_example_generates_and_compiles(tmp_path: Path) -> None:
-	"""The examples are the broadest codegen coverage available."""
-	compiled = 0
-	for path in sorted(EXAMPLES.glob("*/*.situ")):
-		if "STATUS: needs phase" in path.read_text(encoding="ascii"):
-			continue
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_generates_and_compiles(path: Path, tmp_path: Path) -> None:
+	"""Every schema in the repository, not every example.
 
-		source    = Source(str(path), path.read_text(encoding="ascii"))
-		schema    = parse(source)
-		resolved  = resolve(schema, solve(schema))
-		generated = generate(schema, resolved, path.stem)
+	This was the examples alone for four phases, and so were the other three
+	backends' versions of it -- which is how `tests/schemas/edges.situ` came to
+	not compile in C++ at all. That file exists to carry the constructs the
+	worked examples do not have, so it is the *last* one a compile check should
+	skip (26.31).
+	"""
+	if "STATUS: needs phase" in path.read_text(encoding="ascii"):
+		pytest.skip("declares itself unbuildable")
 
-		out = tmp_path / path.stem
-		out.mkdir()
-		for name, text in generated.files().items():
-			(out / name).write_text(text, encoding="ascii")
+	source    = Source(str(path), path.read_text(encoding="ascii"))
+	schema    = parse(source)
+	resolved  = resolve(schema, solve(schema))
+	generated = generate(schema, resolved, path.stem)
 
-		result = subprocess.run(
-			[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{out}",
-			 "-c", str(out / f"{path.stem}.c"), "-o", str(out / "out.o")],
-			capture_output=True, text=True)
-		assert result.returncode == 0, f"{path.parent.name}:\n{result.stderr}"
-		compiled += 1
+	for name, text in generated.files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
 
-	assert compiled >= 8
+	result = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 "-c", str(tmp_path / f"{path.stem}.c"), "-o", str(tmp_path / "out.o")],
+		capture_output=True, text=True)
+	assert result.returncode == 0, f"{path.parent.name}:\n{result.stderr}"
 
 
 # -- constant-offset access -------------------------------------------------

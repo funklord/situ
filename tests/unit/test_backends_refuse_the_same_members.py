@@ -35,12 +35,7 @@ from situc.layout import solve
 from situc.parser import parse
 from situc.resolve import resolve
 
-ROOT = Path(__file__).resolve().parents[2]
-
-SCHEMAS = sorted(
-	[*ROOT.glob("examples/*/*.situ"),
-	 *ROOT.glob("std/*.situ"),
-	 *ROOT.glob("tests/schemas/*.situ")])
+from every_schema import ROOT, SCHEMAS, ids
 
 #: What a refusal reads like. Taken from the emitters rather than invented --
 #: every one of these is a phrase some backend writes when it declines to emit
@@ -114,10 +109,6 @@ def emitted(path: Path) -> tuple[dict[str, str], set[str]]:
 		"python": generate_py(schema, resolved, name).module,
 		"rust":   generate_rs(schema, resolved, name).module,
 	}, paths
-
-
-def ids(paths: list[Path]) -> list[str]:
-	return [path.parent.name + "/" + path.name for path in paths]
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
