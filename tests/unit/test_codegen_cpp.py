@@ -1997,3 +1997,61 @@ int main()
 }
 ''')
 	assert compiled.returncode == 0, compiled.stderr
+
+
+# -- a tag's coverage, dirty bit and finalize (section 14.2) ----------------
+
+TAGGED = ("struct s { u8 hop; authenticated { u16 seq; u8 body[4]; }"
+	" tag u8 mac[16]; }")
+
+
+def test_a_tag_gets_its_bytes_span_and_dirty_bit() -> None:
+	"""It emitted the dirty constant and the setters that mark it, and then
+	said "not in the static subset yet" about the tag -- so a caller could be
+	told a write left the tag stale and had no way to reach it."""
+	header = emit(TAGGED)
+
+	assert "::situ::rt::bytes mac() const noexcept" in header
+	assert "mac_covered(std::uint32_t &offset," in header
+	assert "mac_is_dirty(const ::situ::rt::message &owner)" in header
+	assert "mac_finalize(::situ::rt::message &owner)" in header
+	assert "not in the static subset yet" not in header
+
+
+def test_a_gap_in_the_coverage_gets_no_span() -> None:
+	"""A range covering bytes the tag does not is worse than no range."""
+	header = emit("struct s { authenticated a { u16 x; } u32 gap;"
+	              " authenticated b { u16 y; } tag u8 mac[4] covers(a, b); }")
+
+	assert "mac_covered" not in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_span_and_the_bit_behave(tmp_path: Path) -> None:
+	compiled = compiles(tmp_path, TAGGED, extra='''
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t buf[32];
+	std::memset(buf, 0, sizeof buf);
+
+	situ::rt::message owner(buf, sizeof buf);
+	situ::s v;
+	if (situ::s::at(owner, 0, v) != situ::rt::err::ok) return 1;
+
+	std::uint32_t at = 0, len = 0;
+	if (v.mac_covered(at, len) != situ::rt::err::ok) return 2;
+	if (at != 1 || len != 6) return 3;      /* the authenticated region */
+	if (v.mac().size() != 16) return 4;
+
+	if (situ::s::mac_is_dirty(owner)) return 5;
+	v.set_seq(owner, 0x1234);
+	if (!situ::s::mac_is_dirty(owner)) return 6;
+	situ::s::mac_finalize(owner);
+	if (situ::s::mac_is_dirty(owner)) return 7;
+	return 0;
+}
+''')
+	assert compiled.returncode == 0, compiled.stderr

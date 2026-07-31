@@ -96,6 +96,9 @@ class Member(Enum):
 	#: A byte-order marker: the value that says how the rest of the frame is
 	#: read (8.3).
 	MARKER    = "marker"
+	#: A `tag` or `checksum`: bytes covering other bytes, with a dirty bit
+	#: (14.2).
+	TAG       = "tag"
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
 	#: variant, an opaque span. Each needs its own machinery.
 	REGION    = "region"
@@ -190,6 +193,12 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# yet" for it -- and then read every field it governs big-endian anyway.
 	if placement.kind == "marker":
 		return Member.MARKER
+
+	# Before the region check, like the rest: a tag answered REGION and three
+	# backends emitted their fallthrough note for it, while emitting the dirty
+	# bit it sets and the setters that mark it.
+	if placement.kind in ("tag", "checksum"):
+		return Member.TAG
 
 	if placement.kind != "field":
 		return Member.REGION
@@ -382,6 +391,37 @@ class Obligation:
 		bytes, and a field no longer equals what it is defined to equal.
 		"""
 		return "DIRTY" if self.kind == "tag" else "STALE"
+
+
+def covered_run(struct: "ResolvedStruct",
+		tag: Placement) -> tuple[Placement, Placement] | None:
+	"""The first and last region a tag authenticates, if they are contiguous.
+
+	Only a contiguous run has a single byte range. Nested coverage is
+	contiguous by construction and disjoint coverage of adjacent regions
+	usually is, but nothing guarantees it -- so a gap is reported as no run
+	rather than papered over with a range covering bytes the tag does not.
+
+	Structural, so it is asked once: which regions, in what order, and whether
+	each ends where the next begins. What the two endpoints are *called* is the
+	backend's, because `view.limit` and `self.bytes.len()` are the same fact
+	spelled four ways.
+	"""
+	regions = [entry.placement for entry in struct.entries
+	           if entry.placement.name in tag.tag_covers
+	           and entry.placement.kind in ("authenticated", "sealed")]
+	if not regions:
+		return None
+
+	ordered = sorted(regions, key=lambda p: struct.layout.placements.index(p))
+
+	for earlier, later in zip(ordered, ordered[1:]):
+		if (earlier.offset_bits is None or later.offset_bits is None
+				or not earlier.is_fixed_size
+				or earlier.offset_bits + earlier.size_bits != later.offset_bits):
+			return None
+
+	return ordered[0], ordered[-1]
 
 
 def containment_order(structs: dict[str, "ResolvedStruct"],

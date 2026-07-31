@@ -5034,12 +5034,20 @@ offset an entry holds, and a view over the element it reaches.
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**Two where C is ahead of the other three.**
+**One where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
-| a `tag`'s coverage, dirty bit and finalize | `packet.tag` |
 | the `--materialize` offset cache | any delimited chain |
+
+The tag machinery came off it, and the shape was the one this page keeps
+producing: all three emitted the dirty bit a covered write sets, and the
+setters that set it, and then said "not in the static subset yet" about the tag
+itself. So a caller was told a write left the tag stale and had no way to reach
+the tag, ask whether it was stale, or say it no longer was. Which regions a tag
+covers and whether they are contiguous is `traverse.covered_run` now; only what
+the two endpoints are *called* is each backend's, `view.limit` and
+`self.bytes.len()` being one fact spelled four ways.
 
 Re-deriving this from the output moved two things off it. An array of struct
 elements was not C-ahead-of-three: C, Rust and Python all emitted one and C++

@@ -106,7 +106,7 @@ def test_a_covered_write_is_not_spelled_as_an_assignment() -> None:
 
 	assert "No seq setter: writing it leaves tag stale." in module
 	assert "def set_seq(self, msg: Message, value: int) -> None:" in module
-	assert "msg.mark_dirty(1)" in module
+	assert "msg.mark_dirty(self.DIRTY_TAG)" in module
 
 
 def test_a_field_after_a_variable_member_still_writes_in_place() -> None:
@@ -1321,3 +1321,45 @@ def test_the_digits_parse_as_smtp_writes_them(tmp_path: Path) -> None:
 		held = module.reply.at(rt.Message(bytearray(line)), 0)
 		with pytest.raises(rt.ConstraintError):
 			_ = held.code
+
+
+# -- a tag's coverage, dirty bit and finalize (section 14.2) ----------------
+
+TAGGED = ("struct s { u8 hop; authenticated { u16 seq; u8 body[4]; }"
+	" tag u8 mac[16]; }")
+
+
+def test_a_tag_gets_its_bytes_span_and_dirty_bit() -> None:
+	module = emit(TAGGED)
+
+	assert "def mac(self) -> memoryview:" in module
+	assert "def mac_covered(self) -> tuple[int, int]:" in module
+	assert "def mac_is_dirty(self) -> bool:" in module
+	assert "def mac_finalize(self) -> None:" in module
+	assert "not emitted by this backend yet" not in module
+
+
+def test_the_dirty_bits_are_named(tmp_path: Path) -> None:
+	"""They were literals at the call sites, so a reader comparing
+	`mark_dirty(1)` here against `DIRTY_MAC` elsewhere had to work out that
+	they were the same bit."""
+	module = emit(TAGGED)
+
+	assert "DIRTY_MAC = 0x1" in module
+	assert "msg.mark_dirty(self.DIRTY_MAC)" in module
+
+
+def test_the_span_and_the_bit_behave(tmp_path: Path) -> None:
+	module = load(tmp_path, TAGGED)
+	rt     = runtime()
+	msg    = rt.Message(bytearray(32))
+	held   = module.s.at(msg, 0)
+
+	assert held.mac_covered() == (1, 6)	# the authenticated region
+	assert len(held.mac) == 16
+	assert not held.mac_is_dirty()
+
+	held.set_seq(msg, 0x1234)
+	assert held.mac_is_dirty()
+	held.mac_finalize()
+	assert not held.mac_is_dirty()

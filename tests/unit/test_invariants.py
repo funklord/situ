@@ -131,9 +131,13 @@ def test_the_dirty_bits_are_the_same_in_every_backend() -> None:
 	assert "dirty_total = 0x2u"              in source["cpp"]
 	assert "DIRTY_TAG: u32 = 0x1"            in source["rust"]
 	assert "DIRTY_TOTAL: u32 = 0x2"          in source["rust"]
-	# Python has no constants; the bits appear as literals at the call sites.
-	assert "mark_dirty(2)"  in source["python"]
-	assert "clear_dirty(2)" in source["python"]
+	assert "DIRTY_TAG = 0x1"                 in source["python"]
+	assert "DIRTY_TOTAL = 0x2"               in source["python"]
+	# Named at the call sites too. Python wrote the literal there, so a reader
+	# comparing `mark_dirty(2)` here against `DIRTY_TOTAL` elsewhere had to
+	# work out that they were the same bit.
+	assert "mark_dirty(self.DIRTY_TOTAL)"  in source["python"]
+	assert "clear_dirty(self.DIRTY_TOTAL)" in source["python"]
 
 
 def test_tags_keep_their_bits_when_an_invariant_is_added() -> None:

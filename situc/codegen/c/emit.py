@@ -40,6 +40,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, arm_members, arm_of, classify_check, containment_order,
+	covered_run,
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
@@ -462,20 +463,13 @@ class Emitter:
 		nothing guarantees it, so a gap is reported rather than papered over
 		with a range that covers bytes the tag does not.
 		"""
-		regions = [entry.placement for entry in struct.entries
-		           if entry.placement.name in tag.tag_covers
-		           and entry.placement.kind in ("authenticated", "sealed")]
-		if not regions:
+		run = covered_run(struct, tag)
+		if run is None:
 			return None
 
-		ordered = sorted(regions, key=lambda p: struct.layout.placements.index(p))
-
-		for earlier, later in zip(ordered, ordered[1:]):
-			if not self._is_adjacent(struct, earlier, later):
-				return None
-
-		return self._base_expression(struct, ordered[0]), self._region_end(struct,
-		                                                                  ordered[-1])
+		first, last = run
+		return (self._base_expression(struct, first),
+		        self._region_end(struct, last))
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, as a C expression.
@@ -497,14 +491,6 @@ class Emitter:
 		if index + 1 < len(members):
 			return self._base_expression(struct, members[index + 1])
 		return "view.limit"
-
-	def _is_adjacent(self, struct: ResolvedStruct, earlier: Placement,
-			later: Placement) -> bool:
-		"""Whether one region ends exactly where the next begins."""
-		if (earlier.offset_bits is None or later.offset_bits is None
-				or not earlier.is_fixed_size):
-			return False
-		return earlier.offset_bits + earlier.size_bits == later.offset_bits
 
 	def _sealed_gate(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""The stage gate of 14.3, as a type C will not let a caller around.

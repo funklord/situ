@@ -1426,3 +1426,47 @@ fn main() {
 """)
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+# -- a tag's coverage, dirty bit and finalize (section 14.2) ----------------
+
+TAGGED = ("struct s { u8 hop; authenticated { u16 seq; u8 body[4]; }"
+	" tag u8 mac[16]; }")
+
+
+def test_a_tag_gets_its_bytes_span_and_dirty_bit() -> None:
+	module = emit(TAGGED)
+
+	assert "pub fn mac(&self) -> &[u8]" in module
+	assert "pub fn mac_covered(&self) -> Result<(usize, usize)>" in module
+	assert "pub fn mac_is_dirty(dirty: &Dirty) -> bool" in module
+	assert "pub fn mac_finalize(dirty: &mut Dirty)" in module
+	assert "not in the static subset yet" not in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_span_and_the_bit_behave(tmp_path: Path) -> None:
+	result = build(tmp_path, TAGGED, main="""
+use situ_rt::Dirty;
+
+fn main() {
+	let mut buf = [0u8; 32];
+	let mut dirty = Dirty::new();
+
+	{
+		let v = unit::S::new(&buf).unwrap();
+		assert_eq!(v.mac_covered().unwrap(), (1, 6));
+		assert_eq!(v.mac().len(), 16);
+		assert!(!unit::S::mac_is_dirty(&dirty));
+	}
+	{
+		let mut m = unit::SMut::new(&mut buf).unwrap();
+		m.set_seq(&mut dirty, 0x1234);
+	}
+	assert!(unit::S::mac_is_dirty(&dirty));
+	unit::S::mac_finalize(&mut dirty);
+	assert!(!unit::S::mac_is_dirty(&dirty));
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0

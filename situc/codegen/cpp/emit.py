@@ -40,7 +40,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, containment_order, decode_bound,
+	Check, Member, arm_members, containment_order, covered_run,
+	decode_bound,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts,
@@ -2478,6 +2479,8 @@ class Emitter:
 		# backends shipped the same two mistakes when each kept its own.
 		kind = classify(struct, placement, self.structs)
 
+		if kind is Member.TAG:
+			return self._tag(struct, placement)
 		if kind is Member.MARKER:
 			return self._marker(struct, placement)
 		if kind is Member.RESERVED:
@@ -3089,6 +3092,108 @@ class Emitter:
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 		]
+
+	def _tag(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""A tag's bytes, the span it covers, and its dirty bit (14.2).
+
+		This backend emitted the dirty constant and the setters that mark it,
+		and then said "not in the static subset yet" about the tag itself --
+		so a caller could be told a write left the tag stale and had no way to
+		reach the tag, ask whether it was stale, or say it no longer was.
+
+		The span is what the algorithm runs over. Write the result through the
+		pointer and then call `finalize`, which clears the bit; until then the
+		message is not transmittable.
+		"""
+		name  = c_name(local_name(struct, placement))
+		count = placement.array_count or 0
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the tag sits. */"]
+
+		lines = [
+			"",
+			f"\t/* {placement.path}: {count} bytes. The algorithm is the",
+			"\t * caller's to run -- situ says which bytes it covers and when",
+			"\t * the result has gone stale, not how to compute it. */",
+			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
+			"\t{",
+			f"\t\treturn ::situ::rt::bytes(base() + ({start}), {count});",
+			"\t}",
+		]
+
+		run = covered_run(struct, placement)
+		if run is not None:
+			first, last = run
+			lines.extend([
+				"",
+				f"\t/* The bytes {placement.name} covers:"
+				f" `{'`, `'.join(placement.tag_covers)}`.",
+				"\t *",
+				"\t * Write the result through the pointer above and then call",
+				f"\t * `{name}_finalize`, which clears the dirty bit. A gap in",
+				"\t * the coverage is reported rather than papered over with a",
+				"\t * range covering bytes the tag does not. */",
+				f"\t[[nodiscard]] ::situ::rt::err {name}_covered("
+				"std::uint32_t &offset,",
+				"\t\t\tstd::uint32_t &len) const noexcept",
+				"\t{",
+				f"\t\tconst std::uint32_t start ="
+				f" {self._offset_expression(struct, first) or '0'};",
+				f"\t\tconst std::uint32_t end   ="
+				f" {self._region_end(struct, last)};",
+				"",
+				"\t\tif (end < start || !situ_in_bounds(raw(), start,"
+				" end - start)) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				"",
+				"\t\toffset = start;",
+				"\t\tlen    = end - start;",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			])
+
+		held = obligation(self.schema, struct, placement.name)
+		if held is not None:
+			lines.extend([
+				"",
+				f"\t/* Whether {placement.name} no longer matches the bytes it",
+				"\t * covers, and how to say it does again. */",
+				f"\t[[nodiscard]] static bool {name}_is_dirty("
+				"const ::situ::rt::message &owner) noexcept",
+				"\t{",
+				# The runtime's query is `is_stale` for both kinds of
+				# obligation; the accessor is named after this one's, which is
+				# `dirty` for a tag (traverse.Obligation).
+				f"\t\treturn owner.is_stale(dirty_{name});",
+				"\t}",
+				f"\tstatic void {name}_finalize(::situ::rt::message &owner)"
+				" noexcept",
+				"\t{",
+				f"\t\towner.clear_dirty(dirty_{name});",
+				"\t}",
+			])
+
+		return lines
+
+	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
+		"""Where a region stops, taken from where the next member starts.
+
+		Summing the region's own contents would duplicate the solver badly:
+		a region's extent is its interior put through a codec's expansion, and
+		the interior is not addressable from outside the gate.
+		"""
+		if region.is_fixed_size and region.offset_bits is not None:
+			return f"{region.offset_bytes + region.size_bits // BITS_PER_BYTE}u"
+
+		members = [entry.placement for entry in own_entries(struct)]
+		index   = next((i for i, held in enumerate(members)
+		                if held.path == region.path), None)
+		if index is not None and index + 1 < len(members):
+			return self._offset_expression(struct, members[index + 1]) or "limit()"
+		return "limit()"
 
 	def _array(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))

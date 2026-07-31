@@ -38,7 +38,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, arm_members, decode_bound, decode_counts_bits,
+	Check, Member, arm_members, covered_run, decode_bound,
+	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
@@ -740,6 +741,90 @@ class Emitter:
 		return any(decl.name == placement.varint
 		           for decl in self.schema.varints())
 
+	def _tag(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""A tag's bytes, the span it covers, and its dirty bit (14.2).
+
+		This backend emitted the dirty constant and the setters that mark it,
+		and then said "not in the static subset yet" about the tag itself -- so
+		a caller could be told a write left the tag stale and had no way to
+		reach the tag, ask whether it was stale, or say it no longer was.
+		"""
+		name  = _ident(c_name(local_name(struct, placement)))
+		count = placement.array_count or 0
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the tag sits."]
+
+		at    = self._unparen(start)
+		lines = [
+			"",
+			f"\t/// `{placement.path}`: {count} bytes. The algorithm is the",
+			"\t/// caller's to run -- situ says which bytes it covers and when",
+			"\t/// the result has gone stale, not how to compute it.",
+			f"\tpub fn {name}(&self) -> &[u8] {{",
+			f"\t\t&self.bytes[{at}..{at} + {count}]",
+			"\t}",
+		]
+
+		run = covered_run(struct, placement)
+		if run is not None:
+			first, last = run
+			lines.extend([
+				"",
+				f"\t/// The bytes `{placement.name}` covers:"
+				f" `{'`, `'.join(placement.tag_covers)}`.",
+				"\t///",
+				"\t/// Write the result over the slice above and then clear the",
+				"\t/// dirty bit. A gap in the coverage is reported rather than",
+				"\t/// papered over with a range covering bytes the tag does",
+				"\t/// not.",
+				f"\tpub fn {name}_covered(&self) -> Result<(usize, usize)> {{",
+				f"\t\tlet start = {self._unparen(self._offset_expression(struct, first) or '0')};",
+				f"\t\tlet end   = {self._region_end(struct, last)};",
+				"",
+				"\t\tif end < start || end > self.bytes.len() {",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				"\t\tOk((start, end - start))",
+				"\t}",
+			])
+
+		held = obligation(self.schema, struct, placement.name)
+		if held is not None:
+			lines.extend([
+				"",
+				f"\t/// Whether `{placement.name}` no longer matches the bytes",
+				"\t/// it covers, and how to say it does again.",
+				f"\tpub fn {name}_is_dirty(dirty: &Dirty) -> bool {{",
+				# The constants are on the `Mut` struct, this backend putting
+				# the write side there; the query belongs with the reader.
+				f"\t\tdirty.is_stale({_pascal(struct.name)}Mut::"
+				f"DIRTY_{name.upper()})",
+				"\t}",
+				"",
+				f"\tpub fn {name}_finalize(dirty: &mut Dirty) {{",
+				f"\t\tdirty.clear({_pascal(struct.name)}Mut::"
+				f"DIRTY_{name.upper()})",
+				"\t}",
+			])
+
+		return lines
+
+	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
+		"""Where a region stops, taken from where the next member starts."""
+		if region.is_fixed_size and region.offset_bits is not None:
+			return str(region.offset_bytes + region.size_bits // BITS_PER_BYTE)
+
+		members = [entry.placement for entry in own_entries(struct)]
+		index   = next((i for i, held in enumerate(members)
+		                if held.path == region.path), None)
+		if index is not None and index + 1 < len(members):
+			found = self._offset_expression(struct, members[index + 1])
+			if found is not None:
+				return self._unparen(found)
+		return "self.bytes.len()"
+
 	def _fixed_text_number(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Digits in a field of declared width, padded (section 8.6.2).
@@ -1111,6 +1196,8 @@ class Emitter:
 
 		kind = classify(struct, placement, self.structs)
 
+		if kind is Member.TAG:
+			return self._tag(struct, placement)
 		if kind is Member.MARKER:
 			return self._marker(struct, placement)
 		if kind is Member.RESERVED:

@@ -35,12 +35,13 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, containment_order, decode_bound,
+	Check, Member, arm_members, containment_order, covered_run,
+	decode_bound,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
-	own_entries, own_members,
+	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
 from situc.unparse import expr_to_source as unparse_expr
@@ -212,6 +213,7 @@ class Emitter:
 
 		lines = ["", f"class {name}(View):", *self._class_doc(struct)]
 		lines.extend(self._acquire(struct))
+		lines.extend(self._dirty_constants(struct))
 
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
@@ -262,7 +264,8 @@ class Emitter:
 
 			held = obligation(self.schema, struct, f"invariant {field}")
 			assert held is not None, "the layout solver recorded this"
-			bit = 1 << held.bit
+			# Named, like the other three. It was the literal here.
+			bit = f"self.DIRTY_{c_name(held.name).upper()}"
 
 			lines.extend([
 				"",
@@ -918,6 +921,113 @@ class Emitter:
 		return any(decl.name == placement.varint
 		           for decl in self.schema.varints())
 
+	def _dirty_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""One class constant per obligation over this struct's bytes.
+
+		The numbering is `traverse.obligations`, shared with the other three:
+		a caller reading a bit out of one language's generated code and
+		checking it against another's must find the same answer. This backend
+		had no constants at all and wrote the literal into each setter --
+		`msg.mark_dirty(1)` -- so the bit was a magic number here and a named
+		one everywhere else.
+		"""
+		held = obligations(self.schema, struct)
+		if not held:
+			return []
+
+		lines = ["",
+		         "\t# Dirty bits. A covered write sets one; the message is not",
+		         "\t# transmittable until it is cleared -- a tag by being",
+		         "\t# recomputed and finalized, a derived field by its recompute."]
+		lines.extend(f"\tDIRTY_{c_name(one.name).upper()} = {hex(1 << one.bit)}"
+		             for one in held)
+		lines.append(f"\tDIRTY_MASK = {hex((1 << len(held)) - 1)}")
+		return lines
+
+	def _tag(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""A tag's bytes, the span it covers, and its dirty bit (14.2).
+
+		This backend marked the bit on a covered write and then said "not
+		emitted by this backend yet" about the tag itself, so a caller could be
+		told a write left the tag stale and had no way to reach the tag, ask
+		whether it was stale, or say it no longer was.
+		"""
+		name  = c_name(local_name(struct, placement))
+		count = placement.array_count or 0
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the tag sits."]
+
+		lines = [
+			"",
+			"\t@property",
+			f"\tdef {name}(self) -> memoryview:",
+			f'\t\t"""{placement.path}: {count} bytes.',
+			"",
+			"\t\tThe algorithm is the caller's to run -- situ says which bytes",
+			"\t\tit covers and when the result has gone stale, not how to",
+			'\t\tcompute it."""',
+			"\t\tself._check()",
+			f"\t\tstart = self._at + ({start})",
+			f"\t\treturn self._msg.buffer[start:start + {count}]",
+		]
+
+		run = covered_run(struct, placement)
+		if run is not None:
+			first, last = run
+			lines.extend([
+				"",
+				f"\tdef {name}_covered(self) -> tuple[int, int]:",
+				f'\t\t"""The bytes {placement.name} covers:'
+				f' {", ".join(placement.tag_covers)}.',
+				"",
+				"\t\tWrite the result over the slice above and then call",
+				f"\t\t{name}_finalize. A gap in the coverage raises rather than",
+				"\t\tbeing papered over with a range covering bytes the tag",
+				'\t\tdoes not."""',
+				"\t\tself._check()",
+				f"\t\tstart = {self._offset_expression(struct, first) or '0'}",
+				f"\t\tend   = {self._region_end(struct, last)}",
+				"",
+				"\t\tif end < start or end > self._len:",
+				f'\t\t\traise BoundsError(',
+				f'\t\t\t\tf"{placement.name} covers {{start}}..{{end}},'
+				f' which is not inside this frame")',
+				"\t\treturn start, end - start",
+			])
+
+		held = obligation(self.schema, struct, placement.name)
+		if held is not None:
+			bit = f"self.DIRTY_{c_name(placement.name).upper()}"
+			lines.extend([
+				"",
+				f"\tdef {name}_is_dirty(self) -> bool:",
+				f'\t\t"""Whether {placement.name} no longer matches the bytes'
+				f' it covers."""',
+				f"\t\treturn bool(self._msg.dirty & {bit})",
+				"",
+				f"\tdef {name}_finalize(self) -> None:",
+				f'\t\t"""Say it does again, once it has been recomputed."""',
+				f"\t\tself._msg.clear_dirty({bit})",
+			])
+
+		return lines
+
+	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
+		"""Where a region stops, taken from where the next member starts."""
+		if region.is_fixed_size and region.offset_bits is not None:
+			return str(region.offset_bytes + region.size_bits // BITS_PER_BYTE)
+
+		members = [entry.placement for entry in own_entries(struct)]
+		index   = next((i for i, held in enumerate(members)
+		                if held.path == region.path), None)
+		if index is not None and index + 1 < len(members):
+			found = self._offset_expression(struct, members[index + 1])
+			if found is not None:
+				return found
+		return "self._len"
+
 	def _fixed_text_number(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Digits in a field of declared width, padded (section 8.6.2).
@@ -1234,6 +1344,8 @@ class Emitter:
 
 		kind = classify(struct, placement, self.structs)
 
+		if kind is Member.TAG:
+			return self._tag(struct, placement)
 		if kind is Member.MARKER:
 			return self._marker(struct, placement)
 		if kind is Member.RESERVED:
@@ -1435,12 +1547,14 @@ class Emitter:
 		anything it did not find -- and bit 0 is the first tag's, so an
 		invariant marked the tag dirty and nothing else.
 		"""
-		bits = 0
-		for label in placement.covered_by:
-			held = obligation(self.schema, struct, label)
-			if held is not None:
-				bits |= 1 << held.bit
-		return str(bits or 1)
+		# Named rather than numbered. The constants are emitted on the class
+		# and the other three backends name theirs; this wrote the literal, so
+		# a reader comparing `mark_dirty(1)` here against `DIRTY_MAC` there had
+		# to work out that they were the same bit.
+		named = [f"self.DIRTY_{c_name(one.name).upper()}"
+		         for label in placement.covered_by
+		         if (one := obligation(self.schema, struct, label)) is not None]
+		return " | ".join(named) if named else "0x1"
 
 	def _field_doc(self, entry: Resolved) -> list[str]:
 		"""What the property syntax hides, said where a reader will find it."""
