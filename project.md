@@ -5053,6 +5053,20 @@ entry it was closing named `packet.tag`. A construct verified on a schema
 written for the test is verified on that schema. The worked example is the
 claim.
 
+An `opaque` region was on it too and was never listed: C hands back a pointer
+and a length, and the other three emitted the fallthrough note -- a claim that
+the language does not support the construct, where the language supports
+exactly that much of it. It was found by the check below rather than by
+reading, minutes after that check first ran.
+
+**The list is checked now.** `test_no_construct_falls_through` generates every
+schema in the repository in every backend and fails on the fallthrough note.
+Six constructs reached it silently and were each found by a human one at a
+time; in four of those the note was the *better* half of the problem, C having
+answered on its own and answered wrongly. Section 0's rule applied to section
+26.31: prefer adding a check to adding a promise. Its exemption list is empty,
+which is the point -- it was not empty when it was written.
+
 The rest of the list is closed. The last of them was the `--materialize` offset
 cache, and re-deriving the
 entry narrowed it first: 26.30's table claims the second accessor family in

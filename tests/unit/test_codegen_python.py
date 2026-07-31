@@ -1404,3 +1404,11 @@ def test_the_cache_agrees_with_the_per_member_offsets(tmp_path: Path) -> None:
 	assert off == {"target": 4, "version": 16}
 	assert off["target"] == held.target_offset
 	assert off["version"] == held.version_offset
+
+
+def test_an_opaque_region_hands_back_its_bytes(tmp_path: Path) -> None:
+	module = load(tmp_path, "struct s { u16 n; opaque payload [n]; }")
+	buf    = bytearray(bytes([0, 5]) + b"hello" + bytes(9))
+	held   = module.s.at(runtime().Message(buf), 0, 16)
+
+	assert bytes(held.payload) == b"hello"

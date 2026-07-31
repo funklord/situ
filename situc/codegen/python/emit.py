@@ -945,6 +945,32 @@ class Emitter:
 		lines.append(f"\tDIRTY_MASK = {hex((1 << len(held)) - 1)}")
 		return lines
 
+	def _opaque(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
+		"""Treat-as-bytes, the whole of what an `opaque` region supports (9.4).
+
+		It reached the fallthrough note, which claims the language does not
+		support the construct.
+		"""
+		name   = c_name(local_name(struct, placement))
+		start  = self._offset_expression(struct, placement)
+		length = self._length_expression(struct, placement)
+		if start is None or length is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the region is."]
+
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}(self) -> memoryview:",
+			f'\t\t"""{placement.path}: bytes and nothing more.',
+			"",
+			"\t\tAn opaque region has no interior to address -- that is what",
+			'\t\tit trades for carrying anything at all (9.4)."""',
+			"\t\tself._check()",
+			f"\t\tstart = self._at + ({start})",
+			f"\t\treturn self._msg.buffer[start:start + ({length})]",
+		]
+
 	def _tag(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		"""A tag's bytes, the span it covers, and its dirty bit (14.2).
 
@@ -1411,6 +1437,8 @@ class Emitter:
 
 		kind = classify(struct, placement, self.structs)
 
+		if kind is Member.OPAQUE:
+			return self._opaque(struct, placement)
 		if kind is Member.TAG:
 			return self._tag(struct, placement)
 		if kind is Member.MARKER:
@@ -1449,6 +1477,18 @@ class Emitter:
 			return self._scalar(struct, entry)
 		if kind is Member.NOTHING:
 			return []
+
+		# A sealed region has no accessor of its own: its interior is behind
+		# the gate, which is emitted below. The fallthrough note read as a
+		# missing feature while sitting directly above the thing that supports
+		# it -- the same contradiction the coded-region note had.
+		if placement.kind == "sealed":
+			return ["",
+			        f"\t# {placement.path} is sealed by"
+			        f" {placement.codec}: it has no accessor",
+			        f"\t# of its own, and its interior is reached through the"
+			        " gate below,",
+			        f"\t# which opens only once the tag has verified (14.3)."]
 
 		if placement.kind == "variant":
 			return ["",
@@ -2544,6 +2584,13 @@ class Emitter:
 			if not self._reads_varint(placement):
 				return None
 			return f"self.{c_name(local_name(struct, placement))}_len"
+
+		# An opaque region's size expression is already a byte count: there are
+		# no elements to multiply by, and asking for an element width finds no
+		# scalar and gives up. C has had this branch all along.
+		if placement.kind == "opaque":
+			count = self._count_expression(struct, placement)
+			return None if count is None else f"({count})"
 
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)

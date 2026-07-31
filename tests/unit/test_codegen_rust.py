@@ -1516,3 +1516,10 @@ fn main() {
 """)
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+def test_an_opaque_region_hands_back_its_bytes() -> None:
+	module = emit("struct s { u16 n; opaque payload [n]; }")
+
+	assert "pub fn payload(&self) -> &[u8]" in module
+	assert "not in the static subset yet" not in module

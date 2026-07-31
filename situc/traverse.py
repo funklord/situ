@@ -99,6 +99,8 @@ class Member(Enum):
 	#: A `tag` or `checksum`: bytes covering other bytes, with a dirty bit
 	#: (14.2).
 	TAG       = "tag"
+	#: An `opaque` region: a size and no interior schema (9.4).
+	OPAQUE    = "opaque"
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
 	#: variant, an opaque span. Each needs its own machinery.
 	REGION    = "region"
@@ -199,6 +201,12 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# bit it sets and the setters that mark it.
 	if placement.kind in ("tag", "checksum"):
 		return Member.TAG
+
+	# Treat-as-bytes, which is the whole of what the construct supports -- and
+	# three backends supported none of it, the fallthrough note claiming a
+	# language limit where C hands back a pointer and a length.
+	if placement.kind == "opaque":
+		return Member.OPAQUE
 
 	if placement.kind != "field":
 		return Member.REGION

@@ -2092,3 +2092,13 @@ def test_the_last_advance_is_trimmed() -> None:
 	body   = header.split("resolve_offsets")[1]
 
 	assert body.count("at +=") == 2	# method and target; not version
+
+
+def test_an_opaque_region_hands_back_its_bytes() -> None:
+	"""Treat-as-bytes is the whole of what the construct supports, and this
+	supported none of it -- the fallthrough note claiming a language limit
+	where C hands back a pointer and a length."""
+	header = emit("struct s { u16 n; opaque payload [n]; }")
+
+	assert "::situ::rt::bytes payload() const noexcept" in header
+	assert "not in the static subset yet" not in header
