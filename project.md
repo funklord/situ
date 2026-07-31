@@ -5063,6 +5063,21 @@ The other three refused it, Rust saying "element type u16 has no fixed size" of
 a type that plainly has one: their array branches were written for byte runs
 and struct elements, and a wide scalar is neither. All four index them now.
 
+**Two checks now guard it**, because the two failure modes are different.
+`test_no_construct_falls_through` catches the note that *lies* -- a construct
+the language has, reported as one it does not.
+`test_backends_refuse_the_same_members` catches the note that tells the truth:
+`packet.tag` regressed under an accurate refusal, and nothing noticed, because
+the note was correct and C emitted the accessor anyway. The second asks which
+members each backend declines and fails where the four disagree, since every
+backend claims to describe the same bytes and a split means the schema means
+different things in different languages.
+
+Both found things while being written -- `opaque` regions, an array of wide
+scalars, and a data-driven length inside a sealed region, none of which was on
+this page. That is three constructs found by two checks in an afternoon,
+against six found by reading over a week.
+
 **The list is checked now.** `test_no_construct_falls_through` generates every
 schema in the repository in every backend and fails on the fallthrough note.
 Six constructs reached it silently and were each found by a human one at a

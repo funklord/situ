@@ -1745,16 +1745,36 @@ class Emitter:
 		if placement.array_count is not None or placement.sized_by is not None:
 			if scalar.bits != BITS_PER_BYTE:
 				return []
-			count = (str(placement.array_count) if placement.array_count is not None
-			         else None)
-			if count is None:
-				return ["", f"\t// {placement.path}: a data-driven length inside",
-				        "\t// a gate is not emitted yet."]
 			start = placement.offset_bytes
+
+			if placement.array_count is not None:
+				count = placement.array_count
+				return [
+					"",
+					f"\tpub fn {name}(&self) -> &[u8] {{",
+					f"\t\t&self.bytes[{start}..{start + count}]",
+					"\t}",
+				]
+
+			# A length the data decides, read through the gate's own view --
+			# the driving field is plaintext at the same offsets, which is why
+			# reading it here is not a reference to transform output (13.3).
+			# This refused it as "not emitted yet" while the other three
+			# emitted it, so a sealed payload was reachable in three languages
+			# and not in this one.
+			holder = self.resolved.structs.get(placement.path.split(".")[0])
+			length = (None if holder is None else
+			          self._length_expression(holder, placement))
+			if length is None:
+				return ["", f"\t// {placement.path}: this backend cannot"
+				        " resolve its length."]
+
 			return [
 				"",
 				f"\tpub fn {name}(&self) -> &[u8] {{",
-				f"\t\t&self.bytes[{start}..{start + int(count)}]",
+				f"\t\tlet n = core::cmp::min({self._unparen(length)},",
+				f"\t\t\tself.bytes.len().saturating_sub({start}));",
+				f"\t\t&self.bytes[{start}..{start} + n]",
 				"\t}",
 			]
 
