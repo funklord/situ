@@ -1937,3 +1937,63 @@ int main()
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- a fixed-width text number (section 8.6.2) ------------------------------
+
+TEXT = "struct reply { decimal u16 code[3]; u8 sep; }"
+
+
+def test_a_fixed_width_text_number_parses() -> None:
+	"""It read as an array: the bracket is a width in bytes and the branch
+	took it for a count."""
+	header = emit(TEXT)
+
+	assert "code(std::uint16_t &out) const noexcept" in header
+	assert "code_digits() const noexcept" in header
+	assert "situ_parse_uint(base() + (0), 3u, 10u, 999u, &value)" in header
+
+
+def test_the_range_is_the_fields_not_the_types() -> None:
+	"""`decimal u16 code[3]` holds 0..999, and a check written against `u16`
+	would accept a value the three bytes cannot represent."""
+	header = emit(TEXT)
+
+	assert "0..999" in header
+	assert "999u, &value" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_digits_parse_as_smtp_writes_them(tmp_path: Path) -> None:
+	"""Padded, and the leading zero required rather than tolerated -- which is
+	what makes this Canonical where a delimited text number is not."""
+	compiled = compiles(tmp_path, TEXT, extra='''
+#include <cstring>
+#include "unit.hpp"
+
+static int one(const char *line, unsigned want, bool ok)
+{
+	std::uint8_t buf[8];
+	std::memset(buf, 0, sizeof buf);
+	std::memcpy(buf, line, 4);
+
+	situ::rt::message owner(buf, sizeof buf);
+	situ::reply r;
+	if (situ::reply::at(owner, 0, r) != situ::rt::err::ok) return 1;
+
+	std::uint16_t code = 0;
+	const auto e = r.code(code);
+	if (ok) return (e == situ::rt::err::ok && code == want) ? 0 : 2;
+	return e == situ::rt::err::constraint ? 0 : 3;
+}
+
+int main()
+{
+	if (one("250 ", 250, true)) return 1;
+	if (one("007 ", 7, true))   return 2;
+	if (one("2x0 ", 0, false))  return 3;
+	if (one("25  ", 0, false))  return 4;
+	return 0;
+}
+''')
+	assert compiled.returncode == 0, compiled.stderr

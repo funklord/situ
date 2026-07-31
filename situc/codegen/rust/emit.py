@@ -740,6 +740,51 @@ class Emitter:
 		return any(decl.name == placement.varint
 		           for decl in self.schema.varints())
 
+	def _fixed_text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Digits in a field of declared width, padded (section 8.6.2).
+
+		The bracket is a width in bytes and not a count, which is what this
+		read it as -- so it reported "element type u16 has no fixed size"
+		about a type that plainly has one.
+		"""
+		scalar = placement.scalar
+		if scalar is None:
+			return []
+
+		name  = _ident(c_name(local_name(struct, placement)))
+		width = placement.array_count or 0
+		limit = placement.radix_max or 0
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the digits start."]
+
+		rtype = self._rust_type(scalar)
+		at    = self._unparen(start)
+
+		return [
+			"",
+			f"\t/// `{placement.path}`: {width} digits, padded, holding"
+			f" 0..{limit}.",
+			"\t///",
+			f"\t/// The range is the field's rather than {scalar.name}'s:"
+			f" {width} bytes",
+			f"\t/// cannot hold what {scalar.name} can, and a check against"
+			" the type",
+			"\t/// would accept a value the field cannot represent.",
+			f"\tpub fn {name}_digits(&self) -> &[u8] {{",
+			f"\t\t&self.bytes[{at}..{at} + {width}]",
+			"\t}",
+			"",
+			f"\tpub fn {name}(&self) -> Result<{rtype}> {{",
+			f"\t\tsitu_rt::parse_uint(self.{name}_digits(),"
+			f" {placement.radix}, {limit})",
+			f"\t\t\t.map(|v| v as {rtype})",
+			"\t\t\t.ok_or(Error::Constraint)",
+			"\t}",
+		]
+
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Decode a varint field, and say how wide it turned out to be.
@@ -1162,6 +1207,8 @@ class Emitter:
 				"\t}",
 			]
 
+		if kind is Member.TEXT_NUMBER:
+			return self._fixed_text_number(struct, placement)
 		if kind is Member.ARRAY:
 			if scalar is None or scalar.bits != BITS_PER_BYTE:
 				return self._struct_array(struct, placement)

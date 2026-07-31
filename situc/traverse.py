@@ -112,6 +112,10 @@ class Member(Enum):
 	VARIABLE  = "variable"
 	#: A counted array, of scalars or of structs.
 	ARRAY     = "array"
+	#: A number written as digits in a fixed width: `decimal u16 code[3]`
+	#: (8.6.2). The scalar names the value's domain, not its width in the
+	#: buffer, which the array bracket gives.
+	TEXT_NUMBER = "text_number"
 	#: One struct, at a fixed offset.
 	NESTED    = "nested"
 	#: A field that is none of the above and has no offset either: nothing a
@@ -230,6 +234,15 @@ def classify(struct: ResolvedStruct, placement: Placement,
 			and (placement.sized_by is not None
 			     or placement.size_expr is not None):
 		return Member.VARIABLE
+
+	# Before ARRAY, which it looks exactly like: `decimal u16 code[3]` is one
+	# number in three digits, not three numbers. Three backends read the
+	# bracket as a count and reported "element type u16 has no fixed size" --
+	# about a type that plainly has one -- because the array branch was the
+	# only one that could have it. The delimited form of the same construct
+	# is caught above by its delimiter.
+	if placement.radix is not None and placement.delimiter is None:
+		return Member.TEXT_NUMBER
 
 	# Before NESTED: an array of structs names a struct type and is not one.
 	if placement.array_count is not None:

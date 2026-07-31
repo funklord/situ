@@ -2506,6 +2506,8 @@ class Emitter:
 			return self._variable(struct, placement)
 		if kind is Member.NESTED:
 			return self._nested(struct, placement)
+		if kind is Member.TEXT_NUMBER:
+			return self._fixed_text_number(struct, placement)
 		if kind is Member.ARRAY:
 			return self._array(struct, placement)
 		if kind is Member.VARINT:
@@ -3028,6 +3030,65 @@ class Emitter:
 	def _marker_predicate(self, placement: Placement) -> str:
 		"""Whether the marker this field is governed by says little-endian."""
 		return f"{c_name(placement.marker or '')}_is_little()"
+
+	def _fixed_text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Digits in a field of declared width, padded (section 8.6.2).
+
+		SMTP's reply code and HTTP's status are both this: exactly three
+		digits, no delimiter, and the leading zero is required rather than
+		tolerated. That is why it is `Canonical` where a delimited text number
+		is not -- `007` is the only spelling of seven here.
+
+		It read as an array before: the bracket is a width in bytes and the
+		branch took it for a count, so this backend reported an element type
+		problem about a number.
+		"""
+		scalar = placement.scalar
+		if scalar is None:
+			return []
+
+		name  = c_name(local_name(struct, placement))
+		width = placement.array_count or 0
+		limit = placement.radix_max or 0
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the digits start. */"]
+
+		ctype = self._ctype(scalar)
+
+		return [
+			"",
+			f"\t/* {placement.path}: {width} digits, padded, holding"
+			f" 0..{limit}.",
+			"\t *",
+			f"\t * The range is the field's rather than {scalar.name}'s:"
+			f" {width} bytes",
+			f"\t * cannot hold what {scalar.name} can, and a check against the",
+			"\t * type would accept a value the field cannot represent. */",
+			f"\t[[nodiscard]] ::situ::rt::const_bytes {name}_digits()"
+			" const noexcept",
+			"\t{",
+			f"\t\treturn ::situ::rt::const_bytes(base() + ({start}),"
+			f" {width});",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out)"
+			" const noexcept",
+			"\t{",
+			"\t\tstd::uint64_t value = 0;",
+			"",
+			f"\t\t/* Zero is success, which is C's convention here and not",
+			"\t\t * this backend's. */",
+			f"\t\tif (situ_parse_uint(base() + ({start}), {width}u,"
+			f" {placement.radix}u, {limit}u, &value) != 0) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+			f"\t\tout = static_cast<{ctype}>(value);",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
 
 	def _array(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))

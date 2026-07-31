@@ -918,6 +918,54 @@ class Emitter:
 		return any(decl.name == placement.varint
 		           for decl in self.schema.varints())
 
+	def _fixed_text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Digits in a field of declared width, padded (section 8.6.2).
+
+		The bracket is a width in bytes and not a count, which is what the
+		array branch read it as.
+		"""
+		scalar = placement.scalar
+		if scalar is None:
+			return []
+
+		name  = c_name(local_name(struct, placement))
+		width = placement.array_count or 0
+		limit = placement.radix_max or 0
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the digits start."]
+
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}_digits(self) -> memoryview:",
+			f'\t\t"""{placement.path}: the {width} bytes as written."""',
+			"\t\tself._check()",
+			f"\t\tstart = self._at + ({start})",
+			f"\t\treturn self._msg.buffer[start:start + {width}]",
+			"",
+			"\t@property",
+			f"\tdef {name}(self) -> int:",
+			f'\t\t"""{placement.path}: {width} digits, padded, holding'
+			f' 0..{limit}.',
+			"",
+			f"\t\tThe range is the field's rather than {scalar.name}'s:"
+			f" {width} bytes",
+			f"\t\tcannot hold what {scalar.name} can, and a check against the",
+			"\t\ttype would accept a value the field cannot represent.",
+			"",
+			'\t\tRaises ConstraintError where the bytes are not digits."""',
+			f"\t\tvalue = parse_uint(self.{name}_digits,"
+			f" {placement.radix}, {limit})",
+			"\t\tif value is None:",
+			f'\t\t\traise ConstraintError(',
+			f'\t\t\t\tf"{placement.path} is not {width} digits in base'
+			f' {placement.radix}")',
+			"\t\treturn value",
+		]
+
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Decode a varint field, and say how wide it turned out to be.
@@ -1212,6 +1260,8 @@ class Emitter:
 			return self._variable(struct, placement)
 		if kind is Member.NESTED:
 			return self._nested(struct, placement)
+		if kind is Member.TEXT_NUMBER:
+			return self._fixed_text_number(struct, placement)
 		if kind is Member.ARRAY:
 			return self._array(struct, placement)
 		if kind is Member.VARINT:

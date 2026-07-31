@@ -1387,3 +1387,42 @@ fn main() {
 """)
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+# -- a fixed-width text number (section 8.6.2) ------------------------------
+
+TEXT = "struct reply { decimal u16 code[3]; u8 sep; }"
+
+
+def test_a_fixed_width_text_number_parses() -> None:
+	"""It reported "element type u16 has no fixed size" about a type that
+	plainly has one: the bracket is a width in bytes, not a count."""
+	module = emit(TEXT)
+
+	assert "pub fn code(&self) -> Result<u16>" in module
+	assert "situ_rt::parse_uint(self.code_digits(), 10, 999)" in module
+	assert "has no fixed size" not in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_digits_parse_as_smtp_writes_them(tmp_path: Path) -> None:
+	result = build(tmp_path, TEXT, main="""
+fn check(line: &[u8], want: Option<u16>) {
+	let mut buf = [0u8; 8];
+	buf[..line.len()].copy_from_slice(line);
+	let r = unit::Reply::new(&buf).unwrap();
+	match want {
+		Some(v) => assert_eq!(r.code().unwrap(), v),
+		None => assert!(r.code().is_err()),
+	}
+}
+
+fn main() {
+	check(b"250 ", Some(250));
+	check(b"007 ", Some(7));	// the leading zero is required
+	check(b"2x0 ", None);
+	check(b"25  ", None);		// a space is not a digit
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0

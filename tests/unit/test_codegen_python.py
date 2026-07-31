@@ -1294,3 +1294,30 @@ def test_a_write_agrees_with_the_read(tmp_path: Path) -> None:
 	held.offset = 0x12345678
 	assert held.offset == 0x12345678
 	assert buf[4] == 0x78		# stored little end first
+
+
+# -- a fixed-width text number (section 8.6.2) ------------------------------
+
+TEXT = "struct reply { decimal u16 code[3]; u8 sep; }"
+
+
+def test_a_fixed_width_text_number_parses() -> None:
+	module = emit(TEXT)
+
+	assert "def code(self) -> int:" in module
+	assert "parse_uint(self.code_digits, 10, 999)" in module
+
+
+def test_the_digits_parse_as_smtp_writes_them(tmp_path: Path) -> None:
+	"""Padded, and the leading zero required rather than tolerated."""
+	module = load(tmp_path, TEXT)
+	rt     = runtime()
+
+	for line, want in ((b"250 ", 250), (b"007 ", 7)):
+		held = module.reply.at(rt.Message(bytearray(line)), 0)
+		assert held.code == want
+
+	for line in (b"2x0 ", b"25  "):
+		held = module.reply.at(rt.Message(bytearray(line)), 0)
+		with pytest.raises(rt.ConstraintError):
+			_ = held.code

@@ -5034,12 +5034,11 @@ offset an entry holds, and a view over the element it reaches.
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**Three where C is ahead of the other three.**
+**Two where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
 | a `tag`'s coverage, dirty bit and finalize | `packet.tag` |
-| a fixed-width text number | `reply_line.code` |
 | the `--materialize` offset cache | any delimited chain |
 
 Re-deriving this from the output moved two things off it. An array of struct
@@ -5048,6 +5047,12 @@ said "element type is not in the static subset yet", which the subset had
 nothing to do with -- its array branch wanted a byte scalar, and a struct
 element has no scalar at all. And the `sealed` gate is in all four; the entry
 said "crypto regions -- `tag`, `sealed`" and only the tag machinery is C-only.
+
+A fixed-width text number came off it in the way most of these do. The bracket
+in `decimal u16 code[3]` is a width in bytes and not a count, and three
+backends read it as a count -- Rust's note said "element type u16 has no fixed
+size", about a type that plainly has one. It has a `Member.TEXT_NUMBER` now, so
+the classifier answers before the array branch can.
 
 The endian marker came off it too, and it was not a missing feature. All three
 backends said "not in the static subset yet" for the marker and then read every
