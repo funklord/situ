@@ -53,9 +53,19 @@ Rules for the implementer:
    | 23, the repository layout | `test_the_layout_section_lists_every_compiler_module` |
    | 20.2, the failure classes | `test_the_failure_classes_match_the_runtimes` |
 
-   And 26.31 is not one of them: it is a survey, and a reader picking this up
-   should re-derive it from the generated output rather than trust it to have
-   aged well. A list that cannot be checked should say so.
+   Two of 26.31's claims are checked now as well --
+   `test_no_construct_falls_through`, that no construct in this repository
+   reaches a backend's fallthrough note, and
+   `test_backends_refuse_the_same_members`, that what one backend declines the
+   other three decline too. Both read generated output rather than running it,
+   which invariant 22 is the standing warning about: they hold classification
+   and agreement, never behaviour. Every construct they cover was separately
+   run against real bytes in each backend.
+
+   The rest of 26.31 is still a survey, and a reader picking this up should
+   re-derive it from the generated output rather than trust it to have aged
+   well. It has been materially wrong four times. A list that cannot be
+   checked should say so.
 
    Every one of them was added *after* finding the drift, and every one found
    more of it than expected: 11.3 was about twenty rows behind, 21 named a
@@ -5179,6 +5189,94 @@ the work that made it wrong did not think to come back here.
   loading a shared object from a path this generator would have to invent
   (13.6a).
 
+**Known and open.**
+
+- `tests/schemas/edges.situ` does not compile in C++. `struct framed` collides
+  with the generated `framed()` framing method, and a class may not have a
+  member function of its own name. Decision 0013 governs C identifier
+  collisions; this is a C++ one and nothing checks it. The reason it went
+  unnoticed is the more useful half: `test_every_example_compiles` globs
+  `examples/` only, and `edges.situ` lives in `tests/schemas/` -- which exists
+  precisely to carry the shapes the examples do not have (26.27). The schema
+  written to catch awkward cases is the one the compile check skips.
+- 26.30's measurements are C's. The table records walking against indexed in
+  four languages; the second accessor family reached the other three only
+  after it was written, and none of them has been measured. It is the last
+  claim on these pages with no check behind it.
+
+### 26.32 One question, four answers, and the shape of being wrong
+
+Twenty-five commits made every construct in the language reachable in all four
+backends, and the interesting part is not the list -- it is that the same
+defect kept arriving in the same disguise.
+
+**The disguise.** A construct classified as `REGION` or `NOTHING` in
+`traverse.classify`, which is the shared question a backend asks about a
+member. C++, Rust and Python asked it, got no answer, and emitted a note
+saying the language did not support the construct. C did not ask -- it has its
+own dispatch -- so it answered on its own, and where the answer was wrong it
+was wrong *silently*. Six constructs arrived this way: `tlv` regions,
+`indexed` regions, endian markers, tags, fixed-width text numbers and varint
+fields. Each got a `Member` kind added after a human noticed.
+
+**The three shapes of wrong, in increasing order of cost.**
+
+1. *A refusal that is true.* "This backend cannot resolve where the tag sits."
+   Honest, specific, and it tells a reader to design around a limit that is
+   real. Nothing wrong with it except that nobody notices when it should have
+   gone away.
+2. *A refusal that is false.* "Element type `u16` has no fixed size", of a type
+   that plainly has one; "not in the static subset yet", of a construct in the
+   static subset. A reader designs around a limit that is not there.
+3. *No refusal, and the wrong answer.* A member after a varint placed at the
+   varint's own offset. Every field governed by an endian marker read big-endian
+   whatever the marker said, so a little-endian TIFF -- which is most of them --
+   returned `magic = 10752` where 42 was written. A decode run over the
+   delimiter as well as the content. These produce plausible numbers, and the
+   capability map said `ConditionallyConverted` beside the second one the whole
+   time.
+
+The third kind lived in C more often than anywhere else, and for a reason worth
+stating: **the backend that answers a shared question on its own is the one
+that gets it wrong quietly.** Three backends refusing in unison is a bug
+somebody eventually reads. One backend answering differently is a bug nobody
+sees until a byte comes back wrong.
+
+**What went into `traverse` because of it.** `classify` gained six member
+kinds. `covered_run`, `offset_plan`, `region_extent`, `containment_order`,
+`decodes_here` and `decode_counts_bits` moved there from between one and three
+backends each -- every one of them a question more than one backend was asking
+and at least one was answering differently. `containment_order` is the clearest
+case: C++ and Python had a copy each and C had none, and *both copies walked
+own members only*, so a variant's arm types came out in the right place by
+alphabet and would not have for a schema naming them the other way round.
+
+**Two checks, because there are two failure modes.**
+`test_no_construct_falls_through` generates every schema in the repository in
+every backend and fails on the note that lies. It would have caught all six.
+`test_backends_refuse_the_same_members` asks which members each backend
+declines and fails where the four disagree -- which catches the refusal that is
+true and has stopped being needed, the case that let `packet.tag` regress after
+being recorded as done.
+
+Between them they found three constructs nobody had listed: `opaque` regions,
+arrays of wide scalars, and a data-driven length inside a sealed region. Three
+found by two checks in an afternoon, against six found by reading over a week.
+That ratio is the argument section 0 has been making all along, and 26.31 is
+the page it applies to most: it has now been materially wrong four times, and
+every correction came from generating the output and reading it rather than
+from trusting the list.
+
+**The rule this leaves.** A construct verified on a schema written for its own
+test is verified on that schema. The tag machinery was checked against a frame
+whose members are all fixed-size and recorded as closing an entry that named
+`examples/packet`, where the tag sits after a variable-length sealed region and
+did not resolve in any of the three. The worked example is the claim. That is
+also why `examples/sqlite` exists: `indexed` had no real format behind it, and
+finding one -- a SQLite b-tree page, whose cell pointers are in key order while
+the cells fill the page backwards -- took longer than building the construct
+and asked for two things the language did not have.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -5583,6 +5681,22 @@ the work that made it wrong did not think to come back here.
    written, with an error code reserved for it and returned by nothing. Dead
    ends hide their own bugs: the reason nobody noticed is that nothing could
    reach a variant closely enough to care what an unmatched discriminant did.
+48. **A refusal that has stopped being true is a bug no test sees.** Every
+   check reads what the output *says*, and an honest refusal says something
+   correct: "this backend cannot resolve where the tag sits" was true when it
+   was written and stayed in the file after the reason went away. Nothing
+   fails, no reader is misled, and the construct is simply unreachable in one
+   language. `packet.tag` regressed that way inside a single session, after
+   being recorded as done. The only thing that catches it is asking the other
+   three what *they* emit: a member one backend refuses and another does not
+   is a schema that means different things in different languages, whatever
+   the notes say.
+49. **A construct is verified on the schema it was verified on.** The tag
+   machinery was checked against a frame whose members are all fixed size and
+   recorded as closing an entry that named `examples/packet`, where the tag
+   sits after a variable-length sealed region and resolved in none of the
+   three backends. A schema written for a test exercises what the test author
+   thought of. The worked example is the claim, and it is the one to run.
 
 ---
 
