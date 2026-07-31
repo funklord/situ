@@ -2102,3 +2102,16 @@ def test_an_opaque_region_hands_back_its_bytes() -> None:
 
 	assert "::situ::rt::bytes payload() const noexcept" in header
 	assert "not in the static subset yet" not in header
+
+
+def test_a_member_after_a_sealed_region_is_placed() -> None:
+	"""Only C computed a coded region's length, so the other three could place
+	nothing after one -- `examples/packet`'s tag among them."""
+	header = emit("codec seal { granularity = byte; length_preserving;"
+	              " seekable; authenticated; invertible; deterministic; }\n"
+	              "impl seal extern \"x\";\n"
+	              "struct s { u16 n; sealed(seal) { u8 body[n]; }"
+	              " tag u8 mac[16]; }")
+
+	assert "mac_covered" in header
+	assert "cannot resolve where the tag sits" not in header

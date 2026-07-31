@@ -1523,3 +1523,14 @@ def test_an_opaque_region_hands_back_its_bytes() -> None:
 
 	assert "pub fn payload(&self) -> &[u8]" in module
 	assert "not in the static subset yet" not in module
+
+
+def test_a_member_after_a_sealed_region_is_placed() -> None:
+	module = emit("codec seal { granularity = byte; length_preserving;"
+	              " seekable; authenticated; invertible; deterministic; }\n"
+	              "impl seal extern \"x\";\n"
+	              "struct s { u16 n; sealed(seal) { u8 body[n]; }"
+	              " tag u8 mac[16]; }")
+
+	assert "pub fn mac_covered" in module
+	assert "cannot resolve where the tag sits" not in module

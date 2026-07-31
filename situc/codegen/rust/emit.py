@@ -39,6 +39,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Check, Member, arm_members, covered_run, decode_bound, offset_plan,
+	region_extent,
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
 	extent_parts,
@@ -2638,6 +2639,35 @@ class Emitter:
 			lines.append(f"\t\tat += {constant};")
 		return [*lines, "\t\tat"]
 
+	def _region_length(self, struct: ResolvedStruct,
+			region: Placement) -> str | None:
+		"""How many bytes a coded or sealed region occupies, at runtime.
+
+		Only C had this, so the other three could place nothing after such a
+		region.
+		"""
+		rule = region_extent(struct, region,
+		                     self.codecs.get(region.type_name))
+		if rule is None:
+			return None
+
+		terms = [str(rule.constant)]
+		for member in rule.variable:
+			length = self._length_expression(struct, member)
+			if length is None:
+				return None
+			terms.append(f"({length})")
+		inner = " + ".join(terms)
+
+		if rule.kind == "preserving":
+			return inner
+		if rule.kind == "add":
+			return f"({inner}) + {rule.add}"
+		if rule.kind == "ratio":
+			return f"(({inner}) * {rule.out}) / {rule.into}"
+		return (f"((({inner}) + {rule.group_in - 1})"
+		        f" / {rule.group_in}) * {rule.group_out}")
+
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None) -> str | None:
 		if placement.kind == "variant":
@@ -2669,6 +2699,9 @@ class Emitter:
 				return None		# and so nothing after it can be placed
 			name = _ident(c_name(local_name(struct, placement)) + "_extent")
 			return f"self.{name}()"
+		if placement.kind in ("coded", "sealed"):
+			return self._region_length(struct, placement)
+
 		if placement.varint is not None:
 			if not self._reads_varint(placement):
 				return None

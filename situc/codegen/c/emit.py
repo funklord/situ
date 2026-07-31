@@ -40,7 +40,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, arm_members, arm_of, classify_check, containment_order,
-	covered_run, offset_plan,
+	covered_run, offset_plan, region_extent,
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
@@ -3682,44 +3682,25 @@ class Emitter:
 		without decoding, and a wrong number here would silently misplace every
 		member after it.
 		"""
-		codec = self.codecs.get(region.type_name)
-		if codec is None:
+		rule = region_extent(struct, region,
+		                     self.codecs.get(region.type_name))
+		if rule is None:
 			return None
 
-		prefix   = region.path + "."
-		interior = [entry.placement for entry in struct.entries
-		            if entry.placement.path.startswith(prefix)
-		            and "." not in entry.placement.path[len(prefix):]
-		            and entry.placement.kind != "element"]
+		terms = [f"{rule.constant}u"]
+		terms += [f"({self._length_expression(struct, member, held)})"
+		          for member in rule.variable]
+		inner = " + ".join(terms)
 
-		constant = 0
-		terms    = []
-		for member in interior:
-			if member.is_fixed_size:
-				constant += member.size_bits // BITS_PER_BYTE
-			else:
-				terms.append(self._length_expression(struct, member, held))
-
-		inner = " + ".join([f"{constant}u", *(f"({term})" for term in terms)])
-
-		if codec.expansion is ast.Expansion.PRESERVING:
+		if rule.kind == "preserving":
 			return inner
-		if codec.expansion is ast.Expansion.FIXED_ADD:
-			return f"({inner}) + {codec.expansion_add}u"
-		if codec.expansion is ast.Expansion.RATIO_EXACT:
-			assert codec.ratio is not None
-			out, into = codec.ratio
-			return f"(({inner}) * {out}u) / {into}u"
-		if codec.expansion is ast.Expansion.RATIO_PADDED:
-			assert codec.ratio is not None
-			out, into  = codec.ratio
-			group_in   = lcm(BITS_PER_BYTE, into)
-			group_out  = group_in // into * out
-			# Whole groups only, so a partial one still costs a full group.
-			return (f"((({inner}) + {group_in // BITS_PER_BYTE - 1}u)"
-			        f" / {group_in // BITS_PER_BYTE}u) * {group_out // BITS_PER_BYTE}u")
-
-		return None
+		if rule.kind == "add":
+			return f"({inner}) + {rule.add}u"
+		if rule.kind == "ratio":
+			return f"(({inner}) * {rule.out}u) / {rule.into}u"
+		# Whole groups only, so a partial one still costs a full group.
+		return (f"((({inner}) + {rule.group_in - 1}u)"
+		        f" / {rule.group_in}u) * {rule.group_out}u")
 
 	def _has_length(self, struct: ResolvedStruct, placement: Placement) -> bool:
 		"""Whether a member's runtime extent has a closed form."""

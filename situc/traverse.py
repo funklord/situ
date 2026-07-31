@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from situc.ast import Schema
+from math import lcm
+
 from situc.layout import BITS_PER_BYTE, Arm, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
@@ -399,6 +401,81 @@ class Obligation:
 		bytes, and a field no longer equals what it is defined to equal.
 		"""
 		return "DIRTY" if self.kind == "tag" else "STALE"
+
+
+@dataclass(frozen=True)
+class RegionExtent:
+	"""How a `coded` or `sealed` region's byte count is computed (13.5).
+
+	Its interior extent put through the codec's expansion, which is the same
+	rule the solver applies and the only one available: the region's bytes are
+	the transform's output, so nothing in them can be read to find out how many
+	there are.
+
+	`constant` is the interior's fixed bytes and `variable` the members whose
+	length is a runtime expression -- what that expression *is* stays each
+	backend's. The rest is the expansion, resolved to numbers here so that four
+	backends do not each reimplement `ratio_padded`'s rounding.
+	"""
+
+	constant: int
+	variable: tuple[Placement, ...]
+	#: "preserving", "add", "ratio" or "padded".
+	kind: str
+	add: int		= 0
+	out: int		= 0
+	into: int		= 0
+	#: For "padded", in bytes: a partial group still costs a whole one.
+	group_in: int		= 0
+	group_out: int		= 0
+
+
+def region_extent(struct: "ResolvedStruct", region: Placement,
+		codec: object) -> RegionExtent | None:
+	"""The extent rule for a coded region, or None where there is none.
+
+	None where the expansion has no closed form -- a bounded ratio or an
+	unbounded one -- because the length genuinely is not computable without
+	decoding, and a wrong number would silently misplace every member after it.
+	"""
+	if codec is None:
+		return None
+
+	prefix   = region.path + "."
+	interior = [entry.placement for entry in struct.entries
+	            if entry.placement.path.startswith(prefix)
+	            and "." not in entry.placement.path[len(prefix):]
+	            and entry.placement.kind != "element"]
+
+	constant = 0
+	variable = []
+	for member in interior:
+		if member.is_fixed_size:
+			constant += member.size_bits // BITS_PER_BYTE
+		else:
+			variable.append(member)
+
+	expansion = getattr(codec, "expansion", None)
+	name      = getattr(expansion, "value", None)
+	ratio     = getattr(codec, "ratio", None)
+
+	if name == "length_preserving":
+		return RegionExtent(constant, tuple(variable), "preserving")
+	if name == "fixed_add":
+		return RegionExtent(constant, tuple(variable), "add",
+		                    add=getattr(codec, "expansion_add", 0) or 0)
+	if name == "ratio_exact" and ratio is not None:
+		return RegionExtent(constant, tuple(variable), "ratio",
+		                    out=ratio[0], into=ratio[1])
+	if name == "ratio_padded" and ratio is not None:
+		out, into = ratio
+		group_in  = lcm(BITS_PER_BYTE, into)
+		return RegionExtent(constant, tuple(variable), "padded",
+		                    out=out, into=into,
+		                    group_in=group_in // BITS_PER_BYTE,
+		                    group_out=group_in // into * out // BITS_PER_BYTE)
+
+	return None
 
 
 @dataclass(frozen=True)
