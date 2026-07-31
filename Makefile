@@ -45,8 +45,8 @@ endif
 export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
-.PHONY: all runtime compiler test test-c test-py check lint cross cross-test \
-	install uninstall clean help
+.PHONY: all runtime compiler test test-c test-py check lint bench cross \
+	cross-test install uninstall clean help
 
 all: runtime
 
@@ -58,6 +58,7 @@ help:
 	@echo '  test-c     build and run the C tests only'
 	@echo '  check      mypy strict over situc/'
 	@echo '  lint       source convention checks (indent, ASCII, whitespace)'
+	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  cross      compile-only build for aarch64'
 	@echo '  cross-test run generated accessors on aarch64 under emulation'
 	@echo '  install    install situc and the runtime under PREFIX'
@@ -80,6 +81,11 @@ check:
 
 lint:
 	$(PYTHON) tools/lint_conventions.py
+
+# Not part of `test`, and not a threshold. A wall-clock number belongs to the
+# machine that took it (26.30), so this reports and asserts nothing.
+bench:
+	$(PYTHON) tools/bench.py
 
 test-c: runtime
 	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' test

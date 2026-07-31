@@ -3369,6 +3369,14 @@ emitted `a and b or c` idiom for a conditional length is correct *because zero
 is truthy in Lua*, which is exactly the sort of thing running it would check. And the aarch64 big-endian
 target is compile-only; only the little-endian one runs under emulation.
 
+**Performance is measured and never asserted.** `tools/bench.py` builds a
+driver in each backend and reports what the offset cache of 26.30 costs and
+saves; nothing in the suite holds a wall-clock number, because a threshold
+loose enough to pass on every machine holds nothing and a tight one fails on
+somebody else's laptop. What the suite does hold is that the two accessor
+families agree about where a member starts, which is the property a wrong
+index would break.
+
 Implementation language for `situc`: **Python 3.11+, standard library only**,
 with full type annotations checked by mypy in strict mode. Rationale: the
 compiler is a symbolic solver and a text generator, both of which Python does
@@ -3479,6 +3487,10 @@ situ/
                               derivation can be checked against the declaration
   tools/
     lint_conventions.py       the formatting enforcer; `make lint`
+    bench.py                  what the offset cache costs and saves, in all
+                              four backends. Not a test and not in the suite:
+                              a wall-clock number is the machine's, so 26.30
+                              records the machine beside it
   tests/
     unit/                     compiler tests (pytest), one file per module
     generated/                cmocka tests over generated C
@@ -5032,6 +5044,61 @@ loop passes the sum it already has.
 The feature is the last row's difference. The first row is what looking for it
 found, and it was there before any of this work began.
 
+**Four languages, and the cache is not always the win.** Every number above is
+C's, taken before the other three had the family at all -- the last claim on
+these pages with nothing behind it. `tools/bench.py` is what closes that: it
+generates the accessors through the CLI a user would run, builds a driver in
+each of the four languages, and reports what one pass over a message costs
+with the per-member offsets and with the cache. Two cases, because the obvious
+one does not show what the construct is for.
+
+A hundred thousand reads of every member, fastest of three runs, on a 12th-gen
+i7 with gcc 14.2, rustc 1.85 and CPython 3.13.
+
+`examples/http`'s request line -- three members, 1215 bytes:
+
+| | per-call offsets | offset cache | |
+|---|---|---|---|
+| C | 158 ms | 182 ms | 0.9x |
+| C++ | 164 ms | 179 ms | 0.9x |
+| Rust | 135 ms | 158 ms | 0.9x |
+| Python | 549 ms | 456 ms | 1.2x |
+
+An eight-field record -- eight members, 1209 bytes:
+
+| | per-call offsets | offset cache | |
+|---|---|---|---|
+| C | 645 ms | 180 ms | 3.6x |
+| C++ | 662 ms | 179 ms | 3.7x |
+| Rust | 670 ms | 246 ms | 2.7x |
+| Python | 3437 ms | 1223 ms | 2.8x |
+
+On the request line the two columns are the same measurement. Repeated runs put
+the ratio anywhere between 0.8x and 1.3x, which is this machine's noise and not
+a difference, so **the cache buys nothing on a three-member line** -- the case
+the emitters' comments cite when they explain what it is for.
+
+The reason is the shape of the construct rather than anything about the
+implementation. Resolving every offset scans the target, and then reading the
+members scans it again, so the cache adds a pass that three members do not
+amortise: `method` needs no offset at all, `target`'s is four bytes of scan,
+and only `version` pays -- once, either way. Python leans consistently to the
+cache's side for the opposite reason, its per-call overhead being what
+dominates there and the cache making fewer calls.
+
+At eight members it is between 2.4x and 3.7x, across runs and across the four
+languages, which is what the construct is for: the per-member offset is quadratic in how many members precede it, and
+the cache is that sum once. Nothing in this repository has eight delimited
+members, so that case is written in the benchmark rather than taken from
+`examples/` -- and saying so is the point. 26.32's rule is that a construct
+verified on a schema written for its own test is verified on that schema, and
+what this measures on a worked example is the first table.
+
+None of it is in the suite. A wall-clock number is a property of the machine
+that took it, so a threshold would be either loose enough to hold nothing or
+tight enough to fail on somebody else's laptop. The tool is a thing you run,
+and the machine is recorded beside the numbers.
+
 ### 26.31 Where the frontier is
 
 Measured rather than remembered: every worked example generated in all four
@@ -5215,10 +5282,14 @@ and this one was skipping it in four languages at once.
 
 **Known and open.**
 
-- 26.30's measurements are C's. The table records walking against indexed in
-  four languages; the second accessor family reached the other three only
-  after it was written, and none of them has been measured. It is the last
-  claim on these pages with no check behind it.
+Empty. The last entry was 26.30's measurements, and closing it took a tool
+rather than a paragraph: `tools/bench.py` builds a driver in all four
+languages and reports what the offset cache costs and what it saves. What
+replaces the entry is a caveat rather than a claim. The numbers are one
+machine's, which is why they are recorded with the machine beside them and why
+nothing in the suite asserts them -- and measuring them moved the conclusion,
+the cache being a small loss on the worked example this page had been citing
+for it.
 
 ### 26.32 One question, four answers, and the shape of being wrong
 

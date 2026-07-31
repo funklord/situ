@@ -3265,8 +3265,14 @@ class Emitter:
 		reaching element N a walk of the N-1 before it; a *scan* makes
 		reaching member N a rescan of the N-1 before it, and `_offset` does
 		that on every call -- so reading three members of an HTTP request line
-		scans the target twice. Measured at 77ms for 20k reads of a 1200-byte
-		line, against 4ms once the offsets are held.
+		scans the target twice.
+
+		What that is worth depends on how many members there are, and this
+		comment used to say `4ms against 77ms` for that request line. It is
+		not: measured in all four backends, three members is inside the noise
+		and eight is 3x (26.30). The 4ms was taken against a baseline that no
+		longer exists -- `_span` rescanned from the start of the struct then,
+		and fixing that took the per-call path with it.
 
 		Same bargain as the run index and the same reason it is off by
 		default: this is memory the caller did not ask for. Nothing here

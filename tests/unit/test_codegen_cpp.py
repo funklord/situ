@@ -79,13 +79,15 @@ def emit_materialized(body: str, preamble: str = PREAMBLE) -> str:
 
 
 def compiles(tmp_path: Path, body: str, extra: str = "",
-		preamble: str = "") -> subprocess.CompletedProcess[str]:
+		preamble: str = "",
+		materialize: bool = False) -> subprocess.CompletedProcess[str]:
 	"""Generate the header, compile it, and hand back the result."""
 	schema   = parse_text((preamble or PREAMBLE) + body)
 	resolved = resolve(schema, solve(schema))
 
 	(tmp_path / "unit.hpp").write_text(
-		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+		generate_cpp(schema, resolved, "unit",
+		             materialize=materialize).header, encoding="ascii")
 
 	main = extra or '#include "unit.hpp"\nint main() { return 0; }\n'
 	(tmp_path / "main.cpp").write_text(main, encoding="ascii")
@@ -2093,6 +2095,53 @@ def test_the_offset_cache_resolves_every_dynamic_member() -> None:
 	assert "std::uint32_t target;" in header
 	assert "std::uint32_t version;" in header
 	assert "void resolve_offsets(offsets &out) const noexcept" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_the_cache_agrees_with_the_per_member_offsets(tmp_path: Path) -> None:
+	"""Which is the whole point: one pass instead of a rescan per member, and
+	the same answer.
+
+	C, Rust and Python each had this executed and this backend had the
+	structural assertions only -- that the struct is declared and the method
+	is there. A cache that resolved a member to the wrong place would satisfy
+	every one of them. Section 22's own warning, in the file that ought to
+	know it: reading generated text is not running it."""
+	result = compiles(tmp_path, CHAIN, materialize=True, extra="""
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	static const char raw[] = "GET /index.html HTTP/1.1\\r\\n";
+	std::uint8_t buf[64];
+	std::memcpy(buf, raw, sizeof raw - 1);
+
+	const situ::line view{ situ_view_t{ buf, sizeof raw - 1, 0 } };
+	situ::line::offsets at;
+	view.resolve_offsets(at);
+
+	if (at.target != view.target_offset())   return 1;
+	if (at.version != view.version_offset()) return 2;
+	if (at.target != 4u || at.version != 16u) return 3;
+
+	/* And a span from a known base is the span that resolves its own. */
+	if (view.target_span_from(at.target) != view.target_span()) return 4;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
 
 
 def test_the_last_advance_is_trimmed() -> None:
