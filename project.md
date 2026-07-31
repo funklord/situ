@@ -3262,12 +3262,20 @@ All four backends emit it, and the shape of the answer is each language's:
 through the error, and a caller needs both: one to consume, one to size the
 next read.
 
-Three shapes are declined, each saying so where the function would have been:
-a `[remaining]` tail, because it ends where the view ends and how long one is
-is the transport's answer rather than the message's; a run of records, because
-the walk that finds its terminator stops just as readily at the end of what has
-arrived and nothing distinguishes the two; and a struct whose complete form can
-be zero bytes, because then every buffer already holds one.
+Two shapes are declined, each saying so where the function would have been: a
+`[remaining]` tail, because it ends where the view ends and how long one is is
+the transport's answer rather than the message's; and a struct whose complete
+form can be zero bytes, because then every buffer already holds one.
+
+A run used to be a third, and the reason was sound: the walk that finds a
+run's terminator stops just as readily at the end of what has arrived, and
+nothing it emits distinguishes the two. What it missed is that the *element*
+does. A run is framed one element at a time, through the element's own
+`required` -- the same question one level down -- so a run is frameable exactly
+when its element is, which is what `traverse.frameable` answers. It was worth
+chasing: the refusal was honest, and next to it a `while` run was reaching the
+ordinary path and reporting complete messages from bytes that were nothing of
+the kind (26.31).
 
 It also inherits whatever a backend cannot measure, and declining is the right
 answer rather than a second limitation: a framing function that skipped the
@@ -5282,11 +5290,42 @@ already read -- one list, in `tests/unit/every_schema.py`, rather than six. A
 check that skips the file written to be awkward is a check on the easy cases,
 and this one was skipping it in four languages at once.
 
+**A run is framed through its elements**, which closed the last entry that was
+a gap rather than a trade -- and found a worse one next to it.
+
+`required` answers "is a whole message here, and if not how many bytes?" over a
+prefix of a stream. It declined a run of records, honestly: the walk the
+accessors use stops at the end of the run and at the end of the arrived bytes
+alike, and nothing it emits tells those apart. So `examples/http`'s header block
+could not be framed, which is a real limit on a real format.
+
+The walk cannot tell them apart. The *element* can: asking each one's own
+`required` is the same question one level down, and it already distinguishes
+truncation from completion. So the framing walk reads one element at a time --
+terminator first, where an element would start, then the element's own framing
+-- and stops with a bound rather than a guess. `traverse.frameable` decides
+whether a run's element can be framed at all, and recurses for the same reason
+the walk does.
+
+**And a `while` run was not declined.** It reached the ordinary path, whose
+length expression is the same walk, so `required` reported a *complete* message
+from bytes that were nothing of the kind: two bytes of a nine-byte reply came
+back complete with `need` reported as zero. A framer built on that hands a
+fragment to the parser and calls it a message.
+
+All four had it, so no backend disagreeing made it visible. What did was the
+honest refusal next door: a record run and a `while` run are the same walk with
+a different stopping rule, and reading why one was declined is what raised the
+question about the other. 26.32's third shape of wrong -- no refusal, and a
+plausible answer -- in framing this time rather than in reading.
+
+Both are closed in all four backends, and each carries the same test: every
+prefix of a real HTTP request comes back truncated, with a bound greater than
+what is in hand and never greater than the message turns out to be. Run against
+the previous compiler, all four fail.
+
 **Smaller, known, and deliberate.**
 
-- `required` declines a run of records in all four: the walk cannot tell its
-  terminator from the end of the bytes that have arrived, so an HTTP header
-  block cannot be framed.
 - `gen-dissector` is never executed -- no Lua interpreter in the build.
 - No Doxygen in the build either, so nothing runs over the C and C++ headers to
   prove it extracts them. The generated comments open with `/**` and sit

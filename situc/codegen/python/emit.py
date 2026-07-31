@@ -39,8 +39,8 @@ from situc.traverse import (
 	decode_bound, region_extent, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
-	extent_parts,
-	has_computable_extent, local_name, matched_values, obligation,
+	extent_parts, frameable,
+	has_computable_extent, is_run, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -2374,11 +2374,13 @@ class Emitter:
 
 		steps: list[str] = []
 		for placement in variable:
-			if placement.delimiter is not None \
-					and placement.type_name in self.structs:
-				return self._unframeable(struct,
-				        "a run of records ends at a terminator this cannot tell"
-				        " apart from the end of the bytes so far")
+			if is_run(placement, self.structs):
+				walk = self._framing_walk(struct, placement)
+				if walk is None:
+					return self._unframeable(struct, "a run whose element"
+					        " cannot be framed cannot be framed either")
+				steps.extend(walk)
+				continue
 
 			length = self._length_expression(struct, placement)
 			if length is None:
@@ -2420,6 +2422,92 @@ class Emitter:
 			"\t\tif have < at:",
 			f'\t\t\traise TruncatedError("{struct.name}: incomplete", at)',
 			"\t\treturn at",
+		]
+
+	def _framing_walk(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
+		"""Framing a run: one element at a time, through the element's own
+		`required`.
+
+		The walk the accessors use stops at the end of the bytes as readily as
+		at the end of the run, and those are opposite answers to "is a whole
+		one here?". The element's own framing is what separates them, being
+		the same question one level down.
+
+		`TruncatedError` carries the bound, so the element's own is re-raised
+		with this member's offset added to it rather than replaced.
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or not frameable(self.resolved.structs, element):
+			return None
+
+		inner = c_name(element.name)
+		read  = [
+			"\t\t\ttry:",
+			f"\t\t\t\tpart = {inner}.required(data[at:])",
+			"\t\t\texcept TruncatedError as short:",
+			f'\t\t\t\traise TruncatedError("{placement.path}: incomplete",',
+			"\t\t\t\t\tat + short.needed) from None",
+		]
+		cap  = placement.repeat_cap if placement.repeat_while else None
+		body: list[str] = []
+
+		if placement.repeat_while is not None:
+			cond = self._over_fields(element, placement.repeat_while or "",
+			                         "element")
+			body.extend([
+				*read,
+				f"\t\t\telement = {inner}(probe._msg, at, part)",
+				"\t\t\tat += part",
+				"",
+				"\t\t\t# The condition is asked about the element just"
+				" read, which",
+				"\t\t\t# is the whole difference from a delimiter -- and"
+				" only once",
+				"\t\t\t# that element is known to be entirely here.",
+				f"\t\t\tif not ({cond}):",
+				"\t\t\t\tbreak",
+				*([] if cap is None else [
+					"\t\t\tseen += 1",
+					f"\t\t\tif seen == {cap}:",
+					"\t\t\t\tbreak",
+				]),
+			])
+		else:
+			delim = placement.delimiter
+			assert delim is not None
+			body.extend([
+				f"\t\t\tif have < at + {len(delim)}:",
+				f'\t\t\t\traise TruncatedError("{placement.path}:'
+				' no terminator yet",',
+				f"\t\t\t\t\tat + {len(delim)})",
+				"",
+				"\t\t\t# The terminator only terminates where an element"
+				" would",
+				"\t\t\t# start. It belongs to this member, as a delimiter"
+				" does.",
+				f"\t\t\tif bytes(data[at:at + {len(delim)}]) == {delim!r}:",
+				f"\t\t\t\tat += {len(delim)}",
+				"\t\t\t\tbreak",
+				"",
+				*read,
+				"\t\t\tat += part",
+			])
+
+		loop = ["\t\twhile True:", *body]
+		if cap is not None:
+			loop = ["\t\tseen = 0",
+			        *loop]
+
+		return [
+			"",
+			f"\t\t# {placement.path}: a run of `{element.name}`, framed one",
+			"\t\t# element at a time -- the walk the accessors use cannot"
+			" tell the",
+			"\t\t# end of the run from the end of the bytes, and this asks"
+			" each",
+			"\t\t# element whether it is whole.",
+			*loop,
 		]
 
 	def _unframeable(self, struct: ResolvedStruct,

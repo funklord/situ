@@ -1381,6 +1381,35 @@ def test_the_span_and_the_bit_behave(tmp_path: Path) -> None:
 
 # -- the offset cache (decision 0022) ---------------------------------------
 
+# -- framing a run (20.3) ---------------------------------------------------
+
+
+def test_every_prefix_of_a_real_request_answers_honestly(tmp_path: Path) -> None:
+	"""The claim the entry made: an HTTP header block could not be framed.
+
+	`examples/http` rather than a schema written for this, because that is what
+	the entry named and 26.32's rule is that the worked example is the claim.
+	Every prefix of a real request must come back truncated, and every bound
+	must be a bound: greater than what is in hand, and never more than the
+	message turns out to be. A framer that overshoots stalls waiting for bytes
+	that will not come."""
+	module = load(
+		tmp_path,
+		(ROOT / "examples" / "http" / "http.situ").read_text(encoding="ascii"),
+		preamble="")
+	req = (b"GET /index.html HTTP/1.1\r\n"
+	       b"Host: example.com\r\n"
+	       b"Accept: */*\r\n"
+	       b"\r\n")
+
+	for i in range(len(req)):
+		with pytest.raises(module.TruncatedError) as raised:
+			module.request_head.required(req[:i])
+		assert i < raised.value.needed <= len(req)
+
+	assert module.request_head.required(req) == len(req)
+
+
 KV = ('struct kv { u8 k[] until ": "; u8 v[] until "\\r\\n"; }\n'
 	'struct block { u8 head[] until ";"; kv entries[] until "\\r\\n";'
 	' u8 tail[remaining]; }')

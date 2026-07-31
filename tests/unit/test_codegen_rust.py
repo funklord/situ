@@ -44,7 +44,8 @@ def emit_materialized(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_rs(schema, resolved, "unit", materialize=True).module
 
 
-def build(tmp_path: Path, body: str, main: str = "", preamble: str = "",
+def build(tmp_path: Path, body: str, main: str = "",
+		preamble: str | None = None,
 		link: str = "", materialize: bool = False
 		) -> subprocess.CompletedProcess[str]:
 	"""Generate, lay out a crate, and compile it.
@@ -60,9 +61,12 @@ def build(tmp_path: Path, body: str, main: str = "", preamble: str = "",
 	(src / "situ_rt.rs").write_text(
 		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 		encoding="ascii")
+	# `preamble=""` for a schema carrying its own target and endianness, which
+	# is every worked example; the default is for the fragments written here.
+	head = PREAMBLE if preamble is None else preamble
 	(src / "unit.rs").write_text(
-		emit_materialized(body, preamble or PREAMBLE) if materialize
-		else emit(body, preamble or PREAMBLE), encoding="ascii")
+		emit_materialized(body, head) if materialize else emit(body, head),
+		encoding="ascii")
 
 	if main:
 		(src / "main.rs").write_text(
@@ -1487,6 +1491,45 @@ fn main() {
 
 
 # -- the offset cache (decision 0022) ---------------------------------------
+
+# -- framing a run (20.3) ---------------------------------------------------
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_every_prefix_of_a_real_request_answers_honestly(tmp_path: Path) -> None:
+	"""The claim the entry made: an HTTP header block could not be framed.
+
+	`examples/http` rather than a schema written for this, because that is what
+	the entry named and 26.32's rule is that the worked example is the claim.
+	Every prefix of a real request must come back truncated, and every bound
+	must be a bound: greater than what is in hand, and never more than the
+	message turns out to be. A framer that overshoots stalls waiting for bytes
+	that will not come."""
+	result = build(
+		tmp_path,
+		(ROOT / "examples" / "http" / "http.situ").read_text(encoding="ascii"),
+		preamble="", main=r"""
+fn main() {
+	let req: &[u8] = b"GET /index.html HTTP/1.1\r\n\
+		Host: example.com\r\n\
+		Accept: */*\r\n\
+		\r\n";
+	let whole = req.len();
+
+	for i in 0..whole {
+		match unit::RequestHead::required(&req[..i]) {
+			situ_rt::Framing::Complete(_) => panic!("complete at {}", i),
+			situ_rt::Framing::Need(n) => assert!(n > i && n <= whole,
+				"have {} need {}", i, n),
+		}
+	}
+	assert_eq!(unit::RequestHead::required(req),
+		situ_rt::Framing::Complete(whole));
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
 
 KV = ('struct kv { u8 k[] until ": "; u8 v[] until "\\r\\n"; }\n'
 	'struct block { u8 head[] until ";"; kv entries[] until "\\r\\n";'

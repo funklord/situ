@@ -79,10 +79,14 @@ def emit_materialized(body: str, preamble: str = PREAMBLE) -> str:
 
 
 def compiles(tmp_path: Path, body: str, extra: str = "",
-		preamble: str = "",
+		preamble: str | None = None,
 		materialize: bool = False) -> subprocess.CompletedProcess[str]:
-	"""Generate the header, compile it, and hand back the result."""
-	schema   = parse_text((preamble or PREAMBLE) + body)
+	"""Generate the header, compile it, and hand back the result.
+
+	`preamble=""` for a schema carrying its own target and endianness, which
+	is every worked example: the default is for the fragments written here.
+	"""
+	schema   = parse_text((PREAMBLE if preamble is None else preamble) + body)
 	resolved = resolve(schema, solve(schema))
 
 	(tmp_path / "unit.hpp").write_text(
@@ -2217,6 +2221,61 @@ def test_a_wide_element_gets_no_pointer() -> None:
 
 	assert "::situ::rt::bytes samples()" not in header
 	assert "would alias bytes that are not the value" in header
+
+
+# -- framing a run (20.3) ---------------------------------------------------
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_every_prefix_of_a_real_request_answers_honestly(tmp_path: Path) -> None:
+	"""The claim the entry made: an HTTP header block could not be framed.
+
+	`examples/http` rather than a schema written for this, because that is what
+	the entry named and 26.32's rule is that the worked example is the claim.
+	Every prefix of a real request must come back truncated, and every bound
+	must be a bound: greater than what is in hand, and never more than the
+	message turns out to be. A framer that overshoots stalls waiting for bytes
+	that will not come."""
+	result = compiles(
+		tmp_path,
+		(ROOT / "examples" / "http" / "http.situ").read_text(encoding="ascii"),
+		preamble="", extra=r"""
+#include "unit.hpp"
+
+const char req[] =
+	"GET /index.html HTTP/1.1\r\n"
+	"Host: example.com\r\n"
+	"Accept: */*\r\n"
+	"\r\n";
+
+int main()
+{
+	const std::uint32_t whole = sizeof req - 1;
+	const auto *data = reinterpret_cast<const std::uint8_t *>(req);
+	std::uint32_t need;
+
+	for (std::uint32_t i = 0; i < whole; i++) {
+		if (situ::request_head::required(data, i, need)
+		    == situ::rt::err::ok) return 1;
+		if (need <= i || need > whole)  return 2;
+	}
+	if (situ::request_head::required(data, whole, need)
+	    != situ::rt::err::ok)       return 3;
+	return need == whole ? 0 : 4;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
 
 
 # -- a class a member has taken the name of ---------------------------------

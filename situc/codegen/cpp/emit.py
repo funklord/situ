@@ -46,8 +46,8 @@ from situc.traverse import (
 	decode_bound, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
-	extent_parts,
-	has_computable_extent, local_name, matched_values, obligation,
+	extent_parts, frameable,
+	has_computable_extent, is_run, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarKind, ScalarType, lookup
@@ -1383,12 +1383,13 @@ class Emitter:
 
 		steps: list[str] = []
 		for placement in variable:
-			if placement.delimiter is not None \
-					and placement.type_name in self.structs:
-				return self._unframeable(struct,
-				        "a run of records ends at a terminator this cannot tell"
-				        " apart from the end of the bytes so far")
-
+			if is_run(placement, self.structs):
+				walk = self._framing_walk(struct, placement)
+				if walk is None:
+					return self._unframeable(struct, "a run whose element"
+					        " cannot be framed cannot be framed either")
+				steps.extend(walk)
+				continue
 
 			length = self._length_expression(struct, placement)
 			if length is None:
@@ -1432,6 +1433,107 @@ class Emitter:
 			"\t\t                  : ::situ::rt::err::truncated;",
 			"\t}",
 			*tail,
+		]
+
+	def _framing_walk(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
+		"""Framing a run: one element at a time, through the element's own
+		`required`.
+
+		The walk the accessors use cannot answer this. It stops when the
+		terminator stands where an element would, when an element runs past
+		the view, and when the bytes run out -- and it cannot tell the first
+		from the last, which are opposite answers to "is a whole one here?".
+		So a record run was declined and, worse, a `while` run was *accepted*:
+		two bytes of a nine-byte reply came back complete (26.31).
+
+		The element's own `required` is what separates them, being the same
+		question one level down.
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or not frameable(self.resolved.structs, element):
+			return None
+
+		inner = class_name(element)
+		call  = (f"\t\t\tconst ::situ::rt::err e = ::{self.namespace}::{inner}"
+		         "::required(")
+		read  = [
+			call + "base() + at,",
+			"\t\t\t\thave - at, part);",
+			"\t\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\t\tneed = at + part;",
+			"\t\t\t\treturn ::situ::rt::err::truncated;",
+			"\t\t\t}",
+		]
+		cap  = placement.repeat_cap if placement.repeat_while else None
+		body = ["\t\t\tstd::uint32_t part = 0;"]
+
+		if placement.repeat_while is not None:
+			body.extend([
+				"\t\t\tsitu_view_t raw;",
+				"",
+				*read,
+				"\t\t\tif (situ_view_sub(this->raw(), at, part, &raw)"
+				" != SITU_OK) {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
+				"\t\t\tat += part;",
+				"",
+				"\t\t\t/* The condition is asked about the element just"
+				" read, which",
+				"\t\t\t * is the whole difference from a delimiter -- and"
+				" only once",
+				"\t\t\t * that element is known to be entirely here. */",
+				f"\t\t\tif (!({self._element_cond(element, placement)})) {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				*([] if cap is None else [
+					"\t\t\tn += 1;",
+					f"\t\t\tif (n == {cap}u) {{",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+				]),
+			])
+		else:
+			delim = placement.delimiter
+			assert delim is not None
+			array = self._delimiter_array(placement)
+			body.extend([
+				"",
+				f"\t\t\tif (have < at + {len(delim)}u) {{",
+				f"\t\t\t\tneed = at + {len(delim)}u;",
+				"\t\t\t\treturn ::situ::rt::err::truncated;",
+				"\t\t\t}",
+				"",
+				"\t\t\t/* The terminator only terminates where an element"
+				" would start.",
+				"\t\t\t * It belongs to this member, as a delimiter does. */",
+				f"\t\t\tif (situ_scan(base() + at, {len(delim)}u, {array},"
+				f" {len(delim)}u) == 0u) {{",
+				f"\t\t\t\tat += {len(delim)}u;",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"",
+				*read,
+				"\t\t\tat += part;",
+			])
+
+		loop = ["\t\tfor (;;) {", *body, "\t\t}"]
+		if cap is not None:
+			loop = ["\t\t{", "\t\t\tstd::uint32_t n = 0;",
+			        *[f"\t{line}" if line else line for line in loop],
+			        "\t\t}"]
+
+		return [
+			"",
+			f"\t\t/* {placement.path}: a run of `{element.name}`, framed one",
+			"\t\t * element at a time. The walk the accessors use stops at"
+			" the end",
+			"\t\t * of the bytes as readily as at the end of the run; this"
+			" asks each",
+			"\t\t * element whether it is whole. */",
+			*loop,
 		]
 
 	def _unframeable(self, struct: ResolvedStruct,

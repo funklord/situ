@@ -45,8 +45,8 @@ from situc.traverse import (
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
-	extent_parts,
-	has_computable_extent, matched_values, obligation, obligations,
+	extent_parts, frameable,
+	has_computable_extent, is_run, matched_values, obligation, obligations,
 	own_members,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -2243,15 +2243,13 @@ class Emitter:
 				"\t\treturn SITU_ERR_TRUNCATED;",
 				"\t}",
 			])
-			if placement.delimiter is not None \
-					and placement.type_name in self.structs:
-				# A run of records ends at its terminator, and the walk that
-				# finds it stops just as readily at the end of what has
-				# arrived. Nothing it emits distinguishes "the run ended" from
-				# "the bytes ran out", so this cannot say a whole one is here.
-				return self._unframeable(struct, "a run of records ends at a "
-				        "terminator this cannot tell apart from the end of the "
-				        "bytes so far")
+			if is_run(placement, self.structs):
+				walk = self._framing_walk(struct, placement)
+				if walk is None:
+					return self._unframeable(struct, "a run whose element"
+					        " cannot be framed cannot be framed either")
+				steps.extend(walk)
+				continue
 
 			if placement.delimiter is not None:
 				terminated = ident(self.prefix, struct.name, local, "terminated")
@@ -2323,6 +2321,116 @@ class Emitter:
 			"}",
 		]
 		return lines
+
+	def _framing_walk(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
+		"""Framing a run: one element at a time, through the element's own
+		`required`.
+
+		The walk the accessors use cannot answer this. It stops when the
+		terminator stands where an element would, when an element runs past
+		the view, and when the bytes run out -- and it cannot tell the first
+		from the last, which are opposite answers to "is a whole one here?".
+		So the run was declined for a record run and, worse, *accepted* for a
+		`while` run: two bytes of a nine-byte reply came back complete, with
+		`need` reported as zero (26.31).
+
+		Asking the element's own `required` is what separates them. It is the
+		same question one level down, it already distinguishes truncation from
+		completion, and it is emitted for every element type this can reach --
+		`traverse.frameable` is the check, and it recurses for the same reason
+		this does.
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or not frameable(self.resolved.structs, element):
+			return None
+
+		local    = c_name(self._local(struct, placement))
+		required = ident(self.prefix, element.name, "required")
+		cap      = placement.repeat_cap if placement.repeat_while else None
+
+		body = [
+			"\t\tuint32_t   part;",
+			"\t\tsitu_err_t e;",
+		]
+
+		if placement.repeat_while is not None:
+			body.extend([
+				"\t\tsitu_view_t element;",
+				"",
+				f"\t\te = {required}(data + at, have - at, &part);",
+				"\t\tif (e != SITU_OK) {",
+				"\t\t\t*need = at + part;",
+				"\t\t\treturn SITU_ERR_TRUNCATED;",
+				"\t\t}",
+				"\t\tif (situ_view_sub(view, at, part, &element) != SITU_OK) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+				"\t\tat = at + part;",
+				"",
+				"\t\t/* The condition is asked about the element just read,"
+				" which is",
+				"\t\t * the whole difference from a delimiter -- and it can"
+				" only be",
+				"\t\t * asked once that element is known to be entirely"
+				" here. */",
+				f"\t\tif (!({self._element_condition(element, placement)})) {{",
+				"\t\t\tbreak;",
+				"\t\t}",
+				*([] if cap is None else [
+					"\t\tn = n + 1u;",
+					f"\t\tif (n == {cap}u) {{",
+					"\t\t\tbreak;",
+					"\t\t}",
+				]),
+			])
+		else:
+			assert placement.delimiter is not None
+			delim = placement.delimiter
+			sym   = ident(self.prefix, struct.name, local, "delim")
+			body.extend([
+				"",
+				f"\t\tif (have < at + {len(delim)}u) {{",
+				f"\t\t\t*need = at + {len(delim)}u;",
+				"\t\t\treturn SITU_ERR_TRUNCATED;",
+				"\t\t}",
+				"",
+				"\t\t/* The terminator only terminates where an element would"
+				" start.",
+				"\t\t * It belongs to this member, as a delimiter does. */",
+				f"\t\tif (situ_scan(data + at, {len(delim)}u, {sym},"
+				f" {len(delim)}u) == 0u) {{",
+				f"\t\t\tat = at + {len(delim)}u;",
+				"\t\t\tbreak;",
+				"\t\t}",
+				"",
+				f"\t\te = {required}(data + at, have - at, &part);",
+				"\t\tif (e != SITU_OK) {",
+				"\t\t\t*need = at + part;",
+				"\t\t\treturn SITU_ERR_TRUNCATED;",
+				"\t\t}",
+				"\t\tat = at + part;",
+			])
+
+		# The counter exists only where a cap reads it, and lives in a block
+		# of its own: it belongs to this member's walk and a second run in the
+		# same struct would otherwise redeclare it.
+		loop = ["\tfor (;;) {", *body, "\t}"]
+		if cap is not None:
+			loop = ["\t{", "\t\tuint32_t n = 0u;",
+			        *[f"\t{line}" if line else line for line in loop], "\t}"]
+
+		return [
+			"",
+			f"\t/* {placement.path}: a run of `{element.name}`, framed one"
+			" element at",
+			"\t * a time. The walk the accessors use stops at the end of the"
+			" bytes",
+			"\t * as readily as at the end of the run; this asks each element"
+			" whether",
+			"\t * it is whole, which is the same question one level down. */",
+			*loop,
+		]
 
 	def _required_fixed(self, struct: ResolvedStruct) -> list[str]:
 		"""Framing a struct with one size: it is that size."""

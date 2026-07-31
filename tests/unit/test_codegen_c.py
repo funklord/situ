@@ -2076,13 +2076,72 @@ def test_a_remaining_tail_is_declined_and_says_why() -> None:
 	assert "the transport's answer rather than the message's" in header
 
 
-def test_a_record_run_is_declined_and_says_why() -> None:
-	"""The walk that finds its terminator stops just as readily at the end of
-	what has arrived, and nothing it emits tells the two apart."""
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_every_prefix_of_a_real_request_answers_honestly(tmp_path: Path) -> None:
+	"""The claim the entry made: an HTTP header block could not be framed.
+
+	`examples/http` rather than a schema written for this, because that is
+	what the entry named and 26.32's rule is that the worked example is the
+	claim. Every prefix of a real request must come back truncated, and every
+	bound must be a bound: greater than what is in hand, and never more than
+	the message turns out to be. A framer that overshoots stalls waiting for
+	bytes that will not come."""
+	header, source = emit((ROOT / "examples" / "http" / "http.situ")
+	                      .read_text(encoding="ascii"), preamble="")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text(r"""
+#include "unit.h"
+
+const char req[] =
+	"GET /index.html HTTP/1.1\r\n"
+	"Host: example.com\r\n"
+	"Accept: */*\r\n"
+	"\r\n";
+
+int main(void)
+{
+	const uint32_t whole = (uint32_t)(sizeof req - 1);
+	uint32_t need, i;
+
+	for (i = 0; i < whole; i++) {
+		if (situ_request_head_required((const uint8_t *)req, i, &need)
+		    == SITU_OK)
+			return 1;
+		if (need <= i || need > whole)
+			return 2;
+	}
+	if (situ_request_head_required((const uint8_t *)req, whole, &need)
+	    != SITU_OK)
+		return 3;
+	return need == whole ? 0 : 4;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_a_record_run_is_framed_through_its_elements() -> None:
+	"""It was declined, because the walk that finds its terminator stops just
+	as readily at the end of what has arrived and nothing it emits tells the
+	two apart. That is true of the walk and not of the element: asking each
+	one's own `required` separates "the run ended" from "the bytes ran out",
+	which is the same question one level down."""
 	header, _ = emit('struct f { u8 k; u8 v[] until ";"; }\n'
 	                 'struct s { u16 n; f fields[] until "\\r\\n"; }')
 
-	assert "a run of records ends at a terminator" in header
+	assert "a run of records ends at a terminator" not in header
+	assert "situ_f_required(data + at, have - at, &part)" in header
+	assert "if (situ_scan(data + at, 2u, situ_s_fields_delim, 2u) == 0u) {" \
+		in header
 
 
 TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"

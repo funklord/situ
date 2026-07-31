@@ -42,8 +42,8 @@ from situc.traverse import (
 	region_extent,
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
-	extent_parts,
-	has_computable_extent, local_name, matched_values, obligation,
+	extent_parts, frameable,
+	has_computable_extent, is_run, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -2354,12 +2354,13 @@ class Emitter:
 
 		steps: list[str] = []
 		for placement in variable:
-			if placement.delimiter is not None \
-					and placement.type_name in self.structs:
-				return self._unframeable(struct,
-				        "a run of records ends at a terminator this cannot tell"
-				        " apart from the end of the bytes so far")
-
+			if is_run(placement, self.structs):
+				walk = self._framing_walk(struct, placement)
+				if walk is None:
+					return self._unframeable(struct, "a run whose element"
+					        " cannot be framed cannot be framed either")
+				steps.extend(walk)
+				continue
 
 			length = self._length_expression(struct, placement)
 			if length is None:
@@ -2410,6 +2411,94 @@ class Emitter:
 			"\t\t}",
 			"\t\tsitu_rt::Framing::Complete(at)",
 			"\t}",
+		]
+
+	def _framing_walk(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
+		"""Framing a run: one element at a time, through the element's own
+		`required`.
+
+		The walk the accessors use stops at the end of the bytes as readily as
+		at the end of the run, and those are opposite answers to "is a whole
+		one here?". The element's own framing is what separates them, being
+		the same question one level down.
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or not frameable(self.resolved.structs, element):
+			return None
+
+		inner = _pascal(element.name)
+		read  = [
+			f"\t\t\tlet part = match {inner}::required(&data[at..]) {{",
+			"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
+			"\t\t\t\tsitu_rt::Framing::Need(n) =>",
+			"\t\t\t\t\treturn situ_rt::Framing::Need(at + n),",
+			"\t\t\t};",
+		]
+		cap  = placement.repeat_cap if placement.repeat_while else None
+		body: list[str] = []
+
+		if placement.repeat_while is not None:
+			cond = self._over_fields(element, placement.repeat_while or "",
+			                         "element")
+			body.extend([
+				*read,
+				f"\t\t\tlet element = {inner} {{"
+				" bytes: &data[at..at + part] };",
+				"\t\t\tat += part;",
+				"",
+				"\t\t\t// The condition is asked about the element just"
+				" read, which",
+				"\t\t\t// is the whole difference from a delimiter -- and"
+				" only once",
+				"\t\t\t// that element is known to be entirely here.",
+				f"\t\t\tif !({cond}) {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				*([] if cap is None else [
+					"\t\t\tseen += 1;",
+					f"\t\t\tif seen == {cap} {{",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+				]),
+			])
+		else:
+			delim = placement.delimiter
+			assert delim is not None
+			bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
+			body.extend([
+				f"\t\t\tif have < at + {len(delim)} {{",
+				f"\t\t\t\treturn situ_rt::Framing::Need(at + {len(delim)});",
+				"\t\t\t}",
+				"",
+				"\t\t\t// The terminator only terminates where an element"
+				" would",
+				"\t\t\t// start. It belongs to this member, as a delimiter"
+				" does.",
+				f"\t\t\tif &data[at..at + {len(delim)}] == {bytes_} {{",
+				f"\t\t\t\tat += {len(delim)};",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"",
+				*read,
+				"\t\t\tat += part;",
+			])
+
+		loop = ["\t\tloop {", *body, "\t\t}"]
+		if cap is not None:
+			loop = ["\t\t{", "\t\t\tlet mut seen = 0usize;",
+			        *[f"\t{line}" if line else line for line in loop],
+			        "\t\t}"]
+
+		return [
+			"",
+			f"\t\t// {placement.path}: a run of `{element.name}`, framed one",
+			"\t\t// element at a time -- the walk the accessors use cannot"
+			" tell the",
+			"\t\t// end of the run from the end of the bytes, and this asks"
+			" each",
+			"\t\t// element whether it is whole.",
+			*loop,
 		]
 
 	def _unframeable(self, struct: ResolvedStruct,

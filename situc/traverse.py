@@ -844,6 +844,65 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	return constant_bits // BITS_PER_BYTE, variable
 
 
+def is_run(placement: Placement, structs: Container[str]) -> bool:
+	"""A run of elements rather than a run of bytes.
+
+	Both spellings end somewhere the bytes decide -- `T x[] until "D"` at a
+	terminator, `T x[] while (c)` after the element failing `c` -- and both
+	are walked one element at a time. What separates them from a delimited
+	byte array is that the element is a struct, which is what makes framing a
+	question about the element rather than about a scan.
+	"""
+	return (placement.repeat_while is not None
+	        or (placement.delimiter is not None
+	            and placement.type_name in structs))
+
+
+def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
+		seen: frozenset[str] = frozenset()) -> bool:
+	"""Whether a whole one can be recognised in a prefix of a stream (20.3).
+
+	Framing a run means framing its elements: a walk over what has arrived
+	stops as readily at the end of the bytes as at the end of the run, and
+	those are opposite answers. Asking the element's own `required` is what
+	tells them apart, so a run is frameable exactly when its element is.
+
+	`seen` cuts the recursion where a struct holds a run of itself. Such a
+	schema has no finite frame anyway -- the terminator is the only thing that
+	could end it, and asking about it recursively is how a compiler hangs
+	rather than how it answers.
+
+	Both the emitters and `gen-checks` need this, and the four backends had
+	the record-run half of it written out four times.
+	"""
+	if struct.layout.register is not None:
+		return False
+	if struct.name in seen:
+		return False
+	if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+		return True
+
+	parts = extent_parts(structs, struct)
+	if parts is None:
+		return False
+
+	constant, variable = parts
+	if constant == 0 and not variable:
+		# Nothing to frame: every buffer, including an empty one, already
+		# holds a complete message.
+		return False
+
+	for placement in variable:
+		if not is_run(placement, structs):
+			continue
+		element = structs.get(placement.type_name or "")
+		if element is None:
+			return False
+		if not frameable(structs, element, seen | {struct.name}):
+			return False
+	return True
+
+
 def declares_its_own_length(placement: Placement) -> bool:
 	"""Whether the message, rather than the schema, says how long this is.
 
