@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
-from situc.codegen.c import derived
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
@@ -41,6 +40,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, arm_members, arm_of, classify_check, containment_order,
+	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
 	extent_parts,
@@ -3043,16 +3043,31 @@ class Emitter:
 		the decoded ones. A decoder that ran first would have to know where to
 		stop, which is what the scan is for.
 		"""
-		local = c_name(self._local(struct, placement))
+		local   = c_name(self._local(struct, placement))
+		decoded = self._decode_accessor(struct, placement)
+
+		# What follows decides what this says. The note read "there is no
+		# accessor for the decoded bytes" whatever came after it, which was
+		# true while the decode was emitted for `table` kernels alone and
+		# became a contradiction sitting directly above one.
+		about = ([" * The decoded bytes are below: the transform is derived"
+		          " from the kernel,",
+		          f" * so the length is {placement.codec}'s to report and not"
+		          " this header's to",
+		          " * guess."] if decoded else
+		         [" * There is no accessor for the decoded bytes: the transform"
+		          " is the",
+		          f" * caller's to run, and its length is {placement.codec}'s"
+		          " to report rather",
+		          " * than this header's to guess."])
+
 		return [
 			"",
 			f"/* `{placement.name}` is `{placement.codec}` output, and the"
 			f" pointer above is",
-			" * the encoded form. There is no accessor for the decoded bytes:"
-			" the",
-			f" * transform is the caller's to run, and its length is"
-			f" {placement.codec}'s",
-			" * to report rather than this header's to guess.",
+			" * the encoded form.",
+			" *",
+			*about,
 			" *",
 			" * The scan runs on the encoded bytes, which is the order the"
 			" format",
@@ -3060,7 +3075,7 @@ class Emitter:
 			" the",
 			" * sequence is unambiguous here and would not be after"
 			" decoding. */",
-			*self._decode_accessor(struct, placement),
+			*decoded,
 		]
 
 	def _coded_region(self, struct: ResolvedStruct,
@@ -3124,13 +3139,9 @@ class Emitter:
 		codec = self.codecs.get(placement.codec or "")
 		if codec is None or codec.kernel is None:
 			return []
-		if codec.kernel.family not in (ast.KernelFamily.TABLE,
-		                               ast.KernelFamily.STUFFING):
+		if not decodes_here(codec):
 			return []		# the decoder's shape is the kernel's, and
-					# these two are the settled ones
-		if codec.kernel.family is ast.KernelFamily.STUFFING \
-				and _named_stuffing(codec) is None:
-			return []		# a named code with no derived implementation
+					# only some of them are settled
 
 		ratio = codec.ratio
 		if ratio is None or ratio[0] == 0:
@@ -3139,8 +3150,7 @@ class Emitter:
 		# A bit-oriented kernel counts bits; a byte or stream one counts
 		# bytes. The region's span is bytes either way, so exactly one of
 		# these two needs the conversion.
-		bitwise = (codec.kernel.family is ast.KernelFamily.TABLE
-		           or _stuffing_unit(codec) == "bit")
+		bitwise = decode_counts_bits(codec)
 		scale   = " * 8u" if bitwise else ""
 		unscale = " / 8u" if bitwise else ""
 
@@ -4859,18 +4869,3 @@ def _bit_assembly(endian: ast.Endian | None) -> str:
 		return "ne"
 	return "lsb" if endian is ast.Endian.LITTLE else "msb"
 
-
-
-def _named_stuffing(codec: ast.CodecDecl) -> str | None:
-	"""The stuffing code this codec names, where one is generated for it."""
-	kernel = codec.kernel
-	value  = kernel.argument("code") if kernel is not None else None
-	name   = value.name if isinstance(value, ast.NameRef) else None
-	return name if name in derived.DERIVED_STUFFING else None
-
-
-def _stuffing_unit(codec: ast.CodecDecl) -> str:
-	"""What the trigger examines: HDLC counts bits, COBS scans bytes."""
-	kernel = codec.kernel
-	value  = kernel.argument("unit") if kernel is not None else None
-	return value.name if isinstance(value, ast.NameRef) else "stream"

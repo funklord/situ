@@ -39,7 +39,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, containment_order, decode_bound, classify,
+	Check, Member, arm_members, containment_order, decode_bound,
+	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
@@ -1728,25 +1729,33 @@ class Emitter:
 		that calls it, because a linkage specification is not allowed in a
 		block.
 		"""
+		# Every coded member, not only the undelimited ones: a region found by
+		# scanning has a decode too, and this list decided which prototypes
+		# existed for it to call.
 		wanted = sorted({
 			held.codec for struct in self.resolved.structs.values()
 			for held in own_members(struct)
-			if held.kind == "coded" and held.codec
-			and self._decodes(held)})
+			if held.codec and self._decodes(held)})
 		if not wanted:
 			return []
 
+		# `bits` or `len` after the kernel's own unit: a `table` decoder counts
+		# bits, COBS counts bytes, and the parameter name is what a reader of
+		# this header has to go on.
+		def counted(name: str) -> str:
+			codec = self.codecs.get(name)
+			return "bits" if codec is not None and decode_counts_bits(codec) \
+				else "len"
+
 		return ['extern "C" {', *[
 			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
-			" std::uint32_t bits, std::uint8_t *out);"
+			f" std::uint32_t {counted(name)}, std::uint8_t *out);"
 			for name in wanted], "}", ""]
 
 	def _decodes(self, placement: Placement) -> bool:
 		"""Whether a decode accessor is emitted for this region."""
 		codec = self.codecs.get(placement.codec or "")
-		return (codec is not None and codec.kernel is not None
-		        and codec.kernel.family is ast.KernelFamily.TABLE
-		        and decode_bound(codec, placement) is not None)
+		return codec is not None and decodes_here(codec)
 
 	def _indexed_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2267,31 +2276,86 @@ class Emitter:
 			"\t}",
 		]
 
+		return lines + self._decode_accessor(struct, placement, f"{size}u")
+
+	def _coded_delimited(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A region found by scanning and then decoded (section 13.6).
+
+		Scan first, decode second, and the order is the protocol's: a stuffing
+		code protects its own terminator, so the sequence is unambiguous in the
+		encoded bytes and would not be in the decoded ones. This backend
+		emitted the bytes and said nothing at all about the transform, so a
+		reader had no way to know they were not the value.
+		"""
+		name    = c_name(local_name(struct, placement))
+		decoded = self._decode_accessor(struct, placement, f"{name}_len()")
+
+		about = ([("\t * The decoded bytes are below: the transform is derived"
+		           " from the"),
+		          f"\t * kernel, so the length is {placement.codec}'s to report"
+		          " and not this",
+		          "\t * header's to guess."] if decoded else
+		         [("\t * There is no accessor for the decoded bytes: the"
+		           " transform is the"),
+		          f"\t * caller's to run, and its length is {placement.codec}'s"
+		          " to report",
+		          "\t * rather than this header's to guess."])
+
+		return [
+			"",
+			f"\t/* {placement.path} is `{placement.codec}` output, and the"
+			" bytes above",
+			"\t * are the encoded form.",
+			"\t *",
+			*about,
+			"\t *",
+			"\t * The scan runs on the encoded bytes, which is the order the",
+			"\t * format specifies -- a stuffing code protects its own",
+			"\t * terminator, so the sequence is unambiguous here and would",
+			"\t * not be after decoding. */",
+			*decoded,
+		]
+
+	def _decode_accessor(self, struct: ResolvedStruct, placement: Placement,
+			encoded: str) -> list[str]:
+		"""The decoded bytes, into a buffer the caller owns.
+
+		`encoded` is how many bytes the wire form occupies -- a constant for a
+		sized region, the scan's own length for a delimited one. Not the span:
+		the span includes the delimiter, and the delimiter is not the codec's
+		to transform.
+		"""
 		codec = self.codecs.get(placement.codec or "")
-		bound = None if codec is None else decode_bound(codec, placement)
-		if codec is None or codec.kernel is None or bound is None \
-				or codec.kernel.family is not ast.KernelFamily.TABLE:
-			# The decoder's shape is the kernel's, and only `table`'s is
-			# settled. Guessing one for the families that are described and
-			# not yet generated would name a function nobody agreed to write.
-			return lines
+		if codec is None or not decodes_here(codec):
+			return []
 
 		ratio = codec.ratio
-		assert ratio is not None
+		if ratio is None or ratio[0] == 0:
+			return []
+
+		name    = c_name(local_name(struct, placement))
+		bound   = decode_bound(codec, placement)
+		bitwise = decode_counts_bits(codec)
+		scale   = " * 8u" if bitwise else ""
+		unscale = " / 8u" if bitwise else ""
+
 		return [
-			*lines,
 			"",
-			f"\t/* The decoded bytes, into a buffer the caller owns. Nothing",
-			"\t * here allocates, so the capacity is a parameter and the bound",
-			f"\t * is `{name}_decoded_max` -- {ratio[0]}:{ratio[1]}, so the"
-			" value is that",
-			"\t * much smaller than the wire form. A short buffer is refused",
-			"\t * rather than half-filled. */",
-			f"\tstatic constexpr std::uint32_t {name}_decoded_max = {bound}u;",
+			"\t/* The decoded bytes, into a buffer the caller owns. Nothing",
+			"\t * here allocates, so the capacity is a parameter.",
+			"\t *",
+			f"\t * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so the value"
+			" is that much",
+			"\t * smaller than the wire form. A short buffer is refused rather",
+			"\t * than half-filled. */",
+			*([f"\tstatic constexpr std::uint32_t {name}_decoded_max ="
+			   f" {bound}u;"] if bound is not None else []),
 			f"\t[[nodiscard]] ::situ::rt::err {name}_decode(std::uint8_t *out,",
 			"\t\t\tstd::uint32_t cap, std::uint32_t &len) const noexcept",
 			"\t{",
-			f"\t\tconst std::uint32_t need = {size}u * {ratio[1]}u"
+			f"\t\tconst std::uint32_t encoded = {encoded};",
+			f"\t\tconst std::uint32_t need = encoded * {ratio[1]}u"
 			f" / {ratio[0]}u;",
 			"",
 			"\t\tif (cap < need) {",
@@ -2299,7 +2363,7 @@ class Emitter:
 			"\t\t}",
 			f"\t\tlen = situ_{c_name(placement.codec or '')}_decode("
 			f"{name}().data(),",
-			f"\t\t\t{size}u * 8u, out) / 8u;",
+			f"\t\t\tencoded{scale}, out){unscale};",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 		]
@@ -2428,7 +2492,10 @@ class Emitter:
 		if kind is Member.REPEAT_WHILE:
 			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
-			return self._delimited(struct, placement)
+			lines = self._delimited(struct, placement)
+			if placement.codec is not None:
+				lines.extend(self._coded_delimited(struct, placement))
+			return lines
 		if kind is Member.RECORD_RUN:
 			return self._record_run(struct, placement)
 		if kind is Member.VARIABLE:

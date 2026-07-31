@@ -37,7 +37,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, arm_members, decode_bound, classify, classify_check, declares_its_own_length,
+	Check, Member, arm_members, decode_bound, decode_counts_bits,
+	decodes_here, classify, classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
 	obligations, own_entries, own_members,
@@ -855,42 +856,95 @@ class Emitter:
 			"\t}",
 		]
 
+		return lines + self._decode_accessor(struct, placement, str(size))
+
+	def _coded_delimited(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A region found by scanning and then decoded (section 13.6).
+
+		Scan first, decode second: a stuffing code protects its own terminator,
+		so the sequence is unambiguous in the encoded bytes and would not be in
+		the decoded ones. This backend emitted the bytes and said nothing about
+		the transform, so a reader had no way to know they were not the value.
+		"""
+		name    = _ident(c_name(local_name(struct, placement)))
+		decoded = self._decode_accessor(struct, placement, f"self.{name}_len()")
+
+		about = ([("\t/// The decoded bytes are below: the transform is derived"
+		           " from the"),
+		          f"\t/// kernel, so the length is {placement.codec}'s to"
+		          " report and not",
+		          "\t/// this module's to guess."] if decoded else
+		         [("\t/// There is no accessor for the decoded bytes: the"
+		           " transform is"),
+		          f"\t/// the caller's to run, and its length is"
+		          f" {placement.codec}'s to report",
+		          "\t/// rather than this module's to guess."])
+
+		return [
+			"",
+			f"\t/// `{placement.path}` is `{placement.codec}` output, and the",
+			"\t/// bytes above are the encoded form.",
+			"\t///",
+			*about,
+			"\t///",
+			"\t/// The scan runs on the encoded bytes, which is the order the",
+			"\t/// format specifies -- a stuffing code protects its own",
+			"\t/// terminator, so the sequence is unambiguous here and would",
+			"\t/// not be after decoding.",
+			*decoded,
+		]
+
+	def _decode_accessor(self, struct: ResolvedStruct, placement: Placement,
+			encoded: str) -> list[str]:
+		"""The decoded bytes, into a buffer the caller owns.
+
+		`encoded` is how many bytes the wire form occupies: a constant for a
+		sized region, the scan's own length for a delimited one -- and not the
+		span, which includes a delimiter the codec has no business
+		transforming.
+		"""
 		codec = self.codecs.get(placement.codec or "")
-		bound = None if codec is None else decode_bound(codec, placement)
-		if codec is None or codec.kernel is None or bound is None \
-				or codec.kernel.family is not ast.KernelFamily.TABLE:
-			return lines
+		if codec is None or not decodes_here(codec):
+			return []
 
 		ratio = codec.ratio
-		assert ratio is not None
-		sym = f"situ_{c_name(placement.codec or '')}_decode"
+		if ratio is None or ratio[0] == 0:
+			return []
+
+		name    = _ident(c_name(local_name(struct, placement)))
+		bound   = decode_bound(codec, placement)
+		bitwise = decode_counts_bits(codec)
+		sym     = f"situ_{c_name(placement.codec or '')}_decode"
+		scale   = " * 8" if bitwise else ""
+		unscale = " / 8" if bitwise else ""
+
 		return [
-			*lines,
 			"",
 			f"\t/// The decoded bytes of `{placement.path}`, into a buffer the",
 			"\t/// caller owns. Nothing here allocates, so the capacity is a",
-			f"\t/// parameter and `{name.upper()}_DECODED_MAX` is the bound --",
-			f"\t/// {ratio[0]}:{ratio[1]}, so the value is that much smaller"
-			" than the wire",
-			"\t/// form. A short buffer is refused rather than half-filled.",
-			f"\tpub const {name.upper()}_DECODED_MAX: usize = {bound};",
+			f"\t/// parameter -- {ratio[0]}:{ratio[1]}, so the value is that"
+			" much smaller",
+			"\t/// than the wire form. A short buffer is refused rather than",
+			"\t/// half-filled.",
+			*([f"\tpub const {name.upper()}_DECODED_MAX: usize = {bound};", ""]
+			  if bound is not None else []),
+			f"\tpub fn {name}_decode(&self, out: &mut [u8]) -> Result<usize> {{",
+			f"\t\tlet encoded = {encoded};",
+			f"\t\tlet need = encoded * {ratio[1]} / {ratio[0]};",
 			"",
-			f"\tpub fn {name}_decode(&self, out: &mut [u8])"
-			" -> Result<usize> {",
-			f"\t\tconst NEED: usize = {size} * {ratio[1]} / {ratio[0]};",
-			"",
-			"\t\tif out.len() < NEED {",
+			"\t\tif out.len() < need {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"\t\t// SAFETY: the codec is the C implementation (decision 0017)",
 			"\t\t// and this is the one call that crosses to it. Both slices",
 			"\t\t// are checked above -- the input is this region's own bytes",
 			"\t\t// and the output is at least what the ratio says it needs.",
-			"\t\tlet bits = unsafe {",
-			f"\t\t\t{sym}(self.{name}().as_ptr(), {size} as u32 * 8,",
+			"\t\tlet written = unsafe {",
+			f"\t\t\t{sym}(self.{name}().as_ptr(), (encoded{scale}) as u32,",
 			"\t\t\t\tout.as_mut_ptr())",
 			"\t\t};",
-			"\t\tOk(bits as usize / 8)",
+			f"\t\tOk(written as usize{unscale})",
 			"\t}",
 		]
 
@@ -899,7 +953,7 @@ class Emitter:
 		wanted = sorted({
 			held.codec for struct in self.resolved.structs.values()
 			for held in own_members(struct)
-			if held.kind == "coded" and held.codec and self._decodes(held)})
+			if held.codec and self._decodes(held)})
 		if not wanted:
 			return []
 
@@ -909,16 +963,15 @@ class Emitter:
 			# `unused_doc_comments` warning, and warnings are errors here.
 			"// The codec implementations, which are C's (decision 0017).",
 			'extern "C" {',
-			*[f"\tfn situ_{c_name(name)}_decode(input: *const u8, bits: u32,"
-			  " out: *mut u8) -> u32;" for name in wanted],
+			*[f"\tfn situ_{c_name(name)}_decode(input: *const u8,"
+			  f" {'bits' if decode_counts_bits(self.codecs[name]) else 'len'}:"
+			  " u32, out: *mut u8) -> u32;" for name in wanted],
 			"}",
 		]
 
 	def _decodes(self, placement: Placement) -> bool:
 		codec = self.codecs.get(placement.codec or "")
-		return (codec is not None and codec.kernel is not None
-		        and codec.kernel.family is ast.KernelFamily.TABLE
-		        and decode_bound(codec, placement) is not None)
+		return codec is not None and decodes_here(codec)
 
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
 		"""Each variant arm's members, guarded by the discriminant (9.6)."""
@@ -1026,7 +1079,10 @@ class Emitter:
 		if kind is Member.REPEAT_WHILE:
 			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
-			return self._delimited(struct, placement)
+			lines = self._delimited(struct, placement)
+			if placement.codec is not None:
+				lines.extend(self._coded_delimited(struct, placement))
+			return lines
 		if kind is Member.RECORD_RUN:
 			return self._record_run(struct, placement)
 		if kind is Member.VARIABLE:

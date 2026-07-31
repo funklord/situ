@@ -2217,13 +2217,20 @@ lived in two, the dispatch and the prototype gate, and adding a code to one of
 them emitted a definition that nothing declared.
 
 The decode accessor on a coded region (13.5) covers `table` and `stuffing`,
-which are the shapes settled here. It was `table` alone, on the argument that
-the other families were described and not generated -- an argument that stopped
-being true without the comment stating it noticing. Building the rest of it
-found that the accessor decoded `_span` rather than `_len`, so it ran the
-codec over the delimiter as well as the content: SMTP's `CRLF . CRLF` went
-through the unstuffer and came back as two extra bytes. Nothing caught it while
-the accessor existed only for `table` kernels and no delimited region used one.
+which are the shapes settled here, in all four backends. It was `table` alone
+in each of them, on the argument that the other families were described and not
+generated -- an argument that stopped being true without any of the four
+comments stating it noticing. `traverse.decodes_here` and
+`traverse.decode_counts_bits` answer it once now.
+
+Building the rest of it found three things. The accessor decoded `_span` rather
+than `_len`, so it ran the codec over the delimiter as well as the content:
+SMTP's `CRLF . CRLF` went through the unstuffer and came back as two extra
+bytes. C's note above it said "there is no accessor for the decoded bytes"
+whatever followed, which was true while none did and became a contradiction
+sitting directly on top of one. And the other three backends emitted a
+delimited coded region's bytes with no note at all -- so a reader had the
+encoded form in hand and nothing saying it was not the value.
 
 **Bit phase.** Sub-byte granularity codes force a change in the layout solver:
 a region may begin at a bit offset rather than a byte offset, and its length may
@@ -5056,7 +5063,8 @@ anyone read it back: all six families dispatch, and all twenty codecs in
 
 What was true, narrowly, is that one *named code* had none -- `smtp_dot`, in
 the `stuffing` family -- and that the decode accessor on a coded region was
-`table`-only. Both are closed (13.4), so the dot-stuffed body decodes.
+`table`-only. Both are closed (13.4) in all four backends, so the dot-stuffed
+body decodes.
 
 This entry is the reason section 0 says to re-derive this list from the
 generated output rather than trust it. It was written when it was right, and

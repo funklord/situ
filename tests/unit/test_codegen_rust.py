@@ -37,8 +37,12 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 
 
 def build(tmp_path: Path, body: str, main: str = "",
-		preamble: str = "") -> subprocess.CompletedProcess[str]:
-	"""Generate, lay out a crate, and compile it."""
+		preamble: str = "", link: str = "") -> subprocess.CompletedProcess[str]:
+	"""Generate, lay out a crate, and compile it.
+
+	`link` names a directory holding a static archive of the C codec
+	implementations, for the one accessor that crosses to them (0017).
+	"""
 	src = tmp_path / "src"
 	src.mkdir(exist_ok=True)
 
@@ -64,9 +68,10 @@ def build(tmp_path: Path, body: str, main: str = "",
 	# only compiles without it is generated code that fails for the user. It
 	# was absent here, and `unused_parens` in a clamp went unnoticed until a
 	# hand-run probe used the flag.
+	linkage = ["-L", link, "-l", "static=stuff"] if link else []
 	return subprocess.run(
 		[RUSTC, "--edition", "2021", "-D", "warnings", *kind, str(entry),
-		 "-o", str(tmp_path / "out")],
+		 *linkage, "-o", str(tmp_path / "out")],
 		capture_output=True, text=True, check=False, cwd=tmp_path)
 
 
@@ -1250,5 +1255,78 @@ fn main() {
 	assert_eq!(c.rowid_len(), 9);
 }
 """)
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+# -- a coded region that ends at a delimiter (13.6) -------------------------
+
+STUFFED = ("codec stuff { kernel = stuffing(worst_case = 4, per = 3,"
+	" unit = stream, code = smtp_dot); }\nimpl stuff derived;\n"
+	'struct S { coded body(stuff) until "\\r\\n.\\r\\n" '
+	"{ u8 content[remaining]; } }")
+
+
+def test_a_delimited_coded_region_says_the_bytes_are_encoded() -> None:
+	"""It emitted the bytes and nothing else, so a reader had no way to know
+	they were not the value."""
+	module = emit(STUFFED)
+
+	assert "is `stuff` output, and the" in module
+	assert "The scan runs on the encoded bytes" in module
+
+
+def test_a_stuffing_kernel_gets_a_decode_accessor() -> None:
+	module = emit(STUFFED)
+
+	assert "pub fn body_decode(&self, out: &mut [u8]) -> Result<usize>" in module
+	assert "let encoded = self.body_len();" in module
+
+
+def test_a_byte_kernel_is_handed_bytes() -> None:
+	"""`unit` decides. A byte count into a bit loop decodes an eighth of the
+	region and returns confidently."""
+	module = emit(STUFFED)
+
+	assert "(encoded) as u32," in module
+	assert "len: u32, out: *mut u8" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_decode_unstuffs_a_real_body(tmp_path: Path) -> None:
+	"""RFC 5321 section 4.5.2: the receiver removes one period from a line
+	that starts with one, and the terminator is the only bare dot."""
+	from situc.codegen.c import derived
+	from situc.codegen.c import generate as generate_c
+
+	schema   = parse_text(PREAMBLE + STUFFED)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.h").write_text(
+		generate_c(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "impl.c").write_text(
+		derived.generate(schema, "unit"), encoding="ascii")
+
+	object_file = tmp_path / "impl.o"
+	compiled = subprocess.run(
+		["cc", "-std=c11", "-O1", "-c", f"-I{RUNTIME.parent.parent / 'c'}",
+		 f"-I{tmp_path}", str(tmp_path / "impl.c"), "-o", str(object_file)],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+
+	archive = tmp_path / "libstuff.a"
+	subprocess.run(["ar", "rcs", str(archive), str(object_file)], check=True)
+
+	result = build(tmp_path, STUFFED, main="""
+const WIRE: &[u8] = b"a\\r\\n..b\\r\\n\\r\\n.\\r\\n";
+const WANT: &[u8] = b"a\\r\\n.b\\r\\n";
+
+fn main() {
+	let s = unit::S::new(WIRE).unwrap();
+	let mut out = [0u8; 64];
+	let n = s.body_decode(&mut out).unwrap();
+	assert_eq!(&out[..n], WANT);
+	assert!(s.body_decode(&mut out[..1]).is_err());
+}
+""", link=str(tmp_path))
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0

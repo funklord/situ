@@ -34,7 +34,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, containment_order, decode_bound, classify,
+	Check, Member, arm_members, containment_order, decode_bound,
+	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts,
 	has_computable_extent, local_name, matched_values, obligation,
@@ -1028,19 +1029,55 @@ class Emitter:
 			f"\t\treturn self._msg.buffer[start:start + {size}]",
 		]
 
+		return lines + self._decode_note(struct, placement)
+
+	def _coded_delimited(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A region found by scanning and then decoded (section 13.6).
+
+		Scan first, decode second: a stuffing code protects its own terminator,
+		so the sequence is unambiguous in the encoded bytes and would not be in
+		the decoded ones. This backend emitted the bytes and said nothing about
+		the transform, so a reader had no way to know they were not the value.
+		"""
+		return [
+			"",
+			f"\t# {placement.path} is `{placement.codec}` output, and the bytes",
+			"\t# above are the encoded form. The scan runs on those, which is",
+			"\t# the order the format specifies -- a stuffing code protects its",
+			"\t# own terminator, so the sequence is unambiguous there and would",
+			"\t# not be after decoding.",
+			*self._decode_note(struct, placement),
+		]
+
+	def _decode_note(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Where the decoded bytes are, which for this backend is elsewhere.
+
+		Not emitted, deliberately and unchanged: the codec is C's (0017), and
+		calling it from here means loading a shared object from a path this
+		generator would have to invent. What the note can do is name the symbol
+		and the size, and it now does so for a delimited region too -- which
+		got no note at all, so a Python reader had nothing saying the bytes
+		were stuffed.
+		"""
 		codec = self.codecs.get(placement.codec or "")
-		bound = None if codec is None else decode_bound(codec, placement)
-		if bound is None:
-			return lines
+		if codec is None or not decodes_here(codec):
+			return []
+
+		name  = c_name(local_name(struct, placement))
+		bound = decode_bound(codec, placement)
+		sized = (f"{bound} bytes is what it needs" if bound is not None
+		         else f"it needs the encoded length scaled by the codec's"
+		              f" ratio, which `{name}_len` gives")
 
 		return [
-			*lines,
 			"",
 			f"\t# No `{name}_decode`: the codec is C's (decision 0017), and",
 			"\t# calling it from here means loading a shared object from a",
 			"\t# path this generator would have to invent. Build the C",
 			f"\t# runtime and call `situ_{c_name(placement.codec or '')}_decode`",
-			f"\t# through ctypes; {bound} bytes is what it needs.",
+			f"\t# through ctypes; {sized}.",
 		]
 
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
@@ -1149,7 +1186,10 @@ class Emitter:
 		if kind is Member.REPEAT_WHILE:
 			return self._repeat_while(struct, placement)
 		if kind is Member.DELIMITED:
-			return self._delimited(struct, placement)
+			lines = self._delimited(struct, placement)
+			if placement.codec is not None:
+				lines.extend(self._coded_delimited(struct, placement))
+			return lines
 		if kind is Member.RECORD_RUN:
 			return self._record_run(struct, placement)
 		if kind is Member.VARIABLE:

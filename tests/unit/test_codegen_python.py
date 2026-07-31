@@ -1210,3 +1210,38 @@ def test_a_be128_field_reads_what_sqlite_wrote(tmp_path: Path) -> None:
 	held = module.cell.at(rt.Message(nine), 0, len(nine))
 	assert held.rowid == (1 << 60) - 1
 	assert held.rowid_len == 9
+
+
+# -- a coded region that ends at a delimiter (13.6) -------------------------
+
+STUFFED = ("codec stuff { kernel = stuffing(worst_case = 4, per = 3,"
+	" unit = stream, code = smtp_dot); }\nimpl stuff derived;\n"
+	'struct S { coded body(stuff) until "\\r\\n.\\r\\n" '
+	"{ u8 content[remaining]; } }")
+
+
+def test_a_delimited_coded_region_says_the_bytes_are_encoded() -> None:
+	"""It emitted the bytes and nothing else, so a Python reader had nothing
+	saying they were stuffed."""
+	module = emit(STUFFED)
+
+	assert "is `stuff` output, and the bytes" in module
+	assert "the order the format specifies" in module
+
+
+def test_the_note_names_the_symbol_to_call() -> None:
+	"""The decode is not emitted here, deliberately: the codec is C's (0017)
+	and calling it means loading a shared object from a path this generator
+	would have to invent. What the note can do is say which symbol."""
+	module = emit(STUFFED)
+
+	assert "No `body_decode`" in module
+	assert "situ_stuff_decode" in module
+
+
+def test_an_unbounded_region_is_told_how_to_size_the_buffer() -> None:
+	"""There is no static bound for a `[remaining]` region, so the note names
+	the accessor that gives the encoded length instead of a number."""
+	module = emit(STUFFED)
+
+	assert "`body_len` gives" in module

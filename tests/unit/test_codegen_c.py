@@ -2686,6 +2686,11 @@ def test_a_stuffing_kernel_gets_a_decode_accessor() -> None:
 
 	assert "situ_S_body_decode(situ_view_t view, uint8_t *out," in header
 	assert "situ_stuff_decode(situ_S_body_ptr(view)," in header
+	# The note above it has to agree with what follows: it said "there is no
+	# accessor for the decoded bytes" whatever came after, and became a
+	# contradiction sitting directly on top of one.
+	assert "The decoded bytes are below" in header
+	assert "There is no accessor for the decoded bytes" not in header
 
 
 def test_a_byte_kernel_is_handed_bytes_and_a_bit_kernel_bits() -> None:
@@ -2726,7 +2731,7 @@ def test_a_stuffing_code_with_no_implementation_gets_no_decode() -> None:
 		                    "impl stuff derived;\n")
 
 	assert "situ_S_body_decode" not in header
-	assert "transform is the caller's to run" in header
+	assert "There is no accessor for the decoded bytes" in header
 
 
 # -- tlv regions (section 9.5) ----------------------------------------------

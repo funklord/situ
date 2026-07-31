@@ -1654,3 +1654,98 @@ def test_the_arm_types_of_a_variant_come_before_it(tmp_path: Path) -> None:
 
 	assert header.index("class Zeta") < header.index("class S")
 	assert header.index("class Yank") < header.index("class S")
+
+
+# -- a coded region that ends at a delimiter (13.6) -------------------------
+
+STUFFED = ("codec stuff { kernel = stuffing(worst_case = 4, per = 3,"
+	" unit = stream, code = smtp_dot); }\nimpl stuff derived;\n"
+	'struct S { coded body(stuff) until "\\r\\n.\\r\\n" '
+	"{ u8 content[remaining]; } }")
+
+
+def test_a_delimited_coded_region_says_the_bytes_are_encoded() -> None:
+	"""It emitted the bytes and nothing else, so a reader had no way to know
+	they were not the value."""
+	header = emit(STUFFED, preamble=PREAMBLE)
+
+	assert "is `stuff` output, and the bytes above" in header
+	assert "The scan runs on the encoded bytes" in header
+
+
+def test_a_stuffing_kernel_gets_a_decode_accessor() -> None:
+	"""Table-only, on the argument that the other families were described and
+	not generated -- which stopped being true without the comment noticing."""
+	header = emit(STUFFED, preamble=PREAMBLE)
+
+	assert "body_decode(std::uint8_t *out," in header
+	assert "situ_stuff_decode(body().data()," in header
+
+
+def test_the_decode_runs_over_the_content_and_not_the_delimiter() -> None:
+	header = emit(STUFFED, preamble=PREAMBLE)
+
+	assert "const std::uint32_t encoded = body_len();" in header
+	# `_span` includes the delimiter, which is not the codec's to transform.
+	assert "const std::uint32_t encoded = body_span();" not in header
+
+
+def test_a_byte_kernel_is_handed_bytes() -> None:
+	"""`unit` decides. Passing a byte count to a bit loop decodes an eighth of
+	the region and returns confidently."""
+	header = emit(STUFFED, preamble=PREAMBLE)
+
+	assert "encoded, out);" in header
+	assert "std::uint32_t len, std::uint8_t *out);" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_decode_unstuffs_a_real_body(tmp_path: Path) -> None:
+	"""RFC 5321 section 4.5.2: the receiver removes one period from a line
+	that starts with one, and the terminator is the only bare dot."""
+	from situc.codegen.c import derived
+
+	schema   = parse_text(PREAMBLE + STUFFED)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	# The derived file includes `unit.h`, whose `extern "C"` guard is what
+	# gives its definitions C linkage when g++ compiles them.
+	(tmp_path / "unit.h").write_text(
+		generate_c(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "impl.c").write_text(
+		derived.generate(schema, "unit"), encoding="ascii")
+	(tmp_path / "main.cpp").write_text('''
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	static const char WIRE[] = "a\\r\\n..b\\r\\n\\r\\n.\\r\\n";
+	static const char WANT[] = "a\\r\\n.b\\r\\n";
+
+	std::uint8_t buf[64];
+	std::uint8_t out[64];
+	std::uint32_t len = 0;
+
+	std::memcpy(buf, WIRE, sizeof(WIRE) - 1);
+	situ::rt::message owner(buf, sizeof(WIRE) - 1);
+	situ::S s;
+	if (situ::S::at(owner, 0, sizeof(WIRE) - 1, s) != situ::rt::err::ok) return 1;
+	if (s.body_decode(out, sizeof out, len) != situ::rt::err::ok) return 2;
+	if (len != sizeof(WANT) - 1 || std::memcmp(out, WANT, len) != 0) return 3;
+	if (s.body_decode(out, 1, len) != situ::rt::err::bounds) return 4;
+	return 0;
+}
+''', encoding="ascii")
+
+	assert HOST_CXX is not None
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"), str(tmp_path / "impl.c"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True, check=False)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

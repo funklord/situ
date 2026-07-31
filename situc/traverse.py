@@ -680,6 +680,55 @@ def arm_of(struct: ResolvedStruct,
 	return None
 
 
+#: Stuffing codes a derived implementation exists for. The C generator owns the
+#: list; this is the shape question, which every backend asks.
+DERIVED_STUFFING = ("cobs", "hdlc", "smtp_dot")
+
+
+def decodes_here(codec: object) -> bool:
+	"""Whether a decode accessor has a settled shape to call.
+
+	`(in, count, out) -> count` for a `table` kernel and for a `stuffing` one
+	whose named code is generated. The other families emit implementations too,
+	but their interfaces differ enough -- a Hamming codeword is a nibble in and
+	a byte out, with a correction flag -- that a generic region decode would be
+	guessing.
+
+	Asked here because four backends ask it, and it was `family is TABLE` in
+	each of them with a comment saying the rest were "described and not yet
+	generated". They were generated, and none of the four comments noticed.
+	"""
+	kernel = getattr(codec, "kernel", None)
+	if kernel is None:
+		return False
+	family = getattr(kernel, "family", None)
+	if getattr(family, "value", None) == "table":
+		return True
+	if getattr(family, "value", None) != "stuffing":
+		return False
+
+	named = kernel.argument("code")
+	return getattr(named, "name", None) in DERIVED_STUFFING
+
+
+def decode_counts_bits(codec: object) -> bool:
+	"""Whether the decoder's count is bits rather than bytes.
+
+	A `table` kernel is bit-oriented by construction. A `stuffing` one declares
+	`unit`, because HDLC counts bits where COBS scans bytes -- and passing a
+	byte count to a bit loop decodes an eighth of the region and returns
+	confidently.
+	"""
+	kernel = getattr(codec, "kernel", None)
+	if kernel is None:
+		return False
+	if getattr(getattr(kernel, "family", None), "value", None) == "table":
+		return True
+
+	unit = kernel.argument("unit")
+	return getattr(unit, "name", None) == "bit"
+
+
 def decode_bound(codec: object, placement: Placement) -> int | None:
 	"""How many bytes the decoded form of this region can occupy.
 
