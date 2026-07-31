@@ -1825,10 +1825,52 @@ class Emitter:
 			f"\t\t\t{nested}.SIZE_BYTES)",
 		]
 
+	def _scalar_array(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""`u16 samples[4]`: one getter taking an index.
+
+		No slice: the element is `ValueConverted`, so bytes handed back whole
+		would not be the values. Index them individually, which is C's rule and
+		the reason it gives.
+		"""
+		name  = c_name(local_name(struct, placement))
+		count = placement.array_count or 0
+		width = scalar.bits // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " where the array starts."]
+
+		load = self._load(placement, scalar,
+		                  offset=f"({start}) + index * {width}")
+
+		return [
+			"",
+			f"\tCOUNT_{name.upper()} = {count}",
+			"",
+			f"\tdef {name}(self, index: int) -> int:",
+			f'\t\t"""Element `index` of {count}, an {scalar.name}.',
+			"",
+			"\t\tNo slice accessor: the element is ValueConverted, so bytes",
+			'\t\thanded back whole would not be the values."""',
+			f"\t\tif not 0 <= index < {count}:",
+			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]'
+			f' of {count}")',
+			f"\t\treturn {load}",
+		]
+
 	def _array(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))
 		scalar = placement.scalar
 		count  = placement.array_count or 0
+
+		# A wide scalar element: an indexed getter, which is what C emits.
+		# No pointer, for the reason C gives -- the element is ValueConverted,
+		# so a view into it would alias bytes that are not the value.
+		if scalar is not None and scalar.bits != BITS_PER_BYTE \
+				and not scalar.is_bit_packed \
+				and scalar.bits % BITS_PER_BYTE == 0:
+			return self._scalar_array(struct, placement, scalar)
 
 		if scalar is None or scalar.bits != BITS_PER_BYTE:
 			nested = c_name(placement.type_name or "")

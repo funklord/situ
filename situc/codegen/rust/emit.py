@@ -2834,9 +2834,53 @@ class Emitter:
 		])
 		return lines
 
+	def _scalar_array(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""`u16 samples[4]`: one getter taking an index.
+
+		No slice: the element is `ValueConverted`, so bytes handed back whole
+		would not be the values. Index them individually, which is C's rule and
+		the reason it gives.
+		"""
+		name  = _ident(c_name(local_name(struct, placement)))
+		count = placement.array_count or 0
+		width = scalar.bits // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " where the array starts."]
+
+		rtype = self._rust_type(scalar)
+		load  = self._load(placement, scalar,
+		                   offset=f"{self._unparen(start)} + index * {width}")
+
+		return [
+			"",
+			f"\t/// `{placement.path}`: {count} elements of {scalar.name}.",
+			"\t///",
+			"\t/// No slice accessor: the element is ValueConverted, so bytes",
+			"\t/// handed back whole would not be the values.",
+			f"\tpub const {name.upper()}_COUNT: usize = {count};",
+			f"\tpub fn {name}(&self, index: usize) -> Result<{rtype}> {{",
+			f"\t\tif index >= {count} {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tOk({load})",
+			"\t}",
+		]
+
 	def _struct_array(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
-		"""A counted array of structs."""
+		"""A counted array of structs, or of wide scalars."""
+		# A wide scalar element gets an indexed getter, which is what C emits.
+		# It reached the note below, which said `u16` has no fixed size -- of a
+		# type that plainly has one, because the branch was only ever written
+		# for struct elements.
+		scalar = placement.scalar
+		if scalar is not None and not scalar.is_bit_packed \
+				and scalar.bits % BITS_PER_BYTE == 0:
+			return self._scalar_array(struct, placement, scalar)
+
 		inner = self.resolved.structs.get(placement.type_name or "")
 		if inner is None or not inner.layout.is_fixed_size:
 			return ["", f"\t// {placement.path}: element type"

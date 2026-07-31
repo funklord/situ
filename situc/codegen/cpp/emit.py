@@ -3366,6 +3366,15 @@ class Emitter:
 		if scalar is None and element is not None:
 			return self._element_array(struct, placement, element)
 
+		# A wide scalar element: an indexed getter, which is what C emits and
+		# what the note called "not in the static subset yet". No pointer, for
+		# the reason C gives -- the element is ValueConverted, so a pointer
+		# into it would alias bytes that are not the value.
+		if scalar is not None and scalar.bits != BITS_PER_BYTE \
+				and not scalar.is_bit_packed \
+				and scalar.bits % BITS_PER_BYTE == 0:
+			return self._scalar_array(struct, placement, scalar)
+
 		if scalar is None or scalar.bits != BITS_PER_BYTE:
 			return ["", f"\t/* {placement.path}: element type"
 			        f" {placement.type_name} is not in the static subset yet. */"]
@@ -3392,6 +3401,41 @@ class Emitter:
 				"\t}",
 			])
 		return lines
+
+	def _scalar_array(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""`u16 samples[4]`: one getter taking an index.
+
+		No pointer: the element is `ValueConverted`, so a pointer into it
+		would alias bytes that are not the value. Index them individually,
+		which is C's rule and the reason it gives.
+		"""
+		name  = c_name(local_name(struct, placement))
+		count = placement.array_count or 0
+		width = scalar.bits // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " where the array starts. */"]
+
+		ctype = self._ctype(scalar)
+		load  = self._load(scalar, placement,
+		                   offset=f"({start}) + index * {width}")
+
+		return [
+			"",
+			f"\t/* {placement.path}: {count} elements of {scalar.name}.",
+			"\t *",
+			"\t * No pointer accessor: the element is ValueConverted, so a",
+			"\t * pointer into it would alias bytes that are not the value.",
+			"\t * Out of range is the caller's to avoid, as with any array. */",
+			f"\tstatic constexpr std::uint32_t {name}_count = {count};",
+			f"\t[[nodiscard]] {ctype} {name}(std::uint32_t index)"
+			" const noexcept",
+			"\t{",
+			f"\t\treturn {load};",
+			"\t}",
+		]
 
 	def _element_array(self, struct: ResolvedStruct, placement: Placement,
 			element: ResolvedStruct) -> list[str]:

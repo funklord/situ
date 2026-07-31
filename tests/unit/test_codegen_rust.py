@@ -1534,3 +1534,22 @@ def test_a_member_after_a_sealed_region_is_placed() -> None:
 
 	assert "pub fn mac_covered" in module
 	assert "cannot resolve where the tag sits" not in module
+
+
+WIDE = "struct w { u8 kind; u16 samples[4]; i32 deltas[2]; }"
+
+
+def test_an_array_of_wide_scalars_gets_an_indexed_getter() -> None:
+	"""It reported "element type u16 has no fixed size" of a type that plainly
+	has one: the branch was only ever written for struct elements."""
+	module = emit(WIDE)
+
+	assert "pub fn samples(&self, index: usize) -> Result<u16>" in module
+	assert "pub fn deltas(&self, index: usize) -> Result<i32>" in module
+	assert "has no fixed size" not in module
+
+
+def test_an_index_past_the_end_is_refused() -> None:
+	module = emit(WIDE)
+
+	assert "if index >= 4 {" in module

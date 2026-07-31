@@ -1423,3 +1423,22 @@ def test_a_member_after_a_sealed_region_is_placed() -> None:
 
 	assert "def mac_covered" in module
 	assert "cannot resolve where the tag sits" not in module
+
+
+WIDE = "struct w { u8 kind; u16 samples[4]; i32 deltas[2]; }"
+
+
+def test_an_array_of_wide_scalars_gets_an_indexed_getter(tmp_path: Path) -> None:
+	module = load(tmp_path, WIDE)
+	buf    = bytearray(32)
+	for i in range(4):
+		buf[1 + i * 2] = 1
+		buf[2 + i * 2] = 0x10 + i
+	buf[9:13] = bytes([0xFF, 0xFF, 0xFF, 0xFB])
+	held = module.w.at(runtime().Message(buf), 0)
+
+	assert [held.samples(i) for i in range(4)] == [272, 273, 274, 275]
+	assert held.deltas(0) == -5		# signed, and sign-extended
+
+	with pytest.raises(IndexError):
+		held.samples(4)

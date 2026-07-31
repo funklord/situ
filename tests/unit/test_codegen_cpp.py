@@ -2115,3 +2115,26 @@ def test_a_member_after_a_sealed_region_is_placed() -> None:
 
 	assert "mac_covered" in header
 	assert "cannot resolve where the tag sits" not in header
+
+
+WIDE = "struct w { u8 kind; u16 samples[4]; i32 deltas[2]; }"
+
+
+def test_an_array_of_wide_scalars_gets_an_indexed_getter() -> None:
+	"""C emits one; this said "element type u16 is not in the static subset
+	yet" -- the array branch wanting a byte scalar, as it did for struct
+	elements."""
+	header = emit(WIDE)
+
+	assert "std::uint16_t samples(std::uint32_t index) const noexcept" in header
+	assert "std::int32_t deltas(std::uint32_t index) const noexcept" in header
+	assert "not in the static subset yet" not in header
+
+
+def test_a_wide_element_gets_no_pointer() -> None:
+	"""It is ValueConverted, so a pointer into it would alias bytes that are
+	not the value -- C's rule and the reason it gives."""
+	header = emit(WIDE)
+
+	assert "::situ::rt::bytes samples()" not in header
+	assert "would alias bytes that are not the value" in header
