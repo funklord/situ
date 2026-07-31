@@ -621,12 +621,51 @@ def test_a_variant_gets_no_single_accessor() -> None:
 	assert "situ_S_v_p_view(situ_view_t view, situ_view_t *out)" in header
 
 
-def test_an_indexed_region_says_insertion_is_not_an_operation() -> None:
-	header, _ = emit("struct R { u32 id; }"
-	                 "struct S { u16 n; indexed(offset_type = u16, count = n) "
-	                 "{ R entries[]; } }")
-	assert "reached through an offset table" in header
-	assert "Insertion is not an operation here at all" in header
+INDEXED = ("struct R { u32 id; u16 kind; }"
+	"struct S { u16 n; indexed(offset_type = u16, count = n)"
+	" { R entries[]; } }")
+
+
+def test_an_indexed_region_gets_its_table_walked() -> None:
+	"""It was the last construct no backend reached into: the header said the
+	table was not walked yet and stopped there. Invariant 11 -- this used to
+	assert the absence, and the absence had a shelf life."""
+	header, _ = emit(INDEXED)
+
+	assert "situ_S_entries_count(situ_view_t view)" in header
+	assert "situ_S_entries_offset(situ_view_t view, uint32_t index," in header
+	assert "situ_S_entries_at(situ_view_t view, uint32_t index," in header
+
+
+def test_an_indexed_region_still_says_insertion_is_not_an_operation() -> None:
+	"""The one thing the old note said that is still true, and the reason has
+	not changed: every offset after the insertion point would have to move."""
+	header, _ = emit(INDEXED)
+
+	assert "Insertion is not an operation here" in header
+
+
+def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
+	"""The placement recorded no endian, so a backend asking had nothing to ask
+	and defaulted -- which reads a big-endian table little end first and hands
+	back a plausible offset."""
+	header, _ = emit(INDEXED)
+
+	assert "situ_get_be16(view.base + at)" in header
+
+
+def test_an_index_over_variable_elements_measures_one() -> None:
+	"""The construct exists for elements that are not the same size, so the
+	element has to be measured rather than assumed. `_is_run_element` gated the
+	extent function on runs and nested members, so an indexed region asked for
+	an extent that was simply never emitted and reported it could not compute
+	one."""
+	header, _ = emit("struct V { u16 len; u8 body[len]; }"
+	                 "struct T { u16 n; indexed(offset_type = u16, count = n)"
+	                 " { V varying[]; } }")
+
+	assert "situ_V_extent(probe)" in header
+	assert "situ_T_varying_at" in header
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
@@ -2735,6 +2774,87 @@ int main(void)
 	binary = tmp_path / "probe"
 	build = subprocess.run(
 		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_index_reaches_elements_in_any_order(tmp_path: Path) -> None:
+	"""The whole point of the table: element N is one read plus a base, and
+	the elements need not sit in the order the table names them. A walk that
+	happened to work on a table in ascending order would prove nothing."""
+	header, source = emit("struct R { u32 id; u16 kind; }"
+	                      "struct V { u16 len; u8 body[len]; }"
+	                      "struct S { u16 n; indexed(offset_type = u16,"
+	                      " count = n) { R fixed[]; } }"
+	                      "struct T { u16 n; indexed(offset_type = u16,"
+	                      " count = n) { V varying[]; } }")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+/* Offsets deliberately out of order, and measured from the region start. */
+static const uint8_t S_BYTES[] = {
+	0x00, 0x03,
+	0x00, 0x12, 0x00, 0x06, 0x00, 0x0C,
+	0x00, 0x00, 0x00, 0xBB, 0x00, 0x02,
+	0x00, 0x00, 0x00, 0xCC, 0x00, 0x03,
+	0x00, 0x00, 0x00, 0xAA, 0x00, 0x01,
+};
+
+/* Two elements of different sizes, which is what the table is paying for. */
+static const uint8_t T_BYTES[] = {
+	0x00, 0x02,
+	0x00, 0x04, 0x00, 0x0B,
+	0x00, 0x05, 'h', 'e', 'l', 'l', 'o',
+	0x00, 0x02, 'h', 'i',
+};
+
+int main(void)
+{
+	uint8_t buf[64];
+	situ_msg_t msg;
+	situ_view_t view, elem;
+
+	memcpy(buf, S_BYTES, sizeof(S_BYTES));
+	situ_msg_init(&msg, buf, sizeof(S_BYTES));
+	if (situ_S_view(&msg, 0, sizeof(S_BYTES), &view) != SITU_OK) return 1;
+	if (situ_S_fixed_count(view) != 3u) return 2;
+
+	if (situ_S_fixed_at(view, 0, &elem) != SITU_OK) return 3;
+	if (situ_R_id_get(elem) != 170u || situ_R_kind_get(elem) != 1u) return 4;
+	if (situ_S_fixed_at(view, 1, &elem) != SITU_OK) return 5;
+	if (situ_R_id_get(elem) != 187u) return 6;
+	if (situ_S_fixed_at(view, 2, &elem) != SITU_OK) return 7;
+	if (situ_R_id_get(elem) != 204u) return 8;
+	if (situ_S_fixed_at(view, 3, &elem) != SITU_ERR_BOUNDS) return 9;
+
+	memcpy(buf, T_BYTES, sizeof(T_BYTES));
+	situ_msg_init(&msg, buf, sizeof(T_BYTES));
+	if (situ_T_view(&msg, 0, sizeof(T_BYTES), &view) != SITU_OK) return 10;
+
+	/* Each element is narrowed to its own extent, not to the rest. */
+	if (situ_T_varying_at(view, 0, &elem) != SITU_OK) return 11;
+	if (elem.limit != 7u) return 12;
+	if (memcmp(situ_V_body_ptr(elem), "hello", 5) != 0) return 13;
+
+	if (situ_T_varying_at(view, 1, &elem) != SITU_OK) return 14;
+	if (elem.limit != 4u) return 15;
+	if (memcmp(situ_V_body_ptr(elem), "hi", 2) != 0) return 16;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
 		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
 		 str(RUNTIME / "situ.c"), "-o", str(binary)],
 		capture_output=True, text=True)

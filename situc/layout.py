@@ -1108,7 +1108,11 @@ class Solver:
 			size_bits     = table.lo,
 			size_max_bits = None,
 			scalar        = None,
-			endian        = None,
+			# The table's entries are scalars in the region's byte order. It
+			# was None here, so a backend reading an entry had nothing to ask
+			# and defaulted -- which reads a big-endian table little end
+			# first and yields a plausible offset.
+			endian        = scope.endian,
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			sized_by      = _path_of(count_expr),

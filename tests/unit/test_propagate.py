@@ -498,6 +498,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"variant-unequal-arms",
 		"opaque",
 		"indexed",
+		"indexed-outside-the-region",
 		"tlv",
 		"tlv-unordered-items",
 		"tlv-non-minimal-tag",
@@ -716,6 +717,11 @@ OPAQUE  = "struct S { u16 n; opaque payload [n]; }"
 INDEXED = (
 	"struct R { u32 id; }"
 	"struct T { u16 n; indexed(offset_type = u16, count = n) { R entries[]; } }"
+)
+INDEXED_FROM_MESSAGE = (
+	"struct R { u32 id; }"
+	"struct T { u16 n; indexed(offset_type = u16, count = n, base = message)"
+	" { R entries[]; } }"
 )
 
 
@@ -970,3 +976,26 @@ def test_the_spec_table_matches_the_rows() -> None:
 		                     for one in row.rule.effects)
 		assert effect == (expected or "computed from the construct"), \
 			row.rule.name
+
+
+def test_an_index_measured_from_the_region_keeps_a_frame_stable_address() -> None:
+	"""The default, and the reason it is the default: an offset that cannot
+	name a byte outside the region is bounded by the region's own extent, so
+	the check at the boundary covers it (decision 0024)."""
+	assert axis_of(INDEXED, "T.entries", Axis.ADDRESS) == Value("FrameStable")
+
+
+def test_an_index_measured_from_the_message_is_unstable() -> None:
+	"""Section 9.8 makes this argument for `at expr`, and an index table is the
+	same shape with a table in front of it: nothing about the region says an
+	element is inside it."""
+	assert axis_of(INDEXED_FROM_MESSAGE, "T.entries", Axis.ADDRESS) \
+		== Value("Unstable")
+
+
+def test_the_weaker_address_is_blamed_on_the_base() -> None:
+	"""Both rows apply -- the construct's and the base's -- and the one a
+	reader needs is the one naming what to change."""
+	named = rules_for(INDEXED_FROM_MESSAGE, "T.entries", Axis.ADDRESS)
+
+	assert "indexed-outside-the-region" in named

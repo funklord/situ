@@ -31,7 +31,9 @@ from situc.capability import Axis
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
-from situc.layout import BITS_PER_BYTE, Placement, TlvGrammar, ValueRule
+from situc.layout import (
+	BITS_PER_BYTE, IndexTable, Placement, TlvGrammar, ValueRule,
+)
 from situc.names import over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
@@ -925,7 +927,11 @@ class Emitter:
 			lines.extend(self._tlv_region(struct, placement))
 			return lines
 
-		if placement.kind in ("opaque", "indexed"):
+		if placement.kind == "indexed":
+			lines.extend(self._indexed_region(struct, placement))
+			return lines
+
+		if placement.kind == "opaque":
 			lines.extend(self._region_note(struct, entry))
 			return lines
 
@@ -1447,24 +1453,242 @@ class Emitter:
 
 		return lines
 
-	def _region_note(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
-		"""An opaque or indexed region: bytes now, structure later.
+	def _indexed_region(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""An offset table, then the elements it reaches (section 9.3).
 
-		An opaque region gets a pointer and a length, which is exactly what its
-		capability vector supports -- treat-as-bytes and nothing more. An
-		indexed one needs the offset table walked, which is later phase 6 work.
+		The whole point of the construct is that element N is one read of entry
+		N plus a base, whatever the elements weigh -- which is why `access`
+		stays Random through a region whose elements are not the same size.
+		Nothing walked the table for a long time, so the header said so and
+		stopped there.
+
+		Insertion is still not an operation, and for the reason it never was:
+		every offset after the insertion point would have to move.
+		"""
+		table = placement.index_table
+		if table is None:
+			return []
+
+		local   = c_name(self._local(struct, placement))
+		start   = self._base_expression(struct, placement, gated=False)
+		count   = self._count_expression(struct, placement)
+		width   = table.entry_bits // BITS_PER_BYTE
+		element = self.resolved.structs.get(table.element or "")
+
+		lines = self._index_table(struct, placement, table, local, start,
+		                          count, width)
+		lines.extend(self._index_element(struct, placement, table, local,
+		                                 element))
+		return lines
+
+	def _index_table(self, struct: ResolvedStruct, placement: Placement,
+			table: IndexTable, local: str, start: str, count: str,
+			width: int) -> list[str]:
+		"""`count` and `offset`: the table itself, before anything it reaches."""
+		counter = ident(self.prefix, struct.name, local, "count")
+		offset  = ident(self.prefix, struct.name, local, "offset")
+		read    = self._index_entry_read(placement, width)
+
+		return [
+			f"/* `{placement.name}` is an offset table of {width}-byte entries,"
+			f" then the",
+			" * elements it reaches. Element N is one read of entry N plus a"
+			" base,",
+			" * whatever the elements weigh -- which is why `access` stays"
+			" Random",
+			" * through a region whose elements need not be the same size.",
+			" *",
+			" * Insertion is not an operation here: every offset after the",
+			" * insertion point would have to move. Rebuild the region"
+			" instead. */",
+			f"static inline uint32_t {counter}(situ_view_t view)",
+			"{",
+			f"\treturn {count};",
+			"}",
+			"",
+			f"/* The offset held in entry `index`, as written -- measured from",
+			f" * {self._index_base_noun(table)}. */",
+			f"static inline situ_err_t {offset}(situ_view_t view, uint32_t index,",
+			"\t\tuint32_t *out)",
+			"{",
+			f"\tuint32_t at = {start} + index * {width}u;",
+			"",
+			f"\tif (index >= {counter}(view)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			f"\tif (!situ_in_bounds(view, at, {width}u)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"",
+			f"\t*out = {read};",
+			"\treturn SITU_OK;",
+			"}",
+			"",
+		]
+
+	def _index_entry_read(self, placement: Placement, width: int) -> str:
+		"""One table entry, in the region's byte order."""
+		if width == 1:
+			return "(uint32_t)view.base[at]"
+		order = "be" if placement.endian is ast.Endian.BIG else "le"
+		return f"(uint32_t)situ_get_{order}{width * 8}(view.base + at)"
+
+	def _index_base_noun(self, table: IndexTable) -> str:
+		if table.base == "message":
+			return "the start of the *message*"
+		if table.base == "member":
+			return f"the start of `{table.base_member}`"
+		return "the start of this region"
+
+	def _index_element(self, struct: ResolvedStruct, placement: Placement,
+			table: IndexTable, local: str,
+			element: ResolvedStruct | None) -> list[str]:
+		"""`at`: a view over the element an entry reaches.
+
+		Emitted only where the element's extent is computable. An offset with
+		no length is a position and not a frame, and handing back a view over
+		bytes whose end is a guess is the kind of thing this refuses.
+		"""
+		if element is None:
+			return [
+				f"/* No `{local}_at`: `{table.element or placement.type_name}`"
+				" is not a struct this",
+				" * build can frame, so an entry gives a position and not a"
+				" view. The",
+				" * offsets are still readable above. */",
+			]
+
+		extent = self._element_extent_call(element)
+		if extent is None:
+			return [
+				f"/* No `{local}_at`: one `{element.name}` has no extent this"
+				" build can",
+				" * compute, so an entry gives a position and not a view."
+				" The offsets",
+				" * are still readable above. */",
+			]
+
+		offset = ident(self.prefix, struct.name, local, "offset")
+		at     = ident(self.prefix, struct.name, local, "at")
+
+		# A message-relative offset is not bounded by this frame, so the
+		# accessor takes the message the same way a located member's does
+		# (9.8): only `situ_msg_t` knows where offset zero is.
+		if table.base == "message" and not element.layout.is_fixed_size:
+			return [
+				f"/* No `{local}_at`: `{element.name}` has no fixed size and"
+				" these offsets",
+				" * are measured from the message, so narrowing to one element"
+				" would",
+				" * mean measuring it through a view this frame cannot bound."
+				" The",
+				" * offsets are readable above; frame the element with"
+				f" `{ident(self.prefix, element.name, 'view')}`. */",
+			]
+
+		if table.base == "message":
+			return [
+				f"/* A view over element `index`. Its offset is measured from"
+				f" the start",
+				" * of the *message*, so both are taken: the view reads the"
+				" table, the",
+				" * message says where zero is.",
+				" *",
+				" * Nothing about this frame says the element is inside the"
+				" buffer, so",
+				" * that is checked here on every call rather than once at the"
+				" region",
+				" * boundary -- which is what measuring from the message"
+				" costs. */",
+				f"static inline situ_err_t {at}(const situ_msg_t *msg,"
+				f" situ_view_t view,",
+				"\t\tuint32_t index, situ_view_t *out)",
+				"{",
+				"\tuint32_t found = 0u;",
+				f"\tsitu_err_t err = {offset}(view, index, &found);",
+				"",
+				"\tif (err != SITU_OK) {",
+				"\t\treturn err;",
+				"\t}",
+				f"\treturn situ_view_at(msg, found,"
+				f" {macro(self.prefix, element.name, 'SIZE_FIXED')}, out);",
+				"}",
+				"",
+			]
+
+		origin = (self._index_member_base(struct, table)
+		          if table.base == "member"
+		          else self._base_expression(struct, placement, gated=False))
+
+		return [
+			f"/* A view over element `index`, whose offset is measured from",
+			f" * {self._index_base_noun(table)}. */",
+			f"static inline situ_err_t {at}(situ_view_t view, uint32_t index,",
+			"\t\tsitu_view_t *out)",
+			"{",
+			"\tuint32_t found = 0u;",
+			f"\tsitu_err_t err = {offset}(view, index, &found);",
+			"\tuint32_t start;",
+			"",
+			"\tif (err != SITU_OK) {",
+			"\t\treturn err;",
+			"\t}",
+			f"\tstart = {origin} + found;",
+			*self._index_element_extent(element),
+			"}",
+			"",
+		]
+
+	def _index_element_extent(self, element: ResolvedStruct) -> list[str]:
+		"""Narrow the view to one element, measuring it first where it varies.
+
+		A fixed element is its own macro. A variable one has to be measured,
+		and measuring needs a view over it -- so the sequence is: take the
+		largest view the frame allows, ask the element how long it is, and
+		narrow to that. Handing back the provisional view instead would give
+		the caller everything to the end of the region and call it an element.
+		"""
+		if element.layout.is_fixed_size:
+			return [f"\treturn situ_view_sub(view, start,"
+			        f" {macro(self.prefix, element.name, 'SIZE_FIXED')}, out);"]
+
+		return [
+			"\t{",
+			"\t\tsitu_view_t probe;",
+			"",
+			"\t\t/* The extent is in the element's own bytes, so it takes a",
+			"\t\t * view to read and a view is what it decides. Measure over",
+			"\t\t * the rest of the region, then narrow. */",
+			"\t\tif (start > view.limit) {",
+			"\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t}",
+			"\t\tif (situ_view_sub(view, start, view.limit - start, &probe)",
+			"\t\t\t\t!= SITU_OK) {",
+			"\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t}",
+			f"\t\treturn situ_view_sub(view, start,",
+			f"\t\t\t{ident(self.prefix, element.name, 'extent')}(probe), out);",
+			"\t}",
+		]
+
+	def _index_member_base(self, struct: ResolvedStruct,
+			table: IndexTable) -> str:
+		"""Where the member `base` names starts, within this frame."""
+		found = self.resolved.find(f"{struct.name}.{table.base_member}")
+		if found is None:
+			return "0u"
+		return self._base_expression(struct, found.placement, gated=False)
+
+	def _region_note(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""An opaque region: bytes, which is the whole of what it supports.
+
+		A pointer and a length, which is exactly what its capability vector
+		allows -- treat-as-bytes and nothing more.
 		"""
 		placement = entry.placement
 		local     = c_name(self._local(struct, placement))
 		base      = self._base_expression(struct, placement)
-
-		if placement.kind == "indexed":
-			return [
-				f"/* No accessor: `{placement.name}` is an `indexed` region, whose",
-				" * elements are reached through an offset table. Table walking is",
-				" * not generated yet. Insertion is not an operation here at all:",
-				" * every offset after the insertion point would have to move. */",
-			]
 
 		return [
 			"/* Treat-as-bytes, which is the whole of what an `opaque` region",
@@ -1782,12 +2006,15 @@ class Emitter:
 	def _is_run_element(self, name: str) -> bool:
 		"""Whether anything needs to know how long one `name` is.
 
-		A run walks them, and a nested member has to size its sub-view. Both
-		read the same function, and gating it on the run alone left the nested
-		case reaching for `SIZE_FIXED` instead.
+		A run walks them, a nested member has to size its sub-view, and an
+		`indexed` region has to narrow an offset to one element. All three read
+		the same function, and gating it on the run alone left the nested case
+		reaching for `SIZE_FIXED` instead -- and later left an indexed region
+		saying it could not compute an extent that was simply not emitted.
 		"""
 		return any((self._is_record_run(entry.placement)
 		            or entry.placement.repeat_while is not None
+		            or entry.placement.kind == "indexed"
 		            or self._is_nested_member(entry.placement))
 		           and entry.placement.type_name == name
 		           for other in self.resolved.structs.values()

@@ -1086,6 +1086,41 @@ expression follows, and for the same reason: the base has to be readable when
 the table is walked. Naming a later member, or one that is not there, is an
 error listing what is in scope.
 
+**The table is walked.** C emits, per region, a count, the offset entry N
+holds, and a view over the element it reaches. Three things fell out of
+building it:
+
+1. **An entry has a byte order and the placement did not record one.** The
+   solver set `endian = None` on an indexed region, so a backend reading an
+   entry had nothing to ask and took its default -- which reads a big-endian
+   table little end first and hands back a plausible offset into real bytes.
+   The region's scope decides it, as it does for every other scalar.
+2. **An element that is not fixed-size has to be measured.** Which is the
+   construct's whole purpose, so it is the case that matters: the extent is in
+   the element's own bytes, so the sequence is to take the largest view the
+   region allows, ask the element how long it is, and narrow to that. Handing
+   back the provisional view would give the caller the rest of the region and
+   call it an element.
+3. **`_is_run_element` decided whether to emit an extent function at all**, and
+   knew about runs and nested members. An indexed region asked for an extent
+   that was never emitted, and reported that it could not compute one -- a
+   declared gap that was not a real one, which is invariant 12's failure mode
+   arriving from the other direction.
+
+`base` outside the region also weakens the region's addressing, which the
+propagation table now records: `address := Unstable` where an offset can name
+any byte in the message, because nothing about the region says an element is
+inside it. That is section 9.8's argument for `at expr`, and an index table is
+the same shape with a table in front of it.
+
+**There is still no worked example.** Every other construct in the language is
+exercised by a real format in `examples/`, and this one is exercised by schemas
+written for its tests. Real offset tables are usually tables of *records* --
+offset plus length -- rather than bare offsets, so the construct as specified
+fits FlatBuffers vtables and TrueType `loca` and not much else in the tree.
+Whether that is a gap in the examples or in the construct is the open
+question.
+
 ### 9.4 opaque
 
 A region with a size but no interior schema:
@@ -1565,6 +1600,7 @@ output can be read against this table directly.
 | `tlv-unordered-duplicates` | a `tlv` region with `duplicate_tags = allowed` and no ordering rule | `canonical := NonCanonical` |
 | `opaque` | an `opaque` region | `access := Sequential`, `mutate := RewriteRequired` |
 | `indexed` | an `indexed` region | `address := FrameStable` |
+| `indexed-outside-the-region` | an `indexed` region whose offsets are measured from outside it | `address := Unstable` |
 
 **Codecs (13)**
 
@@ -4813,17 +4849,19 @@ backends, and every refusal the output contains collected. A reader picking
 this up should start here, and should re-derive it the same way rather than
 trusting this list to have aged well.
 
-**One construct no backend reaches into.**
+**None. The list is empty for the first time.**
 
-`indexed` interiors. The offset table is never walked, and the header says
-insertion is not an operation at all.
+`indexed` interiors were the last of them: the offset table was never walked,
+and the header said so and stopped. C walks one now (9.3) -- a count, the
+offset an entry holds, and a view over the element it reaches -- which leaves
+the other three backends behind on it rather than every backend.
 
 `tlv` was here too, and was the sharper case of it: `examples/protobuf`'s
 `proto_message.fields` got no accessor anywhere, so section 9.7 could argue
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**Five where C is ahead of the other three.**
+**Six where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
@@ -4831,6 +4869,7 @@ able to read it. All four walk one now (9.5), against the same protoc vectors.
 | an endian marker | `tiff_header.byte_order` |
 | a fixed-width text number | `reply_line.code` |
 | an array of struct elements | `telemetry_frame.readings` |
+| an `indexed` region's table | any offset table -- no worked example yet |
 | the `--materialize` offset cache | any delimited chain |
 
 Each says so in the generated output. None of them is a design question; they

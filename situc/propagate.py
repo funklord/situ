@@ -525,6 +525,12 @@ def _is_indexed(context: Context) -> bool:
 	return context.placement.kind == "indexed"
 
 
+def _indexes_outside_the_region(context: Context) -> bool:
+	"""An index table whose offsets are not bounded by the region (0024)."""
+	table = context.placement.index_table
+	return table is not None and table.base != "region"
+
+
 def _has_unequal_arms(context: Context) -> bool:
 	sizes = {size for _, size in context.placement.arm_sizes}
 	return len(sizes) > 1
@@ -1258,6 +1264,30 @@ TABLE: tuple[Row, ...] = (
 			            "region instead; element mutation stays in place",
 		),
 		applies = _is_indexed,
+	),
+	Row(
+		rule = Rule(
+			name      = "indexed-outside-the-region",
+			construct = "an `indexed` region whose offsets are measured from "
+			            "outside it",
+			# The construct's own row leaves address at FrameStable, which is
+			# true while an offset cannot name a byte outside the region: the
+			# region's extent bounds it, and the frame check covers it. It
+			# stops being true the moment `base` names the message or an
+			# earlier member (decision 0024). Section 9.8 makes exactly this
+			# argument for `at expr`, and an index table is the same shape with
+			# a table in front of it.
+			effects   = (Effect(Axis.ADDRESS, Value("Unstable"),
+			                    "an offset measured from outside the region "
+			                    "can name any byte in the message, so nothing "
+			                    "about the region says an element is inside it "
+			                    "and a write anywhere may move one"),),
+			remedy    = "measure from the region, which is the default: an "
+			            "offset that cannot leave the region is bounded by the "
+			            "region's own extent, and the check at the boundary "
+			            "covers it",
+		),
+		applies = _indexes_outside_the_region,
 	),
 	Row(
 		rule = Rule(
