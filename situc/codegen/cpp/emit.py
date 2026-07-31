@@ -30,6 +30,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
+from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
 )
@@ -82,6 +83,7 @@ class Emitter:
 		self.namespace = namespace
 		self.enums     = {decl.name: decl for decl in schema.enums()}
 		self.codecs    = {decl.name: decl for decl in schema.codecs()}
+		self.markers   = {decl.name: decl for decl in schema.markers()}
 		self.structs   = set(resolved.structs)
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
@@ -2476,6 +2478,8 @@ class Emitter:
 		# backends shipped the same two mistakes when each kept its own.
 		kind = classify(struct, placement, self.structs)
 
+		if kind is Member.MARKER:
+			return self._marker(struct, placement)
 		if kind is Member.RESERVED:
 			return ["",
 			        f"\t/* {placement.path} is reserved: no accessor, and"
@@ -2810,6 +2814,16 @@ class Emitter:
 		if scalar.bits == BITS_PER_BYTE:
 			return f"static_cast<{ctype}>(*({base}))"
 
+		# A field the data decides the order of. The branch is on a public,
+		# layout-irrelevant value, so it is not a side channel (11.1) -- and
+		# without it this read the marker's own format big-endian whatever the
+		# marker said.
+		if placement.marker is not None and scalar.bits in WORD_WIDTHS:
+			predicate = self._marker_predicate(placement)
+			return (f"static_cast<{ctype}>({predicate}"
+			        f" ? situ_get_le{scalar.bits}({base})"
+			        f" : situ_get_be{scalar.bits}({base}))")
+
 		suffix = _order_suffix(placement.endian)
 		if scalar.bits in WORD_WIDTHS:
 			return f"static_cast<{ctype}>(situ_get_{suffix}{scalar.bits}({base}))"
@@ -2833,6 +2847,18 @@ class Emitter:
 
 		if scalar.bits == BITS_PER_BYTE:
 			return f"*({base}) = static_cast<std::uint8_t>({value});"
+
+		# The write has to agree with the read, or a round trip through this
+		# view swaps the value: the getter branched on the marker and the
+		# setter did not.
+		if placement.marker is not None and scalar.bits in WORD_WIDTHS:
+			predicate = self._marker_predicate(placement)
+			cast      = f"static_cast<std::uint{scalar.bits}_t>({value})"
+			return (f"if ({predicate}) {{\n"
+			        f"\t\t\tsitu_put_le{scalar.bits}({base}, {cast});\n"
+			        f"\t\t}} else {{\n"
+			        f"\t\t\tsitu_put_be{scalar.bits}({base}, {cast});\n"
+			        f"\t\t}}")
 
 		suffix = _order_suffix(placement.endian)
 		if scalar.bits in WORD_WIDTHS:
@@ -2937,6 +2963,71 @@ class Emitter:
 			f"\t\t\t{nested}::size_bytes, raw().generation }});",
 			"\t}",
 		]
+
+	def _marker(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The byte-order marker's constants and accessors (section 8.3).
+
+		The marker is compared as a byte sequence, not decoded as a number: it
+		has to be readable before its own byte order is known. Reading it big
+		endian and comparing against the literal as written is the only
+		interpretation that does not presuppose the answer.
+
+		This backend emitted "not in the static subset yet" for the marker and
+		then read every field it governs big-endian regardless -- so a
+		little-endian TIFF, which is most of them, came back byte-swapped with
+		no diagnostic. The map said `ConditionallyConverted(byte_order)` on
+		each of those fields the whole time.
+		"""
+		marker = self.markers.get(placement.name)
+		scalar = placement.scalar
+		if marker is None or scalar is None:
+			return []
+
+		env    = self.resolved.layout.env
+		little = evaluate(marker.little, env)
+		big    = evaluate(marker.big, env)
+		width  = scalar.bits
+		name   = c_name(local_name(struct, placement))
+		digits = width // 4
+
+		return [
+			"",
+			f"\t/* {placement.path}: which byte order the rest of this frame",
+			"\t * uses, read from the data (8.3). The marker is compared as a",
+			"\t * byte sequence rather than decoded as a number -- it has to be",
+			"\t * readable before its own order is known. */",
+			f"\tstatic constexpr std::uint{width}_t {name}_little ="
+			f" 0x{little:0{digits}X}u;",
+			f"\tstatic constexpr std::uint{width}_t {name}_big ="
+			f" 0x{big:0{digits}X}u;",
+			"",
+			"\t/* The host's own order. A writer stores this rather than",
+			"\t * picking an order, which is what makes the writer",
+			"\t * deterministic even though the format admits both. */",
+			f"\tstatic constexpr std::uint{width}_t {name}_host =",
+			f"\t\tSITU_HOST_BIG ? {name}_big : {name}_little;",
+			"",
+			f"\t[[nodiscard]] bool {name}_is_little() const noexcept",
+			"\t{",
+			f"\t\treturn situ_get_be{width}(base() + {placement.offset_bytes})"
+			f" == {name}_little;",
+			"\t}",
+			f"\t[[nodiscard]] static constexpr std::uint{width}_t"
+			f" {name}_of_host() noexcept",
+			"\t{",
+			f"\t\treturn {name}_host;",
+			"\t}",
+			f"\tvoid set_{name}_host() noexcept",
+			"\t{",
+			f"\t\tsitu_put_be{width}(base() + {placement.offset_bytes},"
+			f" {name}_host);",
+			"\t}",
+		]
+
+	def _marker_predicate(self, placement: Placement) -> str:
+		"""Whether the marker this field is governed by says little-endian."""
+		return f"{c_name(placement.marker or '')}_is_little()"
 
 	def _array(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = c_name(local_name(struct, placement))

@@ -5034,12 +5034,11 @@ offset an entry holds, and a view over the element it reaches.
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
 
-**Four where C is ahead of the other three.**
+**Three where C is ahead of the other three.**
 
 | construct | example |
 |---|---|
 | a `tag`'s coverage, dirty bit and finalize | `packet.tag` |
-| an endian marker | `tiff_header.byte_order` |
 | a fixed-width text number | `reply_line.code` |
 | the `--materialize` offset cache | any delimited chain |
 
@@ -5048,8 +5047,17 @@ elements was not C-ahead-of-three: C, Rust and Python all emitted one and C++
 said "element type is not in the static subset yet", which the subset had
 nothing to do with -- its array branch wanted a byte scalar, and a struct
 element has no scalar at all. And the `sealed` gate is in all four; the entry
-said "crypto regions -- `tag`, `sealed`" and only the tag machinery is
-C-only.
+said "crypto regions -- `tag`, `sealed`" and only the tag machinery is C-only.
+
+The endian marker came off it too, and it was not a missing feature. All three
+backends said "not in the static subset yet" for the marker and then read every
+field it governs **big-endian regardless** -- so a little-endian TIFF, which is
+most of them, returned `magic = 10752` where 42 was written and an `ifd_offset`
+byte-swapped into nonsense. No diagnostic, and the capability map said
+`ConditionallyConverted(byte_order)` on those fields the whole time. A declared
+gap in one place and a silently wrong answer in another, which is the shape
+this page has now produced three times: the varint offset, the tlv walk, and
+this.
 
 Each says so in the generated output. None of them is a design question; they
 are the C backend having gone first and the others not having caught up on

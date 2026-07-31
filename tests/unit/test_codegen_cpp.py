@@ -1847,3 +1847,93 @@ int main()
 	assert build.returncode == 0, build.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- an endian marker (section 8.3) -----------------------------------------
+
+MARKED = ("endian_marker order : u16 { little = 0x4949, big = 0x4D4D, }\n"
+	"struct hdr [endian = from(order)] { endian_marker order; u16 magic;"
+	" u32 offset; }")
+
+
+def test_a_marker_gets_its_constants_and_predicate() -> None:
+	"""It said "not in the static subset yet" and then read every field the
+	marker governs big-endian regardless."""
+	header = emit(MARKED)
+
+	assert "order_little = 0x4949u" in header
+	assert "order_big = 0x4D4Du" in header
+	assert "bool order_is_little() const noexcept" in header
+	assert "not in the static subset yet" not in header
+
+
+def test_a_governed_field_branches_on_the_marker() -> None:
+	"""The map said `ConditionallyConverted(order)` on these the whole time,
+	and the read was unconditional -- so a little-endian frame came back
+	byte-swapped with no diagnostic."""
+	header = emit(MARKED)
+
+	assert "order_is_little() ? situ_get_le16" in header
+	assert "order_is_little() ? situ_get_be16" not in header
+
+
+def test_the_setter_agrees_with_the_getter() -> None:
+	"""Or a round trip through one view swaps the value."""
+	header = emit(MARKED)
+
+	assert "if (order_is_little()) {" in header
+	assert "situ_put_le32" in header and "situ_put_be32" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_both_byte_orders_read_the_same_values(tmp_path: Path) -> None:
+	"""TIFF's own header, in both orders. Little-endian is the common case and
+	is the one that was wrong."""
+	schema   = parse_text("target buffer;\nendian big;\n" + MARKED)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text("""
+#include <cstring>
+#include "unit.hpp"
+
+static int one(const std::uint8_t *bytes)
+{
+	std::uint8_t buf[8];
+	std::memcpy(buf, bytes, 8);
+	situ::rt::message owner(buf, sizeof buf);
+	situ::hdr h;
+	if (situ::hdr::at(owner, 0, h) != situ::rt::err::ok) return 1;
+	return (h.magic() == 42 && h.offset() == 8) ? 0 : 2;
+}
+
+int main()
+{
+	static const std::uint8_t LE[] = { 'I','I', 0x2A,0x00, 0x08,0x00,0x00,0x00 };
+	static const std::uint8_t BE[] = { 'M','M', 0x00,0x2A, 0x00,0x00,0x00,0x08 };
+
+	if (one(LE)) return 1;
+	if (one(BE)) return 2;
+
+	std::uint8_t buf[8];
+	std::memcpy(buf, LE, sizeof buf);
+	situ::rt::message owner(buf, sizeof buf);
+	situ::hdr h;
+	if (situ::hdr::at(owner, 0, h) != situ::rt::err::ok) return 3;
+	h.set_offset(0x12345678u);
+	if (h.offset() != 0x12345678u) return 4;
+	if (buf[4] != 0x78) return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True, check=False)
+	assert build.returncode == 0, build.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0

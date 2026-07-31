@@ -25,6 +25,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
+from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
 )
@@ -90,6 +91,7 @@ class Emitter:
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.codecs   = {decl.name: decl for decl in schema.codecs()}
+		self.markers  = {decl.name: decl for decl in schema.markers()}
 		self.structs  = set(resolved.structs)
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
@@ -109,6 +111,7 @@ class Emitter:
 			"from __future__ import annotations",
 			"",
 			"import enum",
+			*(["import sys"] if self._has_marker() else []),
 			"",
 			"from situ_runtime import (",
 			"\tBoundsError, ConstraintError, Gate, Message, TruncatedError,",
@@ -428,6 +431,17 @@ class Emitter:
 		]
 
 	# -- members -------------------------------------------------------
+
+	def _has_marker(self) -> bool:
+		"""Whether anything here resolves its byte order from the data.
+
+		`sys.byteorder` is what the host constant is built from, and importing
+		it where nothing uses one is the noise `_delimited_imports` exists to
+		avoid.
+		"""
+		return any(entry.placement.kind == "marker"
+		           for struct in self.resolved.structs.values()
+		           for entry in struct.entries)
 
 	def _tlv_imports(self) -> list[str]:
 		"""`varint_get`, where something walks a tlv region."""
@@ -1172,6 +1186,8 @@ class Emitter:
 
 		kind = classify(struct, placement, self.structs)
 
+		if kind is Member.MARKER:
+			return self._marker(struct, placement)
 		if kind is Member.RESERVED:
 			return ["", f"\t# {placement.path} is reserved: no accessor, and",
 			        "\t# validate() holds it to the pattern the schema declares."]
@@ -1211,6 +1227,54 @@ class Emitter:
 			        "\t# present, and each is above behind the discriminant",
 			        "\t# that selects it. The variant itself has no accessor."]
 		return ["", f"\t# {placement.path}: not emitted by this backend yet."]
+
+	def _marker(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The byte-order marker's constants and accessors (section 8.3).
+
+		Compared as a byte sequence rather than decoded as a number: it has to
+		be readable before its own byte order is known.
+
+		This backend said "not emitted by this backend yet" for the marker and
+		then read every field it governs big-endian regardless, so a
+		little-endian TIFF -- which is most of them -- came back byte-swapped
+		with no exception raised. The map said
+		`ConditionallyConverted(byte_order)` on those fields the whole time.
+		"""
+		marker = self.markers.get(placement.name)
+		scalar = placement.scalar
+		if marker is None or scalar is None:
+			return []
+
+		env    = self.resolved.layout.env
+		little = evaluate(marker.little, env)
+		big    = evaluate(marker.big, env)
+		width  = scalar.bits
+		name   = c_name(local_name(struct, placement))
+		digits = width // 4
+		size   = width // BITS_PER_BYTE
+
+		return [
+			"",
+			f"\t{name.upper()}_LITTLE = 0x{little:0{digits}X}",
+			f"\t{name.upper()}_BIG    = 0x{big:0{digits}X}",
+			f"\t{name.upper()}_HOST   = ("
+			f"{name.upper()}_BIG if sys.byteorder == \"big\"",
+			f"\t\telse {name.upper()}_LITTLE)",
+			"",
+			"\t@property",
+			f"\tdef {name}_is_little(self) -> bool:",
+			f'\t\t"""{placement.path}: which byte order the rest of this frame',
+			"\t\tuses, read from the data (8.3). Compared as a byte sequence",
+			"\t\trather than decoded as a number -- it has to be readable",
+			'\t\tbefore its own order is known."""',
+			f"\t\treturn self._read({placement.offset_bytes}, {size},"
+			f" signed=False, big=True) \\",
+			f"\t\t\t== self.{name.upper()}_LITTLE",
+		]
+
+	def _marker_predicate(self, placement: Placement) -> str:
+		return f"self.{c_name(placement.marker or '')}_is_little"
 
 	def _scalar(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
@@ -1358,6 +1422,14 @@ class Emitter:
 			        f" msb={msb}, signed={scalar.signed})")
 
 		at = offset if offset is not None else str(placement.offset_bytes)
+
+		# A field the data decides the order of. Without this it read every
+		# one big-endian whatever the marker said.
+		if placement.marker is not None:
+			return (f"self._read({at}, {scalar.bits // BITS_PER_BYTE},"
+			        f" signed={scalar.signed},"
+			        f" big=not {self._marker_predicate(placement)})")
+
 		return (f"self._read({at}, {scalar.bits // BITS_PER_BYTE},"
 		        f" signed={scalar.signed}, big={big})")
 
@@ -1375,6 +1447,15 @@ class Emitter:
 			        f" {value}, msb={msb})")
 
 		at = offset if offset is not None else str(placement.offset_bytes)
+
+		# The write has to agree with the read, or a round trip through this
+		# view swaps the value: the getter branched on the marker and the
+		# setter did not.
+		if placement.marker is not None:
+			return (f"self._write({at}, {scalar.bits // BITS_PER_BYTE},"
+			        f" {value}, signed={scalar.signed},"
+			        f" big=not {self._marker_predicate(placement)})")
+
 		return (f"self._write({at}, {scalar.bits // BITS_PER_BYTE}, {value},"
 		        f" signed={scalar.signed}, big={big})")
 

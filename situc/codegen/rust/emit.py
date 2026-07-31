@@ -28,6 +28,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic
+from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
 )
@@ -115,6 +116,7 @@ class Emitter:
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.codecs   = {decl.name: decl for decl in schema.codecs()}
+		self.markers  = {decl.name: decl for decl in schema.markers()}
 		self.structs  = set(resolved.structs)
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
@@ -1064,6 +1066,8 @@ class Emitter:
 
 		kind = classify(struct, placement, self.structs)
 
+		if kind is Member.MARKER:
+			return self._marker(struct, placement)
 		if kind is Member.RESERVED:
 			return ["",
 			        f"\t// {placement.path} is reserved: no accessor, and",
@@ -2560,6 +2564,61 @@ class Emitter:
 		                               Axis.ATOMIC, Axis.MUTATE))
 		return [f"\t/// {entry.placement.path}: {axes}"]
 
+	def _marker(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The byte-order marker's constants and accessors (section 8.3).
+
+		Compared as a byte sequence rather than decoded as a number: it has to
+		be readable before its own byte order is known.
+
+		This backend said "not in the static subset yet" for the marker and
+		then read every field it governs big-endian regardless, so a
+		little-endian TIFF -- which is most of them -- came back byte-swapped
+		with no diagnostic. The map said `ConditionallyConverted(byte_order)`
+		on those fields the whole time.
+		"""
+		marker = self.markers.get(placement.name)
+		scalar = placement.scalar
+		if marker is None or scalar is None:
+			return []
+
+		env    = self.resolved.layout.env
+		little = evaluate(marker.little, env)
+		big    = evaluate(marker.big, env)
+		width  = scalar.bits
+		name   = c_name(local_name(struct, placement))
+		digits = width // 4
+
+		return [
+			"",
+			f"\t/// `{placement.path}`: which byte order the rest of this frame",
+			"\t/// uses, read from the data (8.3). Compared as a byte sequence",
+			"\t/// rather than decoded as a number -- it has to be readable",
+			"\t/// before its own order is known.",
+			f"\tpub const {name.upper()}_LITTLE: u{width} ="
+			f" 0x{little:0{digits}X};",
+			f"\tpub const {name.upper()}_BIG: u{width} = 0x{big:0{digits}X};",
+			"",
+			"\t/// The host's own order. A writer stores this rather than",
+			"\t/// picking one, which is what makes the writer deterministic",
+			"\t/// even though the format admits both.",
+			f"\tpub const {name.upper()}_HOST: u{width} ="
+			f" if cfg!(target_endian = \"big\") {{",
+			f"\t\tSelf::{name.upper()}_BIG",
+			"\t} else {",
+			f"\t\tSelf::{name.upper()}_LITTLE",
+			"\t};",
+			"",
+			f"\tpub fn {_ident(name + '_is_little')}(&self) -> bool {{",
+			f"\t\tsitu_rt::read_be(self.bytes, {placement.offset_bytes},"
+			f" {width // 8}) as u{width} == Self::{name.upper()}_LITTLE",
+			"\t}",
+		]
+
+	def _marker_predicate(self, placement: Placement) -> str:
+		name = c_name(placement.marker or "")
+		return f"self.{_ident(name + '_is_little')}()"
+
 	def _load(self, placement: Placement, scalar: ScalarType,
 			offset: str | None = None) -> str:
 		raw   = self._raw_load(placement, scalar, offset)
@@ -2590,6 +2649,19 @@ class Emitter:
 			msb  = placement.bit_order is not ast.BitOrder.LSB_FIRST
 			raw  = (f"situ_rt::read_bits(self.bytes, {placement.offset_bits},"
 			        f" {scalar.bits}, {str(msb).lower()})")
+			if scalar.signed:
+				return f"situ_rt::sign_extend({raw}, {scalar.bits})"
+			return raw
+
+		# A field the data decides the order of. Without this it read the
+		# marker's own format big-endian whatever the marker said.
+		if placement.marker is not None:
+			predicate = self._marker_predicate(placement)
+			width     = scalar.bits // BITS_PER_BYTE
+			raw       = (f"(if {predicate} {{"
+			             f" situ_rt::read_le(self.bytes, {at}, {width}) }}"
+			             f" else {{ situ_rt::read_be(self.bytes, {at},"
+			             f" {width}) }})")
 			if scalar.signed:
 				return f"situ_rt::sign_extend({raw}, {scalar.bits})"
 			return raw
@@ -2792,6 +2864,20 @@ class Emitter:
 			msb = placement.bit_order is not ast.BitOrder.LSB_FIRST
 			return (f"situ_rt::write_bits(self.bytes, {placement.offset_bits},"
 			        f" {scalar.bits}, {str(msb).lower()}, {value});")
+
+		# The write has to agree with the read, or a round trip swaps the
+		# value: the getter branched on the marker and the setter did not.
+		if placement.marker is not None:
+			# Through `as_ref`: the setters are on the `Mut` struct and the
+			# marker accessor is on the read one, which is the split this
+			# backend makes everywhere rather than anything about markers.
+			width = scalar.bits // BITS_PER_BYTE
+			predicate = self._marker_predicate(placement).replace(
+				"self.", "self.as_ref().", 1)
+			return (f"if {predicate} {{"
+			        f" situ_rt::write_le(self.bytes, {at}, {width}, {value}) }}"
+			        f" else {{ situ_rt::write_be(self.bytes, {at}, {width},"
+			        f" {value}) }}")
 
 		writer = "write_be" if big else "write_le"
 		return (f"situ_rt::{writer}(self.bytes, {at},"

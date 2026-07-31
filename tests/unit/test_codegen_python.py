@@ -1245,3 +1245,52 @@ def test_an_unbounded_region_is_told_how_to_size_the_buffer() -> None:
 	module = emit(STUFFED)
 
 	assert "`body_len` gives" in module
+
+
+# -- an endian marker (section 8.3) -----------------------------------------
+
+MARKED = ("endian_marker order : u16 { little = 0x4949, big = 0x4D4D, }\n"
+	"struct hdr [endian = from(order)] { endian_marker order; u16 magic;"
+	" u32 offset; }")
+
+
+def test_a_marker_gets_its_constants_and_predicate() -> None:
+	module = emit(MARKED)
+
+	assert "ORDER_LITTLE = 0x4949" in module
+	assert "def order_is_little(self) -> bool:" in module
+	assert "not emitted by this backend yet" not in module
+
+
+def test_sys_is_imported_only_where_a_marker_needs_it() -> None:
+	"""The host constant is built from `sys.byteorder`, and importing it where
+	nothing uses one is the noise the other import gates exist to avoid."""
+	assert "import sys" in emit(MARKED)
+	assert "import sys" not in emit("struct s { u16 a; }")
+
+
+def test_both_byte_orders_read_the_same_values(tmp_path: Path) -> None:
+	"""Little-endian is the common case and is the one that was wrong: every
+	field the marker governs was read big-endian regardless."""
+	module = load(tmp_path, MARKED)
+	rt     = runtime()
+
+	little = bytearray(b"II" + (42).to_bytes(2, "little") + (8).to_bytes(4, "little"))
+	big    = bytearray(b"MM" + (42).to_bytes(2, "big") + (8).to_bytes(4, "big"))
+
+	held = module.hdr.at(rt.Message(little), 0)
+	assert (held.magic, held.offset, held.order_is_little) == (42, 8, True)
+
+	held = module.hdr.at(rt.Message(big), 0)
+	assert (held.magic, held.offset, held.order_is_little) == (42, 8, False)
+
+
+def test_a_write_agrees_with_the_read(tmp_path: Path) -> None:
+	"""Or a round trip through one view swaps the value."""
+	module = load(tmp_path, MARKED)
+	buf    = bytearray(b"II" + (42).to_bytes(2, "little") + (8).to_bytes(4, "little"))
+	held   = module.hdr.at(runtime().Message(buf), 0)
+
+	held.offset = 0x12345678
+	assert held.offset == 0x12345678
+	assert buf[4] == 0x78		# stored little end first

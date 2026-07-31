@@ -1330,3 +1330,60 @@ fn main() {
 """, link=str(tmp_path))
 	assert result.returncode == 0, result.stderr
 	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+# -- an endian marker (section 8.3) -----------------------------------------
+
+MARKED = ("endian_marker order : u16 { little = 0x4949, big = 0x4D4D, }\n"
+	"struct hdr [endian = from(order)] { endian_marker order; u16 magic;"
+	" u32 offset; }")
+
+
+def test_a_marker_gets_its_constants_and_predicate() -> None:
+	module = emit(MARKED)
+
+	assert "ORDER_LITTLE: u16 = 0x4949;" in module
+	assert "pub fn order_is_little(&self) -> bool" in module
+	assert "not in the static subset yet" not in module
+
+
+def test_a_governed_field_branches_on_the_marker() -> None:
+	"""The map said `ConditionallyConverted(order)` the whole time and the
+	read was unconditional, so a little-endian frame came back byte-swapped."""
+	module = emit(MARKED)
+
+	assert "if self.order_is_little() { situ_rt::read_le" in module
+
+
+def test_the_setter_reaches_the_marker_through_as_ref() -> None:
+	"""The setters are on the `Mut` struct and the accessor is on the read
+	one, which is this backend's split everywhere rather than anything about
+	markers."""
+	module = emit(MARKED)
+
+	assert "self.as_ref().order_is_little()" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_both_byte_orders_read_the_same_values(tmp_path: Path) -> None:
+	result = build(tmp_path, MARKED, main="""
+fn main() {
+	for raw in [[b'I', b'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00],
+	            [b'M', b'M', 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08]] {
+		let h = unit::Hdr::new(&raw).unwrap();
+		assert_eq!((h.magic(), h.offset()), (42, 8));
+	}
+
+	// A write has to agree with the read.
+	let mut buf = [b'I', b'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00];
+	{
+		let mut m = unit::HdrMut::new(&mut buf).unwrap();
+		m.set_offset(0x12345678);
+	}
+	let h = unit::Hdr::new(&buf).unwrap();
+	assert_eq!(h.offset(), 0x12345678);
+	assert_eq!(buf[4], 0x78);
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0

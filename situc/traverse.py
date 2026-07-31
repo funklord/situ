@@ -93,6 +93,9 @@ class Member(Enum):
 	#: An `indexed` region: an offset table, then the elements it reaches
 	#: (9.3).
 	INDEXED   = "indexed"
+	#: A byte-order marker: the value that says how the rest of the frame is
+	#: read (8.3).
+	MARKER    = "marker"
 	#: A tag, a checksum, a sealed or authenticated region, a marker, a
 	#: variant, an opaque span. Each needs its own machinery.
 	REGION    = "region"
@@ -177,6 +180,12 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# could walk a table.
 	if placement.kind == "indexed":
 		return Member.INDEXED
+
+	# Before the region check, for the reason the others are: a marker
+	# answered REGION, and three backends emitted "not in the static subset
+	# yet" for it -- and then read every field it governs big-endian anyway.
+	if placement.kind == "marker":
+		return Member.MARKER
 
 	if placement.kind != "field":
 		return Member.REGION
