@@ -2074,6 +2074,33 @@ class Emitter:
 	def _value_offset(self, placement: Placement) -> int | None:
 		return None if placement.offset_bits is not None else 0
 
+	def _scalar_bytes(self, scalar: ScalarType) -> int:
+		"""How many bytes a scalar's load touches. A bit-packed field is
+		inside a container the layout already placed, and its container is
+		what has to be in the view."""
+		return max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
+
+	def _fits(self, struct: ResolvedStruct, placement: Placement,
+			bytes_: int, held: str = "view", gated: bool = False) -> str | None:
+		"""Whether a fixed-size member at a *dynamic* offset is in the view.
+
+		None where the question does not arise: a statically placed member is
+		inside the frame by the bounds check that acquired the view (20.2),
+		which is the argument that makes every constant-offset access
+		unchecked. A member placed after a variable-length region is not
+		covered by it -- its offset is a sum of lengths the message chose, and
+		`examples/packet` put its tag 65 kilobytes past a 62-byte view.
+
+		The offset is already clamped to the view (`situ_advance_u32`), so
+		what remains to ask is whether the member *fits* there. It is the same
+		bargain 26.27 struck for lengths: the accessor answers safely, and
+		`validate` reports the message as malformed.
+		"""
+		if placement.offset_bits is not None:
+			return None
+		base = self._base_expression(struct, placement, gated)
+		return f"situ_in_bounds({held}, {base}, {bytes_}u)"
+
 	def _is_array(self, placement: Placement) -> bool:
 		return self.resolved.find(placement.path + "[]") is not None
 
@@ -3515,8 +3542,17 @@ class Emitter:
 			"{",
 			f"\tuint32_t offset = {constant}u;",
 		]
+		# Saturating, because a term is a length the message chose: `hdr.length
+		# = 0xffff` put `examples/packet`'s tag 65581 bytes into a 62-byte view
+		# and the accessor handed that pointer back, which an address sanitizer
+		# stopped three seconds into the first real fuzz run. A wide length
+		# field is worse than out of range -- `offset + by` in `uint32_t` wraps
+		# to an offset that is *inside* the frame and points at the wrong
+		# bytes, which nothing downstream can detect. So every term stops at
+		# the view, and `validate` reports the message as malformed (26.27).
 		for term in terms:
-			lines.append(f"\toffset = offset + ({term});")
+			lines.append(f"\toffset = situ_advance_u32(offset, ({term}),"
+			             " view.limit);")
 
 		if not terms:
 			lines.append("\t(void)view;")
@@ -3628,10 +3664,31 @@ class Emitter:
 		The two are different answers and both are needed. Clamping alone
 		silently turns a lie into a truncation.
 		"""
-		if not declares_its_own_length(placement):
-			return []
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []
+
+		# The other half of the same sentence, one step further on. A member
+		# *placed* after a variable-length region has an offset that is a sum
+		# of lengths the message chose, so "does the frame contain it" is a
+		# question the acquiring bounds check did not answer for it either.
+		# `examples/packet`'s tag is sixteen fixed bytes and was 65 kilobytes
+		# past a 62-byte view.
+		if not declares_its_own_length(placement):
+			extent = self._fixed_extent(placement)
+			if extent is None or placement.offset_bits is not None:
+				return []
+			return [
+				f"\t/* {placement.path}: its offset is a sum of lengths the"
+				" message",
+				"\t * chose, so the frame is not known to contain it. The"
+				" accessor",
+				"\t * answers safely; this is where the message is called"
+				" malformed. */",
+				f"\tif (!situ_in_bounds(view,"
+				f" {self._base_expression(struct, placement)}, {extent}u)) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			]
 
 		declared = self._length_expression(struct, placement)
 		base     = self._base_expression(struct, placement)
@@ -3643,6 +3700,19 @@ class Emitter:
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 		]
+
+	def _fixed_extent(self, placement: Placement) -> int | None:
+		"""How many bytes this member occupies, where that is a constant.
+
+		A scalar's container, a counted array's run, a fixed-size nested
+		struct. None for anything the data sizes, which the branch above
+		already covers.
+		"""
+		if not placement.is_fixed_size:
+			return None
+		if placement.size_bits % BITS_PER_BYTE:
+			return None		# a bit-packed field's container is placed, not it
+		return placement.size_bits // BITS_PER_BYTE or None
 
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -4128,12 +4198,34 @@ class Emitter:
 			# A byte array is the bytes: MemoryIdentical, so a pointer is safe
 			# and is what callers actually want.
 			lines.extend(self._address_note(entry))
+			# Unless the member is not there. A counted array at a dynamic
+			# offset has a fixed extent and an offset the message chose, so
+			# "the frame contains it" is not something the acquiring bounds
+			# check established -- `packet.tag` is sixteen bytes after a
+			# region a header field sizes, and a `0xffff` there put the
+			# pointer past the end of the view.
+			fits = (self._fits(struct, placement, count, held,
+			                   gate is not None)
+			        if count is not None else None)
+			body = (f"\treturn {held}.base + "
+			        f"{self._base_expression(struct, placement, gated=gate is not None)};"
+			        if fits is None else
+			        f"\treturn {fits}\n\t\t? {held}.base + "
+			        f"{self._base_expression(struct, placement, gated=gate is not None)}"
+			        "\n\t\t: NULL;")
 			lines.extend([
+				*([] if fits is None else [
+					"/* NULL where the member does not fit the view: its offset"
+					" is a sum",
+					" * of lengths the message chose, so the frame is not known"
+					" to hold",
+					" * it. `validate` reports such a message as malformed"
+					" (26.27). */",
+				]),
 				f"static inline uint8_t *"
 				f"{ident(self.prefix, struct.name, local, 'ptr')}({taken})",
 				"{",
-				f"\treturn {held}.base + "
-				f"{self._base_expression(struct, placement, gated=gate is not None)};",
+				body,
 				"}",
 			])
 			lines.extend(self._nul_length(struct, placement, local, taken, held,
@@ -4221,8 +4313,29 @@ class Emitter:
 		load   = self._load_expression(scalar, placement, base,
 		                               offset=self._value_offset(placement))
 
+		# A scalar whose offset the message decides answers zero where it does
+		# not fit, rather than reading whatever is at that address. The value
+		# is wrong either way; one of the two is also a read past the frame.
+		fits = self._fits(struct, placement, self._scalar_bytes(scalar),
+		                  "gate.view" if gate else "view", gate is not None)
+
 		if placement.since is not None:
 			lines = self._versioned_get(struct, placement, ctype, taken, load)
+		elif fits is not None:
+			lines = [
+				f"/* Zero where the member does not fit the view: its offset is"
+				" a sum of",
+				" * lengths the message chose, so the frame is not known to"
+				" hold it, and",
+				" * `validate` reports such a message as malformed"
+				" (26.27). */",
+				f"static inline {ctype} {getter}({taken})",
+				"{",
+				f"\treturn {fits}",
+				f"\t\t? ({ctype})({load})",
+				f"\t\t: ({ctype})0;",
+				"}",
+			]
 		else:
 			lines = [
 				f"static inline {ctype} {getter}({taken})",
@@ -4315,6 +4428,27 @@ class Emitter:
 				"\t}",
 				f"\t{store}",
 				"\treturn SITU_OK;",
+				"}",
+			]
+
+		# A write at an offset the message chose is the same hole as a read,
+		# and worse: reading past the frame is a wrong answer and writing past
+		# it is somebody else's data. The setter has no error channel, so it
+		# does nothing -- and `validate` is where the caller learns why.
+		fits = self._fits(struct, placement, self._scalar_bytes(scalar))
+		if fits is not None:
+			return [
+				"/* Does nothing where the member does not fit the view: its"
+				" offset is a",
+				" * sum of lengths the message chose, and writing past the"
+				" frame is",
+				" * somebody else's data. `validate` reports such a message"
+				" (26.27). */",
+				f"static inline void {setter}(situ_view_t view, {ctype} value)",
+				"{",
+				f"\tif ({fits}) {{",
+				f"\t\t{store}",
+				"\t}",
 				"}",
 			]
 
@@ -4605,6 +4739,18 @@ class Emitter:
 		return lines
 
 	def _checks_for(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""Everything `validate` says about one member.
+
+		The bounds question comes first and does not replace the rest: a
+		member can be both out of the frame and constrained, and returning
+		early on the first left `[must_eq]` unchecked for every dynamically
+		placed field the moment the offset check landed.
+		"""
+		return [*self._fits_check(struct, entry.placement),
+		        *self._member_checks(struct, entry)]
+
+	def _member_checks(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
 
@@ -4617,10 +4763,6 @@ class Emitter:
 			if "." in placement.path[len(struct.name) + 1:]:
 				return []
 			return self._discriminant_check(struct, placement)
-
-		fits = self._fits_check(struct, placement)
-		if fits:
-			return fits
 
 		# A delimited member's delimiter has to be there. That is the one thing
 		# parse can check about it: the content cannot contain the delimiter,

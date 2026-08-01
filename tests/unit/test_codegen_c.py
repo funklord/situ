@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from situc.cli import analyse
 from situc.codegen.c import generate
 from situc.diagnostics import Source, SituError
 from situc.layout import solve
@@ -283,6 +284,72 @@ def test_every_schema_generates_and_compiles(path: Path, tmp_path: Path) -> None
 		 "-c", str(tmp_path / f"{path.stem}.c"), "-o", str(tmp_path / "out.o")],
 		capture_output=True, text=True)
 	assert result.returncode == 0, f"{path.parent.name}:\n{result.stderr}"
+
+
+# -- an offset the message chooses (26.27) ---------------------------------
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_member_past_the_frame_is_refused_not_read(tmp_path: Path) -> None:
+	"""A message that says its payload is 65535 bytes long, in 62 of them.
+
+	`examples/packet` puts its tag after a sealed region sized by `hdr.length`,
+	so `0xffff` there resolves the tag 65581 bytes into the view. Found by
+	`make fuzz` three seconds into the first run that was fuzzing rather than
+	eight random inputs, and it is the shape 26.27 settled: the accessor
+	answers safely and `validate` reports the message as malformed.
+	"""
+	source, resolved, _ = analyse(ROOT / "examples" / "packet" / "packet.situ")
+	built = generate(parse(source), resolved, "unit")
+	(tmp_path / "unit.h").write_text(built.header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(built.source, encoding="ascii")
+	(tmp_path / "probe.c").write_text(r"""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t raw[70];
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	memset(raw, 0, sizeof raw);
+	raw[4] = 1;			/* hdr.version, [must_eq = 1] */
+	raw[5] = 1;			/* hdr.type = hello */
+	/* 1000 bytes of body, which the schema's own `[max = 1024]` admits and
+	 * this 70-byte frame does not. `0xffff` would fail the cap first and
+	 * prove nothing about the offset. */
+	raw[6] = 0x03;
+	raw[7] = 0xe8;
+
+	situ_msg_init(&msg, raw, sizeof raw);
+	if (situ_packet_view(&msg, 0, sizeof raw, &view) != SITU_OK) return 1;
+
+	/* The offset stops at the view rather than running past it. */
+	if (situ_packet_tag_offset(view) > (uint32_t)sizeof raw)      return 2;
+	/* And the accessor refuses, rather than handing out that address. */
+	if (situ_packet_tag_ptr(view) != NULL)                        return 3;
+	/* A caller who does validate is told the message is malformed. */
+	if (situ_packet_validate(view) != SITU_ERR_BOUNDS)            return 4;
+
+	/* A well-formed one still works: 8 bytes of body fits in 62. */
+	raw[6] = 0;
+	raw[7] = 8;
+	if (situ_packet_tag_ptr(view) == NULL)                        return 5;
+	if (situ_packet_validate(view) != SITU_OK)                    return 6;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built_probe = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built_probe.returncode == 0, built_probe.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
 
 
 # -- constant-offset access -------------------------------------------------
@@ -651,7 +718,8 @@ def test_a_member_after_a_varint_is_placed_past_it() -> None:
 	own bytes. Silently, through an accessor that looked like any other."""
 	header, _ = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
 
-	assert "offset = offset + (situ_S_n_len(view));" in header
+	assert "offset = situ_advance_u32(offset, (situ_S_n_len(view)),"\
+		" view.limit);" in header
 
 
 def test_a_varint_may_size_an_array() -> None:
@@ -1264,7 +1332,8 @@ def test_a_later_members_offset_sums_the_scan() -> None:
 	header, _ = emit(FRAMED)
 
 	assert "situ_s_count_offset" in header
-	assert "offset = offset + (situ_s_line_span_from(view, offset));" in header
+	assert "offset = situ_advance_u32(offset,"\
+		" (situ_s_line_span_from(view, offset)), view.limit);" in header
 
 
 def test_validate_refuses_a_frame_with_no_delimiter_in_it() -> None:
@@ -1618,7 +1687,8 @@ def test_the_member_after_a_run_is_placed() -> None:
 	(26.31)."""
 	header, _ = emit(CHAIN)
 
-	assert "offset = offset + (situ_s_chain_span_from(view, offset));" in header
+	assert "offset = situ_advance_u32(offset,"\
+		" (situ_s_chain_span_from(view, offset)), view.limit);" in header
 
 
 def test_the_fuzz_harness_walks_a_while_run() -> None:

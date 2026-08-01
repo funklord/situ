@@ -1492,6 +1492,47 @@ fn main() {
 
 # -- the offset cache (decision 0022) ---------------------------------------
 
+# -- an offset the message chooses (26.27) ---------------------------------
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_member_past_the_frame_is_empty_not_a_panic(tmp_path: Path) -> None:
+	"""A message that says its payload is a thousand bytes, in seventy of them.
+
+	`examples/packet` puts its tag after a sealed region sized by `hdr.length`.
+	Rust's answer to a slice past the end is a panic, which in a `no_std` build
+	is an abort -- a denial of service rather than a mitigation. Found by
+	`make fuzz` (26.27); the accessor answers empty and `validate` reports the
+	message as malformed.
+	"""
+	result = build(
+		tmp_path,
+		(ROOT / "examples" / "packet" / "packet.situ").read_text(encoding="ascii"),
+		preamble="", main=r"""
+fn main() {
+	let mut raw = [0u8; 70];
+	raw[4] = 1;			// hdr.version, [must_eq = 1]
+	raw[5] = 1;			// hdr.type = hello
+	raw[6] = 0x03;			// hdr.length = 1000, inside [max = 1024]
+	raw[7] = 0xe8;
+
+	{
+		let view = unit::Packet::new(&raw).unwrap();
+		assert!(view.tag().is_empty());
+		assert!(matches!(view.validate(), Err(situ_rt::Error::Bounds)));
+	}
+
+	raw[6] = 0;
+	raw[7] = 8;
+	let view = unit::Packet::new(&raw).unwrap();
+	assert_eq!(view.tag().len(), 16);
+	assert!(view.validate().is_ok());
+}
+""")
+	assert result.returncode == 0, result.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
 # -- framing a run (20.3) ---------------------------------------------------
 
 

@@ -4981,11 +4981,40 @@ four backends have it, in the four shapes 26.27 already listed -- C reads out
 of bounds, C++ hands out a span pointing past the buffer, Rust panics (an abort
 in `no_std`), and Python clamps in silence.
 
-The fix has to be 26.27's, because the argument has not changed: the accessor
-clamps, so a caller who skips validation is memory-safe, *and* `validate`
+The fix is 26.27's, because the argument has not changed: the accessor answers
+safely, so a caller who skips validation is memory-safe, *and* `validate`
 reports `bounds`, so a caller who does not learns the message is malformed
-rather than short. That is the next piece of work rather than this one, and it
-is on 26.31 until it is done.
+rather than short. It is done, in three parts and in all four backends.
+
+**The offset saturates at the view.** `situ_advance_u32` in C, `situ_rt::
+advance` in Rust, `advance` in the Python runtime, and C's own function in C++
+-- every term of a dynamic offset goes through it, so a resolved offset is
+never past the end. Saturating rather than wrapping is the half worth stating:
+`at + by` in a 32-bit offset with a 32-bit length field wraps to an offset
+that is *inside* the frame and points at the wrong bytes, which is the one
+outcome nothing downstream can detect.
+
+**A member that does not fit answers nothing.** C returns `NULL` for a pointer
+and zero for a scalar; C++ an empty `span`; Rust an empty slice, which is also
+what stops the panic that a `no_std` build turns into an abort; Python an empty
+`memoryview` and zero, which is a change in kind for the one backend where this
+was never a safety question -- a short slice read as an integer is a number
+nobody wrote. Setters do nothing, in the two backends that emit one for a
+dynamically placed field; Rust emits none, which is the same answer arrived at
+earlier and for a different reason.
+
+**`validate` reports `bounds`.** Writing that check found a second defect in
+all four backends at once: `validate` returned on the *first* thing it had to
+say about a member, so adding the bounds question silently removed every
+`[must_eq]`, `[max]` and encoding check on any dynamically placed field. A
+member can be both outside the frame and constrained, and four copies of one
+early return is the shape 26.32 is about.
+
+Each backend carries the same probe, over `examples/packet` rather than a
+schema written for it: a thousand-byte body declared in a seventy-byte frame --
+inside the schema's own `[max = 1024]`, so it is the offset that fails rather
+than the cap -- comes back empty and malformed, and an eight-byte one still
+reads at 54. Run against the previous compiler, all four fail.
 
 ### 26.28 Where a generated artifact cannot be purged
 
@@ -5454,13 +5483,13 @@ a dependency nobody has checked, including the person who wrote it down.
 
 **Known and open.**
 
-- **A member placed after a variable-length region has an offset the message
-  chooses, and no accessor checks it.** `examples/packet`'s tag sits after a
-  sealed region sized by `hdr.length`, so `0xffff` there puts
-  `situ_packet_tag_ptr` 65581 bytes into a 62-byte view. Found by `make fuzz`
-  three seconds into the first real run (26.27). All four backends, four
-  different shapes of wrong. The remedy is the one 26.27 settled for lengths --
-  the accessor clamps and `validate` reports `bounds` -- and it is not done.
+Empty again. The entry that stood here for one commit was the offset a message
+chooses, found by `make fuzz` and closed the same way 26.27 closed the length
+it is the other half of: the offset saturates at the view, a member that does
+not fit answers nothing, and `validate` says `bounds`. Closing it found a
+second defect in all four backends -- `validate` returned on the first thing it
+had to say about a member, so the new check displaced every constraint check on
+a dynamically placed field.
 
 The entry before that was 26.30's measurements, and closing it took a tool
 rather than a paragraph: `tools/bench.py` builds a driver in all four

@@ -349,6 +349,22 @@ def nul_len(data: memoryview | bytes, capacity: int) -> int:
 NO_BYTE: Final = -1
 
 
+def advance(at: int, by: int, limit: int) -> int:
+	"""Advance an offset by a length the message chose, and stop at the end.
+
+	A member placed after a variable-length region has an offset that is a sum
+	of lengths an attacker fills in: `examples/packet` with `hdr.length =
+	0xffff` puts its tag 65581 bytes into a 62-byte message. Python cannot read
+	out of bounds -- a `memoryview` slice past the end is short rather than
+	unsafe -- so what this buys here is not safety but *agreement*: the four
+	backends have to answer the same question with the same number, and C's
+	answer is this one (26.27).
+	"""
+	room = limit - at if limit > at else 0
+
+	return at + (by if by < room else room)
+
+
 def scan(data: memoryview | bytes, limit: int, delim: bytes,
 		quote: int = NO_BYTE, escape: int = NO_BYTE) -> int:
 	"""Where a delimited member's content stops (section 8.6.1).

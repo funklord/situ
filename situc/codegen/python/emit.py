@@ -118,6 +118,7 @@ class Emitter:
 			"\tBoundsError, ConstraintError, Gate, Message, TruncatedError,",
 			"\tVersionError, View,",
 			"\tacquire,",
+			"\tadvance,",
 			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
 			"\tcompose, nul_len, open_gate, utf8_valid,",
@@ -996,6 +997,14 @@ class Emitter:
 			"\t\tit covers and when the result has gone stale, not how to",
 			'\t\tcompute it."""',
 			"\t\tself._check()",
+			*([] if self._fits(struct, placement, count) is None else [
+				f"\t\tif not ({self._fits(struct, placement, count)}):",
+				"\t\t\t# Its offset is a sum of lengths the message chose,"
+				" and the",
+				"\t\t\t# frame does not reach it. `validate` reports such a"
+				" message.",
+				"\t\t\treturn self._msg.buffer[0:0]",
+			]),
 			f"\t\tstart = self._at + ({start})",
 			f"\t\treturn self._msg.buffer[start:start + {count}]",
 		]
@@ -1563,8 +1572,26 @@ class Emitter:
 		if placement.offset_bits is None and offset is None:
 			return ["", f"\t# {placement.path}: its offset cannot be resolved."]
 
+		# A scalar whose offset the message decides answers zero where it does
+		# not fit. Python cannot read out of bounds -- the slice is short --
+		# but a short slice read as an integer is a number nobody wrote, and
+		# the other three answer zero (26.27).
+		fits = self._fits(struct, placement,
+		                  max(1, (scalar.bits + BITS_PER_BYTE - 1)
+		                      // BITS_PER_BYTE))
+
 		if placement.since is not None and placement.version_field is not None:
 			lines = self._versioned(placement, entry, name, hint, scalar, offset)
+		elif fits is not None:
+			lines = ["", "\t@property", f"\tdef {name}(self) -> {hint}:",
+			         *self._field_doc(entry),
+			         f"\t\tif not ({fits}):",
+			         "\t\t\t# Its offset is a sum of lengths the message"
+			         " chose, and the",
+			         "\t\t\t# frame does not reach it. `validate` reports"
+			         " such a message.",
+			         "\t\t\treturn 0",
+			         f"\t\treturn {self._load(placement, scalar, offset)}"]
 		else:
 			lines = ["", "\t@property", f"\tdef {name}(self) -> {hint}:",
 			         *self._field_doc(entry),
@@ -1609,12 +1636,25 @@ class Emitter:
 				f'{{self.{version}}} message")',
 			]
 
+		# A write at an offset the message chose does nothing, which is what
+		# the other backends do: the slice assignment would raise here rather
+		# than corrupt anything, and four backends answering three ways about
+		# one message is the disagreement they exist to avoid (26.27).
 		lines.extend([
 			"",
 			f"\t@{name}.setter",
 			f"\tdef {name}(self, value: {hint}) -> None:",
 			*gate,
-			f"\t\t{self._store(placement, scalar, offset)}",
+			*([f"\t\t{self._store(placement, scalar, offset)}"]
+			  if fits is None else [
+				f"\t\tif not ({fits}):",
+				"\t\t\t# Its offset is a sum of lengths the message chose,"
+				" and the",
+				"\t\t\t# frame does not reach it. `validate` reports such a"
+				" message.",
+				"\t\t\treturn",
+				f"\t\t{self._store(placement, scalar, offset)}",
+			]),
 		])
 		return lines
 
@@ -2587,7 +2627,28 @@ class Emitter:
 				return None
 			terms.append(length)
 
-		return " + ".join([str(constant), *terms])
+		if not terms:
+			return str(constant)
+
+		# Saturating, term by term. Python is the one backend where this is
+		# not a safety question -- a short slice is short, not a read past the
+		# buffer -- and it is still the same arithmetic, because four backends
+		# that disagree about where a member is mean the schema means four
+		# things (26.27).
+		folded = str(constant)
+		for term in terms:
+			folded = f"advance({folded}, {term}, self._len)"
+		return folded
+
+	def _fits(self, struct: ResolvedStruct, placement: Placement,
+			bytes_: int) -> str | None:
+		"""Whether a fixed-size member at a *dynamic* offset is in the view."""
+		if placement.offset_bits is not None:
+			return None
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return None
+		return f"self._len - ({start}) >= {bytes_}"
 
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2599,10 +2660,26 @@ class Emitter:
 		tells a caller who does not that the message is malformed rather than
 		short. Clamping alone silently turns a lie into a truncation.
 		"""
-		if not declares_its_own_length(placement):
-			return []
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []
+
+		# The other half of the same sentence: a member *placed* after a
+		# variable-length region has an offset the message chose.
+		if not declares_its_own_length(placement):
+			extent = (placement.size_bits // BITS_PER_BYTE
+			          if placement.is_fixed_size
+			          and placement.size_bits % BITS_PER_BYTE == 0 else None)
+			fits = (None if not extent
+			        else self._fits(struct, placement, extent))
+			if fits is None:
+				return []
+			return [
+				f"\t\t# {placement.path}: its offset is a sum of lengths the",
+				"\t\t# message chose, so the frame is not known to contain it.",
+				f"\t\tif not ({fits}):",
+				f'\t\t\traise BoundsError("{placement.path}: outside the'
+				' frame")',
+			]
 
 		declared = self._length_expression(struct, placement)
 		start    = self._offset_expression(struct, placement)
@@ -2903,6 +2980,17 @@ class Emitter:
 		return lines
 
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""Everything `validate` says about one member.
+
+		The bounds question first, and it does not replace the rest: a member
+		can be both outside the frame and constrained, and returning on the
+		first left `[must_eq]` unchecked for every dynamically placed field.
+		"""
+		return [*self._fits_check(struct, entry.placement),
+		        *self._member_check(struct, entry)]
+
+	def _member_check(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
 		from situc.expr import evaluate
 
 		placement = entry.placement
@@ -2911,9 +2999,6 @@ class Emitter:
 
 		check = classify_check(struct, placement, self.structs)
 
-		fits = self._fits_check(struct, placement)
-		if fits:
-			return fits
 		if check is Check.DISCRIMINANT:
 			return self._discriminant_check(struct, placement)
 		if check is Check.DELIMITED:

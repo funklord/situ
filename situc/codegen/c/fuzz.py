@@ -309,8 +309,24 @@ def _reads(struct: ResolvedStruct, prefix: str,
 			])
 		elif placement.array_count is not None and placement.scalar is not None:
 			if placement.scalar.bits == 8:
-				lines.append(f"\tsitu_fuzz_sink(("
-				             f"uint64_t)*{ident(prefix, struct.name, local, 'ptr')}(view));")
+				# Through a NULL check, because the pointer is one now: a
+				# counted array at an offset the message chose may not be in
+				# the view at all, and the accessor says so by handing back
+				# NULL. Dereferencing it anyway is not merely a trap -- at
+				# `-O1` the compiler takes the deref as proof the branch it
+				# guards cannot be taken, folds the check away, and the read
+				# lands past the buffer. Which is how this was found: the
+				# harness kept crashing after the accessor was fixed.
+				pointer = ident(prefix, struct.name, local, "ptr")
+				lines.extend([
+					"\t{",
+					f"\t\tconst uint8_t *held = {pointer}(view);",
+					"",
+					"\t\tif (held != NULL) {",
+					"\t\t\tsitu_fuzz_sink((uint64_t)*held);",
+					"\t\t}",
+					"\t}",
+				])
 			else:
 				count = macro(prefix, struct.name, local, "COUNT")
 				lines.extend([

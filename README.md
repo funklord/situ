@@ -228,8 +228,7 @@ distribution the no-dependency policy needs.
   part of the compiler exists to feed it or to report its results.
 - **Section 26.31**, where the frontier is: what is unfinished, re-derived from
   generated output rather than remembered. It has been wrong four times, and
-  says so. Read the open entry there before trusting an accessor whose offset
-  the message decides.
+  says so.
 - **Section 0**, on how the document is kept honest: seven claims in it are
   held to the code by tests that fail when they drift. Every one was added
   after finding drift, and each found more than expected.

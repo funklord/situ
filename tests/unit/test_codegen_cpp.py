@@ -1578,7 +1578,7 @@ def test_a_member_after_a_varint_is_placed_past_it() -> None:
 	varint's own bytes."""
 	header = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
 
-	assert "base() + 1 + n_len()" in header
+	assert "situ_advance_u32(1, n_len(), limit())" in header
 	assert "s.after: its offset cannot be resolved" not in header
 
 
@@ -2102,7 +2102,7 @@ def test_a_member_after_a_run_uses_the_runs_from_helper() -> None:
 	the rescan."""
 	header = emit(KV)
 
-	assert "at += entries_span_from(at);" in header
+	assert "at = situ_advance_u32(at, entries_span_from(at), limit());" in header
 	assert "std::uint32_t entries_span_from(std::uint32_t start)" in header
 
 
@@ -2225,6 +2225,62 @@ def test_a_wide_element_gets_no_pointer() -> None:
 
 	assert "::situ::rt::bytes samples()" not in header
 	assert "would alias bytes that are not the value" in header
+
+
+# -- an offset the message chooses (26.27) ---------------------------------
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_member_past_the_frame_is_empty_not_read(tmp_path: Path) -> None:
+	"""A message that says its payload is a thousand bytes, in seventy of them.
+
+	`examples/packet` puts its tag after a sealed region sized by `hdr.length`,
+	so a length the frame cannot hold resolves the tag past the end of it.
+	Found by `make fuzz` three seconds into the first run that was fuzzing
+	rather than eight random inputs (26.27), and the answer is the one already
+	settled: the accessor answers safely, and `validate` reports the message as
+	malformed rather than short.
+	"""
+	result = compiles(
+		tmp_path,
+		(ROOT / "examples" / "packet" / "packet.situ").read_text(encoding="ascii"),
+		preamble="", extra=r"""
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t raw[70] = { 0 };
+	raw[4] = 1;			/* hdr.version, [must_eq = 1] */
+	raw[5] = 1;			/* hdr.type = hello */
+	raw[6] = 0x03;			/* hdr.length = 1000, inside `[max = 1024]` */
+	raw[7] = 0xe8;
+
+	situ::packet view{ situ_view_t{ raw, sizeof raw, 0 } };
+
+	if (!view.tag().empty())                             return 1;
+	if (view.validate() != situ::rt::err::bounds)        return 2;
+
+	raw[6] = 0;
+	raw[7] = 8;
+	if (view.tag().size() != 16)                         return 3;
+	if (view.tag().data() != raw + 54)                   return 4;
+	if (view.validate() != situ::rt::err::ok)            return 5;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	assert subprocess.run([str(binary)]).returncode == 0
 
 
 # -- framing a run (20.3) ---------------------------------------------------

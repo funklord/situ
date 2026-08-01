@@ -122,6 +122,23 @@ impl Dirty {
 
 /// A big-endian read of `width` bytes at `at`.
 #[inline]
+/// Advance an offset by a length the message chose, and stop at the end.
+///
+/// A member placed after a variable-length region has an offset that is a sum
+/// of lengths an attacker fills in: `examples/packet` with `hdr.length =
+/// 0xffff` puts its tag 65581 bytes into a 62-byte message. Rust's answer to
+/// the slice that follows is a panic, which in a `no_std` build is an abort --
+/// a denial of service rather than a mitigation (26.27).
+///
+/// Saturating rather than wrapping, though `usize` here is wider than the
+/// `u32` the C runtime uses: the two agree about where a member is, and
+/// agreeing is the property four backends over one layout exist to keep.
+pub fn advance(at: usize, by: usize, limit: usize) -> usize {
+	let room = limit.saturating_sub(at);
+
+	at + if by < room { by } else { room }
+}
+
 pub fn read_be(bytes: &[u8], at: usize, width: usize) -> u64 {
 	let mut value: u64 = 0;
 	let mut i = 0;

@@ -1381,6 +1381,41 @@ def test_the_span_and_the_bit_behave(tmp_path: Path) -> None:
 
 # -- the offset cache (decision 0022) ---------------------------------------
 
+# -- an offset the message chooses (26.27) ---------------------------------
+
+
+def test_a_member_past_the_frame_is_empty_not_short(tmp_path: Path) -> None:
+	"""A message that says its payload is a thousand bytes, in seventy of them.
+
+	Python is the one backend where this was never unsafe -- a `memoryview`
+	slice past the end is short rather than a read out of bounds -- and a short
+	slice read as an integer is still a number nobody wrote. The other three
+	answer nothing rather than something wrong, and so does this one now
+	(26.27)."""
+	module = load(
+		tmp_path,
+		(ROOT / "examples" / "packet" / "packet.situ").read_text(encoding="ascii"),
+		preamble="")
+
+	raw = bytearray(70)
+	raw[4] = 1			# hdr.version, [must_eq = 1]
+	raw[5] = 1			# hdr.type = hello
+	raw[6] = 0x03			# hdr.length = 1000, inside [max = 1024]
+	raw[7] = 0xe8
+
+	msg  = module.Message(raw)
+	view = module.packet(msg, 0, len(raw))
+
+	assert len(view.tag) == 0
+	with pytest.raises(module.BoundsError):
+		view.validate()
+
+	raw[6] = 0
+	raw[7] = 8
+	assert len(view.tag) == 16
+	view.validate()
+
+
 # -- framing a run (20.3) ---------------------------------------------------
 
 

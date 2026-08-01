@@ -770,7 +770,18 @@ class Emitter:
 				return None
 			terms.append(length)
 
-		return " + ".join([str(constant), *terms])
+		if not terms:
+			return str(constant)
+
+		# Saturating, term by term, for the reason `situ_advance_u32` exists:
+		# one of these is a length the message chose, and `at + by` in
+		# `std::uint32_t` wraps to an offset inside the frame pointing at the
+		# wrong bytes. C's runtime is this backend's too, so it is the same
+		# function rather than a second one that agrees today.
+		folded = str(constant)
+		for term in terms:
+			folded = f"situ_advance_u32({folded}, {term}, limit())"
+		return folded
 
 	def _offset_body(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str] | None:
@@ -799,7 +810,11 @@ class Emitter:
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
 				return None
-			lines.append(f"\t\tat += {length};")
+			# Saturating: a term is a length the message chose, and `at + by`
+			# in `std::uint32_t` wraps to an offset that is inside the frame
+			# and points at the wrong bytes. C's runtime is this one's too, so
+			# the arithmetic is the same function (26.27).
+			lines.append(f"\t\tat = situ_advance_u32(at, {length}, limit());")
 		if constant:
 			lines.append(f"\t\tat += {constant};")
 		return [*lines, "\t\treturn at;"]
@@ -1633,6 +1648,22 @@ class Emitter:
 
 		return over_fields(names, source, read)
 
+	def _fits(self, struct: ResolvedStruct, placement: Placement,
+			bytes_: int) -> str | None:
+		"""Whether a fixed-size member at a *dynamic* offset is in the view.
+
+		None where the question does not arise: a statically placed member is
+		inside the frame by the bounds check that acquired the view (20.2). A
+		member placed after a variable-length region is not, and
+		`examples/packet` put its tag 65 kilobytes past a 62-byte one.
+		"""
+		if placement.offset_bits is not None:
+			return None
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return None
+		return f"situ_in_bounds(raw(), {start}, {bytes_}u)"
+
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A length the message declares must fit the frame it is in.
@@ -1643,10 +1674,28 @@ class Emitter:
 		tells a caller who does not that the message is malformed rather than
 		short. Clamping alone silently turns a lie into a truncation.
 		"""
-		if not declares_its_own_length(placement):
-			return []
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []
+
+		# The other half of the same sentence: a member *placed* after a
+		# variable-length region has an offset the message chose, so whether
+		# the frame contains it is not something the acquiring check settled.
+		if not declares_its_own_length(placement):
+			extent = (placement.size_bits // BITS_PER_BYTE
+			          if placement.is_fixed_size
+			          and placement.size_bits % BITS_PER_BYTE == 0 else None)
+			fits = (None if not extent
+			        else self._fits(struct, placement, extent))
+			if fits is None:
+				return []
+			return [
+				f"\t\t/* {placement.path}: its offset is a sum of lengths the",
+				"\t\t * message chose, so the frame is not known to contain"
+				" it. */",
+				f"\t\tif (!{fits}) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
 
 		declared = self._length_expression(struct, placement)
 		start    = self._offset_expression(struct, placement)
@@ -2943,8 +2992,26 @@ class Emitter:
 		if placement.type_name in self.enums:
 			load = f"static_cast<{ctype}>({load})"
 
+		# A scalar whose offset the message decides answers zero where it does
+		# not fit, rather than reading whatever is at that address (26.27).
+		fits = self._fits(struct, placement,
+		                  max(1, (scalar.bits + BITS_PER_BYTE - 1)
+		                      // BITS_PER_BYTE))
+
 		if placement.since is not None and placement.version_field is not None:
 			lines.extend(self._versioned(placement, name, ctype, load))
+		elif fits is not None:
+			lines.extend([
+				"\t/* Zero where the member does not fit the view: its offset"
+				" is a sum",
+				"\t * of lengths the message chose, and `validate` reports"
+				" such a",
+				"\t * message as malformed. */",
+				f"\t[[nodiscard]] {ctype} {name}() const noexcept",
+				"\t{",
+				f"\t\treturn {fits} ? {load} : {ctype}{{}};",
+				"\t}",
+			])
 		else:
 			lines.extend([
 				f"\t[[nodiscard]] {ctype} {name}() const noexcept",
@@ -3002,10 +3069,24 @@ class Emitter:
 			])
 			return lines
 
+		# A write at an offset the message chose is the same hole as a read,
+		# and worse: reading past the frame is a wrong answer, writing past it
+		# is somebody else's data. No error channel here, so it does nothing.
 		lines.extend([
+			*([] if fits is None else [
+				"\t/* Does nothing where the member does not fit the view:"
+				" writing past",
+				"\t * the frame is somebody else's data, and `validate`"
+				" reports it. */",
+			]),
 			f"\tvoid set_{name}({ctype} value) noexcept",
 			"\t{",
-			f"\t\t{self._store(scalar, placement, stored, offset)}",
+			*([f"\t\t{self._store(scalar, placement, stored, offset)}"]
+			  if fits is None else [
+				f"\t\tif ({fits}) {{",
+				f"\t\t\t{self._store(scalar, placement, stored, offset)}",
+				"\t\t}",
+			]),
 			"\t}",
 		])
 		return lines
@@ -3348,14 +3429,32 @@ class Emitter:
 			return ["", f"\t/* {placement.path}: this backend cannot resolve"
 			        " where the tag sits. */"]
 
+		# Empty where it does not fit: a tag sits after everything it covers,
+		# so its offset is a sum of lengths the message chose -- and a span
+		# with a length is what lets this answer safely at all, where C has
+		# only a pointer and returns NULL (26.27).
+		fits = self._fits(struct, placement, count)
 		lines = [
 			"",
 			f"\t/* {placement.path}: {count} bytes. The algorithm is the",
 			"\t * caller's to run -- situ says which bytes it covers and when",
-			"\t * the result has gone stale, not how to compute it. */",
+			"\t * the result has gone stale, not how to compute it.",
+			*([] if fits is None else [
+				"\t *",
+				"\t * Empty where the member does not fit the view: its offset"
+				" is a sum",
+				"\t * of lengths the message chose, and `validate` reports"
+				" such a",
+				"\t * message as malformed.",
+			]),
+			"\t */",
 			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t{",
-			f"\t\treturn ::situ::rt::bytes(base() + ({start}), {count});",
+			(f"\t\treturn ::situ::rt::bytes(base() + ({start}), {count});"
+			 if fits is None else
+			 f"\t\treturn {fits}\n"
+			 f"\t\t\t? ::situ::rt::bytes(base() + ({start}), {count})\n"
+			 "\t\t\t: ::situ::rt::bytes();"),
 			"\t}",
 		]
 
@@ -3733,6 +3832,17 @@ class Emitter:
 		return lines
 
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""Everything `validate` says about one member.
+
+		The bounds question first, and it does not replace the rest: a member
+		can be both outside the frame and constrained, and returning on the
+		first left `[must_eq]` unchecked for every dynamically placed field.
+		"""
+		return [*self._fits_check(struct, entry.placement),
+		        *self._member_check(struct, entry)]
+
+	def _member_check(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
 		from situc.expr import evaluate
 
 		placement = entry.placement
@@ -3742,9 +3852,6 @@ class Emitter:
 
 		if check is Check.NOTHING:
 			return []
-		fits = self._fits_check(struct, placement)
-		if fits:
-			return fits
 		if check is Check.DISCRIMINANT:
 			return self._discriminant_check(struct, placement)
 		if check is Check.DELIMITED:

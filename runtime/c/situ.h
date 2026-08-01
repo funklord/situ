@@ -479,6 +479,30 @@ static inline uint32_t situ_remaining_u32(uint32_t limit, uint32_t at)
 	return at >= limit ? 0u : limit - at;
 }
 
+/* Advance an offset by a length the message chose, and stop at the view.
+ *
+ * The other half of the same hole, one step further on. `situ_remaining_u32`
+ * keeps a *length* inside the frame; this keeps an *offset* there. A member
+ * placed after a variable-length region has an offset that is the sum of what
+ * precedes it, and one of those terms is a field an attacker fills in: for
+ * `examples/packet`, `hdr.length = 0xffff` puts the tag 65581 bytes into a
+ * 62-byte view, and the accessor handed back that pointer.
+ *
+ * Saturating rather than wrapping, and that is the point: `at + by` in
+ * `uint32_t` with a 32-bit length field wraps to a small number, which is an
+ * offset inside the frame pointing at bytes that are not the member. A
+ * clamped offset is wrong in a way `validate` can report; a wrapped one is
+ * wrong in a way nothing can see.
+ *
+ * Found by fuzzing `examples/packet` under an address sanitizer, three seconds
+ * into the first run that was fuzzing rather than eight random inputs. */
+static inline uint32_t situ_advance_u32(uint32_t at, uint32_t by, uint32_t limit)
+{
+	const uint32_t room = situ_remaining_u32(limit, at);
+
+	return at + (by < room ? by : room);
+}
+
 /* Delimited members (section 8.6.1).
  *
  * `situ_scan` returns the offset of the first occurrence of `delim` within

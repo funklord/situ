@@ -871,13 +871,28 @@ class Emitter:
 			        " where the tag sits."]
 
 		at    = self._unparen(start)
+		# Empty where it does not fit: a tag sits after everything it covers,
+		# so its offset is a sum of lengths the message chose, and slicing
+		# past the end panics -- an abort in `no_std` (26.27).
+		fits  = self._fits(struct, placement, count)
 		lines = [
 			"",
 			f"\t/// `{placement.path}`: {count} bytes. The algorithm is the",
 			"\t/// caller's to run -- situ says which bytes it covers and when",
 			"\t/// the result has gone stale, not how to compute it.",
+			*([] if fits is None else [
+				"\t///",
+				"\t/// Empty where the member does not fit: its offset is a sum",
+				"\t/// of lengths the message chose, and `validate` reports",
+				"\t/// such a message as malformed.",
+			]),
 			f"\tpub fn {name}(&self) -> &[u8] {{",
-			f"\t\t&self.bytes[{at}..{at} + {count}]",
+			*([f"\t\t&self.bytes[{at}..{at} + {count}]"] if fits is None else [
+				f"\t\tif !({fits}) {{",
+				"\t\t\treturn &[];",
+				"\t\t}",
+				f"\t\t&self.bytes[{at}..{at} + {count}]",
+			]),
 			"\t}",
 		]
 
@@ -1487,11 +1502,30 @@ class Emitter:
 				"\t}",
 			]
 
+		# A scalar whose offset the message decides answers zero where it does
+		# not fit. Rust's alternative is the panic inside `read_be`, which is
+		# an abort in `no_std` -- a denial of service rather than a wrong
+		# answer, and neither is what a caller wants (26.27).
+		fits = self._fits(struct, placement,
+		                  max(1, (scalar.bits + BITS_PER_BYTE - 1)
+		                      // BITS_PER_BYTE))
+
 		return [
 			"",
 			*self._axes_doc(entry),
+			*([] if fits is None else [
+				"\t/// Zero where the member does not fit: its offset is a sum",
+				"\t/// of lengths the message chose, and `validate` reports",
+				"\t/// such a message as malformed.",
+			]),
 			f"\tpub fn {name}(&self) -> {self._field_type(placement)} {{",
-			f"\t\t{self._load(placement, scalar, offset)}",
+			*([f"\t\t{self._load(placement, scalar, offset)}"] if fits is None
+			  else [
+				f"\t\tif !({fits}) {{",
+				"\t\t\treturn 0;",
+				"\t\t}",
+				f"\t\t{self._load(placement, scalar, offset)}",
+			]),
 			"\t}",
 		]
 
@@ -2577,7 +2611,34 @@ class Emitter:
 				return None
 			terms.append(length)
 
-		return " + ".join([str(constant), *terms])
+		if not terms:
+			return str(constant)
+
+		# Saturating, term by term: one of these is a length the message
+		# chose, and the slice that follows an out-of-range offset panics --
+		# an abort in `no_std`, which is the denial of service rather than the
+		# mitigation (26.27).
+		folded = str(constant)
+		for term in terms:
+			# `_unparen`, because `-D warnings` rejects a parenthesised
+			# argument and a length expression arrives wrapped.
+			folded = (f"situ_rt::advance({folded}, {self._unparen(term)},"
+			          " self.bytes.len())")
+		return folded
+
+	def _fits(self, struct: ResolvedStruct, placement: Placement,
+			bytes_: int) -> str | None:
+		"""Whether a fixed-size member at a *dynamic* offset is in the slice.
+
+		None where the question does not arise: a statically placed member is
+		inside the frame by the check that made the view (20.2).
+		"""
+		if placement.offset_bits is not None:
+			return None
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return None
+		return (f"self.bytes.len().saturating_sub({start}) >= {bytes_}")
 
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2589,10 +2650,27 @@ class Emitter:
 		tells a caller who does not that the message is malformed rather than
 		short. Clamping alone silently turns a lie into a truncation.
 		"""
-		if not declares_its_own_length(placement):
-			return []
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []
+
+		# The other half of the same sentence: a member *placed* after a
+		# variable-length region has an offset the message chose.
+		if not declares_its_own_length(placement):
+			extent = (placement.size_bits // BITS_PER_BYTE
+			          if placement.is_fixed_size
+			          and placement.size_bits % BITS_PER_BYTE == 0 else None)
+			fits = (None if not extent
+			        else self._fits(struct, placement, extent))
+			if fits is None:
+				return []
+			return [
+				f"\t\t// {placement.path}: its offset is a sum of lengths the",
+				"\t\t// message chose, so the frame is not known to contain"
+				" it.",
+				f"\t\tif !({fits}) {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+			]
 
 		declared = self._length_expression(struct, placement)
 		start    = self._offset_expression(struct, placement)
@@ -3379,11 +3457,13 @@ class Emitter:
 
 			check = classify_check(struct, placement, self.structs)
 
+			# The bounds question first, and it does not replace the rest: a
+			# member can be both outside the frame and constrained, and
+			# `continue` here left `[must_eq]` unchecked for every
+			# dynamically placed field.
+			checks.extend(self._fits_check(struct, placement))
+
 			if check is Check.NOTHING:
-				continue
-			fits = self._fits_check(struct, placement)
-			if fits:
-				checks.extend(fits)
 				continue
 			if check is Check.DISCRIMINANT:
 				checks.extend(self._discriminant_check(struct, placement))
