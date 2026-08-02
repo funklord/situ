@@ -1033,7 +1033,7 @@ def test_the_walk_reads_protoc_output(tmp_path: Path) -> None:
 	module = load(tmp_path, TLV, preamble=TLV_PREAMBLE)
 	held   = module.S.at(runtime().Message(bytearray(WIRE)), 0, len(WIRE))
 
-	assert held.fields_count() == 3
+	assert held.fields_count == 3
 	# Where each item starts, not where its value does.
 	assert [item.at for item in held.fields()] == [0, 3, 9]
 

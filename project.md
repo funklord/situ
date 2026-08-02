@@ -5071,6 +5071,18 @@ None of the three is a crash. All three are one message meaning different
 things in different languages, which is the property the backends exist to
 keep and the only one nothing else was checking.
 
+**Widening the probe list found two more, and looking up the spellings was the
+check.** Adding `tlv` and `indexed` counts, endian markers and varints meant
+finding what each backend calls them, and two answers were wrong before a
+single byte was compared: Python spelled a `tlv` count as a method where every
+other count in that same backend is a property, and kept a varint's
+total-value accessor private -- `_x_value` -- where the other three publish it.
+That accessor is the number every length in the struct is derived from, so it
+was the one thing a Python caller could not ask for without reaching into a
+private name. Neither is a crash and neither would ever have been found by
+running anything; they were found by writing down what the four are asked and
+noticing that one of them had to be asked differently.
+
 ### 26.28 Where a generated artifact cannot be purged
 
 Decision 0022 measured what removes an unused accessor. Two of the four

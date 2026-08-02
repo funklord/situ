@@ -874,6 +874,12 @@ class Emitter:
 			"\t\texcept (BoundsError, ConstraintError):",
 			"\t\t\treturn",
 			"",
+			# A property, like every other count this backend emits. It was a
+			# method here alone -- `view.cells_count` beside
+			# `view.fields_count()` -- which is one question with two spellings
+			# in one language, found by asking the four backends the same
+			# question and having to spell this one differently.
+			"\t@property",
 			f"\tdef {name}_count(self) -> int:",
 			f'\t\t"""How many items are present. A walk: nothing in the region',
 			'\t\trecords a count."""',
@@ -1268,10 +1274,16 @@ class Emitter:
 			"\t\treturn 0 if read is None else read[1]",
 			"",
 			"\t@property",
-			f"\tdef _{name}_value(self) -> int:",
+			f"\tdef {name}_value(self) -> int:",
 			f'\t\t"""The same value where an exception cannot be raised: the',
 			"\t\tlength arithmetic downstream is not fallible, and making it",
-			'\t\tso would put a try around every accessor after this one."""',
+			"\t\tso would put a try around every accessor after this one.",
+			"",
+			"\t\tPublic, like the same accessor in the other three. It was",
+			"\t\t`_"
+			f"{name}_value` here, so the number every length in this",
+			"\t\tstruct is derived from was the one thing a Python caller",
+			'\t\tcould not ask for without touching a private name."""',
 			"\t\ttry:",
 			f"\t\t\treturn self.{name}",
 			"\t\texcept (BoundsError, ConstraintError):",
@@ -2913,7 +2925,7 @@ class Emitter:
 		if driver.placement.varint is not None:
 			if not self._reads_varint(driver.placement):
 				return None
-			return f"self._{c_name(local_name(struct, driver.placement))}_value"
+			return f"self.{c_name(local_name(struct, driver.placement))}_value"
 
 		if driver.placement.scalar is None:
 			return None

@@ -24,12 +24,21 @@ apart when they answer separately (26.32). The probe list is chosen once, by
 all four backends at once, which is this repository. If that changes, it is a
 subcommand and a line in section 21.
 
-What is probed is a subset, and the subset is the thing to grow: scalars, byte
-arrays, delimited members, tags, and the counts of runs, plus `validate`. Not
-probed yet -- variants, `tlv` and `indexed` regions, coded regions, markers,
-text numbers, varints, nested structs, sealed interiors and versioned members --
-because each needs the four spellings checked before it can be compared, and a
-probe that is wrong in one language reports a disagreement that is not there.
+What is probed is a subset, and the subset is the thing to grow. Now: scalars,
+byte arrays, delimited members and delimited text numbers, tags, endian
+markers, varints, the counts of runs and of `tlv` and `indexed` regions, and
+`validate`. Not yet: a variant's arms, coded regions, nested structs, sealed
+interiors and versioned members -- each answers with an error in three
+languages and an exception in the fourth, or has a different shape per arm, and
+a probe spelled wrong in one language reports a disagreement that is not there.
+
+Adding a kind is cheap and pays immediately. The four spellings have to be
+looked up once, and looking them up is itself the check: `tlv` counts were a
+method in Python and a property everywhere else in that same backend, and a
+varint's total-value accessor was public in three languages and private in
+Python -- so the number every length in the struct derives from was the one
+thing a Python caller could not ask for. Neither is a crash; both are one
+question with two answers.
 """
 
 from __future__ import annotations
@@ -59,6 +68,11 @@ class Probe(Enum):
 	TAG       = "tag"
 	#: `name count=<n>`
 	COUNT     = "count"
+	#: `name little=<0|1>` -- an endian marker, whose answer every field it
+	#: governs depends on.
+	MARKER    = "marker"
+	#: `name len=<n> value=<v>` -- a varint, both numbers off the wire.
+	VARINT    = "varint"
 
 
 @dataclass(frozen=True)
@@ -119,11 +133,22 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 			if placement.sized_by is None:
 				continue
 			found.append(Ask(Probe.BYTES, local))
-		elif kind is Member.DELIMITED and placement.radix is None:
+		elif kind is Member.DELIMITED:
+			# A text number framed by a delimiter is asked the framing
+			# question and not the value one: its value accessor returns an
+			# error in three languages and raises in the fourth, which are
+			# four shapes rather than one answer.
 			found.append(Ask(Probe.DELIMITED, local))
 		elif kind is Member.TAG:
 			found.append(Ask(Probe.TAG, local, placement.array_count))
-		elif kind in (Member.RECORD_RUN, Member.REPEAT_WHILE):
+		elif kind is Member.MARKER:
+			found.append(Ask(Probe.MARKER, local))
+		elif kind is Member.VARINT:
+			found.append(Ask(Probe.VARINT, local))
+		elif kind in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.TLV,
+				Member.INDEXED):
+			# Every count is a walk over numbers the message chose: a run's
+			# elements, a `tlv` region's items, an `indexed` region's table.
 			found.append(Ask(Probe.COUNT, local))
 
 	return found
@@ -238,6 +263,13 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        f'\t\t\t\tprintf("{ask.local} present=%d\\n",'
 		        " held == NULL ? 0 : 1);",
 		        "\t\t\t}"]
+	if ask.probe is Probe.MARKER:
+		return [f'\t\t\tprintf("{ask.local} little=%d\\n",'
+		        f' {call.format("is_little")}(view) ? 1 : 0);']
+	if ask.probe is Probe.VARINT:
+		return [f'\t\t\tprintf("{ask.local} len=%u value=%llu\\n",'
+		        f' {call.format("len")}(view),'
+		        f' (unsigned long long){call.format("value")}(view));']
 
 	length = (f"{macro(prefix, struct, ask.local, 'COUNT')}"
 	          if ask.count is not None else f"{call.format('len')}(view)")
@@ -315,6 +347,13 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\tstd::printf("{ask.local} present=%d\\n",'
 		        f" view.{ask.local}().empty() ? 0 : 1);"]
+	if ask.probe is Probe.MARKER:
+		return [f'\t\t\tstd::printf("{ask.local} little=%d\\n",'
+		        f" view.{ask.local}_is_little() ? 1 : 0);"]
+	if ask.probe is Probe.VARINT:
+		return [f'\t\t\tstd::printf("{ask.local} len=%u value=%llu\\n",'
+		        f" view.{ask.local}_len(),"
+		        f" static_cast<unsigned long long>(view.{ask.local}_value()));"]
 
 	return ["\t\t\t{",
 	        f"\t\t\t\tconst auto held = view.{ask.local}();",
@@ -386,6 +425,14 @@ def _rust_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\t\tprintln!("{ask.local} present={{}}",'
 		        f" if view.{call}().is_empty() {{ 0 }} else {{ 1 }});"]
+	if ask.probe is Probe.MARKER:
+		return [f'\t\t\t\tprintln!("{ask.local} little={{}}",'
+		        f" if view.{rust_ident(ask.local + '_is_little')}()"
+		        " { 1 } else { 0 });"]
+	if ask.probe is Probe.VARINT:
+		return [f'\t\t\t\tprintln!("{ask.local} len={{}} value={{}}",'
+		        f" view.{rust_ident(ask.local + '_len')}(),"
+		        f" view.{rust_ident(ask.local + '_value')}());"]
 
 	return [f"\t\t\t\tlet held = view.{call}();",
 	        f'\t\t\t\tprintln!("{ask.local} len={{}} first={{}}", held.len(),',
@@ -454,6 +501,12 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'print("{ask.local} present=%d"'
 		        f" % (0 if len(view.{ask.local}) == 0 else 1))"]
+	if ask.probe is Probe.MARKER:
+		return [f'print("{ask.local} little=%d"'
+		        f" % (1 if view.{ask.local}_is_little else 0))"]
+	if ask.probe is Probe.VARINT:
+		return [f'print("{ask.local} len=%d value=%d"'
+		        f" % (view.{ask.local}_len, view.{ask.local}_value))"]
 
 	return [f"held = view.{ask.local}",
 	        f'print("{ask.local} len=%d first=%d"'
