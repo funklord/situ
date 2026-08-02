@@ -220,6 +220,12 @@ It is not packaged. There is no release, no wheel and no version number:
 `situc` runs from the tree or from a directory copy, which is the only
 distribution the no-dependency policy needs.
 
+One feature is planned and deliberately late: a packed layout image (`situc
+pack`) and a separate project that walks one at run time, for a device whose
+framing has to change without a firmware rebuild. Section 26.33 is the plan and
+decision 0026 is the shape -- including what an interpreter cannot do, which is
+make an operation absent.
+
 ## Reading further
 
 `project.md` is long and is meant to be. Useful entry points:

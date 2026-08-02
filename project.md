@@ -126,7 +126,12 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
 - **No recursive types in v0.** Recursive schema types make size and capability
   computation non-terminating. Rejected at parse time with a clear error.
 - **Not a parser combinator library.** The schema is declarative and the layout
-  solver is a compiler pass, not a runtime interpreter.
+  solver is a compiler pass, not a runtime interpreter. That is a statement
+  about `situc` rather than about everything that may read its output: a packed
+  layout image and a separate program that walks one is a late-stage feature
+  (26.33), decided in `docs/decisions/0026-runtime-image-and-interpreter.md`
+  and kept out of this compiler for the reason recorded there -- these
+  invariants keep exactly one master.
 - **Not a replacement for protobuf semantics.** Situ can *describe* the
   protobuf wire format (Section 9.7) and can import `.proto` files to produce
   such a description (Section 19.2). It does not adopt protobuf's identity model,
@@ -5673,6 +5678,57 @@ also why `examples/sqlite` exists: `indexed` had no real format behind it, and
 finding one -- a SQLite b-tree page, whose cell pointers are in key order while
 the cells fill the page backwards -- took longer than building the construct
 and asked for two things the language did not have.
+
+### 26.33 The runtime image, and why it is late
+
+**Status: not started, and deliberately late.** Decision 0026 is the shape;
+this is the plan and the reason for its place in the order.
+
+The question came from a device rather than from the language: a radio whose
+framing has to change without a firmware rebuild. Ship a description of the new
+format, load it, parse. The same shape serves tooling -- one dissector instead
+of one per host language -- and any harness that wants to read a format it was
+not compiled against.
+
+**What it is.** `situc pack` emits a packed layout image: the placements, their
+kinds, offsets, sizes, endianness, delimiters and codecs, plus a bytecode for
+the expression language of section 10, which is total and about twenty opcodes
+wide. A separate project walks that image over bytes. Nothing in this
+repository walks one at run time.
+
+**Why it is more port than design.** `traverse.py` already answers every
+question a walker asks, and the four backends plus `gen-dissector` are five
+spellings of those answers. A walker is a sixth whose language is a table.
+
+**Four things it has to be, from 0026:**
+
+1. the image format is itself a situ schema, read through generated accessors,
+   so `gen-fuzz`, `situc wire` and the differential check all apply to the one
+   component whose input is least trusted;
+2. the interpreter is a fifth column in `test_backends_agree_under_random_bytes`
+   and disagrees with none of the four;
+3. what it cannot do is written down -- an interpreter cannot make an operation
+   *absent*, so the capability map stops being the shape of the interface and
+   becomes data a caller may consult;
+4. `situc` gains one subcommand and nothing else.
+
+**The first slice, before any of the rest.** Emit the image for every schema in
+the tree and write the walker in Python, in the separate repository, reading it
+through the generated Python accessors. Wire it in as the fifth column of the
+differential check. A few hundred lines, no new language surface, and it
+answers the only question that decides the design: can a table walk say the
+same thing as four compiled backends about hostile bytes? If it agrees over all
+twenty-two schemas the rest is engineering. If it disagrees, the disagreement
+is the design review.
+
+**Why late.** Two reasons, and neither is that it is uninteresting. The image's
+shape depends on which consumer is primary -- an embedded walker in a fixed
+arena wants a small byte-addressable table, and a tooling walker wants names,
+capability vectors and doc strings -- and those pull opposite ways. And
+everything that would keep the interpreter honest was built in the last few
+weeks: the differential check is days old and its probe list is still growing.
+A format designed before the first choice is made, and checked by an apparatus
+still settling, is a format designed twice.
 
 ### Invariants to hold across all phases
 
