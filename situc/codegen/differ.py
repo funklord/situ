@@ -189,9 +189,18 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		# the bytes are the transform's output, and Python emits no decode at
 		# all (0017). Where it ends is still a scan over attacker bytes, and
 		# that all four do answer.
+		#
+		# A region with no delimiter is asked the same question the other way:
+		# how many bytes it occupies, which is its interior's extent through
+		# the codec's expansion. Only the delimited form was asked, so the
+		# other one -- where every backend returned the region's *minimum*,
+		# zero, for a region the data sizes -- was compared by nothing
+		# (26.35).
 		if placement.codec is not None:
 			if placement.delimiter is not None:
 				found.append(Ask(Probe.DELIMITED, local))
+			elif placement.kind == "coded":
+				found.append(Ask(Probe.BYTES, local))
 			continue
 
 		scalar = placement.scalar

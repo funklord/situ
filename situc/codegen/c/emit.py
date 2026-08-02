@@ -3246,7 +3246,21 @@ class Emitter:
 				" knows. */",
 			]
 
-		size = placement.size_bits // BITS_PER_BYTE
+		# The interior's extent through the codec's expansion, which is what
+		# `traverse.region_extent` answers and what the offset of everything
+		# after the region already used. This returned `size_bits`, the
+		# region's *minimum* -- so a region whose interior the data sizes
+		# reported zero bytes, with a pointer at the right place and no
+		# refusal: `coded body(c) { u8 content[n]; }` is `n` bytes of wire and
+		# every backend said it was empty (26.35). A fixed interior is
+		# unaffected; its minimum is its extent.
+		length = self._region_length(struct, placement)
+		if length is None:
+			return [
+				f"/* No accessor for `{placement.name}`: its encoded extent is",
+				f" * {placement.codec}'s to report and not a number this"
+				" knows. */",
+			]
 		return [
 			"",
 			f"/* `{placement.name}` is `{placement.codec}` output, and these"
@@ -3258,8 +3272,13 @@ class Emitter:
 			f"static inline uint32_t "
 			f"{ident(self.prefix, struct.name, local, 'len')}(situ_view_t view)",
 			"{",
-			"\t(void)view;",
-			f"\treturn {size}u;",
+			# A fixed interior renders to a constant, and an unused parameter
+			# is an error under this project's own flags.
+			# Clamped like every other length the message decides: the
+			# interior is sized by fields an attacker fills in, and this
+			# returns a length beside a pointer.
+			f"\treturn situ_min_u32({length},",
+			f"\t\tsitu_remaining_u32(view.limit, {base}));",
 			"}",
 			f"static inline const uint8_t *"
 			f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",

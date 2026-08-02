@@ -2562,7 +2562,16 @@ class Emitter:
 			return ["", f"\t/* No accessor for {placement.path}: its encoded",
 			        f"\t * extent is {placement.codec}'s to report. */"]
 
-		size  = placement.size_bits // BITS_PER_BYTE
+		# The interior's extent through the codec's expansion
+		# (`traverse.region_extent`), not the region's minimum: a region whose
+		# interior the data sizes reported zero bytes, in all four backends
+		# and with no refusal (26.35). A fixed interior is unaffected -- its
+		# minimum is its extent.
+		size = self._region_length(struct, placement)
+		if size is None:
+			return ["", f"\t/* No accessor for {placement.path}: its encoded",
+			        f"\t * extent is {placement.codec}'s to report. */"]
+
 		lines = [
 			"",
 			f"\t/* {placement.path} is `{placement.codec}` output: the bytes on",
@@ -2571,11 +2580,16 @@ class Emitter:
 			" says. */",
 			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t{",
-			f"\t\treturn ::situ::rt::bytes(base() + ({start}), {size}u);",
+			# Clamped like every other length the message decides: the
+			# interior is sized by fields an attacker fills in, and a span is
+			# a pointer that carries one.
+			f"\t\treturn ::situ::rt::bytes(base() + ({start}),",
+			f"\t\t\tsitu_min_u32({size},"
+			f" situ_remaining_u32(limit(), {start})));",
 			"\t}",
 		]
 
-		return lines + self._decode_accessor(struct, placement, f"{size}u")
+		return lines + self._decode_accessor(struct, placement, f"({size})")
 
 	def _coded_delimited(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

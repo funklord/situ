@@ -1325,7 +1325,16 @@ class Emitter:
 			return ["", f"\t# No accessor for {placement.path}: its encoded",
 			        f"\t# extent is {placement.codec}'s to report."]
 
-		size  = placement.size_bits // BITS_PER_BYTE
+		# The interior's extent through the codec's expansion
+		# (`traverse.region_extent`), not the region's minimum: a region whose
+		# interior the data sizes reported zero bytes, in all four backends
+		# and with no refusal (26.35). A fixed interior is unaffected -- its
+		# minimum is its extent.
+		size = self._region_length(struct, placement)
+		if size is None:
+			return ["", f"\t# No accessor for {placement.path}: its encoded",
+			        f"\t# extent is {placement.codec}'s to report."]
+
 		lines = [
 			"", "\t@property",
 			f"\tdef {name}(self) -> memoryview:",
@@ -1335,7 +1344,11 @@ class Emitter:
 			'\t\tis behind the transform (13.5)."""',
 			"\t\tself._check()",
 			f"\t\tstart = self._at + ({start})",
-			f"\t\treturn self._msg.buffer[start:start + {size}]",
+			# Clamped to the view: the length is the interior's, and the
+			# interior is sized by fields the message chose.
+			f"\t\tstop  = start + min({size},"
+			f" max(0, self._len - ({start})))",
+			"\t\treturn self._msg.buffer[start:stop]",
 		]
 
 		return lines + self._decode_note(struct, placement)

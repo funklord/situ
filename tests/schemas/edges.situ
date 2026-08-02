@@ -195,3 +195,35 @@ struct linked {
 	link  chain[] while (kind == 0x11 || kind == 0x22) max 6;
 	u8    tail[remaining];
 }
+
+// A coded region whose interior the *data* sizes, which is the shape nothing
+// in this repository had.
+//
+// Every coded region here and in `examples/` is either fixed inside or ends at
+// a delimiter, and those are the two paths the emitters had. This is the third:
+// the region's extent is its interior's extent put through the codec's
+// expansion, and the interior is `u8 content[n]`. All four backends returned
+// the region's *minimum* -- zero bytes -- with a pointer at the right place and
+// no refusal, so the wire bytes of a non-empty region were unreachable in every
+// language at once (26.35).
+//
+// `ratio_exact(2, 1)` because a codec that doubles makes the arithmetic
+// visible: a two-byte interior is four bytes of region, and a length that
+// forgot the ratio would still look plausible.
+codec doubling {
+	expansion = ratio_exact(2, 1);
+	granularity = byte;
+	seekable = linear;
+	invertible;
+	deterministic;
+}
+
+impl doubling extern "my_doubling";
+
+struct coded_run {
+	u8  n;
+	coded body(doubling) {
+		u8 content[n];
+	}
+	u8  trailer;
+}

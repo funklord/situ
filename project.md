@@ -6073,6 +6073,29 @@ found thirty-one errors in fifteen of the twenty-five, in one second:
 - `__all__ = []` has no element type, which `std/codecs.situ` -- signatures and
   no structs -- is.
 
+**A coded region the data sizes was empty in all four.** Found by asking what
+`gen-codec-tests` could be run against, and following the codec path down.
+Every coded region in this repository is either fixed inside or ends at a
+delimiter, and those are the two the emitters had. The third -- `coded body(c)
+{ u8 content[n]; }`, whose extent is its interior's extent through the codec's
+expansion -- returned the region's *minimum*, zero, beside a pointer at the
+right place and with no refusal. The wire bytes of a non-empty region were
+unreachable in every language at once.
+
+`traverse.region_extent` had the answer all along and the *offset of what
+follows the region* already used it. So a module contradicted itself: `body`
+claimed no bytes while `trailer`, placed after it through the same expansion,
+landed at the right offset. Only the length was not asking.
+
+Two things follow. The shape is in `tests/schemas/edges.situ` now, which is the
+file that exists to carry what no worked example has -- it had two of the three
+coded forms and not this one. And the differential check probes a non-delimited
+coded region's length, which it did not: only the delimited form was asked.
+
+That probe would not have caught this. All four backends agreed, and agreed on
+zero -- 26.34's standing limit, arriving for the fourth time. What caught it was
+reading one generated module and noticing it disagreed with itself.
+
 **Two installers, and the one nobody ran.** Section 24 keeps CMake and GNU
 Make as independently usable entry points, which makes their install lists two
 descriptions of one thing. They agree, file for file -- and `make install` did
@@ -6093,7 +6116,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2238 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2239 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

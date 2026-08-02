@@ -1028,6 +1028,41 @@ def test_a_coded_region_hands_back_its_encoded_bytes(tmp_path: Path) -> None:
 	assert bytes(held.body) == bytes(range(8))
 
 
+SIZED_BODY = ("struct S { u8 n; coded body(halve) { u8 raw[n]; }"
+	" u8 trailer; }")
+
+
+def test_a_region_the_data_sizes_reports_the_bytes_it_occupies(
+		tmp_path: Path) -> None:
+	"""Every coded region in this tree was fixed inside or ended at a
+	delimiter, and those were the two paths the emitters had. A region whose
+	*interior* the data sizes is the third, and all four backends answered it
+	with the region's minimum -- zero -- beside a pointer at the right place
+	and no refusal, so a non-empty region's wire bytes were unreachable in
+	every language at once (26.35).
+
+	The module contradicted itself, which is what makes this checkable from
+	one buffer: `body` claimed no bytes while `trailer`, placed after it,
+	resolved through the same expansion and landed at the right offset. The
+	length was the only thing not asking `traverse.region_extent`.
+
+	`halve` doubles, so three interior bytes are six on the wire and the
+	trailer is at 1 + 6.
+	"""
+	module = load(tmp_path, SIZED_BODY, preamble=CODED_PRE)
+	raw    = bytearray([3, *range(0x10, 0x16), 0xFF])
+	held   = module.S.at(module.Message(raw), 0, len(raw))
+
+	assert len(bytes(held.body)) == 6
+	assert bytes(held.body) == bytes(range(0x10, 0x16))
+	assert held.trailer == 0xFF
+
+	# And clamped where the message declares more than it sent, which is the
+	# bargain every other data-driven length here strikes.
+	short = module.S.at(module.Message(bytearray([9, 1, 2, 3])), 0, 4)
+	assert len(bytes(short.body)) == 3
+
+
 def test_and_says_why_the_decode_is_not_here(tmp_path: Path) -> None:
 	"""C++ links the C codec for free and Rust declares it `extern "C"`; this
 	one would have to load a shared object from a path situ has no convention

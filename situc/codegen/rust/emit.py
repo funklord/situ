@@ -1106,7 +1106,16 @@ class Emitter:
 			return ["", f"\t// No accessor for {placement.path}: its encoded",
 			        f"\t// extent is {placement.codec}'s to report."]
 
-		size  = placement.size_bits // BITS_PER_BYTE
+		# The interior's extent through the codec's expansion
+		# (`traverse.region_extent`), not the region's minimum: a region whose
+		# interior the data sizes reported zero bytes, in all four backends
+		# and with no refusal (26.35). A fixed interior is unaffected -- its
+		# minimum is its extent.
+		size = self._region_length(struct, placement)
+		if size is None:
+			return ["", f"\t// No accessor for {placement.path}: its encoded",
+			        f"\t// extent is {placement.codec}'s to report."]
+
 		lines = [
 			"",
 			f"\t/// `{placement.path}` is `{placement.codec}` output: the bytes",
@@ -1114,11 +1123,15 @@ class Emitter:
 			"\t/// the transform (13.5).",
 			f"\tpub fn {name}(&self) -> &[u8] {{",
 			f"\t\tlet at = {self._unparen(start)};",
-			f"\t\t&self.bytes[at..at + {size}]",
+			# Clamped, because the length is the interior's and the interior is
+			# sized by fields the message chose.
+			f"\t\tlet n  = core::cmp::min({size},",
+			"\t\t\tself.bytes.len().saturating_sub(at));",
+			"\t\t&self.bytes[at..at + n]",
 			"\t}",
 		]
 
-		return lines + self._decode_accessor(struct, placement, str(size))
+		return lines + self._decode_accessor(struct, placement, size)
 
 	def _coded_delimited(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
