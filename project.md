@@ -5790,9 +5790,9 @@ the tree and write the walker in Python, in the separate repository, reading it
 through the generated Python accessors. Wire it in as the fifth column of the
 differential check. A few hundred lines, no new language surface, and it
 answers the only question that decides the design: can a table walk say the
-same thing as four compiled backends about hostile bytes? If it agrees over all
-twenty-two schemas the rest is engineering. If it disagrees, the disagreement
-is the design review.
+same thing as four compiled backends about hostile bytes? If it agrees over
+every schema in the tree the rest is engineering. If it disagrees, the
+disagreement is the design review.
 
 **Why late.** Two reasons, and neither is that it is uninteresting. The image's
 shape depends on which consumer is primary -- an embedded walker in a fixed
@@ -5802,6 +5802,95 @@ everything that would keep the interpreter honest was built in the last few
 weeks: the differential check is days old and its probe list is still growing.
 A format designed before the first choice is made, and checked by an apparatus
 still settling, is a format designed twice.
+
+### 26.34 Running it, and asking four at once
+
+Twenty-two commits since the last fold, and almost all of what they fixed came
+from two methods rather than from reading the code. Both replace a description
+of an artifact with an execution of it.
+
+**Method one: run the artifact the way its consumer runs it.** Everything this
+compiler emits was already generated in a test, held to a golden string, and
+read by a person. Running it found, in one week:
+
+- **The emitted Lua, under a stub of Wireshark's API.** `luac -p` had parsed
+  every dissector for months, which proves a file is syntax. Four are now
+  executed over real packets -- a UDP header, IPv4's bit-packed first row, a DNS
+  name walked label by label, an HTTP request line found by scanning -- and
+  section 22's one recorded semantic dependency, "correct because zero is truthy
+  in Lua", turned out to be safe for a different reason than the one written
+  down. A dependency nobody can exercise is one nobody has checked, including
+  whoever wrote it down.
+- **Doxygen, actually run over the emitted C and C++.** Every generated C++
+  class was undocumented: comments are promoted to `/**` at the indentation the
+  emitter is told about, and it was told about members. The struct comment above
+  every class in every header was extracted by nothing. And `<reserved0>`, the
+  compiler's own label for an unnamed field, is markup to a documentation tool.
+- **libFuzzer with ASan, rather than eight bytes from `/dev/urandom`.** Three
+  seconds in: `examples/protobuf`'s harness was empty and always had been --
+  sixteen million executions at coverage 1, which is what nothing looks like
+  from outside -- and `examples/packet` read 65 kB past a 62-byte view, at an
+  offset the message itself declares.
+- **`situc` run on the Python version it declares as its floor.** It did not
+  start.
+- **`situ_generate()` called from a consumer's CMake scope**, which is the only
+  scope it exists for: two paths it had been resolving by accident.
+- **The offset cache measured in four languages** rather than argued for in one.
+  The conclusion moved: on the example this page had been citing for it, the
+  cache is a small loss.
+
+Each of those had a passing test. The test checked the artifact's text; the
+consumer runs it.
+
+**Method two: ask four backends the same question about the same bytes.**
+`situc/codegen/differ.py` generates a driver per backend *from the layout* --
+thirteen kinds of question, 217 of them across 22 of the 25 schemas -- feeds all
+four identical pseudo-random buffers, and fails where the printed answers
+differ. Generating the drivers rather than writing one per schema is what makes
+it durable: a construct added tomorrow is probed the day it exists, and a probe
+list that has to be maintained by hand is a fifth description to drift.
+
+It found: no acquisition check in two backends; offsets that did not saturate in
+two; a missing minimum-size floor in two; three error-class and two naming
+divergences in Python; and last, the nested sub-view three of the four could not
+refuse -- eighteen members nothing had ever compared, precisely *because* three
+of them had no way to answer "no". It also produced a result worth recording as
+loudly as a defect: a variant's arms already agreed, in all four, on the first
+run.
+
+**What a question found that neither method could.** Two, both from the user
+asking rather than from a check:
+
+- `manchester` names two incompatible conventions -- 802.3 and Thomas, exact
+  inverses -- and the compiler silently picked one. Invariant 9 exactly: a
+  silent default whose wrong choice is undetectable at run time, since both
+  produce plausible bytes and only the peer knows which is right. The bare name
+  is a diagnostic now and the two are named apart.
+- CRC generation was limited to widths that happen to be C word sizes, and
+  reflected CRCs did not reverse the initial value. So `crc24_ble` could not be
+  spelled at all, and a reflected CRC with a nonzero init was quietly wrong. Any
+  byte multiple up to 64 bits now, with `crc24_ble` and `crc40_gsm` in
+  `std/kernels.situ` as the two that exercise it.
+
+No differential check finds either: all four backends agreed, and agreed on the
+wrong convention. That is the standing limit of the method, and the reason
+section 0 asks for a worked example as well as a check.
+
+**The rest was drift.** Five separate lists of which schemas exist, one per
+test, converging by hand; a committed `a.out`; a generated build not held to the
+tree. One list now, in `tests/unit/every_schema.py`, and a check that the build
+tracks it.
+
+**What is open, and why one of them stayed open.** `examples/ble` -- a radio
+frame this project has a real use for -- is deliberately unwritten. 26.32's rule
+is that the worked example is the claim, and field constants recalled rather
+than verified would make it a false one. It waits on a citable source, named in
+the schema's own header. That is a worse outcome than having the example and a
+better one than having it wrong. Beyond it: the two shapes the differential
+check cannot ask about (26.31), and 26.33.
+
+**Status:** 2230 unit tests, 7 skipped; generated C compiled on the host and
+both aarch64 targets; `make fuzz` clean at thirty seconds a harness.
 
 ### Invariants to hold across all phases
 
