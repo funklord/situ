@@ -1076,8 +1076,9 @@ def test_a_tlv_region_gets_a_walk() -> None:
 	section 9.7 makes the conformance gate."""
 	module = emit(TLV, preamble=TLV_PREAMBLE)
 
-	assert "def fields_first(self):" in module
-	assert "def fields_next(self, item):" in module
+	assert "def fields_first(self) -> S_fields_item:" in module
+	assert ("def fields_next(self, item: S_fields_item)"
+	        " -> S_fields_item:") in module
 	assert "not emitted by this backend yet" not in module
 
 
@@ -1639,3 +1640,45 @@ def test_an_array_of_wide_scalars_gets_an_indexed_getter(tmp_path: Path) -> None
 
 	with pytest.raises(IndexError):
 		held.samples(4)
+
+
+# -- the module a caller type-checks (26.35) --------------------------------
+
+#: `python3 -m mypy` rather than a `mypy` on the path: that is how `make check`
+#: runs it, and the compiler's own suite does not require it to be installed as
+#: a command.
+HAS_MYPY = subprocess.run(
+	[sys.executable, "-m", "mypy", "--version"],
+	capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not HAS_MYPY, reason="no mypy")
+def test_every_generated_module_type_checks(tmp_path: Path) -> None:
+	"""The annotations are for a caller who runs a type checker over them, and
+	nothing ran one. Thirty-one errors in fifteen of the twenty-five modules
+	the first time this did: `as_enum` returned `object`, so every enum field
+	in the tree was a type error; the `tlv` walk was emitted unannotated, so
+	every use of it was an untyped call; `__all__ = []` has no element type.
+
+	One invocation over every schema at once, which is a second or so -- the
+	cost of a check that lives in the suite rather than in a habit.
+
+	`--strict` because that is what the compiler holds itself to (`make
+	check`), and generated code a caller cannot check as strictly as the
+	generator was is an annotation that stops at the boundary.
+	"""
+	shutil.copy(RUNTIME / "python" / "situ_runtime.py",
+	            tmp_path / "situ_runtime.py")
+
+	for schema in SCHEMAS:
+		parsed   = parse_text(schema.read_text(encoding="utf-8"))
+		resolved = resolve(parsed, solve(parsed))
+		(tmp_path / f"{schema.stem}.py").write_text(
+			generate_py(parsed, resolved, schema.stem).module, encoding="ascii")
+
+	checked = subprocess.run(
+		[sys.executable, "-m", "mypy", "--strict", "--no-pretty",
+		 "--no-error-summary", str(tmp_path)],
+		capture_output=True, text=True)
+
+	assert checked.returncode == 0, checked.stdout + checked.stderr

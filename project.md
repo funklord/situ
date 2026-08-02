@@ -6059,7 +6059,27 @@ There is a request and a response through the example's own accessors now.
 - Beyond those: the two shapes the differential check cannot ask about
   (26.31), and 26.33.
 
-**Status:** 2236 unit tests, 7 skipped; generated C compiled and run on the
+**And the Python nobody type-checked.** The same method one level over: the
+generated Python is annotated throughout, and an annotation is for a caller who
+runs a type checker. Nobody had. `mypy --strict` over every schema's module
+found thirty-one errors in fifteen of the twenty-five, in one second:
+
+- `as_enum` returned `object`, so *every* enum field in the tree was a type
+  error against its own declared return type. It is generic in the enum now;
+- the `tlv` walk was emitted without annotations, so `fields_first`,
+  `fields_next`, `fields`, `fields_find` and every named tag were untyped
+  definitions and every call to them an untyped call -- eleven of the
+  thirty-one, all in the one construct section 9.7 makes the conformance gate;
+- `__all__ = []` has no element type, which `std/codecs.situ` -- signatures and
+  no structs -- is.
+
+`make check` read `situc tools tests`, and `runtime/python` is none of those:
+the module every generated module imports was the one thing nothing checked. It
+had four dead `type: ignore` comments, which strict mode calls errors, and it
+is checked now. The generated modules are checked in the suite, once, over
+every schema at a time.
+
+**Status:** 2237 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

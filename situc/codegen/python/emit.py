@@ -115,6 +115,10 @@ class Emitter:
 			"import enum",
 			*(["import sys"] if self._has_marker() else []),
 			"",
+			# Only where a walk hands one back: an unused import is a
+			# warning in every linter a caller might run over this.
+			*(["from collections.abc import Iterator", ""]
+			  if self._tlv_items() else []),
 			"from situ_runtime import (",
 			"\tBoundsError, ConstraintError, Gate, Message, TruncatedError,",
 			"\tVersionError, View,",
@@ -127,7 +131,10 @@ class Emitter:
 			*self._delimited_imports(),
 			")",
 			"",
-			"__all__ = [",
+			# Annotated, because `__all__ = []` has no element type and a
+			# caller running mypy over this gets `var-annotated` for it --
+			# which `std/codecs.situ`, all signatures and no structs, is.
+			"__all__: list[str] = [",
 		]
 		exported = [c_name(decl.name) for decl in self.schema.enums()]
 		exported += [c_name(name) for name in sorted(self.structs)]
@@ -651,9 +658,10 @@ class Emitter:
 
 		name = c_name(local_name(struct, placement))
 
+		item  = self._tlv_item_name(placement)
 		lines = self._tlv_read(placement, grammar, name)
-		lines.extend(self._tlv_cursor(name, start))
-		lines.extend(self._tlv_by_name(grammar, name))
+		lines.extend(self._tlv_cursor(name, start, item))
+		lines.extend(self._tlv_by_name(grammar, name, item))
 		return lines
 
 	def _tlv_item_class(self, struct: ResolvedStruct, placement: Placement,
@@ -843,25 +851,31 @@ class Emitter:
 			f"{indent}at = at + {width}",
 		]
 
-	def _tlv_cursor(self, name: str, start: str) -> list[str]:
-		"""The cursor, the generator over it, and the value's bytes."""
+	def _tlv_cursor(self, name: str, start: str, item: str) -> list[str]:
+		"""The cursor, the generator over it, and the value's bytes.
+
+		Annotated, like everything else this backend emits. These were not,
+		so a caller who runs mypy over the module -- which is the only way a
+		type hint is worth writing -- got `no-untyped-def` on the walk and
+		`no-untyped-call` at every use of it (26.35).
+		"""
 		return [
 			"",
-			f"\tdef {name}_first(self):",
+			f"\tdef {name}_first(self) -> {item}:",
 			f'\t\t"""The first item. Raises BoundsError if the region is'
 			f' empty."""',
 			f"\t\treturn self._{name}_read({start})",
 			"",
-			f"\tdef {name}_next(self, item):",
+			f"\tdef {name}_next(self, item: {item}) -> {item}:",
 			f'\t\t"""The item after this one."""',
 			f"\t\treturn self._{name}_read(item.next)",
 			"",
-			f"\tdef {name}_value(self, item) -> memoryview:",
+			f"\tdef {name}_value(self, item: {item}) -> memoryview:",
 			f'\t\t"""This item\'s value. Zero copy, like every other read'
 			f' here."""',
 			"\t\treturn self.bytes[item.value_at:item.value_at + item.value_len]",
 			"",
-			f"\tdef {name}(self):",
+			f"\tdef {name}(self) -> Iterator[{item}]:",
 			f'\t\t"""Every item, in order.',
 			"",
 			"\t\tA generator: the region is walked either way, and stopping",
@@ -887,7 +901,8 @@ class Emitter:
 			f"\t\treturn sum(1 for _ in self.{name}())",
 		]
 
-	def _tlv_by_name(self, grammar: TlvGrammar, name: str) -> list[str]:
+	def _tlv_by_name(self, grammar: TlvGrammar, name: str,
+			item: str) -> list[str]:
 		"""`find`, and one accessor per tag the schema names."""
 		if not grammar.known:
 			return []
@@ -898,7 +913,7 @@ class Emitter:
 
 		lines = [
 			"",
-			f"\tdef {name}_find(self, tag: int):",
+			f"\tdef {name}_find(self, tag: int) -> {item}:",
 			f'\t\t"""The first item whose tag is `tag`, matched against {named}',
 			"\t\t(decision 0023).",
 			"",
@@ -919,7 +934,7 @@ class Emitter:
 				described += "[]" if known.repeated else ""
 			lines.extend([
 				"",
-				f"\tdef {c_name(known.name)}(self):",
+				f"\tdef {c_name(known.name)}(self) -> {item}:",
 				f'\t\t"""`{known.name}`: {described}."""',
 				f"\t\treturn self.{name}_find({known.tag})",
 			])
@@ -2287,7 +2302,7 @@ class Emitter:
 			'\t\tzero-extent element."""',
 			"\t\tself._check()",
 			"\t\tat     = start",
-			"\t\tstarts = []",
+			"\t\tstarts: list[int] = []",
 			"",
 			f"\t\twhile at < self._len{cap}:",
 			f"\t\t\telement = {inner}(self._msg, self._at + at, self._len - at)",
@@ -2393,7 +2408,7 @@ class Emitter:
 			'\t\tempty occupies no bytes, and this would not return."""',
 			"\t\tself._check()",
 			"\t\tat     = start",
-			"\t\tstarts = []",
+			"\t\tstarts: list[int] = []",
 			"",
 			f"\t\twhile at + {len(delim)} <= self._len:",
 			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"

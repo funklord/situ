@@ -38,7 +38,12 @@ nothing installed.
 
 from __future__ import annotations
 
-from typing import Final
+import enum
+from typing import Final, TypeVar
+
+#: The enum a generated getter hands back, or the integer where the
+#: value is not one the schema names (8.7).
+EnumT = TypeVar("EnumT", bound=enum.Enum)
 
 
 class SituError(Exception):
@@ -228,7 +233,7 @@ def acquire(cls: type, msg: Message, at: int, length: int) -> View:
 		raise BoundsError(
 			f"{cls.__name__} needs {length} bytes at offset {at}; the message "
 			f"is {len(msg.buffer)} bytes")
-	return cls(msg, at, length)		# type: ignore[call-arg,no-any-return]
+	return cls(msg, at, length)		# type: ignore[no-any-return]
 
 
 class Gate:
@@ -264,7 +269,7 @@ def open_gate(gate_class: type, view: View, verified: bool) -> Gate:
 	if not verified:
 		raise TagError("the tag has not verified, so the sealed interior "
 		               "stays closed (section 14.3)")
-	return gate_class(view, Gate._KEY)	# type: ignore[call-arg,no-any-return]
+	return gate_class(view, Gate._KEY)	# type: ignore[no-any-return]
 
 
 class Register:
@@ -301,24 +306,29 @@ def compose(raw: int, value: int, shift: int, mask: int) -> int:
 	return (raw & ~(mask << shift)) | ((value & mask) << shift)
 
 
-def as_enum(cls: type, raw: int) -> object:
+def as_enum(cls: type[EnumT], raw: int) -> EnumT | int:
 	"""The enum member, or the raw value when it is not one.
 
 	A getter is not where a caller should discover a malformed field -- that is
 	`validate`'s job, and section 8.7's `default = error` is a rule about
 	parsing rather than about reading. Raising here would also make a getter
 	fail on data a `default = pass` schema explicitly admits.
+
+	Generic in the enum, because the generated getter is annotated
+	`-> ether_type | int` and this returned `object`. Every enum field in every
+	generated module was a type error to a caller who ran mypy over it, which
+	is the only thing an annotation is for.
 	"""
 	try:
-		return cls(raw)		# type: ignore[call-arg]
+		return cls(raw)
 	except ValueError:
 		return raw
 
 
-def known_enum(cls: type, raw: int) -> bool:
+def known_enum(cls: type[enum.Enum], raw: int) -> bool:
 	"""Whether `raw` names a member. What `default = error` asks on parse."""
 	try:
-		cls(raw)		# type: ignore[call-arg]
+		cls(raw)
 	except ValueError:
 		return False
 	return True

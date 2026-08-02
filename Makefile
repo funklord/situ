@@ -77,8 +77,13 @@ test: test-py check lint test-c cross-test
 test-py:
 	$(PYTHON) -m pytest tests -q
 
+# The shipped Python runtime is checked too, and was not: `mypy situc tools
+# tests` reads the compiler and its suite, and `runtime/python` is neither --
+# so the module every generated module imports was the one nothing checked. It
+# had four dead `type: ignore` comments, which strict mode calls errors.
 check:
 	$(PYTHON) -m mypy situc tools tests
+	$(PYTHON) -m mypy --strict runtime/python
 
 lint:
 	$(PYTHON) tools/lint_conventions.py
