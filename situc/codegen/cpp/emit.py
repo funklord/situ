@@ -47,7 +47,8 @@ from situc.traverse import (
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	has_computable_extent, is_run, local_name, matched_values, obligation,
+	has_computable_extent, index_entry_bytes, is_run, local_name,
+	matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarKind, ScalarType, lookup
@@ -1415,6 +1416,10 @@ class Emitter:
 
 		steps: list[str] = []
 		for placement in variable:
+			if placement.kind == "indexed":
+				return self._unframeable(struct, "an `indexed` region reaches"
+				        " wherever its furthest element ends, which its offset"
+				        " table does not say")
 			if is_run(placement, self.structs):
 				walk = self._framing_walk(struct, placement)
 				if walk is None:
@@ -1870,6 +1875,15 @@ class Emitter:
 			return None if start is None else f"(limit() - ({start}))"
 		if placement.sized_by is None:
 			return None
+
+		# An `indexed` region's count counts entries, and an entry is an
+		# `offset_type` wide (`traverse.index_entry_bytes`). Asking the
+		# *element* for a width finds a struct with no fixed one and gives up,
+		# so the region had no length here and `validate` had no check.
+		entry = index_entry_bytes(placement)
+		if entry is not None:
+			table = self._count_expression(struct, placement)
+			return None if table is None else f"({table}) * {entry}"
 
 		count = self._count_expression(struct, placement)
 		if count is None:
@@ -2729,7 +2743,13 @@ class Emitter:
 				"(::situ::rt::bytes &out) const noexcept",
 				"\t{",
 				*refuse,
-				f"\t\tout = ::situ::rt::bytes(base() + ({start}), {length});",
+				# Clamped the way an ordinary run is: the length is the
+				# message's, and a span is a pointer that carries one. A DNS
+				# label declaring 55 bytes in a five-byte frame handed the
+				# caller a 55-byte span.
+				f"\t\tout = ::situ::rt::bytes(base() + ({start}),",
+				f"\t\t\tsitu_min_u32({length},"
+				f" situ_remaining_u32(limit(), {start})));",
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",
 			]
@@ -2743,11 +2763,18 @@ class Emitter:
 				" const noexcept",
 				"\t{",
 				*refuse,
-				f"\t\tout = ::{self.namespace}::{c_name(nested.name)}("
-				"situ_view_t{",
-				f"\t\t\tbase() + ({start}), "
-				f"{c_name(nested.name)}::size_bytes, raw().generation }}); ",
-				"\t\treturn ::situ::rt::err::ok;",
+				# Through `situ_view_sub`, which is the bounds check a nested
+				# member has had since 26.31 and an arm had not: an arm sits at
+				# an offset the discriminant chose, and a view built by hand
+				# claimed the struct's size whatever the frame held.
+				"\t\tsitu_view_t raw;",
+				f"\t\tconst situ_err_t e = situ_view_sub(this->raw(), {start},"
+				f" {c_name(nested.name)}::size_bytes, &raw);",
+				"",
+				"\t\tif (e == SITU_OK) {",
+				f"\t\t\tout = ::{self.namespace}::{c_name(nested.name)}(raw);",
+				"\t\t}",
+				"\t\treturn static_cast<::situ::rt::err>(e);",
 				"\t}",
 			]
 
@@ -2848,9 +2875,30 @@ class Emitter:
 			f"\t\tif ({version}() < {placement.since}u) {{",
 			"\t\t\treturn ::situ::rt::err::version;",
 			"\t\t}",
+			*self._versioned_bounds(placement),
 			f"\t\tout = {load};",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
+		]
+
+	def _versioned_bounds(self, placement: Placement) -> list[str]:
+		"""And the frame has to hold it, which the acquiring check did not say.
+
+		The one place 20.2's argument does not reach: a versioned struct's
+		minimum is its *first* version's, so a message declaring version 2 in
+		three bytes is a well-formed question about a member that is not
+		there. All four backends asked the version and stopped -- C read past
+		the view, this handed back the bytes after it, Rust panicked.
+		"""
+		scalar = placement.scalar
+		if scalar is None or placement.offset_bits is None:
+			return []
+		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
+		return [
+			f"\t\tif (!situ_in_bounds(raw(), {placement.offset_bytes},"
+			f" {width})) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
 		]
 
 	def _reads_varint(self, placement: Placement) -> bool:
@@ -3055,6 +3103,10 @@ class Emitter:
 				f"\t\tif ({version}() < {placement.since}u) {{",
 				"\t\t\treturn ::situ::rt::err::version;",
 				"\t\t}",
+				# The declared version is the message's claim, not a fact
+				# about the buffer: `ver = 2` in three bytes passed this and
+				# wrote four bytes past the frame.
+				*self._versioned_bounds(placement),
 				f"\t\t{self._store(scalar, placement, stored, offset)}",
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",

@@ -19,6 +19,14 @@ accessors come from, so what is asked of one backend is asked of all four:
 pseudo-random buffers in, one canonical listing out, diffed. The seed is fixed
 so a disagreement reproduces.
 
+*Which* pseudo-random buffers turned out to be most of the question. They were
+uniform bytes of uniform length, which is one distribution and the least
+searching one: a text protocol never parsed under it, and a frame small enough
+for a declared length to overrun it was rare. Drawing from four alphabets and
+mostly short lengths -- the same number of buffers, differently spread -- found
+four disagreements the first time it ran, one of them a generated accessor
+handing a caller fifty-five bytes out of a five-byte frame (26.35).
+
 What is *not* asked is written down in that module: a subset of member kinds,
 because a probe that is spelled wrong in one language reports a disagreement
 that is not there. The subset is the thing to grow.
@@ -50,12 +58,47 @@ RUSTC    = shutil.which("rustc")
 
 #: Buffers per schema. Enough to reach past the acquiring bounds check on the
 #: bigger frames, few enough that four processes per buffer stay quick.
-COUNT = 40
+COUNT = 48
 SEED  = 20260801
 
 #: The largest frame in the tree is about a kilobyte; a buffer twice that
 #: reaches every minimum without making the drivers slow.
 LONGEST = 1200
+
+#: And a short one, which is the interesting length rather than the cheap one.
+#: A declared length can only exceed the frame it sits in when the frame is
+#: small, so a kilobyte of noise asks the question with the answer already
+#: filled in. Three quarters of the buffers are drawn from here.
+SHORTEST = 64
+
+#: What a buffer is made of. Uniform noise was the only alphabet, and it is
+#: the one that reaches the least: a member framed on `" "` or `"\r\n"` finds
+#: its delimiter about once in a hundred bytes under it, so `examples/http`
+#: and `examples/smtp` were compared almost entirely on the path where nothing
+#: parses at all. Text-shaped bytes reach the parse; digits reach the number.
+ALPHABETS = (
+	None,					# uniform over 0..255
+	bytes(range(0x20, 0x7f)) + b"\r\n\t",	# printable text and its framing
+	b"0123456789 \r\n:.-",			# digits and the delimiters
+	b"\x00\x01\x7f\x80\xff 0123456789",	# edge bytes among text
+)
+
+
+def draw(rng: random.Random) -> bytes:
+	"""One buffer: an alphabet, a length, and nothing else.
+
+	Both choices come off the same seeded generator, so the sequence is the
+	schema's regardless of which alphabet a buffer lands on and a
+	disagreement still reproduces from the seed alone.
+	"""
+	alphabet = ALPHABETS[rng.randrange(len(ALPHABETS))]
+	length   = (rng.randrange(0, LONGEST) if rng.randrange(4) == 0
+	            else rng.randrange(0, SHORTEST))
+
+	if alphabet is None:
+		return bytes(rng.randrange(256) for _ in range(length))
+	return bytes(alphabet[rng.randrange(len(alphabet))]
+	             for _ in range(length))
 
 
 def build(tmp_path: Path, schema: Path) -> dict[str, list[str]]:
@@ -154,8 +197,7 @@ def test_the_four_agree_about_bytes_nobody_meant_to_send(
 	reached = 0
 
 	for _ in range(COUNT):
-		packet = bytes(rng.randrange(256)
-		               for _ in range(rng.randrange(0, LONGEST)))
+		packet = draw(rng)
 		given  = {name: answers(argv, packet, tmp_path)
 		          for name, argv in command.items()}
 

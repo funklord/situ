@@ -682,6 +682,29 @@ def byte_span(placement: Placement) -> tuple[int, int] | None:
 	return first, last - first + 1
 
 
+def index_entry_bytes(placement: Placement) -> int | None:
+	"""How wide one entry of an `indexed` region's offset table is.
+
+	The number every backend needs and none of them had. An `indexed` region's
+	`count` counts *entries*, and an entry is an `offset_type` wide -- so the
+	bytes the region declares are `count * entry`, and `count` alone is the
+	same number in the wrong unit.
+
+	It cost differently in each backend, which is what a fact spelled four
+	times does. C multiplied by one, so a page declaring 11786 cells in a
+	38-byte frame passed the check that exists to catch exactly that; the
+	other three asked their element for a width, found a `table_leaf_cell`
+	that has no fixed one, and emitted no check at all. Four answers, and the
+	question is the layout's.
+
+	`None` for anything that is not an `indexed` region.
+	"""
+	table = placement.index_table
+	if placement.kind != "indexed" or table is None:
+		return None
+	return table.entry_bits // BITS_PER_BYTE or None
+
+
 def span_bits(placement: Placement) -> int | None:
 	"""How many bits of whole bytes the placement sits inside.
 
@@ -893,6 +916,18 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		return False
 
 	for placement in variable:
+		# An `indexed` region's elements are reached through offsets the table
+		# holds, and an offset may point anywhere the base allows -- so the
+		# region reaches wherever its furthest element ends, which is not a sum
+		# over what precedes it. The table is a lower bound and reporting it as
+		# the total says a whole message has arrived when the header and the
+		# table have.
+		#
+		# Three backends refused this for the wrong reason and stopped being
+		# wrong for it when the table gained a length; C answered all along,
+		# and answered with the bound (26.35).
+		if placement.kind == "indexed":
+			return False
 		if not is_run(placement, structs):
 			continue
 		element = structs.get(placement.type_name or "")

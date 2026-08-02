@@ -43,7 +43,8 @@ from situc.traverse import (
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	has_computable_extent, is_run, local_name, matched_values, obligation,
+	has_computable_extent, index_entry_bytes, is_run, local_name,
+	matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -1299,7 +1300,14 @@ class Emitter:
 				f"\tpub fn {name}(&self) -> Result<&[u8]> {{",
 				*refuse,
 				f"\t\tlet at = {self._unparen(start)};",
-				f"\t\tlet n  = {self._unparen(length)};",
+				# Clamped the way every other run is. Unclamped this did not
+				# hand out too many bytes, which is what the same hole cost the
+				# other three -- it panicked, on a DNS label declaring 55 bytes
+				# in a five-byte frame. A panic is the safe end of that
+				# spectrum and is still a generated accessor killing the
+				# caller's process over bytes the caller did not choose.
+				f"\t\tlet n  = core::cmp::min({self._unparen(length)},",
+				"\t\t\tself.bytes.len().saturating_sub(at));",
 				"\t\tOk(&self.bytes[at..at + n])",
 				"\t}",
 			]
@@ -1314,6 +1322,14 @@ class Emitter:
 				f"\tpub fn {name}(&self) -> Result<{inner}<'_>> {{",
 				*refuse,
 				f"\t\tlet at = {self._unparen(start)};",
+				# The same bounds question a nested member asks, asked here
+				# too: an arm sits at an offset the discriminant chose, and
+				# slicing to `at + SIZE` on a frame that stops earlier is a
+				# panic rather than an `Err`.
+				f"\t\tif self.bytes.len() < at"
+				f" || self.bytes.len() - at < {inner}::SIZE {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
 				f"\t\t{inner}::new(&self.bytes[at..at + {inner}::SIZE])",
 				"\t}",
 			]
@@ -1513,6 +1529,7 @@ class Emitter:
 				f"\t\tif self.{version}() < {placement.since} {{",
 				"\t\t\treturn Err(Error::Version);",
 				"\t\t}",
+				*self._versioned_bounds(placement),
 				f"\t\tOk({self._load(placement, scalar, offset)})",
 				"\t}",
 			]
@@ -2403,6 +2420,10 @@ class Emitter:
 
 		steps: list[str] = []
 		for placement in variable:
+			if placement.kind == "indexed":
+				return self._unframeable(struct, "an `indexed` region reaches"
+				        " wherever its furthest element ends, which its offset"
+				        " table does not say")
 			if is_run(placement, self.structs):
 				walk = self._framing_walk(struct, placement)
 				if walk is None:
@@ -2654,6 +2675,27 @@ class Emitter:
 		if start is None:
 			return None
 		return (f"self.bytes.len().saturating_sub({start}) >= {bytes_}")
+
+	def _versioned_bounds(self, placement: Placement,
+			held: str = "self.bytes") -> list[str]:
+		"""And the frame has to hold it, which the acquiring check did not say.
+
+		The one place 20.2's argument does not reach: a versioned struct's
+		minimum is its *first* version's, so a message declaring version 2 in
+		three bytes is a well-formed question about a member that is not
+		there. All four backends asked the version and stopped -- C read past
+		the view, this panicked in `read_be`, which `no_std` makes an abort.
+		"""
+		scalar = placement.scalar
+		if scalar is None or placement.offset_bits is None:
+			return []
+		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
+		return [
+			f"\t\tif {held}.len().saturating_sub({placement.offset_bytes})"
+			f" < {width} {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+		]
 
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2951,6 +2993,15 @@ class Emitter:
 			return None if start is None else f"(self.bytes.len() - ({start}))"
 		if placement.sized_by is None:
 			return None
+
+		# An `indexed` region's count counts entries, and an entry is an
+		# `offset_type` wide (`traverse.index_entry_bytes`). Asking the
+		# *element* for a width finds a struct with no fixed one and gives up,
+		# so the region had no length here and `validate` had no check.
+		entry = index_entry_bytes(placement)
+		if entry is not None:
+			table = self._count_expression(struct, placement)
+			return None if table is None else f"({table}) * {entry}"
 
 		count = self._count_expression(struct, placement)
 		element = self._element_bytes(placement)
@@ -3400,6 +3451,10 @@ class Emitter:
 				f"\t\tif self.as_ref().{version}() < {placement.since} {{",
 				"\t\t\treturn Err(Error::Version);",
 				"\t\t}",
+				# The declared version is the message's claim, not a fact
+				# about the buffer: `ver = 2` in three bytes passed this and
+				# panicked in `write_be` on the byte after the frame.
+				*self._versioned_bounds(placement, "self.bytes"),
 				f"\t\t{self._store(placement, scalar)}",
 				"\t\tOk(())",
 				"\t}",

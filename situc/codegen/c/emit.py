@@ -46,7 +46,8 @@ from situc.traverse import (
 	declares_its_own_length,
 	decode_bound,
 	extent_parts, frameable,
-	has_computable_extent, is_run, matched_values, obligation, obligations,
+	has_computable_extent, index_entry_bytes, is_run, matched_values,
+	obligation, obligations,
 	own_members,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -1789,7 +1790,13 @@ class Emitter:
 				"\t\treturn SITU_ERR_VERSION;",
 				"\t}",
 				f"\t*out = view.base + {base};",
-				f"\t*len = {length};",
+				# Clamped for the reason every other run is (see `_array`): the
+				# length is the message's. A DNS label declaring 55 bytes in a
+				# five-byte frame handed back that 55 here, and an arm is where
+				# it was missed -- the ordinary path clamps in its `_len`, and
+				# this one builds the length itself.
+				f"\t*len = situ_min_u32({length},",
+				f"\t\tsitu_remaining_u32(view.limit, {base}));",
 				"\treturn SITU_OK;",
 				"}",
 			]
@@ -2257,6 +2264,10 @@ class Emitter:
 		at = str(constant) + "u"
 
 		for placement in variable:
+			if placement.kind == "indexed":
+				return self._unframeable(struct, "an `indexed` region reaches"
+				        " wherever its furthest element ends, which its offset"
+				        " table does not say")
 			if not self._has_length(struct, placement):
 				return self._unframeable(struct)
 			local = c_name(self._local(struct, placement))
@@ -3862,6 +3873,13 @@ class Emitter:
 			rendered = self._over_fields(struct, placement.size_expr, held)
 			return f"(uint32_t)({rendered})"
 
+		# An `indexed` region's count counts entries, and an entry is an
+		# `offset_type` wide (`traverse.index_entry_bytes`).
+		entry = index_entry_bytes(placement)
+		if entry is not None:
+			table = self._count_expression(struct, placement, held)
+			return f"(uint32_t){table} * {entry}u"
+
 		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
 
 		if placement.sized_by == "remaining":
@@ -4293,9 +4311,35 @@ class Emitter:
 			f"	if ({version}(view) < {placement.since}u) {{",
 			"		return SITU_ERR_VERSION;",
 			"	}",
+			*self._versioned_bounds(placement),
 			f"	*out = ({ctype})({load});",
 			"	return SITU_OK;",
 			"}",
+		]
+
+	def _versioned_bounds(self, placement: Placement) -> list[str]:
+		"""And the frame has to hold it, which the acquiring check did not say.
+
+		The one place 20.2's argument does not reach. Every other
+		constant-offset member is inside the frame because the view refused a
+		buffer shorter than the struct's minimum -- and a versioned struct's
+		minimum is its *first* version's, three bytes for `edges.versioned`.
+		A message declaring version 2 in three bytes is a well-formed question
+		about a member that is not there, and the getter read four bytes past
+		the frame to answer it.
+
+		Found by handing the four backends a short buffer with a large version
+		byte: C read past the view, Rust panicked in `read_be`. The version
+		test alone was the whole check in all four.
+		"""
+		width = self._scalar_bytes(placement.scalar) if placement.scalar else 0
+		if not width or placement.offset_bits is None:
+			return []
+		return [
+			f"\tif (!situ_in_bounds(view, {placement.offset_bytes}u,"
+			f" {width}u)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
 		]
 
 	def _scalar_get(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
@@ -4426,6 +4470,11 @@ class Emitter:
 				f"\tif ({version}(view) < {placement.since}u) {{",
 				"\t\treturn SITU_ERR_VERSION;",
 				"\t}",
+				# The declared version is the message's claim, not a fact about
+				# the buffer: `ver = 2` in three bytes passed this and wrote
+				# four bytes past the frame. Same check as the getter, and the
+				# side it matters more on.
+				*self._versioned_bounds(placement),
 				f"\t{store}",
 				"\treturn SITU_OK;",
 				"}",
@@ -4808,13 +4857,22 @@ class Emitter:
 		# it, and it was accepted and dropped on the floor until now: a schema
 		# could declare a field ASCII and the generated code would neither
 		# check it nor record it.
-		if scalar is not None and placement.array_count is not None \
-				and _has_attr(placement.attrs, "encoding"):
-			return self._encoding_check(struct, placement, scalar)
-
-		if scalar is not None and placement.array_count is not None \
-				and _has_attr(placement.attrs, "nul_terminated"):
-			return self._nul_check(struct, placement, scalar)
+		#
+		# Both, where the field declares both, and that is the whole of the
+		# fix: these were two branches of one chain, so `u8 name[16]
+		# [nul_terminated, encoding = utf8]` got the encoding check and the
+		# terminator went unchecked -- in the one backend that had had the
+		# check longest. The other three emit both and disagreed with C about
+		# `edges.labelled` for as long as the attribute pair has existed.
+		if scalar is not None and placement.array_count is not None:
+			attributed = [
+				*(self._nul_check(struct, placement, scalar)
+				  if _has_attr(placement.attrs, "nul_terminated") else []),
+				*(self._encoding_check(struct, placement, scalar)
+				  if _has_attr(placement.attrs, "encoding") else []),
+			]
+			if attributed:
+				return attributed
 
 		if scalar is None or placement.array_count is not None:
 			return []

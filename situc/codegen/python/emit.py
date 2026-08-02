@@ -40,7 +40,8 @@ from situc.traverse import (
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	has_computable_extent, is_run, local_name, matched_values, obligation,
+	has_computable_extent, index_entry_bytes, is_run, local_name,
+	matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -1444,7 +1445,14 @@ class Emitter:
 				*head,
 				"\t\tself._check()",
 				f"\t\tstart = self._at + ({start})",
-				f"\t\treturn self._msg.buffer[start:start + ({length})]",
+				# Clamped to the *view*, not to the buffer. A slice already
+				# stops at the end of the message, which is why this backend
+				# was the one that did not crash or overrun -- but a view is
+				# a window on a larger buffer, and bytes after its limit are
+				# not this member's however many the arm declares.
+				f"\t\tstop  = start + min(({length}),"
+				f" max(0, self._len - ({start})))",
+				"\t\treturn self._msg.buffer[start:stop]",
 			]
 
 		# A struct-typed arm -- `case msg_type.hello: Hello hello;`, section
@@ -1455,6 +1463,13 @@ class Emitter:
 			inner = c_name(nested.name)
 			return [
 				*head,
+				# The same bounds question a nested member asks (26.31): an arm
+				# sits at an offset the discriminant chose, and a view claiming
+				# the struct's size whatever the frame holds is 20.2's
+				# acquisition check skipped one level in.
+				f"\t\tif self._len - ({start}) < {inner}.SIZE_BYTES:",
+				f'\t\t\traise BoundsError("{placement.path}: the frame does'
+				' not reach it")',
 				f"\t\treturn {inner}(self._msg, self._at + ({start}),",
 				f"\t\t\t{inner}.SIZE_BYTES)",
 			]
@@ -1653,6 +1668,10 @@ class Emitter:
 				"\t\t\traise VersionError(",
 				f'\t\t\t\tf"{placement.path} is not in a version '
 				f'{{self.{version}}} message")',
+				# The declared version is the message's claim, not a
+				# fact about the buffer: `ver = 2` in three bytes passed
+				# this and stored into a slice that stops before it.
+				*self._versioned_bounds(placement),
 			]
 
 		# A write at an offset the message chose does nothing, which is what
@@ -1697,7 +1716,28 @@ class Emitter:
 			f'\t\t\t\tf"{placement.path} arrives in version '
 			f'{placement.since}; this message is version "',
 			f"\t\t\t\tf\"{{self.{version}}}\")",
+			*self._versioned_bounds(placement),
 			f"\t\treturn {self._load(placement, scalar, offset)}",
+		]
+
+	def _versioned_bounds(self, placement: Placement) -> list[str]:
+		"""And the frame has to hold it, which the acquiring check did not say.
+
+		The one place 20.2's argument does not reach: a versioned struct's
+		minimum is its *first* version's, so a message declaring version 2 in
+		three bytes is a well-formed question about a member that is not
+		there. All four backends asked the version and stopped -- C read past
+		the view, Rust panicked, and this read a short slice as an integer,
+		which is a number nobody wrote.
+		"""
+		scalar = placement.scalar
+		if scalar is None or placement.offset_bits is None:
+			return []
+		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
+		return [
+			f"\t\tif self._len - {placement.offset_bytes} < {width}:",
+			f'\t\t\traise BoundsError("{placement.path}: the frame stops'
+			' before it")',
 		]
 
 	def _tag_bit(self, struct: ResolvedStruct, placement: Placement) -> str:
@@ -2447,6 +2487,10 @@ class Emitter:
 
 		steps: list[str] = []
 		for placement in variable:
+			if placement.kind == "indexed":
+				return self._unframeable(struct, "an `indexed` region reaches"
+				        " wherever its furthest element ends, which its offset"
+				        " table does not say")
 			if is_run(placement, self.structs):
 				walk = self._framing_walk(struct, placement)
 				if walk is None:
@@ -2917,6 +2961,15 @@ class Emitter:
 		if placement.sized_by is None:
 			return None
 
+		# An `indexed` region's count counts entries, and an entry is an
+		# `offset_type` wide (`traverse.index_entry_bytes`). Asking the
+		# *element* for a width finds a struct with no fixed one and gives up,
+		# so the region had no length here and `validate` had no check.
+		entry = index_entry_bytes(placement)
+		if entry is not None:
+			table = self._count_expression(struct, placement)
+			return None if table is None else f"({table}) * {entry}"
+
 		count = self._count_expression(struct, placement)
 		if count is None:
 			return None
@@ -3018,8 +3071,17 @@ class Emitter:
 			'the frame stops first")',
 		]
 		if placement.radix_minimal:
+			# The *digits*, which is what the predicate reads. This passed
+			# `self.{name}` -- the parsed number -- and `bytes(6)` in Python is
+			# six zero bytes rather than the digit `6`, so the check was
+			# vacuous in both directions: `007` was minimal because none of
+			# those NULs is an ASCII zero, and a code of `0` was not, because
+			# `bytes(0)` is empty and no digits is not a number. No exception
+			# anywhere, and three backends passing the bytes.
+			digits = (f"trim(self.{name}_raw)" if placement.trimmed
+			          else f"self.{name}_raw")
 			lines.extend([
-				f"\t\tif not digits_minimal(self.{name}, {placement.radix}):",
+				f"\t\tif not digits_minimal({digits}, {placement.radix}):",
 				"\t\t\traise ConstraintError(",
 				f'\t\t\t\t"{placement.path} is not the minimal spelling of '
 				'its value")',

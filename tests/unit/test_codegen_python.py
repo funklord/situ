@@ -1345,6 +1345,33 @@ def test_the_digits_parse_as_smtp_writes_them(tmp_path: Path) -> None:
 			_ = held.code
 
 
+MINIMAL = ('struct s { decimal u16 code until " " max 8 [minimal];'
+	' u8 rest[] until "\\r\\n" max 8; }')
+
+
+def test_the_minimal_check_reads_the_digits(tmp_path: Path) -> None:
+	"""`[minimal]` is what makes a text number `Canonical`, and this backend
+	handed the predicate the parsed *number*: `bytes(6)` in Python is six zero
+	bytes rather than the digit `6`, so the check passed whatever the spelling
+	-- and refused the one value whose digits are empty under that conversion,
+	`0`. No exception either way, and the other three passed the bytes.
+
+	`test_every_backend_enforces_minimal` was watching, and it asserts that the
+	source contains `digits_minimal`. It did. Section 26.34's rule, one layer
+	down: the test checked the text, and the check is what runs.
+	"""
+	module = load(tmp_path, MINIMAL)
+	rt     = runtime()
+
+	for line in (b"7 \r\n", b"0 \r\n", b"404 \r\n"):
+		module.s.at(rt.Message(bytearray(line)), 0, len(line)).validate()
+
+	for line in (b"007 \r\n", b"04 \r\n"):
+		held = module.s.at(rt.Message(bytearray(line)), 0, len(line))
+		with pytest.raises(rt.ConstraintError):
+			held.validate()
+
+
 # -- a tag's coverage, dirty bit and finalize (section 14.2) ----------------
 
 TAGGED = ("struct s { u8 hop; authenticated { u16 seq; u8 body[4]; }"
