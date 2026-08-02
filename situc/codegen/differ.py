@@ -26,11 +26,17 @@ subcommand and a line in section 21.
 
 What is probed is a subset, and the subset is the thing to grow. Now: scalars,
 byte arrays, delimited members and delimited text numbers, tags, endian
-markers, varints, the counts of runs and of `tlv` and `indexed` regions, and
-`validate`. Not yet: a variant's arms, coded regions, nested structs, sealed
+markers, varints, the counts of runs and of `tlv` and `indexed` regions, a
+variant's arms, and `validate`. Not yet: coded regions, nested structs, sealed
 interiors and versioned members -- each answers with an error in three
-languages and an exception in the fourth, or has a different shape per arm, and
-a probe spelled wrong in one language reports a disagreement that is not there.
+languages and an exception in the fourth, and a probe spelled wrong in one
+language reports a disagreement that is not there.
+
+A variant's arms are asked the reachability question rather than the value
+one: which arm the discriminant selects, and how long it is or what it holds.
+Three shapes met there -- an out-parameter and an error in C and C++, a
+`Result` in Rust, a property that raises in Python -- and they agree, which is
+worth knowing rather than assuming.
 
 Adding a kind is cheap and pays immediately. The four spellings have to be
 looked up once, and looking them up is itself the check: `tlv` counts were a
@@ -52,7 +58,10 @@ from situc.codegen.rust.emit import _ident as rust_ident
 from situc.codegen.rust.emit import _pascal
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import Member, classify, containment_order, local_name, own_entries
+from situc.traverse import (
+	Member, arm_members, classify, containment_order, local_name,
+	own_entries,
+)
 
 
 class Probe(Enum):
@@ -73,6 +82,11 @@ class Probe(Enum):
 	MARKER    = "marker"
 	#: `name len=<n> value=<v>` -- a varint, both numbers off the wire.
 	VARINT    = "varint"
+	#: `name ok=<0|1> len=<n>` -- a variant's byte-run arm, reachable only
+	#: when the discriminant selects it.
+	ARM_BYTES = "arm_bytes"
+	#: `name ok=<0|1> value=<v>` -- a variant's scalar arm.
+	ARM_VALUE = "arm_value"
 
 
 @dataclass(frozen=True)
@@ -82,6 +96,10 @@ class Ask:
 	#: A fixed byte count, where the member has one. `BYTES` needs it in C,
 	#: which has a macro rather than a length accessor for a counted array.
 	count: int | None = None
+	#: The width of a scalar arm's out-parameter, which is the field's own
+	#: type rather than a wide one: C types the parameter exactly.
+	bits: int = 0
+	signed: bool = False
 
 
 def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
@@ -107,6 +125,14 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 			continue
 
 		scalar = placement.scalar
+
+		# `classify` has no kind for a variant: it has no accessor of its own,
+		# and the emitters key on the placement. Its *arms* do have accessors,
+		# and which one is reachable is a question about a discriminant the
+		# message chose.
+		if placement.kind == "variant":
+			found.extend(_arms(struct, placement))
+			continue
 
 		if kind is Member.SCALAR:
 			if placement.type_name in ("", None) or scalar is None:
@@ -150,6 +176,40 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 			# Every count is a walk over numbers the message chose: a run's
 			# elements, a `tlv` region's items, an `indexed` region's table.
 			found.append(Ask(Probe.COUNT, local))
+
+	return found
+
+
+def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
+	"""A variant's arms: is this one the arm the discriminant selects?
+
+	The reachability is the question. Every backend refuses the arm that is
+	not present -- an error in three languages and an exception in the fourth
+	-- and what has to agree is *which* arm each of them says is there, for a
+	discriminant the message chose. `examples/dnsname`'s label is the one
+	variant in the tree, and its reserved forms are what a hostile name is
+	made of.
+	"""
+	found: list[Ask] = []
+
+	for _, member in arm_members(struct, variant):
+		# `default: error` names no member: there is no arm to reach, and the
+		# refusal is `validate`'s to report.
+		if member is None:
+			continue
+
+		local  = c_name(local_name(struct, member))
+		scalar = member.scalar
+		if scalar is None:
+			continue		# a struct arm: its own accessors are its type's
+		if scalar.bits == BITS_PER_BYTE \
+				and (member.sized_by is not None
+				     or member.array_count is not None):
+			found.append(Ask(Probe.ARM_BYTES, local))
+		elif not scalar.is_bit_packed and not scalar.is_bcd \
+				and member.type_name in _SCALAR_TYPES:
+			found.append(Ask(Probe.ARM_VALUE, local, None,
+			                 max(8, scalar.bits), scalar.signed))
 
 	return found
 
@@ -270,6 +330,27 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		return [f'\t\t\tprintf("{ask.local} len=%u value=%llu\\n",'
 		        f' {call.format("len")}(view),'
 		        f' (unsigned long long){call.format("value")}(view));']
+	if ask.probe is Probe.ARM_BYTES:
+		return ["\t\t\t{",
+		        "\t\t\t\tconst uint8_t *held = NULL;",
+		        "\t\t\t\tuint32_t len = 0u;",
+		        f"\t\t\t\tconst situ_err_t e = {call.format('ptr')}"
+		        "(view, &held, &len);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local} ok=%d len=%u\\n",'
+		        " e == SITU_OK ? 1 : 0, e == SITU_OK ? len : 0u);",
+		        "\t\t\t}"]
+	if ask.probe is Probe.ARM_VALUE:
+		return ["\t\t\t{",
+		        f"\t\t\t\t{'int' if ask.signed else 'uint'}{ask.bits}_t"
+		        " held = 0;",
+		        f"\t\t\t\tconst situ_err_t e = {call.format('get')}"
+		        "(view, &held);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local} ok=%d value=%llu\\n",'
+		        " e == SITU_OK ? 1 : 0,",
+		        "\t\t\t\t\t(unsigned long long)(e == SITU_OK ? held : 0));",
+		        "\t\t\t}"]
 
 	length = (f"{macro(prefix, struct, ask.local, 'COUNT')}"
 	          if ask.count is not None else f"{call.format('len')}(view)")
@@ -354,6 +435,27 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\tstd::printf("{ask.local} len=%u value=%llu\\n",'
 		        f" view.{ask.local}_len(),"
 		        f" static_cast<unsigned long long>(view.{ask.local}_value()));"]
+	if ask.probe is Probe.ARM_BYTES:
+		return ["\t\t\t{",
+		        "\t\t\t\t::situ::rt::bytes held;",
+		        f"\t\t\t\tconst auto e = view.{ask.local}(held);",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local} ok=%d len=%u\\n",',
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
+		        "\t\t\t\t\te == ::situ::rt::err::ok"
+		        " ? static_cast<std::uint32_t>(held.size()) : 0u);",
+		        "\t\t\t}"]
+	if ask.probe is Probe.ARM_VALUE:
+		return ["\t\t\t{",
+		        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
+		        f"{ask.bits}_t held = 0;",
+		        f"\t\t\t\tconst auto e = view.{ask.local}(held);",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local} ok=%d value=%llu\\n",',
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
+		        "\t\t\t\t\tstatic_cast<unsigned long long>(",
+		        "\t\t\t\t\t\te == ::situ::rt::err::ok ? held : 0));",
+		        "\t\t\t}"]
 
 	return ["\t\t\t{",
 	        f"\t\t\t\tconst auto held = view.{ask.local}();",
@@ -433,6 +535,19 @@ def _rust_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\t\tprintln!("{ask.local} len={{}} value={{}}",'
 		        f" view.{rust_ident(ask.local + '_len')}(),"
 		        f" view.{rust_ident(ask.local + '_value')}());"]
+	if ask.probe is Probe.ARM_BYTES:
+		return [f"\t\t\t\tmatch view.{call}() {{",
+		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
+		        ' len={}", held.len()),',
+		        f'\t\t\t\t\tErr(_)   => println!("{ask.local} ok=0 len=0"),',
+		        "\t\t\t\t}"]
+	if ask.probe is Probe.ARM_VALUE:
+		return [f"\t\t\t\tmatch view.{call}() {{",
+		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
+		        ' value={}", held as u64),',
+		        f'\t\t\t\t\tErr(_)   =>'
+		        f' println!("{ask.local} ok=0 value=0"),',
+		        "\t\t\t\t}"]
 
 	return [f"\t\t\t\tlet held = view.{call}();",
 	        f'\t\t\t\tprintln!("{ask.local} len={{}} first={{}}", held.len(),',
@@ -507,6 +622,20 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.VARINT:
 		return [f'print("{ask.local} len=%d value=%d"'
 		        f" % (view.{ask.local}_len, view.{ask.local}_value))"]
+	if ask.probe is Probe.ARM_BYTES:
+		return ["try:",
+		        f"\theld = view.{ask.local}",
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local} ok=0 len=0")',
+		        "else:",
+		        f'\tprint("{ask.local} ok=1 len=%d" % len(held))']
+	if ask.probe is Probe.ARM_VALUE:
+		return ["try:",
+		        f"\theld = view.{ask.local}",
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local} ok=0 value=0")',
+		        "else:",
+		        f'\tprint("{ask.local} ok=1 value=%d" % held)']
 
 	return [f"held = view.{ask.local}",
 	        f'print("{ask.local} len=%d first=%d"'

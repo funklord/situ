@@ -5077,6 +5077,11 @@ finding what each backend calls them, and two answers were wrong before a
 single byte was compared: Python spelled a `tlv` count as a method where every
 other count in that same backend is a property, and kept a varint's
 total-value accessor private -- `_x_value` -- where the other three publish it.
+A variant's arms went in after those and found nothing, which is also a result:
+three shapes -- an out-parameter and an error in C and C++, a `Result` in Rust,
+a property that raises in Python -- agree about which arm a discriminant
+selects, including the reserved forms of `examples/dnsname`'s label, where a
+hostile name is made.
 That accessor is the number every length in the struct is derived from, so it
 was the one thing a Python caller could not ask for without reaching into a
 private name. Neither is a crash and neither would ever have been found by
