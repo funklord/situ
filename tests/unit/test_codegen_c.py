@@ -557,6 +557,26 @@ def test_generated_vector_test_asserts_the_expectations() -> None:
 	assert "situ_S_validate(view)" in text
 
 
+def test_a_byte_run_is_expected_as_bytes() -> None:
+	"""A vector could only state values, and a value is what a byte run does
+	not have. ARP is twenty of its twenty-eight bytes addresses, so a format
+	the language exists for could say almost nothing about itself (26.35)."""
+	text = vector_source(
+		"struct S { u8 mac[6]; }",
+		"S basic 00 1A 2B 3C 4D 5E\n\tmac = 00:1A:2B:3C:4D:5E\n")
+
+	assert "static const uint8_t want[] = { 0x00, 0x1A, 0x2B, 0x3C," in text
+	assert "assert_memory_equal(situ_S_mac_ptr(view), want, sizeof(want));" in text
+
+
+def test_a_byte_run_expectation_of_the_wrong_length_is_refused() -> None:
+	"""Silently comparing a prefix is the failure this exists to avoid: the
+	assertion would pass while checking four of six bytes."""
+	with pytest.raises(ValueError, match="`mac` is 6 bytes and its expectation is 4"):
+		vector_source("struct S { u8 mac[6]; }",
+		              "S basic 00 1A 2B 3C 4D 5E\n\tmac = 00 1A 2B 3C\n")
+
+
 def test_generated_vector_test_round_trips() -> None:
 	text = vector_source("struct S { u32 a; }", "S basic 00 00 00 2A\n")
 	assert "situ_S_a_set(view, situ_S_a_get(view));" in text

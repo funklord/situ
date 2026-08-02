@@ -5996,7 +5996,7 @@ There is a request and a response through the example's own accessors now.
   length check skips a dotted path, for the nested-struct reason, and an arm
   member has one: three backends drop it before the validate loop, so the check
   belongs at the variant and walks its arms.
-- **Four worked examples have never seen a message.** `arp`, `ntp`, `rtc` and
+- **Three worked examples have never seen a message.** `ntp`, `rtc` and
   `telemetry` are generated, fuzzed, `gen-checks`'d and compared under random
   bytes, and none of that can tell whether the schema describes the protocol
   -- `gen-checks` derives its assertions from the schema, so it confirms
@@ -6008,21 +6008,34 @@ There is a request and a response through the example's own accessors now.
   map's "message" is a datasheet's power-on state, and `telemetry` is situ's
   own format, so a vector for it can only be a round trip.
 
-  `bmp` came off this list first, because it is the one with an implementation
-  to hand: `convert -size 3x2 xc:red -type truecolor BMP3:red.bmp` writes the
-  bytes, `examples/bmp/bmp.vectors` records them and the command, and
-  `gen-tests` turns them into the field-by-field suite. What a per-struct
-  vector cannot state is in `tests/generated/test_bmp.c` -- that the pixels
-  start where the two structs end and the declared size is that plus the
-  pixels, which is the arithmetic a misplaced field breaks.
+  Two came off the list, each with the implementation that wrote its bytes
+  named beside them. `bmp`: `convert -size 3x2 xc:red -type truecolor
+  BMP3:red.bmp`. `arp`: glibc's `struct arphdr`, `ARPHRD_ETHER`,
+  `ETHERTYPE_IP` and `ARPOP_REQUEST` from `<net/if_arp.h>`, with the addresses
+  through `inet_pton` so nothing local has an opinion about byte order. That
+  header covers only the fixed eight bytes -- the four addresses are variable
+  in the format, so glibc leaves them out -- which is exactly the part a
+  schema gets wrong: two 16-bit fields, two 8-bit, another 16-bit, none of
+  them aligned to what follows.
 
-  Wiring it in found the smaller version of the same thing: the vector rule
-  hardcoded `tests/schemas/`, so `gen-tests` -- a shipped subcommand -- could
-  only ever run on a schema in that one directory, and it had exactly one.
+  What a per-struct vector cannot state is a claim about a whole file, and for
+  `bmp` that is `tests/generated/test_bmp.c`: the pixels start where the two
+  structs end, and the declared size is that plus the pixels. A misplaced
+  field still reads a number out of every field; that arithmetic is what stops
+  adding up.
+
+  Wiring the two in found the small version of the same lesson twice. The
+  vector rule hardcoded `tests/schemas/`, so `gen-tests` -- a shipped
+  subcommand -- could only ever run on a schema in that one directory, and it
+  had exactly one. And a vector's expectations were values, which a byte run
+  does not have: ARP is twenty of its twenty-eight bytes addresses, so the
+  format could have stated almost nothing about itself. An expectation whose
+  field is a byte run compares as bytes now, and a run of the wrong length is
+  a diagnostic rather than an assertion that silently checks a prefix.
 - Beyond those: the two shapes the differential check cannot ask about
   (26.31), and 26.33.
 
-**Status:** 2233 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2235 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

@@ -16,9 +16,9 @@
  *
  * and their headers are examples/bmp/bmp.vectors, which records how to
  * regenerate them and which `gen-tests` turns into the field-by-field suite
- * beside this one. What every field reads back as is that suite's; this one is
- * for the two things a per-struct vector cannot state, because they are about
- * a whole file:
+ * beside this one. What every field reads back as is that suite's, down to the
+ * "BM" the file opens with; this one is for the two things a per-struct vector
+ * cannot state, because they are about a whole file:
  *
  *   - `pixel_offset` has to be the two struct sizes the `require size(...)`
  *     lines pin, and `file_size` has to be that plus `image_size`;
@@ -99,24 +99,6 @@ static void open_file(struct opened *held, const uint8_t *data, uint32_t len)
 	assert_int_equal(situ_bitmap_info_header_view(
 		&held->msg, SITU_BITMAP_FILE_HEADER_SIZE_FIXED, &held->info),
 	                 SITU_OK);
-}
-
-/* The one field the vector suite has no way to state: a marker is a byte
- * array, and a vector's expectations are values. It is also the field a reader
- * uses to decide whether this is a BMP at all. */
-static void test_the_signature_is_bm(void **state)
-{
-	struct opened held;
-
-	(void)state;
-
-	open_file(&held, RED, (uint32_t)sizeof(RED));
-	assert_memory_equal(situ_bitmap_file_header_signature_ptr(held.file),
-	                    "BM", 2);
-
-	open_file(&held, WHITE, (uint32_t)sizeof(WHITE));
-	assert_memory_equal(situ_bitmap_file_header_signature_ptr(held.file),
-	                    "BM", 2);
 }
 
 /* Both headers pass every constraint the schema declares -- the two reserved
@@ -232,7 +214,6 @@ static void test_a_later_header_version_is_refused(void **state)
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_the_signature_is_bm),
 		cmocka_unit_test(test_a_real_file_validates),
 		cmocka_unit_test(test_the_pixels_start_where_the_two_headers_end),
 		cmocka_unit_test(test_the_file_size_is_the_headers_plus_the_pixels),

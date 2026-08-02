@@ -20,6 +20,7 @@
 # -- 3x2 truecolour, red. 78 bytes: 54 of header, two 12-byte rows.
 
 bitmap_file_header red_file 42 4D 4E 00 00 00 00 00 00 00 36 00 00 00
+	signature    = 42 4D
 	file_size    = 78
 	pixel_offset = 54
 
@@ -37,6 +38,7 @@ bitmap_info_header red_info 28 00 00 00 03 00 00 00 02 00 00 00 01 00 18 00 00 0
 # fixed header would show first.
 
 bitmap_file_header white_file 42 4D 3A 00 00 00 00 00 00 00 36 00 00 00
+	signature    = 42 4D
 	file_size    = 58
 	pixel_offset = 54
 

@@ -1,0 +1,46 @@
+# Golden vectors for the ARP worked example.
+#
+# Laid out by the system's own ARP definitions rather than by situ -- a
+# description that agrees only with its own compiler has demonstrated nothing.
+# `struct arphdr`, `ARPHRD_ETHER`, `ETHERTYPE_IP`, `ARPOP_REQUEST` and
+# `ARPOP_REPLY` are glibc's, from <net/if_arp.h> and <net/ethernet.h>; the
+# addresses go through `inet_pton`, which is what puts them in network order
+# without anything here having an opinion about it:
+#
+#   struct arphdr head;
+#   head.ar_hrd = htons(ARPHRD_ETHER);
+#   head.ar_pro = htons(ETHERTYPE_IP);
+#   head.ar_hln = ETH_ALEN;
+#   head.ar_pln = 4;
+#   head.ar_op  = htons(ARPOP_REQUEST);
+#   memcpy(packet, &head, sizeof head);
+#   /* then sha, sip, tha, tip, in that order */
+#
+# That header is the fixed eight bytes only -- the four addresses are variable
+# in the format and glibc leaves them out -- so what it pins is the part a
+# schema is most likely to get wrong: two 16-bit fields, two 8-bit ones, and
+# another 16-bit field, all big-endian on the wire and none of them aligned to
+# what follows.
+#
+# The exchange: 192.168.1.10 at 00:1a:2b:3c:4d:5e asks who has 192.168.1.1,
+# and 192.168.1.1 at aa:bb:cc:dd:ee:ff answers. The request's target hardware
+# address is zero because that is the thing being asked for, which is the one
+# field a reader has to know is not a mistake.
+
+arp_packet who_has 00 01 08 00 06 04 00 01 00 1A 2B 3C 4D 5E C0 A8 01 0A 00 00 00 00 00 00 C0 A8 01 01
+	hardware_type   = SITU_HARDWARE_TYPE_ETHERNET
+	protocol_type   = 0x0800
+	hardware_length = 6
+	protocol_length = 4
+	operation       = SITU_OPERATION_REQUEST
+	sender_hardware = 00:1A:2B:3C:4D:5E
+	sender_protocol = C0 A8 01 0A
+	target_hardware = 00:00:00:00:00:00
+	target_protocol = C0 A8 01 01
+
+arp_packet is_at 00 01 08 00 06 04 00 02 AA BB CC DD EE FF C0 A8 01 01 00 1A 2B 3C 4D 5E C0 A8 01 0A
+	operation       = SITU_OPERATION_REPLY
+	sender_hardware = AA:BB:CC:DD:EE:FF
+	sender_protocol = C0 A8 01 01
+	target_hardware = 00:1A:2B:3C:4D:5E
+	target_protocol = C0 A8 01 0A

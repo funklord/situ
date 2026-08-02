@@ -30,7 +30,11 @@ from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
-EXPECTATION = re.compile(r"\A\s*([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(\S+)\s*\Z")
+#: The value runs to the end of the line rather than being one token: a byte
+#: run is written as bytes, and `00 1A 2B 3C 4D 5E` is six of them. Which of
+#: the two a value is depends on the field it names, not on how it is spelled,
+#: so the decision is made against the layout in `_expectation_lines`.
+EXPECTATION = re.compile(r"\A\s*([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(\S.*?)\s*\Z")
 
 
 @dataclass
@@ -145,10 +149,29 @@ def _check(resolved: ResolvedSchema, case: Case) -> None:
 			f"vector `{case.name}` is {len(case.data)} bytes, but "
 			f"`{case.struct}` is {expected}")
 
-	for path, _ in case.expectations:
+	for path, value in case.expectations:
 		if resolved.find(f"{case.struct}.{path}") is None:
 			raise ValueError(
 				f"vector `{case.name}` names unknown field `{case.struct}.{path}`")
+
+		count = _byte_run(resolved, case.struct, path)
+		if count is None:
+			continue
+
+		# A byte run compares as bytes, so a value that is not bytes, or is
+		# the wrong number of them, is caught here rather than as C that does
+		# not compile or -- worse -- compiles and compares a prefix.
+		try:
+			data = _hex(value)
+		except ValueError as exc:
+			raise ValueError(
+				f"vector `{case.name}`: `{path}` is {count} bytes, so its "
+				f"expectation is bytes and `{value}` is not ({exc})") from exc
+
+		if len(data) != count:
+			raise ValueError(
+				f"vector `{case.name}`: `{path}` is {count} bytes and its "
+				f"expectation is {len(data)}")
 
 
 def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
@@ -180,9 +203,7 @@ def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
 	]
 
 	for path, value in case.expectations:
-		local = c_name(path)
-		lines.append(f"\tassert_int_equal({ident(prefix, case.struct, local, 'get')}"
-		             f"(view), {value});")
+		lines.extend(_expectation_lines(resolved, case, path, value, prefix))
 
 	if case.expectations:
 		lines.append("")
@@ -190,6 +211,59 @@ def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
 	lines.extend(_round_trip(resolved, struct, case, prefix))
 	lines.extend(["}", ""])
 	return lines
+
+
+def _byte_run(resolved: ResolvedSchema, struct: str, path: str) -> int | None:
+	"""How many bytes a member is, where it is a run of them.
+
+	`None` for anything a getter returns a value for, which is what the
+	scalar form of an expectation is written against.
+	"""
+	found = resolved.find(f"{struct}.{path}")
+	if found is None:
+		return None
+	placement = found.placement
+	scalar    = placement.scalar
+	if scalar is None or scalar.bits != 8 or placement.array_count is None:
+		return None
+	return placement.array_count
+
+
+def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
+		value: str, prefix: str) -> list[str]:
+	"""One expectation, in the form the field it names admits.
+
+	A scalar compares as a number; a byte run compares as bytes. The second
+	was not expressible at all, so a format that is mostly addresses -- ARP is
+	twenty of its twenty-eight bytes -- could state almost nothing about
+	itself, and the one marker in `examples/bmp` had to be checked by hand
+	beside the generated suite (26.35).
+	"""
+	local = c_name(path)
+	count = _byte_run(resolved, case.struct, path)
+
+	if count is None:
+		return [f"\tassert_int_equal({ident(prefix, case.struct, local, 'get')}"
+		        f"(view), {value});"]
+
+	data = _hex(value)
+	return [
+		"\t{",
+		f"\t\tstatic const uint8_t want[] = {{"
+		f" {', '.join(f'0x{byte:02X}' for byte in data)} }};",
+		"",
+		f"\t\tassert_memory_equal({ident(prefix, case.struct, local, 'ptr')}"
+		"(view), want, sizeof(want));",
+		"\t}",
+	]
+
+
+def _hex(value: str) -> bytes:
+	"""The bytes of an expectation, spaced or colon-separated or neither."""
+	digits = value.replace(":", "").replace("-", "").replace(" ", "")
+	if digits.lower().startswith("0x"):
+		digits = digits[2:]
+	return bytes.fromhex(digits)
 
 
 def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
