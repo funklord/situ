@@ -5665,12 +5665,20 @@ evaluate itself, so there is no fourth spelling of "how long is it" to compare.
 
 **Known and open.**
 
-One, and it is 26.35's: a variant's byte-run arm whose declared length exceeds
-the frame is clamped by all four accessors and reported by none of them, so a
-caller cannot tell a truncated message from a short one. The safe half of
-26.27's bargain is struck and the other half is not.
+Empty again. The entry that stood here for one commit was 26.35's: a variant's
+byte-run arm whose declared length exceeds the frame, clamped by all four
+accessors and reported by none, so a caller could not tell a truncated message
+from a lying one. `validate` asks the arm's own accessor now -- it refuses the
+arm that is not selected and clamps the one that is, so a short answer *is* the
+mismatch, and no fifth place has to agree about which arm is present.
 
-The entry before it stood for one commit and was the offset a message
+What kept it open for a commit is worth the line: every length check in every
+backend skips a dotted path, because a nested struct's members belong to that
+struct's own walk -- and an arm member has a dotted path too, so a variant sat
+outside all of them. Three backends drop such a member before the loop that
+would check it, so the check is asked at the *variant* and walks its arms.
+
+The entry before that stood for one commit and was the offset a message
 chooses, found by `make fuzz` and closed the same way 26.27 closed the length
 it is the other half of: the offset saturates at the view, a member that does
 not fit answers nothing, and `validate` says `bounds`. Closing it found a
@@ -5981,10 +5989,13 @@ There is a request and a response through the example's own accessors now.
 
 **What is open.**
 
-- **A truncated arm is clamped and not reported.** The accessors agree and are
-  safe; `validate` says nothing, which is the half of 26.27's bargain that
-  makes a lie distinguishable from a truncation. It needs a fits check guarded
-  by the discriminant, in four backends.
+- ~~A truncated arm is clamped and not reported.~~ Closed. `validate` asks the
+  arm's own accessor, which refuses the arm that is not selected and clamps the
+  one that is -- so a short answer is the mismatch, and the discriminant test
+  stays in the one place that already had it. What kept it hidden is that every
+  length check skips a dotted path, for the nested-struct reason, and an arm
+  member has one: three backends drop it before the validate loop, so the check
+  belongs at the variant and walks its arms.
 - **Four worked examples have never seen a message.** `arp`, `ntp`, `rtc` and
   `telemetry` are generated, fuzzed, `gen-checks`'d and compared under random
   bytes, and none of that can tell whether the schema describes the protocol
@@ -6011,7 +6022,7 @@ There is a request and a response through the example's own accessors now.
 - Beyond those: the two shapes the differential check cannot ask about
   (26.31), and 26.33.
 
-**Status:** 2232 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2233 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

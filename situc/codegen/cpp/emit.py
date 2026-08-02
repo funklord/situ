@@ -3928,7 +3928,62 @@ class Emitter:
 		first left `[must_eq]` unchecked for every dynamically placed field.
 		"""
 		return [*self._fits_check(struct, entry.placement),
+		        *self._arm_checks(struct, entry.placement),
 		        *self._member_check(struct, entry)]
+
+	def _arm_checks(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every arm of this variant, in declaration order.
+
+		Asked at the variant rather than at the arm: `own_entries` drops a
+		dotted path, and every arm member has one, so an arm never reaches
+		the validate loop on its own.
+		"""
+		if placement.kind != "variant":
+			return []
+		found: list[str] = []
+		for _, member in arm_members(struct, placement):
+			if member is not None:
+				found.extend(self._arm_fits_check(struct, member))
+		return found
+
+	def _arm_fits_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The arm the discriminant selects has to fit the frame it is in.
+
+		`_fits_check` skips a dotted path and every arm member has one, so a
+		variant was outside the length checks entirely -- and a DNS label
+		declaring 55 bytes in a five-byte frame is the same lie
+		`u8 opts[hdr.length]` tells. The accessors clamp it (26.35); this is
+		the other half, without which clamping turns a lie into a truncation.
+
+		Through the accessor rather than by re-deriving the discriminant test:
+		it refuses the arm that is not present and clamps the one that is, so
+		a short answer is the mismatch.
+		"""
+		scalar = placement.scalar
+		if placement.sized_by is None or scalar is None:
+			return []
+		if scalar.bits != BITS_PER_BYTE:
+			return []
+		declared = self._length_expression(struct, placement)
+		if declared is None:
+			return []
+
+		name = c_name(local_name(struct, placement))
+		return [
+			f"\t\t/* {placement.path}: the arm the discriminant selects has",
+			"\t\t * to fit the frame. The accessor clamps; this is where a",
+			"\t\t * message that does not fit is called malformed. */",
+			"\t\t{",
+			"\t\t\t::situ::rt::bytes held;",
+			"",
+			f"\t\t\tif ({name}(held) == ::situ::rt::err::ok",
+			f"\t\t\t\t\t&& held.size() < ({declared})) {{",
+			"\t\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _member_check(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:

@@ -2697,6 +2697,40 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _arm_fits_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The arm the discriminant selects has to fit the frame it is in.
+
+		A variant was outside the length checks in all four backends -- a DNS
+		label declaring 55 bytes in a five-byte frame is the same lie
+		`u8 opts[hdr.length]` tells. The accessors clamp it (26.35); this is
+		the other half, without which clamping turns a lie into a truncation.
+
+		Through the accessor rather than by re-deriving the discriminant test:
+		it refuses the arm that is not present and clamps the one that is, so
+		a short answer is the mismatch.
+		"""
+		scalar = placement.scalar
+		if placement.sized_by is None or scalar is None:
+			return []
+		if scalar.bits != BITS_PER_BYTE:
+			return []
+		declared = self._length_expression(struct, placement)
+		if declared is None:
+			return []
+
+		name = _ident(c_name(local_name(struct, placement)))
+		return [
+			f"\t\t// {placement.path}: the arm the discriminant selects has to",
+			"\t\t// fit the frame. The accessor clamps; this is where a message",
+			"\t\t// that does not fit is called malformed.",
+			f"\t\tif let Ok(held) = self.{name}() {{",
+			f"\t\t\tif held.len() < ({declared}) {{",
+			"\t\t\t\treturn Err(Error::Bounds);",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A length the message declares must fit the frame it is in.
@@ -3543,6 +3577,12 @@ class Emitter:
 				continue
 			if check is Check.DISCRIMINANT:
 				checks.extend(self._discriminant_check(struct, placement))
+				# And each arm, in declaration order, which is where the
+				# other three emit theirs: `own_entries` drops a dotted
+				# path, so an arm member never reaches this loop on its own.
+				for _, member in arm_members(struct, placement):
+					if member is not None:
+						checks.extend(self._arm_fits_check(struct, member))
 				continue
 			if check is Check.DELIMITED:
 				checks.extend(self._delimiter_checks(struct, placement))

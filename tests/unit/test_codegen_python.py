@@ -896,6 +896,34 @@ def test_each_arm_refuses_when_it_is_not_the_one_present(tmp_path: Path) -> None
 		ptr.body_text
 
 
+def test_an_arm_that_does_not_fit_is_clamped_and_reported(tmp_path: Path) -> None:
+	"""Both halves of 26.27's bargain, on a variant this time.
+
+	`\\x37` is a length label declaring 55 bytes, and four follow it. The
+	accessor hands back the four -- clamping is what keeps a caller who never
+	validates inside the buffer, and C and C++ handed out the 55 until 26.35 --
+	and `validate` is where the message is called malformed rather than short.
+
+	Neither half alone is enough, which is why they are one test: clamping
+	without the report turns a lie into a truncation, and the caller cannot
+	tell a message that ends early from one that lied about its length.
+	"""
+	module = load(tmp_path, ARMS)
+
+	short = module.label.at(module.Message(bytearray(b"\x37abcd")), 0, 5)
+	assert bytes(short.body_text) == b"abcd"
+	with pytest.raises(module.BoundsError):
+		short.validate()
+
+	whole = module.label.at(module.Message(bytearray(b"\x04abcd")), 0, 5)
+	assert bytes(whole.body_text) == b"abcd"
+	whole.validate()
+
+	# The other arm is not this arm's business: a pointer label declares no
+	# length, so nothing here has an opinion about how many bytes follow it.
+	module.label.at(module.Message(bytearray(b"\xC0\x0C")), 0, 2).validate()
+
+
 ENUM_ARMS = """
 enum K : u8 { a = 1, b = 2, }
 struct A { u16 x; }

@@ -4796,7 +4796,48 @@ class Emitter:
 		placed field the moment the offset check landed.
 		"""
 		return [*self._fits_check(struct, entry.placement),
+		        *self._arm_fits_check(struct, entry.placement),
 		        *self._member_checks(struct, entry)]
+
+	def _arm_fits_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The arm the discriminant selects has to fit the frame it is in.
+
+		`_fits_check` skips a dotted path, and every arm member has one, so
+		the whole of a variant was outside the length checks -- and a DNS label
+		declaring 55 bytes in a five-byte frame is the same lie
+		`u8 opts[hdr.length]` tells. The accessors clamp it now (26.35); this
+		is the other half of that bargain, without which clamping silently
+		turns a lie into a truncation.
+
+		Asked through the accessor rather than by re-deriving the discriminant
+		test: it already refuses the arm that is not present and already
+		clamps, so a short answer *is* the mismatch. Duplicating the guard here
+		would be a fifth place that has to agree about which arm is there.
+		"""
+		found = arm_of(struct, placement)
+		scalar = placement.scalar
+		if found is None or placement.sized_by is None or scalar is None:
+			return []
+		if scalar.bits != BITS_PER_BYTE or not self._has_length(struct, placement):
+			return []
+
+		local = c_name(self._local(struct, placement))
+		return [
+			f"\t/* {placement.path}: the arm the discriminant selects has to",
+			"\t * fit the frame. The accessor clamps; this is where a message",
+			"\t * that does not fit is called malformed. */",
+			"\t{",
+			"\t\tconst uint8_t *held = NULL;",
+			"\t\tuint32_t held_len = 0u;",
+			"",
+			f"\t\tif ({ident(self.prefix, struct.name, local, 'ptr')}"
+			"(view, &held, &held_len) == SITU_OK",
+			f"\t\t\t\t&& held_len < ({self._length_expression(struct, placement)})) {{",
+			"\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _member_checks(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
