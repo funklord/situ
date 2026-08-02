@@ -6073,13 +6073,27 @@ found thirty-one errors in fifteen of the twenty-five, in one second:
 - `__all__ = []` has no element type, which `std/codecs.situ` -- signatures and
   no structs -- is.
 
+**Two installers, and the one nobody ran.** Section 24 keeps CMake and GNU
+Make as independently usable entry points, which makes their install lists two
+descriptions of one thing. They agree, file for file -- and `make install` did
+not work: it named `$(RUNTIME_LIB)` as its prerequisite, which is a path
+produced by a sub-make that nothing at that level has a rule for, so it
+succeeded only where an earlier build had left the archive there. From a clean
+tree, the first command a packager runs stopped with "No rule to make target".
+It depends on the `runtime` target now, and a check compares the two listings.
+
+The C++ warning set had the same shape without the same cost: `-Wall -Wextra
+-Wconversion -Wsign-conversion` and no `-Werror`, under an assertion on the
+exit status. Nothing in the tree warns, so the flags were decoration that
+happened to be true. They enforce now.
+
 `make check` read `situc tools tests`, and `runtime/python` is none of those:
 the module every generated module imports was the one thing nothing checked. It
 had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2237 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2238 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

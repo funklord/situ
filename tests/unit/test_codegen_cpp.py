@@ -61,8 +61,13 @@ struct s {
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
+#: `-Werror` because without it this list was decoration: every compile below
+#: asserts `returncode == 0`, and a warning does not change that. The C build
+#: has had `-Werror` since phase 4 (see the top-level Makefile's WARNFLAGS) and
+#: the C++ checks were reading the same flags without the one that enforces
+#: them. Nothing in the tree warns today, which is the moment to fix it.
 WARNINGS = ["-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
-	"-Wsign-conversion", "-fno-exceptions", "-fno-rtti"]
+	"-Wsign-conversion", "-Werror", "-fno-exceptions", "-fno-rtti"]
 
 
 def emit(body: str, preamble: str = PREAMBLE) -> str:

@@ -59,6 +59,45 @@ def test_the_top_level_build_makes_the_runtime_and_installs_it(
 	assert (prefix / "share" / "situc" / "std" / "codecs.situ").is_file()
 
 
+@pytest.mark.skipif(shutil.which("make") is None, reason="no make")
+def test_the_two_installers_put_the_same_files_there(tmp_path: Path) -> None:
+	"""Section 24 says CMake and GNU Make are maintained in parallel as
+	independently usable entry points, which makes their install lists two
+	descriptions of one thing -- and this repository's recurring finding is
+	that two such lists drift (26.31, 26.34).
+
+	The lists agree today. That is the moment to check it: a module added to
+	`situc/` reaches both by glob, and anything else -- a new standard schema
+	directory, a second header -- reaches whichever one its author edited.
+	"""
+	staged = tmp_path / "make"
+	prefix = tmp_path / "cmake"
+	build  = tmp_path / "build"
+
+	subprocess.run(
+		["make", "-C", str(ROOT), "install",
+		 f"DESTDIR={staged}", "PREFIX=/usr/local",
+		 f"BUILD_ROOT={tmp_path / 'obj'}"],
+		capture_output=True, text=True, check=True)
+
+	cmake("-S", str(ROOT), "-B", str(build), f"-DCMAKE_INSTALL_PREFIX={prefix}")
+	cmake("--build", str(build))
+	cmake("--install", str(build))
+
+	def listing(root: Path) -> set[str]:
+		return {str(path.relative_to(root))
+		        for path in root.rglob("*") if path.is_file()}
+
+	from_make  = listing(staged / "usr" / "local")
+	from_cmake = listing(prefix)
+
+	assert from_make == from_cmake, (
+		"the two installers disagree:\n"
+		f"  only `make install`: {sorted(from_make - from_cmake)}\n"
+		f"  only CMake:         {sorted(from_cmake - from_make)}")
+	assert "bin/situc" in from_make		# and neither is empty
+
+
 def test_the_runtime_builds_on_its_own(tmp_path: Path) -> None:
 	"""Section 24's rule for every sub-project: self-contained, with the parent
 	injecting through cache variables rather than through include files. A

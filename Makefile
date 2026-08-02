@@ -121,7 +121,13 @@ cross-test:
 # the package and a launcher that finds it. Section 24 requires it to run from
 # a bare interpreter -- no pip, no virtualenv, no network -- because the build
 # machine it has to vendor into may have none of them.
-install: $(RUNTIME_LIB)
+#
+# `runtime` rather than `$(RUNTIME_LIB)`: the library is built by a sub-make and
+# nothing at this level has a rule that produces that path, so naming the file
+# made `make install` work only where a previous build had already left one
+# there. From a clean tree it stopped with "No rule to make target", which is
+# the first command a packager runs.
+install: runtime
 	install -d '$(DESTDIR)$(PREFIX)/lib/situc'
 	find situc -name '*.py' -exec install -Dm644 '{}' '$(DESTDIR)$(PREFIX)/lib/{}' \;
 	install -d '$(DESTDIR)$(PREFIX)/share/situc/std'
