@@ -28,9 +28,20 @@ What is probed is a subset, and the subset is the thing to grow. Now: scalars,
 byte arrays, delimited members and delimited text numbers, tags, endian
 markers, varints, the counts of runs and of `tlv` and `indexed` regions, a
 variant's arms, members present only from a given version, the framing of a
-coded region, and a sealed region's stage gate *and* the scalars behind it --
-plus `validate`. Not yet: a nested struct's sub-view, a byte run inside a gate,
-and the decoded contents of a coded region.
+coded region, a sealed region's stage gate *and* the scalars behind it, and the
+first element of an array of wide scalars -- plus `validate`.
+
+Not yet, and each for a stated reason rather than for want of writing it:
+
+  * a nested struct's sub-view -- C bounds-checks it and the other three cannot
+    fail, so there is no shared answer to compare (26.31);
+  * an enum-typed field -- C and C++ hand back the value in an enum type, Rust
+    an `Option` that is `None` for a value the schema does not name, and Python
+    the member or the raw integer. Three answers to "what does this byte say",
+    all defensible, and no single line to diff. The underlying integer would
+    compare, and no backend exposes it;
+  * a fixed-width text number's *value*, a byte run inside a gate, and a coded
+    region's decoded contents.
 
 A versioned member needed no new probe shape at all: "is this member in *this*
 message?" is the question a variant's arm answers, asked of the version field
@@ -114,6 +125,9 @@ class Probe(Enum):
 	SEALED    = "sealed"
 	#: `name <integer>` -- a scalar *inside* a gate, read through it.
 	GATED     = "gated"
+	#: `name[0] <integer>` -- the first element of an array of wide scalars,
+	#: which is reached by index rather than by pointer.
+	ELEMENT   = "element"
 
 
 @dataclass(frozen=True)
@@ -209,9 +223,19 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 				continue
 			found.append(Ask(Probe.SCALAR, local))
 		elif kind is Member.ARRAY and scalar is not None \
-				and scalar.bits == BITS_PER_BYTE \
 				and placement.array_count is not None:
-			found.append(Ask(Probe.BYTES, local, placement.array_count))
+			if scalar.bits == BITS_PER_BYTE:
+				found.append(Ask(Probe.BYTES, local, placement.array_count))
+			elif not scalar.is_bit_packed and not scalar.is_bcd \
+					and placement.type_name in _SCALAR_TYPES \
+					and placement.array_count > 0:
+				# An element wider than a byte is `ValueConverted`, so there is
+				# no pointer into it and the accessor takes an index. The first
+				# element is always there -- the count is the schema's, not the
+				# message's -- so this needs no bounds question, which is what
+				# keeps it askable where Rust returns a `Result` and C does
+				# not.
+				found.append(Ask(Probe.ELEMENT, local))
 		elif kind is Member.VARIABLE and scalar is not None \
 				and scalar.bits == BITS_PER_BYTE:
 			# Only where a *field* gives the length. A member sized by
@@ -418,6 +442,9 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        f'\t\t\t\tprintf("{ask.local} present=%d\\n",'
 		        " held == NULL ? 0 : 1);",
 		        "\t\t\t}"]
+	if ask.probe is Probe.ELEMENT:
+		return [f'\t\t\tprintf("{ask.local}[0] %lld\\n",'
+		        f' (long long){call.format("get")}(view, 0u));']
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\tprintf("{ask.local} little=%d\\n",'
 		        f' {call.format("is_little")}(view) ? 1 : 0);']
@@ -541,6 +568,9 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\tstd::printf("{ask.local} present=%d\\n",'
 		        f" view.{ask.local}().empty() ? 0 : 1);"]
+	if ask.probe is Probe.ELEMENT:
+		return [f'\t\t\tstd::printf("{ask.local}[0] %lld\\n",'
+		        f" static_cast<long long>(view.{ask.local}(0)));"]
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\tstd::printf("{ask.local} little=%d\\n",'
 		        f" view.{ask.local}_is_little() ? 1 : 0);"]
@@ -668,6 +698,12 @@ def _rust_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\t\tprintln!("{ask.local} present={{}}",'
 		        f" if view.{call}().is_empty() {{ 0 }} else {{ 1 }});"]
+	if ask.probe is Probe.ELEMENT:
+		# `Result`, where C and C++ return the value: the index is the
+		# caller's own and the count is the schema's, so the first element is
+		# always there and the two shapes agree about it.
+		return [f'\t\t\t\tprintln!("{ask.local}[0] {{}}",'
+		        f" view.{call}(0).map(|held| held as i64).unwrap_or(0));"]
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\t\tprintln!("{ask.local} little={{}}",'
 		        f" if view.{rust_ident(ask.local + '_is_little')}()"
@@ -771,6 +807,8 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'print("{ask.local} present=%d"'
 		        f" % (0 if len(view.{ask.local}) == 0 else 1))"]
+	if ask.probe is Probe.ELEMENT:
+		return [f'print("{ask.local}[0] %d" % view.{ask.local}(0))']
 	if ask.probe is Probe.MARKER:
 		return [f'print("{ask.local} little=%d"'
 		        f" % (1 if view.{ask.local}_is_little else 0))"]

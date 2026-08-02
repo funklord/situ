@@ -5129,6 +5129,12 @@ finding what each backend calls them, and two answers were wrong before a
 single byte was compared: Python spelled a `tlv` count as a method where every
 other count in that same backend is a property, and kept a varint's
 total-value accessor private -- `_x_value` -- where the other three publish it.
+An array of wide scalars went in as well -- an element wider than a byte is
+`ValueConverted`, so it is reached by index rather than by pointer, and Rust
+answers with a `Result` where C and C++ return the value. The first element is
+always there, the count being the schema's rather than the message's, so the
+shapes agree about it and the probe needs no bounds question.
+
 A sealed region's stage gate went in too, with the scalars behind it, and it is
 the probe worth having for its own sake rather than for what it might catch. Section 14.3 claims the
 interior cannot be reached before the tag verifies; the four say so in four
@@ -5609,10 +5615,12 @@ the fallback chain evaluates to zero as well, so the idiom is safe for a
 narrower reason than the one written down. A dependency nobody can exercise is
 a dependency nobody has checked, including the person who wrote it down.
 
-**One shape the differential check cannot ask about, and what it is.** A nested
-struct's sub-view is bounds-checked in C -- `situ_view_sub` refuses a range the
-parent does not contain -- and constructed unchecked in the other three, which
-hand back a view claiming the nested struct's size whatever the parent holds.
+**Three shapes the differential check cannot ask about, and what they are.**
+
+The first is a nested struct's sub-view. It is bounds-checked in C --
+`situ_view_sub` refuses a range the parent does not contain -- and constructed
+unchecked in the other three, which hand back a view claiming the nested
+struct's size whatever the parent holds.
 That is the acquisition invariant of 20.2 one level in, and it is the same
 divergence the top-level `at()` had until the differential check found it.
 
@@ -5627,6 +5635,18 @@ refuse, `err x(T &out)` in C++, `Result<T>` in Rust, a raise in Python -- which
 is the sort of thing to do deliberately rather than while passing. Until then
 the differential drivers cannot ask the question at all, because three of the
 four have no way to answer it.
+
+The second is an **enum-typed field**, and it is not a defect. C and C++ hand
+back the value in an enum type, Rust an `Option` that is `None` for a value the
+schema does not name, and Python the member or the raw integer. Three answers
+to "what does this byte say", each idiomatic where it lives, and no single line
+to diff. The underlying integer would compare and no backend exposes it, which
+is the one thing that could change if this ever matters more than the
+ergonomics do.
+
+The third is a **member sized by arithmetic** -- `u8 data[(len + 1) * 8 - 2]`.
+C emits no `_len` for one, the count being an expression the caller can
+evaluate itself, so there is no fourth spelling of "how long is it" to compare.
 
 **Smaller, known, and deliberate.**
 
