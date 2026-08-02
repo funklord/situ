@@ -5077,6 +5077,16 @@ finding what each backend calls them, and two answers were wrong before a
 single byte was compared: Python spelled a `tlv` count as a method where every
 other count in that same backend is a property, and kept a varint's
 total-value accessor private -- `_x_value` -- where the other three publish it.
+A sealed region's stage gate went in too, and it is the probe worth having for
+its own sake rather than for what it might catch. Section 14.3 claims the
+interior cannot be reached before the tag verifies; the four say so in four
+shapes -- an out-parameter and an error in C, a callback in C++ so that no
+expression names a gate outside the verified branch, a `Result` in Rust, a
+raise in Python -- and all four refuse a failed check and admit a passed one,
+over every buffer in the corpus. A coded region is asked where it ends rather
+than what it holds, the decode being C's to run and absent from Python by
+decision (0017).
+
 A variant's arms went in after those and found nothing, which is also a result:
 three shapes -- an out-parameter and an error in C and C++, a `Result` in Rust,
 a property that raises in Python -- agree about which arm a discriminant

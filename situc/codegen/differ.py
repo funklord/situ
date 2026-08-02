@@ -27,15 +27,26 @@ subcommand and a line in section 21.
 What is probed is a subset, and the subset is the thing to grow. Now: scalars,
 byte arrays, delimited members and delimited text numbers, tags, endian
 markers, varints, the counts of runs and of `tlv` and `indexed` regions, a
-variant's arms, and members present only from a given version -- plus
-`validate`. Not yet: coded regions, nested structs and sealed interiors.
+variant's arms, members present only from a given version, the framing of a
+coded region, and a sealed region's stage gate -- plus `validate`. Not yet: a
+nested struct's sub-view, and the *contents* of a sealed interior or a coded
+region.
 
 A versioned member needed no new probe shape at all: "is this member in *this*
 message?" is the question a variant's arm answers, asked of the version field
-instead of a discriminant, and all four spell it the same way. A nested struct
-is the opposite case and is why it is still missing -- C bounds-checks the
-sub-view and the other three cannot fail, so there is no shared answer to
-compare until three of them grow one (26.31).
+instead of a discriminant, and all four spell it the same way. A coded region
+is asked where it ends and not what it holds, the decode being C's to run and
+absent from Python by decision (0017). A nested struct is the opposite case and
+is why it is still missing -- C bounds-checks the sub-view and the other three
+cannot fail, so there is no shared answer to compare until three of them grow
+one (26.31).
+
+The gate is the probe worth having for its own sake. Section 14.3 claims a
+sealed interior cannot be reached before its tag verifies, and the four say
+that in four shapes: an out-parameter and an error in C, a callback in C++ --
+so that no expression names a gate outside the verified branch -- a `Result` in
+Rust, a raise in Python. What they can all answer is whether a failed check is
+refused and a passed one admitted, which is the claim itself.
 
 A variant's arms are asked the reachability question rather than the value
 one: which arm the discriminant selects, and how long it is or what it holds.
@@ -92,6 +103,9 @@ class Probe(Enum):
 	ARM_BYTES = "arm_bytes"
 	#: `name ok=<0|1> value=<v>` -- a variant's scalar arm.
 	ARM_VALUE = "arm_value"
+	#: `name refused=<0|1> opened=<0|1>` -- a sealed region's stage gate,
+	#: asked to open on a failed check and then on a passed one.
+	SEALED    = "sealed"
 
 
 @dataclass(frozen=True)
@@ -121,10 +135,28 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 		kind      = classify(struct, placement, structs)
 		local     = c_name(local_name(struct, placement))
 
-		# Skipped, each for a reason the module docstring gives: a gated
-		# member is reached through the gate, and a coded member's bytes are
-		# the transform's rather than the field's.
-		if placement.sealed_by or placement.codec is not None:
+		# The gate, which is the security claim of 14.3: the interior cannot
+		# be had without a verification token. What every backend can answer
+		# is whether it refuses a failed check and admits a passed one.
+		#
+		# Before the `sealed_by` skip below, because a sealed region names
+		# itself there -- the region is `sealed_by` the region -- so asking
+		# that question first skipped the one member this probe exists for.
+		if placement.kind == "sealed":
+			found.append(Ask(Probe.SEALED, local))
+			continue
+
+		# A member *inside* a sealed region is reached through the gate.
+		if placement.sealed_by:
+			continue
+
+		# A coded region is asked the framing question and not the value one:
+		# the bytes are the transform's output, and Python emits no decode at
+		# all (0017). Where it ends is still a scan over attacker bytes, and
+		# that all four do answer.
+		if placement.codec is not None:
+			if placement.delimiter is not None:
+				found.append(Ask(Probe.DELIMITED, local))
 			continue
 
 		scalar = placement.scalar
@@ -342,6 +374,19 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\tprintf("{ask.local} little=%d\\n",'
 		        f' {call.format("is_little")}(view) ? 1 : 0);']
+	if ask.probe is Probe.SEALED:
+		gate = ident(prefix, struct, ask.local, "t")
+		return ["\t\t\t{",
+		        f"\t\t\t\t{gate} held;",
+		        f"\t\t\t\tconst situ_err_t refused ="
+		        f" {call.format('open')}(view, 0, &held);",
+		        f"\t\t\t\tconst situ_err_t opened ="
+		        f" {call.format('open')}(view, 1, &held);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local} refused=%d opened=%d\\n",',
+		        "\t\t\t\t\trefused == SITU_OK ? 0 : 1,",
+		        "\t\t\t\t\topened == SITU_OK ? 1 : 0);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
 		return [f'\t\t\tprintf("{ask.local} len=%u value=%llu\\n",'
 		        f' {call.format("len")}(view),'
@@ -447,6 +492,20 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\tstd::printf("{ask.local} little=%d\\n",'
 		        f" view.{ask.local}_is_little() ? 1 : 0);"]
+	if ask.probe is Probe.SEALED:
+		# A callback rather than a returned gate, which is the whole of what
+		# C++ adds here: there is no expression that names one outside the
+		# verified branch. The answer is the same either way.
+		return ["\t\t\t{",
+		        f"\t\t\t\tconst auto refused = view.with_{ask.local}("
+		        "false, [](auto) {});",
+		        f"\t\t\t\tconst auto opened = view.with_{ask.local}("
+		        "true, [](auto) {});",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local} refused=%d opened=%d\\n",',
+		        "\t\t\t\t\trefused == ::situ::rt::err::ok ? 0 : 1,",
+		        "\t\t\t\t\topened == ::situ::rt::err::ok ? 1 : 0);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
 		return [f'\t\t\tstd::printf("{ask.local} len=%u value=%llu\\n",'
 		        f" view.{ask.local}_len(),"
@@ -547,6 +606,13 @@ def _rust_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\t\tprintln!("{ask.local} little={{}}",'
 		        f" if view.{rust_ident(ask.local + '_is_little')}()"
 		        " { 1 } else { 0 });"]
+	if ask.probe is Probe.SEALED:
+		opener = rust_ident(f"open_{ask.local}")
+		return [f'\t\t\t\tprintln!("{ask.local} refused={{}} opened={{}}",',
+		        f"\t\t\t\t\tif view.{opener}(false).is_err()"
+		        " { 1 } else { 0 },",
+		        f"\t\t\t\t\tif view.{opener}(true).is_ok()"
+		        " { 1 } else { 0 });"]
 	if ask.probe is Probe.VARINT:
 		return [f'\t\t\t\tprintln!("{ask.local} len={{}} value={{}}",'
 		        f" view.{rust_ident(ask.local + '_len')}(),"
@@ -635,6 +701,19 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.MARKER:
 		return [f'print("{ask.local} little=%d"'
 		        f" % (1 if view.{ask.local}_is_little else 0))"]
+	if ask.probe is Probe.SEALED:
+		return ["refused = 0",
+		        "try:",
+		        f"\tview.open_{ask.local}(False)",
+		        "except situ_runtime.SituError:",
+		        "\trefused = 1",
+		        "opened = 0",
+		        "try:",
+		        f"\tview.open_{ask.local}(True)",
+		        "\topened = 1",
+		        "except situ_runtime.SituError:",
+		        "\tpass",
+		        f'print("{ask.local} refused=%d opened=%d" % (refused, opened))']
 	if ask.probe is Probe.VARINT:
 		return [f'print("{ask.local} len=%d value=%d"'
 		        f" % (view.{ask.local}_len, view.{ask.local}_value))"]
