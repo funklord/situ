@@ -159,6 +159,12 @@ codec hamming_7_4 {
 
 // Manchester: one input bit becomes two output bits. The 2:1 ratio is exact, so
 // output position stays a linear function of input position.
+//
+// The signature is the same for both conventions -- IEEE 802.3's and G.E.
+// Thomas's differ by an inversion, which no property here can see. A schema
+// that needs the code generated says which (`std/kernels.situ`); one that only
+// declares the signature does not have to, because nothing is generated from
+// it.
 codec manchester {
 	expansion = ratio_exact(2, 1);
 	granularity = bit(1);

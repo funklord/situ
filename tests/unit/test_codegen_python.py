@@ -940,7 +940,7 @@ def test_a_coded_region_is_framed_like_any_delimited_member(tmp_path: Path) -> N
 
 # -- a coded region's bytes, and its transform (13.5) -----------------------
 
-CODED_PRE  = 'target buffer;\nendian big;\nbit_order msb_first;\ncodec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester); }\nimpl halve derived;\n'
+CODED_PRE  = 'target buffer;\nendian big;\nbit_order msb_first;\ncodec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester_802_3); }\nimpl halve derived;\n'
 CODED_BODY = 'struct S { coded body(halve) { u8 raw[4]; } }'
 
 

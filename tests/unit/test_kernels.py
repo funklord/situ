@@ -324,7 +324,7 @@ codec crc16_ccitt {
 impl crc16_ccitt derived;
 
 codec manchester {
-	kernel = table(input_bits = 1, output_bits = 2, code = manchester);
+	kernel = table(input_bits = 1, output_bits = 2, code = manchester_802_3);
 }
 impl manchester derived;
 
@@ -574,6 +574,39 @@ def test_a_hamming_and_interleaver_pipeline_keeps_the_ratio() -> None:
 	assert not found.systematic	# the interleaver moves the data bits
 
 
+def test_a_code_name_that_names_two_codes_is_refused() -> None:
+	"""`manchester` is two codes. IEEE 802.3's and G.E. Thomas's are called by
+	the same name and are bit-inverses of each other, so a decoder built on the
+	wrong one returns the complement of what was sent -- plausible bytes, no
+	error, and nothing at run time that could notice.
+
+	Invariant 9: situ never takes a silent default where the wrong choice is
+	undetectable at run time. The compiler had one anyway, in a comment beside
+	the table: "Manchester is IEEE 802.3's". A schema saying `manchester` got
+	that and no way to ask for the other.
+
+	Found by reading `rflab`, a radio project that makes the same choice a
+	compile-time option -- which is the evidence that a practitioner has to
+	make it."""
+	rendered = refusal("codec m { kernel = table(input_bits = 1,"
+	                   " output_bits = 2, code = manchester); }")
+
+	assert "names 2 codes" in rendered
+	assert "manchester_802_3" in rendered
+	assert "manchester_thomas" in rendered
+
+
+def test_the_two_manchesters_are_inverses() -> None:
+	"""One table is the other's complement, which is the whole of the
+	difference and the reason the name has to say which."""
+	from situc.codegen.c.derived import NAMED_CODES
+
+	thomas = NAMED_CODES["manchester_thomas"]
+	ethernet = NAMED_CODES["manchester_802_3"]
+
+	assert [~code & 0b11 for code in ethernet] == thomas
+
+
 def test_the_kernel_library_binds_every_family_it_can_generate() -> None:
 	"""A family that generates and is not bound anywhere is a generator nobody
 	has ever run over a real description."""
@@ -583,7 +616,11 @@ def test_the_kernel_library_binds_every_family_it_can_generate() -> None:
 	emitted = derived.generate(
 		parse((ROOT / "std" / "kernels.situ")), "kernels")
 
-	for name in ("crc32", "manchester", "cobs", "hamming_7_4",
+	# Both Manchesters: they are two codes, and the library names them apart
+	# because a receiver built on one reads a sender built on the other as the
+	# complement of what was sent.
+	for name in ("crc32", "manchester_802_3", "manchester_thomas",
+	             "cobs", "hamming_7_4",
 	             "interleave_16", "scrambler_additive",
 	             "scrambler_multiplicative", "hdlc_bit_stuffing"):
 		assert name in bound

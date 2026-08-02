@@ -71,10 +71,19 @@ impl reed_solomon_64_56 derived;
 // appear verbatim in the output, so nothing can be read without decoding.
 // ---------------------------------------------------------------------------
 
-codec manchester {
-	kernel = table(input_bits = 1, output_bits = 2, code = manchester);
+// The two Manchesters. Both are called Manchester, they are bit-inverses of
+// each other, and a receiver built on one reads a sender built on the other as
+// the complement of what was sent -- plausible bytes and no error anywhere.
+// Naming them apart is the whole point; `code = manchester` is refused.
+codec manchester_802_3 {
+	kernel = table(input_bits = 1, output_bits = 2, code = manchester_802_3);
 }
-impl manchester derived;
+impl manchester_802_3 derived;
+
+codec manchester_thomas {
+	kernel = table(input_bits = 1, output_bits = 2, code = manchester_thomas);
+}
+impl manchester_thomas derived;
 
 // RFC 4648 base16. A nibble to an ASCII hex digit, which needs no padding at
 // any input length -- every byte is exactly two nibbles. That is what makes it
@@ -186,4 +195,4 @@ impl smtp_dot_stuffing derived;
 // doubled to 64, and permuted rather than linear because the interleaver is.
 // ---------------------------------------------------------------------------
 
-codec framed = crc32 |> interleave_16 |> manchester;
+codec framed = crc32 |> interleave_16 |> manchester_802_3;

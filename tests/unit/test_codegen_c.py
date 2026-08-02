@@ -2748,7 +2748,7 @@ int main(void)
 # -- running the transform once (section 13.5) ------------------------------
 
 CODED_TABLE = """
-codec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester); }
+codec halve { kernel = table(input_bits = 1, output_bits = 2, code = manchester_802_3); }
 impl halve derived;
 struct S {
 	coded body(halve) { u8 raw[4]; }

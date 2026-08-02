@@ -140,6 +140,8 @@ def _table(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	inputs  = _positive(kernel, "input_bits", decl)
 	outputs = _positive(kernel, "output_bits", decl)
 
+	_unambiguous(decl, kernel)
+
 	# `pad` says the code emits whole groups: a group is the smallest run of
 	# input that is both a whole number of bytes and a whole number of symbols,
 	# so a partial one at the end is filled out rather than truncated. That is
@@ -166,6 +168,43 @@ def _table(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 		systematic       = False,
 		invertible       = True,
 		deterministic    = True,
+	)
+
+
+#: Code names that are two codes. `manchester` is the instance and the reason
+#: this exists: IEEE 802.3 and G.E. Thomas both call themselves Manchester and
+#: are bit-inverses of each other, so a receiver built on one reads a sender
+#: built on the other as the complement of what was sent -- plausible bytes,
+#: no error, and nothing at run time can tell. rflab, a radio project written
+#: against real hardware, makes the same choice a compile-time option, which is
+#: the evidence that a practitioner has to make it.
+#:
+#: Invariant 9: situ never takes a silent default where the wrong choice is
+#: undetectable at run time. The remedy is to say which.
+AMBIGUOUS_CODES: dict[str, tuple[str, ...]] = {
+	"manchester": ("manchester_802_3", "manchester_thomas"),
+}
+
+
+def _unambiguous(decl: ast.CodecDecl, kernel: ast.Kernel) -> None:
+	"""Refuse a code name that names more than one code."""
+	named = kernel.argument("code")
+	if not isinstance(named, ast.NameRef):
+		return
+
+	choices = AMBIGUOUS_CODES.get(named.name)
+	if choices is None:
+		return
+
+	raise error(
+		f"`{named.name}` names {len(choices)} codes, not one",
+		kernel.span,
+		f"`{decl.name}` does not say which",
+		[f"the candidates are {', '.join(f'`{one}`' for one in choices)}, and "
+		 "they are bit-inverses of each other",
+		 "a decoder built on the wrong one returns the complement of what was "
+		 "sent: plausible bytes, no error, and nothing at run time to notice",
+		 f"say `code = {choices[0]}` or `code = {choices[1]}`"],
 	)
 
 

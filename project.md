@@ -2213,7 +2213,21 @@ kernel families, or a pipeline of them. This bounds the tier-2 design.
 | **permutation** | index mapping, closed form or table | block and convolutional interleavers | `length_preserving`; `seekable = permuted`; `deterministic` |
 | **stuffing** | trigger predicate plus insertion rule | HDLC bit stuffing, COBS, SLIP, byte stuffing | `expansion = ratio_bounded`; `not seekable`; interior addressing lost |
 
-Pipelines compose: `codec framed = rs_255_223 |> interleave(16) |> manchester;`
+**A code name that names two codes is refused.** `manchester` is the instance:
+IEEE 802.3's and G.E. Thomas's are both called Manchester and are bit-inverses
+of each other, so a receiver built on one reads a sender built on the other as
+the complement of what was sent -- plausible bytes, no error, and nothing at
+run time that could notice. The compiler picked 802.3 in a comment beside the
+table and a schema had no way to ask for the other. Both are named now,
+`manchester_802_3` and `manchester_thomas`, and the bare name is a diagnostic
+that names them and says they are inverses. Invariant 9, in the one place where
+the wrong choice is invisible at run time rather than loud.
+
+The evidence that this is a choice a practitioner has to make came from
+outside: `rflab`, a radio project built against real hardware, makes the same
+convention a compile-time option in its Manchester encoder.
+
+Pipelines compose: `codec framed = rs_255_223 |> interleave(16) |> manchester_802_3;`
 Property composition is pointwise and conservative -- the pipeline is seekable
 only if every stage is, systematic only if every stage is, and the expansion is
 the product of the stages' expansions.
