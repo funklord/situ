@@ -109,7 +109,8 @@ CHECK_BINS	:= $(GEN_NAMES:%=$(BUILD_DIR)/%_checks)
 # signature rather than a suite: it is a library of contracts with no `impl` at
 # all, which is what it is for.
 CODEC_SUITE	:= $(GEN_DIR)/codecs_codec_tests.o
-CODEC_BINS	:= $(BUILD_DIR)/edges_codec_tests
+CODEC_BINS	:= $(BUILD_DIR)/edges_codec_tests \
+		   $(BUILD_DIR)/kernels_codec_tests
 
 # Which generated objects each test needs. Linking all of them into every
 # binary would collide: two schemas may both declare a `Header`, and each
@@ -217,6 +218,22 @@ $(BUILD_DIR)/edges_codec_tests: $(GEN_DIR)/edges_codec_tests.c codec_impl.c \
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< codec_impl.c $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+
+# And the tier-2 half: the property tests for every codec `std/kernels.situ`
+# describes, run against the implementations `gen-derived` writes from the same
+# descriptions. Nothing supplies anything here -- both sides are generated,
+# which is what a derived codec means.
+$(GEN_DIR)/kernels_codec_tests.c: $(REPO_ROOT)/std/kernels.situ $(SITUC_SOURCES)
+	@mkdir -p '$(GEN_DIR)'
+	cd '$(REPO_ROOT)' && $(SITUC) gen-codec-tests std/kernels.situ \
+		--out '$(abspath $(GEN_DIR))'
+
+$(BUILD_DIR)/kernels_codec_tests: $(GEN_DIR)/kernels_codec_tests.c \
+		$(GEN_DIR)/kernels_derived.o $(RUNTIME_LIB)
+	@mkdir -p '$(@D)'
+	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/kernels_derived.o $(RUNTIME_LIB) $(LDFLAGS) \
+		$(CMOCKA_LIBS) -o $@
 
 $(GEN_DIR)/%_fuzz.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' \

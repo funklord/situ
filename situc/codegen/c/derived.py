@@ -135,6 +135,37 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 	return lines
 
 
+def pair_of(decl: ast.CodecDecl, prefix: str = "situ") -> tuple[str, str] | None:
+	"""The `(in, count, out) -> count` encode/decode pair this kernel emits.
+
+	Four of the six families produce that one shape, which is what
+	`_byte_declarations` says: bytes in, bytes out, and a count. `None` for
+	the two that do not -- a polynomial kernel is a checksum over its input
+	and a linear block code is a nibble in and a codeword out, and neither is
+	a transform with an inverse of the same shape.
+
+	Asked here rather than inferred from the emitted text, because
+	`gen-codec-tests` needs to know which codecs it can attack and reading a
+	prototype back out of a string is how a second description starts.
+	"""
+	kernel = decl.kernel
+	if kernel is None:
+		return None
+
+	family = kernel.family
+	if family is ast.KernelFamily.POLYNOMIAL or family is ast.KernelFamily.LINEAR:
+		return None
+	if family is ast.KernelFamily.PERMUTATION and kernel.argument("rows") is None:
+		return None
+	if family is ast.KernelFamily.STUFFING and _named_code(decl) not in DERIVED_STUFFING:
+		return None
+	if family is ast.KernelFamily.TABLE and _symbol_map(
+			decl, _number(decl, "input_bits"), _number(decl, "output_bits")) is None:
+		return None
+
+	return (ident(prefix, decl.name, "encode"), ident(prefix, decl.name, "decode"))
+
+
 def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	kernel = decl.kernel
 	assert kernel is not None

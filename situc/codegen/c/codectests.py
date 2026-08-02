@@ -35,7 +35,9 @@ from __future__ import annotations
 from math import lcm
 
 from situc import ast
-from situc.traverse import extern_symbol
+from situc.codegen.c.derived import pair_of
+from situc.traverse import decode_counts_bits, extern_symbol,\
+	table_is_padded
 
 # Input sizes the length tests sweep. Chosen to straddle block boundaries and
 # to include the degenerate cases, which is where a length claim usually breaks.
@@ -77,12 +79,25 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	suites: list[str] = []
 	for codec in codecs:
 		symbol = extern_symbol(schema, codec.name)
-		if symbol is None:
-			suites.extend(_declined(schema, codec))
+		if symbol is not None:
+			body, names = _codec_suite(codec, symbol)
+			suites.extend(body)
+			cases.extend(names)
 			continue
-		body, names = _codec_suite(codec, symbol)
-		suites.extend(body)
-		cases.extend(names)
+
+		# A derived codec is attacked through the pair its kernel emits
+		# rather than through the tier-1 ABI: it has no `impl extern` to
+		# bind one, and its implementation is situ's own. Its *properties*
+		# cannot lie -- they follow from the kernel -- and its
+		# implementation still can (13.1).
+		pair = pair_of(codec, prefix) if _is_derived(schema, codec) else None
+		if pair is not None:
+			body, names = _derived_suite(codec, *pair)
+			suites.extend(body)
+			cases.extend(names)
+			continue
+
+		suites.extend(_declined(schema, codec))
 
 	# The shared generator only where something calls it. A file of refusals
 	# is a legitimate output -- `std/codecs.situ` is contracts and no `impl`
@@ -450,3 +465,239 @@ def _main(cases: list[str]) -> list[str]:
 		"}",
 	])
 	return lines
+
+
+# ---------------------------------------------------------------------------
+# Tier 2: the pair a kernel generates
+# ---------------------------------------------------------------------------
+
+
+def _is_derived(schema: ast.Schema, codec: ast.CodecDecl) -> bool:
+	return any(decl.codec == codec.name
+	           and decl.kind is ast.ImplKind.DERIVED
+	           for decl in schema.impls())
+
+
+def _step(codec: ast.CodecDecl) -> int:
+	"""The input granularity, in bytes, a length has to be a multiple of.
+
+	A block interleaver rearranges whole blocks and a padded code emits whole
+	groups; handing either a partial one is asking for what it does not do.
+	One byte for everything else, which is every symbol map whose symbols
+	divide a byte.
+	"""
+	kernel = codec.kernel
+	assert kernel is not None
+
+	if kernel.family is ast.KernelFamily.PERMUTATION:
+		rows    = kernel.argument("rows")
+		columns = kernel.argument("columns")
+		return max(1, getattr(rows, "value", 1) * getattr(columns, "value", 1))
+	if codec.expansion is ast.Expansion.RATIO_PADDED and codec.ratio is not None:
+		return lcm(8, codec.ratio[1]) // 8
+	return 1
+
+
+def _derived_suite(codec: ast.CodecDecl, encode: str,
+		decode: str) -> tuple[list[str], list[str]]:
+	"""Property tests over an implementation situ generated.
+
+	Section 13.1: a tier-2 codec's *properties* cannot lie, because they are
+	derived from the same kernel description the implementation is. What can
+	be wrong is the implementation, and nothing had ever run one of these
+	against the properties it is supposed to have (26.35).
+
+	The call shape is the kernel's -- `(in, count, out) -> count`, counting
+	bits where the kernel is bit-oriented -- rather than the tier-1 ABI, and
+	that is the whole difference. A derived codec has no `impl extern` to bind
+	an ABI to.
+	"""
+	bits  = decode_counts_bits(codec)
+	step  = _step(codec)
+	unit  = " * 8u" if bits else ""
+	sizes = [n * step for n in (0, 1, 2, 3, 7, 8) if n * step <= MAX_INPUT // 2]
+
+	counted = "bits" if bits else "len"
+	head = [
+		f"/* ---- {codec.name} (derived) ---- */",
+		"",
+		# Declared here rather than by including the schema's header: this
+		# file is generated from a codec library that may declare no struct
+		# at all, and `std/kernels.situ` is exactly that.
+		f"extern uint32_t {encode}(const uint8_t *in, uint32_t {counted},"
+		" uint8_t *out);",
+		f"extern uint32_t {decode}(const uint8_t *in, uint32_t {counted},"
+		" uint8_t *out);",
+		"",
+	]
+	body: list[str] = []
+	names: list[str] = []
+
+	# Round trip, which is `invertible` and is the property worth having
+	# whatever else the signature says: an implementation whose inverse is
+	# not one has nothing else worth checking.
+	if codec.invertible:
+		name = f"test_{codec.name}_derived_invertible"
+		names.append(name)
+		body.extend([
+			"/* Derived: `invertible`. What comes back is what went in, at",
+			" * every length the kernel admits. */",
+			f"static void {name}(void **state)",
+			"{",
+			f"	static const uint32_t sizes[] = {{ {', '.join(f'{n}u' for n in sizes)} }};",
+			"	uint8_t input[SITU_CODEC_MAX_INPUT];",
+			"	uint8_t coded[SITU_CODEC_MAX_OUTPUT];",
+			"	uint8_t back[SITU_CODEC_MAX_OUTPUT];",
+			"	size_t i;",
+			"",
+			"	(void)state;",
+			"	for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {",
+			"		const uint32_t in_len = sizes[i];",
+			"		uint32_t coded_len;",
+			"",
+			"		situ_codec_fill(input, in_len, (uint32_t)i + 7u);",
+			f"		coded_len = {encode}(input, in_len{unit}, coded);",
+			f"		assert_int_equal({decode}(coded, coded_len, back),",
+			f"			in_len{unit});",
+			"		if (in_len > 0u) {",
+			"			assert_memory_equal(back, input, in_len);",
+			"		}",
+			"	}",
+			"}",
+			"",
+		])
+
+	if codec.deterministic:
+		name = f"test_{codec.name}_derived_deterministic"
+		names.append(name)
+		body.extend([
+			"/* Derived: `deterministic`. Twice over one input, byte for byte. */",
+			f"static void {name}(void **state)",
+			"{",
+			f"	const uint32_t in_len = {sizes[-1]}u;",
+			"	uint8_t input[SITU_CODEC_MAX_INPUT];",
+			"	uint8_t first[SITU_CODEC_MAX_OUTPUT];",
+			"	uint8_t second[SITU_CODEC_MAX_OUTPUT];",
+			"	uint32_t first_len;",
+			"	uint32_t second_len;",
+			"",
+			"	(void)state;",
+			"	situ_codec_fill(input, in_len, 11u);",
+			f"	first_len  = {encode}(input, in_len{unit}, first);",
+			f"	second_len = {encode}(input, in_len{unit}, second);",
+			"",
+			"	assert_int_equal(first_len, second_len);",
+			# Whole bytes of the written bits, where the count is bits: a
+			# bit-oriented codec writes `n` bits, and the rest of the last
+			# byte belongs to whoever owns the buffer. Comparing it
+			# compares what the caller left there, which is how this test
+			# first failed a correct HDLC stuffer (26.35).
+			f"\tassert_memory_equal(first, second,"
+			f" {'first_len / 8u' if bits else 'first_len'});",
+			"}",
+			"",
+		])
+
+	length = _derived_length(codec, encode, unit, sizes)
+	if length is not None:
+		body.extend(length[0])
+		names.append(length[1])
+
+	seek = _derived_seekable(codec, encode, unit, step)
+	if seek is not None:
+		body.extend(seek[0])
+		names.append(seek[1])
+
+	return (head + body if names else
+	        [*head, "/* Nothing declared that this shape can attack. */", ""],
+	        names)
+
+
+def _derived_length(codec: ast.CodecDecl, encode: str, unit: str,
+		sizes: list[int]) -> tuple[list[str], str] | None:
+	"""The declared expansion, as arithmetic on the count the pair returns.
+
+	Only where the expansion is exact: `ratio_bounded` and `unbounded` say
+	the output depends on the content, which is a claim about what *cannot*
+	be asserted.
+	"""
+	if codec.expansion is ast.Expansion.PRESERVING:
+		expect = "in_len{unit}"
+	elif codec.expansion is ast.Expansion.FIXED_ADD:
+		expect = f"in_len{{unit}} + {codec.expansion_add}u"
+	elif codec.expansion is ast.Expansion.RATIO_EXACT and codec.ratio:
+		expect = f"in_len{{unit}} * {codec.ratio[0]}u / {codec.ratio[1]}u"
+	elif codec.expansion is ast.Expansion.RATIO_PADDED and codec.ratio:
+		group_in  = lcm(8, codec.ratio[1]) // 8
+		group_out = lcm(8, codec.ratio[1]) // codec.ratio[1] * codec.ratio[0] // 8
+		expect = (f"((in_len + {group_in - 1}u) / {group_in}u) * {group_out}u")
+	else:
+		return None
+
+	name = f"test_{codec.name}_derived_length"
+	return ([
+		f"/* Derived: {codec.expansion.value}. The count the encode returns is",
+		" * what the signature says it is, at every length. */",
+		f"static void {name}(void **state)",
+		"{",
+		f"	static const uint32_t sizes[] = {{ {', '.join(f'{n}u' for n in sizes)} }};",
+		"	uint8_t input[SITU_CODEC_MAX_INPUT];",
+		"	uint8_t coded[SITU_CODEC_MAX_OUTPUT];",
+		"	size_t i;",
+		"",
+		"	(void)state;",
+		"	for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {",
+		"		const uint32_t in_len = sizes[i];",
+		"",
+		"		situ_codec_fill(input, in_len, (uint32_t)i + 23u);",
+		f"		assert_int_equal({encode}(input, in_len{unit}, coded),",
+		f"			{expect.format(unit=unit)});",
+		"	}",
+		"}",
+		"",
+	], name)
+
+
+def _derived_seekable(codec: ast.CodecDecl, encode: str, unit: str,
+		step: int) -> tuple[list[str], str] | None:
+	"""`seekable = linear`: a prefix in, a prefix out.
+
+	Cut on a granularity boundary, which is what makes the claim a claim: a
+	padded code emits whole groups, so cutting base64 at 64 of 128 bytes
+	pads the 64 and the outputs diverge at the last group. The tier-1 harness
+	cuts at half and does not ask, which would have failed a correct base64
+	the first time one was bound (26.35).
+	"""
+	if codec.seekable is not ast.Seekable.LINEAR:
+		return None
+
+	whole = (MAX_INPUT // 2 // step) * step
+	half  = (whole // 2 // step) * step
+	if half == 0 or whole == 0:
+		return None
+
+	name = f"test_{codec.name}_derived_seekable_linear"
+	return ([
+		"/* Derived: `seekable = linear`. A prefix of the input produces a",
+		f" * prefix of the output, cut at {step}-byte granularity because that",
+		" * is the unit the claim is about. */",
+		f"static void {name}(void **state)",
+		"{",
+		"	uint8_t input[SITU_CODEC_MAX_INPUT];",
+		"	uint8_t whole[SITU_CODEC_MAX_OUTPUT];",
+		"	uint8_t partial[SITU_CODEC_MAX_OUTPUT];",
+		"	uint32_t whole_len;",
+		"	uint32_t partial_len;",
+		"",
+		"	(void)state;",
+		f"	situ_codec_fill(input, {whole}u, 21u);",
+		"",
+		f"	whole_len   = {encode}(input, {whole}u{unit}, whole);",
+		f"	partial_len = {encode}(input, {half}u{unit}, partial);",
+		"",
+		"	assert_true(partial_len <= whole_len);",
+		f"	assert_memory_equal(partial, whole,"
+		f" ({'partial_len / 8u' if unit else 'partial_len'}));",
+		"}",
+		"",
+	], name)

@@ -6177,9 +6177,32 @@ written against the implementation rather than the header.
 `decode_counts_bits` ask it. A padded table counts bytes; an unpadded one is
 bit-oriented by construction, which is what a Manchester line code is.
 
-Still open: the derived harness itself. A derived codec's properties cannot lie
--- they follow from its kernel -- but its implementation can be wrong, and the
-shapes are per-family rather than one ABI.
+**And then the derived harness, which is the other half.** A tier-2 codec's
+properties cannot lie -- they are derived from the same kernel description the
+implementation is -- and the implementation can. Fourteen of the twenty-five
+codecs in `std/kernels.situ` emit an `(in, count, out) -> count` pair;
+`derived.pair_of` says which, and the eleven that do not get a stated refusal:
+a polynomial kernel is a checksum over its input and a linear block code is a
+nibble in and a codeword out, and neither is a transform with an inverse of the
+same shape.
+
+Forty-eight tests, generated from the signatures and run against the
+implementations `gen-derived` writes from the same descriptions. Both sides
+generated, nothing supplied, which is what a derived codec means.
+
+Writing it found two things about what a property *is*:
+
+- **`seekable = linear` is a claim at the codec's own granularity.** base64
+  emits whole groups of four from three input bytes, so cutting an input at
+  half of 128 pads the 64 and the two outputs diverge in the last group. The
+  tier-1 harness cuts at half and does not ask, which would have failed a
+  correct base64 the first time one was bound. The derived one cuts on a
+  boundary and says which.
+- **A bit-oriented codec's output is `n` bits, and the rest of the last byte is
+  the caller's.** The determinism test compared whole bytes of `(n + 7) / 8`
+  and failed a correct HDLC stuffer on the leftover four bits of byte 64 --
+  which is the harness comparing what the caller left in the buffer rather than
+  what the codec wrote.
 
 **A coded region the data sizes was empty in all four.** Found by asking what
 `gen-codec-tests` could be run against, and following the codec path down.
@@ -6224,7 +6247,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2249 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2252 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

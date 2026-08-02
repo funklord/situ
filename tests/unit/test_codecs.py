@@ -308,6 +308,53 @@ def test_a_signature_claiming_nothing_produces_no_tests() -> None:
 	assert "That is not a pass: it means the signatures claim nothing" in text
 
 
+def test_a_derived_codec_is_attacked_through_its_kernel_pair() -> None:
+	"""A tier-2 codec has no `impl extern` to bind the tier-1 ABI to, and its
+	implementation is situ's own. Its *properties* cannot lie -- they follow
+	from the kernel the code is generated from -- and the implementation still
+	can, which is what these attack (26.35).
+
+	The call shape is the kernel's: `(in, count, out) -> count`, counting bits
+	where the kernel is bit-oriented."""
+	text = codec_tests(
+		"codec mm { kernel = table(input_bits = 1, output_bits = 2,"
+		" code = manchester_802_3); }\nimpl mm derived;",
+		bind=False)
+
+	assert "situ_mm_encode(input, in_len * 8u, coded)" in text
+	assert "test_mm_derived_invertible" in text
+	assert "test_mm_derived_deterministic" in text
+	assert "test_mm_derived_length" in text
+
+
+def test_a_padded_codec_is_cut_on_a_group_boundary() -> None:
+	"""`seekable = linear` is a claim at the codec's own granularity. base64
+	emits whole groups of four from three input bytes, so cutting at half of
+	128 pads the 64 and the outputs diverge at the last group -- the tier-1
+	harness cuts at half without asking, which would fail a correct
+	implementation the first time one was bound."""
+	text = codec_tests(
+		"codec b64 { kernel = table(input_bits = 6, output_bits = 8,"
+		" code = base64, pad = 0x3D); }\nimpl b64 derived;",
+		bind=False)
+
+	assert "situ_b64_encode(input, 126u, whole)" in text
+	assert "situ_b64_encode(input, 63u, partial)" in text
+
+
+def test_a_kernel_with_no_pair_is_declined() -> None:
+	"""A polynomial kernel is a checksum over its input rather than a
+	transform with an inverse, so there is no pair to attack -- and the file
+	says so where the suite would have been."""
+	text = codec_tests(
+		"codec c { kernel = polynomial(width = 32, poly = 0x04C11DB7,"
+		" init = 0xFFFFFFFF, xor_out = 0xFFFFFFFF, reflect_in = true,"
+		" reflect_out = true); }\nimpl c derived;", bind=False)
+
+	assert "no suite" in text
+	assert "static void test_c_" not in text
+
+
 def test_the_standard_library_declines_every_suite() -> None:
 	"""`std/codecs.situ` is contracts and no `impl`, which is what it is for.
 
