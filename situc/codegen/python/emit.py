@@ -430,7 +430,14 @@ class Emitter:
 			f"\tdef at(cls, msg: Message, offset: int, length: int)"
 			f" -> \"{c_name(struct.name)}\":",
 			'\t\t"""Nothing in the bytes says where the frame ends, so the',
-			'\t\tcaller supplies it. That is the one bounds check."""',
+			"\t\tcaller supplies it. That is the one bounds check, and the",
+			"\t\tminimum is part of it: every constant-offset accessor below",
+			"\t\ttrusts that the fixed members are here (20.2), which a frame",
+			'\t\tshorter than the minimum does not carry."""',
+			"\t\tif length < cls.SIZE_MIN:",
+			"\t\t\traise BoundsError(",
+			f'\t\t\t\tf"{struct.name} needs at least {{cls.SIZE_MIN}} bytes;'
+			' {length} given")',
 			"\t\treturn acquire(cls, msg, offset, length)"
 			f"  # type: ignore[return-value]",
 		]

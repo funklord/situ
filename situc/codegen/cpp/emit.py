@@ -559,10 +559,22 @@ class Emitter:
 		return [
 			f"\tstatic constexpr std::uint32_t size_min = {layout.size_bytes};",
 			"",
+			"\t/* The one bounds check, and the minimum is part of it: every",
+			"\t * constant-offset accessor below trusts that the fixed members",
+			"\t * are here (20.2), which a shorter frame does not carry. C and",
+			"\t * Rust refused one from the start and this did not, so a"
+			" 55-byte",
+			"\t * `packet` was a view here and an error there -- found by"
+			" handing",
+			"\t * random bytes to all four and diffing what they said. */",
 			"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &owner,",
 			f"\t\t\tstd::uint32_t offset, std::uint32_t length,"
 			f" {name} &out) noexcept",
 			"\t{",
+			"\t\tif (length < size_min) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"",
 			"\t\tsitu_view_t raw;",
 			"\t\tconst situ_err_t e = situ_view_at(owner.raw(), offset,"
 			" length, &raw);",

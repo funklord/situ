@@ -3370,6 +3370,7 @@ promise.
 | fuzz | libFuzzer + ASan | `make fuzz` builds every generated harness with `-fsanitize=fuzzer,address` and runs each for `FUZZ_SECONDS`. Not part of `make test`: minutes rather than seconds, and a compiler `test` does not need. The suite still compiles every harness and smoke-runs it on eight inputs from `/dev/urandom`, which catches a harness that stopped running and reaches nothing else -- a length field is a 1-in-2^16 guess |
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
 | backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
+| backend agreement, hostile input | pytest + all four toolchains | the same question about bytes nobody meant to send: two hundred pseudo-random buffers through all four, every answer diffed. The well-formed comparison above cannot see a backend that differs only on a malformed message, which is where all four differed (26.27) |
 | every example, in every backend | pytest + each toolchain | each worked example generated *and compiled* -- C since phase 4, the other three only recently, which is how three C++ examples and two Rust ones came to be broken with the suite green. Generating is not compiling, and the examples are the schemas anyone reads |
 | compiler mutation | by hand, recorded in 26.13a | deliberate bugs in the generator, judged by what a *user's* suite catches rather than situ's own. Not automated: choosing the mutation is the work, and a mutation nobody thought of is the gap that survives |
 | test mutation | by hand, at the point of writing | a probe that walks generated code is run once against a deliberately wrong expectation, to find out whether it is a test or a compile check. Three of mine were the latter -- `-fsyntax-only`, a `main` nobody executed, an `assert!` in an unrun binary -- and each passed identically before and after the fix it was written for (invariant 35) |
@@ -5015,6 +5016,31 @@ schema written for it: a thousand-byte body declared in a seventy-byte frame --
 inside the schema's own `[max = 1024]`, so it is the offset that fails rather
 than the cap -- comes back empty and malformed, and an eight-byte one still
 reads at 54. Run against the previous compiler, all four fail.
+
+**The four are now asked about bytes nobody meant to send.** Everything above
+was found by fuzzing one backend. What fuzzing cannot see is the other three
+answering the same question differently, and that is exactly what the offset
+bug was: C read out of bounds, C++ handed out a span past the buffer, Rust
+panicked, Python clamped in silence. Four answers, one message, and the
+agreement test of section 22 could not see it because it compares backends on
+*well-formed* buffers.
+
+`test_backends_agree_under_random_bytes` asks the other question. Two hundred
+pseudo-random buffers, the same bytes to all four, and every answer compared:
+what the plaintext fields read, whether the tag is reachable, its first byte,
+and what `validate` says. `examples/packet` is the schema, being the one with a
+data-driven length, a sealed region and a member placed after both. The seed is
+fixed, so a disagreement reproduces.
+
+It found one on its second input, and it was the check every other check
+depends on. **C++ and Python did not enforce a struct's minimum size when
+acquiring a view.** C refuses a frame shorter than `SIZE_MIN` and so does Rust;
+the other two took whatever length the caller passed. Section 20.2's whole
+argument is that the acquiring bounds check is what makes every constant-offset
+access below it safe -- so a 55-byte `packet` in C++ was a view whose fixed
+members were not all there, and every accessor read them anyway. Two backends
+had the check from the beginning, two never had it, and nothing compared them
+on a frame short enough to tell.
 
 ### 26.28 Where a generated artifact cannot be purged
 
