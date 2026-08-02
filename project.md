@@ -6203,6 +6203,29 @@ setter bumps the view generation (12.3), and an enum takes its own type in two
 languages and an integer in two. Each is written down where the subset is
 chosen -- the same rule the read subset follows.
 
+**And a check that asks the map rather than another backend.** Three gaps this
+session were a backend emitting *nothing* -- no accessor and no note -- for a
+member the capability map calls writable. Backend-versus-backend can see that
+only if the four disagree, and only after compiling a driver; nothing was
+asking the simpler question, which is whether the map's promise is kept.
+
+`test_the_map_is_writable_where_it_says` reads every schema in the tree, takes
+every own field the map calls `mutate = InPlaceFixed`, and requires each of the
+four backends to emit a way to write it. It is the mirror of 26.31's two
+agreement checks: those ask what each backend *refuses* and fail on a split,
+this asks what the map *promises* and fails on a silence. Run against the
+compiler as it was this morning it names `dnsname:question.qtype`,
+`question.qclass` and `edges:coded_run.trailer` in Rust -- which is the gap the
+write pass took a compile failure to find.
+
+Its exclusions are the interesting half, and each is a member whose write the
+map does not promise or whose setter belongs to another type: an array is
+reached through its pointer, a text number cannot be stored in place at all, a
+marker holds no value, a sealed interior takes the gate, `[secret]` has no
+accessor by design, and a nested struct's field belongs to the nested type --
+*except* when a tag covers it, which is the case below and is held to the
+parent by its own test.
+
 **A covered write was the third, and asking it found more.** 14.2 says writing
 a byte a tag covers leaves the tag stale, and each backend spells the marking
 its own way -- the message in C, C++ and Python, a dirty word in Rust -- so it
@@ -6294,7 +6317,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2262 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2287 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases
