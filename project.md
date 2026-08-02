@@ -5996,19 +5996,17 @@ There is a request and a response through the example's own accessors now.
   length check skips a dotted path, for the nested-struct reason, and an arm
   member has one: three backends drop it before the validate loop, so the check
   belongs at the variant and walks its arms.
-- **Two worked examples have never seen a message.** `rtc` and
-  `telemetry` are generated, fuzzed, `gen-checks`'d and compared under random
+- **One worked example has never seen a message.** `telemetry` is generated, fuzzed, `gen-checks`'d and compared under random
   bytes, and none of that can tell whether the schema describes the protocol
   -- `gen-checks` derives its assertions from the schema, so it confirms
   self-consistency, and agreement across backends confirms they read the same
   schema the same way. Only a real message says the schema is right, and http
-  is the proof that the difference is not theoretical. Each needs a vector
-  with its source cited, which is 26.32's rule and the reason `examples/ble`
-  is still unwritten. `rtc` and `telemetry` are the awkward two: a register
-  map's "message" is a datasheet's power-on state, and `telemetry` is situ's
-  own format, so a vector for it can only be a round trip.
+  is the proof that the difference is not theoretical. It needs a vector with
+  its source cited, which is 26.32's rule and the reason `examples/ble` is
+  still unwritten -- and it is the awkward case, being situ's own format, so
+  a vector for it can only be a round trip.
 
-  Three came off the list, each with the implementation that wrote its bytes
+  Four came off the list, each with the implementation that wrote its bytes
   named beside them. `bmp`: `convert -size 3x2 xc:red -type truecolor
   BMP3:red.bmp`. `arp`: glibc's `struct arphdr`, `ARPHRD_ETHER`,
   `ETHERTYPE_IP` and `ARPOP_REQUEST` from `<net/if_arp.h>`, with the addresses
@@ -6020,7 +6018,25 @@ There is a request and a response through the example's own accessors now.
   `sntp_initialize_request()`, which is where the request's first byte 0x23
   comes from -- three bit-packed fields lwIP writes as one `li_vn_mode` and
   this schema splits into `leap`, `version` and `mode`, so the vector is the
-  only thing that says they were split in the same places.
+  only thing that says they were split in the same places. `rtc`: U-Boot's
+  `bin2bcd` and the register addresses in `drivers/rtc/ds1307.c`.
+
+  `rtc` is the one where the independent source disagreed with the schema, and
+  in two ways. The comment claimed the DS1307's byte order; the part puts the
+  *weekday* at 0x03, so `day` is the chip's `date` at 0x04 and everything after
+  it is one register along. The schema is an encoding rather than a register
+  image, which is a fine thing to be and was not what it said.
+
+  The second is a gap in the language and is written down as one. The DS1307's
+  seconds register spends its top bit on Clock Halt and its hours register two
+  bits on 12/24 and PM, so those hold seven and six bits of packed decimal --
+  and `bcd<digits>` is a nibble a digit (8.1), so a three-bit tens field is not
+  a `bcd2` and is not anything else. A driver masks the bits off, which is the
+  work a description exists to remove. Every RTC in `drivers/rtc/` does this
+  and several put a century bit in the month register too. Whether `bcd` should
+  take a width, or a bit-packed field should be able to declare a decimal
+  encoding, is a question for a decision record rather than something to
+  invent here.
 
   What a per-struct vector cannot state is a claim about a whole file, and for
   `bmp` that is `tests/generated/test_bmp.c`: the pixels start where the two

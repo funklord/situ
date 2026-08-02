@@ -23,8 +23,21 @@ target buffer;
 endian big;
 bit_order msb_first;
 
-// The clock, in the byte order the DS1307 family actually uses: seconds first,
-// each field packed decimal, each one its own byte.
+// The clock: seconds first, each field packed decimal, each one its own byte,
+// which is the DS1307 family's encoding.
+//
+// Its *register file* is not this, and the difference is worth stating rather
+// than leaving for a reader to trip over. The part puts the weekday at 0x03
+// (`RTC_DAY_REG_ADDR` in U-Boot's drivers/rtc/ds1307.c), so `day` here is the
+// chip's `date` at 0x04 and everything after it is one register along. Nothing
+// reads a weekday it can derive, so it is not carried.
+//
+// Two of the part's registers situ cannot describe at all, which is the more
+// interesting half: the seconds register spends its top bit on Clock Halt and
+// the hours register two bits on 12/24 and PM, leaving *seven* and *six* bits
+// of decimal. `bcd<digits>` is a nibble a digit (8.1), so a three-bit tens
+// field is not a `bcd2` and is not anything else either. A driver masks them
+// off; a description is meant to make that unnecessary. See 26.35.
 struct wall_clock {
 	bcd2  seconds  [max = 59];
 	bcd2  minutes  [max = 59];

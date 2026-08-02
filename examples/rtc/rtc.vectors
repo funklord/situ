@@ -1,0 +1,62 @@
+# Golden vectors for the BCD and fixed-point worked example.
+#
+# The clock bytes are encoded by U-Boot's `bin2bcd`, copied verbatim from
+# include/bcd.h -- a description that agrees only with its own compiler has
+# demonstrated nothing:
+#
+#   static inline unsigned int bin2bcd(unsigned int val)
+#   {
+#           return (((val / 10) << 4) | (val % 10));
+#   }
+#
+# and the field order is drivers/rtc/ds1307.c's register addresses:
+#
+#   RTC_SEC_REG_ADDR 0x00   RTC_MIN_REG_ADDR  0x01   RTC_HR_REG_ADDR  0x02
+#   RTC_DAY_REG_ADDR 0x03   RTC_DATE_REG_ADDR 0x04   RTC_MON_REG_ADDR 0x05
+#   RTC_YR_REG_ADDR  0x06
+#
+# **This is not a register image, and the difference is the point.** `0x03` on
+# the part is the *weekday*, which `wall_clock` does not carry, so its `day` is
+# the chip's `date` at 0x04 and everything after it is one register along.
+# What the schema shares with the part is the encoding -- packed decimal,
+# seconds first, one byte a field -- and that is what these bytes check.
+#
+# Two things the part does that situ cannot say (26.35): the seconds register
+# spends its top bit on Clock Halt and the hours register two bits on 12/24
+# and PM, so those registers are a control bit above *seven* bits of decimal.
+# `bcd<digits>` is a nibble a digit, so a three-bit tens field is not a `bcd2`
+# and not anything else either. U-Boot masks them off -- `bcd2bin(sec & 0x7F)`,
+# `bcd2bin(hour & 0x3F)` -- which is what a driver does and what a description
+# is supposed to make unnecessary.
+#
+# The time is 2025-08-02 12:34:56. `rtc_frame` is this project's own
+# composition rather than any part's, so it has no vector: a version byte, a
+# clock, a calibration block and a checksum is a frame nobody transmits.
+
+wall_clock noon 56 34 12 02 08 25
+	seconds = 56
+	minutes = 34
+	hours   = 12
+	day     = 2
+	month   = 8
+	year    = 25
+
+# Midnight, which is where BCD is most likely to be read as hexadecimal: every
+# field is zero but the date, and `0x10` is ten rather than sixteen.
+wall_clock new_year 00 00 00 01 01 10
+	seconds = 0
+	minutes = 0
+	hours   = 0
+	day     = 1
+	month   = 1
+	year    = 10
+
+# The last second of a leap day, and the one case where every digit pair is
+# in the upper half of its range: 0x59 is fifty-nine, not eighty-nine.
+wall_clock leap_second 59 59 23 29 02 24
+	seconds = 59
+	minutes = 59
+	hours   = 23
+	day     = 29
+	month   = 2
+	year    = 24
