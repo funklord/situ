@@ -622,7 +622,11 @@ def test_an_unrecognised_discriminant_is_rejected(tmp_path: Path) -> None:
 	raw    = bytes([0x40, 0x00])
 	held   = module.name.at(module.Message(bytearray(raw)), 0, len(raw))
 
-	with pytest.raises(module.ConstraintError):
+	# `VersionError`, which is what the runtime has called an unknown
+	# discriminant since it was written and what the other three raise. This
+	# expected a constraint failure, which is the opposite remedy: malformed
+	# rather than newer than this code (19.4).
+	with pytest.raises(module.VersionError):
 		held.labels(0).validate()
 
 
@@ -643,7 +647,9 @@ def test_a_declared_length_is_clamped_and_reported(tmp_path: Path) -> None:
 	held = module.s.at(module.Message(raw), 0, len(raw))
 
 	assert len(held.body) == 13		# 16 bytes, 3 before the body
-	with pytest.raises(module.ConstraintError):
+	# `BoundsError`: the message claims bytes that are not there, which is not
+	# a value the schema forbids. The other three report it that way.
+	with pytest.raises(module.BoundsError):
 		held.validate()
 
 
@@ -753,7 +759,9 @@ def test_a_scan_base_past_the_frame_reads_nothing(tmp_path: Path) -> None:
 
 	held = module.s.at(module.Message(raw), 0, 10)
 
-	assert held.b_offset == 65537
+	# The offset stops at the frame rather than running past it: every term of
+	# it is a length the message chose (26.27).
+	assert held.b_offset == 10
 	assert held.b_len == 0
 
 
@@ -765,7 +773,7 @@ def test_an_offset_sum_keeps_a_running_total() -> None:
 	module = emit('struct s { u8 a[] until ";"; u8 b[] until ";"; u8 c[] until ";"; }')
 
 	assert "at = 0" in module
-	assert "at += self.a_span_from(at)" in module
+	assert "at = advance(at, self.a_span_from(at), self._len)" in module
 	assert "return 0 + self.a_span" not in module
 
 
@@ -1461,7 +1469,7 @@ def test_a_member_after_a_run_uses_the_runs_from_helper() -> None:
 	the rescan."""
 	module = emit(KV)
 
-	assert "at += self.entries_span_from(at)" in module
+	assert "at = advance(at, self.entries_span_from(at), self._len)" in module
 	assert "def entries_span_from(self, at: int) -> int:" in module
 
 

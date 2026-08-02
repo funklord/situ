@@ -2841,7 +2841,13 @@ class Emitter:
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
 				return None
-			lines.append(f"\t\tat += {self._unparen(length)};")
+			# Saturating, like the expression form. This one was left plain
+			# when that was fixed, so `examples/message` with a hostile
+			# `rec_count` resolved `trailer` a quarter of a megabyte into a
+			# kilobyte slice and panicked -- found by the differential test,
+			# which is what an incomplete fix looks like from outside.
+			lines.append(f"\t\tat = situ_rt::advance(at,"
+			             f" {self._unparen(length)}, self.bytes.len());")
 		if constant:
 			lines.append(f"\t\tat += {constant};")
 		return [*lines, "\t\tat"]

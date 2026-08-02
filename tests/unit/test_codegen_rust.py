@@ -664,7 +664,9 @@ fn main() {
 	buf[1] = 0xFF;			// n = 65535 in a ten-byte frame
 
 	let held = unit::S::new(&buf).unwrap();
-	assert_eq!(held.b_offset(), 65537);
+	// The offset stops at the frame rather than running past it: every term
+	// of it is a length the message chose (26.27).
+	assert_eq!(held.b_offset(), 10);
 	assert_eq!(held.b_len(), 0);
 }
 """)
@@ -682,7 +684,8 @@ def test_an_offset_sum_keeps_a_running_total() -> None:
 	module = emit('struct s { u8 a[] until ";"; u8 b[] until ";"; u8 c[] until ";"; }')
 
 	assert "let mut at = 0usize;" in module
-	assert "at += self.a_span_from(at);" in module
+	assert "at = situ_rt::advance(at, self.a_span_from(at),"\
+		" self.bytes.len());" in module
 	assert "0 + self.a_span()" not in module
 
 
@@ -1588,7 +1591,8 @@ def test_a_member_after_a_run_uses_the_runs_from_helper() -> None:
 	the rescan."""
 	module = emit(KV)
 
-	assert "at += self.entries_span_from(at);" in module
+	assert "at = situ_rt::advance(at, self.entries_span_from(at),"\
+		" self.bytes.len());" in module
 	assert "pub fn entries_span_from(&self, start: usize) -> usize {" in module
 
 

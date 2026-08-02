@@ -2696,7 +2696,13 @@ class Emitter:
 			f"\t\t# {placement.path}: the length the message declares has to",
 			"\t\t# fit the frame it is in.",
 			f"\t\tif self._len - ({start}) < ({declared}):",
-			f'\t\t\traise ConstraintError("{placement.path}: declared length'
+			# `BoundsError`, which is what the other three report here: a
+			# length that does not fit the frame is the message claiming bytes
+			# that are not there, not a value the schema forbids. This raised
+			# a constraint failure, so a receiver told the same message was
+			# malformed in one language and out of bounds in three -- found by
+			# diffing all four over random buffers.
+			f'\t\t\traise BoundsError("{placement.path}: declared length'
 			' does not fit")',
 		]
 
@@ -2707,6 +2713,15 @@ class Emitter:
 		Section 14.5 says an unrecognised discriminant is rejected on parse,
 		and no backend rejected it. It stayed invisible while a variant had no
 		computable extent, because nothing walked one.
+
+		`VersionError`, not `ConstraintError`: the runtime has named this
+		condition "unknown version or variant discriminant" since it was
+		written, and the other three raise it. This one raised a constraint
+		failure, which tells a receiver the message is malformed where the
+		other three tell it the message is newer than this code -- opposite
+		remedies for the same bytes (19.4). Found by handing random buffers to
+		all four and diffing what they said about `examples/dnsname`, whose
+		label form `2` is the reserved encoding.
 		"""
 		values = matched_values(placement)
 		if not values or placement.discriminant is None:
@@ -2719,7 +2734,7 @@ class Emitter:
 			f"\t\t# {placement.path}: an arm for {named}, and"
 			f" `default: error` for the rest.",
 			f"\t\tif {test}:",
-			f'\t\t\traise ConstraintError("{placement.path}: no arm for'
+			f'\t\t\traise VersionError("{placement.path}: no arm for'
 			f' this {placement.discriminant}")',
 		]
 
@@ -2783,7 +2798,10 @@ class Emitter:
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
 				return None
-			lines.append(f"\t\tat += {length}")
+			# Saturating, like the expression form: the four have to place a
+			# member at the same offset for the same bytes, hostile ones
+			# included.
+			lines.append(f"\t\tat = advance(at, {length}, self._len)")
 		if constant:
 			lines.append(f"\t\tat += {constant}")
 		return [*lines, "\t\treturn at"]

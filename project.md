@@ -3370,7 +3370,7 @@ promise.
 | fuzz | libFuzzer + ASan | `make fuzz` builds every generated harness with `-fsanitize=fuzzer,address` and runs each for `FUZZ_SECONDS`. Not part of `make test`: minutes rather than seconds, and a compiler `test` does not need. The suite still compiles every harness and smoke-runs it on eight inputs from `/dev/urandom`, which catches a harness that stopped running and reaches nothing else -- a length field is a 1-in-2^16 guess |
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
 | backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
-| backend agreement, hostile input | pytest + all four toolchains | the same question about bytes nobody meant to send: two hundred pseudo-random buffers through all four, every answer diffed. The well-formed comparison above cannot see a backend that differs only on a malformed message, which is where all four differed (26.27) |
+| backend agreement, hostile input | pytest + all four toolchains | the same question about bytes nobody meant to send, over every schema: the drivers are generated from the layout (`situc/codegen/differ.py`), so what is asked of one backend is asked of all four, and the answers are diffed. The well-formed comparison above cannot see a backend that differs only on a malformed message, which is where all four differed (26.27) |
 | every example, in every backend | pytest + each toolchain | each worked example generated *and compiled* -- C since phase 4, the other three only recently, which is how three C++ examples and two Rust ones came to be broken with the suite green. Generating is not compiling, and the examples are the schemas anyone reads |
 | compiler mutation | by hand, recorded in 26.13a | deliberate bugs in the generator, judged by what a *user's* suite catches rather than situ's own. Not automated: choosing the mutation is the work, and a mutation nobody thought of is the gap that survives |
 | test mutation | by hand, at the point of writing | a probe that walks generated code is run once against a deliberately wrong expectation, to find out whether it is a test or a compile check. Three of mine were the latter -- `-fsyntax-only`, a `main` nobody executed, an `assert!` in an unrun binary -- and each passed identically before and after the fix it was written for (invariant 35) |
@@ -3484,6 +3484,10 @@ situ/
     lsp.py                    `situc lsp`: diagnostics, hover, symbols, code
                               actions and definitions, over JSON-RPC on stdio
     codegen/
+      differ.py               drivers that print what a schema says about a
+                              buffer, in all four languages, so the answers can
+                              be diffed. Four emitters in one file because what
+                              has to agree is their output
       c/                      emit, checks, vectors, fuzz harnesses, codec
                               tests, derived codec implementations, MMIO
       cpp/                    the second backend: emit, and the naming rule C++
@@ -5025,22 +5029,47 @@ panicked, Python clamped in silence. Four answers, one message, and the
 agreement test of section 22 could not see it because it compares backends on
 *well-formed* buffers.
 
-`test_backends_agree_under_random_bytes` asks the other question. Two hundred
-pseudo-random buffers, the same bytes to all four, and every answer compared:
-what the plaintext fields read, whether the tag is reachable, its first byte,
-and what `validate` says. `examples/packet` is the schema, being the one with a
-data-driven length, a sealed region and a member placed after both. The seed is
-fixed, so a disagreement reproduces.
+`test_backends_agree_under_random_bytes` asks the other question. Pseudo-random
+buffers, the same bytes to all four, every answer compared: what the fields
+read, how long the byte runs are, whether a tag is reachable, how many elements
+a run has, and what `validate` says. The seed is fixed, so a disagreement
+reproduces.
 
-It found one on its second input, and it was the check every other check
-depends on. **C++ and Python did not enforce a struct's minimum size when
-acquiring a view.** C refuses a frame shorter than `SIZE_MIN` and so does Rust;
-the other two took whatever length the caller passed. Section 20.2's whole
-argument is that the acquiring bounds check is what makes every constant-offset
-access below it safe -- so a 55-byte `packet` in C++ was a view whose fixed
-members were not all there, and every accessor read them anyway. Two backends
-had the check from the beginning, two never had it, and nothing compared them
-on a frame short enough to tell.
+It began as one schema with four hand-written drivers and found a disagreement
+on its second input -- the check every other check depends on. **C++ and Python
+did not enforce a struct's minimum size when acquiring a view.** C refuses a
+frame shorter than `SIZE_MIN` and so does Rust; the other two took whatever
+length the caller passed. Section 20.2's whole argument is that the acquiring
+bounds check is what makes every constant-offset access below it safe -- so a
+55-byte `packet` in C++ was a view whose fixed members were not all there, and
+every accessor read them anyway. Two backends had the check from the beginning,
+two never had it, and nothing compared them on a frame short enough to tell.
+
+**Then the drivers were generated** (`situc/codegen/differ.py`), so the question
+is asked of every schema in the repository rather than of the one that broke.
+The four emitters live in one file on purpose: what has to agree is the output
+text, line for line, and putting the four renderers in the four backend
+packages is how the four spellings of a shared question drift apart (26.32).
+Three more disagreements came out in the first run:
+
+- **Rust and Python resolved a dynamic offset without saturating.** The fix
+  above had reached the expression form in both and the *statement* form in
+  neither, so `examples/message` with a hostile `rec_count` put `trailer` a
+  quarter of a megabyte into a kilobyte slice, and Rust panicked. An
+  incomplete fix looks exactly like a complete one from inside the backend
+  that has it.
+- **Python called an unrecognised variant discriminant a constraint failure**
+  where the other three call it a version error. Those are opposite remedies:
+  one says the message is malformed, the other that it is newer than this code
+  (19.4), and `examples/dnsname`'s reserved label form is where a receiver
+  meets it.
+- **Python called a declared length that does not fit a constraint failure**
+  too, where the other three report bounds. The message is claiming bytes that
+  are not there rather than a value the schema forbids.
+
+None of the three is a crash. All three are one message meaning different
+things in different languages, which is the property the backends exist to
+keep and the only one nothing else was checking.
 
 ### 26.28 Where a generated artifact cannot be purged
 
