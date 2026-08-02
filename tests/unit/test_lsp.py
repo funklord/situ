@@ -5,12 +5,23 @@ a half-written schema still produces something useful -- an editor asks about a
 document in whatever state the user left it, and half-written is the normal
 state -- and that the answers are the ones `situc explain` and the blame chains
 already give, rather than a second, weaker computation of the same thing.
+
+The plumbing gets one test anyway, at the end, and it is the one an editor
+performs: launch `situc lsp` as a process, talk to it over its own stdin and
+stdout, and read the replies back. Everything else here drives `Server` in
+process over `BytesIO`, which exercises the framing and none of what a
+subprocess adds -- the CLI wiring, binary-mode streams, and whether anything is
+flushed before the server waits for the next request. An editor that gets no
+diagnostics because they are sitting in a buffer sees a server that does not
+work.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -367,3 +378,58 @@ def test_hover_without_a_weakening_has_no_why_section() -> None:
 
 	assert text is not None
 	assert "**Why:**" not in text
+
+
+# -- the process an editor launches -----------------------------------------
+
+
+def test_the_server_answers_over_its_own_stdio() -> None:
+	"""`situc lsp`, as a subprocess, over real pipes.
+
+	The session is the smallest real one: initialize, open a document, take the
+	diagnostics, shut down. What this covers that the in-process tests cannot
+	is everything between `main` and `Server` -- the subcommand, the streams it
+	is handed, and whether a reply reaches the client before the server blocks
+	on the next request.
+	"""
+	messages: list[dict[str, Any]] = [
+		{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		 "params": {"capabilities": {}}},
+		{"jsonrpc": "2.0", "method": "textDocument/didOpen",
+		 "params": {"textDocument": {
+			 "uri": URI, "languageId": "situ", "version": 1,
+			 "text": "target buffer;\nendian big;\n"
+			         "struct s { u8 a; u8 b[missing]; }\n"}}},
+		{"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
+		{"jsonrpc": "2.0", "method": "exit"},
+	]
+
+	result = subprocess.run(
+		[sys.executable, "-m", "situc", "lsp"],
+		input=b"".join(frame(one) for one in messages),
+		capture_output=True, timeout=60)
+
+	assert result.returncode == 0, result.stderr.decode()
+
+	replies, raw = [], result.stdout
+	while raw:
+		header, _, rest = raw.partition(b"\r\n\r\n")
+		if not _:
+			break
+		length = int(header.split(b":")[1])
+		replies.append(json.loads(rest[:length]))
+		raw = rest[length:]
+
+	assert [reply.get("id") for reply in replies if "id" in reply] == [1, 2]
+
+	first = replies[0]["result"]["capabilities"]
+	assert first["hoverProvider"] is True
+
+	published = [reply for reply in replies
+	             if reply.get("method") == "textDocument/publishDiagnostics"]
+	assert published, "an opened document produced no diagnostics at all"
+	assert published[0]["params"]["uri"] == URI
+	# The document names a length field that is not there, so there is
+	# something to say about it -- a server that publishes an empty list for a
+	# broken document is the failure this notices.
+	assert published[0]["params"]["diagnostics"]

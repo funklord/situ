@@ -28,9 +28,9 @@ What is probed is a subset, and the subset is the thing to grow. Now: scalars,
 byte arrays, delimited members and delimited text numbers, tags, endian
 markers, varints, the counts of runs and of `tlv` and `indexed` regions, a
 variant's arms, members present only from a given version, the framing of a
-coded region, and a sealed region's stage gate -- plus `validate`. Not yet: a
-nested struct's sub-view, and the *contents* of a sealed interior or a coded
-region.
+coded region, and a sealed region's stage gate *and* the scalars behind it --
+plus `validate`. Not yet: a nested struct's sub-view, a byte run inside a gate,
+and the decoded contents of a coded region.
 
 A versioned member needed no new probe shape at all: "is this member in *this*
 message?" is the question a variant's arm answers, asked of the version field
@@ -46,7 +46,13 @@ sealed interior cannot be reached before its tag verifies, and the four say
 that in four shapes: an out-parameter and an error in C, a callback in C++ --
 so that no expression names a gate outside the verified branch -- a `Result` in
 Rust, a raise in Python. What they can all answer is whether a failed check is
-refused and a passed one admitted, which is the claim itself.
+refused and a passed one admitted, which is the claim itself, and then what the
+interior *says* once it is open, which is the half a tag exists to protect.
+
+C++ made that second half awkward in a way worth keeping: its interior is read
+during the open, inside the callback, so printing there put the interior ahead
+of the summary line the other three print first. Same numbers, different order,
+and a diff sees an order. The values are captured and printed after.
 
 A variant's arms are asked the reachability question rather than the value
 one: which arm the discriminant selects, and how long it is or what it holds.
@@ -106,6 +112,8 @@ class Probe(Enum):
 	#: `name refused=<0|1> opened=<0|1>` -- a sealed region's stage gate,
 	#: asked to open on a failed check and then on a passed one.
 	SEALED    = "sealed"
+	#: `name <integer>` -- a scalar *inside* a gate, read through it.
+	GATED     = "gated"
 
 
 @dataclass(frozen=True)
@@ -119,6 +127,10 @@ class Ask:
 	#: type rather than a wide one: C types the parameter exactly.
 	bits: int = 0
 	signed: bool = False
+	#: For `SEALED`: the plain scalars inside the region, read through the gate
+	#: once it opens. The interior is the half a tag exists to protect, so
+	#: reading it is the half worth comparing.
+	inside: tuple[str, ...] = ()
 
 
 def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
@@ -143,10 +155,12 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 		# itself there -- the region is `sealed_by` the region -- so asking
 		# that question first skipped the one member this probe exists for.
 		if placement.kind == "sealed":
-			found.append(Ask(Probe.SEALED, local))
+			found.append(Ask(Probe.SEALED, local, None, 0, False,
+			                 _gated(struct, placement)))
 			continue
 
-		# A member *inside* a sealed region is reached through the gate.
+		# A member *inside* a sealed region is reached through the gate, which
+		# the probe above opens; the interior is asked about there.
 		if placement.sealed_by:
 			continue
 
@@ -260,6 +274,39 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 			                 max(8, scalar.bits), scalar.signed))
 
 	return found
+
+
+def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
+	"""Plain scalars inside a sealed region, in declaration order.
+
+	Only the scalars: a `[secret]` member has no debug accessor at all by
+	design (14.6), and a byte run inside a gate is spelled four ways that have
+	not been checked against each other yet.
+	"""
+	found: list[str] = []
+
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.sealed_by != region.name or placement.kind != "field":
+			continue
+		if placement.scalar is None or placement.array_count is not None \
+				or placement.sized_by is not None:
+			continue
+		if placement.scalar.is_bit_packed or placement.scalar.is_bcd:
+			continue
+		if placement.type_name not in _SCALAR_TYPES:
+			continue
+		if any(attr.name == "secret" for attr in placement.attrs):
+			continue
+
+		# The name *inside* the gate, which is the member's local name with
+		# the region's stripped: `packet.sealed.inner_kind` is `inner_kind` on
+		# the gate in three backends, and `sealed_inner_kind` only in C, where
+		# there are no scopes to put it in. The caller spells that difference.
+		found.append(c_name(local_name(struct, placement))
+		             [len(c_name(region.name)) + 1:])
+
+	return tuple(found)
 
 
 #: Scalar type names that are one integer in every backend. An enum is not, and
@@ -386,6 +433,11 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        f'\t\t\t\tprintf("{ask.local} refused=%d opened=%d\\n",',
 		        "\t\t\t\t\trefused == SITU_OK ? 0 : 1,",
 		        "\t\t\t\t\topened == SITU_OK ? 1 : 0);",
+		        "\t\t\t\tif (opened == SITU_OK) {",
+		        *[f'\t\t\t\t\tprintf("{one} %lld\\n", (long long)'
+		          f"{ident(prefix, struct, ask.local, one, 'get')}(held));"
+		          for one in ask.inside],
+		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
 		return [f'\t\t\tprintf("{ask.local} len=%u value=%llu\\n",'
@@ -496,15 +548,29 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		# A callback rather than a returned gate, which is the whole of what
 		# C++ adds here: there is no expression that names one outside the
 		# verified branch. The answer is the same either way.
+		# The interior is captured rather than printed inside the callback:
+		# C++ reads it *during* the open, so printing there put the interior
+		# ahead of the summary line the other three print first. Same answers,
+		# different order, and the diff sees an order.
 		return ["\t\t\t{",
+		        *[f"\t\t\t\tlong long {one} = 0;" for one in ask.inside],
 		        f"\t\t\t\tconst auto refused = view.with_{ask.local}("
 		        "false, [](auto) {});",
 		        f"\t\t\t\tconst auto opened = view.with_{ask.local}("
-		        "true, [](auto) {});",
+		        "true, [&](auto gate) {",
+		        *[f"\t\t\t\t\t{one} ="
+		          f" static_cast<long long>(gate.{one}());"
+		          for one in ask.inside],
+		        "\t\t\t\t\t(void)gate;",
+		        "\t\t\t\t});",
 		        "",
 		        f'\t\t\t\tstd::printf("{ask.local} refused=%d opened=%d\\n",',
 		        "\t\t\t\t\trefused == ::situ::rt::err::ok ? 0 : 1,",
 		        "\t\t\t\t\topened == ::situ::rt::err::ok ? 1 : 0);",
+		        "\t\t\t\tif (opened == ::situ::rt::err::ok) {",
+		        *[f'\t\t\t\t\tstd::printf("{one} %lld\\n", {one});'
+		          for one in ask.inside],
+		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
 		return [f'\t\t\tstd::printf("{ask.local} len=%u value=%llu\\n",'
@@ -612,7 +678,14 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        f"\t\t\t\t\tif view.{opener}(false).is_err()"
 		        " { 1 } else { 0 },",
 		        f"\t\t\t\t\tif view.{opener}(true).is_ok()"
-		        " { 1 } else { 0 });"]
+		        " { 1 } else { 0 });",
+		        *([] if not ask.inside else [
+			        f"\t\t\t\tif let Ok(gate) = view.{opener}(true) {{",
+			        *[f'\t\t\t\t\tprintln!("{one} {{}}",'
+			          f" gate.{rust_ident(one)}() as i64);"
+			          for one in ask.inside],
+			        "\t\t\t\t}",
+		        ])]
 	if ask.probe is Probe.VARINT:
 		return [f'\t\t\t\tprintln!("{ask.local} len={{}} value={{}}",'
 		        f" view.{rust_ident(ask.local + '_len')}(),"
@@ -708,12 +781,16 @@ def _python_ask(ask: Ask) -> list[str]:
 		        "except situ_runtime.SituError:",
 		        "\trefused = 1",
 		        "opened = 0",
+		        "gate = None",
 		        "try:",
-		        f"\tview.open_{ask.local}(True)",
+		        f"\tgate = view.open_{ask.local}(True)",
 		        "\topened = 1",
 		        "except situ_runtime.SituError:",
 		        "\tpass",
-		        f'print("{ask.local} refused=%d opened=%d" % (refused, opened))']
+		        f'print("{ask.local} refused=%d opened=%d" % (refused, opened))',
+		        "if gate is not None:",
+		        *[f'\tprint("{one} %d" % gate.{one})' for one in ask.inside],
+		        "\tpass"]
 	if ask.probe is Probe.VARINT:
 		return [f'print("{ask.local} len=%d value=%d"'
 		        f" % (view.{ask.local}_len, view.{ask.local}_value))"]

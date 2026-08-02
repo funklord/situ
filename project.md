@@ -3420,6 +3420,15 @@ promise.
 | the emitted Lua | lua5.4 | parsed for every schema, and four dissected: a UDP header, an IPv4 header with its bit-packed first row, a DNS name walked label by label, and an HTTP request line found by scanning. Offsets and values are compared against the layout the accessors come from |
 | the emitted C and C++ comments | doxygen | run over every schema's headers in both languages, and its XML read back: the capability vector must arrive against the accessor it describes, and a reason for an accessor that does *not* exist must not be attached to whatever declaration follows it |
 
+**Every artifact is now run the way its consumer runs it.** The language server
+was the last one that was not: its tests drove `Server` in process over
+`BytesIO`, which exercises the framing and none of what a subprocess adds --
+the subcommand, binary-mode streams, and whether a reply is flushed before the
+server blocks on the next request. An editor that gets no diagnostics because
+they are sitting in a buffer sees a server that does not work. `situc lsp` is
+launched as a process now, talked to over real pipes, and its diagnostics read
+back.
+
 **What the suite does not do**, stated because a reader would otherwise assume
 it: no Wireshark runs here, so nothing proves Wireshark *accepts* a generated
 plugin. Everything short of that now happens -- `luac -p` parses every
@@ -5120,13 +5129,17 @@ finding what each backend calls them, and two answers were wrong before a
 single byte was compared: Python spelled a `tlv` count as a method where every
 other count in that same backend is a property, and kept a varint's
 total-value accessor private -- `_x_value` -- where the other three publish it.
-A sealed region's stage gate went in too, and it is the probe worth having for
-its own sake rather than for what it might catch. Section 14.3 claims the
+A sealed region's stage gate went in too, with the scalars behind it, and it is
+the probe worth having for its own sake rather than for what it might catch. Section 14.3 claims the
 interior cannot be reached before the tag verifies; the four say so in four
 shapes -- an out-parameter and an error in C, a callback in C++ so that no
 expression names a gate outside the verified branch, a `Result` in Rust, a
 raise in Python -- and all four refuse a failed check and admit a passed one,
-over every buffer in the corpus. A coded region is asked where it ends rather
+over every buffer in the corpus, and agree about what the interior says once it
+is open. C++ needed one accommodation that is worth keeping: it reads the
+interior *during* the open, inside the callback, so printing there put those
+lines ahead of the summary the other three print first. Same numbers, different
+order, and a diff sees an order. A coded region is asked where it ends rather
 than what it holds, the decode being C's to run and absent from Python by
 decision (0017).
 
