@@ -43,7 +43,8 @@ from situc.traverse import (
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	has_computable_extent, index_entry_bytes, is_run, local_name,
+	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
+	local_name,
 	matched_values, obligation,
 	obligations, own_entries, own_members,
 )
@@ -1180,7 +1181,18 @@ class Emitter:
 		transforming.
 		"""
 		codec = self.codecs.get(placement.codec or "")
-		if codec is None or not decodes_here(codec):
+		if codec is None:
+			return []
+
+		# A tier-1 codec is bound to an implementation and to the ABI of
+		# 13.2a, which is settled whatever the algorithm -- so a region with
+		# an `extern` impl decodes here too (26.35).
+		symbol = extern_symbol(self.schema, placement.codec or "")
+		if symbol is not None:
+			return self._extern_decode(struct, placement, codec, symbol,
+			                           encoded)
+
+		if not decodes_here(codec):
 			return []
 
 		ratio = codec.ratio
@@ -1223,13 +1235,58 @@ class Emitter:
 			"\t}",
 		]
 
+	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
+			codec: object, symbol: str, encoded: str) -> list[str]:
+		"""The decode of a tier-1 region, through the ABI its `impl` binds."""
+		name  = _ident(c_name(local_name(struct, placement)))
+		bound = decode_bound(codec, placement)
+
+		return [
+			"",
+			f"\t/// The decoded bytes of `{placement.path}`, into a buffer the",
+			"\t/// caller owns. Nothing here allocates, so the capacity is a",
+			"\t/// parameter.",
+			"\t///",
+			f"\t/// `{placement.codec}` is a tier-1 codec: `{symbol}_decode`"
+			" is the",
+			"\t/// implementation this schema binds, and its error is its own",
+			"\t/// to report (13.1, 13.2a).",
+			*([f"\tpub const {name.upper()}_DECODED_MAX: usize = {bound};", ""]
+			  if bound is not None else []),
+			f"\tpub fn {name}_decode(&self, out: &mut [u8]) -> Result<usize> {{",
+			"\t\tlet mut written: u32 = 0;",
+			"\t\t// SAFETY: the implementation is the one this schema binds",
+			"\t\t// and this is the one call that crosses to it. The input is",
+			"\t\t// this region's own bytes and the output is the caller's,",
+			"\t\t// both passed with the lengths they actually have.",
+			"\t\tlet code = unsafe {",
+			f"\t\t\t{symbol}_decode(self.{name}().as_ptr(),"
+			f" ({encoded}) as u32,",
+			"\t\t\t\tout.as_mut_ptr(), out.len() as u32, &mut written)",
+			"\t\t};",
+			"",
+			"\t\tif code != 0 {",
+			"\t\t\treturn Err(situ_rt::Error::from_code(code));",
+			"\t\t}",
+			"\t\tOk(written as usize)",
+			"\t}",
+		]
+
 	def _codec_externs(self) -> list[str]:
 		"""Decoders this module calls, declared once at module scope."""
 		wanted = sorted({
 			held.codec for struct in self.resolved.structs.values()
 			for held in own_members(struct)
 			if held.codec and self._decodes(held)})
-		if not wanted:
+
+		# And the tier-1 ones, under the symbol their `impl` binds (13.2a).
+		tier_one = sorted({
+			symbol for struct in self.resolved.structs.values()
+			for held in own_members(struct)
+			if held.codec and held.kind == "coded"
+			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
+
+		if not wanted and not tier_one:
 			return []
 
 		return [
@@ -1241,6 +1298,9 @@ class Emitter:
 			*[f"\tfn situ_{c_name(name)}_decode(input: *const u8,"
 			  f" {'bits' if decode_counts_bits(self.codecs[name]) else 'len'}:"
 			  " u32, out: *mut u8) -> u32;" for name in wanted],
+			*[f"\tfn {symbol}_decode(input: *const u8, in_len: u32,"
+			  " out: *mut u8, out_cap: u32, out_len: *mut u32) -> u32;"
+			  for symbol in tier_one],
 			"}",
 		]
 

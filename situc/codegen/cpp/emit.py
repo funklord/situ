@@ -47,7 +47,8 @@ from situc.traverse import (
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	has_computable_extent, index_entry_bytes, is_run, local_name,
+	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
+	local_name,
 	matched_values, obligation,
 	obligations, own_entries, own_members,
 )
@@ -2035,7 +2036,18 @@ class Emitter:
 			held.codec for struct in self.resolved.structs.values()
 			for held in own_members(struct)
 			if held.codec and self._decodes(held)})
-		if not wanted:
+
+		# The tier-1 ones too, under the symbol their `impl` binds and with
+		# the ABI of 13.2a. Same reason as the derived: a linkage
+		# specification is not allowed in a block, so it cannot go inside the
+		# class that calls it.
+		tier_one = sorted({
+			symbol for struct in self.resolved.structs.values()
+			for held in own_members(struct)
+			if held.codec and held.kind == "coded"
+			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
+
+		if not wanted and not tier_one:
 			return []
 
 		# `bits` or `len` after the kernel's own unit: a `table` decoder counts
@@ -2049,7 +2061,12 @@ class Emitter:
 		return ['extern "C" {', *[
 			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
 			f" std::uint32_t {counted(name)}, std::uint8_t *out);"
-			for name in wanted], "}", ""]
+			for name in wanted], *[
+			f"situ_err_t {symbol}_decode(const std::uint8_t *in,"
+			" std::uint32_t in_len,"
+			f" std::uint8_t *out, std::uint32_t out_cap,"
+			" std::uint32_t *out_len);"
+			for symbol in tier_one], "}", ""]
 
 	def _decodes(self, placement: Placement) -> bool:
 		"""Whether a decode accessor is emitted for this region."""
@@ -2640,7 +2657,19 @@ class Emitter:
 		to transform.
 		"""
 		codec = self.codecs.get(placement.codec or "")
-		if codec is None or not decodes_here(codec):
+		if codec is None:
+			return []
+
+		# A tier-1 codec is bound to an implementation and to the ABI of
+		# 13.2a, which is a settled shape whatever the algorithm -- so a
+		# region with an `extern` impl decodes here too, where before it
+		# handed back its bytes and nothing else (26.35).
+		symbol = extern_symbol(self.schema, placement.codec or "")
+		if symbol is not None:
+			return self._extern_decode(struct, placement, codec, symbol,
+			                           encoded)
+
+		if not decodes_here(codec):
 			return []
 
 		ratio = codec.ratio
@@ -2678,6 +2707,39 @@ class Emitter:
 			f"{name}().data(),",
 			f"\t\t\tencoded{scale}, out){unscale};",
 			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+		]
+
+	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
+			codec: ast.CodecDecl, symbol: str, encoded: str) -> list[str]:
+		"""The decode of a tier-1 region, through the ABI its `impl` binds.
+
+		Declared at file scope with C linkage by `_extern_declarations`: a
+		linkage specification is not allowed in a block, so it cannot go
+		inside the class that calls it -- the same reason the derived decoder
+		is declared there.
+		"""
+		name  = c_name(local_name(struct, placement))
+		bound = decode_bound(codec, placement)
+
+		return [
+			"",
+			f"\t/* The decoded bytes of {placement.path}, into a buffer the",
+			"\t * caller owns. Nothing here allocates, so the capacity is a",
+			"\t * parameter.",
+			"\t *",
+			f"\t * `{placement.codec}` is a tier-1 codec: `{symbol}_decode` is"
+			" the",
+			"\t * implementation this schema binds, and its error is its own"
+			" to",
+			"\t * report (13.1, 13.2a). */",
+			*([f"\tstatic constexpr std::uint32_t {name}_decoded_max ="
+			   f" {bound}u;"] if bound is not None else []),
+			f"\t[[nodiscard]] ::situ::rt::err {name}_decode(std::uint8_t *out,",
+			"\t\t\tstd::uint32_t cap, std::uint32_t &len) const noexcept",
+			"\t{",
+			f"\t\treturn static_cast<::situ::rt::err>({symbol}_decode(",
+			f"\t\t\t{name}().data(), {encoded}, out, cap, &len));",
 			"\t}",
 		]
 

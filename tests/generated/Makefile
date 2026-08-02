@@ -95,11 +95,21 @@ FUZZ_BINS	:= $(FUZZ_SCHEMAS:%=$(BUILD_DIR)/%_fuzz)
 # alone. These are what hold the emitted accessors to what the map claims.
 CHECK_BINS	:= $(GEN_NAMES:%=$(BUILD_DIR)/%_checks)
 
-# The conformance harness generated from the standard signature library. It is
-# compiled but not run: it needs implementations, and shipping those is the
-# user's job. Compiling it is what proves the generator emits valid C for every
-# signature in the library, which is where a codegen bug would otherwise hide.
+# The conformance harness, generated and *run*. It calls the ABI of section
+# 13.2a under the symbol a codec's `impl` binds, so `tests/schemas/edges.situ`
+# -- which binds `doubling` to `my_doubling` -- gets a suite that links against
+# `codec_impl.c` beside this file and executes.
+#
+# It had never run. The harness named `situ_codec_<codec>_encode`, which is not
+# what the accessors call and not what any `impl` binds, so it could not be
+# linked with an implementation this repository produces; compiling it was the
+# most that could be said (26.35).
+#
+# `std/codecs.situ` still only compiles, and now emits a stated refusal per
+# signature rather than a suite: it is a library of contracts with no `impl` at
+# all, which is what it is for.
 CODEC_SUITE	:= $(GEN_DIR)/codecs_codec_tests.o
+CODEC_BINS	:= $(BUILD_DIR)/edges_codec_tests
 
 # Which generated objects each test needs. Linking all of them into every
 # binary would collide: two schemas may both declare a `Header`, and each
@@ -122,7 +132,8 @@ OBJS_test_bmp		:= $(GEN_DIR)/bmp.o
 
 .PHONY: all test clean generate fuzz
 
-all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE)
+all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
+	$(CODEC_BINS)
 
 generate: $(GEN_HEADERS)
 
@@ -193,6 +204,20 @@ $(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ $(SITUC_SOURCES)
 $(GEN_DIR)/codecs_codec_tests.o: $(GEN_DIR)/codecs_codec_tests.c
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
+# The runnable one: `edges.situ` binds `doubling` to `my_doubling`, which
+# `codec_impl.c` implements against 13.2a's ABI.
+$(GEN_DIR)/edges_codec_tests.c: $(REPO_ROOT)/tests/schemas/edges.situ \
+		$(SITUC_SOURCES)
+	@mkdir -p '$(GEN_DIR)'
+	cd '$(REPO_ROOT)' && $(SITUC) gen-codec-tests tests/schemas/edges.situ \
+		--out '$(abspath $(GEN_DIR))'
+
+$(BUILD_DIR)/edges_codec_tests: $(GEN_DIR)/edges_codec_tests.c codec_impl.c \
+		$(RUNTIME_LIB)
+	@mkdir -p '$(@D)'
+	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< codec_impl.c $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+
 $(GEN_DIR)/%_fuzz.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' \
 		--out '$(abspath $(GEN_DIR))'
@@ -227,7 +252,7 @@ $(BUILD_DIR)/%_fuzz: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) -o $@
 
 test: all
-	@for t in $(BINS) $(VECTOR_BINS) $(CHECK_BINS); do \
+	@for t in $(BINS) $(VECTOR_BINS) $(CHECK_BINS) $(CODEC_BINS); do \
 		echo "--- $$t"; \
 		case "$$t" in /*) "$$t";; *) "./$$t";; esac || exit 1; \
 	done

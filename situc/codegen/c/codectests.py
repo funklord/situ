@@ -9,13 +9,25 @@ Each declared property gets the cheap falsifying test from the section 13.1
 table. The properties cannot be proven; they can be attacked, and an
 implementation that survives the attack is one a reviewer can reason about.
 
-The generated suite calls two functions the user supplies:
+The generated suite calls the two functions the codec's `impl` binds:
 
-    situ_codec_<name>_encode(in, in_len, out, out_cap, &out_len)
-    situ_codec_<name>_decode(in, in_len, out, out_cap, &out_len)
+    <symbol>_encode(in, in_len, out, out_cap, &out_len)
+    <symbol>_decode(in, in_len, out, out_cap, &out_len)
 
-which is the same shape whatever the algorithm, because the harness knows only
-the signature.
+which is the tier-1 ABI of section 13.2a -- the same shape whatever the
+algorithm, because the harness knows only the signature.
+
+It was `situ_codec_<codec>_encode`, which is a name nothing else in this
+project used: not the accessors, not the spec, and not the `impl x extern
+"my_x"` that names the implementation. So a user who wrote a codec to satisfy
+these tests had written a function nothing called, and the harness could not be
+linked against any implementation this repository produces. It had never been
+run (26.35).
+
+A codec with no `impl`, or with a derived one, gets no suite here and the file
+says which and why. A signature may exist with no implementation at all (13.1),
+and a derived implementation cannot lie about properties derived from its own
+kernel -- what it can get wrong is the transform, which is a different harness.
 """
 
 from __future__ import annotations
@@ -23,7 +35,7 @@ from __future__ import annotations
 from math import lcm
 
 from situc import ast
-from situc.codegen.c.names import ident
+from situc.traverse import extern_symbol
 
 # Input sizes the length tests sweep. Chosen to straddle block boundaries and
 # to include the degenerate cases, which is where a length claim usually breaks.
@@ -59,14 +71,26 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"",
 		'#include "situ.h"',
 		"",
-		*_shared(),
 	]
 
 	cases: list[str] = []
+	suites: list[str] = []
 	for codec in codecs:
-		body, names = _codec_suite(codec, prefix)
-		lines.extend(body)
+		symbol = extern_symbol(schema, codec.name)
+		if symbol is None:
+			suites.extend(_declined(schema, codec))
+			continue
+		body, names = _codec_suite(codec, symbol)
+		suites.extend(body)
 		cases.extend(names)
+
+	# The shared generator only where something calls it. A file of refusals
+	# is a legitimate output -- `std/codecs.situ` is contracts and no `impl`
+	# -- and an unused static function in it is an error under this project's
+	# own flags.
+	if cases:
+		lines.extend(_shared())
+	lines.extend(suites)
 
 	lines.extend(_main(cases))
 	return "\n".join(lines) + "\n"
@@ -93,9 +117,27 @@ def _shared() -> list[str]:
 	]
 
 
-def _codec_suite(codec: ast.CodecDecl, prefix: str) -> tuple[list[str], list[str]]:
-	encode = ident(prefix, "codec", codec.name, "encode")
-	decode = ident(prefix, "codec", codec.name, "decode")
+def _declined(schema: ast.Schema, codec: ast.CodecDecl) -> list[str]:
+	"""Why a codec has no suite, where it would have had one.
+
+	A refusal that names itself, like every other artifact here: a file that
+	quietly omits a codec is indistinguishable from one that never had it.
+	"""
+	bound = next((decl for decl in schema.impls()
+	              if decl.codec == codec.name), None)
+	why = ("no `impl` binds an implementation, and a signature may exist with"
+	       " none (13.1)" if bound is None else
+	       "its implementation is derived, so its properties follow from its"
+	       " own kernel and cannot lie (13.1)")
+
+	return [f"/* ---- {codec.name}: no suite ---- */",
+	        f"/* {why}. */", ""]
+
+
+def _codec_suite(codec: ast.CodecDecl,
+		symbol: str) -> tuple[list[str], list[str]]:
+	encode = f"{symbol}_encode"
+	decode = f"{symbol}_decode"
 
 	lines = [
 		f"/* ---- {codec.name} ---- */",

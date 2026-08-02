@@ -44,6 +44,27 @@ pub enum Error {
 	Truncated,
 }
 
+impl Error {
+	/// The C runtime's code as an `Error`. One place, because a tier-1
+	/// codec's ABI reports failure the way every other C boundary here does
+	/// -- an `situ_err_t` -- and a caller crossing it needs the same names
+	/// the rest of this module uses (13.2a).
+	///
+	/// Anything unrecognised is `Constraint`: an implementation reporting a
+	/// code this build does not name has still refused the input, and the
+	/// one thing that must not happen is reading its output anyway.
+	pub fn from_code(code: u32) -> Error {
+		match code {
+			1 => Error::Bounds,
+			3 => Error::Version,
+			4 => Error::Tag,
+			5 => Error::Stage,
+			7 => Error::Truncated,
+			_ => Error::Constraint,
+		}
+	}
+}
+
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// The answer to "is a whole message here yet, and if not how many bytes?"

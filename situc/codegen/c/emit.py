@@ -45,7 +45,7 @@ from situc.traverse import (
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
-	extent_parts, frameable,
+	extent_parts, extern_symbol, frameable,
 	has_computable_extent, index_entry_bytes, is_run, matched_values,
 	obligation, obligations,
 	own_members,
@@ -3311,7 +3311,20 @@ class Emitter:
 		decode an eighth of the region.
 		"""
 		codec = self.codecs.get(placement.codec or "")
-		if codec is None or codec.kernel is None:
+		if codec is None:
+			return []
+
+		# A tier-1 codec: the user supplies the implementation, and the
+		# tier-1 ABI (13.2a) is what it is bound to. That shape is settled by
+		# the contract rather than by a kernel, so the accessor can call it --
+		# which it could not while the only settled shape was a derived
+		# kernel's, so an `extern` codec's region handed back its bytes and
+		# nothing else (26.35).
+		symbol = extern_symbol(self.schema, placement.codec or "")
+		if symbol is not None:
+			return self._extern_decode(struct, placement, codec, symbol)
+
+		if codec.kernel is None:
 			return []
 		if not decodes_here(codec):
 			return []		# the decoder's shape is the kernel's, and
@@ -3380,6 +3393,55 @@ class Emitter:
 			f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
 			f"\t\tencoded{scale}, out){unscale};",
 			"\treturn SITU_OK;",
+			"}",
+		])
+		return out
+
+	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
+			codec: ast.CodecDecl, symbol: str) -> list[str]:
+		"""The decode of a tier-1 region, through the ABI its `impl` binds.
+
+		Same bargain as the derived one: the plaintext is not in the message,
+		nothing allocates, so the buffer and its capacity are the caller's and
+		a macro says how large it has to be. What differs is only who wrote
+		the function -- and that its error is its own to report, because a
+		tier-1 codec may fail where a table lookup cannot.
+		"""
+		local = c_name(self._local(struct, placement))
+		# `_len`, which clamps: the region's extent is its interior's, and the
+		# interior is sized by fields the message chose. Handing the codec a
+		# length past the frame is the one thing this accessor must not do.
+		span    = f"{ident(self.prefix, struct.name, local, 'len')}(view)"
+		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
+		bound   = decode_bound(codec, placement)
+
+		out = [
+			"",
+			f"/* The decoded bytes of `{placement.name}`, into a buffer the"
+			" caller owns.",
+			" *",
+			f" * `{placement.codec}` is a tier-1 codec: `{symbol}_decode` is"
+			" the",
+			" * implementation this schema binds, and situ never learns what"
+			" it does",
+			" * (13.1). The ABI is 13.2a's, which is the one shape a caller"
+			" and a",
+			" * generated accessor can both assume. */",
+		]
+		if bound is not None:
+			out.append(f"#define {decoded} {bound}u")
+		out.extend([
+			f"extern situ_err_t {symbol}_decode(const uint8_t *in,"
+			" uint32_t in_len,",
+			"		uint8_t *out, uint32_t out_cap, uint32_t *out_len);",
+			"",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'decode')}"
+			"(situ_view_t view, uint8_t *out, uint32_t cap, uint32_t *len)",
+			"{",
+			f"	return {symbol}_decode("
+			f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
+			f"		{span}, out, cap, len);",
 			"}",
 		])
 		return out

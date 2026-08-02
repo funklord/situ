@@ -994,6 +994,32 @@ def arm_of(struct: ResolvedStruct,
 DERIVED_STUFFING = ("cobs", "hdlc", "smtp_dot")
 
 
+def extern_symbol(schema: Schema, codec: str) -> str | None:
+	"""The symbol a tier-1 codec's implementation is bound to (13.1, 13.2a).
+
+	`impl x extern "my_x"` binds one, and the two functions situ calls are
+	`my_x_encode` and `my_x_decode` -- the tier-1 ABI, which is the one shape
+	a harness and an accessor can both assume because the compiler never
+	learns what the algorithm does.
+
+	`None` for a codec bound to a derived implementation, or to none at all: a
+	signature may exist with no implementation (13.1), and asking for a symbol
+	that was never named is how a header comes to declare a function nobody
+	agreed to write.
+
+	It was nobody's, and that is why `gen-codec-tests` invented
+	`situ_codec_<codec>_encode` while the accessors called something else and
+	`impl x extern "my_x"` named a symbol appearing nowhere at all (26.35).
+	"""
+	for decl in schema.impls():
+		if decl.codec != codec:
+			continue
+		if getattr(decl.kind, "value", None) != "extern":
+			return None
+		return decl.symbol
+	return None
+
+
 def decodes_here(codec: object) -> bool:
 	"""Whether a decode accessor has a settled shape to call.
 

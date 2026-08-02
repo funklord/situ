@@ -2185,6 +2185,46 @@ and a write only needs to recompute parity for the containing block. A
 non-systematic code (convolutional with Viterbi, turbo, most LDPC constructions)
 destroys interior addressing completely.
 
+### 13.2a The tier-1 ABI
+
+A tier-1 codec's implementation is the user's, and `impl x extern "my_x"`
+names it. These are the two functions situ calls, and the two
+`gen-codec-tests` attacks:
+
+```c
+situ_err_t my_x_encode(const uint8_t *in, uint32_t in_len,
+                       uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+situ_err_t my_x_decode(const uint8_t *in, uint32_t in_len,
+                       uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+```
+
+One shape whatever the algorithm, because that is the whole of what the
+compiler knows: the signature says what the transform *does to extents and
+positions*, and the ABI is how it is reached. A capacity rather than an
+allocation, for invariant 4's reason; `*out_len` written only on success; a
+short buffer refused rather than half-filled, because half a decode is not a
+shorter message.
+
+`situ_err_t` and not a byte count, because a tier-1 codec can fail where a
+table lookup cannot -- a truncated ciphertext, an odd number of nibbles, a tag
+that does not verify. `SITU_ERR_BOUNDS` for a buffer too small,
+`SITU_ERR_CONSTRAINT` for input the codec does not admit; a code this build
+does not name reads as `constraint` in the Rust binding, because an
+implementation that refused the input has refused it whatever it called the
+refusal.
+
+A coded region whose codec is tier-1 gets its decode accessor through this
+(13.6a): C, C++ and Rust call it, and Python names it in the note that says
+why it does not. A tier-2 region reaches its generated kernel instead, whose
+shape is the kernel family's rather than this one.
+
+**This was written down after the fact**, and the gap it closed is the
+argument for writing it down at all. `gen-codec-tests` had been emitting
+`situ_codec_<codec>_encode` since phase 7 -- a name the accessors did not
+call, the spec did not name, and no `impl` bound. So the harness could not be
+linked against any implementation this repository produces, and had never once
+been run (26.35, `docs/decisions/0028-the-tier-one-codec-abi.md`).
+
 ### 13.3 The decidability rule
 
 **The compiler reasons only about property signatures, never about transform
@@ -6094,6 +6134,33 @@ found thirty-one errors in fifteen of the twenty-five, in one second:
 - `__all__ = []` has no element type, which `std/codecs.situ` -- signatures and
   no structs -- is.
 
+**The codec harness had never been run, and could not be.** `gen-codec-tests`
+emits the property tests that would catch a lying tier-1 signature, which is
+the whole of what 13.1 offers against a codec the compiler never sees. It
+declared and called `situ_codec_<codec>_encode` -- a name the accessors did not
+call, the specification did not name, and no `impl` bound. Three names for one
+implementation, no two agreeing, so a suite could not be linked with any
+implementation this repository produces.
+
+The tier-1 ABI is written down now (13.2a, decision 0028) and named after the
+symbol `impl x extern "my_x"` binds, which is what that string has meant since
+13.1 was written and what nothing emitted. `gen-codec-tests` attacks it, three
+backends call it for a tier-1 region's decode -- 13.6a's "only a table kernel"
+was about a *derived* decoder's shape and this one is settled by contract --
+and Python names it in the note that says why it does not.
+
+`tests/schemas/edges.situ` binds `doubling` to `my_doubling`,
+`tests/generated/codec_impl.c` implements it, and `make test-c` now checks four
+declared properties against a running implementation. Breaking the
+implementation fails the matching test, which is the first evidence the harness
+attacks anything at all. `std/codecs.situ` emits nineteen stated refusals
+rather than nineteen suites, which is right: it is a library of contracts with
+no `impl`.
+
+Still open, and the other half of the answer: a *derived* codec's harness. Its
+properties cannot lie -- they follow from its kernel -- but its implementation
+can be wrong, and the shapes are per-family rather than one ABI.
+
 **A coded region the data sizes was empty in all four.** Found by asking what
 `gen-codec-tests` could be run against, and following the codec path down.
 Every coded region in this repository is either fixed inside or ends at a
@@ -6137,7 +6204,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2245 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2246 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

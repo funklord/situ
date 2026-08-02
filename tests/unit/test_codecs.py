@@ -219,10 +219,22 @@ def test_a_size_from_outside_the_region_is_fine() -> None:
 # -- gen-codec-tests (section 13.1) -----------------------------------------
 
 
-def codec_tests(body: str) -> str:
+def codec_tests(body: str, bind: bool = True) -> str:
+	"""The harness for `body`, with an implementation bound to every codec.
+
+	Bound by default because a harness with nothing to call is not one: the
+	suite tests the functions an `impl` names (13.2a), and a signature with no
+	implementation gets a stated refusal instead (26.35).
+	"""
 	from situc.codegen.c import codectests
 
-	return codectests.generate(parse_text(PREAMBLE + body), "unit")
+	schema = parse_text(PREAMBLE + body)
+	if bind:
+		bound = "\n".join(f'impl {decl.name} extern "my_{decl.name}";'
+		                   for decl in schema.codecs())
+		schema = parse_text(PREAMBLE + body + "\n" + bound)
+
+	return codectests.generate(schema, "unit")
 
 
 def test_a_length_claim_gets_a_sweep() -> None:
@@ -296,7 +308,13 @@ def test_a_signature_claiming_nothing_produces_no_tests() -> None:
 	assert "That is not a pass: it means the signatures claim nothing" in text
 
 
-def test_the_standard_library_generates_a_full_suite() -> None:
+def test_the_standard_library_declines_every_suite() -> None:
+	"""`std/codecs.situ` is contracts and no `impl`, which is what it is for.
+
+	A harness with nothing to call is not one, so each signature gets a stated
+	refusal instead -- the same rule every other generated artifact follows:
+	one that quietly omits a codec is indistinguishable from one that never
+	had it (26.35)."""
 	from pathlib import Path
 
 	from situc.codegen.c import codectests
@@ -304,6 +322,23 @@ def test_the_standard_library_generates_a_full_suite() -> None:
 	path   = Path(__file__).resolve().parents[2] / "std" / "codecs.situ"
 	schema = parse_text(path.read_text(encoding="ascii"))
 	text   = codectests.generate(schema, "codecs")
+
+	assert "static void test_" not in text
+	assert text.count("no suite") >= 19
+	assert "no `impl` binds an implementation" in text
+
+
+def test_the_standard_library_generates_a_full_suite() -> None:
+	from pathlib import Path
+
+	from situc.codegen.c import codectests
+
+	path   = Path(__file__).resolve().parents[2] / "std" / "codecs.situ"
+	source = path.read_text(encoding="ascii")
+	schema = parse_text(source)
+	bound  = "\n".join(f'impl {decl.name} extern "my_{decl.name}";'
+	                    for decl in schema.codecs())
+	text   = codectests.generate(parse_text(source + "\n" + bound), "codecs")
 
 	# Every signature that claims something gets attacked.
 	assert text.count("static void test_") >= 60

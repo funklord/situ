@@ -40,7 +40,8 @@ from situc.traverse import (
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	has_computable_extent, index_entry_bytes, is_run, local_name,
+	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
+	local_name,
 	matched_values, obligation,
 	obligations, own_entries, own_members,
 )
@@ -1384,14 +1385,32 @@ class Emitter:
 		were stuffed.
 		"""
 		codec = self.codecs.get(placement.codec or "")
-		if codec is None or not decodes_here(codec):
+		if codec is None:
 			return []
 
-		name  = c_name(local_name(struct, placement))
-		bound = decode_bound(codec, placement)
-		sized = (f"{bound} bytes is what it needs" if bound is not None
-		         else f"it needs the encoded length scaled by the codec's"
-		              f" ratio, which `{name}_len` gives")
+		name   = c_name(local_name(struct, placement))
+		bound  = decode_bound(codec, placement)
+		sized  = (f"{bound} bytes is what it needs" if bound is not None
+		          else f"it needs the encoded length scaled by the codec's"
+		               f" ratio, which `{name}_len` gives")
+
+		# A tier-1 codec is the user's own, bound to a symbol and to 13.2a's
+		# ABI. The note names that rather than a `situ_` function nobody
+		# wrote: the other three backends call it now, and a Python reader
+		# should be told what they call (26.35).
+		symbol = extern_symbol(self.schema, placement.codec or "")
+		if symbol is not None:
+			return [
+				"",
+				f"\t# No `{name}_decode`: the codec is the caller's, and",
+				"\t# calling it from here means loading a shared object from",
+				"\t# a path this generator would have to invent (0017).",
+				f"\t# `{symbol}_decode(in, in_len, out, out_cap, &out_len)`",
+				f"\t# is the ABI this schema binds (13.2a); {sized}.",
+			]
+
+		if not decodes_here(codec):
+			return []
 
 		return [
 			"",
