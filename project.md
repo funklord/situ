@@ -5662,7 +5662,12 @@ evaluate itself, so there is no fourth spelling of "how long is it" to compare.
 
 **Known and open.**
 
-Empty again. The entry that stood here for one commit was the offset a message
+One, and it is 26.35's: a variant's byte-run arm whose declared length exceeds
+the frame is clamped by all four accessors and reported by none of them, so a
+caller cannot tell a truncated message from a short one. The safe half of
+26.27's bargain is struck and the other half is not.
+
+The entry before it stood for one commit and was the offset a message
 chooses, found by `make fuzz` and closed the same way 26.27 closed the length
 it is the other half of: the offset saturates at the view, a member that does
 not fit answers nothing, and `validate` says `bounds`. Closing it found a
@@ -5891,6 +5896,106 @@ check cannot ask about (26.31), and 26.33.
 
 **Status:** 2230 unit tests, 7 skipped; generated C compiled on the host and
 both aarch64 targets; `make fuzz` clean at thirty seconds a harness.
+
+### 26.35 The bytes the check was made of
+
+26.34 built the differential check and counted what it found. This is about
+the input it was finding it with, which nobody had chosen: uniform random
+bytes, of a length drawn uniformly from zero to twelve hundred. One
+distribution, and the least searching one available.
+
+Two things follow from it and neither is obvious until it is written down. A
+member framed on `" "` or `"\r\n"` meets its delimiter about once in a hundred
+bytes under uniform noise, so `examples/http` and `examples/smtp` were compared
+almost entirely on the path where nothing parses -- the scans returned "ran to
+the end", every text number refused, and the four agreed about that. And a
+declared length can only overrun the frame it sits in when the frame is small,
+so a kilobyte of noise asks that question with the answer already filled in.
+
+The change is four alphabets -- uniform, printable text with its framing,
+digits and delimiters, edge bytes among text -- and three buffers in four drawn
+short. The same forty-eight buffers per schema, differently spread. Five
+disagreements on the first run.
+
+**Two were a member the frame does not contain, handed back anyway.** Both are
+26.27's defect exactly, one construct over from where it was closed:
+
+- A **variant's byte-run arm**. `examples/dnsname`'s label declaring 55 bytes
+  in a five-byte frame got 55 back from C and C++ -- a pointer and a span past
+  the end of the buffer -- a panic from Rust, and from Python a clamp to the
+  message rather than to the view. Four answers, one of them memory-unsafe in
+  the caller's hands. The ordinary run path has clamped since 26.27; an arm
+  builds its own length and was never brought along.
+- A **`[since]` member**. This one is worth stating as a rule rather than as a
+  bug: 20.2's argument is that a constant offset needs no check because the
+  frame was refused if shorter than the struct's minimum -- and a versioned
+  struct's minimum is its *first* version's. `ver = 2` in three bytes is a
+  well-formed question about a member that is not there, and all four backends
+  answered it by reading. C read four bytes past the view, Rust panicked in
+  `read_be`, Python read a short slice as a number. The setter had it too,
+  which is the side that writes.
+
+**Three were a constraint the schema declares and a backend did not check.**
+
+- `[nul_terminated]` in **C**, where the attribute checks were branches of one
+  `elif` chain: `u8 name[16] [nul_terminated, encoding = utf8]` got the
+  encoding check and the terminator went unchecked. In the backend that has had
+  the check longest, against `tests/schemas/edges.situ`, for as long as the
+  attribute pair has existed.
+- An **`indexed` region's offset table**, in all four and differently in each.
+  `count` counts entries and an entry is an `offset_type` wide, which is
+  `traverse.index_entry_bytes` now: C multiplied by one, so a page declaring
+  11786 cells in 38 bytes passed the very check that exists to catch it, and
+  the other three asked the *element* for a width, found a `table_leaf_cell`
+  that has no fixed one, and emitted no check at all.
+- `[minimal]` in **Python**, which handed the predicate the parsed number
+  rather than the digits. `bytes(6)` in Python is six zero bytes, so every
+  spelling was minimal -- and `0`, whose digits vanish under that conversion,
+  was not. `test_every_backend_enforces_minimal` asserts that the source
+  contains `digits_minimal`, and it did.
+
+Giving the offset table a length turned `required` on for a struct holding one,
+which is how the last of these arrived: all four now refuse to frame such a
+struct and say why -- an `indexed` region reaches wherever its furthest element
+ends, and the table says where the elements start. C had been answering with
+the bound and calling it the total.
+
+**And then the schema was wrong.** Writing a test for the `[minimal]` fix meant
+writing a status line, and `examples/http` could not read one. `decimal u16
+code until " " max 3` reads as "three digits"; a cap bounds the whole member
+with its delimiter (8.6.1), so three is two digits and a space. Against
+`HTTP/1.1 404 Not Found` every backend agreed: the scan ran out at the third
+digit, `validate` called the message a frame cut short, and `reason` came back
+as `" Not Found"` with the space still on it. A two-digit code parsed clean,
+and HTTP has none.
+
+Nothing in the language was wrong and no backend disagreed. What was wrong is
+that this was checkable for a year and nobody checked it: every http test in
+the tree used a schema written for that test, a request line handed to the
+dissector, or random bytes. 26.32 says the worked example is the claim, and
+this claim had been verified against everything except the protocol it names.
+There is a request and a response through the example's own accessors now.
+
+**What is open.**
+
+- **A truncated arm is clamped and not reported.** The accessors agree and are
+  safe; `validate` says nothing, which is the half of 26.27's bargain that
+  makes a lie distinguishable from a truncation. It needs a fits check guarded
+  by the discriminant, in four backends.
+- **Five worked examples have never seen a message.** `arp`, `bmp`, `ntp`,
+  `rtc` and `telemetry` are generated, fuzzed, `gen-checks`'d and compared
+  under random bytes, and none of that can tell whether the schema describes
+  the protocol -- `gen-checks` derives its assertions from the schema, so it
+  confirms self-consistency, and agreement across backends confirms they read
+  the same schema the same way. Only a real message says the schema is right,
+  and http is the proof that the difference is not theoretical. Each needs a
+  vector with its source cited, which is 26.32's rule and the reason
+  `examples/ble` is still unwritten.
+- Beyond those: the two shapes the differential check cannot ask about
+  (26.31), and 26.33.
+
+**Status:** 2232 unit tests, 7 skipped; generated C compiled on the host and
+both aarch64 targets.
 
 ### Invariants to hold across all phases
 
