@@ -30,6 +30,14 @@ handing a caller fifty-five bytes out of a five-byte frame (26.35).
 What is *not* asked is written down in that module: a subset of member kinds,
 because a probe that is spelled wrong in one language reports a disagreement
 that is not there. The subset is the thing to grow.
+
+It read and never wrote, for its whole life. Every backend emits setters, and a
+schema means one thing in four languages only if it also means one thing when
+written -- a byte order reversed in a setter, a bit field written with a
+read-modify-write that clobbers its neighbour, a member writable in three
+languages and not the fourth. There is a write pass now: every writable scalar
+takes a pattern, each backend prints what it reads back, and the whole buffer is
+printed once at the end. The buffer is the assertion (26.35).
 """
 
 from __future__ import annotations

@@ -284,6 +284,46 @@ def test_dynamic_offsets_and_counts_work(tmp_path: Path) -> None:
 	assert run.returncode == 0, run.stderr
 
 
+SCANNED = ('struct s { u8 name[] until "\\r\\n" max 8; u16 tag; }')
+
+WRITE_SCANNED = ('fn main() {\n'
+	'\tlet mut buf = *b"ab\\r\\n\\x00\\x00padding";\n'
+	'\t{\n'
+	'\t\tlet mut view = unit::SMut::new(&mut buf).unwrap();\n'
+	'\t\tview.set_tag(0xBEEF);\n'
+	'\t}\n'
+	'\tlet view = unit::S::new(&buf).unwrap();\n'
+	'\tassert_eq!(view.tag(), 0xBEEF);\n'
+	'\tassert_eq!(&buf[4..6], &[0xBE, 0xEF]);\n'
+	'}\n')
+
+
+def test_a_scalar_at_a_dynamic_offset_gets_a_setter() -> None:
+	"""It got nothing at all here -- no setter and no note -- while the map
+	called it `mutate = InPlaceFixed` and the other three backends wrote it.
+	A field readable in four languages and writable in three is the schema
+	meaning something narrower in one of them (26.35).
+
+	Found by making the differential drivers write, which they never had."""
+	module = emit(SCANNED)
+
+	assert "pub fn set_tag(&mut self, value: u16)" in module
+	assert "Does nothing where the member does not fit" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_that_setter_writes_where_the_scan_ends(tmp_path: Path) -> None:
+	"""And writes at the offset the *data* put the member at: `name` ends at
+	the CRLF, so the tag is at 4 rather than at any constant this backend
+	could have used."""
+	result = build(tmp_path, SCANNED, main=WRITE_SCANNED)
+	assert result.returncode == 0, result.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, run.stderr
+
+
 # -- the gate ---------------------------------------------------------------
 
 

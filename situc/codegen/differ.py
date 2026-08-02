@@ -88,11 +88,12 @@ from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
 from situc.codegen.rust.emit import _ident as rust_ident
 from situc.codegen.rust.emit import _pascal
+from situc.capability import Axis
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Member, arm_members, classify, containment_order, local_name,
-	own_entries,
+	own_entries, own_members,
 )
 
 
@@ -130,6 +131,9 @@ class Probe(Enum):
 	#: `name ok=<0|1> extent=<n>` -- a nested struct's sub-view, which every
 	#: backend can now refuse.
 	NESTED    = "nested"
+	#: `name <- <integer>` -- a *write*, and then the buffer, which is the
+	#: half of every backend's surface nothing compared.
+	WRITE     = "write"
 
 
 @dataclass(frozen=True)
@@ -291,6 +295,80 @@ def asks(struct: ResolvedStruct, structs: set[str],
 	return found
 
 
+def writes(struct: ResolvedStruct) -> list[Ask]:
+	"""Which members this struct can be *written*, in declaration order.
+
+	Every backend emits setters and nothing compared them: the drivers read,
+	and a schema means the same thing in four languages only if it also means
+	the same thing when written. A byte order reversed in one setter, a mask
+	off by a bit, a bit-packed field written with a read-modify-write that
+	clobbers its neighbour -- none of that is visible from a read pass over
+	bytes nobody wrote (26.35).
+
+	The subset is narrow on purpose, and each exclusion is a shape whose
+	*probe* would differ rather than whose behaviour would:
+
+	  * `mutate` other than `InPlaceFixed` has no setter at all, which the
+	    capability map decides and every backend already obeys;
+	  * a covered member's setter takes the message or a dirty word, so the
+	    four signatures differ by design (14.2);
+	  * a versioned one's refuses, and the read probe already asks that;
+	  * an enum takes its own type in two languages and an integer in two;
+	  * a signed one needs a value in range, and a pattern that fits every
+	    width is what makes the comparison worth anything;
+	  * BCD and fixed point convert on the way in, so a pattern is not a
+	    value they can hold.
+	"""
+	# A field whose value decides where a later member starts writes through
+	# a setter that takes the message and bumps its generation (12.3), so its
+	# signature is not the ordinary one. `sqlite`'s `cell_count` is the case:
+	# four backends spell that extended setter four ways on purpose.
+	drivers = {placement.sized_by for placement in own_members(struct)
+	           if placement.sized_by and placement.sized_by != "remaining"}
+
+	found: list[Ask] = []
+
+	for entry in own_entries(struct):
+		placement = entry.placement
+		scalar    = placement.scalar
+
+		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
+			continue
+		if local_name(struct, placement) in drivers:
+			continue
+		if placement.covered_by or placement.since is not None:
+			continue
+		if placement.kind != "field" or scalar is None:
+			continue
+		if placement.array_count is not None or placement.sized_by is not None:
+			continue
+		if placement.marker is not None or placement.radix is not None:
+			continue
+		if scalar.signed or scalar.is_bcd or scalar.is_fixed_point:
+			continue
+		# `_SCALAR_TYPES` and nothing else, packed or not: a bit-packed
+		# *enum* is still an enum, and its setter takes the enum type in two
+		# languages and an integer in the other two. `leap_indicator : u2`
+		# is what caught the first version of this.
+		if placement.type_name not in _SCALAR_TYPES:
+			continue
+
+		found.append(Ask(Probe.WRITE, c_name(local_name(struct, placement)),
+		                 _pattern(scalar.bits), 0, False))
+
+	return found
+
+
+def _pattern(bits: int) -> int:
+	"""A value that fits `bits` and shows a byte order when it does not.
+
+	`0x0123456789ABCDEF` truncated: a `u32` written little end first lands as
+	`EF CD AB 89` and big end first as `89 AB CD EF`, and the two are not each
+	other reversed by accident.
+	"""
+	return 0x0123456789ABCDEF & ((1 << bits) - 1)
+
+
 def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 	"""A variant's arms: is this one the arm the discriminant selects?
 
@@ -445,8 +523,59 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 			"\t}",
 		])
 
+	lines.extend(_c_writes(resolved, prefix))
 	lines.extend(["\treturn 0;", "}"])
 	return "\n".join(lines) + "\n"
+
+
+def _c_writes(resolved: ResolvedSchema, prefix: str) -> list[str]:
+	"""The write pass, and then the bytes.
+
+	Every struct's writable members, then the buffer, once. What has to agree
+	is the buffer: a setter that reverses a byte order or clobbers a
+	neighbouring bit field shows there and nowhere else.
+	"""
+	lines: list[str] = []
+	any_write = False
+
+	for struct in structs_of(resolved):
+		asked = writes(struct)
+		if not asked:
+			continue
+		any_write = True
+		view  = ident(prefix, struct.name, "view")
+		fixed = struct.layout.is_fixed_size
+		lines.extend([
+			"\t{",
+			"\t\tsitu_view_t view;",
+			f'\t\tprintf("-- write {struct.name}\\n");',
+			f"\t\tif ({view}(&msg, 0{'' if fixed else ', n'}, &view)"
+			" == SITU_OK) {",
+		])
+		for ask in asked:
+			setter = ident(prefix, struct.name, ask.local, "set")
+			lines.extend([
+				f"\t\t\t{setter}(view, {ask.count}u);",
+				f'\t\t\tprintf("{ask.local} <- %llu\\n",'
+				f' (unsigned long long)'
+				f'{ident(prefix, struct.name, ask.local, "get")}(view));',
+			])
+		lines.extend(["\t\t}", "\t}"])
+
+	if not any_write:
+		return lines
+
+	return lines + [
+		"\t{",
+		"\t\tuint32_t i;",
+		"",
+		'\t\tprintf("buffer ");',
+		"\t\tfor (i = 0; i < n; i++) {",
+		'\t\t\tprintf("%02x", raw[i]);',
+		"\t\t}",
+		'\t\tprintf("\\n");',
+		"\t}",
+	]
 
 
 def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
@@ -585,8 +714,50 @@ def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 			"\t}",
 		])
 
+	lines.extend(_cpp_writes(resolved))
 	lines.extend(["\treturn 0;", "}"])
 	return "\n".join(lines) + "\n"
+
+
+def _cpp_writes(resolved: ResolvedSchema) -> list[str]:
+	"""The write pass, and then the bytes."""
+	lines: list[str] = []
+	any_write = False
+
+	for struct in structs_of(resolved):
+		asked = writes(struct)
+		if not asked:
+			continue
+		any_write = True
+		fixed = struct.layout.is_fixed_size
+		lines.extend([
+			"\t{",
+			f"\t\t::situ::{c_name(struct.name)} view;",
+			f'\t\tstd::printf("-- write {struct.name}\\n");',
+			f"\t\tif (::situ::{c_name(struct.name)}::at(msg,"
+			f" 0{'' if fixed else ', n'}, view) == ::situ::rt::err::ok) {{",
+		])
+		for ask in asked:
+			lines.extend([
+				f"\t\t\tview.set_{ask.local}({ask.count});",
+				f'\t\t\tstd::printf("{ask.local} <- %llu\\n",',
+				f"\t\t\t\tstatic_cast<unsigned long long>"
+				f"(view.{ask.local}()));",
+			])
+		lines.extend(["\t\t}", "\t}"])
+
+	if not any_write:
+		return lines
+
+	return lines + [
+		"\t{",
+		"\t\tstd::printf(\"buffer \");",
+		"\t\tfor (std::uint32_t i = 0; i < n; i++) {",
+		'\t\t\tstd::printf("%02x", raw[i]);',
+		"\t\t}",
+		'\t\tstd::printf("\\n");',
+		"\t}",
+	]
 
 
 def _cpp_ask(ask: Ask) -> list[str]:
@@ -723,8 +894,49 @@ def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 			"\t}",
 		])
 
+	lines.extend(_rust_writes(resolved))
 	lines.extend(["}"])
 	return "\n".join(lines) + "\n"
+
+
+def _rust_writes(resolved: ResolvedSchema) -> list[str]:
+	"""The write pass, and then the bytes.
+
+	A mutable view is its own type here -- `XMut` over `&mut [u8]` -- which is
+	how this backend spells section 12.3's invalidation rule: a write while a
+	read view is outstanding does not compile. So the buffer is copied once
+	and the writes happen against the copy, which is the same bytes the other
+	three mutate in place.
+	"""
+	asked_any = [(struct, writes(struct)) for struct in structs_of(resolved)]
+	asked_any = [(struct, asked) for struct, asked in asked_any if asked]
+	if not asked_any:
+		return []
+
+	lines = ["\tlet mut raw = raw;", ""]
+
+	for struct, asked in asked_any:
+		lines.extend([
+			"\t{",
+			f'\t\tprintln!("-- write {struct.name}");',
+			f"\t\tif let Ok(mut view) ="
+			f" unit::{_pascal(struct.name)}Mut::new(&mut raw) {{",
+		])
+		for ask in asked:
+			lines.extend([
+				f"\t\t\tview.set_{rust_ident(ask.local)}({ask.count});",
+				f'\t\t\tprintln!("{ask.local} <- {{}}",'
+				f" view.as_ref().{rust_ident(ask.local)}());",
+			])
+		lines.extend(["\t\t}", "\t}"])
+
+	return lines + [
+		"\t{",
+		"\t\tlet shown: String = raw.iter()"
+		'.map(|b| format!("{:02x}", b)).collect();',
+		'\t\tprintln!("buffer {}", shown);',
+		"\t}",
+	]
 
 
 def _rust_ask(ask: Ask) -> list[str]:
@@ -848,7 +1060,41 @@ def _python(resolved: ResolvedSchema, prefix: str) -> str:
 		lines.extend(f"\t{line}" for line in body)
 		lines.append("")
 
+	lines.extend(_python_writes(resolved))
 	return "\n".join(lines) + "\n"
+
+
+def _python_writes(resolved: ResolvedSchema) -> list[str]:
+	"""The write pass, and then the bytes."""
+	lines: list[str] = []
+	any_write = False
+
+	for struct in structs_of(resolved):
+		asked = writes(struct)
+		if not asked:
+			continue
+		any_write = True
+		fixed = struct.layout.is_fixed_size
+		lines.extend([
+			f'print("-- write {struct.name}")',
+			"try:",
+			f"\tview = unit.{c_name(struct.name)}.at(msg, 0"
+			f"{'' if fixed else ', len(raw)'})",
+			"except situ_runtime.BoundsError:",
+			"\tpass",
+			"else:",
+		])
+		for ask in asked:
+			lines.extend([
+				f"\tview.{ask.local} = {ask.count}",
+				f'\tprint("{ask.local} <-", view.{ask.local})',
+			])
+		lines.append("")
+
+	if not any_write:
+		return lines
+
+	return lines + ['print("buffer", raw.hex())', ""]
 
 
 def _python_ask(ask: Ask) -> list[str]:

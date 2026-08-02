@@ -3523,13 +3523,22 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 
-		if placement.kind != "field" or placement.offset_bits is None:
+		if placement.kind != "field":
 			return []
 		if scalar is None or placement.array_count is not None \
 				or placement.sized_by is not None:
 			return []
 		if placement.type_name in self.structs:
 			return []
+
+		# A scalar at a *dynamic* offset is writable too, and this backend
+		# emitted nothing at all for one -- no setter and no note, so a field
+		# the capability map calls `mutate = InPlaceFixed` could be read here
+		# and not written. `examples/dnsname`'s `question.qtype` sits after a
+		# name and is the case; the other three have had the setter since
+		# 26.27, and each does nothing where the member does not fit (26.35).
+		if placement.offset_bits is None:
+			return self._dynamic_setter(struct, entry)
 
 		# `set_` plus a raw identifier is not one: `r#` has to prefix the whole
 		# name. `set_type` is not a keyword, so the escape is only needed on
@@ -3589,6 +3598,58 @@ class Emitter:
 			"",
 			f"\tpub fn {setter}(&mut self, value: {rtype}) {{",
 			f"\t\t{self._store(placement, scalar)}",
+			"\t}",
+		]
+
+	def _dynamic_setter(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""A setter for a scalar whose offset the message decides.
+
+		Does nothing where the member does not fit, which is what C, C++ and
+		Python do: writing past the frame is somebody else's data, and
+		`validate` is where the caller learns the message was malformed.
+		"""
+		placement = entry.placement
+		scalar    = placement.scalar
+		assert scalar is not None
+
+		base   = c_name(local_name(struct, placement))
+		setter = _ident(f"set_{base}")
+
+		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
+			return ["",
+			        f"\t// No {setter}(): mutate is"
+			        f" {entry.vector.get(Axis.MUTATE).render()}."]
+		if placement.covered_by:
+			return []		# the covered form is emitted below
+
+		offset = self._offset_expression(struct, placement)
+		fits   = self._fits(struct, placement,
+		                    max(1, (scalar.bits + BITS_PER_BYTE - 1)
+		                        // BITS_PER_BYTE))
+		if offset is None or fits is None:
+			return ["",
+			        f"\t// No {setter}(): this backend cannot resolve where"
+			        " the member starts."]
+
+		# Through `as_ref()`: the offset is a read -- a scan or a sum of
+		# lengths -- and those helpers live on the immutable view. `bytes` is
+		# the one thing both types have.
+		def reading(text: str) -> str:
+			return text.replace("self.", "self.as_ref().") \
+			           .replace("self.as_ref().bytes", "self.bytes")
+
+		rtype = self._field_type(placement, writing=True)
+		return [
+			"",
+			"\t/// Does nothing where the member does not fit: its offset is a",
+			"\t/// sum of lengths the message chose, and writing past the frame",
+			"\t/// is somebody else's data. `validate` reports such a message.",
+			f"\tpub fn {setter}(&mut self, value: {rtype}) {{",
+			f"\t\tif !({reading(fits)}) {{",
+			"\t\t\treturn;",
+			"\t\t}",
+			f"\t\t{reading(self._store(placement, scalar, self._unparen(offset)))}",
 			"\t}",
 		]
 

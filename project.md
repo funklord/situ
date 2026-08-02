@@ -6177,6 +6177,33 @@ written against the implementation rather than the header.
 `decode_counts_bits` ask it. A padded table counts bytes; an unpadded one is
 bit-oriented by construction, which is what a Manchester line code is.
 
+**The differential check had never written.** Twelve probe kinds, every one a
+read, for the life of the check -- and every backend emits setters. A schema
+means one thing in four languages only if it also means one thing when written:
+a byte order reversed in a setter, a bit field written with a read-modify-write
+that clobbers its neighbour, an offset resolved differently on the write path
+than on the read path. None of that is visible from reading bytes nobody wrote.
+
+There is a write pass now. Every writable scalar takes a pattern --
+`0x0123456789ABCDEF` truncated to the field, so a byte order that reverses is
+not a value that could have arisen by accident -- each backend prints what it
+reads back, and the whole buffer is printed once at the end. The buffer is the
+assertion.
+
+What it found is one member writable in three languages and not the fourth:
+**Rust emitted no setter at all for a scalar at a dynamic offset**, and no note
+either -- while the capability map called it `mutate = InPlaceFixed` and C, C++
+and Python had all written it since 26.27. `examples/dnsname`'s `question.qtype`
+sits after a name and is the case. A field readable in four languages and
+writable in three is the schema meaning something narrower in one of them, which
+is the whole thing this check exists to catch, on the half it never looked at.
+
+Three exclusions are the probe's rather than the backends': a covered member's
+setter takes the message or a dirty word by design (14.2), a length driver's
+bumps the view generation (12.3), and an enum takes its own type in two
+languages and an integer in two. Each is written down where the subset is
+chosen -- the same rule the read subset follows.
+
 **And then the derived harness, which is the other half.** A tier-2 codec's
 properties cannot lie -- they are derived from the same kernel description the
 implementation is -- and the implementation can. Fourteen of the twenty-five
@@ -6247,7 +6274,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2252 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2254 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases
