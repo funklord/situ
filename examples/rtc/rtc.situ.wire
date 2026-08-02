@@ -17,16 +17,24 @@ struct calibration size=6
   @0x0000   2         q8_8       trim_ppm  big
   @0x0002   4         uq16_16    reference_hz  big
 
-struct rtc_frame size=15
+struct rtc_frame size=16
   @0x0000   1         u8         version  must_eq=1
-  @0x0001   6         wall_clock clock  big
-  @0x0007   6         calibration cal  big
-  @0x000d   2         u16        checksum  big
+  @0x0001   7         wall_clock clock  big
+  @0x0008   6         calibration cal  big
+  @0x000e   2         u16        checksum  big
 
-struct wall_clock size=6
-  @0x0000   1         bcd2       seconds  max=59
-  @0x0001   1         bcd2       minutes  max=59
-  @0x0002   1         bcd2       hours  max=23
-  @0x0003   1         bcd2       day  min=1 max=31
-  @0x0004   1         bcd2       month  min=1 max=12
-  @0x0005   1         bcd2       year
+struct wall_clock size=7
+  @0x0000   1bit      u1         clock_halt  msb_first
+  @0x0000:1 7bit      bcd2       seconds  msb_first max=59
+  @0x0001   1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0001:1 7bit      bcd2       minutes  msb_first max=59
+  @0x0002   1bit      u1         <reserved1>  msb_first must_be_zero
+  @0x0002:1 1bit      u1         twelve_hour  msb_first must_eq=0
+  @0x0002:2 6bit      bcd2       hours  msb_first max=23
+  @0x0003   5bit      u5         <reserved2>  msb_first must_be_zero
+  @0x0003:5 3bit      bcd1       weekday  msb_first min=1 max=7
+  @0x0004   2bit      u2         <reserved3>  msb_first must_be_zero
+  @0x0004:2 6bit      bcd2       day  msb_first min=1 max=31
+  @0x0005   3bit      u3         <reserved4>  msb_first must_be_zero
+  @0x0005:3 5bit      bcd2       month  msb_first min=1 max=12
+  @0x0006   1         bcd2       year

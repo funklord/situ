@@ -23,27 +23,45 @@ target buffer;
 endian big;
 bit_order msb_first;
 
-// The clock: seconds first, each field packed decimal, each one its own byte,
-// which is the DS1307 family's encoding.
+// The DS1307's register file, registers 0x00 to 0x06, as U-Boot's
+// drivers/rtc/ds1307.c addresses them. Not an encoding that resembles it: this
+// is the seven bytes the part hands back, control bits included.
 //
-// Its *register file* is not this, and the difference is worth stating rather
-// than leaving for a reader to trip over. The part puts the weekday at 0x03
-// (`RTC_DAY_REG_ADDR` in U-Boot's drivers/rtc/ds1307.c), so `day` here is the
-// chip's `date` at 0x04 and everything after it is one register along. Nothing
-// reads a weekday it can derive, so it is not carried.
+// Those control bits are why `[bits]` exists (decision 0027). The seconds
+// register spends its top bit on Clock Halt and the hours register two on
+// 12/24 and AM/PM, leaving seven and six bits of packed decimal underneath --
+// three bits of tens over four of units. Every driver masks them off before
+// decoding, `bcd2bin(sec & 0x7F)` and `bcd2bin(hour & 0x3F)`, which is exactly
+// the work a description is supposed to remove.
 //
-// Two of the part's registers situ cannot describe at all, which is the more
-// interesting half: the seconds register spends its top bit on Clock Halt and
-// the hours register two bits on 12/24 and PM, leaving *seven* and *six* bits
-// of decimal. `bcd<digits>` is a nibble a digit (8.1), so a three-bit tens
-// field is not a `bcd2` and is not anything else either. A driver masks them
-// off; a description is meant to make that unnecessary. See 26.35.
+// `weekday` is carried because the part carries it: nothing derives it, and a
+// schema that skipped it would put every register after it one byte early --
+// which is what the earlier version of this file did (26.35).
 struct wall_clock {
-	bcd2  seconds  [max = 59];
-	bcd2  minutes  [max = 59];
-	bcd2  hours    [max = 23];
-	bcd2  day      [min = 1, max = 31];
-	bcd2  month    [min = 1, max = 12];
+	u1    clock_halt;                    // CH: 1 stops the oscillator
+	bcd2  seconds  [bits = 7, max = 59];
+
+	reserved u1  [must_be_zero];
+	bcd2  minutes  [bits = 7, max = 59];
+
+	// 12/24 selects what the bit below it means, so this schema describes the
+	// 24-hour form and says so: in 12-hour mode bit 5 is AM/PM rather than the
+	// high bit of the tens digit, and `hours` would be 1..12 beside it. A
+	// `variant` on `twelve_hour` is the honest shape and needs a discriminant
+	// situ can read *before* the field it selects, which this is.
+	reserved u1  [must_be_zero];
+	u1    twelve_hour  [must_eq = 0];
+	bcd2  hours    [bits = 6, max = 23];
+
+	reserved u5  [must_be_zero];
+	bcd1  weekday  [bits = 3, min = 1, max = 7];
+
+	reserved u2  [must_be_zero];
+	bcd2  day      [bits = 6, min = 1, max = 31];
+
+	reserved u3  [must_be_zero];
+	bcd2  month    [bits = 5, min = 1, max = 12];
+
 	bcd2  year;                          // 00 to 99, which is the whole range
 }
 
@@ -61,13 +79,20 @@ struct rtc_frame {
 	u16          checksum;
 }
 
-require size(wall_clock) == 6;
+require size(wall_clock) == 7;
 require size(calibration) == 6;
-require size(rtc_frame) == 15;
+require size(rtc_frame) == 16;
 
-// BCD is byte-aligned here, so it keeps everything except its representation.
+// A bit-packed field is still writable in place: it shares a byte with the
+// control bit above it, and a read-modify-write of that byte is one access.
 require in_place(wall_clock.seconds);
-require aligned(wall_clock.seconds, 1);
+
+// Not aligned, and that is the register rather than the schema: `seconds`
+// starts one bit into byte 0, under Clock Halt. `aligned` is about where a
+// field begins, so a field sharing a byte cannot claim it -- which is the
+// cost of describing the part instead of the encoding, recorded rather than
+// hidden.
+assert aligned(wall_clock.seconds, 1);
 
 // And so does fixed point: it is an integer in memory, and only the meaning of
 // that integer differs.

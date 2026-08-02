@@ -104,6 +104,9 @@ ATTRIBUTE_NAMES = frozenset({
 	# section 8.2 - 8.6: layout and representation
 	"allow_straddle", "require_aligned", "encoding", "nul_terminated",
 	"endian", "bit_order", "size",
+	# section 8.1: a packed-decimal field narrower than its digits, which is
+	# what a register holding a control bit above the decimal is
+	"bits",
 	# section 8.6.1: how a delimiter is made inert inside the content
 	"quoted", "escape",
 	# section 8.6.2: one spelling per value for a text number

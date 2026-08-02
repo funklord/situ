@@ -537,3 +537,57 @@ def test_the_copy_in_the_parent_is_the_same_member() -> None:
 	for slot in fields(Placement):
 		if slot.name not in differ:
 			assert getattr(own, slot.name) == getattr(seen, slot.name), slot.name
+
+
+# -- a packed-decimal field narrower than its digits (decision 0027) --------
+
+CLOCK = ("struct S { u1 halt; bcd2 seconds [bits = 7];"
+	" u2 mode; bcd2 hours [bits = 6]; }")
+
+
+def test_a_bcd_field_may_declare_a_width() -> None:
+	"""What a register holding a control bit above the decimal is: a DS1307
+	spends the top bit of its seconds register on Clock Halt and two bits of
+	its hours register on 12/24 and PM, leaving seven and six bits of packed
+	decimal. `bcd2` at eight bits could not describe either (26.35)."""
+	assert offsets(CLOCK) == {"halt": 0, "seconds": 1, "mode": 8, "hours": 10}
+	assert size_bits(CLOCK) == 16
+
+
+def test_the_narrowed_field_stays_packed_decimal() -> None:
+	"""It is the *top* digit that gives up bits; everything below it stays a
+	whole nibble, which is what the hardware does."""
+	held = next(p for p in layout(CLOCK).structs["S"].placements
+	            if p.path == "S.seconds")
+
+	assert held.scalar is not None
+	assert held.scalar.is_bcd and held.scalar.digits == 2
+	assert held.scalar.bits == 7
+
+
+def test_a_width_wider_than_the_type_is_refused() -> None:
+	text = rendered("struct S { bcd2 x [bits = 9]; }")
+
+	assert "wider than the type" in text
+
+
+def test_a_width_that_loses_a_digit_is_refused() -> None:
+	"""Four bits cannot hold two digits: the lower one is a whole nibble, so
+	the top would have none at all."""
+	text = rendered("struct S { bcd2 x [bits = 4]; }")
+
+	assert "leaves no room for 2 digits" in text
+
+
+def test_a_width_on_anything_else_is_refused() -> None:
+	"""Every other type carries its width in its name. Accepting `[bits]` on
+	one and ignoring it is invariant 9's silent default."""
+	text = rendered("struct S { u8 x [bits = 7]; }")
+
+	assert "not a `bcd` type" in text
+
+
+def test_a_width_with_no_value_is_refused() -> None:
+	text = rendered("struct S { bcd2 x [bits]; }")
+
+	assert "`[bits]` needs a width" in text

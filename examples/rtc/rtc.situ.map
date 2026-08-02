@@ -12,24 +12,40 @@ struct calibration size=6 repr=ValueConverted atomic=NonAtomic
   calibration.trim_ppm                   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   calibration.reference_hz               offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
 
-struct rtc_frame size=15 repr=ValueConverted atomic=NonAtomic
+struct rtc_frame size=16 repr=ValueConverted atomic=NonAtomic
   rtc_frame.version                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  rtc_frame.clock                        offset=AbsoluteStatic(0x01) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  rtc_frame.clock.seconds                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=ValueConverted atomic=AtomicWord
-  rtc_frame.clock.minutes                offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  rtc_frame.clock.hours                  offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=ValueConverted atomic=AtomicWord
-  rtc_frame.clock.day                    offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  rtc_frame.clock.month                  offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=ValueConverted atomic=AtomicWord
-  rtc_frame.clock.year                   offset=AbsoluteStatic(0x06) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  rtc_frame.cal                          offset=AbsoluteStatic(0x07) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  rtc_frame.cal.trim_ppm                 offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  rtc_frame.cal.reference_hz             offset=AbsoluteStatic(0x09) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
-  rtc_frame.checksum                     offset=AbsoluteStatic(0x0D) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock                        offset=AbsoluteStatic(0x01) size=Fixed(7) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.clock_halt             offset=AbsoluteStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.seconds                offset=AbsoluteStatic(0x01:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.<reserved0>            offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.minutes                offset=AbsoluteStatic(0x02:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.<reserved1>            offset=AbsoluteStatic(0x03) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.twelve_hour            offset=AbsoluteStatic(0x03:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.hours                  offset=AbsoluteStatic(0x03:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.<reserved2>            offset=AbsoluteStatic(0x04) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.weekday                offset=AbsoluteStatic(0x04:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.<reserved3>            offset=AbsoluteStatic(0x05) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.day                    offset=AbsoluteStatic(0x05:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.<reserved4>            offset=AbsoluteStatic(0x06) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.month                  offset=AbsoluteStatic(0x06:3) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtc_frame.clock.year                   offset=AbsoluteStatic(0x07) size=Fixed(1) align=Aligned(1) repr=ValueConverted atomic=AtomicWord
+  rtc_frame.cal                          offset=AbsoluteStatic(0x08) size=Fixed(6) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  rtc_frame.cal.trim_ppm                 offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  rtc_frame.cal.reference_hz             offset=AbsoluteStatic(0x0A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  rtc_frame.checksum                     offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
 
-struct wall_clock size=6 repr=ValueConverted
-  wall_clock.seconds                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  wall_clock.minutes                     offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=ValueConverted atomic=AtomicWord
-  wall_clock.hours                       offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  wall_clock.day                         offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=ValueConverted atomic=AtomicWord
-  wall_clock.month                       offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  wall_clock.year                        offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=ValueConverted atomic=AtomicWord
+struct wall_clock size=7 repr=ValueConverted atomic=NonAtomic
+  wall_clock.clock_halt                  offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.seconds                     offset=AbsoluteStatic(0x00:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.<reserved0>                 offset=AbsoluteStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.minutes                     offset=AbsoluteStatic(0x01:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.<reserved1>                 offset=AbsoluteStatic(0x02) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.twelve_hour                 offset=AbsoluteStatic(0x02:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.hours                       offset=AbsoluteStatic(0x02:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.<reserved2>                 offset=AbsoluteStatic(0x03) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.weekday                     offset=AbsoluteStatic(0x03:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.<reserved3>                 offset=AbsoluteStatic(0x04) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.day                         offset=AbsoluteStatic(0x04:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.<reserved4>                 offset=AbsoluteStatic(0x05) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.month                       offset=AbsoluteStatic(0x05:3) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  wall_clock.year                        offset=AbsoluteStatic(0x06) size=Fixed(1) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

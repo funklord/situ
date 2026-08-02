@@ -24,7 +24,7 @@ from situc import ast, unparse
 from situc.diagnostics import SituError, Span, error
 from situc.expr import Env, Interval, build_env, evaluate, interval_of, scalar_interval
 from situc.invariant import paths_in
-from situc.types import ScalarType, lookup
+from situc.types import BITS_PER_DIGIT, ScalarType, lookup
 
 BITS_PER_BYTE = 8
 
@@ -1782,7 +1782,7 @@ class Solver:
 		`atomic` as a plain `u8`. Only a struct-typed field has no scalar.
 		"""
 		if member.type_ref.scalar is not None:
-			return member.type_ref.scalar
+			return self.narrowed(member, member.type_ref.scalar)
 
 		enum = self.enums.get(member.type_ref.name)
 		if enum is not None:
@@ -1790,14 +1790,88 @@ class Solver:
 
 		return None
 
+	def narrowed(self, member: ast.Field | ast.Reserved,
+			scalar: ScalarType) -> ScalarType:
+		"""A BCD field's declared width, where it declares one (8.1).
+
+		`bcd<d>` is a nibble a digit, which is what a display wants and what a
+		register file usually is not: a DS1307 spends the top bit of its
+		seconds register on Clock Halt and two bits of its hours register on
+		12/24 and PM, leaving seven and six bits of decimal under them. Every
+		driver masks those off before decoding, which is the work a
+		description exists to remove -- and `bcd2` at eight bits could not
+		describe the register at all (26.35).
+
+		`[bits = N]` narrows the *top* digit and leaves the rest whole, which
+		is what the hardware does: three bits of tens above four of units is
+		0..79, and the field's own `[max]` says which of those are meant.
+		Everything else follows the ordinary bit-packing rules -- this is a
+		seven-bit field, and the byte it shares is the schema's to lay out.
+		"""
+		attr = next((one for one in member.attrs if one.name == "bits"), None)
+		if attr is None:
+			return scalar
+
+		if not scalar.is_bcd:
+			raise error(
+				f"`[bits]` is for a packed-decimal field, and "
+				f"`{member.type_ref.name}` is not one",
+				attr.span,
+				label = "not a `bcd` type",
+				notes = ["every other type carries its width in its name --"
+				         " `u7` is seven bits",
+				         "`bcd<d>` names digits rather than bits, which is why"
+				         " it is the one that can be narrowed"],
+			)
+
+		if attr.value is None:
+			raise error(
+				"`[bits]` needs a width",
+				attr.span,
+				label = "no value",
+				notes = [f"`{member.type_ref.name}` is {scalar.bits} bits;"
+				         " say how many of them this field takes",
+				         "for example `[bits = 7]`, which is a control bit"
+				         " above two decimal digits"],
+			)
+
+		bits  = evaluate(attr.value, self.result.env)
+		floor = (scalar.digits - 1) * BITS_PER_DIGIT
+
+		if bits > scalar.bits:
+			raise error(
+				f"`{member.type_ref.name}` is {scalar.bits} bits and this asks"
+				f" for {bits}",
+				attr.span,
+				label = "wider than the type",
+				notes = ["`[bits]` narrows a packed-decimal field; padding it"
+				         " out would be a different type"],
+			)
+		if bits <= floor:
+			raise error(
+				f"{bits} bits leaves no room for {scalar.digits} digits",
+				attr.span,
+				label = f"needs more than {floor}",
+				notes = [f"the lower {scalar.digits - 1} digit(s) are a whole"
+				         f" nibble each, which is {floor} bits",
+				         "the top digit takes what is left, and cannot take"
+				         " nothing"],
+			)
+
+		return replace(scalar, bits=bits)
+
 	def element_extent(self, member: ast.Field | ast.Reserved,
 			scope: Scope) -> Interval:
 		"""The size of one element, which may itself be a range for a frame."""
 		type_ref = member.type_ref
 
 		if type_ref.scalar is not None:
-			self.check_directives(member, type_ref.scalar, scope)
-			return Interval.point(type_ref.scalar.bits)
+			# `narrowed` first: a `bcd2 [bits = 7]` is a seven-bit field, and
+			# asking the type for its width places it as eight and reports it
+			# as straddling the byte it fits in.
+			scalar = self.narrowed(member, type_ref.scalar)
+			self.check_directives(member, scalar, scope)
+			return Interval.point(scalar.bits)
 
 		# A varint carries its own byte order in its encoding, so it needs no
 		# `endian` in scope: the continuation bit decides the order.

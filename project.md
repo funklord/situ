@@ -514,6 +514,16 @@ path          = ident { "." ident } ;
 - **BCD**: `bcd<digits>`, a nibble to a digit, most significant first. `bcd2`
   is one byte and holds 0 to 99, which is what an RTC puts in a seconds
   register. Twelve bits for `bcd3`, so an odd digit count packs.
+- A packed-decimal field may declare a width: `bcd2 [bits = 7]` is three bits
+  of tens over four of units, which is what a register holding a control bit
+  above the decimal is -- a DS1307 spends the top bit of its seconds register
+  on Clock Halt and two bits of its hours register on 12/24 and PM. The
+  narrowing takes bits from the *top* digit and leaves the rest whole, the
+  bound is `4 * (d - 1) < N <= 4 * d`, and `[bits]` on any other type is an
+  error: every other type carries its width in its name, and `bcd<d>` names
+  digits, which is why it is the one that can be narrowed. Section 8.2's
+  packing rules apply to the result unchanged
+  (`docs/decisions/0027-narrowed-packed-decimal.md`).
 - Both cost `repr = ValueConverted`, for different reasons the map states: a
   fixed-point field's stored integer is the value scaled by a power of two, and
   a BCD field's nibbles are digits. Neither generates floating point -- the
@@ -6027,16 +6037,27 @@ There is a request and a response through the example's own accessors now.
   it is one register along. The schema is an encoding rather than a register
   image, which is a fine thing to be and was not what it said.
 
-  The second is a gap in the language and is written down as one. The DS1307's
-  seconds register spends its top bit on Clock Halt and its hours register two
-  bits on 12/24 and PM, so those hold seven and six bits of packed decimal --
-  and `bcd<digits>` is a nibble a digit (8.1), so a three-bit tens field is not
-  a `bcd2` and is not anything else. A driver masks the bits off, which is the
-  work a description exists to remove. Every RTC in `drivers/rtc/` does this
-  and several put a century bit in the month register too. Whether `bcd` should
-  take a width, or a bit-packed field should be able to declare a decimal
-  encoding, is a question for a decision record rather than something to
-  invent here.
+  The second was a gap in the language and is now `[bits]`
+  (`docs/decisions/0027-narrowed-packed-decimal.md`). The DS1307's seconds
+  register spends its top bit on Clock Halt and its hours register two bits on
+  12/24 and PM, so those hold seven and six bits of packed decimal -- and
+  `bcd<digits>` is a nibble a digit (8.1), so a three-bit tens field was not a
+  `bcd2` and was not anything else. Every driver in `drivers/rtc/` masks the
+  bits off before decoding, which is the work a description exists to remove.
+
+  `bcd2 [bits = 7]` is three bits of tens over four of units. The narrowing
+  takes from the top digit and leaves the rest whole, which is what the
+  hardware does, and everything downstream was already there: a `bcd3` is
+  twelve bits and has bit-packed since it existed, so the four backends needed
+  no change at all -- the narrowing produces a seven-bit `ScalarType` and the
+  ordinary packing path carries it.
+
+  `examples/rtc` describes the register file now, weekday register and control
+  bits included, and its vectors carry a Clock Halt set beside one clear: the
+  same instant, read the same, which is the whole difference between a control
+  bit and a digit. Two `require`s became `assert`s in the process and that is
+  the honest direction -- a field sharing a byte with a control bit is not
+  byte-aligned, and saying so is what the map is for.
 
   What a per-struct vector cannot state is a claim about a whole file, and for
   `bmp` that is `tests/generated/test_bmp.c`: the pixels start where the two
@@ -6116,7 +6137,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2239 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2245 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases
