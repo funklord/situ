@@ -28,8 +28,8 @@ from situc.layout import solve
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
 
-ROOT     = Path(__file__).resolve().parent.parent.parent
-EXAMPLES = sorted(ROOT.glob("examples/*/*.situ")) + sorted(ROOT.glob("tests/schemas/*.situ"))
+from every_schema import ROOT, SCHEMAS
+EXAMPLES = SCHEMAS
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 

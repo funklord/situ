@@ -18,8 +18,8 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-ROOT     = Path(__file__).resolve().parent.parent.parent
-EXAMPLES = sorted(ROOT.glob("examples/*/*.situ")) + sorted(ROOT.glob("tests/schemas/*.situ"))
+from every_schema import ROOT, SCHEMAS
+EXAMPLES = SCHEMAS
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
@@ -154,7 +154,15 @@ def test_every_example_documents_without_error(path: Path) -> None:
 	text = render(parse(source), resolved, path.stem)
 
 	assert text.endswith("\n")
-	assert "struct " in text or "tlv" in text
+
+	# A schema of codec signatures and nothing else documents no layout, and
+	# that is the honest answer for a tool whose subject is where bytes sit:
+	# `std/codecs.situ` and `std/kernels.situ` produce a title and the note
+	# about where the offsets come from. Where a codec *is* layout -- a coded
+	# or sealed region -- it is named in the field table, which the tests
+	# below hold.
+	if resolved.structs:
+		assert "struct " in text or "tlv" in text
 
 
 def test_a_derived_field_says_it_is_derived() -> None:

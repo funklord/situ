@@ -229,3 +229,40 @@ def test_every_module_parses_at_the_declared_floor() -> None:
 	assert not failed, (
 		f"these do not parse on python{floor}, which section 22 and "
 		f"pyproject.toml both promise:\n  " + "\n  ".join(failed))
+
+
+# -- the generated-C build's own list of schemas -----------------------------
+
+
+def test_the_generated_build_lists_every_schema() -> None:
+	"""`tests/generated/Makefile` names the schemas it builds, by hand.
+
+	It is the third place in this repository that answers "which schemas are
+	there" -- `tests/unit/every_schema.py` and the two agreement checks are
+	the others -- and the only one nothing held to the tree. That is the shape
+	that let `tests/schemas/edges.situ` go unbuilt in C++ for weeks: a list
+	somebody has to remember to extend, extended by somebody who did not.
+
+	The cost of forgetting here is larger than a compile check. Every schema
+	in that list gets a capability-conformance suite, a fuzz harness and a
+	compiled object, so one left out is a schema whose generated C nothing in
+	the build ever runs.
+	"""
+	block = (ROOT / "tests" / "generated" / "Makefile").read_text(
+		encoding="utf-8").split("SCHEMAS\t\t:=", 1)[1].split("\nGEN_NAMES", 1)[0]
+	listed = set(re.findall(r"[\w./]+\.situ", block))
+
+	real = {str(path.relative_to(ROOT))
+	        for path in [*ROOT.glob("examples/*/*.situ"),
+	                     *ROOT.glob("tests/schemas/*.situ"),
+	                     *ROOT.glob("std/*.situ")]}
+
+	# `std/codecs.situ` declares codec signatures and nothing else: it has no
+	# struct, so its generated C is an include guard and a comment, and there
+	# is nothing for a check suite or a fuzz harness to reach. `kernels.situ`
+	# beside it carries the derived-codec path that does generate code.
+	exempt = {"std/codecs.situ"}
+
+	assert listed | exempt == real | exempt, (
+		f"in the tree and not built: {sorted(real - listed - exempt)}; "
+		f"built and not in the tree: {sorted(listed - real)}")

@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from every_schema import SCHEMAS
 from situc.lsp import (
 	Server, analyse_text, code_actions, definition_at, hover_at, symbols,
 	to_lsp_diagnostic,
@@ -272,10 +273,14 @@ def test_hover_over_the_protocol() -> None:
 	assert "header.offset" in answer["result"]["contents"]["value"]
 
 
-def test_every_example_analyses_without_raising() -> None:
+def test_every_schema_analyses_without_raising() -> None:
 	"""The server must survive whatever a user opens, including the schemas
-	this project ships that fail their own requirements on purpose."""
-	for path in sorted(ROOT.glob("examples/*/*.situ")):
+	this project ships that fail their own requirements on purpose.
+
+	Every schema rather than every example: `tests/schemas/` carries the
+	awkward shapes and `std/` carries a file of nothing but codec signatures,
+	and an editor opens whichever one the user clicked."""
+	for path in SCHEMAS:
 		analysis = analyse_text(f"file://{path}", path.read_text(encoding="ascii"))
 
 		assert analysis.source is not None
