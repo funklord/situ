@@ -700,3 +700,50 @@ def test_an_unpadded_table_is_still_exact() -> None:
 
 	assert derived.expansion is ast.Expansion.RATIO_EXACT
 	assert derived.granularity is ast.Granularity.SYMBOL
+
+
+# -- what the generated function counts (26.35) -----------------------------
+
+HEAD     = "endian big;\nbit_order msb_first;\n"
+PADDED   = ("codec b64 { kernel = table(input_bits = 6, output_bits = 8,"
+	" code = base64, pad = 0x3D); }\nimpl b64 derived;\n")
+UNPADDED = ("codec mm { kernel = table(input_bits = 1, output_bits = 2,"
+	" code = manchester_802_3); }\nimpl mm derived;\n")
+
+
+def test_a_padded_table_counts_bytes_and_says_so() -> None:
+	"""The prototype and the definition differ in a parameter *name*, which C
+	does not check: the types are the same. So `situ_base64_encode` was
+	declared taking `bits` and defined walking `len` bytes, and a header a
+	caller reads promised the wrong unit."""
+	schema = parse_text(HEAD + PADDED)
+	header = "\n".join(derived.declarations(schema, "situ"))
+	body   = derived.generate(schema, "unit")
+
+	assert "situ_b64_encode(const uint8_t *in, uint32_t len," in header
+	assert "situ_b64_encode(const uint8_t *in, uint32_t len," in body
+
+
+def test_an_unpadded_table_still_counts_bits() -> None:
+	"""A symbol map with no padding is bit-oriented by construction, which is
+	what a Manchester line code is. Only the padded loop walks whole bytes."""
+	schema = parse_text(HEAD + UNPADDED)
+	header = "\n".join(derived.declarations(schema, "situ"))
+
+	assert "situ_mm_encode(const uint8_t *in, uint32_t bits," in header
+
+
+def test_a_padded_region_passes_its_decoder_bytes() -> None:
+	"""Not a wrong answer -- a buffer overrun. The region accessor scaled its
+	length by eight for every table kernel, so a `coded body(base64)` handed
+	the decoder eight times the region's bytes and it wrote eight times the
+	output, past whatever the caller supplied. No schema in the tree used one,
+	so nothing ran it."""
+	source = (HEAD + PADDED
+	          + "struct s { u8 n; coded body(b64) { u8 content[n]; } }")
+	schema   = parse_text(source)
+	resolved = resolve(schema, solve(schema))
+	header   = generate(schema, resolved, "unit").header
+
+	assert "situ_b64_decode(situ_s_body_ptr(view),\n\t\tencoded, out)" in header
+	assert "encoded * 8u" not in header

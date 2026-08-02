@@ -1046,19 +1046,45 @@ def decodes_here(codec: object) -> bool:
 	return getattr(named, "name", None) in DERIVED_STUFFING
 
 
+def table_is_padded(codec: object) -> bool:
+	"""Whether a table kernel fills out a partial final group (13.2).
+
+	`pad` is what separates base64 from Manchester: both are symbol maps, and
+	one of them emits whole groups and fills the last. That changes the shape
+	of the generated loop -- a symbol at a time cannot express it, because the
+	last group's symbol count depends on how much input was left -- and with
+	it the unit the generated function counts.
+	"""
+	kernel = getattr(codec, "kernel", None)
+	if kernel is None:
+		return False
+	if getattr(getattr(kernel, "family", None), "value", None) != "table":
+		return False
+	return kernel.argument("pad") is not None
+
+
 def decode_counts_bits(codec: object) -> bool:
 	"""Whether the decoder's count is bits rather than bytes.
 
-	A `table` kernel is bit-oriented by construction. A `stuffing` one declares
-	`unit`, because HDLC counts bits where COBS scans bytes -- and passing a
-	byte count to a bit loop decodes an eighth of the region and returns
-	confidently.
+	A `table` kernel is bit-oriented by construction -- *unless* it pads, and
+	then it is not: the padded loop walks whole input bytes into whole output
+	groups, and counts both in bytes. A `stuffing` kernel declares `unit`,
+	because HDLC counts bits where COBS scans bytes.
+
+	Getting this wrong is not a wrong answer, it is a buffer overrun. Every
+	padded codec in `std/kernels.situ` -- base32, base64, base64url -- was
+	declared in bits and defined in bytes, so a coded region using one passed
+	`encoded * 8` to a loop that reads that many *bytes*: eight times the
+	region in, eight times the output written, past whatever the caller
+	supplied. The prototype and the definition differ in a parameter *name*,
+	which C does not check, and no schema in the tree used such a region so
+	nothing ran it (26.35).
 	"""
 	kernel = getattr(codec, "kernel", None)
 	if kernel is None:
 		return False
 	if getattr(getattr(kernel, "family", None), "value", None) == "table":
-		return True
+		return not table_is_padded(codec)
 
 	unit = kernel.argument("unit")
 	return getattr(unit, "name", None) == "bit"

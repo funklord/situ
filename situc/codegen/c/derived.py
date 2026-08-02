@@ -24,6 +24,7 @@ from math import lcm
 
 from situc import ast
 from situc.codegen.c.names import ident, macro
+from situc.traverse import table_is_padded
 from situc.layout import BITS_PER_BYTE
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -113,13 +114,20 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				"(const uint8_t *data, uint32_t len);",
 			])
 		elif decl.kernel.family is ast.KernelFamily.TABLE:
+			# Bits, unless the code pads: a padded table walks whole input
+			# bytes into whole output groups and counts both in bytes. The
+			# prototype said `bits` for every table, which C does not check
+			# against the definition -- the types are the same and only the
+			# name differs -- so base64's header lied about its own unit
+			# (26.35).
+			counted = "len" if table_is_padded(decl) else "bits"
 			lines.extend([
 				"",
 				f"/* `{decl.name}`: derived from a table kernel. */",
 				f"uint32_t {ident(prefix, decl.name, 'encode')}"
-				"(const uint8_t *in, uint32_t bits, uint8_t *out);",
+				f"(const uint8_t *in, uint32_t {counted}, uint8_t *out);",
 				f"uint32_t {ident(prefix, decl.name, 'decode')}"
-				"(const uint8_t *in, uint32_t bits, uint8_t *out);",
+				f"(const uint8_t *in, uint32_t {counted}, uint8_t *out);",
 			])
 		else:
 			lines.extend(_byte_declarations(decl, prefix))

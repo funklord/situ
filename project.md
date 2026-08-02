@@ -6157,9 +6157,29 @@ attacks anything at all. `std/codecs.situ` emits nineteen stated refusals
 rather than nineteen suites, which is right: it is a library of contracts with
 no `impl`.
 
-Still open, and the other half of the answer: a *derived* codec's harness. Its
-properties cannot lie -- they follow from its kernel -- but its implementation
-can be wrong, and the shapes are per-family rather than one ABI.
+**And looking for the derived half found an overrun.** The other half of the
+answer is a harness in the shapes `gen-derived` emits, and reading those shapes
+is what turned this up: a table kernel's generated functions were *declared*
+counting bits and, where the code pads, *defined* counting bytes. C does not
+check a prototype against a definition when only the parameter name differs, so
+`situ_base64_encode(const uint8_t *, uint32_t bits, uint8_t *)` sat in the
+header above a loop walking `len` bytes.
+
+The accessors believed the header. A `coded body(base64)` region passed
+`encoded * 8` to a decoder that reads that many *bytes*: eight times the region
+in, eight times the output written, past whatever buffer the caller supplied.
+Three of the twenty built-in codecs pad -- base32, base64, base64url -- and no
+schema in the tree used one as a region, which is why nothing ran it. The
+hand-written codec tests call them with byte counts and pass, because they were
+written against the implementation rather than the header.
+
+`traverse.table_is_padded` is the predicate now, and both the prototype and
+`decode_counts_bits` ask it. A padded table counts bytes; an unpadded one is
+bit-oriented by construction, which is what a Manchester line code is.
+
+Still open: the derived harness itself. A derived codec's properties cannot lie
+-- they follow from its kernel -- but its implementation can be wrong, and the
+shapes are per-family rather than one ABI.
 
 **A coded region the data sizes was empty in all four.** Found by asking what
 `gen-codec-tests` could be run against, and following the codec path down.
@@ -6204,7 +6224,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2246 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2249 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases
