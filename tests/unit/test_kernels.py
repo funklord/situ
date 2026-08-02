@@ -323,6 +323,17 @@ codec crc16_ccitt {
 }
 impl crc16_ccitt derived;
 
+codec crc24_ble {
+	kernel = polynomial(width = 24, poly = 0x00065B, init = 0x555555, reflect);
+}
+impl crc24_ble derived;
+
+codec crc40_gsm {
+	kernel = polynomial(width = 40, poly = 0x0004820009,
+	                    xorout = 0xFFFFFFFFFF);
+}
+impl crc40_gsm derived;
+
 codec manchester {
 	kernel = table(input_bits = 1, output_bits = 2, code = manchester_802_3);
 }
@@ -354,10 +365,23 @@ def test_an_ungenerated_family_says_so_rather_than_emitting_nothing() -> None:
 def test_the_generated_crcs_match_the_published_check_values(tmp_path: Path) -> None:
 	"""The acceptance criterion: vectors from an independent reference.
 
-	0xCBF43926 and 0x29B1 are the CRC catalogue's check values for the string
-	"123456789". Testing against them is what makes this an implementation of
-	CRC-32 rather than an implementation of whatever this file happens to do.
-	"""
+	0xCBF43926, 0x29B1, 0xC25A56 and 0xD4164FC646 are the CRC catalogue's check
+	values for
+	the string "123456789". Testing against them is what makes this an
+	implementation of CRC-32 rather than an implementation of whatever this
+	file happens to do.
+
+	CRC-24/BLE is here because it is two firsts at once. It is the first width
+	that is not a C word -- twenty-four bits held in a `uint32_t` and masked
+	after every shift -- and the first *reflected* CRC whose initial value is
+	not its own bit-reverse. A reflected register starts reversed, and this
+	emitted it as written; CRC-32 and CRC-16/MODBUS both start all-ones, so
+	every check value in this file agreed with the bug. It came out as
+	0xD39857.
+
+	CRC-40/GSM is the same point on the other side of thirty-two: forty bits
+	in a `uint64_t`, which is where a mask that was written for narrowing
+	would go wrong the other way."""
 	schema   = parse_text("endian big;\n" + DERIVED)
 	resolved = resolve(schema, solve(schema))
 	built    = generate(schema, resolved, "unit")
@@ -370,6 +394,8 @@ def test_the_generated_crcs_match_the_published_check_values(tmp_path: Path) -> 
 		'#include "unit.h"\n'
 		"uint32_t situ_crc32(const uint8_t *data, uint32_t len);\n"
 		"uint16_t situ_crc16_ccitt(const uint8_t *data, uint32_t len);\n"
+		"uint32_t situ_crc24_ble(const uint8_t *data, uint32_t len);\n"
+		"uint64_t situ_crc40_gsm(const uint8_t *data, uint32_t len);\n"
 		"uint32_t situ_manchester_encode(const uint8_t *in, uint32_t bits,\n"
 		"                                uint8_t *out);\n"
 		"uint32_t situ_manchester_decode(const uint8_t *in, uint32_t bits,\n"
@@ -383,6 +409,8 @@ def test_the_generated_crcs_match_the_published_check_values(tmp_path: Path) -> 
 		"\n"
 		"\tif (situ_crc32(check, 9u) != 0xCBF43926u) { return 1; }\n"
 		"\tif (situ_crc16_ccitt(check, 9u) != 0x29B1u) { return 2; }\n"
+		"\tif (situ_crc24_ble(check, 9u) != 0xC25A56u) { return 7; }\n"
+		"\tif (situ_crc40_gsm(check, 9u) != 0xD4164FC646u) { return 8; }\n"
 		"\n"
 		"\t/* IEEE 802.3: a zero is 01 and a one is 10. */\n"
 		"\tif (situ_manchester_encode(plain, 8u, coded) != 16u) { return 3; }\n"

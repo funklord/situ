@@ -39,6 +39,25 @@ codec crc16_modbus {
 }
 impl crc16_modbus derived;
 
+// Bluetooth LE's link-layer CRC, and the first entry here whose width is not a
+// C word: a 24-bit register held in a `uint32_t` and masked after every shift.
+// Its initial value is also the first reflected one that is not its own
+// reverse, which is what made the missing reflection visible -- every other
+// reflected CRC in this file starts all-ones.
+codec crc24_ble {
+	kernel = polynomial(width = 24, poly = 0x00065B, init = 0x555555, reflect);
+}
+impl crc24_ble derived;
+
+// GSM's 40-bit CRC, over control channel blocks. Here as the second width
+// that is not a C word and the one on the other side of thirty-two: the
+// register is a `uint64_t`, masked to forty bits after every shift.
+codec crc40_gsm {
+	kernel = polynomial(width = 40, poly = 0x0004820009,
+	                    xorout = 0xFFFFFFFFFF);
+}
+impl crc40_gsm derived;
+
 codec crc8_smbus {
 	kernel = polynomial(width = 8, poly = 0x07);
 }

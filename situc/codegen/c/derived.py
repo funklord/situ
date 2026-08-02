@@ -109,7 +109,7 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				"",
 				f"/* `{decl.name}`: derived from a polynomial kernel. */",
 				f"#define {macro(prefix, decl.name, 'WIDTH')} {width}u",
-				f"uint{width}_t {ident(prefix, decl.name)}"
+				f"uint{_accumulator(width)}_t {ident(prefix, decl.name)}"
 				"(const uint8_t *data, uint32_t len);",
 			])
 		elif decl.kernel.family is ast.KernelFamily.TABLE:
@@ -152,11 +152,36 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 
 def _width(decl: ast.CodecDecl) -> int | None:
+	"""A CRC width this can generate: any whole number of bytes up to eight.
+
+	It was the four C word widths, so a 24-bit CRC derived a correct signature
+	-- `+3 bytes`, systematic, seekable -- and generated nothing, with a note
+	telling the author to supply it themselves. Bluetooth LE's link-layer CRC
+	is 24 bits, which is how the gap was noticed; CRC-24/OpenPGP, CRC-40/GSM
+	and the 12-bit telemetry CRCs are the same shape.
+
+	Nothing about the algorithm needed the width to be a word. The table is
+	computed either way, and what a non-word width needs is an accumulator
+	wider than itself and a mask after every shift -- which `_accumulator`
+	and the emitter below now do.
+	"""
 	kernel = decl.kernel
 	assert kernel is not None
 	value = kernel.argument("width")
 	width = value.value if isinstance(value, ast.IntLiteral) else None
-	return width if width in WORD_WIDTHS else None
+	if width is None or width % 8 or not 8 <= width <= 64:
+		return None
+	return width
+
+
+def _accumulator(width: int) -> int:
+	"""The C word that holds a `width`-bit CRC: the next one up, or its own.
+
+	A 24-bit CRC accumulates in a `uint32_t`, and every shift is masked back
+	to 24 bits. There is no `uint24_t`, and inventing a struct for one would
+	buy nothing a mask does not.
+	"""
+	return next(word for word in WORD_WIDTHS if word >= width)
 
 
 def _number(decl: ast.CodecDecl, name: str, default: int = 0) -> int:
@@ -188,11 +213,17 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	if not poly:
 		return None
 
-	table = _crc_table(width, poly, reflect)
-	word  = f"uint{width}_t"
-	name  = ident(prefix, decl.name)
-	mask  = (1 << width) - 1
+	table  = _crc_table(width, poly, reflect)
+	held   = _accumulator(width)
+	word   = f"uint{held}_t"
+	name   = ident(prefix, decl.name)
+	mask   = (1 << width) - 1
 	digits = width // 4
+
+	# A width narrower than the word it is held in has to be masked back after
+	# every shift, or the bits above it survive into the next lookup and the
+	# digest is not the one the polynomial defines.
+	narrow = f" & 0x{mask:X}u" if held != width else ""
 
 	lines = [
 		"",
@@ -213,22 +244,30 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	lines.append("};")
 	lines.append("")
+	# A reflected CRC runs the register the other way round, so it *starts*
+	# the other way round: the initial value is the catalogue's, bit-reversed.
+	# Emitting it as written was right for every reflected CRC in the library
+	# -- CRC-32 and CRC-16/MODBUS both start all-ones, which is its own
+	# reverse -- and wrong for the first one that does not. CRC-24/BLE starts
+	# at 0x555555 and came out as 0xD39857 where the catalogue says 0xC25A56.
+	started = _reverse(init, width) if reflect else init
+
 	lines.append(f"{word} {name}(const uint8_t *data, uint32_t len)")
 	lines.append("{")
-	lines.append(f"\t{word} crc = ({word})0x{init:0{digits}X}u;")
+	lines.append(f"\t{word} crc = ({word})0x{started:0{digits}X}u;")
 	lines.append("\tuint32_t i;")
 	lines.append("")
 	lines.append("\tfor (i = 0; i < len; i++) {")
 
 	if reflect:
-		lines.append(f"\t\tcrc = ({word})({name}_table[(crc ^ data[i]) & 0xFFu]"
-		             f" ^ (crc >> 8));")
+		lines.append(f"\t\tcrc = ({word})(({name}_table[(crc ^ data[i]) & 0xFFu]"
+		             f" ^ (crc >> 8)){narrow});")
 	elif width == 8:
 		lines.append(f"\t\tcrc = {name}_table[crc ^ data[i]];")
 	else:
-		lines.append(f"\t\tcrc = ({word})({name}_table"
+		lines.append(f"\t\tcrc = ({word})(({name}_table"
 		             f"[((crc >> {width - 8}) ^ data[i]) & 0xFFu]"
-		             f" ^ ({word})(crc << 8));")
+		             f" ^ ({word})(crc << 8)){narrow});")
 
 	lines.append("\t}")
 	lines.append("")

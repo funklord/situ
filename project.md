@@ -2208,10 +2208,34 @@ kernel families, or a pipeline of them. This bounds the tier-2 design.
 |---|---|---|---|
 | **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, 8b10b, NRZI, Gray, BCD, base16/32/64 | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
 | **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon, BCH | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
+
 | **linear block** | generator or parity-check matrix over GF(2) | Hamming, extended Hamming, LDPC, arbitrary block codes | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
 | **shift register** | taps, feedback source, initial state | convolutional codes, additive and multiplicative scramblers, Miller | `length_preserving` or `ratio_exact`; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output |
 | **permutation** | index mapping, closed form or table | block and convolutional interleavers | `length_preserving`; `seekable = permuted`; `deterministic` |
 | **stuffing** | trigger predicate plus insertion rule | HDLC bit stuffing, COBS, SLIP, byte stuffing | `expansion = ratio_bounded`; `not seekable`; interior addressing lost |
+
+**Any whole number of bytes, and the reflection that hid in the palindromes.**
+A CRC's polynomial, width, initial value, reflection and final xor are the
+description; the table is computed from them rather than copied, so a variant
+nobody has written down generates as well as a famous one. The width was the
+four C word sizes, which meant a 24-bit CRC derived a correct *signature* --
+`+3 bytes`, systematic, seekable -- and generated nothing. Bluetooth LE's
+link-layer CRC is 24 bits, which is how that was noticed. It is any multiple of
+eight up to sixty-four now: the register is held in the next word up and masked
+after every shift, since there is no `uint24_t` and a struct for one would buy
+nothing a mask does not.
+
+Adding the first such entry found a real defect. **A reflected CRC starts its
+register reversed**, and this emitted the initial value as written. Every
+reflected CRC in `std/kernels.situ` starts all-ones -- CRC-32 and
+CRC-16/MODBUS -- and all-ones is its own reverse, so every check value in the
+suite agreed with the bug. CRC-24/BLE starts at `0x555555` and came out
+`0xD39857` where the catalogue says `0xC25A56`. It is in the library now, and
+in the check-value test, for exactly that reason: it is the first width that is
+not a word and the first reflected initial value that is not a palindrome.
+CRC-40/GSM is there too, as the same point on the other side of thirty-two --
+forty bits in a `uint64_t`, where a mask written for narrowing would go wrong
+in the other direction.
 
 **A code name that names two codes is refused.** `manchester` is the instance:
 IEEE 802.3's and G.E. Thomas's are both called Manchester and are bit-inverses
