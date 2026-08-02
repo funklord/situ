@@ -13,6 +13,11 @@ bit_order msb_first
 endian big
 target buffer
 
+struct coded_run size=2..512
+  @0x0000   1         u8         n
+  @0x0001   0..510    doubling   body  codec=doubling
+  ~         1         u8         trailer
+
 struct derived size=13
   @0x0000   2         u16        total  big
   @0x0002   1         u8         a

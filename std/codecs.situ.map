@@ -1,0 +1,31 @@
+# situ capability map v1
+# schema: codecs.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec aes_cbc_128 unbound length_preserving seekable=none granularity=block(16) invertible deterministic error_propagating
+codec aes_ctr_128 unbound length_preserving seekable=linear granularity=byte invertible deterministic
+codec aes_ctr_256 unbound length_preserving seekable=linear granularity=byte invertible deterministic
+codec aes_gcm_128 unbound length_preserving seekable=linear granularity=byte authenticated invertible deterministic
+codec chacha20 unbound length_preserving seekable=linear granularity=byte invertible deterministic
+codec chacha20_poly1305 unbound length_preserving seekable=linear granularity=byte authenticated invertible deterministic
+codec cobs unbound expansion=ratio_bounded(255,254) seekable=none granularity=stream invertible deterministic
+codec code_4b5b unbound expansion=ratio_exact(5,4) seekable=linear granularity=symbol(4) invertible deterministic
+codec code_8b10b unbound expansion=ratio_exact(10,8) seekable=linear granularity=symbol(8) invertible deterministic
+codec crc16_ccitt unbound expansion=+2 seekable=linear granularity=block systematic deterministic
+codec crc32 unbound expansion=+4 seekable=linear granularity=block systematic deterministic
+codec deflate unbound expansion=unbounded seekable=none granularity=stream invertible
+codec hamming_7_4 unbound expansion=ratio_exact(7,4) seekable=linear granularity=bit(4) systematic invertible deterministic
+codec hdlc_bit_stuffing unbound expansion=ratio_bounded(6,5) seekable=none granularity=bit(1) invertible deterministic
+codec hmac_sha256 unbound expansion=+32 seekable=none granularity=stream deterministic
+codec lz4 unbound expansion=unbounded seekable=none granularity=stream invertible deterministic
+codec manchester unbound expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
+codec nrzi unbound length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
+codec reed_solomon_255_223 unbound expansion=+32 seekable=linear granularity=block(255) systematic invertible deterministic error_propagating

@@ -1,0 +1,37 @@
+# situ capability map v1
+# schema: kernels.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec base16 derived expansion=ratio_exact(8,4) seekable=linear granularity=symbol(4) invertible deterministic
+codec base16_lower derived expansion=ratio_exact(8,4) seekable=linear granularity=symbol(4) invertible deterministic
+codec base32 derived expansion=ratio_padded(8,5) seekable=linear granularity=block(5) invertible deterministic
+codec base64 derived expansion=ratio_padded(8,6) seekable=linear granularity=block(3) invertible deterministic
+codec base64url derived expansion=ratio_padded(8,6) seekable=linear granularity=block(3) invertible deterministic
+codec cobs derived expansion=ratio_bounded(255,254) seekable=none granularity=stream invertible deterministic
+codec code_4b5b derived expansion=ratio_exact(5,4) seekable=linear granularity=symbol(4) invertible deterministic
+codec crc16_ccitt derived expansion=+2 seekable=linear granularity=block systematic deterministic
+codec crc16_modbus derived expansion=+2 seekable=linear granularity=block systematic deterministic
+codec crc24_ble derived expansion=+3 seekable=linear granularity=block systematic deterministic
+codec crc32 derived expansion=+4 seekable=linear granularity=block systematic deterministic
+codec crc32c derived expansion=+4 seekable=linear granularity=block systematic deterministic
+codec crc40_gsm derived expansion=+5 seekable=linear granularity=block systematic deterministic
+codec crc8_smbus derived expansion=+1 seekable=linear granularity=block systematic deterministic
+codec framed unbound expansion=ratio_exact(2,1) seekable=permuted granularity=block deterministic
+codec hamming_7_4 derived expansion=ratio_exact(7,4) seekable=linear granularity=bit(4) systematic invertible deterministic
+codec hdlc_bit_stuffing derived expansion=ratio_bounded(6,5) seekable=none granularity=bit(1) invertible deterministic
+codec interleave_16 derived length_preserving seekable=permuted granularity=byte invertible deterministic
+codec manchester_802_3 derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
+codec manchester_thomas derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
+codec reed_solomon_255_223 derived expansion=+32 seekable=linear granularity=block(255) systematic invertible deterministic error_propagating
+codec reed_solomon_64_56 derived expansion=+8 seekable=linear granularity=block(64) systematic invertible deterministic error_propagating
+codec scrambler_additive derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
+codec scrambler_multiplicative derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
+codec smtp_dot_stuffing derived expansion=ratio_bounded(4,3) seekable=none granularity=stream invertible deterministic

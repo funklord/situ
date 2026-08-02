@@ -6205,6 +6205,23 @@ setter bumps the view generation (12.3), and an enum takes its own type in two
 languages and an integer in two. Each is written down where the subset is
 chosen -- the same rule the read subset follows.
 
+**Two committed snapshots that nothing read.** `tests/schemas/edges.situ.map`
+and `edges.situ.wire` have been in the tree for as long as the schema has, and
+the checks that compare a committed map or wire signature against what the
+compiler produces glob `examples/`. So the file that exists to carry the
+constructs no worked example has -- the one whose capability vectors are most
+worth reviewing -- had two snapshots nobody verified. Both were stale, from a
+change made in this same session.
+
+A snapshot nobody verifies is worse than none: it looks authoritative, it is
+what a reader consults, and it drifts silently. That is 26.31's `edges.situ`
+lesson for the third time, and the fix is the same one -- read the list in
+`tests/unit/every_schema.py` rather than a glob somebody wrote.
+
+`std/kernels.situ` gains one too, which is the more useful half: it records the
+derived properties of all twenty-five built-in codecs, so a change to what a
+kernel implies becomes a reviewable diff. This session changed two of them.
+
 **Twenty-one dissectors had never run a line.** 26.14 executed four over
 chosen packets and `luac -p` parses all twenty-five, which proves a file is
 syntax. Running the rest over bytes found five that could not dissect a packet
@@ -6344,7 +6361,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2312 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2320 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

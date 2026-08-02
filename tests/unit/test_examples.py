@@ -21,6 +21,8 @@ from situc.resolve import resolve
 from situc.parser import parse
 from situc.unparse import unparse
 
+from every_schema import SCHEMAS as ALL_SCHEMAS
+
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 # `// STATUS: needs phase N.` marks the phase at which a schema becomes fully
@@ -44,11 +46,23 @@ def required_phase(path: Path) -> int | None:
 
 
 def ids(paths: list[Path]) -> list[str]:
-	return [path.parent.name for path in paths]
+	"""The directory names an example, except where two share one: `std/` and
+	`tests/schemas/` hold more than one schema each, so those carry the file
+	name too."""
+	return [path.parent.name if path.parent.name not in ("std", "schemas")
+	        else f"{path.parent.name}/{path.stem}" for path in paths]
 
 
 CURRENT = [path for path in schemas() if required_phase(path) is None]
 FUTURE  = [path for path in schemas() if required_phase(path) is not None]
+
+#: Every schema this repository builds, for the two snapshot checks below.
+#: They read `examples/` alone, and `tests/schemas/edges.situ` -- the file that
+#: exists to carry the constructs no worked example has -- had a committed map
+#: and a committed wire signature that *nothing read*. Both were stale, from a
+#: change made in the same session that noticed. A snapshot nobody verifies is
+#: worse than none: it looks authoritative and is not (26.35).
+SNAPSHOT = [path for path in ALL_SCHEMAS if required_phase(path) is None]
 
 
 def test_every_example_directory_holds_a_schema() -> None:
@@ -104,7 +118,7 @@ def test_current_examples_solve(path: Path) -> None:
 	solve(parse(Source(str(path), path.read_text(encoding="ascii"))))
 
 
-@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+@pytest.mark.parametrize("path", SNAPSHOT, ids=ids(SNAPSHOT))
 def test_committed_map_is_current(path: Path) -> None:
 	"""The committed map must match what the compiler produces today.
 
@@ -162,7 +176,7 @@ def test_future_examples_are_rejected_naming_their_phase(path: Path) -> None:
 # -- the wire signature (section 19.3) --------------------------------------
 
 
-@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
+@pytest.mark.parametrize("path", SNAPSHOT, ids=ids(SNAPSHOT))
 def test_committed_wire_signature_is_current(path: Path) -> None:
 	"""The byte-level contract, committed for the reason the map is.
 
