@@ -6198,11 +6198,31 @@ sits after a name and is the case. A field readable in four languages and
 writable in three is the schema meaning something narrower in one of them, which
 is the whole thing this check exists to catch, on the half it never looked at.
 
-Three exclusions are the probe's rather than the backends': a covered member's
-setter takes the message or a dirty word by design (14.2), a length driver's
-bumps the view generation (12.3), and an enum takes its own type in two
+Two exclusions are the probe's rather than the backends': a length driver's
+setter bumps the view generation (12.3), and an enum takes its own type in two
 languages and an integer in two. Each is written down where the subset is
 chosen -- the same rule the read subset follows.
+
+**A covered write was the third, and asking it found more.** 14.2 says writing
+a byte a tag covers leaves the tag stale, and each backend spells the marking
+its own way -- the message in C, C++ and Python, a dirty word in Rust -- so it
+looked like a difference by design. It is not: what has to agree is the *bit*,
+and the probe writes the member and prints whether the tag went dirty.
+
+Asking it needed the setter to exist, and in three backends it did not. A
+covered field of a *nested* struct -- `packet.hdr.version`, which is every
+covered field in the worked example -- reached no covered branch at all: they
+walk own members, `own_entries` drops a dotted path, and a nested struct's
+fields have one. That is the third time this session that rule has hidden
+something (the arm's length check and the arm's `validate` were the others).
+
+What it left is worse than a missing accessor. The nested type's own setter
+still writes the byte and marks nothing, so a C++, Rust or Python caller could
+write a tag-covered field and have the message go on reporting itself
+transmittable -- while the map said `auth = Covered(tag)` about that very
+field. C has flattened these onto the parent since the machinery landed. The
+other three do now, and the nested type keeps its plain setter, which is right:
+`inner` may sit where nothing covers it, and the type cannot know.
 
 **And then the derived harness, which is the other half.** A tier-2 codec's
 properties cannot lie -- they are derived from the same kernel description the
@@ -6274,7 +6294,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2254 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2262 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

@@ -229,6 +229,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._extent_property(struct))
 		lines.extend(self._required(struct))
@@ -236,6 +237,52 @@ class Emitter:
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
 		lines.append("")
+		return lines
+
+	def _covered_nested_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""A covered write for a field of a *nested* struct, on the parent.
+
+		`own_entries` drops a dotted path and a nested struct's fields have
+		one, so a covered field inside one never reached the branch that marks
+		the bit -- and the only way to write it was the nested type's own
+		setter, which marks nothing. The map says `auth = Covered(t)` about
+		that field and 14.2 says a covered write leaves `t` stale (26.35).
+
+		The nested type keeps its plain setter: it may sit where nothing
+		covers it, and the type cannot know.
+		"""
+		lines: list[str] = []
+
+		for entry in struct.entries:
+			placement = entry.placement
+			scalar    = placement.scalar
+
+			if "." not in local_name(struct, placement):
+				continue
+			if not placement.covered_by or scalar is None:
+				continue
+			if placement.kind != "field" or placement.array_count is not None:
+				continue
+			if placement.sized_by is not None:
+				continue
+			if entry.vector.get(Axis.MUTATE).base not in ("InPlaceFixed",
+			                                             "InPlaceSlack"):
+				continue
+
+			name = c_name(local_name(struct, placement))
+			tags = ", ".join(placement.covered_by)
+			hint = "int"
+			lines.extend([
+				"",
+				f"\tdef set_{name}(self, msg: Message, value: {hint}) -> None:",
+				f'\t\t"""Write {placement.path} and mark {tags} stale.',
+				"",
+				"\t\tOn the parent, because the nested type's own setter marks",
+				'\t\tnothing -- it may sit where nothing covers it."""',
+				f"\t\t{self._store(placement, scalar, None)}",
+				f"\t\tmsg.mark_dirty({self._tag_bit(struct, placement)})",
+			])
+
 		return lines
 
 	# -- invariants (section 16.1) --------------------------------------

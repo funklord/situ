@@ -567,3 +567,54 @@ def test_the_rust_reads_are_widened() -> None:
 	source = "\n".join(emit(schema, resolved, "unit").files().values())
 
 	assert "as usize) + 1" in source
+
+
+# -- a covered field of a nested struct (26.35) -----------------------------
+
+NESTED_COVERED = """struct inner { u8 a; u16 b; }
+struct s {
+	u8  outside;
+	authenticated { u8 direct; inner nested; }
+	tag u8[16];
+}
+"""
+
+#: What each backend calls the covered write for `s.nested.a`. The setter is
+#: on the *parent*, because marking the bit needs the message and a nested
+#: type cannot know a tag covers it: `inner` may sit where nothing does.
+NESTED_SETTERS = {
+	"c":      "situ_s_nested_a_set(situ_msg_t *msg",
+	"cpp":    "void set_nested_a(::situ::rt::message &owner",
+	"python": "def set_nested_a(self, msg: Message",
+	"rust":   "pub fn set_nested_a(&mut self, dirty: &mut Dirty",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_covered_field_of_a_nested_struct_can_be_written(target: str) -> None:
+	"""C flattened these onto the parent from the start; the other three
+	emitted nothing, because `own_entries` drops a dotted path and a nested
+	struct's fields have one.
+
+	What that left was worse than a missing accessor: the nested type's own
+	setter still writes the byte and marks nothing, so a caller could write a
+	tag-covered field and have the message go on reporting itself
+	transmittable -- while the map said `auth = Covered(tag)` about it. Found
+	by making the differential drivers write (26.35)."""
+	assert NESTED_SETTERS[target] in sources(NESTED_COVERED)[target]
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_that_write_marks_the_tag(target: str) -> None:
+	"""The claim itself: 14.2 says a covered write leaves the tag stale, and
+	a setter that writes without marking is the map lying."""
+	source = sources(NESTED_COVERED)[target]
+	marked = {
+		"c":      "situ_msg_mark_dirty(msg, SITU_S_TAG_DIRTY)",
+		"cpp":    "owner.mark_dirty(dirty_tag)",
+		"python": "msg.mark_dirty(self.DIRTY_TAG)",
+		"rust":   "dirty.mark(Self::DIRTY_TAG)",
+	}[target]
+
+	body = source[source.index(NESTED_SETTERS[target]):]
+	assert marked in body[:400]

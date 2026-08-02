@@ -134,6 +134,10 @@ class Probe(Enum):
 	#: `name <- <integer>` -- a *write*, and then the buffer, which is the
 	#: half of every backend's surface nothing compared.
 	WRITE     = "write"
+	#: `name <- <integer> dirty=<0|1>` -- a write to a member a tag covers,
+	#: which has to leave the tag stale (14.2). The claim is the security
+	#: model's, and four backends spell the marking four ways.
+	COVERED   = "covered"
 
 
 @dataclass(frozen=True)
@@ -336,7 +340,7 @@ def writes(struct: ResolvedStruct) -> list[Ask]:
 			continue
 		if local_name(struct, placement) in drivers:
 			continue
-		if placement.covered_by or placement.since is not None:
+		if placement.since is not None:
 			continue
 		if placement.kind != "field" or scalar is None:
 			continue
@@ -353,8 +357,52 @@ def writes(struct: ResolvedStruct) -> list[Ask]:
 		if placement.type_name not in _SCALAR_TYPES:
 			continue
 
-		found.append(Ask(Probe.WRITE, c_name(local_name(struct, placement)),
-		                 _pattern(scalar.bits), 0, False))
+		# A covered write is the same write plus a claim: the tag it covers
+		# is stale afterwards, which is 14.2's whole point and which each
+		# backend spells its own way -- the message in C, C++ and Python, a
+		# dirty word in Rust.
+		#
+		# A *tag* only. `covered_by` also carries an invariant's obligation,
+		# spelled `invariant total`, whose recompute is section 16.1's rather
+		# than 14.2's and whose accessors are named after the invariant. One
+		# question at a time.
+		covers = [one for one in placement.covered_by if " " not in one]
+		kind   = Probe.COVERED if covers else Probe.WRITE
+		if placement.covered_by and not covers:
+			continue		# an invariant's obligation, not a tag's
+		found.append(Ask(kind, c_name(local_name(struct, placement)),
+		                 _pattern(scalar.bits), 0, False,
+		                 inside=tuple(covers)))
+
+	# And a covered field of a *nested* struct, which the loop above cannot
+	# see: `own_entries` drops a dotted path. Its setter is on the parent in
+	# all four backends -- it was on the parent in C alone until this probe
+	# went looking (26.35) -- and the nested type's own setter marks nothing,
+	# so this is the only path that keeps the tag honest.
+	for entry in struct.entries:
+		placement = entry.placement
+		scalar    = placement.scalar
+		covers    = [one for one in placement.covered_by if " " not in one]
+
+		if "." not in local_name(struct, placement) or not covers:
+			continue
+		if scalar is None or placement.kind != "field":
+			continue
+		# A sealed region's interior is reached through the gate, whose type
+		# every accessor on it takes. The `SEALED` probe opens one and reads
+		# what is inside; writing through a gate is a question of its own.
+		if placement.sealed_by:
+			continue
+		if placement.array_count is not None or placement.sized_by is not None:
+			continue
+		if placement.type_name not in _SCALAR_TYPES:
+			continue
+		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
+			continue
+
+		found.append(Ask(Probe.COVERED, c_name(local_name(struct, placement)),
+		                 _pattern(scalar.bits), 0, False,
+		                 inside=tuple(covers)))
 
 	return found
 
@@ -554,11 +602,25 @@ def _c_writes(resolved: ResolvedSchema, prefix: str) -> list[str]:
 		])
 		for ask in asked:
 			setter = ident(prefix, struct.name, ask.local, "set")
+			getter = ident(prefix, struct.name, ask.local, "get")
+			if ask.probe is Probe.COVERED:
+				# No read-back: a covered *nested* field has its setter on
+				# the parent and its getter on the nested view, which is the
+				# right split -- the write has to mark a bit that lives in
+				# the message and the read does not. The buffer at the end
+				# is what says the bytes landed.
+				tag = ask.inside[0]
+				lines.extend([
+					f"\t\t\t{setter}(&msg, view, {ask.count}u);",
+					f'\t\t\tprintf("{ask.local} <- {ask.count} dirty=%d\\n",',
+					f"\t\t\t\t{ident(prefix, struct.name, tag, 'is_dirty')}"
+					"(&msg) ? 1 : 0);",
+				])
+				continue
 			lines.extend([
 				f"\t\t\t{setter}(view, {ask.count}u);",
 				f'\t\t\tprintf("{ask.local} <- %llu\\n",'
-				f' (unsigned long long)'
-				f'{ident(prefix, struct.name, ask.local, "get")}(view));',
+				f' (unsigned long long){getter}(view));',
 			])
 		lines.extend(["\t\t}", "\t}"])
 
@@ -738,6 +800,16 @@ def _cpp_writes(resolved: ResolvedSchema) -> list[str]:
 			f" 0{'' if fixed else ', n'}, view) == ::situ::rt::err::ok) {{",
 		])
 		for ask in asked:
+			if ask.probe is Probe.COVERED:
+				name = c_name(struct.name)
+				lines.extend([
+					f"\t\t\tview.set_{ask.local}(msg, {ask.count});",
+					f'\t\t\tstd::printf("{ask.local} <- {ask.count}'
+					' dirty=%d\\n",',
+					f"\t\t\t\t::situ::{name}::{ask.inside[0]}_is_dirty(msg)"
+					" ? 1 : 0);",
+				])
+				continue
 			lines.extend([
 				f"\t\t\tview.set_{ask.local}({ask.count});",
 				f'\t\t\tstd::printf("{ask.local} <- %llu\\n",',
@@ -913,7 +985,9 @@ def _rust_writes(resolved: ResolvedSchema) -> list[str]:
 	if not asked_any:
 		return []
 
-	lines = ["\tlet mut raw = raw;", ""]
+	lines = ["\tlet mut raw = raw;",
+	         "\tlet mut dirty = situ_rt::Dirty::default();",
+	         "\tlet _ = &dirty;", ""]
 
 	for struct, asked in asked_any:
 		lines.extend([
@@ -923,6 +997,17 @@ def _rust_writes(resolved: ResolvedSchema) -> list[str]:
 			f" unit::{_pascal(struct.name)}Mut::new(&mut raw) {{",
 		])
 		for ask in asked:
+			if ask.probe is Probe.COVERED:
+				lines.extend([
+					f"\t\t\tview.set_{rust_ident(ask.local)}"
+					f"(&mut dirty, {ask.count});",
+					f'\t\t\tprintln!("{ask.local} <- {ask.count}'
+					' dirty={}",',
+					f"\t\t\t\tif unit::{_pascal(struct.name)}::"
+					f"{rust_ident(ask.inside[0] + '_is_dirty')}(&dirty)"
+					" { 1 } else { 0 });",
+				])
+				continue
 			lines.extend([
 				f"\t\t\tview.set_{rust_ident(ask.local)}({ask.count});",
 				f'\t\t\tprintln!("{ask.local} <- {{}}",'
@@ -1085,6 +1170,14 @@ def _python_writes(resolved: ResolvedSchema) -> list[str]:
 			"else:",
 		])
 		for ask in asked:
+			if ask.probe is Probe.COVERED:
+				lines.extend([
+					f"\tview.set_{ask.local}(msg, {ask.count})",
+					f'\tprint("{ask.local} <- {ask.count}",',
+					f'\t\t"dirty=%d" % (1 if view.{ask.inside[0]}_is_dirty'
+					" else 0))",
+				])
+				continue
 			lines.extend([
 				f"\tview.{ask.local} = {ask.count}",
 				f'\tprint("{ask.local} <-", view.{ask.local})',

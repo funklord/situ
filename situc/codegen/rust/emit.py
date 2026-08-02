@@ -294,9 +294,57 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._setter(struct, entry))
 
+		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(["}", ""])
 		return [*types, *lines]
+
+	def _covered_nested_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""A covered write for a field of a *nested* struct, on the parent.
+
+		`own_entries` drops a dotted path and a nested struct's fields have
+		one, so a covered field inside one never reached the branch that marks
+		the bit -- and the only way to write it was the nested type's own
+		setter, which marks nothing. The map says `auth = Covered(t)` about
+		that field and 14.2 says a covered write leaves `t` stale (26.35).
+
+		The nested type keeps its plain setter, which is right: the type may
+		be used where nothing covers it, and it cannot know.
+		"""
+		lines: list[str] = []
+
+		for entry in struct.entries:
+			placement = entry.placement
+			scalar    = placement.scalar
+
+			if "." not in local_name(struct, placement):
+				continue
+			if not placement.covered_by or scalar is None:
+				continue
+			if placement.kind != "field" or placement.array_count is not None:
+				continue
+			if placement.sized_by is not None:
+				continue
+			if entry.vector.get(Axis.MUTATE).base not in ("InPlaceFixed",
+			                                             "InPlaceSlack"):
+				continue
+
+			name  = _ident(f"set_{c_name(local_name(struct, placement))}")
+			what  = ", ".join(placement.covered_by)
+			rtype = self._field_type(placement, writing=True)
+			lines.extend([
+				"",
+				f"\t/// `{placement.path}` is under {what}, so writing it here",
+				"\t/// marks the bit. Its own type's setter cannot: the type may",
+				"\t/// sit where nothing covers it.",
+				f"\tpub fn {name}(&mut self, dirty: &mut Dirty,"
+				f" value: {rtype}) {{",
+				f"\t\t{self._store(placement, scalar)}",
+				f"\t\tdirty.mark({self._dirty_bits(struct, placement)});",
+				"\t}",
+			])
+
+		return lines
 
 	# -- reads ---------------------------------------------------------
 

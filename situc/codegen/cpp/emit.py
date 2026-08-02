@@ -203,6 +203,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._member(struct, entry))
 
+		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._offsets(struct))
 		lines.extend(self._extent_method(struct))
@@ -2742,6 +2743,58 @@ class Emitter:
 			f"\t\t\t{name}().data(), {encoded}, out, cap, &len));",
 			"\t}",
 		]
+
+	def _covered_nested_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""A covered write for a field of a *nested* struct, on the parent.
+
+		`own_entries` drops a dotted path, and a nested struct's fields have
+		one -- so a covered field inside one never reached the branch above,
+		and the only way to write it was the nested type's own setter, which
+		marks nothing. The map says `auth = Covered(t)` about that field and
+		14.2 says a covered write leaves `t` stale, so a backend with no
+		marking path does not have the operation the map describes.
+
+		C has flattened these onto the parent since the machinery landed;
+		this backend, Rust and Python did not, and nothing compared writes
+		until now (26.35). The nested type keeps its own plain setter, which
+		is right: `inner` may be used where no tag covers it, and the type
+		cannot know.
+		"""
+		covered = [entry for entry in struct.entries
+		           if "." in local_name(struct, entry.placement)
+		           and entry.placement.covered_by
+		           and entry.placement.scalar is not None
+		           and entry.placement.kind == "field"
+		           and entry.placement.array_count is None
+		           and entry.placement.sized_by is None
+		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
+		                                                      "InPlaceSlack")]
+		lines: list[str] = []
+
+		for entry in covered:
+			placement = entry.placement
+			scalar    = placement.scalar
+			assert scalar is not None
+
+			name  = c_name(local_name(struct, placement))
+			ctype = self._field_ctype(placement)
+			what  = ", ".join(placement.covered_by)
+			bits  = self._dirty_bits(struct, placement)
+			lines.extend([
+				"",
+				f"\t/* {placement.path} is under {what}, so writing it here",
+				"\t * marks the bit. Its own type's setter cannot: `"
+				f"{placement.type_name}` may sit",
+				"\t * where nothing covers it. */",
+				f"\tvoid set_{name}(::situ::rt::message &owner, {ctype} value)"
+				" noexcept",
+				"\t{",
+				f"\t\t{self._store(scalar, placement, 'value', None)}",
+				f"\t\towner.mark_dirty({bits});",
+				"\t}",
+			])
+
+		return lines
 
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
 		"""Each variant arm's members, guarded by the discriminant (9.6).
