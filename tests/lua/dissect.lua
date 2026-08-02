@@ -81,6 +81,16 @@ local function Tvb(buffer, base)
 		if offset == nil then
 			return range(buffer, base, 0, #buffer)
 		end
+		-- `tvb(offset)` is the range from `offset` to the end, and so is a
+		-- negative length: Wireshark's API, and what a generated dissector
+		-- writes for a `[remaining]` member. The stub implemented only the
+		-- two-argument form, so `subtree:add(f.payload, tvb(at))` -- correct
+		-- Lua against the real API -- died here on `offset + nil`. Five
+		-- dissectors could not be executed at all, and the reason was this
+		-- file rather than any of them (26.35).
+		if length == nil or length < 0 then
+			length = #buffer - offset
+		end
 		if offset + length > #buffer then
 			error(("tvb(%d, %d) runs past the %d bytes there are")
 				:format(offset, length, #buffer), 2)

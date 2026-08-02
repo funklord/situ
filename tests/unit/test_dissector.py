@@ -15,6 +15,7 @@ shows the wrong bytes is worse than one that fails to load.
 
 from __future__ import annotations
 
+import random
 import re
 import shutil
 import subprocess
@@ -22,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from every_schema import SCHEMAS, ids
 from situc.cli import analyse
 from situc.dissector import generate
 from situc.layout import solve
@@ -532,3 +534,66 @@ def test_helpers_are_defined_before_they_are_called() -> None:
 	assert where["name_labels_span"] < where["name_extent"]
 	assert where["name_extent"] < where["question_extent"]
 
+
+
+# -- every dissector, executed (26.35) --------------------------------------
+
+#: Alphabets, for the same reason the differential drivers have them: a
+#: dissector for a text protocol reaches its scans only over text-shaped
+#: bytes, and one for a binary format reaches its arithmetic over anything.
+DISSECT_ALPHABETS = (
+	None,
+	bytes(range(0x20, 0x7f)) + b"\r\n",
+	b"0123456789 \r\n:.-",
+)
+
+
+def dissect_bytes(rng: random.Random) -> bytes:
+	alphabet = DISSECT_ALPHABETS[rng.randrange(len(DISSECT_ALPHABETS))]
+	length   = rng.randrange(0, 96)
+
+	if alphabet is None:
+		return bytes(rng.randrange(256) for _ in range(length))
+	return bytes(alphabet[rng.randrange(len(alphabet))] for _ in range(length))
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_dissector_runs(schema: Path, tmp_path: Path) -> None:
+	"""`luac -p` has parsed every dissector for months, which proves a file is
+	syntax. Four were executed over chosen packets (26.14); the other
+	twenty-one had never run a line.
+
+	Running them found three schemas whose dissector died on the first packet
+	-- `subtree:add(nil, ...)`, because the loop that declares `ProtoField`s
+	and the loop that adds them disagreed about varints and coded regions --
+	and two more that the *stub* could not run, because it implemented only
+	the two-argument `tvb(offset, length)` and a `[remaining]` member writes
+	`tvb(at)`.
+
+	This asks only that the dissector survives the packet. What it *shows* is
+	the business of the tests above, which is why those use chosen bytes: a
+	random buffer has no right answer to compare against.
+	"""
+	source, resolved, _ = analyse(schema)
+	lua = tmp_path / f"{schema.stem}.lua"
+	lua.write_text(generate(parse(source), resolved, schema.stem),
+	               encoding="ascii")
+
+	rng = random.Random(20260803)
+	for name, struct in sorted(resolved.structs.items()):
+		# A register map is a bus transaction rather than bytes on a wire, so
+		# no `Proto` is emitted for one and there is nothing to run.
+		if struct.layout.register is not None:
+			continue
+
+		for _ in range(8):
+			packet = dissect_bytes(rng)
+			assert LUA is not None
+			result = subprocess.run(
+				[LUA, str(HARNESS), str(lua), name, packet.hex()],
+				capture_output=True, text=True)
+
+			assert result.returncode == 0, (
+				f"{schema.name}/{name} died on {len(packet)} bytes:\n"
+				f"  {packet.hex()}\n{result.stderr}")

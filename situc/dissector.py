@@ -180,11 +180,14 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	fields  = [_field(resolved, struct, placement) for placement in shown]
 	fields  = [line for line in fields if line]
 
-	if fields:
-		lines.append(f"{proto}.fields = {{}}")
-		lines.append(f"local {proto}_f = {proto}.fields")
-		lines.extend(fields)
-		lines.append("")
+	# The table always, even when nothing goes in it. A struct whose only
+	# member is a nested one shows no field of its own -- and the body still
+	# names `X_f` for anything that arrives later, so declaring it costs a
+	# line and its absence is a `nil` index at run time.
+	lines.append(f"{proto}.fields = {{}}")
+	lines.append(f"local {proto}_f = {proto}.fields")
+	lines.extend(fields)
+	lines.append("")
 
 	lines.extend(_dissector(resolved, struct, members))
 	lines.append("")
@@ -200,6 +203,19 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.type_name in resolved.structs:
 		return ""			# a nested struct: its own Proto dissects it
 	if placement.sized_by is not None or placement.array_count is not None:
+		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
+
+	# A varint and a `coded` or `sealed` region have no scalar, and the
+	# dissector body adds both -- so returning "" here declared no field for
+	# a member the body then indexed. `subtree:add(nil, ...)` is not a wrong
+	# display, it is a Lua error at the first packet, and the three schemas
+	# it hit could not be dissected at all (26.35).
+	#
+	# `bytes` rather than a number: a varint's bytes are not the value it
+	# spells, and a region's are the transform's output. Showing them as an
+	# integer would be a number nobody wrote.
+	if placement.varint is not None or placement.kind in ("coded", "sealed"):
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 

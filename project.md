@@ -5706,8 +5706,10 @@ evaluate itself, so there is no fourth spelling of "how long is it" to compare.
 **Smaller, known, and deliberate.**
 
 - No Wireshark, so nothing proves it accepts a generated plugin. Everything
-  short of that runs: `luac -p` parses every dissector, and four are executed
-  over real packets against a stub of Wireshark's API (26.14).
+  short of that runs: `luac -p` parses every dissector, four are executed over
+  real packets against a stub of Wireshark's API (26.14), and every one of the
+  twenty-five is executed over pseudo-random bytes to prove it survives a
+  packet at all (26.35).
 - Big-endian aarch64 is compile-only (decisions 0004, 0007).
 - Python emits no decode for a coded region, deliberately: it would mean
   loading a shared object from a path this generator would have to invent
@@ -6203,6 +6205,31 @@ setter bumps the view generation (12.3), and an enum takes its own type in two
 languages and an integer in two. Each is written down where the subset is
 chosen -- the same rule the read subset follows.
 
+**Twenty-one dissectors had never run a line.** 26.14 executed four over
+chosen packets and `luac -p` parses all twenty-five, which proves a file is
+syntax. Running the rest over bytes found five that could not dissect a packet
+at all, and two causes.
+
+Three were the artifact: `subtree:add(nil, ...)` on the first packet, because
+the loop that declares `ProtoField`s and the loop that adds them disagreed
+about which members exist. A varint and a `coded` or `sealed` region have no
+scalar, so the declaring loop returned nothing for them while the body added
+them anyway -- and `examples/smtp`'s `data_block`, whose only member is a coded
+region, got no field table at all, so the body indexed a global that was never
+assigned. Both are `ProtoField.bytes` now, which is the honest display: a
+varint's bytes are not the value it spells and a region's are the transform's
+output.
+
+Two were the *stub*. `tests/lua/dissect.lua` implemented `tvb(offset, length)`
+and not `tvb(offset)`, which is Wireshark's spelling for "to the end" and what
+a generated dissector writes for a `[remaining]` member. Correct Lua against
+the real API, dead against the stub -- which is the risk a stub carries, and
+the reason to run every file through it rather than the four somebody chose.
+
+The check asks only that the dissector survives the packet. What it *shows* is
+the business of the tests that hand it chosen bytes: a random buffer has no
+right answer to compare against.
+
 **And a check that asks the map rather than another backend.** Three gaps this
 session were a backend emitting *nothing* -- no accessor and no note -- for a
 member the capability map calls writable. Backend-versus-backend can see that
@@ -6317,7 +6344,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2287 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2312 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases
