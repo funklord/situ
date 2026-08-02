@@ -569,6 +569,21 @@ def test_a_byte_run_is_expected_as_bytes() -> None:
 	assert "assert_memory_equal(situ_S_mac_ptr(view), want, sizeof(want));" in text
 
 
+def test_a_nested_field_is_expected_through_its_own_view() -> None:
+	"""`reference.seconds` is not `situ_ntp_packet_reference_seconds_get` --
+	that function does not exist, because a nested struct's fields are its own
+	type's accessors on a sub-view. The expectation was written as though it
+	did, so the member most worth stating in NTP -- thirty-two of its
+	forty-eight bytes are timestamps -- produced C naming a symbol nothing
+	emits (26.35)."""
+	text = vector_source(
+		"struct t { u32 s; u32 f; }\nstruct S { t a; }",
+		"S basic 00 00 00 2A 00 00 00 07\n\ta.s = 42\n")
+
+	assert "situ_S_a_view(view, &sub)" in text
+	assert "assert_int_equal(situ_t_s_get(sub), 42);" in text
+
+
 def test_a_byte_run_expectation_of_the_wrong_length_is_refused() -> None:
 	"""Silently comparing a prefix is the failure this exists to avoid: the
 	assertion would pass while checking four of six bytes."""

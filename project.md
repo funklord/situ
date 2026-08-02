@@ -5996,7 +5996,7 @@ There is a request and a response through the example's own accessors now.
   length check skips a dotted path, for the nested-struct reason, and an arm
   member has one: three backends drop it before the validate loop, so the check
   belongs at the variant and walks its arms.
-- **Three worked examples have never seen a message.** `ntp`, `rtc` and
+- **Two worked examples have never seen a message.** `rtc` and
   `telemetry` are generated, fuzzed, `gen-checks`'d and compared under random
   bytes, and none of that can tell whether the schema describes the protocol
   -- `gen-checks` derives its assertions from the schema, so it confirms
@@ -6008,7 +6008,7 @@ There is a request and a response through the example's own accessors now.
   map's "message" is a datasheet's power-on state, and `telemetry` is situ's
   own format, so a vector for it can only be a round trip.
 
-  Two came off the list, each with the implementation that wrote its bytes
+  Three came off the list, each with the implementation that wrote its bytes
   named beside them. `bmp`: `convert -size 3x2 xc:red -type truecolor
   BMP3:red.bmp`. `arp`: glibc's `struct arphdr`, `ARPHRD_ETHER`,
   `ETHERTYPE_IP` and `ARPOP_REQUEST` from `<net/if_arp.h>`, with the addresses
@@ -6016,7 +6016,11 @@ There is a request and a response through the example's own accessors now.
   header covers only the fixed eight bytes -- the four addresses are variable
   in the format, so glibc leaves them out -- which is exactly the part a
   schema gets wrong: two 16-bit fields, two 8-bit, another 16-bit, none of
-  them aligned to what follows.
+  them aligned to what follows. `ntp`: lwIP's `struct sntp_msg` and
+  `sntp_initialize_request()`, which is where the request's first byte 0x23
+  comes from -- three bit-packed fields lwIP writes as one `li_vn_mode` and
+  this schema splits into `leap`, `version` and `mode`, so the vector is the
+  only thing that says they were split in the same places.
 
   What a per-struct vector cannot state is a claim about a whole file, and for
   `bmp` that is `tests/generated/test_bmp.c`: the pixels start where the two
@@ -6027,15 +6031,19 @@ There is a request and a response through the example's own accessors now.
   Wiring the two in found the small version of the same lesson twice. The
   vector rule hardcoded `tests/schemas/`, so `gen-tests` -- a shipped
   subcommand -- could only ever run on a schema in that one directory, and it
-  had exactly one. And a vector's expectations were values, which a byte run
-  does not have: ARP is twenty of its twenty-eight bytes addresses, so the
-  format could have stated almost nothing about itself. An expectation whose
-  field is a byte run compares as bytes now, and a run of the wrong length is
-  a diagnostic rather than an assertion that silently checks a prefix.
+  had exactly one. And a vector's expectations were written as though every
+  field were a scalar, which cost twice. A byte run has no value, so ARP --
+  twenty of its twenty-eight bytes addresses -- could have stated almost
+  nothing about itself; it compares as bytes now, and a run of the wrong
+  length is a diagnostic rather than an assertion that silently checks a
+  prefix. And a nested struct's field is reached through its own accessors on
+  a sub-view, so `reference.seconds` emitted C naming a getter that does not
+  exist -- in NTP, where thirty-two of the forty-eight bytes are timestamps
+  and every one of them is nested.
 - Beyond those: the two shapes the differential check cannot ask about
   (26.31), and 26.33.
 
-**Status:** 2235 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2236 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

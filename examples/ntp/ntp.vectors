@@ -1,0 +1,65 @@
+# Golden vectors for the NTP worked example.
+#
+# Laid out by lwIP rather than by situ -- a description that agrees only with
+# its own compiler has demonstrated nothing. `struct sntp_msg` and the
+# constants below are copied verbatim from lwIP's SNTP client, which is
+# vendored in U-Boot at lib/lwip/lwip/src/apps/sntp/sntp.c:
+#
+#   #define SNTP_MSG_LEN          48
+#   #define SNTP_LI_NO_WARNING    (0x00 << 6)
+#   #define SNTP_VERSION          (4 /* NTP Version 4 */ << 3)
+#   #define SNTP_MODE_CLIENT      0x03
+#   #define SNTP_MODE_SERVER      0x04
+#
+#   struct sntp_msg {
+#     u8_t  li_vn_mode;  u8_t stratum;  u8_t poll;  u8_t precision;
+#     u32_t root_delay;  u32_t root_dispersion;  u32_t reference_identifier;
+#     u32_t reference_timestamp[2];  u32_t originate_timestamp[2];
+#     u32_t receive_timestamp[2];    u32_t transmit_timestamp[2];
+#   } PACK_STRUCT_STRUCT;
+#
+# The request is `sntp_initialize_request()` byte for byte: `memset` to zero,
+# then `li_vn_mode = SNTP_LI_NO_WARNING | SNTP_VERSION | SNTP_MODE_CLIENT`,
+# then the transmit timestamp through `htonl`. That first byte is 0x23, and it
+# is the whole reason this vector is worth having: three bit-packed fields in
+# one byte, and the only check that situ splits them where lwIP joined them.
+#
+# lwIP carries each timestamp as two `u32_t` rather than one 64-bit value, for
+# the same reason this schema has a `timestamp` struct with two members: NTP's
+# 32.32 fixed point is not an integer, and calling it one invites arithmetic
+# nobody meant (8.1).
+#
+# The times are 2025-08-02 00:00:00 UTC and a second later, in NTP's epoch
+# (seconds since 1900). What they mean matters less than that both ends agree
+# where the halves are.
+
+# A client request: mode 3, everything else zero but the transmit timestamp,
+# which is what the server echoes back as `origin`.
+ntp_packet client_request 23 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 EC 3E DB 80 80 00 00 00
+	leap              = SITU_LEAP_INDICATOR_NONE
+	version           = 4
+	mode              = SITU_MODE_CLIENT
+	stratum           = 0
+	transmit.seconds  = 3963542400
+	transmit.fraction = 0x80000000
+
+# A stratum-2 server's answer. `reference_id` is four ASCII bytes for a
+# stratum-1 source and an address below that; "GPS\0" is the shape a reader
+# should recognise, and this schema reads it as the u32 0x47505300 because a
+# u32 is what the field is.
+ntp_packet server_reply 24 02 06 E9 00 00 12 34 00 00 56 78 47 50 53 00 EC 3E D9 F0 00 00 00 00 EC 3E DB 80 80 00 00 00 EC 3E DB 81 00 00 00 00 EC 3E DB 81 40 00 00 00
+	leap               = SITU_LEAP_INDICATOR_NONE
+	version            = 4
+	mode               = SITU_MODE_SERVER
+	stratum            = 2
+	poll               = 6
+	precision          = -23
+	root_delay         = 0x1234
+	root_dispersion    = 0x5678
+	reference_id       = 0x47505300
+	reference.seconds  = 3963542000
+	origin.seconds     = 3963542400
+	origin.fraction    = 0x80000000
+	receive.seconds    = 3963542401
+	transmit.seconds   = 3963542401
+	transmit.fraction  = 0x40000000

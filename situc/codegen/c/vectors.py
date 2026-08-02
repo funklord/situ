@@ -18,6 +18,17 @@ are expectations: a field path relative to the struct, and the value its getter
 must return. A case with no expectations still asserts that the bytes are the
 right length, that a view can be taken, that validation accepts them, and that
 reading and writing every field back leaves the buffer byte-identical.
+
+An expectation takes the form its field admits, which is decided here against
+the layout rather than guessed from how the value is spelled:
+
+    mac    = 00:1A:2B:3C:4D:5E    a byte run, compared as bytes
+    a.s    = 42                   a nested struct's field, through its own view
+
+Both were written as though every field were a scalar. The first is why ARP --
+twenty of its twenty-eight bytes addresses -- could state almost nothing about
+itself; the second emitted C naming a getter that does not exist, since a
+nested struct's accessors belong to its type (26.35).
 """
 
 from __future__ import annotations
@@ -229,8 +240,32 @@ def _byte_run(resolved: ResolvedSchema, struct: str, path: str) -> int | None:
 	return placement.array_count
 
 
+def _nested_of(resolved: ResolvedSchema, struct: str,
+		path: str) -> tuple[str, str, str] | None:
+	"""A member of a nested struct, as (member, its type, the inner path).
+
+	`None` where the path names one of this struct's own members. A nested
+	struct's fields are reached through its own accessors on a sub-view, so
+	`reference.seconds` is not `situ_ntp_packet_reference_seconds_get` -- that
+	function does not exist, and writing the expectation produced C that named
+	it anyway. NTP is thirty-two of its forty-eight bytes timestamps, so the
+	member most worth stating was the one that could not be.
+	"""
+	if "." not in path:
+		return None
+
+	head, rest = path.split(".", 1)
+	found = resolved.find(f"{struct}.{head}")
+	if found is None or found.placement.scalar is not None:
+		return None
+	inner = found.placement.type_name or ""
+	if resolved.find_struct(inner) is None:
+		return None
+	return head, inner, rest
+
+
 def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
-		value: str, prefix: str) -> list[str]:
+		value: str, prefix: str, held: str = "view") -> list[str]:
 	"""One expectation, in the form the field it names admits.
 
 	A scalar compares as a number; a byte run compares as bytes. The second
@@ -239,12 +274,27 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 	itself, and the one marker in `examples/bmp` had to be checked by hand
 	beside the generated suite (26.35).
 	"""
+	nested = _nested_of(resolved, case.struct, path)
+	if nested is not None:
+		member, inner, rest = nested
+		return [
+			"\t{",
+			"\t\tsitu_view_t sub;",
+			"",
+			f"\t\tassert_int_equal({ident(prefix, case.struct, member, 'view')}"
+			f"({held}, &sub), SITU_OK);",
+			*[f"\t{line}" for line in
+			  _expectation_lines(resolved, Case(inner, case.name, b""),
+			                     rest, value, prefix, "sub")],
+			"\t}",
+		]
+
 	local = c_name(path)
 	count = _byte_run(resolved, case.struct, path)
 
 	if count is None:
 		return [f"\tassert_int_equal({ident(prefix, case.struct, local, 'get')}"
-		        f"(view), {value});"]
+		        f"({held}), {value});"]
 
 	data = _hex(value)
 	return [
@@ -253,7 +303,7 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 		f" {', '.join(f'0x{byte:02X}' for byte in data)} }};",
 		"",
 		f"\t\tassert_memory_equal({ident(prefix, case.struct, local, 'ptr')}"
-		"(view), want, sizeof(want));",
+		f"({held}), want, sizeof(want));",
 		"\t}",
 	]
 

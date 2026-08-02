@@ -70,7 +70,7 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 # `header` alone, and one schema is a sample of the constructs that schema
 # happens to have -- the argument FUZZ_SCHEMAS above already makes. `bmp` is
 # here because its vectors are two files ImageMagick wrote (26.35).
-VECTOR_SCHEMAS	:= header bmp arp
+VECTOR_SCHEMAS	:= header bmp arp ntp
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 
 # Fuzz harnesses, for every schema. This was `header` alone once: the harness
