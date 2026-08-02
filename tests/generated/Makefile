@@ -31,7 +31,7 @@ CMOCKA_LIBS	?= -lcmocka
 # Every test is compiled twice: the checked build exercises the bounds and
 # generation assertions, the release build proves they compile out cleanly.
 TESTS		:= test_runtime test_header test_tiff test_message test_protobuf \
-		   test_packet test_kernels test_sqlite
+		   test_packet test_kernels test_sqlite test_bmp
 BINS		:= $(TESTS:%=$(BUILD_DIR)/%) $(TESTS:%=$(BUILD_DIR)/%_checked)
 
 # Schemas whose generated accessors are exercised here. The code is generated
@@ -66,7 +66,11 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 # Generated golden-vector suites and fuzz harnesses, built alongside the
 # hand-written tests. The vector suites run under cmocka; the fuzz harness is
 # built standalone so a harness nobody can compile cannot go unnoticed.
-VECTOR_SCHEMAS	:= header
+# Schemas with golden vectors beside them, in the `gen-tests` format. This was
+# `header` alone, and one schema is a sample of the constructs that schema
+# happens to have -- the argument FUZZ_SCHEMAS above already makes. `bmp` is
+# here because its vectors are two files ImageMagick wrote (26.35).
+VECTOR_SCHEMAS	:= header bmp
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 
 # Fuzz harnesses, for every schema. This was `header` alone once: the harness
@@ -108,6 +112,7 @@ OBJS_test_protobuf	:= $(GEN_DIR)/protobuf.o
 OBJS_test_packet	:= $(GEN_DIR)/packet.o
 OBJS_test_kernels	:= $(GEN_DIR)/kernels.o $(GEN_DIR)/kernels_derived.o
 OBJS_test_sqlite	:= $(GEN_DIR)/sqlite.o
+OBJS_test_bmp		:= $(GEN_DIR)/bmp.o
 
 # The per-test object lists are named after the target, so the prerequisites
 # have to be expanded a second time to see them. Without this a test linking a
@@ -147,6 +152,13 @@ $(foreach schema,$(SCHEMAS),$(eval $(call situ_generate,$(schema))))
 $(foreach schema,$(SCHEMAS),\
 	$(eval SCHEMA_$(notdir $(basename $(schema))) := $(schema)))
 
+# And where its vectors are, which is beside it. The rule below hardcoded
+# `tests/schemas/`, so a vector file could only exist for a schema in that one
+# directory -- the same shape as the compile checks that globbed `examples/`
+# and never read `edges.situ` (26.31).
+$(foreach name,$(VECTOR_SCHEMAS),\
+	$(eval VECTORS_$(name) := $(basename $(SCHEMA_$(name))).vectors))
+
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
@@ -167,11 +179,11 @@ $(BUILD_DIR)/runtime/libsitu.a:
 
 # BUILD_DIR may be absolute (parent) or relative (standalone), so resolve the
 # invocation rather than blindly prefixing './'.
-$(GEN_DIR)/%_vectors.c: $(REPO_ROOT)/tests/schemas/%.situ \
-		$(REPO_ROOT)/tests/schemas/%.vectors $(SITUC_SOURCES)
+$(GEN_DIR)/%_vectors.c: $(REPO_ROOT)/$$(SCHEMA_$$*) \
+		$(REPO_ROOT)/$$(VECTORS_$$*) $(SITUC_SOURCES)
 	@mkdir -p '$(GEN_DIR)'
-	cd '$(REPO_ROOT)' && $(SITUC) gen-tests 'tests/schemas/$*.situ' \
-		'tests/schemas/$*.vectors' --out '$(abspath $(GEN_DIR))'
+	cd '$(REPO_ROOT)' && $(SITUC) gen-tests '$(SCHEMA_$*)' \
+		'$(VECTORS_$*)' --out '$(abspath $(GEN_DIR))'
 
 $(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ $(SITUC_SOURCES)
 	@mkdir -p '$(GEN_DIR)'

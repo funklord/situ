@@ -3593,7 +3593,10 @@ situ/
                               edges.situ -- constructs no protocol here uses,
                               which exists so their generated code runs at all
   examples/                   one directory per protocol, name matching its
-                              `.situ` file, each with at least one `require`
+                              `.situ` file, each with at least one `require`.
+                              A `<name>.vectors` beside a schema is bytes
+                              some other implementation wrote, and `gen-tests`
+                              turns it into a cmocka suite (26.35)
 ```
 
 Every example is parsed by the test suite, and every buildable one has a
@@ -5982,20 +5985,34 @@ There is a request and a response through the example's own accessors now.
   safe; `validate` says nothing, which is the half of 26.27's bargain that
   makes a lie distinguishable from a truncation. It needs a fits check guarded
   by the discriminant, in four backends.
-- **Five worked examples have never seen a message.** `arp`, `bmp`, `ntp`,
-  `rtc` and `telemetry` are generated, fuzzed, `gen-checks`'d and compared
-  under random bytes, and none of that can tell whether the schema describes
-  the protocol -- `gen-checks` derives its assertions from the schema, so it
-  confirms self-consistency, and agreement across backends confirms they read
-  the same schema the same way. Only a real message says the schema is right,
-  and http is the proof that the difference is not theoretical. Each needs a
-  vector with its source cited, which is 26.32's rule and the reason
-  `examples/ble` is still unwritten.
+- **Four worked examples have never seen a message.** `arp`, `ntp`, `rtc` and
+  `telemetry` are generated, fuzzed, `gen-checks`'d and compared under random
+  bytes, and none of that can tell whether the schema describes the protocol
+  -- `gen-checks` derives its assertions from the schema, so it confirms
+  self-consistency, and agreement across backends confirms they read the same
+  schema the same way. Only a real message says the schema is right, and http
+  is the proof that the difference is not theoretical. Each needs a vector
+  with its source cited, which is 26.32's rule and the reason `examples/ble`
+  is still unwritten. `rtc` and `telemetry` are the awkward two: a register
+  map's "message" is a datasheet's power-on state, and `telemetry` is situ's
+  own format, so a vector for it can only be a round trip.
+
+  `bmp` came off this list first, because it is the one with an implementation
+  to hand: `convert -size 3x2 xc:red -type truecolor BMP3:red.bmp` writes the
+  bytes, `examples/bmp/bmp.vectors` records them and the command, and
+  `gen-tests` turns them into the field-by-field suite. What a per-struct
+  vector cannot state is in `tests/generated/test_bmp.c` -- that the pixels
+  start where the two structs end and the declared size is that plus the
+  pixels, which is the arithmetic a misplaced field breaks.
+
+  Wiring it in found the smaller version of the same thing: the vector rule
+  hardcoded `tests/schemas/`, so `gen-tests` -- a shipped subcommand -- could
+  only ever run on a schema in that one directory, and it had exactly one.
 - Beyond those: the two shapes the differential check cannot ask about
   (26.31), and 26.33.
 
-**Status:** 2232 unit tests, 7 skipped; generated C compiled on the host and
-both aarch64 targets.
+**Status:** 2232 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation.
 
 ### Invariants to hold across all phases
 
