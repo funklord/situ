@@ -5543,6 +5543,25 @@ the fallback chain evaluates to zero as well, so the idiom is safe for a
 narrower reason than the one written down. A dependency nobody can exercise is
 a dependency nobody has checked, including the person who wrote it down.
 
+**One shape the differential check cannot ask about, and what it is.** A nested
+struct's sub-view is bounds-checked in C -- `situ_view_sub` refuses a range the
+parent does not contain -- and constructed unchecked in the other three, which
+hand back a view claiming the nested struct's size whatever the parent holds.
+That is the acquisition invariant of 20.2 one level in, and it is the same
+divergence the top-level `at()` had until the differential check found it.
+
+No schema in this repository can reach it: every nested member sits at a static
+offset, so either the struct is fixed-size and inside the parent's own minimum,
+or its extent comes from scans the parent's limit already bounds. It is a
+divergence in shape rather than a reachable bug, and it stays here rather than
+in the open list for that reason.
+
+Closing it means an API change in three backends -- a nested accessor that can
+refuse, `err x(T &out)` in C++, `Result<T>` in Rust, a raise in Python -- which
+is the sort of thing to do deliberately rather than while passing. Until then
+the differential drivers cannot ask the question at all, because three of the
+four have no way to answer it.
+
 **Smaller, known, and deliberate.**
 
 - No Wireshark, so nothing proves it accepts a generated plugin. Everything

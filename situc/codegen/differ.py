@@ -27,10 +27,15 @@ subcommand and a line in section 21.
 What is probed is a subset, and the subset is the thing to grow. Now: scalars,
 byte arrays, delimited members and delimited text numbers, tags, endian
 markers, varints, the counts of runs and of `tlv` and `indexed` regions, a
-variant's arms, and `validate`. Not yet: coded regions, nested structs, sealed
-interiors and versioned members -- each answers with an error in three
-languages and an exception in the fourth, and a probe spelled wrong in one
-language reports a disagreement that is not there.
+variant's arms, and members present only from a given version -- plus
+`validate`. Not yet: coded regions, nested structs and sealed interiors.
+
+A versioned member needed no new probe shape at all: "is this member in *this*
+message?" is the question a variant's arm answers, asked of the version field
+instead of a discriminant, and all four spell it the same way. A nested struct
+is the opposite case and is why it is still missing -- C bounds-checks the
+sub-view and the other three cannot fail, so there is no shared answer to
+compare until three of them grow one (26.31).
 
 A variant's arms are asked the reachability question rather than the value
 one: which arm the discriminant selects, and how long it is or what it holds.
@@ -117,14 +122,25 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 		local     = c_name(local_name(struct, placement))
 
 		# Skipped, each for a reason the module docstring gives: a gated
-		# member is reached through the gate, a versioned one answers
-		# differently in each language, and a coded member's bytes are the
-		# transform's rather than the field's.
-		if placement.sealed_by or placement.since is not None \
-				or placement.codec is not None:
+		# member is reached through the gate, and a coded member's bytes are
+		# the transform's rather than the field's.
+		if placement.sealed_by or placement.codec is not None:
 			continue
 
 		scalar = placement.scalar
+
+		# A member present only from a given version answers exactly the way a
+		# variant's arm does -- an out-parameter and an error in C and C++, a
+		# `Result` in Rust, a property that raises in Python -- because it is
+		# the same question: is this member in *this* message? The version
+		# field is the message's own, so a hostile one decides it.
+		if placement.since is not None:
+			if scalar is not None and not scalar.is_bit_packed \
+					and not scalar.is_bcd \
+					and placement.type_name in _SCALAR_TYPES:
+				found.append(Ask(Probe.ARM_VALUE, local, None,
+				                 max(8, scalar.bits), scalar.signed))
+			continue
 
 		# `classify` has no kind for a variant: it has no accessor of its own,
 		# and the emitters key on the placement. Its *arms* do have accessors,
