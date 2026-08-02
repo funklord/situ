@@ -26,10 +26,10 @@ struct request_line size=4..8224
   ~         until:0d0a u8         version  big cap=16 encoding=ascii
 
 struct response_head size=6..
-  @0x0000   4..275    status_line start  big
+  @0x0000   4..276    status_line start  big
   ~         until:0d0a header_field fields  big
 
-struct status_line size=4..275
+struct status_line size=4..276
   @0x0000   until:20  u8         version  cap=16 encoding=ascii
-  ~         until:20  u16        code  radix=10 minimal cap=3
+  ~         until:20  u16        code  radix=10 minimal cap=4
   ~         until:0d0a u8         reason  big cap=256

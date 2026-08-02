@@ -28,9 +28,9 @@ struct request_line size=4 access=Sequential mutate=Shifting address=Unstable
   request_line.version                   offset=Scanned size=Bounded(2, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
 struct response_head size=6 access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
-  response_head.start                    offset=AbsoluteStatic(0x00) size=Bounded(4, 275) align=Aligned(8) repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  response_head.start                    offset=AbsoluteStatic(0x00) size=Bounded(4, 276) align=Aligned(8) repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   response_head.start.version            offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  response_head.start.code               offset=Scanned size=Bounded(1, 3) align=Unaligned repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  response_head.start.code               offset=Scanned size=Bounded(1, 4) align=Unaligned repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   response_head.start.reason             offset=Scanned size=Bounded(2, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
   response_head.fields                   offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
   response_head.fields[]                 offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
@@ -39,5 +39,5 @@ struct response_head size=6 access=Sequential mutate=Shifting address=Unstable r
 
 struct status_line size=4 access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
   status_line.version                    offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  status_line.code                       offset=Scanned size=Bounded(1, 3) align=Unaligned repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  status_line.code                       offset=Scanned size=Bounded(1, 4) align=Unaligned repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   status_line.reason                     offset=Scanned size=Bounded(2, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable

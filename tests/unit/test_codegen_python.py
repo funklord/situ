@@ -477,6 +477,51 @@ def test_the_terminator_is_not_looked_for_inside_an_element(tmp_path: Path) -> N
 	assert view.entries_count == 3
 
 
+REQUEST = (b"GET /index.html HTTP/1.1\r\n"
+	b"Host: example.com\r\n"
+	b"Accept: */*\r\n\r\n")
+
+RESPONSE = (b"HTTP/1.1 404 Not Found\r\n"
+	b"Content-Length: 0\r\n\r\n")
+
+
+def test_the_http_example_reads_an_http_message(tmp_path: Path) -> None:
+	"""The worked example against the bytes it is about (26.32).
+
+	Nothing did this. Every http test in the tree used a schema written for
+	that test or a request line the dissector was handed, and `examples/http`
+	could not read a response: `max 3` on a three-digit status code caps the
+	whole member, delimiter included (8.6.1), so the scan ran out at the third
+	digit. `validate` called every real response a frame cut short, and
+	`reason` kept the space that should have ended the code -- `" Not Found"`.
+
+	A two-digit code parsed, which is why the property tests and the random
+	buffers were all content.
+	"""
+	source = (ROOT / "examples" / "http" / "http.situ").read_text(encoding="utf-8")
+	module = load(tmp_path, "", module_text=emit(source, ""))
+	rt     = runtime()
+
+	raw  = bytearray(REQUEST)
+	head = module.request_head.at(rt.Message(raw), 0, len(raw))
+	head.validate()
+	assert bytes(head.start.method)  == b"GET"
+	assert bytes(head.start.target)  == b"/index.html"
+	assert bytes(head.start.version) == b"HTTP/1.1"
+	assert head.fields_count == 2
+	assert bytes(head.fields(0).name)  == b"Host"
+	assert bytes(head.fields(0).value) == b"example.com"
+
+	raw  = bytearray(RESPONSE)
+	held = module.response_head.at(rt.Message(raw), 0, len(raw))
+	held.validate()
+	held.start.validate()
+	assert bytes(held.start.version) == b"HTTP/1.1"
+	assert held.start.code           == 404
+	assert bytes(held.start.reason)  == b"Not Found"
+	assert held.fields_count == 1
+
+
 def test_an_empty_run_has_no_elements(tmp_path: Path) -> None:
 	"""The terminator standing where the first element would. The first thing
 	a walk gets wrong, in one direction or the other."""

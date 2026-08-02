@@ -58,9 +58,15 @@ struct request_head {
 // than shared through a variant: the two lines have different fields, and a
 // discriminant that told them apart would have to come from outside the
 // bytes.
+// `max 4` for a three-digit code, and the four is the point. A cap bounds
+// the whole member, delimiter included (8.6.1), so `max 3` says "the code and
+// its space are three bytes between them" -- which is a two-digit code, and
+// HTTP has none. Every real response failed here: the scan ran out at the
+// third digit, `validate` reported a frame cut short, and `reason` came back
+// with the space still on the front of it.
 struct status_line {
 	u8       version[]  until " "     max 16  [encoding = ascii];
-	decimal  u16        code until " " max 3  [minimal];
+	decimal  u16        code until " " max 4  [minimal];
 	u8       reason[]   until "\r\n"  max 256;
 }
 
