@@ -3280,21 +3280,46 @@ class Emitter:
 				f"\t\treturn {nested}(situ_view_t{{ base() + ({start}),",
 				f"\t\t\tlimit() - ({start}), raw().generation }}).extent();",
 				"\t}",
-				f"\t[[nodiscard]] {nested} {name}() const noexcept",
-				"\t{",
-				f"\t\treturn {nested}(situ_view_t{{ base() + ({start}),",
-				f"\t\t\t{name}_extent(), raw().generation }});",
-				"\t}",
+				*self._nested_accessor(name, nested, f"({start})",
+				                       f"{name}_extent()"),
 			]
 
 		return [
 			"",
 			f"\t/* {placement.path} at {placement.offset_bytes}. Its own class",
 			"\t * carries its accessors; this is where the parent puts it. */",
-			f"\t[[nodiscard]] {nested} {name}() const noexcept",
+			*self._nested_accessor(name, nested, str(placement.offset_bytes),
+			                       f"{nested}::size_bytes"),
+		]
+
+	def _nested_accessor(self, name: str, nested: str, start: str,
+			extent: str) -> list[str]:
+		"""A sub-view, refused where the parent does not contain it.
+
+		It handed one back unchecked: a view claiming the nested struct's size
+		whatever the parent held, which is 20.2's acquisition invariant one
+		level in -- every constant-offset accessor on the result trusts that
+		its own bytes are all there. C has bounds-checked this since phase 4,
+		through `situ_view_sub`, and the other three could not refuse at all;
+		the differential check could not even ask the question, because three
+		of the four had no way to answer it.
+
+		So the signature changes rather than the body: an out-parameter and an
+		error, which is what every other fallible accessor here already looks
+		like.
+		"""
+		return [
+			f"\t[[nodiscard]] ::situ::rt::err {name}({nested} &out)"
+			" const noexcept",
 			"\t{",
-			f"\t\treturn {nested}(situ_view_t{{ base() + {placement.offset_bytes},",
-			f"\t\t\t{nested}::size_bytes, raw().generation }});",
+			"\t\tsitu_view_t raw;",
+			f"\t\tconst situ_err_t e = situ_view_sub(this->raw(), {start},"
+			f" {extent}, &raw);",
+			"",
+			"\t\tif (e == SITU_OK) {",
+			f"\t\t\tout = {nested}(raw);",
+			"\t\t}",
+			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",
 		]
 
@@ -3878,11 +3903,23 @@ class Emitter:
 					and not has_computable_extent(self.resolved.structs, inner):
 				return [f"\t\t/* {placement.path}: no accessor to validate"
 				        " through. */"]
-			name = c_name(local_name(struct, placement))
+			name  = c_name(local_name(struct, placement))
+			held  = f"::{self.namespace}::{c_name(placement.type_name or '')}"
+			# Two errors rather than one, because they are two things: the
+			# frame does not contain the member, or the member is there and
+			# malformed. The accessor refuses the first now (26.31), and
+			# `validate` is where a caller who does validate hears about it.
 			return [
-				f"\t\tif (const ::situ::rt::err e = {name}().validate();"
-				f" e != ::situ::rt::err::ok) {{",
-				"\t\t\treturn e;",
+				"\t\t{",
+				f"\t\t\t{held} held;",
+				f"\t\t\tif (const ::situ::rt::err e = {name}(held);"
+				" e != ::situ::rt::err::ok) {",
+				"\t\t\t\treturn e;",
+				"\t\t\t}",
+				"\t\t\tif (const ::situ::rt::err e = held.validate();"
+				" e != ::situ::rt::err::ok) {",
+				"\t\t\t\treturn e;",
+				"\t\t\t}",
 				"\t\t}",
 			]
 

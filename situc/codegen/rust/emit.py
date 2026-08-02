@@ -1421,19 +1421,34 @@ class Emitter:
 					"\t}",
 					"",
 					f"\t/// {placement.path}, sized from its own contents.",
-					f"\tpub fn {name}(&self) -> {nested}<'_> {{",
+					"\t///",
+					"\t/// `Err(Bounds)` where the frame does not contain it:",
+					"\t/// every accessor on the result trusts that its own",
+					"\t/// bytes are all here, which is 20.2's acquisition",
+					"\t/// check one level in. C has refused this since phase",
+					"\t/// 4 and the other three could not (26.31).",
+					f"\tpub fn {name}(&self) -> Result<{nested}<'_>> {{",
 					f"\t\tlet at = {at};",
 					f"\t\tlet n  = self.{_ident(f'{base}_extent')}();",
-					f"\t\t{nested} {{ bytes: &self.bytes[at..at + n] }}",
+					"\t\tif self.bytes.len() < at || self.bytes.len() - at < n {",
+					"\t\t\treturn Err(Error::Bounds);",
+					"\t\t}",
+					f"\t\tOk({nested} {{ bytes: &self.bytes[at..at + n] }})",
 					"\t}",
 				]
 
 			return [
 				"",
 				f"\t/// {placement.path} at {placement.offset_bytes}.",
-				f"\tpub fn {name}(&self) -> {nested}<'_> {{",
-				f"\t\t{nested} {{ bytes: &self.bytes[{placement.offset_bytes}..]"
-				f" }}",
+				"\t///",
+				"\t/// `Err(Bounds)` where the frame does not contain it (26.31).",
+				f"\tpub fn {name}(&self) -> Result<{nested}<'_>> {{",
+				f"\t\tlet at = {placement.offset_bytes};",
+				f"\t\tif self.bytes.len() < at"
+				f" || self.bytes.len() - at < {nested}::SIZE {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\tOk({nested} {{ bytes: &self.bytes[at..] }})",
 				"\t}",
 			]
 
@@ -3489,7 +3504,11 @@ class Emitter:
 					checks.append(f"\t\t// {placement.path}: no accessor to"
 					              " validate through.")
 					continue
-				checks.append(f"\t\tself.{name}().validate()?;")
+				# Two questions rather than one: the frame may not contain
+				# the member at all, which the accessor refuses now (26.31),
+				# and the member may be there and malformed. `?` carries both
+				# out, in that order.
+				checks.append(f"\t\tself.{name}()?.validate()?;")
 				continue
 
 			assert scalar is not None

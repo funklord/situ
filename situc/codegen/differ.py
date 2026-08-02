@@ -28,13 +28,12 @@ What is probed is a subset, and the subset is the thing to grow. Now: scalars,
 byte arrays, delimited members and delimited text numbers, tags, endian
 markers, varints, the counts of runs and of `tlv` and `indexed` regions, a
 variant's arms, members present only from a given version, the framing of a
-coded region, a sealed region's stage gate *and* the scalars behind it, and the
-first element of an array of wide scalars -- plus `validate`.
+coded region, a sealed region's stage gate *and* the scalars behind it, the
+first element of an array of wide scalars, and a nested struct's sub-view --
+plus `validate`.
 
 Not yet, and each for a stated reason rather than for want of writing it:
 
-  * a nested struct's sub-view -- C bounds-checks it and the other three cannot
-    fail, so there is no shared answer to compare (26.31);
   * an enum-typed field -- C and C++ hand back the value in an enum type, Rust
     an `Option` that is `None` for a value the schema does not name, and Python
     the member or the raw integer. Three answers to "what does this byte say",
@@ -128,6 +127,9 @@ class Probe(Enum):
 	#: `name[0] <integer>` -- the first element of an array of wide scalars,
 	#: which is reached by index rather than by pointer.
 	ELEMENT   = "element"
+	#: `name ok=<0|1> extent=<n>` -- a nested struct's sub-view, which every
+	#: backend can now refuse.
+	NESTED    = "nested"
 
 
 @dataclass(frozen=True)
@@ -145,9 +147,13 @@ class Ask:
 	#: once it opens. The interior is the half a tag exists to protect, so
 	#: reading it is the half worth comparing.
 	inside: tuple[str, ...] = ()
+	#: For `NESTED`: the member's type, which C++ needs to declare the
+	#: out-parameter the accessor fills in.
+	inner: str = ""
 
 
-def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
+def asks(struct: ResolvedStruct, structs: set[str],
+		structs_by_name: dict[str, ResolvedStruct] | None = None) -> list[Ask]:
 	"""Which members this struct can be asked about, in declaration order.
 
 	`traverse.classify` decides what kind a member is, so the four drivers ask
@@ -155,6 +161,7 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 	today.
 	"""
 	found: list[Ask] = []
+	structs_by_name = structs_by_name or {}
 
 	for entry in own_entries(struct):
 		placement = entry.placement
@@ -245,6 +252,15 @@ def asks(struct: ResolvedStruct, structs: set[str]) -> list[Ask]:
 			if placement.sized_by is None:
 				continue
 			found.append(Ask(Probe.BYTES, local))
+		elif kind is Member.NESTED and placement.type_name in structs:
+			# A fixed-size nested struct measures its own constant; a
+			# variable one is asked. The count carries which.
+			inner_struct = structs_by_name.get(placement.type_name or "")
+			fixed = (inner_struct.layout.size_bytes
+			         if inner_struct is not None
+			         and inner_struct.layout.is_fixed_size else None)
+			found.append(Ask(Probe.NESTED, local, fixed,
+			                 inner=c_name(placement.type_name or "")))
 		elif kind is Member.DELIMITED:
 			# A text number framed by a delimiter is asked the framing
 			# question and not the value one: its value accessor returns an
@@ -411,7 +427,7 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 			'\t\t\tprintf("no-view\\n");',
 			"\t\t} else {",
 		])
-		for ask in asks(struct, set(resolved.structs)):
+		for ask in asks(struct, set(resolved.structs), resolved.structs):
 			lines.extend(_c_ask(prefix, name, ask))
 		lines.extend([
 			f'\t\t\tprintf("validate %d\\n",'
@@ -445,6 +461,16 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	if ask.probe is Probe.ELEMENT:
 		return [f'\t\t\tprintf("{ask.local}[0] %lld\\n",'
 		        f' (long long){call.format("get")}(view, 0u));']
+	if ask.probe is Probe.NESTED:
+		return ["\t\t\t{",
+		        "\t\t\t\tsitu_view_t sub;",
+		        f"\t\t\t\tconst situ_err_t e = {call.format('view')}"
+		        "(view, &sub);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local} ok=%d extent=%u\\n",',
+		        "\t\t\t\t\te == SITU_OK ? 1 : 0,"
+		        " e == SITU_OK ? sub.limit : 0u);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\tprintf("{ask.local} little=%d\\n",'
 		        f' {call.format("is_little")}(view) ? 1 : 0);']
@@ -541,7 +567,7 @@ def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 			'\t\t\tstd::printf("no-view\\n");',
 			"\t\t} else {",
 		])
-		for ask in asks(struct, set(resolved.structs)):
+		for ask in asks(struct, set(resolved.structs), resolved.structs):
 			lines.extend(_cpp_ask(ask))
 		lines.extend([
 			'\t\t\tstd::printf("validate %d\\n",'
@@ -571,6 +597,15 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.ELEMENT:
 		return [f'\t\t\tstd::printf("{ask.local}[0] %lld\\n",'
 		        f" static_cast<long long>(view.{ask.local}(0)));"]
+	if ask.probe is Probe.NESTED:
+		return ["\t\t\t{",
+		        f"\t\t\t\t::situ::{ask.inner} held;",
+		        f"\t\t\t\tconst auto e = view.{ask.local}(held);",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local} ok=%d extent=%u\\n",',
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? held.limit() : 0u);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\tstd::printf("{ask.local} little=%d\\n",'
 		        f" view.{ask.local}_is_little() ? 1 : 0);"]
@@ -664,7 +699,7 @@ def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 			"\t\t\tErr(_) => println!(\"no-view\"),",
 			"\t\t\tOk(view) => {",
 		])
-		for ask in asks(struct, set(resolved.structs)):
+		for ask in asks(struct, set(resolved.structs), resolved.structs):
 			lines.extend(_rust_ask(ask))
 		lines.extend([
 			'\t\t\t\tprintln!("validate {}", match view.validate() {',
@@ -698,6 +733,18 @@ def _rust_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\t\tprintln!("{ask.local} present={{}}",'
 		        f" if view.{call}().is_empty() {{ 0 }} else {{ 1 }});"]
+	if ask.probe is Probe.NESTED:
+		# The extent is asked of the sub-view rather than read off it: the
+		# slice behind a generated struct is private, which is the point of
+		# the type. `extent()` is emitted for a variable struct and `SIZE` is
+		# the constant for a fixed one.
+		measure = ("held.extent()" if ask.count is None else str(ask.count))
+		return [f"\t\t\t\tmatch view.{call}() {{",
+		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
+		        f' extent={{}}", {measure}),',
+		        f'\t\t\t\t\tErr(_) => println!("{ask.local} ok=0'
+		        ' extent=0"),',
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.ELEMENT:
 		# `Result`, where C and C++ return the value: the index is the
 		# caller's own and the count is the schema's, so the first element is
@@ -774,7 +821,7 @@ def _python(resolved: ResolvedSchema, prefix: str) -> str:
 			"else:",
 		])
 		body: list[str] = []
-		for ask in asks(struct, set(resolved.structs)):
+		for ask in asks(struct, set(resolved.structs), resolved.structs):
 			body.extend(_python_ask(ask))
 		body.extend([
 			"try:",
@@ -809,6 +856,13 @@ def _python_ask(ask: Ask) -> list[str]:
 		        f" % (0 if len(view.{ask.local}) == 0 else 1))"]
 	if ask.probe is Probe.ELEMENT:
 		return [f'print("{ask.local}[0] %d" % view.{ask.local}(0))']
+	if ask.probe is Probe.NESTED:
+		return ["try:",
+		        f"\theld = view.{ask.local}",
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local} ok=0 extent=0")',
+		        "else:",
+		        f'\tprint("{ask.local} ok=1 extent=%d" % held._len)']
 	if ask.probe is Probe.MARKER:
 		return [f'print("{ask.local} little=%d"'
 		        f" % (1 if view.{ask.local}_is_little else 0))"]

@@ -300,9 +300,11 @@ int main()
 
 	situ_view_t csrc;
 	situ_hdr_source_view(cview, &csrc);
-	if (std::memcmp(cpp.source().octets().data(),
+	situ::addr source;
+	if (cpp.source(source) != situ::rt::err::ok) { return 1; }
+	if (std::memcmp(source.octets().data(),
 	                situ_addr_octets_ptr(csrc), 4) != 0) { bad++; }
-	if (cpp.source().octets().size() != 4) { bad++; }
+	if (source.octets().size() != 4) { bad++; }
 
 	cpp.set_ttl(64);
 	if (situ_hdr_ttl_get(cview) != 64) { bad++; }
@@ -2441,7 +2443,8 @@ int main()
 	if (one.option() != 0x11 || one.length() != 0x22)       return 2;
 
 	const situ::frame whole{ situ_view_t{ buf, sizeof buf, 0 } };
-	const situ::option held = whole.first();
+	situ::option held;
+	if (whole.first(held) != situ::rt::err::ok)              return 6;
 	if (held.option() != 0x11)                              return 3;
 
 	one.set_option(0x99);

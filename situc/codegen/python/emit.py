@@ -1872,14 +1872,28 @@ class Emitter:
 				"",
 				"\t@property",
 				f"\tdef {name}(self) -> {nested}:",
-				f'\t\t"""{placement.path}, sized from its own contents."""',
+				f'\t\t"""{placement.path}, sized from its own contents.',
+				"",
+				"\t\tRaises BoundsError where the frame does not contain it:",
+				"\t\tevery accessor on the result trusts that its own bytes",
+				"\t\tare all here, which is 20.2's acquisition check one",
+				'\t\tlevel in (26.31)."""',
+				f"\t\tif self._len - ({start}) < self.{name}_extent:",
+				f'\t\t\traise BoundsError("{placement.path}: the frame does'
+				' not reach it")',
 				f"\t\treturn {nested}(self._msg, self._at + ({start}),",
 				f"\t\t\tself.{name}_extent)",
 			]
 
 		return [
 			"", "\t@property", f"\tdef {name}(self) -> {nested}:",
-			f'\t\t"""{placement.path} at {placement.offset_bytes}."""',
+			f'\t\t"""{placement.path} at {placement.offset_bytes}.',
+			"",
+			"\t\tRaises BoundsError where the frame does not contain it",
+			'\t\t(26.31)."""',
+			f"\t\tif self._len - {placement.offset_bytes} < {nested}.SIZE_BYTES:",
+			f'\t\t\traise BoundsError("{placement.path}: the frame does not'
+			' reach it")',
 			f"\t\treturn {nested}(self._msg, self._at + {placement.offset_bytes},",
 			f"\t\t\t{nested}.SIZE_BYTES)",
 		]
