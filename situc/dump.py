@@ -73,7 +73,20 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.Requirement):
 		return [_indent(depth, f"{decl.kind.value} {expr_to_source(decl.expr)}")]
 
-	raise TypeError(f"cannot dump {type(decl).__name__}")
+	# An invariant is a declaration like any other and this dumper did not
+	# know it, so `situc dump-ast` -- a debugging aid, and phase 1's own
+	# deliverable -- died with a Python traceback on any schema carrying one.
+	# `tests/schemas/edges.situ` has carried one since invariants landed, and
+	# nothing ran the subcommand over it (26.35).
+	if isinstance(decl, ast.Invariant):
+		return [_indent(depth,
+		                f"invariant {decl.derived} == {expr_to_source(decl.expr)}")]
+
+	# Every kind the parser can produce has a case above. This is not one, so
+	# it is a construct that arrived without its dump -- which is a compiler
+	# bug rather than a schema error, and says so.
+	raise TypeError(f"cannot dump {type(decl).__name__}: every declaration the "
+	                "parser produces needs a case in situc/dump.py")
 
 
 def _codec(decl: ast.CodecDecl, depth: int) -> list[str]:

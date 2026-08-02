@@ -9,6 +9,8 @@ import argparse
 
 import pytest
 
+from every_schema import SCHEMAS as ALL_SCHEMAS
+from every_schema import ids
 from situc.cli import build_parser, main
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -393,3 +395,36 @@ def test_it_names_only_the_flags_that_are_global() -> None:
 	assert "--diagnostics" in claimed
 	for local in ("--out", "--target", "--prefix"):
 		assert f"`{local}" in claimed or f"`{local}=" in claimed
+
+
+# -- every subcommand, over every schema (26.35) ----------------------------
+
+#: The subcommands that take a schema and produce a document. Split from the
+#: ones below only by whether they write into a directory.
+READS  = ("map", "advise", "wire", "doc", "dump-ast")
+WRITES = ("gen-fuzz", "gen-checks", "gen-dissector", "gen-derived",
+	"gen-codec-tests")
+
+
+@pytest.mark.parametrize("schema", ALL_SCHEMAS, ids=ids(ALL_SCHEMAS))
+@pytest.mark.parametrize("command", READS + WRITES)
+def test_every_subcommand_runs_on_every_schema(
+		command: str, schema: Path, tmp_path: Path) -> None:
+	"""A subcommand is a product surface, and a schema is what it is for.
+	Every pair had been exercised by *some* test on *some* schema, which is
+	not the same claim.
+
+	It found `situc dump-ast` dying with a Python traceback -- `TypeError:
+	cannot dump Invariant` -- on any schema carrying an invariant.
+	`tests/schemas/edges.situ` has carried one since invariants landed, and
+	the phase 1 deliverable had never been pointed at it (26.35).
+
+	This asks only that the command succeeds. What each one *says* is the
+	business of the tests above; a crash is the failure that makes those
+	moot.
+	"""
+	argv = [command, str(schema)]
+	if command in WRITES:
+		argv += ["--out", str(tmp_path)]
+
+	assert main(argv) == 0

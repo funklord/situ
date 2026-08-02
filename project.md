@@ -6205,6 +6205,22 @@ setter bumps the view generation (12.3), and an enum takes its own type in two
 languages and an integer in two. Each is written down where the subset is
 chosen -- the same rule the read subset follows.
 
+**Every subcommand, over every schema.** Ten of the fourteen CLI commands take
+a schema and produce something, and every pair had been exercised by *some*
+test on *some* schema -- which is not the same claim as every pair. Running all
+of them over all of them found one: `situc dump-ast` dies with a Python
+traceback, `TypeError: cannot dump Invariant`, on any schema carrying one.
+
+`tests/schemas/edges.situ` has carried an invariant since invariants landed,
+and the phase 1 deliverable had never been pointed at it. The dumper had a case
+for every other declaration kind and no `else` that said anything useful; it has
+the case now, and the fallthrough says what it means -- a construct arrived
+without its dump, which is a compiler bug rather than a schema error.
+
+The check asks only that the command succeeds. What each one *says* is the
+business of the tests that already assert it; a crash is the failure that makes
+those moot.
+
 **Two committed snapshots that nothing read.** `tests/schemas/edges.situ.map`
 and `edges.situ.wire` have been in the tree for as long as the schema has, and
 the checks that compare a committed map or wire signature against what the
@@ -6361,7 +6377,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2320 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2570 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases
