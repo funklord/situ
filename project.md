@@ -7080,6 +7080,54 @@ host and under aarch64 emulation; the four backends compared over
 `tests/schemas/edges.situ` on the shapes above; the new stride check falsified
 by widening the emitted stride and watching it fail.
 
+### 26.48 The constructs that had never met a run
+
+26.47's family was one construct meeting an element width. This fold takes the
+same run to the constructs it had never been written beside: a nested struct,
+a variant arm, and a byte-order marker. Three probe schemas, and two of the
+three produced something no backend should emit.
+
+**A marker at a dynamic offset crashed the compiler.** `examples/tiff` is the
+only `endian_marker` in the tree and it is a header of constant offsets, so
+the marker-conditional load had never been asked for a member behind a
+variable-length one. C's asks the placement for its constant offset while
+every other load on that path takes one from the caller -- so it hit the
+assertion inside `offset_bytes` and came out as a Python traceback, where
+section 17 asks for a diagnostic with a blame chain. The other three emit it
+correctly, which is the shape of most cross-backend findings reversed.
+
+**And Rust wrote `self.as_ref().as_ref()`.** The setter for a member at a
+dynamic offset rewrites its body to run the *reads* on the immutable view, by
+substituting `self.` -- and the store had already put an `as_ref()` on the
+marker predicate, because every other setter site needs one. So the rewrite
+found its own output and wrapped it again. That is invariant 53's rule from
+the other side: a rewrite over generated text has to move past what somebody
+already wrote there, not only past what it wrote itself.
+
+**A variant arm may be a scalar, a byte run or a struct.** A run of *values*
+was none of those, in any of the four: C and C++ said so in the generated file
+("not a shape this backend reaches into yet"), and Python and Rust emitted
+nothing at all -- no accessor and no note, which is invariant 27's floor and
+one step below it. Both spellings were unreachable, `u16 x[n]` and `u16 x[3]`
+alike, the arm's own base being dynamic whatever its count says. All four emit
+the pair now, the count carrying the discriminant test and the getter reaching
+through it.
+
+**The differ asked that arm the wrong question**, which is why nothing found
+it: `_arms` sorted a member into "byte run" or "scalar" by its element width
+alone, so a run of `u16` was a scalar arm and the generated driver named a
+getter taking no index. A driver that does not compile is a schema nobody
+compares -- and no schema here had one.
+
+**What did not break** is worth as much as what did. A nested struct's field
+driving a run, a run of values under a marker, `[remaining]` with a wide
+element, a fixed-point element reached by index: written, generated, executed
+in all four, agreed. The sweep is only evidence when it says both.
+
+**Status:** 2804 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; five probe schemas built and run through
+all four backends, three of them now in `tests/schemas/edges.situ`.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7676,7 +7724,16 @@ by widening the emitted stride and watching it fail.
    Where a fix is proved by a hand-written schema, that schema belongs in the
    tree.
 
-72. **Where the count comes from and how wide an element is are two
+72. **A construct is exercised where it was written, not where it composes.**
+   `endian_marker` has worked since phase 4 and every field it governs in this
+   repository is at a constant offset, so the one thing a marker *is* -- a
+   decision taken from the data -- had never met a member placed from the
+   data. C crashed on it and Rust generated a double `as_ref()`. The question
+   to ask of a construct is not "is it tested" but "which of its neighbours
+   has it never had", and the neighbours worth trying first are the ones that
+   make something else about the member dynamic.
+
+73. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
