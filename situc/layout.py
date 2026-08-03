@@ -749,6 +749,7 @@ class Solver:
 			span          = member.span,
 			attrs         = member.attrs,
 			sized_by      = _path_of(member.size),
+			size_expr     = _expression_source(member.size),
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
@@ -2335,11 +2336,17 @@ def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
 
 
 def _arm_name(arm: ast.VariantArm) -> str:
+	"""What to call this arm in a diagnostic or a suggestion.
+
+	Every arm form has a name in the schema and this knew about one of them,
+	so an `opaque` arm was reported to the author as `arm` -- a placeholder
+	reaching a user-facing artifact, which invariant 16 is the general form
+	of: a label is not an identifier, and neither is a fallback.
+	"""
 	if arm.member is None:
 		return "default"
-	if isinstance(arm.member, ast.Field):
-		return arm.member.name
-	return "arm"
+	name = getattr(arm.member, "name", None)
+	return str(name) if name else "arm"
 
 
 def _tlv_grammar(member: ast.Tlv) -> TlvGrammar:
@@ -2520,22 +2527,36 @@ def _version_field(decl: ast.StructDecl) -> str | None:
 
 def _size_source(member: ast.Field | ast.Reserved) -> str | None:
 	"""An array's size as source, when it is more than a field reference."""
+	array = getattr(member, "array", None)
+	return None if array is None else _expression_source(array.size)
+
+
+def _expression_source(size: ast.Expr | None) -> str | None:
+	"""A declared size as source, when it is more than a field reference.
+
+	Shared with `place_opaque`, which had no version of this at all: an
+	`opaque` region sized `[n + 1]` recorded neither `sized_by` (it holds a
+	path and there is none) nor this, so every backend computed its length as
+	zero and read whatever followed it out of the region's own bytes. The
+	docstring on `size_expr` describes exactly that failure for arrays, where
+	it was found and fixed; `opaque` asks the same question and was never
+	given the same answer.
+	"""
 	from situc.unparse import expr_to_source
 
-	array = getattr(member, "array", None)
-	if array is None or array.size is None:
+	if size is None:
 		return None
-	if isinstance(array.size, ast.Remaining) or _path_of(array.size) is not None:
+	if isinstance(size, ast.Remaining) or _path_of(size) is not None:
 		return None		# `[remaining]` and `[n]` are already handled
 
 	# And a constant. `octets[4]` has no field path either, and reporting it
 	# here made `traverse.classify` call a fixed array variable -- which is
 	# the same fact `array_count` already carries, said a second time and
 	# believed instead.
-	if not paths_in(array.size):
+	if not paths_in(size):
 		return None
 
-	return expr_to_source(array.size)
+	return expr_to_source(size)
 
 
 def _located_source(member: ast.Field | ast.Reserved) -> str | None:

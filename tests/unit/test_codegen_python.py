@@ -88,6 +88,26 @@ def runtime() -> ModuleType:
 	return module
 
 
+def test_an_arithmetic_count_counts_elements(tmp_path: Path) -> None:
+	"""`T name[N]` counts elements, and every backend rendered `sized_by` as
+	`count * width`. The `size_expr` branch beside it did not: `u32 d[n + 1]`
+	advanced `n + 1` bytes where the solver said `(n + 1) * 4`, so the compiler
+	disagreed with its own accessors by a factor of four and `tail` was read
+	out of the array.
+
+	Executed rather than matched, and against the solver's own arithmetic:
+	`n = 2` means three `u32`s, so `tail` is at 1 + 12."""
+	body   = "struct s { u8 n; u32 d[n + 1]; u16 tail; }\n"
+	module = load(tmp_path, body)
+
+	buf = bytearray(32)
+	buf[0] = 2
+	buf[13], buf[14] = 0xAB, 0xCD
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.tail == 0xABCD
+
+
 # -- the surface ------------------------------------------------------------
 
 

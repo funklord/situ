@@ -50,7 +50,7 @@ from situc.traverse import (
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
 	local_name,
-	matched_values, obligation,
+	element_bytes, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarKind, ScalarType, lookup
@@ -1906,8 +1906,10 @@ class Emitter:
 		# member fell through to the scalar case and this backend handed back
 		# one byte and called it the field.
 		if placement.size_expr is not None:
-			return (f"static_cast<std::uint32_t>("
-			        f"{self._over_fields(struct, placement.size_expr)})")
+			rendered = (f"static_cast<std::uint32_t>("
+			            f"{self._over_fields(struct, placement.size_expr)})")
+			each     = element_bytes(placement)
+			return rendered if each == 1 else f"({rendered}) * {each}u"
 		# A delimited member's extent is not a closed form: it is wherever the
 		# delimiter turns out to be, and `_span()` is the member's own answer.
 		# The same call serves a byte array and a run of records -- one name

@@ -47,7 +47,8 @@ from situc.traverse import (
 	declares_its_own_length,
 	decode_bound,
 	extent_parts, extern_symbol, frameable,
-	has_computable_extent, index_entry_bytes, is_run, matched_values,
+	element_bytes, has_computable_extent, index_entry_bytes, is_run,
+	matched_values,
 	obligation, obligations,
 	own_members,
 )
@@ -4107,6 +4108,17 @@ class Emitter:
 			assert length is not None, "callers check _has_length first"
 			return length
 
+		# A size that is arithmetic over a field rather than a bare reference
+		# to one. `sized_by` holds a path and holds nothing for this, so the
+		# count branch below returned zero -- for `data[(len + 1) * 8 - 2]`,
+		# which is a length counted in units and about as common as a length
+		# gets.
+		if placement.size_expr is not None:
+			rendered = self._over_fields(struct, placement.size_expr, held)
+			each     = element_bytes(placement)
+			return (f"(uint32_t)({rendered})" if each == 1 else
+			        f"(uint32_t)({rendered}) * {each}u")
+
 		if placement.kind == "opaque":
 			# An opaque region's size expression is already a byte count; there
 			# are no elements to multiply by.
@@ -4118,15 +4130,6 @@ class Emitter:
 		if placement.varint is not None:
 			local = c_name(self._local(struct, placement))
 			return f"{ident(self.prefix, struct.name, local, 'len')}({held})"
-
-		# A size that is arithmetic over a field rather than a bare reference
-		# to one. `sized_by` holds a path and holds nothing for this, so the
-		# count branch below returned zero -- for `data[(len + 1) * 8 - 2]`,
-		# which is a length counted in units and about as common as a length
-		# gets.
-		if placement.size_expr is not None:
-			rendered = self._over_fields(struct, placement.size_expr, held)
-			return f"(uint32_t)({rendered})"
 
 		# An `indexed` region's count counts entries, and an entry is an
 		# `offset_type` wide (`traverse.index_entry_bytes`).

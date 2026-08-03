@@ -540,6 +540,93 @@ def test_no_backend_reads_an_expression_sized_member_as_a_scalar(
 	assert SIZED_BY_EXPRESSION[target] in source
 
 
+#: The same question asked of an `opaque` region: how many bytes is it, when
+#: its size is arithmetic rather than a bare field?
+SIZED_OPAQUE = "struct s { u8 n; opaque body[n + 1]; u16 tail; }\n"
+
+SIZED_OPAQUE_LENGTH = {
+	"c":      "(uint32_t)(situ_s_n_get(view) + 1)",
+	"cpp":    "static_cast<std::uint32_t>(n() + 1)",
+	"python": "advance(1, self.n + 1, self._len)",
+	"rust":   "situ_rt::advance(1, (self.n() as usize) + 1, self.bytes.len())",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_no_backend_reads_a_sized_opaque_region_as_nothing(target: str) -> None:
+	"""An `opaque` region records `sized_by`, which holds a path and holds
+	nothing for `[n + 1]`. `size_expr` is the field that answers this for an
+	array and `place_opaque` never set it, so all four backends computed the
+	region's length as zero and placed `tail` one byte in -- reading the
+	region's own bytes and calling them the field.
+
+	The same defect as `d[(len + 1) * 8 - 2]` above, found and fixed for
+	arrays and never asked of the construct beside them (invariant 1)."""
+	schema   = parse_text(PREAMBLE + SIZED_OPAQUE)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert SIZED_OPAQUE_LENGTH[target] in source
+
+
+#: `u32 d[n + 1]`: an arithmetic count over elements wider than a byte, which
+#: is the case that separates "how many" from "how far".
+WIDE_ARITHMETIC = "struct s { u8 n; u32 d[n + 1]; u16 tail; }\n"
+
+WIDE_ARITHMETIC_LENGTH = {
+	"c":      "(uint32_t)(situ_s_n_get(view) + 1) * 4u",
+	"cpp":    "(static_cast<std::uint32_t>(n() + 1)) * 4u",
+	"python": "(self.n + 1) * 4",
+	"rust":   "((self.n() as usize) + 1) * 4",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_every_backend_counts_elements_in_an_arithmetic_bracket(
+		target: str) -> None:
+	"""The bracket counts elements. `sized_by` renders as `count * width` in
+	all four backends and `size_expr` rendered as bare bytes in all four, so
+	the accessors disagreed with the solver -- which sizes `u32 d[n + 1]` at
+	`(n + 1) * 4` -- by a factor of the element width.
+
+	The shape that found `size_expr` was `u8 d[(len + 1) * 8 - 2]`, where that
+	factor is one, so the bug arrived with its own reason for staying hidden.
+	"""
+	schema   = parse_text(PREAMBLE + WIDE_ARITHMETIC)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert WIDE_ARITHMETIC_LENGTH[target] in source
+
+
+def test_the_solver_and_the_accessors_size_an_array_alike() -> None:
+	"""The fact the four spellings are checked against: 256 elements of four
+	bytes, which is where the disagreement was."""
+	schema   = parse_text(PREAMBLE + WIDE_ARITHMETIC)
+	resolved = resolve(schema, solve(schema))
+	held     = {entry.placement.path: entry.placement
+	            for entry in resolved.structs["s"].entries}
+
+	assert held["s.d"].size_max_bits == 256 * 32
+	assert held["s.d"].element_bits == 32
+
+
+def test_a_sized_opaque_region_moves_what_follows_it() -> None:
+	"""And the fact under the four spellings: `tail` is not at a constant
+	offset, and its offset is the region's size rather than zero."""
+	schema   = parse_text(PREAMBLE + SIZED_OPAQUE)
+	resolved = resolve(schema, solve(schema))
+	held     = {entry.placement.path: entry.placement
+	            for entry in resolved.structs["s"].entries}
+
+	assert held["s.body"].size_expr == "n + 1"
+	assert held["s.tail"].offset_bits is None		# the data decides it
+
+
 def test_the_python_condition_is_python() -> None:
 	"""The schema's operators are C's. Python spells three of them in words,
 	and emitting `||` produced a module that did not parse."""

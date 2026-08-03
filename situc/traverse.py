@@ -724,6 +724,25 @@ def byte_span(placement: Placement) -> tuple[int, int] | None:
 	return first, last - first + 1
 
 
+def element_bytes(placement: Placement) -> int:
+	"""How wide one element of this member is, in bytes.
+
+	`T name[N]` counts elements and never bytes -- the solver has always read
+	it that way, and `sized_by` renders as `count * width` in every backend.
+	The `size_expr` branch beside it did not: `u32 d[n + 1]` advanced `n + 1`
+	bytes where the layout said `(n + 1) * 4`, so the compiler disagreed with
+	its own accessors by a factor of the element width, and every member after
+	such an array was read out of its bytes.
+
+	It went unseen because the shape that found `size_expr` in the first place
+	was `u8 d[(len + 1) * 8 - 2]`, where the factor is one.
+
+	One byte where there are no elements to count: an `opaque` region's size
+	expression is already a byte count.
+	"""
+	return (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+
+
 def index_entry_bytes(placement: Placement) -> int | None:
 	"""How wide one entry of an `indexed` region's offset table is.
 

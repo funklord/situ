@@ -46,7 +46,7 @@ from situc.traverse import (
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
 	local_name,
-	matched_values, obligation,
+	element_bytes, matched_values, obligation,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -3260,7 +3260,9 @@ class Emitter:
 		# the member fell through to the scalar case and this backend read one
 		# byte and called it the field.
 		if placement.size_expr is not None:
-			return self._over_fields(struct, placement.size_expr, "self")
+			rendered = self._over_fields(struct, placement.size_expr, "self")
+			each     = element_bytes(placement)
+			return rendered if each == 1 else f"({rendered}) * {each}"
 
 		# A nested struct with no single size, which the sum treated as zero
 		# bytes wide -- so whatever followed it was placed on top of it.
