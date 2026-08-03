@@ -5960,444 +5960,182 @@ check cannot ask about (26.31), and 26.33.
 **Status:** 2230 unit tests, 7 skipped; generated C compiled on the host and
 both aarch64 targets; `make fuzz` clean at thirty seconds a harness.
 
-### 26.35 The bytes the check was made of
+### 26.35 The sample nobody chose
 
-26.34 built the differential check and counted what it found. This is about
-the input it was finding it with, which nobody had chosen: uniform random
-bytes, of a length drawn uniformly from zero to twelve hundred. One
-distribution, and the least searching one available.
+Twenty-two commits, and one sentence covers most of them: **every check reads
+some input, and where nobody chose that input deliberately, it was the least
+searching one available.**
 
-Two things follow from it and neither is obvious until it is written down. A
-member framed on `" "` or `"\r\n"` meets its delimiter about once in a hundred
-bytes under uniform noise, so `examples/http` and `examples/smtp` were compared
-almost entirely on the path where nothing parses -- the scans returned "ran to
-the end", every text number refused, and the four agreed about that. And a
-declared length can only overrun the frame it sits in when the frame is small,
-so a kilobyte of noise asks that question with the answer already filled in.
+That is not a statement about test coverage in the usual sense. Every artifact
+here was already generated, held to a golden string, and read by a person; most
+were compiled, and 26.34 got several of them executed. What this fold is about
+is the *sample* each check happens to run over, which in every case had been
+picked by whatever was convenient when it was written:
 
-The change is four alphabets -- uniform, printable text with its framing,
-digits and delimiters, edge bytes among text -- and three buffers in four drawn
-short. The same forty-eight buffers per schema, differently spread. Five
-disagreements on the first run.
+| The check | Its sample was | It became |
+|---|---|---|
+| the differential drivers | uniform bytes, uniform length | four alphabets, mostly short frames |
+| the drivers again | reads only | reads and writes, including a covered write |
+| the dissector suite | four schemas somebody picked | all twenty-five, over bytes |
+| the committed map and wire | `examples/` | every schema the repository builds |
+| the CLI tests | some command on some schema | every command on every schema |
+| `gen-tests` | one schema, in `tests/schemas/` | any schema, by the same list |
+| `gen-codec-tests` | an ABI nothing else used | the ABI an `impl` binds, and run |
+| mypy | the compiler and its suite | the shipped runtime and the emitted modules |
 
-**Two were a member the frame does not contain, handed back anyway.** Both are
-26.27's defect exactly, one construct over from where it was closed:
+None of those widenings is clever. Each is a line or two, and each found
+defects the narrow version could not have.
 
-- A **variant's byte-run arm**. `examples/dnsname`'s label declaring 55 bytes
-  in a five-byte frame got 55 back from C and C++ -- a pointer and a span past
-  the end of the buffer -- a panic from Rust, and from Python a clamp to the
-  message rather than to the view. Four answers, one of them memory-unsafe in
-  the caller's hands. The ordinary run path has clamped since 26.27; an arm
-  builds its own length and was never brought along.
-- A **`[since]` member**. This one is worth stating as a rule rather than as a
-  bug: 20.2's argument is that a constant offset needs no check because the
-  frame was refused if shorter than the struct's minimum -- and a versioned
-  struct's minimum is its *first* version's. `ver = 2` in three bytes is a
-  well-formed question about a member that is not there, and all four backends
-  answered it by reading. C read four bytes past the view, Rust panicked in
-  `read_be`, Python read a short slice as a number. The setter had it too,
-  which is the side that writes.
+**Why the input rather than the check.** A check with a chosen sample tells you
+about the sample. `luac -p` parsed twenty-five dissectors, which says every file
+is syntax; four were executed, which says four dissect. The other twenty-one
+were neither, and three of them died on the first packet. The same shape holds
+for uniform random bytes and a text protocol: the scans returned "ran to the
+end", every text number refused, the four backends agreed about that, and the
+parse paths were never entered. A sample nobody chose is a sample nobody
+examined.
 
-**Three were a constraint the schema declares and a backend did not check.**
+#### What the widened samples found
 
-- `[nul_terminated]` in **C**, where the attribute checks were branches of one
-  `elif` chain: `u8 name[16] [nul_terminated, encoding = utf8]` got the
-  encoding check and the terminator went unchecked. In the backend that has had
-  the check longest, against `tests/schemas/edges.situ`, for as long as the
-  attribute pair has existed.
-- An **`indexed` region's offset table**, in all four and differently in each.
-  `count` counts entries and an entry is an `offset_type` wide, which is
-  `traverse.index_entry_bytes` now: C multiplied by one, so a page declaring
-  11786 cells in 38 bytes passed the very check that exists to catch it, and
-  the other three asked the *element* for a width, found a `table_leaf_cell`
-  that has no fixed one, and emitted no check at all.
-- `[minimal]` in **Python**, which handed the predicate the parsed number
-  rather than the digits. `bytes(6)` in Python is six zero bytes, so every
-  spelling was minimal -- and `0`, whose digits vanish under that conversion,
-  was not. `test_every_backend_enforces_minimal` asserts that the source
-  contains `digits_minimal`, and it did.
+Grouped by what went wrong rather than by the day it turned up, because the
+same four shapes account for all of it.
 
-Giving the offset table a length turned `required` on for a struct holding one,
-which is how the last of these arrived: all four now refuse to frame such a
-struct and say why -- an `indexed` region reaches wherever its furthest element
-ends, and the table says where the elements start. C had been answering with
-the bound and calling it the total.
+**Bytes handed back that the frame does not contain.** 26.27 closed this for a
+member placed after a variable-length region. It was open in four more places:
 
-**And then the schema was wrong.** Writing a test for the `[minimal]` fix meant
-writing a status line, and `examples/http` could not read one. `decimal u16
-code until " " max 3` reads as "three digits"; a cap bounds the whole member
-with its delimiter (8.6.1), so three is two digits and a space. Against
-`HTTP/1.1 404 Not Found` every backend agreed: the scan ran out at the third
-digit, `validate` called the message a frame cut short, and `reason` came back
-as `" Not Found"` with the space still on it. A two-digit code parsed clean,
-and HTTP has none.
+- a **variant's byte-run arm** -- a DNS label declaring 55 bytes in a five-byte
+  frame got 55 from C and C++ (a pointer and a span past the end), a panic from
+  Rust, a silent clamp from Python;
+- a **`[since]` member** -- 20.2 says a constant offset needs no check because
+  the acquiring check refused a shorter buffer, and a versioned struct's minimum
+  is its *first* version's. `ver = 2` in three bytes read four bytes past the
+  view in C, panicked in Rust, and wrote past the frame in every setter;
+- a **coded region whose interior the data sizes** -- every backend returned the
+  region's minimum, zero, with a pointer at the right place and no refusal;
+- a **padded table codec** -- `situ_base64_encode` was declared counting bits
+  and defined counting bytes, so the region accessor passed `encoded * 8` to a
+  byte loop: eight times the region read and written past the caller's buffer.
 
-Nothing in the language was wrong and no backend disagreed. What was wrong is
-that this was checkable for a year and nobody checked it: every http test in
-the tree used a schema written for that test, a request line handed to the
-dissector, or random bytes. 26.32 says the worked example is the claim, and
-this claim had been verified against everything except the protocol it names.
-There is a request and a response through the example's own accessors now.
+The last two are the interesting ones, because all four backends agreed. A
+differential check cannot see that, which is 26.34's standing limit arriving
+twice more.
 
-**What is open.**
+**A constraint the schema declares and a backend does not check.** `[minimal]`
+in Python passed the *parsed number* to a bytes predicate, so `bytes(6)` was six
+NULs and every spelling was minimal -- while `0`, whose digits vanish under that
+conversion, was refused. `[nul_terminated]` in C never ran, because the
+attribute checks were branches of one `elif` chain and the field also declared
+an encoding. An `indexed` region's declared table fit no frame in three
+backends and fit the wrong one in C, which multiplied entries by one byte
+instead of by the offset width. A truncated variant arm was clamped by every
+accessor and reported by none.
 
-- ~~A truncated arm is clamped and not reported.~~ Closed. `validate` asks the
-  arm's own accessor, which refuses the arm that is not selected and clamps the
-  one that is -- so a short answer is the mismatch, and the discriminant test
-  stays in the one place that already had it. What kept it hidden is that every
-  length check skips a dotted path, for the nested-struct reason, and an arm
-  member has one: three backends drop it before the validate loop, so the check
-  belongs at the variant and walks its arms.
-- **One worked example has never seen a message.** `telemetry` is generated, fuzzed, `gen-checks`'d and compared under random
-  bytes, and none of that can tell whether the schema describes the protocol
-  -- `gen-checks` derives its assertions from the schema, so it confirms
-  self-consistency, and agreement across backends confirms they read the same
-  schema the same way. Only a real message says the schema is right, and http
-  is the proof that the difference is not theoretical. It needs a vector with
-  its source cited, which is 26.32's rule and the reason `examples/ble` is
-  still unwritten -- and it is the awkward case, being situ's own format, so
-  a vector for it can only be a round trip.
+**An operation the map promises and a backend does not offer.** Rust emitted
+nothing at all -- no setter and no note -- for a scalar at a dynamic offset.
+Three backends emitted no covered write for a field of a nested struct, so the
+only path to such a field marked no tag and a message went on reporting itself
+transmittable. Three said nothing about *why* a delimited member has no setter,
+which section 1 promises is explained.
 
-  Four came off the list, each with the implementation that wrote its bytes
-  named beside them. `bmp`: `convert -size 3x2 xc:red -type truecolor
-  BMP3:red.bmp`. `arp`: glibc's `struct arphdr`, `ARPHRD_ETHER`,
-  `ETHERTYPE_IP` and `ARPOP_REQUEST` from `<net/if_arp.h>`, with the addresses
-  through `inet_pton` so nothing local has an opinion about byte order. That
-  header covers only the fixed eight bytes -- the four addresses are variable
-  in the format, so glibc leaves them out -- which is exactly the part a
-  schema gets wrong: two 16-bit fields, two 8-bit, another 16-bit, none of
-  them aligned to what follows. `ntp`: lwIP's `struct sntp_msg` and
-  `sntp_initialize_request()`, which is where the request's first byte 0x23
-  comes from -- three bit-packed fields lwIP writes as one `li_vn_mode` and
-  this schema splits into `leap`, `version` and `mode`, so the vector is the
-  only thing that says they were split in the same places. `rtc`: U-Boot's
-  `bin2bcd` and the register addresses in `drivers/rtc/ds1307.c`.
+All three of those hid behind the same rule: every backend walks own members,
+`own_entries` drops a dotted path, and an arm's member, a nested struct's field
+and a covered nested field all have one. It cost four separate findings before
+it was worth writing down.
 
-  `rtc` is the one where the independent source disagreed with the schema, and
-  in two ways. The comment claimed the DS1307's byte order; the part puts the
-  *weekday* at 0x03, so `day` is the chip's `date` at 0x04 and everything after
-  it is one register along. The schema is an encoding rather than a register
-  image, which is a fine thing to be and was not what it said.
+**An artifact nobody executed.** The generated Python is annotated throughout
+and no one had run a type checker over it: thirty-one errors in fifteen of
+twenty-five modules, `as_enum` returning `object` so that every enum field in
+the tree was a type error against its own signature. `make install` had no rule
+to build what it installs, so the first command a packager runs failed from a
+clean tree. `situc dump-ast` died with a Python traceback on any schema carrying
+an invariant. Three dissectors died on their first packet, and two more could
+not run because the *stub* implemented `tvb(offset, length)` and not
+`tvb(offset)`.
 
-  The second was a gap in the language and is now `[bits]`
-  (`docs/decisions/0027-narrowed-packed-decimal.md`). The DS1307's seconds
-  register spends its top bit on Clock Halt and its hours register two bits on
-  12/24 and PM, so those hold seven and six bits of packed decimal -- and
-  `bcd<digits>` is a nibble a digit (8.1), so a three-bit tens field was not a
-  `bcd2` and was not anything else. Every driver in `drivers/rtc/` masks the
-  bits off before decoding, which is the work a description exists to remove.
+#### Two language changes, each from a device
 
-  `bcd2 [bits = 7]` is three bits of tens over four of units. The narrowing
-  takes from the top digit and leaves the rest whole, which is what the
-  hardware does, and everything downstream was already there: a `bcd3` is
-  twelve bits and has bit-packed since it existed, so the four backends needed
-  no change at all -- the narrowing produces a seven-bit `ScalarType` and the
-  ordinary packing path carries it.
+**`bcd` takes a width** (decision 0027). A DS1307's seconds register is one
+control bit over seven bits of packed decimal, three of tens above four of
+units; its hours register spends two bits on 12/24 and PM. `bcd<d>` is a nibble
+a digit, so neither register could be written down -- `u1` above `bcd2` makes a
+nine-bit byte, and `u1` above `u7` throws the encoding away. Every driver in
+`drivers/rtc/` masks the bits off first, which is the work a description exists
+to remove. `bcd2 [bits = 7]` says it now, and no backend needed a change: a
+`bcd3` is twelve bits and has bit-packed since it existed.
 
-  `examples/rtc` describes the register file now, weekday register and control
-  bits included, and its vectors carry a Clock Halt set beside one clear: the
-  same instant, read the same, which is the whole difference between a control
-  bit and a digit. Two `require`s became `assert`s in the process and that is
-  the honest direction -- a field sharing a byte with a control bit is not
-  byte-aligned, and saying so is what the map is for.
+**The tier-1 codec ABI is named** (13.2a, decision 0028). `gen-codec-tests` had
+been emitting property tests since phase 7 against `situ_codec_<codec>_encode`
+-- a name the accessors did not call, the specification did not name, and no
+`impl` bound. So the harness could not be linked against any implementation this
+repository produces, and had never been run. It attacks the symbol
+`impl x extern "my_x"` binds now, three backends call it for a tier-1 region's
+decode, and `tests/generated/codec_impl.c` supplies a `my_doubling` -- each byte
+becomes two of itself -- so that four declared properties are checked against a
+running implementation. Break it and the matching test fails, which is the first
+evidence the harness attacks anything.
 
-  What a per-struct vector cannot state is a claim about a whole file, and for
-  `bmp` that is `tests/generated/test_bmp.c`: the pixels start where the two
-  structs end, and the declared size is that plus the pixels. A misplaced
-  field still reads a number out of every field; that arithmetic is what stops
-  adding up.
+#### The worked examples, and what they are worth
 
-  Wiring the two in found the small version of the same lesson twice. The
-  vector rule hardcoded `tests/schemas/`, so `gen-tests` -- a shipped
-  subcommand -- could only ever run on a schema in that one directory, and it
-  had exactly one. And a vector's expectations were written as though every
-  field were a scalar, which cost twice. A byte run has no value, so ARP --
-  twenty of its twenty-eight bytes addresses -- could have stated almost
-  nothing about itself; it compares as bytes now, and a run of the wrong
-  length is a diagnostic rather than an assertion that silently checks a
-  prefix. And a nested struct's field is reached through its own accessors on
-  a sub-view, so `reference.seconds` emitted C naming a getter that does not
-  exist -- in NTP, where thirty-two of the forty-eight bytes are timestamps
-  and every one of them is nested.
-- Beyond those: the two shapes the differential check cannot ask about
-  (26.31), and 26.33.
+26.32 says the worked example is the claim. Four now carry bytes some other
+implementation wrote, with the implementation named:
 
-**And the Python nobody type-checked.** The same method one level over: the
-generated Python is annotated throughout, and an annotation is for a caller who
-runs a type checker. Nobody had. `mypy --strict` over every schema's module
-found thirty-one errors in fifteen of the twenty-five, in one second:
+| example | written by |
+|---|---|
+| `bmp` | ImageMagick, `convert -size 3x2 xc:red -type truecolor BMP3:red.bmp` |
+| `arp` | glibc's `struct arphdr`, `ARPHRD_ETHER`, `inet_pton` |
+| `ntp` | lwIP's `struct sntp_msg` and `sntp_initialize_request()` |
+| `rtc` | U-Boot's `bin2bcd` and `drivers/rtc/ds1307.c` |
 
-- `as_enum` returned `object`, so *every* enum field in the tree was a type
-  error against its own declared return type. It is generic in the enum now;
-- the `tlv` walk was emitted without annotations, so `fields_first`,
-  `fields_next`, `fields`, `fields_find` and every named tag were untyped
-  definitions and every call to them an untyped call -- eleven of the
-  thirty-one, all in the one construct section 9.7 makes the conformance gate;
-- `__all__ = []` has no element type, which `std/codecs.situ` -- signatures and
-  no structs -- is.
+Two of them disagreed with the schema on arrival. `examples/rtc` claimed the
+DS1307's byte order and the part puts the weekday at 0x03, so every register
+after it was one along -- it is the register file now, control bits included.
+And writing a test for the `[minimal]` fix meant writing an HTTP status line,
+which `examples/http` could not read: `max 3` on a three-digit code caps the
+whole member with its delimiter (8.6.1), so the scan ran out at the third digit
+and `reason` came back with the space still on the front. Every backend agreed
+with the schema; the schema said something other than what its author meant.
 
-**The codec harness had never been run, and could not be.** `gen-codec-tests`
-emits the property tests that would catch a lying tier-1 signature, which is
-the whole of what 13.1 offers against a codec the compiler never sees. It
-declared and called `situ_codec_<codec>_encode` -- a name the accessors did not
-call, the specification did not name, and no `impl` bound. Three names for one
-implementation, no two agreeing, so a suite could not be linked with any
-implementation this repository produces.
+That one is the argument for the whole table. It was checkable for a year --
+every http test in the tree used a schema written for that test, a request line
+handed to the dissector, or random bytes, and none of them was an HTTP message.
 
-The tier-1 ABI is written down now (13.2a, decision 0028) and named after the
-symbol `impl x extern "my_x"` binds, which is what that string has meant since
-13.1 was written and what nothing emitted. `gen-codec-tests` attacks it, three
-backends call it for a tier-1 region's decode -- 13.6a's "only a table kernel"
-was about a *derived* decoder's shape and this one is settled by contract --
-and Python names it in the note that says why it does not.
+#### Checks added, and the two that were declined
 
-`tests/schemas/edges.situ` binds `doubling` to `my_doubling`,
-`tests/generated/codec_impl.c` implements it, and `make test-c` now checks four
-declared properties against a running implementation. Breaking the
-implementation fails the matching test, which is the first evidence the harness
-attacks anything at all. `std/codecs.situ` emits nineteen stated refusals
-rather than nineteen suites, which is right: it is a library of contracts with
-no `impl`.
+Seven new standing checks and two widened ones, each the standing form of a
+defect above: every dissector executed; every subcommand over every schema; the
+map's writable members held to a setter in all four backends and its unwritable
+ones held to an explanation; the two installers compared file for file; the
+generated Python type-checked under `--strict`; the map and wire snapshots read
+from one list rather than a glob. The two widened are the differential drivers'
+alphabets and their write pass.
 
-**And looking for the derived half found an overrun.** The other half of the
-answer is a harness in the shapes `gen-derived` emits, and reading those shapes
-is what turned this up: a table kernel's generated functions were *declared*
-counting bits and, where the code pads, *defined* counting bytes. C does not
-check a prototype against a definition when only the parameter name differs, so
-`situ_base64_encode(const uint8_t *, uint32_t bits, uint8_t *)` sat in the
-header above a loop walking `len` bytes.
+Two were measured and *not* added, because a check that only confirms today's
+behaviour is ceremony:
 
-The accessors believed the header. A `coded body(base64)` region passed
-`encoded * 8` to a decoder that reads that many *bytes*: eight times the region
-in, eight times the output written, past whatever buffer the caller supplied.
-Three of the twenty built-in codecs pad -- base32, base64, base64url -- and no
-schema in the tree used one as a region, which is why nothing ran it. The
-hand-written codec tests call them with byte counts and pass, because they were
-written against the implementation rather than the header.
+- **the doc's field table against the layout.** Every offset in every rendered
+  document matches the placements. 20.3 records a past instance of a true number
+  answering a different question, so it was worth measuring -- but the renderer
+  reads the same placements the accessors do.
+- **the read-side mirror of the writability check.** Every member the map lists
+  has a read path in all four; the only ones without are `authenticated`
+  regions, which are a coverage grouping rather than bytes, and all four agree.
 
-`traverse.table_is_padded` is the predicate now, and both the prototype and
-`decode_counts_bits` ask it. A padded table counts bytes; an unpadded one is
-bit-oriented by construction, which is what a Manchester line code is.
+#### What is open
 
-**The differential check had never written.** Twelve probe kinds, every one a
-read, for the life of the check -- and every backend emits setters. A schema
-means one thing in four languages only if it also means one thing when written:
-a byte order reversed in a setter, a bit field written with a read-modify-write
-that clobbers its neighbour, an offset resolved differently on the write path
-than on the read path. None of that is visible from reading bytes nobody wrote.
+- **`examples/telemetry` has never seen a message**, and cannot in the sense the
+  other four now have: it is situ's own format, so a vector for it is a round
+  trip through the compiler that produced it. Recorded rather than papered over
+  with one.
+- **A `[remaining]` member cannot be written in any backend and says so.** That
+  is `mutate = Shifting` doing its job, not a gap -- listed here because a
+  reader looking for the write surface should find the boundary stated.
+- Beyond those: the two shapes the differential check cannot ask about (26.31),
+  26.33's runtime image, and `examples/ble`, which waits on a citable source for
+  its field constants because 26.32's rule makes a recalled one a false claim.
 
-There is a write pass now. Every writable scalar takes a pattern --
-`0x0123456789ABCDEF` truncated to the field, so a byte order that reverses is
-not a value that could have arisen by accident -- each backend prints what it
-reads back, and the whole buffer is printed once at the end. The buffer is the
-assertion.
-
-What it found is one member writable in three languages and not the fourth:
-**Rust emitted no setter at all for a scalar at a dynamic offset**, and no note
-either -- while the capability map called it `mutate = InPlaceFixed` and C, C++
-and Python had all written it since 26.27. `examples/dnsname`'s `question.qtype`
-sits after a name and is the case. A field readable in four languages and
-writable in three is the schema meaning something narrower in one of them, which
-is the whole thing this check exists to catch, on the half it never looked at.
-
-Two exclusions are the probe's rather than the backends': a length driver's
-setter bumps the view generation (12.3), and an enum takes its own type in two
-languages and an integer in two. Each is written down where the subset is
-chosen -- the same rule the read subset follows.
-
-**Re-deriving 26.31, as section 0 asks.** Every refusal in every generated file
-in every backend, collected and read: the list is still empty in the sense that
-matters -- nothing claims a construct is unsupported that is supported. What
-came out of it instead is an asymmetry in the *explanations*.
-
-Section 1 says a field that cannot be mutated in place "does not get an
-in-place setter. The absence is deliberate, explained, and assertable."
-`http.request_line.method` is `mutate = Shifting`, because a delimited member's
-length is wherever the delimiter turns out to be and a longer value moves the
-bytes after it. Three backends emitted a pointer, a length, no setter, and
-nothing at all. Rust explained it -- and had the same silence for a run whose
-length a *field* decides, which no backend explained.
-
-Both are explained in all four now, and a check holds them there: every member
-the map calls unwritable, in every schema, must say why in every backend. The
-explanation matters more than it sounds. A span with no setter beside it reads
-as an oversight; the same span with `mutate is Shifting` and the blame chain
-that produced it reads as the schema, which is what the capability map is for.
-
-**Every subcommand, over every schema.** Ten of the fourteen CLI commands take
-a schema and produce something, and every pair had been exercised by *some*
-test on *some* schema -- which is not the same claim as every pair. Running all
-of them over all of them found one: `situc dump-ast` dies with a Python
-traceback, `TypeError: cannot dump Invariant`, on any schema carrying one.
-
-`tests/schemas/edges.situ` has carried an invariant since invariants landed,
-and the phase 1 deliverable had never been pointed at it. The dumper had a case
-for every other declaration kind and no `else` that said anything useful; it has
-the case now, and the fallthrough says what it means -- a construct arrived
-without its dump, which is a compiler bug rather than a schema error.
-
-The check asks only that the command succeeds. What each one *says* is the
-business of the tests that already assert it; a crash is the failure that makes
-those moot.
-
-**Two committed snapshots that nothing read.** `tests/schemas/edges.situ.map`
-and `edges.situ.wire` have been in the tree for as long as the schema has, and
-the checks that compare a committed map or wire signature against what the
-compiler produces glob `examples/`. So the file that exists to carry the
-constructs no worked example has -- the one whose capability vectors are most
-worth reviewing -- had two snapshots nobody verified. Both were stale, from a
-change made in this same session.
-
-A snapshot nobody verifies is worse than none: it looks authoritative, it is
-what a reader consults, and it drifts silently. That is 26.31's `edges.situ`
-lesson for the third time, and the fix is the same one -- read the list in
-`tests/unit/every_schema.py` rather than a glob somebody wrote.
-
-`std/kernels.situ` gains one too, which is the more useful half: it records the
-derived properties of all twenty-five built-in codecs, so a change to what a
-kernel implies becomes a reviewable diff. This session changed two of them.
-
-**Twenty-one dissectors had never run a line.** 26.14 executed four over
-chosen packets and `luac -p` parses all twenty-five, which proves a file is
-syntax. Running the rest over bytes found five that could not dissect a packet
-at all, and two causes.
-
-Three were the artifact: `subtree:add(nil, ...)` on the first packet, because
-the loop that declares `ProtoField`s and the loop that adds them disagreed
-about which members exist. A varint and a `coded` or `sealed` region have no
-scalar, so the declaring loop returned nothing for them while the body added
-them anyway -- and `examples/smtp`'s `data_block`, whose only member is a coded
-region, got no field table at all, so the body indexed a global that was never
-assigned. Both are `ProtoField.bytes` now, which is the honest display: a
-varint's bytes are not the value it spells and a region's are the transform's
-output.
-
-Two were the *stub*. `tests/lua/dissect.lua` implemented `tvb(offset, length)`
-and not `tvb(offset)`, which is Wireshark's spelling for "to the end" and what
-a generated dissector writes for a `[remaining]` member. Correct Lua against
-the real API, dead against the stub -- which is the risk a stub carries, and
-the reason to run every file through it rather than the four somebody chose.
-
-The check asks only that the dissector survives the packet. What it *shows* is
-the business of the tests that hand it chosen bytes: a random buffer has no
-right answer to compare against.
-
-**And a check that asks the map rather than another backend.** Three gaps this
-session were a backend emitting *nothing* -- no accessor and no note -- for a
-member the capability map calls writable. Backend-versus-backend can see that
-only if the four disagree, and only after compiling a driver; nothing was
-asking the simpler question, which is whether the map's promise is kept.
-
-`test_the_map_is_writable_where_it_says` reads every schema in the tree, takes
-every own field the map calls `mutate = InPlaceFixed`, and requires each of the
-four backends to emit a way to write it. It is the mirror of 26.31's two
-agreement checks: those ask what each backend *refuses* and fail on a split,
-this asks what the map *promises* and fails on a silence. Run against the
-compiler as it was this morning it names `dnsname:question.qtype`,
-`question.qclass` and `edges:coded_run.trailer` in Rust -- which is the gap the
-write pass took a compile failure to find.
-
-Its exclusions are the interesting half, and each is a member whose write the
-map does not promise or whose setter belongs to another type: an array is
-reached through its pointer, a text number cannot be stored in place at all, a
-marker holds no value, a sealed interior takes the gate, `[secret]` has no
-accessor by design, and a nested struct's field belongs to the nested type --
-*except* when a tag covers it, which is the case below and is held to the
-parent by its own test.
-
-**A covered write was the third, and asking it found more.** 14.2 says writing
-a byte a tag covers leaves the tag stale, and each backend spells the marking
-its own way -- the message in C, C++ and Python, a dirty word in Rust -- so it
-looked like a difference by design. It is not: what has to agree is the *bit*,
-and the probe writes the member and prints whether the tag went dirty.
-
-Asking it needed the setter to exist, and in three backends it did not. A
-covered field of a *nested* struct -- `packet.hdr.version`, which is every
-covered field in the worked example -- reached no covered branch at all: they
-walk own members, `own_entries` drops a dotted path, and a nested struct's
-fields have one. That is the third time this session that rule has hidden
-something (the arm's length check and the arm's `validate` were the others).
-
-What it left is worse than a missing accessor. The nested type's own setter
-still writes the byte and marks nothing, so a C++, Rust or Python caller could
-write a tag-covered field and have the message go on reporting itself
-transmittable -- while the map said `auth = Covered(tag)` about that very
-field. C has flattened these onto the parent since the machinery landed. The
-other three do now, and the nested type keeps its plain setter, which is right:
-`inner` may sit where nothing covers it, and the type cannot know.
-
-**And then the derived harness, which is the other half.** A tier-2 codec's
-properties cannot lie -- they are derived from the same kernel description the
-implementation is -- and the implementation can. Fourteen of the twenty-five
-codecs in `std/kernels.situ` emit an `(in, count, out) -> count` pair;
-`derived.pair_of` says which, and the eleven that do not get a stated refusal:
-a polynomial kernel is a checksum over its input and a linear block code is a
-nibble in and a codeword out, and neither is a transform with an inverse of the
-same shape.
-
-Forty-eight tests, generated from the signatures and run against the
-implementations `gen-derived` writes from the same descriptions. Both sides
-generated, nothing supplied, which is what a derived codec means.
-
-Writing it found two things about what a property *is*:
-
-- **`seekable = linear` is a claim at the codec's own granularity.** base64
-  emits whole groups of four from three input bytes, so cutting an input at
-  half of 128 pads the 64 and the two outputs diverge in the last group. The
-  tier-1 harness cuts at half and does not ask, which would have failed a
-  correct base64 the first time one was bound. The derived one cuts on a
-  boundary and says which.
-- **A bit-oriented codec's output is `n` bits, and the rest of the last byte is
-  the caller's.** The determinism test compared whole bytes of `(n + 7) / 8`
-  and failed a correct HDLC stuffer on the leftover four bits of byte 64 --
-  which is the harness comparing what the caller left in the buffer rather than
-  what the codec wrote.
-
-**A coded region the data sizes was empty in all four.** Found by asking what
-`gen-codec-tests` could be run against, and following the codec path down.
-Every coded region in this repository is either fixed inside or ends at a
-delimiter, and those are the two the emitters had. The third -- `coded body(c)
-{ u8 content[n]; }`, whose extent is its interior's extent through the codec's
-expansion -- returned the region's *minimum*, zero, beside a pointer at the
-right place and with no refusal. The wire bytes of a non-empty region were
-unreachable in every language at once.
-
-`traverse.region_extent` had the answer all along and the *offset of what
-follows the region* already used it. So a module contradicted itself: `body`
-claimed no bytes while `trailer`, placed after it through the same expansion,
-landed at the right offset. Only the length was not asking.
-
-Two things follow. The shape is in `tests/schemas/edges.situ` now, which is the
-file that exists to carry what no worked example has -- it had two of the three
-coded forms and not this one. And the differential check probes a non-delimited
-coded region's length, which it did not: only the delimited form was asked.
-
-That probe would not have caught this. All four backends agreed, and agreed on
-zero -- 26.34's standing limit, arriving for the fourth time. What caught it was
-reading one generated module and noticing it disagreed with itself.
-
-**Two installers, and the one nobody ran.** Section 24 keeps CMake and GNU
-Make as independently usable entry points, which makes their install lists two
-descriptions of one thing. They agree, file for file -- and `make install` did
-not work: it named `$(RUNTIME_LIB)` as its prerequisite, which is a path
-produced by a sub-make that nothing at that level has a rule for, so it
-succeeded only where an earlier build had left the archive there. From a clean
-tree, the first command a packager runs stopped with "No rule to make target".
-It depends on the `runtime` target now, and a check compares the two listings.
-
-The C++ warning set had the same shape without the same cost: `-Wall -Wextra
--Wconversion -Wsign-conversion` and no `-Werror`, under an assertion on the
-exit status. Nothing in the tree warns, so the flags were decoration that
-happened to be true. They enforce now.
-
-`make check` read `situc tools tests`, and `runtime/python` is none of those:
-the module every generated module imports was the one thing nothing checked. It
-had four dead `type: ignore` comments, which strict mode calls errors, and it
-is checked now. The generated modules are checked in the suite, once, over
-every schema at a time.
-
-**Status:** 2595 unit tests, 7 skipped; generated C compiled and run on the
-host and under aarch64 emulation.
+**Status:** 2595 unit tests, 7 skipped; generated C compiled and run on the host
+and under aarch64 emulation; every dissector executed; both codec harnesses run
+against implementations; `make fuzz` clean at thirty seconds a harness.
 
 ### Invariants to hold across all phases
 
