@@ -259,13 +259,15 @@ make an operation absent.
 The examples are the schemas to read first: `udp` for the smallest complete
 one, `ipv4` for bit packing, `dns` and `dnsname` for a variant and a walk,
 `http` for a text protocol, `sqlite` for an offset table, `ble` for a count of
-records that each say how long they are, and `packet` for authenticated and
-sealed regions.
+records that each say how long they are, `netlink` for a format whose byte
+order is the sending machine's, and `packet` for authenticated and sealed
+regions.
 
-Five of them carry a `.vectors` file, and what is in it matters more than that
+Six of them carry a `.vectors` file, and what is in it matters more than that
 it exists: bytes some *other* implementation wrote, with that implementation
 named. ImageMagick for `bmp`, glibc's `struct arphdr` for `arp`, lwIP's SNTP
 client for `ntp`, U-Boot's `bin2bcd` and DS1307 driver for `rtc`, the Linux
-Bluetooth stack for `ble`. A description that agrees only with its own compiler
-has demonstrated nothing, and two of those five disagreed with the schema on
+Bluetooth stack for `ble`, and for `netlink` the reply a `NETLINK_ROUTE` socket
+gave to a dump request. A description that agrees only with its own compiler
+has demonstrated nothing, and two of those six disagreed with the schema on
 arrival.

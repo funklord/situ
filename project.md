@@ -3849,13 +3849,17 @@ any of the above:
 
 | Layer | Count | What it holds |
 |---|---|---|
-| compiler tests | ~1280 | pytest over `situc/`, one file per module |
+| compiler tests | 2685 | pytest over `situc/`, one file per module |
 | generated C checks | ~670 | cmocka, `gen-checks` output for every schema |
-| schemas exercised | 20 | 16 examples, `header.situ`, `edges.situ`, two std |
+| schemas exercised | 27 | 23 examples, `header.situ`, `edges.situ`, two std |
 | targets built | 3 | host, aarch64 under emulation, aarch64 big endian |
 | backends compiled | 3 | every schema, as C++, Python and Rust, in the suite |
 
-Every one of those numbers is a floor rather than a target. The generated
+Every one of those numbers is a floor rather than a target, and every one of
+them was stale when somebody last looked: the first said 1280 and the third
+said 20, which is what a hand-maintained count does between the day it is
+written and the day it is read. `tests/unit/every_schema.py` is where the third
+one comes from, and running the suite is where the first one does. The generated
 checks are derived from the schemas, so adding an example adds coverage without
 anybody writing a test. Diagnostics are snapshot-tested in `tests/golden/`,
 because section 17 makes message quality the product rather than a finish: a
@@ -6215,6 +6219,184 @@ host and under aarch64 emulation; every dissector executed; both codec
 harnesses run against implementations; five worked examples carrying bytes an
 independent implementation wrote.
 
+### 26.37 The expression language, and the host's own byte order
+
+Six commits, and one measurement holds them together. Across every schema this
+repository builds, the only operators that ever reached a backend's expression
+renderer were `+`, `-` and `*`, and no schema called a builtin at all. Not a
+decision anybody made: a fact about which protocols somebody happened to write
+up. What that sample hid was a *language* whose arithmetic did not compile in
+four target languages and whose intervals were unsound in four operators.
+
+The example that pressed it is `examples/netlink`, and it is the first schema
+here whose wire byte order is the host's.
+
+**Host order, which two backends were guessing at.** `endian native` read every
+field big-endian in Python and in Rust -- silently, on every little-endian
+machine, no note and no diagnostic. C and C++ have called `situ_get_ne*` since
+phase 4 and the question had never been put to the other two, because *no
+schema in this repository used host order*. It is invariant 40's argument with
+the sample size at zero.
+
+Two backends also disagreed with themselves. A field asked "is this not
+little-endian", so `native` read big; an indexed table's entry and a tlv length
+prefix in the same file asked "is this big-endian", so the same schema's
+`native` read little. Every site goes through one helper per backend now,
+including the byte assembly for a width that is not a word -- where C has had
+`situ_bits_get_ne` since phase 4 and it had no caller in any language.
+
+And the dissector now does what its own docstring has claimed since it was
+written: "a `native` field has no fixed answer here, because the capture and
+the machine reading it are different machines; those are added as bytes with a
+note rather than guessed at." It was reading them big-endian. A promise nobody
+checked is section 0's rule 6 in a comment.
+
+**Netlink is not the protocol that made these true; it is the one that
+asked.** It is host order because `nla_get_u32` is a plain dereference and
+`nla_get_be32` twelve lines down is the one that swaps
+(`include/net/netlink.h:1734`), and its attributes are padded to four bytes
+with `NLA_ALIGN(nla_len) - nla_len`, which is the kernel's `nla_padlen` and the
+first size expression here to call a builtin. Its vector is not laid out by
+hand: it is the reply a `NETLINK_ROUTE` socket gave to an `RTM_GETADDR` dump,
+so the seven-byte `IFA_LABEL` attribute and the zero byte after it are the
+kernel's own demonstration of what the padding is for.
+
+#### What the sample was hiding
+
+**Corner enumeration is sound for monotone operators, and four of this
+language's are not.** `(4 - n % 4) % 4` came out `[0, 1]` for an expression
+whose range is `0..3`, so the map *understated* a member's size -- the
+direction that grants a capability rather than costing one, and the direction a
+caller sizes a buffer from. `%`, `&`, `|` and `^` have their own rules now, and
+the test is exhaustive rather than exemplary: every pair of small ranges
+against every value the operator can produce. Run against the previous rules it
+finds thousands of unsound pairs for each of the four. Nothing had tested the
+interval layer directly at all, and it is the decision procedure behind every
+`size=` the map reports.
+
+**A widening that grants the property you are about to test is not
+conservative.** Every widening returned `Interval(0, None)`, and the zero was
+read by the one check that asks as "this cannot be negative" -- so
+`x[align_up(n, 4) - n - 10]`, which is negative for every `n`, was accepted.
+`lo_known` says when the bound is a placeholder, and a size whose lower bound
+nothing derived is refused in its own sentence.
+
+**`align_up` reached four target languages as a call to a function that exists
+in none of them.** `min` and `max` too. The expression travels to a backend as
+source text and every backend passed it through unchanged, so the generated
+code did not compile -- for the one construct anybody writes `align_up` for.
+They are spelled per target from one place now, with the rounding written once
+so four backends cannot round three ways. `align_up(x, k) - x` is recognised
+exactly, because interval arithmetic has no memory of which ranges came from
+the same value and refused the composition of two builtins the language already
+had.
+
+**Python's `/` was float division.** `body[n / 2]` produced a slice bound of
+2.5 and an offset that stayed a float from there on. The docstring above the
+operator translation had named that hazard as an analogy for the `||` it did
+fix, which is as close as a comment gets to being a bug report about the
+function it sits on.
+
+#### One predicate, three answers
+
+`classify` learned that a length written as arithmetic is a length the message
+decides. The two other places asking the same question did not, and the
+consequences are worse than the duplication:
+
+- `classify_check` called such a member a scalar, so a `reserved` run whose
+  length the message chooses -- the padding every aligned TLV format has --
+  reached a load at a static offset and **crashed the compiler** in C, C++ and
+  Python. Rust returned early on a count of None and emitted nothing at all,
+  which invariant 27 rates below the crash.
+- `declares_its_own_length` said no, so invariant 41's check was never emitted
+  for one: `u8 data[(len + 1) * 8 - 2]` -- the shape `examples/ipv6ext` is made
+  of -- could declare two kilobytes inside a forty-byte frame and `validate`
+  returned OK in all four backends.
+- `doc` printed "0 bytes" for the same member. Three constructs above it in the
+  same function carry their own comment recording exactly this mistake; the
+  fourth was missing for the same reason as the other two.
+
+`traverse.data_sized` is the question now. This is invariant 17 with a
+predicate rather than a number, and it is the third time a fact in this
+compiler has been derived in more than one place and drifted in all but one.
+
+#### What the example found on its own
+
+Five defects in code that had been shipping, none of them about the constructs
+above:
+
+- **A wrong offset in two backends.** The expression renderer keyed its field
+  lookup by name over *every* entry, so a nested member of the same name won --
+  entries are in layout order and the deeper one comes last. `nlmsgerr` carries
+  the `nlmsghdr` of the message it is about, so a variant switching on
+  `nlmsg_type` read the `nlmsg_type` twenty bytes further in, and every arm
+  guard and the whole extent chain went with it. The differential check caught
+  it as a Rust panic on the first hostile buffer.
+- **A check emitted in the wrong scope**, naming a function that does not
+  exist: the reserved-run check did not skip a dotted path, so a run's element
+  padding was checked against the enclosing struct's fields.
+- **`opaque` and `tlv` claimed a fixed size they have not got.** The generic
+  bounded-size row was skipped whole for constructs that own their mutate
+  effect, which dropped the size effect with it -- so the map said
+  `size=Fixed`, with no number, which is the tell that no rule ever set it. The
+  unbounded row beside it has always emitted the size and withheld only the
+  mutate.
+- **A `while` run need not have a first element.** `gen-checks` asserted that
+  element 0 sits where the map says, from a zeroed instance. Every run in the
+  tree yielded one until this schema, whose condition is `nla_len >= 4`: a
+  zeroed attribute declares a length of zero and the run is empty.
+- **A versioned member was guarded on the wrong question.** The dissector asks
+  whether the *version* admits a member and never asked whether the capture is
+  long enough to hold it, so a v3 message that stops after three bytes read
+  `tvb(3, 4)` and died. The comment above that code has described this exact
+  failure since the version guard landed, one question short.
+
+#### And the sample it left behind
+
+`tests/schemas/edges.situ` exists so that no construct's generated code has
+only ever been compiled, and the expression language was the hole in it.
+`struct arithmetic` now calls all ten operators and both of `min`/`max` in
+sizes the C suite builds and `gen-checks` executes. It found three more things
+in the hour after it was written -- an infinite loop in the builtin expansion,
+because Python spells `min` as `min` and the pass found its own output; a
+`-D warnings` failure in Rust's spelling; and the versioned-member guard above.
+
+`x[min(a, b)]` also parses now. `min` and `max` are attribute names *and*
+expression builtins, and the arguments sit at bracket depth 2 where decision
+0006's comma rule cannot see them, so a size expression was read as an
+attribute list and reported "expected `]`" at the open parenthesis.
+
+#### What is open
+
+Carried forward and re-derived rather than copied. The first two are unchanged
+from 26.35; the last two are this fold's.
+
+- **`examples/telemetry` has never seen a message**, and cannot in the sense
+  the other six have: it is situ's own format, so a vector for it is a round
+  trip through the compiler that produced it. Recorded rather than papered over
+  with one.
+- **A `[remaining]` member cannot be written in any backend and says so.** That
+  is `mutate = Shifting` doing its job, not a gap -- listed here because a
+  reader looking for the write surface should find the boundary stated.
+- **`/` and `%` over a signed operand inside a condition.** Floor and
+  truncation part on negative values, so Python and Lua would answer
+  differently from the three compiled backends. Every *size* is safe from it by
+  construction now, since a size with no derivable lower bound is refused; a
+  condition is not, and nothing in the tree has one.
+- **The Lua dissector still divides in floating point**, deliberately. Decision
+  0021 keeps the emitted Lua inside 5.2, where `//` is a syntax error and a
+  dissector that fails to load is worse than one that divides. `align_up` is
+  spelled with `math.floor` for the same reason.
+
+Beyond those: the two shapes the differential check cannot ask about (26.31),
+and 26.33's runtime image, which stays deliberately late -- the image's shape
+depends on which consumer is primary and no consumer exists yet to be one.
+
+**Status:** 2685 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; `make fuzz` clean
+over 26 harnesses; six worked examples carrying bytes an independent
+implementation wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -6635,6 +6817,40 @@ independent implementation wrote.
    sits after a variable-length sealed region and resolved in none of the
    three backends. A schema written for a test exercises what the test author
    thought of. The worked example is the claim, and it is the one to run.
+
+50. **An approximation that happens to satisfy the predicate you are about to
+   test is not an approximation.** Every interval widening returned
+   `Interval(0, None)`, described as conservative because it costs a capability
+   rather than granting one -- and the zero was read by the one check that asks
+   as *proof the expression cannot be negative*. So a size that is negative for
+   every input was accepted. Widening is only conservative with respect to the
+   questions it was designed for; the moment something else reads a bound as a
+   fact, the placeholder is a claim. Say which bounds are derived.
+
+51. **Soundness is a property of the operator, not of the arithmetic around
+   it.** Corner enumeration finds the extremes of a *monotone* function over a
+   box, and this language has `%`, `&`, `|` and `^`, which are not monotone.
+   The docstring asserting the property was true when it was written and became
+   false as operators were added, which nothing could notice: the answers stay
+   plausible and are merely too narrow. A rule per operator, and a test that
+   enumerates every value rather than checking an example -- an interval rule
+   is exactly the kind of thing that passes every example somebody thinks of.
+
+52. **A construct nothing uses is a construct with no behaviour.** Not "no
+   tests" -- no behaviour, because nothing decided what it should do. `endian
+   native` had a correct C implementation from phase 4 and was read
+   big-endian by Python and Rust, little-endian by two backends' *own* table
+   readers, and shown as a guessed number by a dissector whose docstring said
+   it would not guess. Five answers, no schema, and nothing to make them
+   disagree in public. The measurement that matters before trusting a feature
+   is not "is it tested" but "has anything ever asked for it".
+
+53. **A generated spelling that reproduces its own trigger is a loop.** The
+   builtin expansion rescanned from the start after each substitution, and
+   Python spells `min` as `min` -- so it found its own output and expanded it
+   again, for ever. It hung rather than emitting anything wrong, which is the
+   good failure, and only a schema that actually calls one could produce it.
+   A rewrite over generated text has to move forward past what it wrote.
 
 ---
 
