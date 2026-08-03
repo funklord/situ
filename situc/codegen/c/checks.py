@@ -35,8 +35,8 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Obligation, enclosing_arm, has_computable_extent, obligations,
-	own_members, local_name,
+	Obligation, data_sized, enclosing_arm, has_computable_extent,
+	indexed_elements, obligations, own_members, local_name,
 )
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -788,7 +788,12 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 				# read `size_bits`, which for one of these is the
 				# delimiter's own width and not the member's
 
-	if placement.array_count is not None or placement.sized_by is not None:
+	# `data_sized` as well, which is the same question with a spelling
+	# missing: `u8 d[(n + 1) * 4]` has no scalar accessor either, and this
+	# checked it as one -- against a getter the C backend emitted only because
+	# it had the same gap in the same place.
+	if placement.array_count is not None or placement.sized_by is not None \
+			or data_sized(placement):
 		_array_checks(suite, struct, entry, prefix, extent)
 		return		# no scalar accessor; the elements are what there is to check
 	if placement.scalar is None:
@@ -1057,8 +1062,16 @@ def _array_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	local     = c_name(placement.path[len(struct.name) + 1:])
 	count     = placement.array_count
 
-	if count is None or count < 2:
-		return		# `remaining`, or too short for a stride to exist
+	if count is None:
+		# The same array with its count in the message. It has a stride to
+		# drift just as the constant-count one does, and reaching it means
+		# writing the driver first -- which is why this returned instead, and
+		# why the shape that broke in four backends at once had no check here
+		# either.
+		_run_element_check(suite, struct, entry, prefix, extent)
+		return
+	if count < 2:
+		return		# too short for a stride to exist
 
 	scalar = placement.scalar
 	if scalar is not None:
@@ -1147,6 +1160,113 @@ def _element_encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolve
 		 " *",
 		 " * A stride that drifted leaves element zero right and every other",
 		 " * element quietly wrong, so only a later one can tell. */"])
+
+
+def _run_element_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+		prefix: str, extent: int) -> None:
+	"""An element of a run the *message* counts, at the bytes its index puts it.
+
+	The constant-count check above writes a pattern and demands the value; this
+	one writes the count as well, because there is no element to reach until
+	the driver says there is. That extra step is the whole reason this shape
+	had no check: `_array_checks` returned on a count it could not read from
+	the schema, and the accessor it would have exercised was a scalar getter in
+	C and a span of raw bytes in the other three.
+
+	Only where the count can be written from here: a plain scalar driver at a
+	byte-aligned constant offset. A varint or a text number decides its own
+	width, and a check that guessed it would be asserting the guess.
+	"""
+	placement = entry.placement
+	scalar    = placement.scalar
+
+	if scalar is None or not indexed_elements(placement):
+		return		# a byte run is a pointer and a length, not an index
+	if placement.offset_bits is None or placement.offset_bits % BITS_PER_BYTE:
+		return
+	if placement.endian is ast.Endian.NATIVE:
+		return
+
+	driver = _writable_driver(struct, placement)
+	if driver is None:
+		return
+
+	index  = 1		# the first element a drifting stride can move
+	stride = scalar.bits // BITS_PER_BYTE
+	at     = placement.offset_bits // BITS_PER_BYTE + index * stride
+	raw    = _probe_pattern(scalar.bits)
+	placed = _placed_bytes(at * BITS_PER_BYTE, scalar.bits, raw,
+	                       placement.endian, placement.bit_order, False)
+	if placed is None or at + stride > extent:
+		return
+
+	# Two elements is all this needs, and asking for more of them than the
+	# frame holds would have the accessor answer zero -- correctly, and about
+	# a different question.
+	counted = _placed_bytes(driver.offset_bits or 0, driver.scalar.bits
+	                        if driver.scalar else 8, index + 1,
+	                        driver.endian, driver.bit_order, False)
+	if counted is None:
+		return
+
+	local  = c_name(placement.path[len(struct.name) + 1:])
+	getter = f"{ident(prefix, struct.name, local, 'get')}(view, {index}u)"
+	if scalar.signed:
+		want, got = f"(int64_t){_signed_value(raw, scalar.bits)}", f"(int64_t){getter}"
+	else:
+		want, got = f"(uint64_t){raw:#x}u", f"(uint64_t){getter}"
+
+	body = [*_acquire(struct, prefix, extent), ""]
+	body.append(f"\t/* {driver.path} says how many, and this asks for the"
+	            f" last of them. */")
+	body.extend(f"\tbuf[{byte}u] = {counted[byte]:#04x}u;"
+	            for byte in sorted(counted))
+	body.append("")
+	body.append(f"\t/* element {index} sits one stride ({stride} bytes) past"
+	            " the first. */")
+	body.extend(f"\tbuf[{byte}u] = {placed[byte]:#04x}u;" for byte in sorted(placed))
+	body.extend([
+		"",
+		f"\tassert_int_equal((uint64_t){ident(prefix, struct.name, local, 'count')}"
+		f"(view), (uint64_t){index + 1}u);",
+		f"\tassert_int_equal({got}, {want});",
+	])
+
+	suite.add(
+		f"check_{c_name(placement.path)}_element_lands_on_its_stride",
+		body,
+		[f"/* {placement.path}[{index}]: the bytes its index puts it on, for a",
+		 " * count the message carries rather than the schema.",
+		 " *",
+		 " * The count is written first, because there is no element to reach",
+		 " * until the driver says there is -- and asking for the count back is",
+		 " * half the check: a stride that drifted moves the elements, and a",
+		 " * count that forgot the element width invents them. */"])
+
+
+def _writable_driver(struct: ResolvedStruct, placement: Placement) -> Placement | None:
+	"""The field that says how many elements, where a check can write it.
+
+	A plain scalar at a byte-aligned constant offset and nothing else: a varint
+	is as wide as its own bytes say, and a text number is digits, so writing
+	either from here means reimplementing an encoder inside a check.
+	"""
+	if placement.sized_by is None:
+		return None		# arithmetic over fields, or `remaining`
+
+	for candidate in own_members(struct):
+		if candidate.path != f"{struct.name}.{placement.sized_by}":
+			continue
+		if candidate.scalar is None or candidate.varint is not None:
+			return None
+		if candidate.radix is not None or candidate.scalar.is_bcd:
+			return None
+		if candidate.scalar.is_bit_packed or candidate.offset_bits is None:
+			return None
+		if candidate.offset_bits % BITS_PER_BYTE:
+			return None
+		return candidate
+	return None
 
 
 def resolve_element_struct(placement: Placement) -> str | None:

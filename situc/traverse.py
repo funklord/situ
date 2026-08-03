@@ -755,6 +755,36 @@ def element_bytes(placement: Placement) -> int:
 	return (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
 
 
+def indexed_elements(placement: Placement) -> bool:
+	"""Whether this member's values are reached by index rather than as bytes.
+
+	An element wider than a byte is `ValueConverted`: the bytes on the wire are
+	not the values, so a span of them is not the member. Every backend states
+	that rule for `u16 x[4]` -- three of them in a comment in the generated
+	code, saying "bytes handed back whole would not be the values" -- and every
+	backend broke it for `u16 x[n]`, which is the same array with its count in
+	the message rather than in the schema. Python handed back a `memoryview`,
+	C++ a `bytes`, Rust a `&[u8]`; a caller who cast any of them got host byte
+	order for a schema that names its own.
+
+	C did emit the indexed getter for `x[n]` and not for `x[n + 1]`, where a
+	member sized by arithmetic reached the *scalar* branch and got one getter
+	returning the first element: no index, no count, and the rest of the array
+	unreachable in the only backend that decoded it at all.
+
+	Not the element width alone, because two constructs wear the same bracket.
+	A text number is one value written as digits (`decimal u16 code[3]`,
+	invariant 57) and a BCD field is one value written as nibbles, and neither
+	is a run of anything.
+	"""
+	scalar = placement.scalar
+	return (scalar is not None
+	        and placement.radix is None
+	        and not scalar.is_bcd
+	        and scalar.bits > BITS_PER_BYTE
+	        and scalar.bits % BITS_PER_BYTE == 0)
+
+
 def index_entry_bytes(placement: Placement) -> int | None:
 	"""How wide one entry of an `indexed` region's offset table is.
 

@@ -29,8 +29,14 @@ byte arrays, delimited members and delimited text numbers, tags, endian
 markers, varints, the counts of runs and of `tlv` and `indexed` regions, a
 variant's arms, members present only from a given version, the framing of a
 coded region, a sealed region's stage gate *and* the scalars behind it, the
-first element of an array of wide scalars, and a nested struct's sub-view --
-plus `validate`.
+first element of an array of wide scalars, the count and first element of a
+run of them, and a nested struct's sub-view -- plus `validate`.
+
+That second-to-last one is what the subset costs when it is short. An array of
+wide scalars was probed only where the *schema* gives the count, and the same
+array with the count in the message was skipped for having no byte pointer to
+read -- so the shape three backends answered with raw bytes, and C with the
+first element and no way to ask for a second, was compared by nothing (26.47).
 
 Not yet, and each for a stated reason rather than for want of writing it:
 
@@ -92,8 +98,8 @@ from situc.capability import Axis
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Member, arm_members, classify, containment_order, local_name,
-	own_entries, own_members,
+	Member, arm_members, classify, containment_order, indexed_elements,
+	local_name, own_entries, own_members,
 )
 
 
@@ -128,6 +134,10 @@ class Probe(Enum):
 	#: `name[0] <integer>` -- the first element of an array of wide scalars,
 	#: which is reached by index rather than by pointer.
 	ELEMENT   = "element"
+	#: `name count=<n> [0]=<integer>` -- the same array with its count in the
+	#: message. Asked together because the count is what says whether there is
+	#: an element to read, and the four spell "there is not" four ways.
+	RUN_ELEMENT = "run_element"
 	#: `name ok=<0|1> extent=<n>` -- a nested struct's sub-view, which every
 	#: backend can now refuse.
 	NESTED    = "nested"
@@ -267,6 +277,14 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				# keeps it askable where Rust returns a `Result` and C does
 				# not.
 				found.append(Ask(Probe.ELEMENT, local))
+		elif kind is Member.VARIABLE and indexed_elements(placement):
+			# A run of values the message counts. Not asked for its whole life,
+			# and every backend answered it differently: C decoded the values,
+			# the other three handed back the raw bytes, and the arithmetic
+			# spelling of the count reached C's *scalar* branch and returned
+			# the first element with no way to ask for a second.
+			found.append(Ask(Probe.RUN_ELEMENT, local,
+			                 bits=max(8, scalar.bits if scalar else 8)))
 		elif kind is Member.VARIABLE and scalar is not None \
 				and scalar.bits == BITS_PER_BYTE:
 			# Only where a *field* gives the length. A member sized by
@@ -668,6 +686,14 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	if ask.probe is Probe.ELEMENT:
 		return [f'\t\t\tprintf("{ask.local}[0] %lld\\n",'
 		        f' (long long){call.format("get")}(view, 0u));']
+	if ask.probe is Probe.RUN_ELEMENT:
+		return ["\t\t\t{",
+		        f"\t\t\t\tconst uint32_t n = {call.format('count')}(view);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local} count=%u [0]=%lld\\n", n,',
+		        "\t\t\t\t\tn == 0u ? 0LL : (long long)"
+		        f"{call.format('get')}(view, 0u));",
+		        "\t\t\t}"]
 	if ask.probe is Probe.NESTED:
 		return ["\t\t\t{",
 		        "\t\t\t\tsitu_view_t sub;",
@@ -856,6 +882,14 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.ELEMENT:
 		return [f'\t\t\tstd::printf("{ask.local}[0] %lld\\n",'
 		        f" static_cast<long long>(view.{ask.local}(0)));"]
+	if ask.probe is Probe.RUN_ELEMENT:
+		return ["\t\t\t{",
+		        f"\t\t\t\tconst std::uint32_t n = view.{ask.local}_count();",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local} count=%u [0]=%lld\\n", n,',
+		        "\t\t\t\t\tn == 0 ? 0LL : static_cast<long long>"
+		        f"(view.{ask.local}(0)));",
+		        "\t\t\t}"]
 	if ask.probe is Probe.NESTED:
 		return ["\t\t\t{",
 		        f"\t\t\t\t::situ::{ask.inner} held;",
@@ -1064,6 +1098,16 @@ def _rust_ask(ask: Ask) -> list[str]:
 		# always there and the two shapes agree about it.
 		return [f'\t\t\t\tprintln!("{ask.local}[0] {{}}",'
 		        f" view.{call}(0).map(|held| held as i64).unwrap_or(0));"]
+	if ask.probe is Probe.RUN_ELEMENT:
+		# The count is the message's here, so there may be no first element:
+		# Rust says that with `Err(Bounds)` where C returns zero, and the
+		# count is what makes the two comparable.
+		return ["\t\t\t\t{",
+		        f"\t\t\t\t\tlet n = view.{rust_ident(ask.local + '_count')}();",
+		        f'\t\t\t\t\tprintln!("{ask.local} count={{}} [0]={{}}", n,',
+		        "\t\t\t\t\t\tif n == 0 { 0i64 } else"
+		        f" {{ view.{call}(0).map(|held| held as i64).unwrap_or(0) }});",
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\t\tprintln!("{ask.local} little={{}}",'
 		        f" if view.{rust_ident(ask.local + '_is_little')}()"
@@ -1211,6 +1255,10 @@ def _python_ask(ask: Ask) -> list[str]:
 		        f" % (0 if len(view.{ask.local}) == 0 else 1))"]
 	if ask.probe is Probe.ELEMENT:
 		return [f'print("{ask.local}[0] %d" % view.{ask.local}(0))']
+	if ask.probe is Probe.RUN_ELEMENT:
+		return [f"n = view.{ask.local}_count",
+		        f'print("{ask.local} count=%d [0]=%d"'
+		        f" % (n, 0 if n == 0 else view.{ask.local}(0)))"]
 	if ask.probe is Probe.NESTED:
 		return ["try:",
 		        f"\theld = view.{ask.local}",

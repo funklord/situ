@@ -44,7 +44,8 @@ from situc.traverse import (
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
+	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
+	is_run,
 	local_name,
 	element_bytes, is_counted_run, matched_values, obligation,
 	preceding_parts,
@@ -2318,6 +2319,19 @@ class Emitter:
 		            or [f"\t\treturn {start}"])]
 
 		if nested is None:
+			# An element wider than a byte, which is the same array `x[4]` is
+			# with its count in the message. This handed back a memoryview of
+			# the raw bytes, three lines under a generated comment saying why
+			# that is not the member: the element is ValueConverted, so a
+			# caller casting the slice gets host byte order for a schema that
+			# names its own. C indexed it from the start.
+			if indexed_elements(placement):
+				# Not None here: the refusal above only lets a missing length
+				# through for a variable-size struct element, which this is not.
+				assert length is not None
+				lines.extend(self._variable_elements(struct, placement, length))
+				return lines
+
 			lines.extend([
 				"", "\t@property", f"\tdef {name}(self) -> memoryview:",
 				"\t\tself._check()",
@@ -2364,6 +2378,41 @@ class Emitter:
 		if not nested.layout.is_fixed_size and count is not None:
 			lines.extend(self._counted_run_span(struct, placement, count))
 		return lines
+
+	def _variable_elements(self, struct: ResolvedStruct, placement: Placement,
+			length: str) -> list[str]:
+		"""`u16 x[n]`: a count the message gives, and a getter taking an index.
+
+		The count is clamped to what the frame holds, which is what the byte
+		spelling gets for free from slicing and this has to say: a caller
+		looping to the declared count would otherwise read past the end of the
+		message on a length the message chose (invariant 41).
+		"""
+		name   = c_name(local_name(struct, placement))
+		scalar = placement.scalar
+		assert scalar is not None
+		width  = scalar.bits // BITS_PER_BYTE
+		load   = self._load(placement, scalar,
+		                    offset=f"self.{name}_offset + index * {width}")
+
+		return [
+			"", "\t@property", f"\tdef {name}_count(self) -> int:",
+			f'\t\t"""How many {scalar.name} elements of {placement.path} are'
+			' here.',
+			"",
+			"\t\tThe message says how many there are; this says how many the",
+			'\t\tframe holds, which is the one a caller may loop to."""',
+			f"\t\treturn min({length},",
+			f"\t\t\tmax(self._len - self.{name}_offset, 0)) // {width}",
+			"", f"\tdef {name}(self, index: int) -> int:",
+			f'\t\t"""Element `index`, an {scalar.name}.',
+			"",
+			"\t\tNo slice accessor: the element is ValueConverted, so bytes",
+			'\t\thanded back whole would not be the values."""',
+			f"\t\tif not 0 <= index < self.{name}_count:",
+			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+			f"\t\treturn {load}",
+		]
 
 	def _counted_run_span(self, struct: ResolvedStruct, placement: Placement,
 			count: str) -> list[str]:

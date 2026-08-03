@@ -158,6 +158,48 @@ def test_a_varint_can_drive_an_arithmetic_length(tmp_path: Path) -> None:
 	assert held.tail == 0xABCD
 
 
+def test_a_run_the_message_counts_is_read_by_index(tmp_path: Path) -> None:
+	"""Executed. `u16 a[n]` is `u16 samples[4]` with its count in the message,
+	and this handed back a `memoryview` of the raw bytes -- three lines under
+	the comment saying why the constant-count form does not. A caller who cast
+	it read host byte order for a schema that names big.
+
+	The last assertion is the count: the message says four elements and the
+	frame holds three, so a caller looping to it stays inside the buffer."""
+	module = load(tmp_path, "struct s { u8 n; u16 a[n]; }\n")
+
+	buf = bytearray(7)
+	buf[0] = 4				# four elements claimed, three carried
+	buf[1], buf[2] = 0x12, 0x34
+	buf[3], buf[4] = 0xAB, 0xCD
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.a(0) == 0x1234
+	assert held.a(1) == 0xABCD
+	assert held.a_count == 3
+	with pytest.raises(IndexError):
+		held.a(3)
+
+
+def test_an_arithmetic_count_of_wide_elements_is_read_by_index(
+		tmp_path: Path) -> None:
+	"""The same array with its count written as arithmetic, which is the
+	spelling that reached C's *scalar* branch: one getter, no index, and every
+	element after the first unreachable in the one backend that decoded any of
+	them."""
+	module = load(tmp_path, "struct s { u8 n; i32 b[n + 1]; }\n")
+
+	buf = bytearray(9)
+	buf[0] = 1				# n + 1 == two elements
+	buf[1], buf[2], buf[3], buf[4] = 0xFF, 0xFF, 0xFF, 0xFE
+	buf[5], buf[6], buf[7], buf[8] = 0x00, 0x00, 0x01, 0x00
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.b_count == 2
+	assert held.b(0) == -2			# signed, and indexed
+	assert held.b(1) == 256
+
+
 def test_a_run_may_walk_a_fixed_size_element(tmp_path: Path) -> None:
 	"""Executed. Two elements of two bytes each, the second failing the
 	condition, so the run is four bytes and `tail` is at 4."""

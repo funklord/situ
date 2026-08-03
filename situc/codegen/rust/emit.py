@@ -44,7 +44,8 @@ from situc.traverse import (
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
+	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
+	is_run,
 	local_name,
 	element_bytes, is_counted_run, matched_values, obligation,
 	preceding_parts,
@@ -3434,6 +3435,14 @@ class Emitter:
 			# missing one through for a variable-size struct element, which
 			# this branch is not.
 			assert length is not None
+			# An element wider than a byte is reached by index, which the
+			# constant-count emitter below has always done and this did not:
+			# the same array with its count in the message came back as a
+			# `&[u8]`, and the values in it are whatever byte order the schema
+			# named rather than the host's.
+			if indexed_elements(placement):
+				lines.extend(self._variable_elements(struct, placement, length))
+				return lines
 			# Clamped to what the slice holds. The length is a field, so it is
 			# whatever the message says, and `&bytes[at..at + declared]`
 			# *panics* on a message that claims more than it carries -- which
@@ -3528,6 +3537,51 @@ class Emitter:
 				"\t}",
 			])
 		return lines
+
+	def _variable_elements(self, struct: ResolvedStruct, placement: Placement,
+			length: str) -> list[str]:
+		"""`u16 x[n]`: a count the message gives, and a getter taking an index.
+
+		The count is clamped to the slice, which is the same clamp the byte
+		spelling above puts on its length and for the same reason: the number
+		is the message's, and a caller looping to it would otherwise index
+		past the frame (invariant 41).
+		"""
+		name   = _ident(local_name(struct, placement))
+		base   = c_name(local_name(struct, placement))
+		scalar = placement.scalar
+		assert scalar is not None
+		width  = scalar.bits // BITS_PER_BYTE
+		rtype  = self._rust_type(scalar)
+		load   = self._load(placement, scalar,
+		                    offset=f"self.{_ident(base + '_offset')}()"
+		                           f" + index * {width}")
+
+		return [
+			"",
+			f"\t/// How many {scalar.name} elements of `{placement.path}` are"
+			" here.",
+			"\t///",
+			"\t/// The message says how many there are; this says how many the",
+			"\t/// frame holds, which is the one a caller may loop to.",
+			f"\tpub fn {_ident(base + '_count')}(&self) -> usize {{",
+			f"\t\tlet at = self.{_ident(base + '_offset')}();",
+			f"\t\tcore::cmp::min({self._unparen(length)},",
+			"\t\t\tself.bytes.len().saturating_sub(at))"
+			f" / {width}",
+			"\t}",
+			"",
+			f"\t/// Element `index`, an {scalar.name}.",
+			"\t///",
+			"\t/// No slice accessor: the element is ValueConverted, so bytes",
+			"\t/// handed back whole would not be the values.",
+			f"\tpub fn {name}(&self, index: usize) -> Result<{rtype}> {{",
+			f"\t\tif index >= self.{_ident(base + '_count')}() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tOk({load})",
+			"\t}",
+		]
 
 	def _scalar_array(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:

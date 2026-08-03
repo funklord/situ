@@ -48,7 +48,8 @@ from situc.traverse import (
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts, frameable,
-	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
+	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
+	is_run,
 	local_name,
 	element_bytes, is_counted_run, matched_values, obligation,
 	preceding_parts,
@@ -2081,6 +2082,17 @@ class Emitter:
 		          "\t}"]
 
 		if nested is None:
+			# An element wider than a byte is the same array `x[4]` is, with
+			# its count in the message rather than in the schema -- and the
+			# constant-count emitter three functions down refuses to hand back
+			# bytes for exactly the reason this did: they are not the values.
+			if indexed_elements(placement):
+				# Not None here: the refusal above only lets a missing length
+				# through for a variable-size struct element, which this is not.
+				assert length is not None
+				lines.extend(self._variable_elements(struct, placement, length))
+				return lines
+
 			# Clamped to what the view holds. The length is a field, so it is
 			# whatever the message says: `u8 opts[hdr.length]` with a `u16`
 			# length claims up to 65535 bytes, and this handed out a raw
@@ -4165,6 +4177,40 @@ class Emitter:
 				"\t}",
 			])
 		return lines
+
+	def _variable_elements(self, struct: ResolvedStruct, placement: Placement,
+			length: str) -> list[str]:
+		"""`u16 x[n]`: a count the message gives, and a getter taking an index.
+
+		The count is clamped to the frame, so a caller looping to it stays
+		inside the message however large a number the length field carries --
+		which the byte spelling above gets from the same clamp on its span.
+		Out of range still reads zero rather than the buffer: this is a count
+		the message chose, so a caller who loops to *it* is not making the
+		mistake a fixed array's index is (invariant 41).
+		"""
+		name   = c_name(local_name(struct, placement))
+		scalar = placement.scalar
+		assert scalar is not None
+		width  = scalar.bits // BITS_PER_BYTE
+		ctype  = self._ctype(scalar)
+		load   = self._load(scalar, placement,
+		                    offset=f"{name}_offset() + index * {width}")
+
+		return [
+			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+			"\t{",
+			f"\t\treturn situ_min_u32({length},",
+			f"\t\t\tsitu_remaining_u32(limit(), {name}_offset())) / {width}u;",
+			"\t}",
+			f"\t/* Zero past the count: the element is ValueConverted, so a",
+			"\t * span of the bytes would not be the values, and the count is",
+			"\t * the message's rather than the schema's. */",
+			f"\t[[nodiscard]] {ctype} {name}(std::uint32_t index) const noexcept",
+			"\t{",
+			f"\t\treturn index < {name}_count() ? {load} : static_cast<{ctype}>(0);",
+			"\t}",
+		]
 
 	def _scalar_array(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:

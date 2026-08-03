@@ -829,3 +829,75 @@ def test_that_write_marks_the_tag(target: str) -> None:
 
 	body = source[source.index(NESTED_SETTERS[target]):]
 	assert marked in body[:400]
+
+
+#: A run of values the message counts, whose elements are wider than a byte.
+#: `u16 x[4]` is the same array with its count in the schema, and every backend
+#: refuses to hand back its bytes -- the element is ValueConverted, so the bytes
+#: are not the values. With the count in the message all four answered
+#: differently.
+WIDE_RUN = "struct s { u8 n; u16 a[n]; i32 b[n + 1]; u16 tail; }\n"
+
+#: What indexing one looks like in each language. Spelled out rather than
+#: grepped for a substring, because the shape that was wrong -- a span of the
+#: raw bytes -- contains the member's name too (invariant 26).
+WIDE_RUN_INDEXED = {
+	"c":      "situ_s_a_get(situ_view_t view, uint32_t index)",
+	"cpp":    "std::uint16_t a(std::uint32_t index) const noexcept",
+	"python": "def a(self, index: int) -> int:",
+	"rust":   "pub fn a(&self, index: usize) -> Result<u16> {",
+}
+
+#: And the byte spellings each of them used to emit instead.
+WIDE_RUN_AS_BYTES = {
+	"c":      "situ_s_a_ptr(",
+	"cpp":    "::situ::rt::bytes a() const noexcept",
+	"python": "def a(self) -> memoryview:",
+	"rust":   "pub fn a(&self) -> &[u8] {",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_run_the_message_counts_is_read_by_index(target: str) -> None:
+	"""Three backends handed back the raw bytes of a `u16 x[n]`, each of them
+	three lines under a comment saying why the constant-count form does not:
+	the element is ValueConverted, so a caller casting the span reads host
+	byte order for a schema that names its own."""
+	source = sources(WIDE_RUN)[target]
+
+	assert WIDE_RUN_INDEXED[target] in source
+	assert WIDE_RUN_AS_BYTES[target] not in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_an_arithmetic_count_of_wide_elements_is_an_array(target: str) -> None:
+	"""The same array, its count written as arithmetic. In C that spelling
+	reached the *scalar* branch and got a getter taking no index -- so the
+	array had one element as far as any caller could tell -- and the other
+	three handed back bytes as they did for the count form."""
+	source = sources(WIDE_RUN)[target]
+	indexed = {
+		"c":      "situ_s_b_get(situ_view_t view, uint32_t index)",
+		"cpp":    "std::int32_t b(std::uint32_t index) const noexcept",
+		"python": "def b(self, index: int) -> int:",
+		"rust":   "pub fn b(&self, index: usize) -> Result<i32> {",
+	}[target]
+
+	assert indexed in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_an_element_of_a_counted_run_is_bounded(target: str) -> None:
+	"""Invariant 41, for the accessor that had it wrong: the count is the
+	message's, so a caller looping to it is not making the mistake a fixed
+	array's index would be. C read element 99 of an `n` of 200 from four
+	hundred bytes past an eight-byte frame."""
+	source = sources(WIDE_RUN)[target]
+	bounded = {
+		"c":      "situ_in_bounds(view, 1u + index * 2u, 2u)",
+		"cpp":    "index < a_count() ?",
+		"python": "if not 0 <= index < self.a_count:",
+		"rust":   "if index >= self.a_count() {",
+	}[target]
+
+	assert bounded in source

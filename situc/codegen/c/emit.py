@@ -1128,7 +1128,15 @@ class Emitter:
 				lines.extend(self._sub_view(struct, placement))
 			return lines
 
-		if placement.array_count is not None or placement.sized_by is not None:
+		# `data_sized` as well as the two spellings that name a count, because a
+		# length written as arithmetic is an array too. `u16 d[n + 1]` set
+		# neither `array_count` nor `sized_by`, fell through to the scalar case
+		# below, and got a getter returning the first element -- no index, no
+		# length, and every element after the first unreachable. The docstring
+		# on `data_sized` names three places that asked this question and
+		# answered it differently; this was a fourth.
+		if placement.array_count is not None or placement.sized_by is not None \
+				or data_sized(placement):
 			lines.extend(self._array(struct, entry))
 			lines.extend(self._covered_pointer_note(struct, placement))
 			if _has_attr(placement.attrs, "secret"):
@@ -4673,6 +4681,20 @@ class Emitter:
 			" * which is ValueConverted, so a pointer into it would alias bytes",
 			" * that are not the value. Index the elements individually. */",
 		])
+		if count is None:
+			# How many elements are *here*, which is not how many the message
+			# claims: `_len` is already clamped to the view, and dividing it is
+			# what turns that clamp into a loop bound a caller can trust. The
+			# three other backends emit the same name for the same reason.
+			lines.extend([
+				f"static inline uint32_t "
+				f"{ident(self.prefix, struct.name, local, 'count')}({taken})",
+				"{",
+				f"\treturn {ident(self.prefix, struct.name, local, 'len')}"
+				f"({'gate' if gate else 'view'})"
+				f" / {scalar.bits // BITS_PER_BYTE}u;",
+				"}",
+			])
 		lines.extend(self._indexed_element(struct, entry, local, scalar))
 		return lines
 
@@ -4686,10 +4708,36 @@ class Emitter:
 		base = self._base_expression(struct, placement)
 		load = self._load_expression(
 			scalar, placement, f"view.base + {base} + index * {stride}u", offset=0)
+
+		# A constant count at a constant offset is what section 20.2 amortises:
+		# the frame was sized around it at acquisition, so every element is
+		# known to be here and the index is the caller's business, as it is for
+		# any C array.
+		#
+		# Neither of those holds when the message decides. `u16 a[n]` with an
+		# `n` of 200 in an eight-byte frame handed back element 99 from four
+		# hundred bytes past the end -- and a caller looping to `n` is doing
+		# what the schema says. Invariant 41: an accessor whose extent comes
+		# from the data carries its own bound.
+		if placement.array_count is not None and placement.offset_bits is not None:
+			return [
+				f"static inline {ctype} {getter}(situ_view_t view, uint32_t index)",
+				"{",
+				f"\treturn ({ctype})({load});",
+				"}",
+			]
+
 		return [
+			"/* Zero where the element is not in the view: the count is the"
+			" message's",
+			" * and the frame was not sized around it. `validate` reports such a",
+			" * message as malformed (26.27). */",
 			f"static inline {ctype} {getter}(situ_view_t view, uint32_t index)",
 			"{",
-			f"\treturn ({ctype})({load});",
+			f"\treturn situ_in_bounds(view, {base} + index * {stride}u,"
+			f" {stride}u)",
+			f"\t\t? ({ctype})({load})",
+			f"\t\t: ({ctype})0;",
 			"}",
 		]
 

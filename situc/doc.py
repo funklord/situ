@@ -26,7 +26,9 @@ from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.names import render_delimiter
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import local_name, own_members
+from situc.traverse import (
+	element_bytes, indexed_elements, local_name, own_members,
+)
 from situc.unparse import expr_to_source
 
 #: The RFC convention. Everything below assumes two characters to a bit; the
@@ -155,6 +157,13 @@ def _label(struct: ResolvedStruct, placement: Placement) -> str:
 		return f"{local}[{placement.array_count}]"
 	if placement.sized_by is not None:
 		return f"{local}[{placement.sized_by}]"
+	# ...and the same array with its count written as arithmetic, which came
+	# out bare: `a[n]` beside `b`, for two members of the same kind, in the
+	# column a reader identifies fields by. The Size column has said
+	# `[n + 1]` for it all along, so the diagram named a scalar and the table
+	# beside it named an array (invariant 69).
+	if placement.size_expr is not None:
+		return f"{local}[{placement.size_expr}]"
 	return local
 
 
@@ -354,6 +363,17 @@ def _offset(placement: Placement) -> str:
 	return f"{placement.offset_bits // BITS_PER_BYTE}.{placement.offset_bits % BITS_PER_BYTE}"
 
 
+def _stride(placement: Placement) -> str:
+	"""How wide one element is, where a count alone would not say.
+
+	Nothing for a byte element, where the count *is* the byte count, and for
+	an element of a struct type, whose name the Type column carries.
+	"""
+	if not indexed_elements(placement):
+		return ""
+	return f" x {element_bytes(placement)} bytes"
+
+
 def _size(placement: Placement) -> str:
 	if placement.delimiter is not None:
 		# What a reader needs is where it stops, not how many bytes the
@@ -363,8 +383,13 @@ def _size(placement: Placement) -> str:
 		if placement.delimiter_cap is not None:
 			return f"to {shown}, max {placement.delimiter_cap}"
 		return f"to {shown}"
+	# The count is in elements, and this column is otherwise in bytes: a
+	# constant array two rows down says "8 bytes" for four `u16`s. So `[n]`
+	# beside a `u16` read as n bytes, and half the array was invisible to
+	# somebody sizing a buffer from the table. The two coincide for a byte
+	# element, which is every data-sized array anybody had written.
 	if placement.sized_by is not None:
-		return f"[{placement.sized_by}]"
+		return f"[{placement.sized_by}]{_stride(placement)}"
 	if placement.size_expr is not None and placement.array_count is None:
 		# The same question `sized_by` answers, for a length written as
 		# arithmetic rather than as a bare field reference. Without it this
@@ -373,7 +398,7 @@ def _size(placement: Placement) -> str:
 		# saying "(variable)". Three constructs above have their own comment
 		# recording this same mistake; the fourth is here because the
 		# predicate was `sized_by` rather than `traverse.data_sized`.
-		return f"[{placement.size_expr}]"
+		return f"[{placement.size_expr}]{_stride(placement)}"
 	if placement.kind == "variant" and placement.discriminant is not None:
 		# The fixed-size branch below reported `size_bits`, which for a
 		# variant is the *smallest* arm -- printed as "0 bytes" beside a

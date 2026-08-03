@@ -17,7 +17,9 @@ from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import has_computable_extent, own_entries
+from situc.traverse import (
+	data_sized, has_computable_extent, indexed_elements, own_entries,
+)
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
@@ -276,9 +278,12 @@ def _reads(struct: ResolvedStruct, prefix: str,
 		# accessors are the fixed-array ones -- a `[CHANNEL_COUNT]` array got
 		# `_len` and `_count`, which are emitted only for a runtime length.
 		# `array_count` is the honest question, now that it is never a guess.
+		# `data_sized` rather than `sized_by`, which is the same question with
+		# one spelling missing: a length written as arithmetic reached the
+		# scalar branch below and asked for a `_get` that takes no index.
 		if placement.array_count is None \
 				and (placement.delimiter is not None
-				     or placement.sized_by is not None):
+				     or data_sized(placement)):
 			lines.extend(_variable_read(frozenset(resolved.structs), struct,
 			                            placement, local, prefix))
 			continue
@@ -547,6 +552,28 @@ def _variable_read(structs: frozenset[str], struct: ResolvedStruct,
 			f"\t\tif ({ident(prefix, struct.name, local, 'get')}(view, &parsed)"
 			" == SITU_OK) {",
 			"\t\t\tsitu_fuzz_sink((uint64_t)parsed);",
+			"\t\t}",
+			"\t}",
+		]
+
+	if indexed_elements(placement):
+		# An element wider than a byte has no pointer -- it is ValueConverted,
+		# so the bytes are not the values -- and this asked for one anyway, so
+		# the harness for any schema with a `u16 x[n]` did not compile. Nothing
+		# noticed because no schema here had one until somebody wrote it to see
+		# what would happen.
+		count  = ident(prefix, struct.name, local, "count")
+		getter = ident(prefix, struct.name, local, "get")
+		return [
+			"\t{",
+			f"\t\tconst uint32_t n = {count}(view);",
+			"",
+			"\t\t/* The count is the attacker's. Read the last element it",
+			"\t\t * claims rather than the first: an off-by-one in the",
+			"\t\t * extent shows up there. */",
+			"\t\tsitu_fuzz_sink((uint64_t)n);",
+			"\t\tif (n > 0u) {",
+			f"\t\t\tsitu_fuzz_sink((uint64_t){getter}(view, n - 1u));",
 			"\t\t}",
 			"\t}",
 		]

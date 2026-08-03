@@ -99,6 +99,12 @@ struct messy size=3..
   @0x0000   until:3a  u8         name  fold-case
   ~         until:0d0a u8         value  big trim
 
+struct packed_driver size=3..63
+  @0x0000   4bit      u4         hi  msb_first
+  @0x0000:4 4bit      u4         n  msb_first
+  @0x0001   0..60     u32        d  sized-by=n
+  ~         2         u16        tail  big
+
 struct quoted_row size=1..
   @0x0000   until:2c  u8         field  quote=0x22
   ~         0..       u8         rest  sized-by=remaining
@@ -111,6 +117,11 @@ struct segments size=3..65283
   @0x0000   1         u8         count
   @0x0001   0..65280  segment    parts  sized-by=count
   ~         2         u16        after  big
+
+struct text_driver size=6..14
+  @0x0000   4         u32        n  big radix=10 max=4
+  @0x0004   0..8      u16        d  sized-by=n
+  ~         2         u16        tail  big
 
 struct texty size=2..65543
   @0x0000   until:0d0a u16        count  big radix=10 cap=8
@@ -138,11 +149,22 @@ struct unverified size=19
   @0x0003   16        u8         mac
   mac covers: body seq
 
+struct varint_driver size=5..36893488147419103243
+  @0x0000   1..9      edge_varint n  varint=edge_varint
+  ~         2..36893488147419103232 u16        d  big
+  ~         2         u16        tail  big
+
 struct versioned size=3..9
   @0x0000   1         u8         ver
   @0x0001   2         u16        length  big
   @0x0003   4         u32        flags  big since=2
   @0x0007   2         u16        extra  big since=3
+
+struct wide_run size=7..31
+  @0x0000   1         u8         n  max=4
+  @0x0001   0..8      u16        a  sized-by=n
+  ~         4..20     i32        b  big
+  ~         2         u16        tail  big
 
 struct wire::framed_body size=3
   @0x0000   1         u8         kind

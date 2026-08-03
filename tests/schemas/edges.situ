@@ -370,3 +370,91 @@ struct unverified {
 	}
 	tag u8  mac[16] covers(body);
 }
+
+// The combinations, which are not constructs and are where the defects are.
+//
+// Everything above this line is a *construct* nothing exercised. These three
+// are pairs of constructs that are each covered several times over, put next
+// to each other: the neighbour is what the code branches on, so a question
+// with two spellings gets answered for whichever spelling a real protocol
+// happened to write (26.46, invariant 69).
+//
+// They were found by construction and fixed against unit tests over generated
+// text, which is three backends inspected and one executed (invariant 22).
+// Here they reach every artifact this file reaches: four compilers, the
+// random-bytes differ, the dissector, `doc`, the fuzz harness and the checks.
+
+// A packed pair before a member the data sizes.
+//
+// `hi` and `n` are a nibble each: one byte together and zero apart. Every
+// offset sum in the four backends divided each preceding member by eight and
+// added the quotients, so the pair contributed nothing and everything after
+// `d` read one byte early -- the last byte of the array and the first of
+// `tail`. `extent_parts` states that arithmetic in its own docstring, having
+// been fixed there for the *extent*; the accumulation beside it was never
+// told, in seven places across the four backends.
+struct packed_driver {
+	u4   hi;
+	u4   n;
+	u32  d[n];
+	u16  tail;
+}
+
+// A fixed-width text number driving a length, named from the struct that
+// declares it.
+//
+// An expression over a text driver names `<field>_value`, the read that
+// cannot fail, and only the delimited and nested forms of a text number
+// emitted one -- `texty` above is delimited, and `examples/cpio` reaches its
+// driver through a nested header. So `decimal u32 n[4]; u16 d[n]` named a
+// function nothing defined: C that does not compile, and a Python
+// `AttributeError` on every accessor after the driver.
+struct text_driver {
+	decimal u32  n[4]  [max = 4];
+	u16          d[n];
+	u16          tail;
+}
+
+// A varint driving a size written as arithmetic.
+//
+// `readable_names` is the one list of what an expression may name and it
+// asked for a scalar, which a varint has not -- so `n` in `d[n + 1]` reached
+// the generated code as a bare identifier. The count form `d[n]` beside it,
+// which `examples/sqlite` writes, has known about varint drivers since they
+// were added.
+varint_type edge_varint {
+	encoding  = be128;
+	max_bits  = 64;
+	max_bytes = 9;
+}
+
+struct varint_driver {
+	edge_varint  n;
+	u16          d[n + 1];
+	u16          tail;
+}
+
+// A run of values the message counts, whose elements are wider than a byte.
+//
+// `edges.samples[4]` at the top of this file is the same array with its count
+// in the schema, and every backend refuses to hand back its bytes -- three of
+// them in a generated comment saying why: the element is ValueConverted, so
+// the bytes are not the values. With the count in the *message* all three
+// handed back exactly that, a `memoryview`, a `bytes` and a `&[u8]`, and a
+// caller who cast one read host byte order for a schema that names its own.
+//
+// C did index it, and did not bound the index: `n` is the message's number,
+// so element 99 of a frame that holds eight bytes was read four hundred bytes
+// past the end (invariant 41).
+//
+// Two spellings, because they were two answers. `a` names a count and `b`
+// computes one, and the computed form reached C's *scalar* branch: one getter,
+// no index, no length, and every element after the first unreachable in the
+// only backend that decoded any of them. `b` is signed so that indexing and
+// sign extension are exercised together rather than one masking the other.
+struct wide_run {
+	u8   n  [max = 4];
+	u16  a[n];
+	i32  b[n + 1];
+	u16  tail;
+}

@@ -109,6 +109,12 @@ struct messy size=3 access=Sequential mutate=Shifting address=Unstable canonical
   messy.name                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   messy.value                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
 
+struct packed_driver size=3 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  packed_driver.hi                       offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  packed_driver.n                        offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  packed_driver.d                        offset=AbsoluteStatic(0x01) size=Bounded(0, 60) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  packed_driver.tail                     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
 struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
   quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   quoted_row.rest                        offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
@@ -124,6 +130,11 @@ struct segments size=3 access=Sequential mutate=Shifting address=Unstable repr=V
   segments.parts[].length                offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   segments.parts[].body                  offset=FrameStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   segments.after                         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct text_driver size=6 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
+  text_driver.n                          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=TextConverted atomic=NonAtomic
+  text_driver.d                          offset=AbsoluteStatic(0x04) size=Bounded(0, 8) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting
+  text_driver.tail                       offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
 struct texty size=2 access=Sequential mutate=Shifting address=Unstable repr=TextConverted canonical=NonCanonical
   texty.count                            offset=AbsoluteStatic(0x00) size=Bounded(2, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
@@ -151,11 +162,22 @@ struct unverified size=19 mutate=Immutable repr=ValueConverted atomic=NonAtomic 
   unverified.body.seq                    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
   unverified.mac                         offset=AbsoluteStatic(0x03) size=Fixed(16) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
+struct varint_driver size=5 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  varint_driver.n                        offset=AbsoluteStatic(0x00) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  varint_driver.d                        offset=Dynamic size=Bounded(2, 36893488147419103232) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  varint_driver.tail                     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
 struct versioned size=3 repr=ValueConverted atomic=NonAtomic stage=ParseTime
   versioned.ver                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   versioned.length                       offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   versioned.flags                        offset=AbsoluteStatic(0x03) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
   versioned.extra                        offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
+
+struct wide_run size=7 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  wide_run.n                             offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  wide_run.a                             offset=AbsoluteStatic(0x01) size=Bounded(0, 8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  wide_run.b                             offset=Dynamic size=Bounded(4, 20) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  wide_run.tail                          offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
 struct wire::framed_body size=3 repr=ValueConverted atomic=NonAtomic
   wire::framed_body.kind                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
