@@ -40,8 +40,10 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	NOT_A_MEMBER,
 	Check, arm_members, arm_of, classify_check, containment_order,
-	covered_run, data_sized, local_name, offset_plan, readable_names,
+	covered_run, data_sized, dynamic_frame_owner, local_name, offset_plan,
+	readable_names,
 	region_extent,
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
@@ -680,13 +682,44 @@ class Emitter:
 			gate  = self._gate_type(struct, placement)
 			view  = f"{gate} gate" if gate else "situ_view_t view"
 			base  = self._value_base(struct, placement, gated=gate is not None)
+			at    = self._value_offset(placement)
+
+			# A field of a nested struct that sits behind a variable-length
+			# member has a *frame-relative* offset: measured from the nested
+			# struct, which is not where this view starts. Writing at the
+			# parent's base plus that offset put `s.head.seq` over the top of
+			# `s.n`, silently, in the one backend that got this far.
+			owner = dynamic_frame_owner(struct, placement)
+			held  = "gate.view" if gate else "view"
+			guard: list[str] = []
+			if owner is not None:
+				where = self._base_expression(struct, owner,
+				                              gated=gate is not None)
+				base  = f"({held}.base + {where})"
+				at    = placement.offset_bytes
+				# ...and the offset is the message's, so the frame is not known
+				# to hold it. Every other dynamic setter says this; the covered
+				# one wrote whatever the sum came to.
+				guard = [
+					f"\tif (!situ_in_bounds({held}, {where} + {at}u,"
+					f" {self._scalar_bytes(scalar)}u)) {{",
+					"\t\treturn;",
+					"\t}",
+				]
+			elif placement.offset_bits is None:
+				fits = self._fits(struct, placement,
+				                  self._scalar_bytes(scalar), held,
+				                  gate is not None)
+				if fits is not None:
+					guard = [f"\tif (!({fits})) {{", "\t\treturn;", "\t}"]
 
 			lines.extend([
 				f"static inline void "
 				f"{ident(self.prefix, struct.name, local, 'set')}"
 				f"(situ_msg_t *msg, {view}, {ctype} value)",
 				"{",
-				f"\t{self._store_statement(scalar, placement, base, 'value', offset=self._value_offset(placement))}",
+				*guard,
+				f"\t{self._store_statement(scalar, placement, base, 'value', offset=at)}",
 				f"\tsitu_msg_mark_dirty(msg, {mask});",
 				"}",
 			])
@@ -2322,9 +2355,25 @@ class Emitter:
 
 	def _base_expression(self, struct: ResolvedStruct, placement: Placement,
 			gated: bool = False) -> str:
-		"""Where this member starts, in bytes, as a C expression."""
+		"""Where this member starts, in bytes, as a C expression.
+
+		An `authenticated` region has no offset function, because it is not a
+		member: it consumes no bytes of its own and names bytes its members
+		already account for (`traverse.NOT_A_MEMBER`). Where such a region sits
+		at a constant offset nobody noticed; behind a variable-length member,
+		two callers -- the covered span a tag hands its algorithm, and
+		`validate`'s bounds check -- named a function nothing defines, and the
+		generated header did not compile. Its start is its first member's, for
+		the reason `_region_end` gives for its end being its last member's.
+		"""
 		if placement.offset_bits is not None:
 			return f"{placement.offset_bytes}u"
+		if placement.kind in NOT_A_MEMBER:
+			inside = [held for held in self._top_level(struct)
+			          if placement.name in held.regions]
+			if inside:
+				return self._base_expression(struct, inside[0], gated)
+			return "0u"
 		local    = c_name(self._local(struct, placement))
 		argument = "gate.view" if gated else "view"
 		return f"{ident(self.prefix, struct.name, local, 'offset')}({argument})"
@@ -4766,19 +4815,29 @@ class Emitter:
 				f" / {scalar.bits // BITS_PER_BYTE}u;",
 				"}",
 			])
-		lines.extend(self._indexed_element(struct, entry, local, scalar))
+		lines.extend(self._indexed_element(struct, entry, local, scalar,
+		                                   taken, held, gate is not None))
 		return lines
 
 	def _indexed_element(self, struct: ResolvedStruct, entry: Resolved,
-			local: str, scalar: ScalarType) -> list[str]:
+			local: str, scalar: ScalarType, taken: str = "situ_view_t view",
+			held: str = "view", gated: bool = False) -> list[str]:
 		placement = entry.placement
 		ctype     = self._field_ctype(placement)
 		stride    = scalar.bits // BITS_PER_BYTE
 		getter    = ident(self.prefix, struct.name, local, "get")
 
-		base = self._base_expression(struct, placement)
+		# Through the gate where there is one. This took a plain view whatever
+		# the member was, so every element of a `u16 x[4]` inside a `sealed`
+		# region was readable without the verification token -- section 14.3's
+		# one claim, and the map beside it saying `stage = VerifyGated` about
+		# the same member. The scalar next to it in the same region needs the
+		# gate; only the indexed path did not, because it is the one accessor
+		# family that was written without one.
+		base = self._base_expression(struct, placement, gated=gated)
 		load = self._load_expression(
-			scalar, placement, f"view.base + {base} + index * {stride}u", offset=0)
+			scalar, placement, f"{held}.base + {base} + index * {stride}u",
+			offset=0)
 
 		# A constant count at a constant offset is what section 20.2 amortises:
 		# the frame was sized around it at acquisition, so every element is
@@ -4792,7 +4851,7 @@ class Emitter:
 		# from the data carries its own bound.
 		if placement.array_count is not None and placement.offset_bits is not None:
 			return [
-				f"static inline {ctype} {getter}(situ_view_t view, uint32_t index)",
+				f"static inline {ctype} {getter}({taken}, uint32_t index)",
 				"{",
 				f"\treturn ({ctype})({load});",
 				"}",
@@ -4803,9 +4862,9 @@ class Emitter:
 			" message's",
 			" * and the frame was not sized around it. `validate` reports such a",
 			" * message as malformed (26.27). */",
-			f"static inline {ctype} {getter}(situ_view_t view, uint32_t index)",
+			f"static inline {ctype} {getter}({taken}, uint32_t index)",
 			"{",
-			f"\treturn situ_in_bounds(view, {base} + index * {stride}u,"
+			f"\treturn situ_in_bounds({held}, {base} + index * {stride}u,"
 			f" {stride}u)",
 			f"\t\t? ({ctype})({load})",
 			f"\t\t: ({ctype})0;",

@@ -43,6 +43,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, Member, arm_members, containment_order, covered_run, data_sized,
+	dynamic_frame_owner,
 	readable_names,
 	decode_bound, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
@@ -627,7 +628,6 @@ class Emitter:
 		           if entry.placement.sealed_by == region.name
 		           and entry.placement.kind == "field"
 		           and entry.placement.scalar is not None
-		           and entry.placement.offset_bits is not None
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None]
 
@@ -657,7 +657,7 @@ class Emitter:
 		]
 
 		for entry in inside:
-			lines.extend(self._gated_accessor(entry))
+			lines.extend(self._gated_accessor(struct, entry))
 
 		if not inside:
 			lines.append("\t\t/* Nothing in this region has a scalar accessor. */")
@@ -709,6 +709,8 @@ class Emitter:
 		only the view it is read through differs.
 		"""
 		scalar = placement.scalar
+		if scalar is not None and indexed_elements(placement):
+			return self._gated_elements(struct, placement, scalar)
 		if scalar is None or scalar.bits != BITS_PER_BYTE:
 			return ["", f"\t\t/* {placement.path}: element type"
 			        f" {placement.type_name} is not reachable through the gate. */"]
@@ -736,7 +738,58 @@ class Emitter:
 			"\t\t}",
 		]
 
-	def _gated_accessor(self, entry: Resolved) -> list[str]:
+	def _gated_elements(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""A run of values wider than a byte inside a sealed region.
+
+		The span above is not available to it -- the element is
+		ValueConverted -- so it is the count and the indexed getter, read
+		through the gate's own view. This backend declined it with a note,
+		which was honest and left the interior unreadable; C emitted an
+		indexed getter taking a plain view, which is the stage gate of 14.3
+		with a hole in it.
+		"""
+		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		width = scalar.bits // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		length = (str(placement.array_count * width)
+		          if placement.array_count is not None
+		          else self._length_expression(struct, placement))
+		if start is None or length is None:
+			return ["", f"\t\t/* {placement.path}: this backend cannot resolve"
+			        f" its extent. */"]
+
+		# Inside the gate the view is `raw_`, not `base()`.
+		def inside(text: str) -> str:
+			return text.replace("base()", "raw_.base") \
+			           .replace("limit()", "raw_.limit")
+
+		start  = inside(start)
+		length = inside(length)
+		load   = inside(self._load(scalar, placement,
+		                           f"({start}) + index * {width}")) \
+			.replace("raw_.base.base", "raw_.base")
+
+		return [
+			"",
+			f"\t\t/* {placement.path}: {scalar.name} elements, reached through",
+			"\t\t * the gate and by index -- the bytes are not the values. */",
+			"\t\t[[nodiscard]] std::uint32_t "
+			f"{name}_count() const noexcept",
+			"\t\t{",
+			f"\t\t\treturn situ_min_u32({length},",
+			f"\t\t\t\tsitu_remaining_u32(raw_.limit, {start})) / {width}u;",
+			"\t\t}",
+			f"\t\t[[nodiscard]] {self._ctype(scalar)} {name}"
+			"(std::uint32_t index) const noexcept",
+			"\t\t{",
+			f"\t\t\treturn index < {name}_count() ? {load}"
+			f" : static_cast<{self._ctype(scalar)}>(0);",
+			"\t\t}",
+		]
+
+	def _gated_accessor(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
 		assert scalar is not None
@@ -750,16 +803,42 @@ class Emitter:
 			        f" for it",
 			        "\t\t * at all (section 14.6). */"]
 
-		load = self._raw_load(scalar, placement, f"raw_.base + {placement.offset_bytes}")
-		load = load.replace("base()", "raw_.base")
+		# Not `offset_bytes`: a scalar behind a variable-length member *inside*
+		# the region has an offset the message decides, and asking for a
+		# constant one crashed the compiler. Dropping such members instead
+		# left them unreachable in three backends while C read them through
+		# the gate -- and read them at the wrong place, which is how the
+		# offset itself turned out to be wrong.
+		where = (str(placement.offset_bytes) if placement.offset_bits is not None
+		         else self._offset_expression(struct, placement))
+		if where is not None:
+			# Inside the gate the view is `raw_`, and the offset expression is
+			# written for the outer accessors, which have `base()`.
+			where = where.replace("base()", "raw_.base") \
+			             .replace("limit()", "raw_.limit")
+		if where is None:
+			return ["", f"\t\t/* {placement.path}: this backend cannot resolve",
+			        "\t\t * where it starts. */"]
+		load = self._raw_load(scalar, placement, f"raw_.base + ({where})")
+		load = load.replace("base()", "raw_.base").replace("limit()", "raw_.limit")
 		if placement.type_name in self.enums:
 			load = f"static_cast<{ctype}>({load})"
 
+		# Bounded where the offset is the message's, as every other dynamic
+		# read is. The gate says the bytes have been authenticated; it does
+		# not say the frame is long enough for what a length field claims.
+		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
+		body  = ([f"\t\t\treturn {load};"] if placement.offset_bits is not None
+		         else [
+			f"\t\t\treturn situ_in_bounds(raw_, {where}, {width})",
+			f"\t\t\t\t? {load}",
+			f"\t\t\t\t: static_cast<{ctype}>(0);",
+		])
 		return [
 			"",
 			f"\t\t[[nodiscard]] {ctype} {name}() const noexcept",
 			"\t\t{",
-			f"\t\t\treturn {load};",
+			*body,
 			"\t\t}",
 		]
 
@@ -2992,10 +3071,45 @@ class Emitter:
 			scalar    = placement.scalar
 			assert scalar is not None
 
+			# A sealed member is not written from out here: the interior is
+			# behind the gate of 14.3, and this wrote it at its plaintext
+			# offset from the outer view. C has demanded the gate since the
+			# machinery landed. The gated setter goes with the interior.
+			if placement.sealed_by is not None:
+				continue
+
 			name  = c_name(local_name(struct, placement))
 			ctype = self._field_ctype(placement)
 			what  = ", ".join(placement.covered_by)
 			bits  = self._dirty_bits(struct, placement)
+
+			# The offset may be the message's, and a field of a nested struct
+			# behind a variable-length member has a *frame-relative* one --
+			# measured from the nested struct rather than from this view.
+			owner = dynamic_frame_owner(struct, placement)
+			start = self._offset_expression(struct, owner or placement)
+			if placement.offset_bits is None or owner is not None:
+				if start is None:
+					lines.extend([
+						"",
+						f"\t/* No set_{name}(): this backend cannot resolve",
+						f"\t * where {placement.path} starts. */",
+					])
+					continue
+				at: str | None = (f"({start}) + {placement.offset_bytes}"
+				                  if owner is not None else f"({start})")
+			else:
+				at = None
+
+			# ...and the offset is the message's, so the frame is not known
+			# to hold it. Every other dynamic setter says this; the covered
+			# one wrote whatever the sum came to.
+			width = max(1, scalar.bits // BITS_PER_BYTE)
+			guard = ([] if at is None else [
+				f"\t\tif (!situ_in_bounds(raw(), {at}, {width})) {{",
+				"\t\t\treturn;",
+				"\t\t}",
+			])
 			lines.extend([
 				"",
 				f"\t/* {placement.path} is under {what}, so writing it here",
@@ -3005,7 +3119,8 @@ class Emitter:
 				f"\tvoid set_{name}(::situ::rt::message &owner, {ctype} value)"
 				" noexcept",
 				"\t{",
-				f"\t\t{self._store(scalar, placement, 'value', None)}",
+				*guard,
+				f"\t\t{self._store(scalar, placement, 'value', at)}",
 				f"\t\towner.mark_dirty({bits});",
 				"\t}",
 			])
@@ -3538,14 +3653,25 @@ class Emitter:
 		if placement.covered_by:
 			bits = self._dirty_bits(struct, placement)
 			what = ", ".join(placement.covered_by)
+			# ...and where the offset is the message's, the frame is not known
+			# to hold it. The plain setter below has said so since 26.27 and
+			# the covered one above it did not, so the one write that carries a
+			# security obligation was the one without the bound.
+			body = ([f"\t\t{self._store(scalar, placement, stored, offset)}",
+			         f"\t\towner.mark_dirty({bits});"]
+			        if fits is None else [
+				f"\t\tif ({fits}) {{",
+				f"\t\t\t{self._store(scalar, placement, stored, offset)}",
+				f"\t\t\towner.mark_dirty({bits});",
+				"\t\t}",
+			])
 			lines.extend([
 				f"\t/* Writing this leaves {what} stale, so it takes the message",
 				"\t * and marks the bit. The cost is in the signature rather than",
 				"\t * in a comment somebody may not read. */",
 				f"\tvoid set_{name}(::situ::rt::message &owner, {ctype} value) noexcept",
 				"\t{",
-				f"\t\t{self._store(scalar, placement, stored, offset)}",
-				f"\t\towner.mark_dirty({bits});",
+				*body,
 				"\t}",
 			])
 			return lines
@@ -3753,11 +3879,25 @@ class Emitter:
 				                       f"{name}_extent()"),
 			]
 
+		# A fixed-size nested struct at whatever offset the members before it
+		# leave. This asked the placement for a constant and crashed the
+		# compiler on the assertion inside `offset_bytes` -- for a header, a
+		# variable-length field and another header, which is as ordinary as a
+		# protocol gets. C reads its own offset function here and always has.
+		if start is None:
+			return ["",
+			        f"\t/* No accessor for {placement.path}: this backend cannot",
+			        "\t * resolve where it starts. */"]
+		where = (str(placement.offset_bytes) if placement.offset_bits is not None
+		         else f"({start})")
+
 		return [
 			"",
-			f"\t/* {placement.path} at {placement.offset_bytes}. Its own class",
+			f"\t/* {placement.path} at {placement.offset_bytes}. Its own class"
+			if placement.offset_bits is not None else
+			f"\t/* {placement.path}, at an offset the message decides. Its own class",
 			"\t * carries its accessors; this is where the parent puts it. */",
-			*self._nested_accessor(name, nested, str(placement.offset_bytes),
+			*self._nested_accessor(name, nested, where,
 			                       f"{nested}::size_bytes"),
 		]
 

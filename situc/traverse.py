@@ -755,6 +755,39 @@ def element_bytes(placement: Placement) -> int:
 	return (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
 
 
+def dynamic_frame_owner(struct: "ResolvedStruct",
+		placement: Placement) -> Placement | None:
+	"""The member whose frame a dotted placement's offset is measured in.
+
+	`s.head.seq` is a member of `inner` seen from `s`, and its `offset_bits`
+	answers two different questions depending on where `head` sits. Where the
+	nested struct has a constant offset the copy carries an absolute one --
+	`frame_relative` is False -- and the parent can address it directly. Where
+	the nested struct sits behind a variable-length member the copy is
+	*frame-relative*: the offset is measured from `head`, and reaching it from
+	the parent means adding wherever `head` turned out to be.
+
+	Every backend addressed it directly regardless, so the flattened setter for
+	a tag-covered field wrote at the parent's base plus a frame-relative
+	offset -- over the top of whatever is actually there. C emitted that from
+	the start; the other three crashed before they got far enough to emit it,
+	which is the only reason it was not four.
+
+	None where the question does not arise, or where the owner is not a member
+	of this struct.
+	"""
+	if not (placement.frame_relative and placement.frame_base_dynamic):
+		return None
+	local = placement.path[len(struct.name) + 1:]
+	if "." not in local:
+		return None
+	owner = f"{struct.name}.{local.split('.', 1)[0]}"
+	for candidate in own_members(struct):
+		if candidate.path == owner:
+			return candidate
+	return None
+
+
 def indexed_elements(placement: Placement) -> bool:
 	"""Whether this member's values are reached by index rather than as bytes.
 
@@ -970,6 +1003,36 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	return constant_bits // BITS_PER_BYTE, variable
 
 
+def _walk_order(struct: ResolvedStruct,
+		placement: Placement) -> list[Placement]:
+	"""The members to step over when placing `placement`, in order.
+
+	Its own struct's, normally. For a member inside a sealed region, the
+	members before the region and then the region's interior -- the region
+	itself contributes no bytes beyond that interior, and what follows the
+	region does not precede anything inside it.
+	"""
+	members = own_members(struct)
+	if placement.sealed_by is None or placement.kind != "field":
+		return members
+
+	region = next((held for held in members
+	               if held.name == placement.sealed_by), None)
+	if region is None or region.path == placement.path:
+		return members
+
+	before: list[Placement] = []
+	for held in members:
+		if held.path == region.path:
+			break
+		before.append(held)
+	interior = [entry.placement for entry in struct.entries
+	            if entry.placement.sealed_by == region.name
+	            and entry.placement.kind == "field"
+	            and entry.placement.path != region.path]
+	return before + interior
+
+
 def preceding_parts(struct: ResolvedStruct,
 		placement: Placement) -> list[int | Placement] | None:
 	"""What lies before `placement` in its struct: runs of fixed bytes, and
@@ -993,7 +1056,13 @@ def preceding_parts(struct: ResolvedStruct,
 	parts: list[int | Placement] = []
 	bits  = 0
 
-	for other in own_members(struct):
+	# A member *inside* a sealed region is not one of the struct's own, so the
+	# walk below never met it and never stopped: it summed every member of the
+	# struct, the region it is in and the tag that follows the region, and C --
+	# the one backend that emits an accessor for such a member -- read it 17
+	# bytes past where it is. What precedes it is what precedes the region,
+	# then the region's own earlier members.
+	for other in _walk_order(struct, placement):
 		if other.path == placement.path:
 			break
 		if other.is_fixed_size:

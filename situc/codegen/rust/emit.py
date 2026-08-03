@@ -40,7 +40,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, arm_members, covered_run, data_sized, decode_bound, offset_plan,
+	Check, Member, arm_members, covered_run, data_sized, decode_bound,
+	dynamic_frame_owner, offset_plan,
 	readable_names,
 	region_extent,
 	decode_counts_bits,
@@ -364,9 +365,57 @@ class Emitter:
 			                                             "InPlaceSlack"):
 				continue
 
+			# A sealed member is not written from out here: the interior is
+			# behind the gate of 14.3, and this wrote it at its plaintext
+			# offset from the outer view. C has demanded the gate since the
+			# machinery landed; this backend's gate holds a shared slice, so
+			# there is no write path through it to offer instead.
+			if placement.sealed_by is not None:
+				lines.extend([
+					"",
+					f"\t// No setter for `{placement.path}`: it is sealed, so"
+					" the write",
+					"\t// goes through the gate (14.3) -- and `Gate` borrows the"
+					" bytes",
+					"\t// immutably, so this backend has no gated setter to"
+					" offer.",
+				])
+				continue
+
 			name  = _ident(f"set_{c_name(local_name(struct, placement))}")
 			what  = ", ".join(placement.covered_by)
 			rtype = self._field_type(placement, writing=True)
+
+			# The offset may be the message's, and a field of a nested struct
+			# behind a variable-length member has a *frame-relative* one --
+			# measured from the nested struct rather than from these bytes.
+			owner = dynamic_frame_owner(struct, placement)
+			start = self._offset_expression(struct, owner or placement)
+			if placement.offset_bits is None or owner is not None:
+				if start is None:
+					lines.extend([
+						"",
+						f"\t// No {name}(): this backend cannot resolve where",
+						f"\t// `{placement.path}` starts.",
+					])
+					continue
+				at: str | None = (
+					f"{self._unparen(start)} + {placement.offset_bytes}"
+					if owner is not None else self._unparen(start))
+			else:
+				at = None
+
+			# ...and the offset is the message's, so the frame is not known
+			# to hold it. `write_be` indexes the slice, so this is a *panic*
+			# rather than a wrong write -- which is the safe end of that
+			# spectrum and is still a generated setter killing the caller's
+			# process over bytes the caller did not choose.
+			width = max(1, scalar.bits // BITS_PER_BYTE)
+			guard = ([] if at is None else [
+				f"\t\tif self.bytes.len().saturating_sub({at}) < {width} {{",
+				"\t\t\treturn;",
+				"\t\t}",
+			])
 			lines.extend([
 				"",
 				f"\t/// `{placement.path}` is under {what}, so writing it here",
@@ -374,7 +423,8 @@ class Emitter:
 				"\t/// sit where nothing covers it.",
 				f"\tpub fn {name}(&mut self, dirty: &mut Dirty,"
 				f" value: {rtype}) {{",
-				f"\t\t{self._store(placement, scalar)}",
+				*guard,
+				f"\t\t{self._store(placement, scalar, at)}",
 				f"\t\tdirty.mark({self._dirty_bits(struct, placement)});",
 				"\t}",
 			])
@@ -1681,13 +1731,26 @@ class Emitter:
 					"\t}",
 				]
 
+			# A fixed-size nested struct at whatever offset the members before
+			# it leave. This asked the placement for a constant one and
+			# crashed the compiler on the assertion inside `offset_bytes` --
+			# for a header, a variable-length field and another header, which
+			# is as ordinary as a protocol gets. C reads its own offset
+			# function here and always has.
+			if at is None:
+				return ["",
+				        f"\t// No accessor for {placement.path}: this backend",
+				        "\t// cannot resolve where it starts."]
+
 			return [
 				"",
-				f"\t/// {placement.path} at {placement.offset_bytes}.",
+				f"\t/// {placement.path} at {placement.offset_bytes}."
+				if placement.offset_bits is not None else
+				f"\t/// {placement.path}, at an offset the message decides.",
 				"\t///",
 				"\t/// `Err(Bounds)` where the frame does not contain it (26.31).",
 				f"\tpub fn {name}(&self) -> Result<{nested}<'_>> {{",
-				f"\t\tlet at = {placement.offset_bytes};",
+				f"\t\tlet at = {self._unparen(at)};",
 				f"\t\tif self.bytes.len() < at"
 				f" || self.bytes.len() - at < {nested}::SIZE {{",
 				"\t\t\treturn Err(Error::Bounds);",
@@ -1995,10 +2058,13 @@ class Emitter:
 			name = c_name(local_name(struct, region))
 			gate = _pascal(f"{struct.name}_{name}_gate")
 
+			# Not `offset_bits is not None`: a scalar behind a variable-length
+			# member *inside* the region has an offset the message decides,
+			# and dropping it left the member unreachable here and in C++
+			# while C read it through the gate.
 			inside = [entry for entry in struct.entries
 			          if entry.placement.sealed_by == region.name
-			          and entry.placement.kind == "field"
-			          and entry.placement.offset_bits is not None]
+			          and entry.placement.kind == "field"]
 
 			lines.extend([
 				f"/// {region.path}: reachable only through a verified open.",
@@ -2015,7 +2081,7 @@ class Emitter:
 			])
 
 			for entry in inside:
-				lines.extend(self._gated(entry))
+				lines.extend(self._gated(struct, entry))
 
 			if not inside:
 				lines.append("	// Nothing in this region has an accessor.")
@@ -2023,7 +2089,50 @@ class Emitter:
 			lines.extend(["}", ""])
 		return lines
 
-	def _gated(self, entry: Resolved) -> list[str]:
+	def _gated_elements(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""A run of values wider than a byte, inside a sealed region.
+
+		No slice, for the reason there is none outside a gate either: the
+		element is ValueConverted, so the bytes are not the values. The count
+		and the indexed getter, read through the gate's own view -- which this
+		backend emitted for neither spelling, leaving the interior of a sealed
+		`u16 x[n]` unreachable while C handed its elements out through a plain
+		view (14.3).
+		"""
+		name  = _ident(placement.path.rsplit(".", 1)[-1])
+		width = scalar.bits // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		length = (str(placement.array_count * width)
+		          if placement.array_count is not None
+		          else self._length_expression(struct, placement))
+		if start is None or length is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve"
+			        " its extent."]
+
+		rtype = self._rust_type(scalar)
+		load  = self._load(placement, scalar,
+		                   f"{self._unparen(start)} + index * {width}")
+		return [
+			"",
+			f"\tpub fn {_ident(name + '_count')}(&self) -> usize {{",
+			f"\t\tlet at = {self._unparen(start)};",
+			f"\t\tcore::cmp::min({self._unparen(length)},",
+			f"\t\t\tself.bytes.len().saturating_sub(at)) / {width}",
+			"\t}",
+			"",
+			f"\t/// Element `index`. No slice accessor: the element is",
+			"\t/// ValueConverted, so bytes handed back whole would not be",
+			"\t/// the values.",
+			f"\tpub fn {name}(&self, index: usize) -> Result<{rtype}> {{",
+			f"\t\tif index >= self.{_ident(name + '_count')}() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tOk({self._unparen(load)})",
+			"\t}",
+		]
+
+	def _gated(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
 		name      = _ident(placement.path.rsplit(".", 1)[-1])
@@ -2037,6 +2146,8 @@ class Emitter:
 			return []
 
 		if placement.array_count is not None or placement.sized_by is not None:
+			if indexed_elements(placement):
+				return self._gated_elements(struct, placement, scalar)
 			if scalar.bits != BITS_PER_BYTE:
 				return []
 			start = placement.offset_bytes
@@ -2072,10 +2183,28 @@ class Emitter:
 				"\t}",
 			]
 
+		at = (None if placement.offset_bits is not None
+		      else self._offset_expression(struct, placement))
+		if placement.offset_bits is None and at is None:
+			return ["", f"\t// {placement.path}: this backend cannot resolve",
+			        "\t// where it starts."]
+
+		# Bounded where the offset is the message's, as every other dynamic
+		# read is: `read_be` indexes the slice, so an unbounded one is a panic
+		# rather than a wrong answer -- and the gate is the place where the
+		# caller has already been told the bytes are trustworthy.
+		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
+		guard = ([] if at is None else [
+			f"\t\tif self.bytes.len().saturating_sub({self._unparen(at)})"
+			f" < {width} {{",
+			"\t\t\treturn 0;",
+			"\t\t}",
+		])
 		return [
 			"",
 			f"\tpub fn {name}(&self) -> {self._field_type(placement)} {{",
-			f"\t\t{self._load(placement, scalar)}",
+			*guard,
+			f"\t\t{self._load(placement, scalar, at and self._unparen(at))}",
 			"\t}",
 		]
 
@@ -4026,8 +4155,6 @@ class Emitter:
 			return ["",
 			        f"\t// No {setter}(): mutate is"
 			        f" {entry.vector.get(Axis.MUTATE).render()}."]
-		if placement.covered_by:
-			return []		# the covered form is emitted below
 
 		offset = self._offset_expression(struct, placement)
 		fits   = self._fits(struct, placement,
@@ -4054,16 +4181,34 @@ class Emitter:
 			              "self.as_ref().", text)
 
 		rtype = self._field_type(placement, writing=True)
+
+		# A covered member takes the dirty word here as it does at a constant
+		# offset. This returned an empty list saying "the covered form is
+		# emitted below", and below is in the caller, which had already
+		# dispatched here -- so a tag-covered member behind a variable-length
+		# one had no setter in this backend and no note either, while the
+		# other three wrote it (invariant 48).
+		covered = list(placement.covered_by)
+		what    = ", ".join(covered)
 		return [
 			"",
+			*([] if not covered else [
+				f"\t/// Writing this leaves {what} stale, so it takes the dirty",
+				"\t/// word and marks the bit.",
+			]),
 			"\t/// Does nothing where the member does not fit: its offset is a",
 			"\t/// sum of lengths the message chose, and writing past the frame",
 			"\t/// is somebody else's data. `validate` reports such a message.",
-			f"\tpub fn {setter}(&mut self, value: {rtype}) {{",
+			f"\tpub fn {setter}(&mut self,"
+			+ (" dirty: &mut Dirty," if covered else "")
+			+ f" value: {rtype}) {{",
 			f"\t\tif !({reading(fits)}) {{",
 			"\t\t\treturn;",
 			"\t\t}",
 			f"\t\t{reading(self._store(placement, scalar, self._unparen(offset)))}",
+			*([] if not covered else [
+				f"\t\tdirty.mark({self._dirty_bits(struct, placement)});",
+			]),
 			"\t}",
 		]
 

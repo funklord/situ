@@ -989,3 +989,126 @@ def test_an_arm_of_wide_values_counts_what_is_there(target: str) -> None:
 	}[target]
 
 	assert counts in source
+
+
+#: A nested struct behind a variable-length member: a header, a variable-length
+#: field, and another header. C emitted it from the start and the other three
+#: asked the placement for a constant offset.
+NESTED_DYNAMIC = (
+	"struct inner { u16 seq; u8 flags; }\n"
+	"struct s { u8 n; u8 pad[n]; inner head; u16 tail; }\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_nested_struct_may_sit_at_a_dynamic_offset(target: str) -> None:
+	"""Three backends crashed the compiler on the assertion inside
+	`offset_bytes` for this, which is as ordinary a shape as a protocol has.
+	An internal error is where section 17 asks for a diagnostic -- and the
+	shape is not one situ refuses, so there was nothing to diagnose."""
+	source = sources(NESTED_DYNAMIC)[target]
+	reaches = {
+		"c":      "situ_s_head_view(situ_view_t view, situ_view_t *out)",
+		"cpp":    "err head(::situ::inner &out)",
+		"python": "def head(self) -> inner:",
+		"rust":   "pub fn head(&self) -> Result<Inner<'_>> {",
+	}[target]
+
+	assert reaches in source
+	assert "cannot resolve where it starts" not in source
+
+
+#: The same nested struct, covered by a tag. Its fields get the flattened
+#: setter that marks the bit, and that setter wrote at the parent's base plus a
+#: *frame-relative* offset -- `head.seq` over the top of `n`.
+COVERED_DYNAMIC = (
+	"struct inner { u16 seq; u8 flags; }\n"
+	"struct s {\n"
+	"\tu8 n; u8 pad[n];\n"
+	"\tauthenticated body { inner head; }\n"
+	"\ttag u8 mac[4] covers(body);\n"
+	"}\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_covered_nested_setter_finds_its_own_frame(target: str) -> None:
+	"""`s.head.seq` is at offset 0 *of `head`*, and `head` is wherever `pad`
+	leaves it. Every backend added the frame-relative offset to the parent's
+	base: C wrote over `n`, and the other three crashed before they got far
+	enough to write anything."""
+	source = sources(COVERED_DYNAMIC)[target]
+	composed = {
+		"c":      "view.base + situ_s_head_offset(view)",
+		"cpp":    "base() + (situ_advance_u32(1,",
+		"python": "self._write((advance(1,",
+		"rust":   "situ_rt::write_be(self.bytes, situ_rt::advance(1,",
+	}[target]
+
+	assert composed in source
+
+
+def test_a_tag_covering_a_dynamic_region_names_no_missing_function() -> None:
+	"""An `authenticated` region is not a member -- it owns no bytes -- so it
+	gets no offset function, and two callers named one anyway: the covered
+	span a tag hands its algorithm, and `validate`'s bounds check. The
+	generated C did not compile, for a tag over a region behind a
+	variable-length member.
+
+	Its start is its first member's, which is the rule `_region_end` already
+	states for its end."""
+	source = sources(COVERED_DYNAMIC)["c"]
+
+	assert "situ_s_body_offset" not in source
+	assert "uint32_t start = situ_s_head_offset(view);" in source
+
+
+#: A sealed region whose interior the data sizes: a run of wide values, then a
+#: scalar behind it.
+SEALED_RUN = (
+	"codec seal { length_preserving; seekable; authenticated;"
+	" invertible; deterministic; }\n"
+	"impl seal extern \"my_seal\";\n"
+	"struct s {\n"
+	"\tu8 n;\n"
+	"\tsealed body(seal) { u16 vals[n]; u16 trailer; }\n"
+	"\ttag u8 mac[16] covers(body);\n"
+	"}\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_sealed_run_is_reached_through_the_gate(target: str) -> None:
+	"""Section 14.3's claim is that the interior cannot be had without a
+	verification token, and the indexed accessor family was the one written
+	without one: every element of a `u16 x[4]` inside a sealed region was
+	readable in C through a plain view, while the scalar beside it demanded
+	the gate. The other three emitted nothing at all for it."""
+	source = sources(SEALED_RUN)[target]
+	gated = {
+		"c":      "situ_s_body_vals_get(situ_s_body_t gate, uint32_t index)",
+		"cpp":    "std::uint16_t vals(std::uint32_t index) const noexcept",
+		"python": "def vals(self, index: int) -> int:",
+		"rust":   "pub fn vals(&self, index: usize) -> Result<u16> {",
+	}[target]
+
+	assert gated in source
+	if target == "c":
+		# The one that had it wrong says so exactly: no accessor for a sealed
+		# member takes a bare view.
+		assert "situ_s_body_vals_get(situ_view_t" not in source
+
+
+def test_a_member_inside_a_region_is_placed_from_the_region() -> None:
+	"""What precedes `body.trailer` is what precedes `body`, and then `body`'s
+	own earlier members. The walk was over the struct's own members and never
+	met a dotted one, so it never stopped: it summed the whole struct, the
+	region itself and the *tag after it*, and C -- the only backend that
+	emitted an accessor for such a member -- read it seventeen bytes past
+	where it is."""
+	schema   = parse_text(PREAMBLE + SEALED_RUN)
+	resolved = resolve(schema, solve(schema))
+	source   = "\n".join(generate_c(schema, resolved, "unit").files().values())
+
+	assert "uint32_t offset = 1u;" in source
+	assert "offset = 17u;" not in source

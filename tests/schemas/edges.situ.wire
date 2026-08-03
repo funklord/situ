@@ -37,6 +37,10 @@ struct arm_run size=2..8
   @0x0001   1         u8         n  max=3
   @0x0002   0..6      variant    body
 
+struct beacon size=3
+  @0x0000   2         u16        seq  big
+  @0x0002   1         u8         flags
+
 struct beat size=2
   @0x0000   1         u8         kind
   @0x0001   1         u8         payload
@@ -49,6 +53,13 @@ struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling
   ~         1         u8         trailer
+
+struct covered_tail size=8..12
+  @0x0000   1         u8         n  max=4
+  @0x0001   0..4      u8         pad  sized-by=n
+  ~         3         beacon     head  big
+  ~         4         u8         mac
+  mac covers: body head flags seq
 
 struct derived size=13
   @0x0000   2         u16        total  big
@@ -80,6 +91,12 @@ struct framed size=9..
   @0x0004   until:0d0a u8         version  big cap=16
   ~         until:00  u8         label
   ~         2         u16        count  big
+
+struct framed_tail size=6..10
+  @0x0000   1         u8         n  max=4
+  @0x0001   0..4      u8         pad  sized-by=n
+  ~         3         beacon     head  big
+  ~         2         u16        tail  big
 
 struct kv size=4..
   @0x0000   until:3a20 u8         key  big
@@ -123,6 +140,12 @@ struct packed_driver size=3..63
 struct quoted_row size=1..
   @0x0000   until:2c  u8         field  quote=0x22
   ~         0..       u8         rest  sized-by=remaining
+
+struct sealed_run size=19..27
+  @0x0000   1         u8         n  max=4
+  @0x0001   2..10     sealing_aead body  codec=sealing_aead
+  ~         16        u8         seal_mac
+  seal_mac covers: body trailer vals
 
 struct segment size=1..256
   @0x0000   1         u8         length

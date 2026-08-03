@@ -1062,6 +1062,14 @@ def _array_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	local     = c_name(placement.path[len(struct.name) + 1:])
 	count     = placement.array_count
 
+	# Behind the gate of 14.3, which the scalar branch has always skipped here
+	# and this did not: every accessor for a sealed member takes the gate, so a
+	# check calling one with a plain view does not compile. It only arose once
+	# an array inside a sealed region *had* accessors -- before that the gap
+	# was in the emitter and this could not reach it.
+	if placement.sealed_by is not None and not placement.unverified_ok:
+		return
+
 	if count is None:
 		# The same array with its count in the message. It has a stride to
 		# drift just as the constant-count one does, and reaching it means
@@ -1918,9 +1926,16 @@ def _span_check(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 	# Only what *this* tag covers. A struct may carry several, each over its
 	# own region, and asking one of them to span another's bytes is a demand
 	# the schema never made.
+	# `offset_bits is not None` is not the whole question: a member of a nested
+	# struct behind a variable-length one carries a *frame-relative* offset,
+	# measured from that struct rather than from the message. Reading it as an
+	# absolute one had this check demanding that a tag cover bytes 0..3 of a
+	# frame whose covered region starts at 1.
 	known = [entry.placement for entry in struct.entries
 	         if tag in entry.placement.covered_by
 	         and entry.placement.offset_bits is not None
+	         and not (entry.placement.frame_relative
+	                  and entry.placement.frame_base_dynamic)
 	         and entry.placement.size_bits
 	         and entry.placement.kind != "authenticated"]
 	if not known:

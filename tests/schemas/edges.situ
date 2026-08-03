@@ -510,3 +510,59 @@ struct marked [endian = from(edge_order)] {
 	u16            after;
 	u16            samples[n];
 }
+
+// A nested struct behind a variable-length member.
+//
+// A header, a variable-length field, and another header: about as ordinary as
+// a protocol gets, and no schema in this repository had one. C emitted it from
+// the start; the other three asked the placement for a constant offset and
+// crashed the compiler on the assertion inside `offset_bytes`.
+struct beacon {
+	u16  seq;
+	u8   flags;
+}
+
+struct framed_tail {
+	u8       n [max = 4];
+	u8       pad[n];
+	beacon   head;
+	u16      tail;
+}
+
+// The same nested struct, covered by a tag, so its fields get the flattened
+// setter that marks the bit.
+//
+// Two things live here. The covered setter wrote at the parent's base plus a
+// *frame-relative* offset -- `head.seq` over the top of `n` -- because the
+// nested copy of a member behind a variable-length one measures from the
+// nested struct rather than from the frame. And the tag's covered span, and
+// `validate`'s bounds check, both named an offset function for an
+// `authenticated` region that gets none: the region owns no bytes, so where
+// it sits behind a variable-length member the generated C did not compile.
+struct covered_tail {
+	u8  n [max = 4];
+	u8  pad[n];
+	authenticated body {
+		beacon  head;
+	}
+	tag u8 mac[4] covers(body);
+}
+
+// A sealed region whose interior the data sizes.
+//
+// `vals` is a run of values wider than a byte, which is the construct 26.47
+// added -- and inside a gate it was the one accessor family emitted without
+// one, so every element of a sealed `u16 x[4]` was readable in C without the
+// verification token 14.3 exists to demand. `trailer` sits behind `vals`, so
+// its offset is the message's: three backends dropped it and C read it
+// seventeen bytes past where it is, because what precedes a member inside a
+// region is what precedes the region, and the walk was over the struct's own
+// members and never stopped.
+struct sealed_run {
+	u8  n [max = 4];
+	sealed body(sealing_aead) {
+		u16  vals[n];
+		u16  trailer;
+	}
+	tag u8  seal_mac[16] covers(body);
+}

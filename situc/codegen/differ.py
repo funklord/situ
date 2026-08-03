@@ -1281,7 +1281,13 @@ def _python_writes(resolved: ResolvedSchema) -> list[str]:
 				lines.extend([
 					f"\tview.set_{ask.local}(msg, {ask.count})",
 					f'\tprint("{ask.local} <- {ask.count}",',
-					f'\t\t"dirty=%d" % (1 if view.{ask.inside[0]}_is_dirty'
+					# Called, because this backend spells it as a method and
+					# the bound method is truthy: this printed `dirty=1`
+					# whatever the write did, so the one claim the covered
+					# probe exists to make was never compared. It surfaced
+					# only when C started *refusing* a write and printed the
+					# zero Python could not (invariant 26).
+					f'\t\t"dirty=%d" % (1 if view.{ask.inside[0]}_is_dirty()'
 					" else 0))",
 				])
 				continue

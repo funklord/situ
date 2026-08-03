@@ -701,3 +701,31 @@ def test_every_dissector_runs(schema: Path, tmp_path: Path) -> None:
 			assert result.returncode == 0, (
 				f"{schema.name}/{name} died on {len(packet)} bytes:\n"
 				f"  {packet.hex()}\n{result.stderr}")
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_number_in_digits_is_never_negative(tmp_path: Path) -> None:
+	"""`tonumber` reads a leading minus and situ has no sign to read (8.6.2).
+
+	Four bytes of "-26" drove a length of -26, an offset of -48, and
+	`tvb(-48, 2)` -- which is an error out of the harness rather than a short
+	field. The compiled backends parse digits and have no such case.
+
+	Found by the random-packet sweep over `tests/schemas/edges.situ`, which
+	drew a different packet once the schema grew, and the first fix for it
+	hit invariant 53: `math.max` in an expression the builtin expansion then
+	rewrote into `math.math.max`.
+	"""
+	source = emit("struct s { decimal u32 n[4]; u16 d[n]; u16 tail; }\n")
+
+	assert "situ_digits(" in source
+	assert "math.math" not in code(source)
+
+	# And it holds: "-26" in four bytes is zero here, not a negative length.
+	lua = tmp_path / "unit.lua"
+	lua.write_text(source, encoding="ascii")
+	assert LUA is not None
+	result = subprocess.run(
+		[LUA, str(HARNESS), str(lua), "s", b"-26 \x00\x00\x00\x00".hex()],
+		capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr

@@ -67,6 +67,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	       for entry in struct.entries):
 		lines.extend(SCAN_HELPER)
 
+	# Same rule: only where a number is written as digits.
+	if any(entry.placement.radix is not None
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(DIGITS_HELPER)
+
 	values = _value_strings(schema, resolved)
 	if values:
 		lines.extend(values)
@@ -89,6 +95,27 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines.extend(_registration(resolved, roots))
 	return "\n".join(lines).rstrip() + "\n"
+
+
+DIGITS_HELPER = [
+	"-- A number written as digits (situ section 8.6.2), never negative.",
+	"--",
+	"-- `tonumber` reads a leading minus and situ has no sign to read: four",
+	"-- bytes of \"-26\" gave a length of -26 here and an offset of -48, which",
+	"-- is an error out of Wireshark rather than a short field.",
+	"--",
+	"-- A named helper rather than `math.max`, because the builtin expansion",
+	"-- rewrites `max` wherever it finds one -- including in what this",
+	"-- returns, which came out as `math.math.max` (invariant 53).",
+	"local function situ_digits(text, base)",
+	"\tlocal value = tonumber(text, base) or 0",
+	"\tif value < 0 then",
+	"\t\treturn 0",
+	"\tend",
+	"\treturn value",
+	"end",
+	"",
+]
 
 
 SCAN_HELPER = [
@@ -622,8 +649,14 @@ def _read(placement: Placement, base: str) -> str | None:
 		# out at four bytes, so for a cpio header it is an error rather than a
 		# wrong answer. Lua's own `tonumber` takes the base.
 		if placement.radix is not None:
-			return (f"(tonumber(tvb({_at(base, first)}, {count}):string(),"
-			        f" {placement.radix}) or 0)")
+			# ...and never negative. Lua's `tonumber` takes a leading minus,
+			# so four bytes reading "-26" gave a length of -26, an offset of
+			# -48, and `tvb(-48, 2)` -- an arithmetic-on-nil out of the
+			# harness rather than a short field. A text number in situ is
+			# digits (8.6.2); the compiled backends have no sign to read and
+			# this had one.
+			return (f"situ_digits(tvb({_at(base, first)}, {count}):string(),"
+			        f" {placement.radix})")
 
 		if count > 4:
 			return None		# `uint` tops out at four bytes; `uint64` is a
@@ -1173,8 +1206,10 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# *run* is, and it read a cpio name length as an eight-byte integer --
 	# which Wireshark's `uint` refuses outright, above four.
 	if driver.placement.radix is not None:
-		return (f"(tonumber(tvb({byte}, {width}):string(),"
-		        f" {driver.placement.radix}) or 0)")
+		# ...and never negative, for the reason `_read` gives: a minus sign is
+		# a number to `tonumber` and is not a digit to anything else here.
+		return (f"situ_digits(tvb({byte}, {width}):string(),"
+		        f" {driver.placement.radix})")
 
 	read  = "le_uint" if driver.placement.endian is ast.Endian.LITTLE else "uint"
 	return f"tvb({byte}, {width}):{read}()"

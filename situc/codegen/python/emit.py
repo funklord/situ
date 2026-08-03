@@ -39,6 +39,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, Member, arm_members, containment_order, covered_run, data_sized,
+	dynamic_frame_owner,
 	readable_names,
 	decode_bound, region_extent, offset_plan,
 	decodes_here, classify,
@@ -336,9 +337,49 @@ class Emitter:
 			                                             "InPlaceSlack"):
 				continue
 
+			# Not a sealed member. This wrote one at its plaintext offset from
+			# the *outer* view, so a caller could put bytes inside a sealed
+			# region without ever verifying its tag -- section 14.3's stage
+			# gate, on the side that escapes the object (invariant 28). C has
+			# demanded the gate here since the machinery landed. The gated
+			# setter is emitted with the rest of the interior.
+			if placement.sealed_by is not None:
+				continue
+
 			name = c_name(local_name(struct, placement))
 			tags = ", ".join(placement.covered_by)
 			hint = "int"
+			# The offset may be the message's: a nested struct behind a
+			# variable-length member has one, and asking the placement for a
+			# constant crashed the compiler on the assertion inside
+			# `offset_bytes`. Three backends did; C reads its own offset
+			# function here and always has.
+			start = (None if placement.offset_bits is not None
+			         else self._offset_expression(struct, placement))
+			# ...and a field of a nested struct behind a variable-length
+			# member has a *frame-relative* one, measured from the nested
+			# struct rather than from this view. Adding it to the parent's
+			# base wrote `s.head.seq` over the top of `s.n`.
+			owner = dynamic_frame_owner(struct, placement)
+			if owner is not None:
+				where = self._offset_expression(struct, owner)
+				start = (None if where is None
+				         else f"({where}) + {placement.offset_bytes}")
+			if (placement.offset_bits is None or owner is not None) \
+					and start is None:
+				lines.extend([
+					"",
+					f"\t# No set_{name}(): this backend cannot resolve where",
+					f"\t# {placement.path} starts.",
+				])
+				continue
+			width = max(1, scalar.bits // BITS_PER_BYTE)
+			guard = ([] if start is None else [
+				f"\t\tif not (self._len - ({start}) >= {width}):",
+				"\t\t\t# Its offset is a sum of lengths the message chose, and",
+				"\t\t\t# the frame does not reach it.",
+				"\t\t\treturn",
+			])
 			lines.extend([
 				"",
 				f"\tdef set_{name}(self, msg: Message, value: {hint}) -> None:",
@@ -346,7 +387,8 @@ class Emitter:
 				"",
 				"\t\tOn the parent, because the nested type's own setter marks",
 				'\t\tnothing -- it may sit where nothing covers it."""',
-				f"\t\t{self._store(placement, scalar, None)}",
+				*guard,
+				f"\t\t{self._store(placement, scalar, start)}",
 				f"\t\tmsg.mark_dirty({self._tag_bit(struct, placement)})",
 			])
 
@@ -1954,6 +1996,16 @@ class Emitter:
 		# another here.
 		if placement.covered_by:
 			tags = ", ".join(placement.covered_by)
+			# ...and where the offset is the message's, the frame is not known
+			# to hold it. The plain setter below has said so since 26.27 and
+			# the covered one beside it did not, so the one write that carries
+			# a security obligation was the one without the bound.
+			guard = ([] if fits is None else [
+				f"\t\tif not ({fits}):",
+				"\t\t\t# Its offset is a sum of lengths the message chose, and",
+				"\t\t\t# the frame does not reach it.",
+				"\t\t\treturn",
+			])
 			lines.extend([
 				"",
 				f"\t# No {name} setter: writing it leaves {tags} stale.",
@@ -1961,6 +2013,7 @@ class Emitter:
 				"",
 				f"\tdef set_{name}(self, msg: Message, value: {hint}) -> None:",
 				f'\t\t"""Write {placement.path} and mark {tags} stale."""',
+				*guard,
 				f"\t\t{self._store(placement, scalar, offset)}",
 				f"\t\tmsg.mark_dirty({self._tag_bit(struct, placement)})",
 			])
@@ -2237,16 +2290,29 @@ class Emitter:
 				f"\t\t\tself.{name}_extent)",
 			]
 
+		# A fixed-size nested struct, at whatever offset the members before it
+		# leave. This asked the placement for a constant one and crashed the
+		# compiler on the assertion inside `offset_bytes` for the most
+		# ordinary shape a protocol has -- a header, a variable-length field,
+		# and another header. C reads its own offset function here; the other
+		# three each had this line.
+		if start is None:
+			return ["", f"\t# No accessor for {placement.path}: this backend"
+			        " cannot resolve where it starts."]
+		where = f"({start})"
+
 		return [
 			"", "\t@property", f"\tdef {name}(self) -> {nested}:",
-			f'\t\t"""{placement.path} at {placement.offset_bytes}.',
+			f'\t\t"""{placement.path} at {placement.offset_bytes}.'
+			if placement.offset_bits is not None else
+			f'\t\t"""{placement.path}, at an offset the message decides.',
 			"",
 			"\t\tRaises BoundsError where the frame does not contain it",
 			'\t\t(26.31)."""',
-			f"\t\tif self._len - {placement.offset_bytes} < {nested}.SIZE_BYTES:",
+			f"\t\tif self._len - {where} < {nested}.SIZE_BYTES:",
 			f'\t\t\traise BoundsError("{placement.path}: the frame does not'
 			' reach it")',
-			f"\t\treturn {nested}(self._msg, self._at + {placement.offset_bytes},",
+			f"\t\treturn {nested}(self._msg, self._at + {where},",
 			f"\t\t\t{nested}.SIZE_BYTES)",
 		]
 
@@ -3821,13 +3887,21 @@ class Emitter:
 		sealed = [entry.placement for entry in struct.entries
 		          if entry.placement.sealed_by == region.name
 		          and entry.placement.kind == "field"]
+		# Not `offset_bits is not None`: a scalar behind a variable-length
+		# member *inside* the region has an offset the message decides, and
+		# dropping it left the member unreachable in three backends while C
+		# read it through the gate. The offset expression is the same one the
+		# outer accessors use, read through the gate's view.
 		inside = [entry for entry in struct.entries
 		          if entry.placement.sealed_by == region.name
 		          and entry.placement.kind == "field"
 		          and entry.placement.scalar is not None
-		          and entry.placement.offset_bits is not None
-		          and entry.placement.array_count is None
-		          and entry.placement.sized_by is None]
+		          and (indexed_elements(entry.placement)
+		               or (entry.placement.array_count is None
+		                   and entry.placement.sized_by is None))
+		          and (entry.placement.offset_bits is not None
+		               or self._offset_expression(struct, entry.placement)
+		               is not None)]
 		secret = [placement.path for placement in sealed
 		          if any(attr.name == "secret" for attr in placement.attrs)
 		          and (placement.array_count is not None
@@ -3856,10 +3930,52 @@ class Emitter:
 				              "\t\t# generated for it at all (section 14.6)."])
 				continue
 
+			through = self._offset_expression(struct, placement)
+			at = (None if placement.offset_bits is not None
+			      else through)
+
+			# A run of values wider than a byte, inside the gate. It has no
+			# slice for the reason it has none outside one -- the bytes are
+			# not the values -- so it is the count and the indexed getter,
+			# read through the gate's own view.
+			if placement.array_count is not None or placement.sized_by is not None:
+				width  = scalar.bits // BITS_PER_BYTE
+				length = (str(placement.array_count * width)
+				          if placement.array_count is not None
+				          else self._length_expression(struct, placement))
+				start  = through if through is not None else "0"
+				if length is None:
+					lines.extend(["",
+					              f"\t\t# {placement.path}: this backend cannot"
+					              " resolve its length."])
+					continue
+
+				# Everything read inside the gate is read through its view,
+				# including the field that says how long the run is: it is
+				# plaintext at the same offsets, which is what makes reading
+				# it here not a reference to transform output (13.3).
+				def through_gate(text: str) -> str:
+					return text.replace("self.", "self._view.")
+
+				load = self._load(placement, scalar,
+				                  f"({start}) + index * {width}")
+				lines.extend([
+					"", "\t\t@property",
+					f"\t\tdef {field_name}_count(self) -> int:",
+					f"\t\t\treturn min(({through_gate(length)}),",
+					f"\t\t\t\tmax(0, self._view._len - ({through_gate(start)})))"
+					f" // {width}",
+					"", f"\t\tdef {field_name}(self, index: int) -> int:",
+					f"\t\t\tif not 0 <= index < self.{field_name}_count:",
+					f'\t\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+					f"\t\t\treturn {through_gate(load)}",
+				])
+				continue
+
 			lines.extend([
 				"", "\t\t@property",
 				f"\t\tdef {field_name}(self) -> {self._hint(placement)}:",
-				f"\t\t\treturn {self._load(placement, scalar).replace('self.', 'self._view.')}",
+				f"\t\t\treturn {self._load(placement, scalar, at).replace('self.', 'self._view.')}",
 			])
 
 		for path in secret:
