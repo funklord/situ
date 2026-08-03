@@ -108,6 +108,56 @@ def test_an_arithmetic_count_counts_elements(tmp_path: Path) -> None:
 	assert held.tail == 0xABCD
 
 
+def test_a_packed_pair_before_a_dynamic_member_is_one_byte(
+		tmp_path: Path) -> None:
+	"""Executed rather than matched. `hi` and `n` are a nibble each, so `d`
+	starts at byte 1 and two `u32`s put `tail` at 9. The offset sum divided
+	each member by eight and added the quotients, so it said 8."""
+	module = load(tmp_path, "struct s { u4 hi; u4 n; u32 d[n]; u16 tail; }\n",
+	              preamble="endian big;\nbit_order msb_first;\n")
+
+	buf = bytearray(32)
+	buf[0] = 0x02				# hi = 0, n = 2
+	buf[9], buf[10] = 0xAB, 0xCD
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.tail == 0xABCD
+
+
+def test_a_fixed_width_text_number_can_drive_a_length(tmp_path: Path) -> None:
+	"""`decimal u32 n[4]` is a length field written as digits, and an
+	expression over it names `n_value` -- the read that cannot fail, which
+	only the delimited and nested forms of a text number emitted. This shape
+	produced a module referring to a property nothing defined, and generated C
+	that did not compile.
+
+	Every text driver in `examples/` is delimited or nested, which is why."""
+	module = load(tmp_path, "struct s { decimal u32 n[4]; u16 d[n]; u16 tail; }\n")
+
+	buf = bytearray(b"0004" + bytes(28))
+	buf[12], buf[13] = 0xAB, 0xCD		# 4 + four u16s
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.n == 4
+	assert held.tail == 0xABCD
+
+
+def test_a_varint_can_drive_an_arithmetic_length(tmp_path: Path) -> None:
+	"""Executed. `n = 2` means three `u16`s after the varint's one byte, so
+	`tail` is at 7. The expression named `n` and nothing defined it."""
+	module = load(
+		tmp_path, "struct s { v n; u16 d[n + 1]; u16 tail; }\n",
+		preamble=("endian big;\nvarint_type v { encoding = be128;"
+		          " max_bits = 64; max_bytes = 9; }\n"))
+
+	buf = bytearray(32)
+	buf[0] = 2
+	buf[7], buf[8] = 0xAB, 0xCD
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.tail == 0xABCD
+
+
 # -- the surface ------------------------------------------------------------
 
 

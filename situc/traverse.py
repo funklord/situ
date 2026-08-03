@@ -151,10 +151,22 @@ def readable_names(struct: ResolvedStruct) -> list[Placement]:
 	struct's frame -- which is what a nested member's offset is, since a
 	struct at a dynamic offset contributes nothing an expression can name at
 	compile time.
+
+	A varint has no scalar and is readable all the same: `v n; u16 d[n + 1]`
+	names one, and every backend left it as a bare identifier -- generated C,
+	C++ and Rust that do not compile, and a Python `NameError`. The count form
+	`d[n]` beside it has known about varint drivers since they were added; the
+	arithmetic form was never told.
+
+	Its own varints only. A nested struct's varint has no accessor on this
+	struct and no `_value` helper either, and claiming it is readable would
+	trade a bare identifier for a call to a function nobody emits.
 	"""
 	return [entry.placement for entry in struct.entries
-	        if entry.placement.scalar is not None
-	        and entry.placement.offset_bits is not None]
+	        if entry.placement.offset_bits is not None
+	        and (entry.placement.scalar is not None
+	             or (entry.placement.varint is not None
+	                 and "." not in entry.placement.path[len(struct.name) + 1:]))]
 
 
 def data_sized(placement: Placement) -> bool:
@@ -926,6 +938,47 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	if constant_bits % BITS_PER_BYTE:
 		return None		# not a whole number of bytes; nothing to walk by
 	return constant_bits // BITS_PER_BYTE, variable
+
+
+def preceding_parts(struct: ResolvedStruct,
+		placement: Placement) -> list[int | Placement] | None:
+	"""What lies before `placement` in its struct: runs of fixed bytes, and
+	the variable members between them, in order.
+
+	Alternating and always starting and ending with a byte count, so a caller
+	either sums the whole thing or emits it term by term.
+
+	The counts are accumulated in *bits* and divided once per run, which is
+	the same rule `extent_parts` states and for the same reason: a `u4` and a
+	`u4` are one byte together and zero apart. Every backend accumulated this
+	one per member and truncated, so a struct opening with a packed pair
+	placed everything after its first variable-length member one byte early --
+	reading the last byte of the run and the first of whatever follows. All
+	four had it, separately, and it is the second time this exact arithmetic
+	has been got wrong in this file's neighbourhood.
+
+	None where a run of fixed members is not a whole number of bytes at the
+	point a variable one begins, which the solver already refuses.
+	"""
+	parts: list[int | Placement] = []
+	bits  = 0
+
+	for other in own_members(struct):
+		if other.path == placement.path:
+			break
+		if other.is_fixed_size:
+			bits += other.size_bits
+			continue
+		if bits % BITS_PER_BYTE:
+			return None
+		parts.append(bits // BITS_PER_BYTE)
+		parts.append(other)
+		bits = 0
+
+	if bits % BITS_PER_BYTE:
+		return None
+	parts.append(bits // BITS_PER_BYTE)
+	return parts
 
 
 def is_run(placement: Placement, structs: Container[str]) -> bool:

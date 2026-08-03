@@ -46,7 +46,7 @@ from situc.traverse import (
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
 	local_name,
-	element_bytes, matched_values, obligation,
+	element_bytes, matched_values, obligation, preceding_parts,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -2250,8 +2250,11 @@ class Emitter:
 			scalar    = placement.scalar
 			if placement.radix is None or placement.offset_bits is None:
 				continue
-			if "." not in placement.path[len(struct.name) + 1:]:
-				continue
+			# Nested *or* the struct's own. Restricting this to nested
+			# members assumed the fixed-width form beside it emitted its own
+			# `_value`, and it does not: `decimal u32 n[4]; u16 d[n]` named a
+			# helper nothing defined. Every text driver in `examples/` is
+			# either delimited or nested, which are the two forms that had it.
 			if scalar is None or placement.array_count is None:
 				continue
 
@@ -2329,6 +2332,10 @@ class Emitter:
 				assert held_at.scalar is not None
 				raw = self._raw_load(held_at, held_at.scalar)
 				return f"({self._unparen(raw)} as usize)"
+			# A varint's own getter reports a truncated encoding; `_value` is
+			# the read that cannot fail, which is what the count form uses.
+			if held_at.varint is not None:
+				return f"({held}.{_ident(c_name(name) + '_value')}() as usize)"
 			return f"({held}.{_ident(c_name(name))}() as usize)"
 
 		return expand_calls(over_fields([*by_path, *consts], source, read),
@@ -2893,14 +2900,15 @@ class Emitter:
 		if placement.offset_bits is not None:
 			return str(placement.offset_bits // BITS_PER_BYTE)
 
-		constant = 0
+		parts = preceding_parts(struct, placement)
+		if parts is None:
+			return None
+
+		constant = sum(part for part in parts if isinstance(part, int))
 		terms: list[str] = []
 
-		for other in own_members(struct):
-			if other.path == placement.path:
-				break
-			if other.is_fixed_size:
-				constant += other.size_bits // BITS_PER_BYTE
+		for other in parts:
+			if isinstance(other, int):
 				continue
 			length = self._length_expression(struct, other)
 			if length is None:
@@ -3205,17 +3213,16 @@ class Emitter:
 		if placement.offset_bits is not None:
 			return None
 
-		lines    = ["\t\tlet mut at = 0usize;"]
-		constant = 0
-		for other in own_members(struct):
-			if other.path == placement.path:
-				break
-			if other.is_fixed_size:
-				constant += other.size_bits // BITS_PER_BYTE
+		parts = preceding_parts(struct, placement)
+		if parts is None:
+			return None
+
+		lines = ["\t\tlet mut at = 0usize;"]
+		for other in parts:
+			if isinstance(other, int):
+				if other:
+					lines.append(f"\t\tat += {other};")
 				continue
-			if constant:
-				lines.append(f"\t\tat += {constant};")
-				constant = 0
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
 				return None
@@ -3226,8 +3233,6 @@ class Emitter:
 			# which is what an incomplete fix looks like from outside.
 			lines.append(f"\t\tat = situ_rt::advance(at,"
 			             f" {self._unparen(length)}, self.bytes.len());")
-		if constant:
-			lines.append(f"\t\tat += {constant};")
 		return [*lines, "\t\tat"]
 
 	def _region_length(self, struct: ResolvedStruct,

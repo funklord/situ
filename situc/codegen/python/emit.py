@@ -46,7 +46,7 @@ from situc.traverse import (
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
 	local_name,
-	element_bytes, matched_values, obligation,
+	element_bytes, matched_values, obligation, preceding_parts,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -1692,8 +1692,11 @@ class Emitter:
 			placement = entry.placement
 			if placement.radix is None or placement.offset_bits is None:
 				continue
-			if "." not in placement.path[len(struct.name) + 1:]:
-				continue
+			# Nested *or* the struct's own. Restricting this to nested
+			# members assumed the fixed-width form beside it emitted its own
+			# `_value`, and it does not: `decimal u32 n[4]; u16 d[n]` named a
+			# property nothing defined. Every text driver in `examples/` is
+			# either delimited or nested, which are the two forms that had it.
 			scalar = placement.scalar
 			if scalar is None or placement.array_count is None:
 				continue
@@ -2557,9 +2560,13 @@ class Emitter:
 		def read(local: str) -> str:
 			if local in consts:
 				return str(consts[local])
-			if "." not in local:
-				return f"{held}.{c_name(local)}"
 			placement = by_local[local]
+			if "." not in local:
+				# A varint's own property raises on a truncated encoding;
+				# `_value` is the read that cannot, which is what the count
+				# form already uses.
+				suffix = "_value" if placement.varint is not None else ""
+				return f"{held}.{c_name(local)}{suffix}"
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
 			# -- a plausible number nobody wrote, which is the shape 26.32
@@ -3023,14 +3030,15 @@ class Emitter:
 		if placement.offset_bits is not None:
 			return str(placement.offset_bits // BITS_PER_BYTE)
 
-		constant = 0
+		parts = preceding_parts(struct, placement)
+		if parts is None:
+			return None
+
+		constant = sum(part for part in parts if isinstance(part, int))
 		terms: list[str] = []
 
-		for other in own_members(struct):
-			if other.path == placement.path:
-				break
-			if other.is_fixed_size:
-				constant += other.size_bits // BITS_PER_BYTE
+		for other in parts:
+			if isinstance(other, int):
 				continue
 			length = self._length_expression(struct, other)
 			if length is None:
@@ -3187,17 +3195,16 @@ class Emitter:
 		if placement.offset_bits is not None:
 			return None
 
-		lines    = ["\t\tat = 0"]
-		constant = 0
-		for other in own_members(struct):
-			if other.path == placement.path:
-				break
-			if other.is_fixed_size:
-				constant += other.size_bits // BITS_PER_BYTE
+		parts = preceding_parts(struct, placement)
+		if parts is None:
+			return None
+
+		lines = ["\t\tat = 0"]
+		for other in parts:
+			if isinstance(other, int):
+				if other:
+					lines.append(f"\t\tat += {other}")
 				continue
-			if constant:
-				lines.append(f"\t\tat += {constant}")
-				constant = 0
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
 				return None
@@ -3205,8 +3212,6 @@ class Emitter:
 			# member at the same offset for the same bytes, hostile ones
 			# included.
 			lines.append(f"\t\tat = advance(at, {length}, self._len)")
-		if constant:
-			lines.append(f"\t\tat += {constant}")
 		return [*lines, "\t\treturn at"]
 
 	def _region_length(self, struct: ResolvedStruct,

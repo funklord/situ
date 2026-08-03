@@ -48,7 +48,7 @@ from situc.traverse import (
 	decode_bound,
 	extent_parts, extern_symbol, frameable,
 	element_bytes, has_computable_extent, index_entry_bytes, is_run,
-	matched_values,
+	matched_values, preceding_parts,
 	obligation, obligations,
 	own_members,
 )
@@ -1070,14 +1070,19 @@ class Emitter:
 			lines.extend(self._varint_field(struct, placement))
 			return lines
 
-		if placement.radix is not None and placement.delimiter is None:
-			lines.extend(self._fixed_text_number(struct, placement))
-			return lines
-
 		# A text number with a width rather than a delimiter (8.6.2): three
 		# digits, padded, and no scan at all.
 		if placement.radix is not None and placement.delimiter is None:
 			lines.extend(self._fixed_text_number(struct, placement))
+			# And the non-failing read, which the delimited form beside it has
+			# always emitted. An expression over a text driver names
+			# `<struct>_<field>_value` whichever form the driver takes, so
+			# `decimal u32 n[4]; u16 d[n]` called a function nothing defined
+			# -- generated C that does not compile, in a shape no schema here
+			# has: every text driver in `examples/` is either delimited or a
+			# member of a nested struct, and those are the two cases that got
+			# this helper.
+			lines.extend(self._text_value_helper(struct, placement))
 			return lines
 
 		if placement.repeat_while is not None:
@@ -2968,7 +2973,11 @@ class Emitter:
 				return str(consts[local])
 			placement = by_local[local]
 			if "." not in local:
-				return (f"{ident(self.prefix, struct.name, c_name(local), 'get')}"
+				# A varint's `_get` is fallible and takes an out-parameter;
+				# `_value` is the read that cannot fail, which is what an
+				# offset sum needs and what the count form already uses.
+				which = "value" if placement.varint is not None else "get"
+				return (f"{ident(self.prefix, struct.name, c_name(local), which)}"
 				        f"({held})")
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
@@ -3782,15 +3791,16 @@ class Emitter:
 		because a size expression may only name a field declared before it and
 		everything before the first dynamic member is statically placed.
 		"""
-		local    = c_name(self._local(struct, placement))
-		constant = 0
+		local = c_name(self._local(struct, placement))
+		parts = preceding_parts(struct, placement)
+		if parts is None:
+			return self._unresolvable_offset(placement, placement)
+
+		constant = sum(part for part in parts if isinstance(part, int))
 		terms    = []
 
-		for other in self._top_level(struct):
-			if other.path == placement.path:
-				break
-			if other.is_fixed_size:
-				constant += other.size_bits // BITS_PER_BYTE
+		for other in parts:
+			if isinstance(other, int):
 				continue
 			if not self._has_length(struct, other):
 				return self._unresolvable_offset(placement, other)
@@ -4283,16 +4293,18 @@ class Emitter:
 		ctype  = self._field_ctype(placement)
 		limit  = (1 << scalar.bits) - 1
 
-		# A nested member has no `_ptr`/`_len` pair of this struct's own, and
-		# does not need one: its offset is a constant here and its width is
-		# the digit count.
-		if "." in placement.path[len(struct.name) + 1:]:
-			assert placement.array_count is not None
-			source = (f"view.base + {placement.offset_bytes}u",
-			          f"{placement.array_count}u")
-		else:
-			source = (f"{ident(self.prefix, struct.name, local, 'ptr')}(view)",
-			          f"{ident(self.prefix, struct.name, local, 'len')}(view)")
+		# A nested member has no `_ptr` of this struct's own, and does not
+		# need one: its offset is a constant here.
+		nested = "." in placement.path[len(struct.name) + 1:]
+		base   = (f"view.base + {placement.offset_bytes}u" if nested
+		          else f"{ident(self.prefix, struct.name, local, 'ptr')}(view)")
+
+		# And a declared width is the width. `_len` is the *scan's* answer and
+		# only a delimited field has one, so asking for it here named a second
+		# function that does not exist.
+		width = (f"{placement.array_count}u" if placement.array_count is not None
+		         else f"{ident(self.prefix, struct.name, local, 'len')}(view)")
+		source = (base, width)
 
 		return [
 			"",

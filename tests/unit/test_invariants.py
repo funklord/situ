@@ -615,6 +615,75 @@ def test_the_solver_and_the_accessors_size_an_array_alike() -> None:
 	assert held["s.d"].element_bits == 32
 
 
+#: A packed pair before a member the data sizes. `u4` and `u4` are one byte
+#: together and zero apart, which is the arithmetic `extent_parts` states in
+#: its own docstring -- and which the offset accumulation beside it did per
+#: member, in all four backends.
+PACKED_BEFORE_DYNAMIC = (
+	"struct s { u4 hi; u4 n; u32 d[n]; u16 tail; }\n"
+)
+
+PACKED_BASE = {
+	"c":      "uint32_t offset = 1u;",
+	"cpp":    "situ_advance_u32(1, ",
+	"python": "advance(1, ",
+	"rust":   "situ_rt::advance(1, ",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_packed_pair_before_a_dynamic_member_is_one_byte(target: str) -> None:
+	"""`tail` sits after `d`, whose offset is the sum of what precedes it.
+	That sum divided each member by eight and added the quotients, so two
+	nibbles contributed nothing and every accessor after the run read one byte
+	early -- the last byte of the array and the first of `tail`.
+
+	`extent_parts` says this in its docstring, having been fixed for the
+	*extent*; the offset sum next to it was left as it was (invariant 65)."""
+	schema   = parse_text(PREAMBLE + PACKED_BEFORE_DYNAMIC)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert PACKED_BASE[target] in source
+	assert "advance(0, " not in source and "offset = 0u;" not in source
+
+
+#: A varint driving a size written as arithmetic. The count form `d[n]` has
+#: known about varint drivers since they were added; the form beside it left
+#: the name as a bare identifier.
+VARINT_ARITHMETIC = (
+	"varint_type v { encoding = be128; max_bits = 64; max_bytes = 9; }\n"
+	"struct s { v n; u16 d[n + 1]; u16 tail; }\n"
+)
+
+VARINT_ARITHMETIC_READ = {
+	"c":      "situ_s_n_value(view) + 1",
+	"cpp":    "n_value() + 1",
+	"python": "self.n_value + 1",
+	"rust":   "(self.n_value() as usize) + 1",
+}
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_an_expression_may_name_a_varint(target: str) -> None:
+	"""`readable_names` is the one list of what an expression may name, and it
+	asked for a scalar -- which a varint has not. So `n` reached the generated
+	code verbatim: an undefined identifier in C, C++ and Rust, and a
+	`NameError` in Python.
+
+	`_value` rather than the plain getter, because an offset sum cannot report
+	a truncated encoding -- which is the same choice the count form made."""
+	schema   = parse_text(PREAMBLE + VARINT_ARITHMETIC)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert VARINT_ARITHMETIC_READ[target] in source
+
+
 def test_a_sized_opaque_region_moves_what_follows_it() -> None:
 	"""And the fact under the four spellings: `tail` is not at a constant
 	offset, and its offset is the region's size rather than zero."""
