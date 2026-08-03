@@ -6668,6 +6668,60 @@ in the layout.
 host and under aarch64 emulation; every dissector executed; eight worked
 examples carrying bytes an independent implementation wrote.
 
+### 26.41 The rest of the list
+
+26.40 chose its example by surveying every construct the language offers
+against every schema in the repository, and the survey named more than one
+unused thing. This is the rest of them: five in `tests/schemas/edges.situ`,
+which exists to say exactly this, and eight register access modes in
+`examples/registers`, where the vocabulary they are borrowed from lives.
+
+The result is worth stating plainly because it cuts both ways. **Two of the
+thirteen were wrong. Eleven were right.** The eleven are not a waste: the only
+way to know which two were wrong was to write all thirteen, and "we have never
+run this" is not a defect report either way.
+
+**`rc` and `rs`, wrong in both halves.** They are *read*-triggered -- the read
+is what clears or sets the bit -- so there is no write side at all, and the
+read is not pure.
+
+- situ had them **writable**, because the test was "not read-only". Both
+  generated a setter that writes a whole word of ones with one bit cleared: an
+  operation the bus does not offer, aimed at a field nobody can write.
+- And both came out **`effect = Pure`**, which is the axis reporting a
+  destructive read as a pure one. `on_read = clear` was understood and `rc`
+  was not -- the same fact in SystemRDL's other spelling, and situ read only
+  one of the two. 15.2 lists both in the same table.
+
+`w1s`, `w0c`, `w0s`, `wo_once` and `rsvd` were right, as were `namespace`,
+`[escape]`, `[unknown]`, `[equalize]` and `[allow_unverified_read]`.
+
+**Three defects around them**, each from the first schema to reach it:
+
+- **The differential driver opened a gate that is not there.**
+  `[allow_unverified_read]` is the one construct whose purpose is to give up a
+  guarantee (14.3), and where it is written there is no gate type and no
+  `_open` to call. The driver named both.
+- **`gen-fuzz` emitted `wire::framed_body` into C.** `::` is not an identifier
+  there; the compiler read it as a label and a stray colon.
+- **And the check that every struct reaches the fuzz harness compared the same
+  unflattened name**, so it would have passed on the broken output. The C
+  compiler caught it first, which is luck rather than coverage -- the check
+  was written against the generator's spelling rather than the target's.
+
+**What the survey is now.** Every attribute in the vocabulary has a user, and
+the constructs listed as unused in 26.40 have one each. The survey script is
+not committed and should not be: it is twenty lines of regular expressions
+over the schema sources, it answers a question worth asking about twice a
+year, and a committed version of it would be a list to maintain rather than a
+measurement to take. What is worth keeping is the habit -- ask the language
+what it offers, ask the schemas what they use, and read the difference.
+
+**Status:** 2729 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; `make fuzz` clean
+over 27 harnesses; eight worked examples carrying bytes an independent
+implementation wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7158,7 +7212,22 @@ examples carrying bytes an independent implementation wrote.
    the way to find those places is to grep for the shape rather than to wait
    for a schema.
 
-58. **A frame is not a message, and only one construct makes them differ.**
+58. **One fact in two vocabularies is two facts to a compiler.** `rc` and
+   `on_read = clear` say the same thing about a register field, and 15.2 lists
+   both because SystemRDL does. situ understood the clause and not the mode,
+   so a field declared read-to-clear the short way was reported as a pure
+   read. Where a language borrows a vocabulary and also has its own, every
+   spelling has to reach the same place -- and the way to find out whether it
+   does is to write each one.
+
+59. **A check written against the generator's spelling is not a check on the
+   output.** The test that every struct reaches the fuzz harness looked for
+   `fuzz_<name>` using the schema's name, and the harness emits the *C* name;
+   for a namespaced struct those differ, and the check would have passed on
+   output that does not compile. A check on generated code has to ask the
+   question in the target's terms.
+
+60. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
