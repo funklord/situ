@@ -6864,6 +6864,94 @@ does not exist yet -- and the way to check that is to write it.
 host and under aarch64 emulation; every dissector executed; eight worked
 examples carrying bytes an independent implementation wrote.
 
+### 26.45 The number, and what the number counts
+
+Fourth fold on the artifacts with no compiler behind them, and it starts where
+26.44 left off: taking the advisor's advice rather than reading it. Four more
+defects, all in the half of a suggestion that is a number.
+
+**A basis nobody printed.** `Cost.basis` says what the number counts. Every
+rule in the catalogue supplies one and `render` dropped all eight, so a
+reordering and a bound and a padding all read "cost: nothing" or "cost: N
+bytes" with nothing to distinguish them. The basis is where the honesty is:
+"nothing" for a reordering means no bytes move, and says nothing about the
+peers already speaking the old order -- which is the cost the reader is
+actually deciding about, and now the sentence says so.
+
+**A cost used as a rank.** `weight` orders the catalogue, and
+`equalize-variant-arms` handed it the padding: the more absurd the
+equalization, the higher it sorted. `examples/netlink`'s `default: opaque` arm
+prices at four gigabytes and outranked every genuinely useful suggestion in
+the file. It is ranked by what it buys now, and what it buys is measured
+rather than asserted -- because the old line asserted it wrongly. "Members
+after the variant keep absolute offsets" printed as "0 member(s)" for
+`examples/dnsname`, a change stated to be worthless; taking it makes `label` a
+fixed 64 bytes, which is the whole reason to pay 62 of padding.
+
+**And a placeholder in the output.** `_arm_name` knew one of the forms an arm
+takes, so netlink's `opaque rest` was reported to the author as `arm`.
+
+**Then the fold turned into something else.** Fixing that placeholder made it
+match a real placement for the first time, and the four backends immediately
+disagreed about `nl_message.attrs` -- which is the cross-backend test doing
+exactly its job, on a defect that had nothing to do with arm names.
+
+`place_opaque` set `sized_by`, which holds a *path* and holds nothing for
+`[n + 1]`, and never set `size_expr`, which is the field that answers this
+question for an array. An `opaque` region sized by arithmetic therefore had no
+length recorded anywhere in the layout: all four backends computed it as zero
+and read whatever followed it out of the region's own bytes. The docstring on
+`size_expr` describes that exact failure -- for arrays, where it was found and
+fixed. The construct beside them was never asked (invariant 1).
+
+**And the size_expr branch was itself wrong, in all four backends.** `T
+name[N]` counts elements. The solver has always read it that way, and
+`sized_by` renders as `count * width` everywhere. `size_expr` rendered as bare
+bytes everywhere: `u32 d[n + 1]` advanced `n + 1` where the layout said
+`(n + 1) * 4`, so the compiler disagreed with its own accessors by a factor of
+the element width -- 1024 bytes against 256 -- and every member after such an
+array was read out of it.
+
+It stayed hidden for a reason worth naming. The shape that *found* `size_expr`
+in the first place was `u8 d[(len + 1) * 8 - 2]`, where the element is one
+byte and the factor is one. **A bug fixed by an example is fixed for that
+example's shape**, and the fix carried the shape's blind spot into four
+backends and a dissector. `traverse.element_bytes` is the one derivation now,
+and the test executes rather than matches: `n = 2` means three `u32`s, so
+`tail` is at 1 + 12 or the assertion is wrong.
+
+**The dissector had the same two gates, asked the same wrong way.** Both
+tested `sized_by is not None`, so a run sized `[n + 1]` was shown at its
+*minimum* -- one byte -- and everything after it placed on top of its bytes,
+under a note that still read "after a member the data sizes". The note it
+printed when it gave up named the driver it had not looked for: "sized by
+`None`".
+
+**Which ran a schema expression through Lua for the first time.** Lua does not
+spell them the way the schema does, and the first packet through the fixed
+version died on `tvb(at, 2.5)`: `/` divides in floating point. `^` is
+exponentiation rather than exclusive or, and is the one that would not have
+failed -- a number Lua computes happily and nobody meant. `<< >> & |` arrived
+in 5.3, which decision 0021 says this backend cannot assume. All six are
+declined; `&&` and `||` are not among them, and the first version of the guard
+matched their halves and silently declined every run walk in the repository.
+
+26.37 recorded that no schema here has a bare `/`. That was true of
+`examples/`, and false of `tests/schemas/edges.situ`, which has one of every
+operator on that list -- which is what it is for. Nothing had ever reached
+them, because every member sized by arithmetic was being declined for a
+different reason. **A boundary that nothing can reach is not a boundary that
+holds; it is one that has not been tested.**
+
+**And a dissector consumed more than it was handed.** A length is the
+message's claim, not the frame's. The guard above the advance already declined
+to *show* bytes that are not there, and the advance counted them anyway: an
+eight-byte UDP header declaring a length of 24 reported having consumed 24.
+
+**Status:** 2755 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; eight worked
+examples carrying bytes an independent implementation wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7413,7 +7501,28 @@ examples carrying bytes an independent implementation wrote.
    for a third, and neither was asked about. When a rule turns on "may X
    precede Y", enumerate the Ys.
 
-66. **A frame is not a message, and only one construct makes them differ.**
+66. **A bug fixed by an example is fixed for that example's shape.** The
+   arithmetic-size branch exists because `u8 d[(len + 1) * 8 - 2]` was found
+   reading as a scalar. It was written to return bytes, which is right for a
+   one-byte element and wrong by a factor of four for a `u32` -- and it was
+   copied into four backends and a dissector that way. When a fix is prompted
+   by one instance, state the general rule and check the instance that differs
+   from it.
+
+67. **A boundary nothing can reach is not a boundary that holds.** The Lua
+   dissector's float division was recorded as an accepted parting from the
+   compiled backends, on the grounds that no schema had a bare `/`. The test
+   schemas had several; nothing reached them because every member sized by
+   arithmetic was declined for an unrelated reason. A documented limit needs a
+   test that arrives at it, or it is an untested guess about what the code
+   would do.
+
+68. **A cost is not a rank.** The advisor ordered its suggestions by a field
+   that two rules filled with a benefit and one filled with a price, so the
+   most expensive change in a schema sorted above the cheapest and above every
+   other rule. Where one number both ranks and reports, say which it is.
+
+69. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
