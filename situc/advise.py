@@ -177,18 +177,15 @@ def _find_tail_reordering(resolved: ResolvedSchema) -> list[Suggestion]:
 			# and if it were not, it would move bytes for every deployed peer
 			# that speaks the earlier version. The advisor said "cost:
 			# nothing" for exactly that.
-			behind = [later for later in members[index + 1:]
-			          if later.vector.get(Axis.OFFSET).base == "Dynamic"
-			          and later.placement.kind not in ("tag", "checksum")
-			          and later.placement.since is None]
-			if not behind:
-				continue
-
 			# And this member cannot be moved past one either, whatever else
-			# follows it: the destination is the end, and a versioned member
-			# is already there.
+			# follows it: a versioned member is append-only, so it is already
+			# at the end and nothing may go after it.
 			if any(later.placement.since is not None
 			       for later in members[index + 1:]):
+				continue
+
+			behind, destination = _reordering_gain(members, index)
+			if not behind:
 				continue
 
 			listed = ", ".join(f"`{later.placement.name}`" for later in behind[:4])
@@ -199,7 +196,7 @@ def _find_tail_reordering(resolved: ResolvedSchema) -> list[Suggestion]:
 				rule    = "move-dynamic-to-tail",
 				subject = entry.placement.path,
 				span    = entry.placement.span,
-				summary = "move this variable-length member after the fixed ones",
+				summary = (f"move this variable-length member {destination}"),
 				detail  = (f"its extent is not fixed, so {len(behind)} member(s) "
 				           f"behind it are Dynamic: {listed}"),
 				cost    = Cost(basis="reordering moves no bytes"),
@@ -210,6 +207,45 @@ def _find_tail_reordering(resolved: ResolvedSchema) -> list[Suggestion]:
 			))
 
 	return found
+
+
+def _reordering_gain(members: list[Resolved],
+		index: int) -> tuple[list[Resolved], str]:
+	"""Which members actually gain from moving this one back, and how far.
+
+	Both halves were wrong, and in the same direction: the rule counted
+	*every* dynamic member behind it and told the author to move it to the
+	end.
+
+	It cannot always go to the end. A `[remaining]` member has to be last
+	(8.5) and a tag has to follow what it authenticates, so the destination is
+	before whichever of those comes first -- and taken literally, the old
+	advice produced a schema the compiler refuses, which is the same defect
+	26.36 found for `[since]` and did not generalise.
+
+	And moving it does not make everything behind it static. Only the members
+	up to and including the *next* variable-length one gain: whatever follows
+	that one is placed after a variable extent either way. `examples/message`
+	is the case -- the advisor promised two and delivered one.
+	"""
+	# Two separate questions, and answering them in one pass conflated them:
+	# how far this member may go, and which members gain when it does.
+	stopper = next((later for later in members[index + 1:]
+	                if later.placement.sized_by == "remaining"
+	                or later.placement.kind in ("tag", "checksum")), None)
+
+	gainers: list[Resolved] = []
+	for later in members[index + 1:]:
+		if later is stopper:
+			break
+		if later.vector.get(Axis.OFFSET).base == "Dynamic":
+			gainers.append(later)
+		if _is_dynamic_size(later.placement):
+			break		# whatever follows this one is dynamic either way
+
+	if stopper is None:
+		return gainers, "after the fixed ones"
+	return gainers, f"after the fixed ones, before `{stopper.placement.name}`"
 
 
 def _find_varint_replacement(resolved: ResolvedSchema) -> list[Suggestion]:

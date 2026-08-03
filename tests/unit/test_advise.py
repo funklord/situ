@@ -354,3 +354,80 @@ def test_it_still_suggests_it_where_the_move_is_legal() -> None:
 	                "move-dynamic-to-tail")
 
 	assert found
+
+
+# -- the suggestion, taken ---------------------------------------------------
+#
+# Everything above asks what the advisor *says*. What follows takes it: the
+# schema is rewritten the way the suggestion describes, re-solved, and the
+# capability it promised is counted. That is the only check that can fail for
+# the reason the advisor exists to avoid -- advice nobody can act on, or
+# advice whose payoff is smaller than the number beside it (26.44).
+
+
+def moved_to_tail(body: str, member: str, before: str | None = None) -> str:
+	"""The schema with `member` moved down, which is what the advice says."""
+	lines  = body.splitlines(keepends=True)
+	moving = next(line for line in lines if f" {member}[" in line
+	              or line.strip().startswith(f"{member} ")
+	              or f" {member};" in line)
+	rest   = [line for line in lines if line is not moving]
+
+	if before is None:
+		closing = next(i for i, line in enumerate(rest) if line.strip() == "}")
+	else:
+		closing = next(i for i, line in enumerate(rest)
+		               if f" {before}[" in line or f" {before};" in line)
+	return "".join(rest[:closing] + [moving] + rest[closing:])
+
+
+def offsets(body: str) -> dict[str, str]:
+	resolved = build(body)
+	return {entry.placement.path: entry.vector.get(Axis.OFFSET).base
+	        for struct in resolved.structs.values()
+	        for entry in struct.entries}
+
+
+def test_the_reordering_suggestion_yields_what_it_says() -> None:
+	"""The number in `yields` is a count of members, and it was the count of
+	everything behind the mover rather than the count that gains.
+
+	Whatever follows the *next* variable-length member is placed after a
+	variable extent either way, so it does not gain and never could.
+	"""
+	body = """struct m {
+	u16 length [max = 1500];
+	u8  opts[length];
+	u8  recs[length];
+	u32 seq;
+}
+"""
+	found  = next(item for item in by_rule(body, "move-dynamic-to-tail")
+	              if item.subject == "m.opts")
+	before = offsets(body)
+	after  = offsets(moved_to_tail(body, "opts"))
+
+	gained = [path for path, base in before.items()
+	          if base != "AbsoluteStatic"
+	          and after.get(path) == "AbsoluteStatic"]
+
+	assert found.yields.startswith(f"{len(gained)} member(s)"), \
+		f"advisor promised `{found.yields}`, the rewrite delivered {gained}"
+
+
+def test_the_reordering_suggestion_compiles_when_taken() -> None:
+	"""A `[remaining]` member has to be last (8.5), so "move it to the end" is
+	advice the compiler refuses -- which is 26.36's `[since]` defect in its
+	other form, found by taking the advice rather than by reading it."""
+	body = """struct m {
+	u16 length [max = 1500];
+	u8  opts[length];
+	u32 seq;
+	u8  tail[remaining];
+}
+"""
+	found = only(body, "move-dynamic-to-tail")
+	assert "before `tail`" in found.summary
+
+	# And the rewrite it describes is one the solver accepts.
+	build(moved_to_tail(body, "opts", before="tail"))
