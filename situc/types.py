@@ -62,8 +62,26 @@ class ScalarType:
 
 	@property
 	def decimal_max(self) -> int:
-		"""The largest value a BCD field can hold: all nines."""
-		return int(10 ** self.digits) - 1
+		"""The largest value a BCD field can hold.
+
+		All nines, *unless the field is narrower than its digits*. Decision
+		0027 lets a register put a control bit above packed decimal --
+		`bcd2 [bits = 7]` is seven bits of it -- and then the top digit has
+		three bits rather than four, so it stops at seven and the field stops
+		at 79.
+
+		It answered 99 for that field: a `_MAX` macro naming a value the
+		field cannot hold, and a setter that writes 0x99 into seven bits and
+		reads back 19. The digits are what the type is named for; the bits
+		are what there are.
+		"""
+		if self.digits < 1:
+			return 0
+
+		low      = int(10 ** (self.digits - 1))
+		top_bits = self.bits - BITS_PER_DIGIT * (self.digits - 1)
+		top      = min(9, (1 << top_bits) - 1) if top_bits > 0 else 0
+		return top * low + low - 1
 
 	@property
 	def is_bit_packed(self) -> bool:

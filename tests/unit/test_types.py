@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from situc.types import ScalarKind, WidthError, is_scalar_name, lookup
@@ -198,6 +200,29 @@ def test_an_odd_digit_count_packs() -> None:
 
 	assert bcd is not None
 	assert bcd.bits == 12 and bcd.is_bit_packed
+
+
+@pytest.mark.parametrize(("bits", "expected"), [
+	(8, 99),		# `bcd2` whole: both digits have four bits
+	(7, 79),		# decision 0027's case: three bits for the tens digit
+	(6, 39),		# `wall_clock.hours`, under two control bits
+	(5, 19),		# `wall_clock.month`
+])
+def test_a_narrowed_bcd_field_stops_where_its_bits_do(bits: int,
+		expected: int) -> None:
+	"""Decision 0027 lets a control bit sit above packed decimal, and then the
+	top digit is not a whole nibble.
+
+	`decimal_max` answered "all nines" from the digit count alone, so a
+	seven-bit `bcd2` reported 99 -- a `_MAX` macro naming a value the field
+	cannot hold, a document repeating it, and a setter that writes 0x99 into
+	seven bits and reads back 19. Every narrowed field in `examples/rtc` was
+	wrong, and nothing had ever asked (26.43).
+	"""
+	bcd = lookup("bcd2")
+	assert bcd is not None
+
+	assert dataclasses.replace(bcd, bits=bits).decimal_max == expected
 
 
 @pytest.mark.parametrize("name", ["bcd0", "bcd17"])

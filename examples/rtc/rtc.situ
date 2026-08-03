@@ -39,6 +39,13 @@ bit_order msb_first;
 // which is what the earlier version of this file did (26.35).
 struct wall_clock {
 	u1    clock_halt;                    // CH: 1 stops the oscillator
+
+	// Seven bits of packed decimal under the halt bit, which is decision
+	// 0027's whole case. The tens digit gets three bits rather than four, so
+	// the *field* stops at 79 whatever `bcd2` would allow -- and `[max = 59]`
+	// is the DS1307 stopping earlier still. situ reported 99 for this until
+	// somebody asked what the bits could hold rather than what the digits
+	// could (26.43).
 	bcd2  seconds  [bits = 7, max = 59];
 
 	reserved u1  [must_be_zero];

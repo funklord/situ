@@ -239,7 +239,16 @@ def _place(row: list[tuple[int, str]], flush: Callable[[], None], width: int,
 	while remaining > 0:
 		take = min(width - at % width, remaining)
 
-		row.append((take, name if first else f"{name} (cont.)"))
+		# A continuation says so before it says which member it continues:
+		# where the box is too narrow for both, the marker is the half a
+		# reader needs, and the member above it is right there.
+		if first:
+			label = name
+		else:
+			label = f"{name} (cont.)"
+			if len(label) > 2 * take - 1:
+				label = "(cont.)"
+		row.append((take, label))
 		at        += take
 		remaining -= take
 		first      = False
@@ -259,9 +268,27 @@ def _rule(width: int) -> str:
 
 
 def _cell(text: str, bits: int) -> str:
-	"""A member's own space between two borders: two characters to a bit, less one."""
+	"""A member's own space between two borders: two characters to a bit, less one.
+
+	A label that does not fit is cut, and the cut is *marked*. It was silent,
+	so `cell_count (cont.)` in a fifteen-character box came out as
+	`cell_count (con` -- a field name that is not any field's name, in the one
+	artifact whose whole purpose is that somebody implements from it. The
+	table below the diagram carries the full name; the diagram says when it is
+	not showing it.
+	"""
 	room = 2 * bits - 1
-	return (text[:room] if len(text) > room else text).center(room)
+	if len(text) > room:
+		# A narrow box gets a prefix and no marker, which is the convention
+		# RFC 791 uses for its own one-bit flags: `R`, `D`, `M`, and the
+		# reader looks below. There is no room for a marker there and a
+		# lone `~` says less than a letter does.
+		#
+		# A box with room gets the marker, because a name that is *nearly*
+		# right is the one a reader retypes. `cell_count (cont.)` came out as
+		# `cell_count (con`, which is not any field's name.
+		text = text[:room - 1] + "~" if room >= 4 else text[:room]
+	return text.center(room)
 
 
 def _tall(name: str, rows: int, width: int) -> list[str]:
