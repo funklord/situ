@@ -108,6 +108,8 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 | `situc gen-fuzz` | a libFuzzer harness per parseable struct |
 | `situc gen-dissector` | a Wireshark dissector in Lua, over the same traversal the code backends use |
 | `situc gen-derived` | codec implementations from kernel descriptions |
+| `situc gen-codec-tests` | property tests that would falsify a lying codec signature, against the ABI an `impl` binds |
+| `situc dump-ast` | the parsed schema, for when a layout surprises you |
 | `situc import-proto` | a `.proto` read as a description of its wire format, reporting what it could not represent |
 | `situc lsp` | a language server over stdio: diagnostics, hover, symbols, code actions |
 
@@ -133,14 +135,24 @@ are shared, and the runtime arithmetic lives once, in C:
 - **Python** -- views over `memoryview`, with the generation check of section
   12.3 that a release build of C cannot afford.
 
-Three checks exist because four backends are worth nothing if they disagree.
-Each backend's output is compiled beside the C and compared field by field on
-the same buffer. Every schema in the repository is generated and compiled in
-every backend -- generating is not compiling, and that check found a header no
-C++ compiler would take. And one asks which members each backend *declines* to
-give an accessor to, failing where the four disagree: a construct one backend
-emits and another refuses means the schema means different things in different
-languages.
+Four backends are worth nothing if they disagree, so several checks exist to
+make disagreement fail rather than ship.
+
+The differential one generates a driver per backend *from the layout*, feeds
+all four the same pseudo-random buffers -- drawn from several alphabets and
+mostly short, because uniform noise never enters a text protocol's parse paths
+-- and diffs the answers. It writes as well as reads: every writable scalar
+takes a pattern, and the buffer afterwards is the assertion, because a byte
+order reversed in a setter is invisible to a read pass over bytes nobody wrote.
+
+Beside it: every schema is generated *and compiled* in every backend, because
+generating is not compiling; every schema's dissector is executed over bytes,
+because parsing is not running; and two checks compare each backend against the
+capability map rather than against each other -- one asking that every member
+the map calls writable has a setter, the other that every member it calls
+unwritable says why. A backend that silently omits an operation the map
+promises is invisible to a backend-versus-backend check unless the four happen
+to disagree.
 
 ## What it will not do
 
@@ -184,9 +196,10 @@ it.
 The Python suite needs `pytest` and `mypy`. Everything it drives a toolchain
 for is *skipped* rather than failed when that toolchain is absent: `gcc`, `g++`
 and `rustc` for compiling and running generated code, `lua5.4` and `luac5.4`
-(every emitted dissector is parsed, and four are executed against a stub of the
-Wireshark API), `doxygen` (the emitted C and C++ comments are extracted and
-read back), and `aarch64-linux-gnu-gcc` with `qemu-aarch64`. `make test-c` and
+(every emitted dissector is executed against a stub of the Wireshark API, and
+four of them over packets whose fields are then compared with the layout),
+`doxygen` (the emitted C and C++ comments are extracted and read back), and
+`aarch64-linux-gnu-gcc` with `qemu-aarch64`. `make test-c` and
 `make cross-test` are the two steps that need their toolchain rather than
 skipping: they build and run the generated C directly.
 
@@ -204,17 +217,20 @@ docs/grammar.ebnf extracted from section 7, held in sync by a test
 situc/            the compiler: Python 3.11+, standard library only, mypy strict
 runtime/          one runtime per backend, each thin; the arithmetic lives in C
 examples/         one directory per protocol, each with at least one `require`
-tests/            unit, generated-C, cross-architecture, golden diagnostics
+tests/            unit, generated-C, cross-architecture, golden diagnostics,
+                  a Wireshark stub, and the schemas written to be awkward
 tools/            the convention linter and the benchmark
 ```
 
 ## Status
 
 The phase plan in section 26 ran out some time ago; what came after it is
-recorded in 26.14 onward. Every construct the language offers is reachable in
-all four backends, and 26.31 -- the list of what is unfinished, re-derived from
-generated output rather than remembered -- has no open gap on it. What remains
-there is deliberate and each entry says why.
+recorded in 26.14 onward, in folds -- a batch of work, then what it found and
+what it left open. Every construct the language offers is reachable in all four
+backends, and 26.31, the list of where the frontier is, has no open gap on it.
+The latest fold is the place to look for what is open today; each entry there
+says why it is, and two of them say why they are deliberate rather than
+pending.
 
 It is not packaged. There is no release, no wheel and no version number:
 `situc` runs from the tree or from a directory copy, which is the only
@@ -242,5 +258,14 @@ make an operation absent.
 
 The examples are the schemas to read first: `udp` for the smallest complete
 one, `ipv4` for bit packing, `dns` and `dnsname` for a variant and a walk,
-`http` for a text protocol, `sqlite` for an offset table, `packet` for
-authenticated and sealed regions.
+`http` for a text protocol, `sqlite` for an offset table, `ble` for a count of
+records that each say how long they are, and `packet` for authenticated and
+sealed regions.
+
+Five of them carry a `.vectors` file, and what is in it matters more than that
+it exists: bytes some *other* implementation wrote, with that implementation
+named. ImageMagick for `bmp`, glibc's `struct arphdr` for `arp`, lwIP's SNTP
+client for `ntp`, U-Boot's `bin2bcd` and DS1307 driver for `rtc`, the Linux
+Bluetooth stack for `ble`. A description that agrees only with its own compiler
+has demonstrated nothing, and two of those five disagreed with the schema on
+arrival.

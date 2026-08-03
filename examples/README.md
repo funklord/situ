@@ -36,6 +36,8 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [ipv6ext](ipv6ext/) | A self-describing chain: each header names what follows, and the run ends after the one that names something else. The construct SMTP asked for first and did not get, because one protocol is not evidence. |
 | [smtp](smtp/) | A fixed-width number written in digits, a body ending at a dot on its own line -- and the one framing rule in this directory that situ cannot express, said in the schema rather than in a footnote. |
 | [http](http/) | Text, which situ said for a long time it would not describe: delimited fields, a header block ending at a blank line, and a status code written in digits. Read the three warnings it produces as the bill for framing in text. project.md section 8.6. |
+| [ble](ble/) | A count of records that each say how long they are, which is the construct this example added: `num` reports with no stride to index by, so the run is walked. Written from the Linux Bluetooth stack, and the two facts a header alone cannot give -- an RSSI trailing a flexible array, a zero length ending a run -- come from its parsers. |
+| [rtc](rtc/) | BCD and fixed point, and the register file that made `bcd2 [bits = 7]` exist: a control bit sits above seven bits of packed decimal, which a nibble-per-digit type could not describe. Decision 0027. |
 
 ## Waiting on later phases
 
