@@ -6823,6 +6823,47 @@ checks that the output is *well formed*, never that it is *true*.
 host and under aarch64 emulation; every dissector executed; eight worked
 examples carrying bytes an independent implementation wrote.
 
+### 26.44 Advice, taken rather than read
+
+Third fold on the same question -- what has no reader -- and this time the
+artifact is the one that tells the author what to change. Section 1 calls
+design feedback a product rather than a by-product, and 26.9 built it. Every
+test of it asks what it *says*. None took it.
+
+Taking it found both halves of the highest-ranked suggestion wrong, and wrong
+in the same direction: too optimistic.
+
+**The destination.** "Move this variable-length member after the fixed ones"
+means the end, and a `[remaining]` member has to be last (8.5) -- so following
+the advice produces a schema the compiler refuses. That is 26.36's `[since]`
+defect exactly. It was fixed there for `[since]` and not generalised, and a tag
+is the third case, since it has to follow what it authenticates. The summary
+names the member to stop before now.
+
+**The yield.** It counted every dynamic member behind the mover. Whatever
+follows the *next* variable-length member sits after a variable extent either
+way, so it cannot gain whatever moves: `examples/message` promised two members
+would return to `AbsoluteStatic` and delivered one. Counting only what gains
+also deleted a suggestion that promised nothing at all -- moving `recs` past a
+`[remaining]` tail, which is both illegal and pointless.
+
+**The check is the interesting part.** Two tests now rewrite the schema the way
+the suggestion describes, re-solve it, and count the capability that appeared.
+That is the only check that can fail for the reason the advisor exists to
+avoid: advice nobody can act on, or advice whose payoff is smaller than the
+number printed beside it. Reading the suggestion cannot find either.
+
+It generalises, and the generalisation is the reason this is a fold rather
+than a commit. **An artifact that tells someone to do something can be checked
+by doing it.** The map says what a field's capabilities are, and the map is
+checked against generated code that reads the same placements. The advisor
+says what they *would be* after a change, which is a claim about a schema that
+does not exist yet -- and the way to check that is to write it.
+
+**Status:** 2736 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; eight worked
+examples carrying bytes an independent implementation wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7359,7 +7400,20 @@ examples carrying bytes an independent implementation wrote.
    space is too small for the saying to fit, which is the case a convention
    already covers.
 
-64. **A frame is not a message, and only one construct makes them differ.**
+64. **An artifact that tells someone to do something is checked by doing it.**
+   The advisor's suggestions were tested by reading them, which cannot find
+   the two things that make advice worthless: that the compiler refuses the
+   result, and that the payoff is smaller than the number printed beside it.
+   Both were true of its highest-ranked rule. A claim about a schema that does
+   not exist yet is checkable only by writing that schema.
+
+65. **A fix stated for one construct is a fix owed to its family.** "This
+   member cannot be moved past a `[since]` one" was found, fixed and written
+   down; `[remaining]` has the same property for a different reason and a tag
+   for a third, and neither was asked about. When a rule turns on "may X
+   precede Y", enumerate the Ys.
+
+66. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
