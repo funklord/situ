@@ -6109,8 +6109,9 @@ generated Python type-checked under `--strict`; the map and wire snapshots read
 from one list rather than a glob. The two widened are the differential drivers'
 alphabets and their write pass.
 
-Two were measured and *not* added, because a check that only confirms today's
-behaviour is ceremony:
+Four sweeps were run and *not* kept, because a check that only confirms today's
+behaviour is ceremony and a slow one is worse. Each is recorded here so the next
+reader knows it was measured rather than skipped:
 
 - **the doc's field table against the layout.** Every offset in every rendered
   document matches the placements. 20.3 records a past instance of a true number
@@ -6119,6 +6120,13 @@ behaviour is ceremony:
 - **the read-side mirror of the writability check.** Every member the map lists
   has a read path in all four; the only ones without are `authenticated`
   regions, which are a coverage grouping rather than bytes, and all four agree.
+- **`situc explain` over every path the map names** -- 458 of them across the
+  twenty-five schemas, and every one answers.
+- **hover and go-to-definition at every position of every schema**, 89,280 of
+  them plus the out-of-range ones an editor sends when a document shrinks. All
+  clean, and fifty-four seconds: a 45% increase in the suite's running time for
+  a check that has never had anything to say. The position tests that name a
+  spot, and `test_every_schema_analyses_without_raising`, cover the shapes.
 
 #### What is open
 
