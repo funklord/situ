@@ -30,10 +30,22 @@ require absolute_static(udp_header);
 require canonical(udp_header);
 require aligned(udp_header.length, 2);
 
-// Every field is freely mutable: nothing here is covered by an authentication
-// tag, and the UDP checksum is not modelled as one because it is optional over
-// IPv4. A schema that wanted the checksum maintained automatically would
-// declare it `checksum` and gain the dirty-tracking of section 14.2.
+// Every field is freely mutable: nothing here is covered by a tag, and the
+// checksum is a plain `u16` -- which is the one thing in this header situ
+// cannot say, and it is not the reason `examples/icmp` gives.
+//
+// ICMP's checksum covers its own message and nothing else, so `[self_as = 0]`
+// describes it exactly (14.2). UDP's covers a *pseudo-header* as well: the
+// source and destination addresses, the protocol number and the UDP length,
+// none of which are in this struct and two of which belong to the IP layer.
+// The kernel builds it in `csum_tcpudp_nofold` (lib/checksum.c:149), which
+// takes `saddr` and `daddr` as arguments precisely because they are not in
+// the datagram it is summing.
+//
+// Coverage in situ is over regions of *this* message. There is no way to name
+// bytes another schema owns, and inventing one would mean a schema that
+// cannot be checked against the bytes in front of it. `examples/tcp` carries
+// the same limitation for the same reason: two askers, and no design.
 require in_place(udp_header.checksum);
 
 // The payload makes nothing after it static -- and there is nothing after it,

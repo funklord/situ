@@ -12,6 +12,10 @@ one the kernel's own ICMP stack computed. What is here is the language surface.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 
 from situc.codegen.c import generate as generate_c
@@ -22,6 +26,8 @@ from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
+
+from every_schema import ROOT
 
 PREAMBLE = "target buffer;\nendian big;\n"
 
@@ -110,6 +116,61 @@ def test_every_backend_says_where_the_hole_is(backend: str) -> None:
 
 	for name in EMITS[backend]:
 		assert name in output, f"{backend} does not emit {name}"
+
+
+#: The same echo reply `tests/generated/test_icmp.c` reads, and the same
+#: reason: the checksum in it is the kernel's, not this repository's.
+REPLY = bytes([0x00, 0x00, 0xFF, 0xF9, 0x00, 0x05, 0x00, 0x01])
+
+
+def test_python_computes_the_checksum_the_kernel_did(tmp_path: Path) -> None:
+	"""Everything above this line reads the generated text, and invariant 22
+	is the standing warning about that: a test that greps does not run.
+
+	The C backend's half is run in `tests/generated/test_icmp.c`. This is the
+	same RFC 1071 loop over the same bytes, through the Python module -- so
+	two of the four are executed and the other two are asserted to emit the
+	names, which is a weaker thing and is said here rather than assumed.
+	"""
+	schema   = parse_text(ROOT.joinpath("examples/icmp/icmp.situ").read_text())
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.py").write_text(
+		generate_py(schema, resolved, "unit").module, encoding="ascii")
+
+	if "situ_runtime" not in sys.modules:
+		spec = importlib.util.spec_from_file_location(
+			"situ_runtime", ROOT / "runtime" / "python" / "situ_runtime.py")
+		assert spec is not None and spec.loader is not None
+		runtime = importlib.util.module_from_spec(spec)
+		sys.modules["situ_runtime"] = runtime
+		spec.loader.exec_module(runtime)
+	runtime = sys.modules["situ_runtime"]
+
+	sys.path.insert(0, str(tmp_path))
+	try:
+		spec = importlib.util.spec_from_file_location("unit", tmp_path / "unit.py")
+		assert spec is not None and spec.loader is not None
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+	finally:
+		sys.path.remove(str(tmp_path))
+
+	view = module.icmp_message.at(runtime.Message(bytearray(REPLY)), 0)
+	at, length = view.checksum_covered()
+	hole, held = view.checksum_self_span()
+	filler     = module.icmp_message.SELF_AS_CHECKSUM
+
+	total = 0
+	for index in range(0, length - 1, 2):
+		pair = []
+		for byte in (at + index, at + index + 1):
+			pair.append(filler if hole <= byte < hole + held
+			            else view._msg.buffer[byte])
+		total += (pair[0] << 8) | pair[1]
+	while total >> 16:
+		total = (total & 0xFFFF) + (total >> 16)
+
+	assert (~total) & 0xFFFF == (REPLY[2] << 8) | REPLY[3]
 
 
 @pytest.mark.parametrize("backend", sorted(EMITS))

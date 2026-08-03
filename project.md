@@ -6580,10 +6580,27 @@ destination addresses from the IP layer, which are not in the struct at all.
 `self_as` does nothing for that, and neither does anything else here: it is
 coverage over bytes another schema owns. Two askers, and no design yet.
 
-**Status:** 2696 unit tests, 7 skipped; generated C compiled and run on the
+**And the frontier, re-derived rather than trusted.** Section 0 asks a reader
+to rebuild 26.31's list from the generated output instead of believing it, and
+this fold is a good moment: `[self_as]`, arm validation, a located member in
+four backends and a nested field in an expression all landed since it was last
+measured. Every phrase the four emitters can produce as a refusal, collected
+over every schema in the repository, in every backend: **none of them appears
+in any output.** The two standing checks were already saying so; this is the
+independent form of the same statement, and it is recorded because a
+measurement that finds nothing is a different thing from not looking.
+
+Two of the four backends *run* the new construct rather than being read for
+it. `tests/generated/test_icmp.c` computes RFC 1071 in C and
+`test_self_covering_checksum.py` does it again through the generated Python,
+both against the kernel's number. C++ and Rust are asserted to emit the names
+and are not executed, which invariant 22 rates as the weaker thing -- said here
+rather than left for a reader to assume.
+
+**Status:** 2697 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; every dissector executed; seven worked
 examples carrying bytes an independent implementation wrote, and one of them
-now carries a checksum the kernel computed.
+now carries a checksum the kernel computed -- in two languages.
 
 ### Invariants to hold across all phases
 

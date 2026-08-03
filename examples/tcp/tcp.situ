@@ -48,6 +48,19 @@ require absolute_static(tcp_header);
 require in_place(tcp_header.syn);
 require aligned(tcp_header.sequence, 4);
 
+// THE CHECKSUM, and why it is a plain `u16` where ICMP's is not.
+//
+// TCP's covers the segment *and* a pseudo-header: the source and destination
+// addresses, the protocol number and the segment length, none of which are in
+// this struct and two of which belong to the IP layer. The kernel builds that
+// in `csum_tcpudp_nofold` (lib/checksum.c:149), which takes `saddr` and
+// `daddr` as arguments precisely because they are not in the segment.
+//
+// `[self_as = 0]` covers the other half of the problem -- a checksum over its
+// own bytes -- and `examples/icmp` uses it. Coverage over bytes a *different*
+// message owns is not something situ has, and `examples/udp` carries the same
+// note: two askers, and no design.
+
 // A bit field is never atomic: setting one flag is a read-modify-write of the
 // containing byte, so two threads setting different flags can lose one of
 // them. Stated here so the schema records it.
