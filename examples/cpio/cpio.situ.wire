@@ -1,0 +1,36 @@
+# situ wire signature v0
+# schema: cpio.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+struct cpio_entry size=111..4294971507
+  @0x0000   110       cpio_header header  big
+  @0x006e   1..4096   u8         name  sized-by=header.namesize nul_terminated
+  ~         0..3      u8         <reserved0>
+  ~         0..4294967295 u8         data  sized-by=header.filesize
+  ~         0..3      u8         <reserved1>
+
+struct cpio_header size=110
+  @0x0000   6         u32        magic  big radix=10 min=70701 max=70702
+  @0x0006   8         u32        ino  big radix=16
+  @0x000e   8         u32        mode  big radix=16
+  @0x0016   8         u32        uid  big radix=16
+  @0x001e   8         u32        gid  big radix=16
+  @0x0026   8         u32        nlink  big radix=16
+  @0x002e   8         u32        mtime  big radix=16
+  @0x0036   8         u32        filesize  big radix=16
+  @0x003e   8         u32        devmajor  big radix=16
+  @0x0046   8         u32        devminor  big radix=16
+  @0x004e   8         u32        rdevmajor  big radix=16
+  @0x0056   8         u32        rdevminor  big radix=16
+  @0x005e   8         u32        namesize  big radix=16 min=1 max=4096
+  @0x0066   8         u32        check  big radix=16

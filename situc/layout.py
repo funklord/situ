@@ -1651,8 +1651,16 @@ class Solver:
 		if not isinstance(member, ast.Field):
 			return
 
-		# An array has no single value, so nothing about it is nameable.
-		if member.array is not None:
+		# An array has no single value, so nothing about it is nameable --
+		# and a *text number* is not an array, however much its bracket looks
+		# like one. `hex u32 namesize[8]` is one number in eight digits, and
+		# a cpio header is thirteen of them, one of which is the length of
+		# the name that follows. It fell through here and the diagnostic said
+		# "no fields are in scope at this point", which reads as though
+		# nothing preceded it -- the same sentence the varint case below
+		# quotes, one construct along. 26.31 records this exact distinction
+		# for the classifier; this is the other place that had to learn it.
+		if member.array is not None and member.radix is None:
 			return
 
 		if member.type_ref.name in self.structs:
@@ -1676,8 +1684,31 @@ class Solver:
 		if scalar is None:
 			return
 
+		# The digits bound the value, and more tightly than the type does:
+		# `decimal u16 code[3]` holds 0..999 whatever a u16 would allow. The
+		# same number `Placement.radix_max` reports, computed here from the
+		# same two inputs rather than read back from a placement that does
+		# not exist yet.
+		if member.radix is not None and member.array is not None:
+			digits = self._radix_digits(member)
+			if digits is not None:
+				limit = min((1 << scalar.bits) - 1,
+				            int(member.radix ** digits) - 1)
+				state.fields[name] = self.constrain(Interval(0, limit),
+				                                    member.attrs)
+				return
+
 		state.fields[name] = self.constrain(
 			scalar_interval(scalar.bits, scalar.signed), member.attrs)
+
+	def _radix_digits(self, member: ast.Field) -> int | None:
+		"""How many digits a fixed-width text number is written in."""
+		if member.array is None or member.array.size is None:
+			return None
+		try:
+			return int(evaluate(member.array.size, self.result.env))
+		except SituError:
+			return None
 
 	def record_nested_intervals(self, member: ast.Field, state: Walk,
 			name: str) -> None:
@@ -1693,13 +1724,20 @@ class Solver:
 		for inner in nested.placements:
 			if inner.kind != "field" or inner.scalar is None:
 				continue
-			if inner.array_count is not None:
+			# ...and a text number is not an array, one level down. `u8
+			# name[header.namesize]` in a cpio entry names a field of the
+			# nested header that is eight hex digits, and this dropped it for
+			# having a bracket.
+			if inner.array_count is not None and inner.radix is None:
 				continue
 			tail = inner.path[len(nested.name) + 1 :]
 			if "." in tail:
 				continue
-			state.fields[f"{name}.{tail}"] = self.constrain(
-				scalar_interval(inner.scalar.bits, inner.scalar.signed), inner.attrs)
+
+			limit = inner.radix_max
+			held  = (Interval(0, limit) if limit is not None
+			         else scalar_interval(inner.scalar.bits, inner.scalar.signed))
+			state.fields[f"{name}.{tail}"] = self.constrain(held, inner.attrs)
 
 	def constrain(self, base: Interval, attrs: tuple[ast.Attr, ...]) -> Interval:
 		"""Narrow a field's range by the constraints it declares.

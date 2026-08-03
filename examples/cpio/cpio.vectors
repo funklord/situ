@@ -1,0 +1,44 @@
+# Golden vectors for the `newc` cpio format, written by GNU cpio.
+#
+# Not laid out here. The archive is what this produced:
+#
+#   printf 'greeting.txt\n' | cpio -o -H newc > test.cpio
+#
+# with `greeting.txt` holding "hello\n". GNU cpio 2.15 wrote every byte
+# below, including the padding -- which is the part worth having an
+# independent implementation for, because it is the part a schema gets
+# wrong silently.
+#
+# The two entries are the whole archive bar its trailing block of zeros.
+#
+# ENTRY ONE, 132 bytes:
+#
+#   "070701"                     the magic, as six decimal digits
+#   13 fields of 8 hex digits    ino .. check
+#   "greeting.txt\0"             13 bytes, which is what `namesize` says
+#   one zero byte                rounding 110 + 13 up to 124
+#   "hello\n"                    6 bytes, which is what `filesize` says
+#   two zero bytes               rounding 124 + 6 up to 132
+#
+# The one padding byte is the whole reason `N_ALIGN` exists in
+# init/initramfs.c:73, and it is what a schema that padded to four from the
+# *name* rather than from the start of the entry would get wrong -- 110 is
+# not a multiple of four, so the two are never the same.
+
+cpio_entry greeting 30 37 30 37 30 31 30 30 31 42 31 31 32 39 30 30 30 30 38 31 42 34 30 30 30 30 30 33 45 38 30 30 30 30 30 33 45 38 30 30 30 30 30 30 30 31 36 41 37 30 42 41 42 42 30 30 30 30 30 30 30 36 30 30 30 30 30 30 30 30 30 30 30 30 30 30 32 42 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 44 30 30 30 30 30 30 30 30 67 72 65 65 74 69 6E 67 2E 74 78 74 00 00 68 65 6C 6C 6F 0A 00 00
+	header.magic    = 70701
+	header.namesize = 13
+	header.filesize = 6
+	header.mode     = 33204
+	header.nlink    = 1
+
+# ENTRY TWO: the trailer. A name of "TRAILER!!!" is how an archive ends
+# (init/initramfs.c:374), and it is a name rather than a flag -- which is why
+# situ describes the entry and a caller writes the loop. `filesize` is zero
+# and `namesize` is 11, so the padding after the name is three bytes.
+
+cpio_entry trailer 30 37 30 37 30 31 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 31 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 42 30 30 30 30 30 30 30 30 54 52 41 49 4C 45 52 21 21 21 00 00 00 00
+	header.magic    = 70701
+	header.namesize = 11
+	header.filesize = 0
+	header.nlink    = 1

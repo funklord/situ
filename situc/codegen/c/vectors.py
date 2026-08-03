@@ -40,6 +40,7 @@ from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.traverse import data_sized
 
 #: The value runs to the end of the line rather than being one token: a byte
 #: run is written as bytes, and `00 1A 2B 3C 4D 5E` is six of them. Which of
@@ -326,6 +327,24 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 	count = _byte_run(resolved, case.struct, path)
 
 	if count is None:
+		# A text number's getter is fallible -- the digits may not be digits --
+		# so it takes an out-parameter and returns a code, and calling it as a
+		# plain getter does not compile. No vector had ever named one: the two
+		# schemas with text numbers, `http` and `smtp`, have no `.vectors`
+		# file, and `examples/cpio` is thirteen of them in a row.
+		found = resolved.find(f"{case.struct}.{path}")
+		if found is not None and found.placement.radix is not None:
+			scalar = found.placement.scalar
+			assert scalar is not None
+			return [
+				"\t{",
+				f"\t\t{_ctype(scalar)} got = 0;",
+				"",
+				f"\t\tassert_int_equal({ident(prefix, case.struct, local, 'get')}"
+				f"({held}, &got), SITU_OK);",
+				f"\t\tassert_int_equal(got, {value});",
+				"\t}",
+			]
 		return [f"\tassert_int_equal({ident(prefix, case.struct, local, 'get')}"
 		        f"({held}), {value});"]
 
@@ -339,6 +358,16 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 		f"({held}), want, sizeof(want));",
 		"\t}",
 	]
+
+
+def _ctype(scalar: object) -> str:
+	"""The C type a scalar's accessor hands back."""
+	bits   = getattr(scalar, "bits", 32)
+	signed = getattr(scalar, "signed", False)
+	for width in (8, 16, 32, 64):
+		if bits <= width:
+			return f"{'int' if signed else 'uint'}{width}_t"
+	return "uint64_t"
 
 
 def _hex(value: str) -> bytes:
@@ -371,6 +400,13 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 		if placement.kind != "field" or placement.scalar is None:
 			continue
 		if placement.array_count is not None:
+			continue
+		# ...and a run the *message* sizes is not a scalar either, however
+		# much `array_count is None` makes it look like one. It has a pointer
+		# and a length, not a getter and a setter. `traverse.data_sized` is
+		# the question, and this is the fourth place that was asking a
+		# narrower one.
+		if data_sized(placement):
 			continue
 
 		local = placement.path[len(struct.name) + 1 :]

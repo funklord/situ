@@ -357,10 +357,15 @@ def _padding_interval(expr: ast.Binary, env: Env) -> Interval | None:
 	(include/net/netlink.h), and a builtin whose only real use the solver
 	rejects is a builtin that does not work.
 
-	Recognised rather than inferred, and narrowly: the same *field* on both
-	sides, and a constant alignment. The answer is exact rather than
+	Recognised rather than inferred, and narrowly: the same *expression* on
+	both sides, and a constant alignment. The answer is exact rather than
 	conservative, which is why it is worth the special case -- correlation is
 	not something a wider rule would recover.
+
+	The two sides are compared structurally rather than by path. A cpio
+	header pads its name to a four-byte boundary counted from the start of
+	the entry, which is `align_up(110 + namesize, 4) - (110 + namesize)`:
+	the same value twice, and neither occurrence is a bare field.
 	"""
 	if expr.op != "-" or not isinstance(expr.left, ast.Call):
 		return None
@@ -368,14 +373,46 @@ def _padding_interval(expr: ast.Binary, env: Env) -> Interval | None:
 	if call.name != "align_up" or len(call.args) != 2:
 		return None
 
-	subject = path_text(call.args[0])
-	if subject is None or subject != path_text(expr.right):
+	if not same_expression(call.args[0], expr.right):
 		return None
 
 	alignment = interval_of(call.args[1], env)
 	if not alignment.is_point or alignment.value() <= 0:
 		return None
 	return Interval(0, alignment.value() - 1)
+
+
+def same_expression(left: ast.Expr, right: ast.Expr) -> bool:
+	"""Whether two expressions are the same one, structurally.
+
+	Not an evaluation: two expressions that happen to be equal for every
+	input are not the same expression, and nothing here needs them to be.
+	What this answers is "is this the same value written twice", which is the
+	question correlation turns on.
+	"""
+	if type(left) is not type(right):
+		return False
+
+	if isinstance(left, ast.IntLiteral) and isinstance(right, ast.IntLiteral):
+		return left.value == right.value
+	if isinstance(left, ast.NameRef) and isinstance(right, ast.NameRef):
+		return left.name == right.name
+	if isinstance(left, ast.Access) and isinstance(right, ast.Access):
+		return (left.name == right.name
+		        and same_expression(left.base, right.base))
+	if isinstance(left, ast.Unary) and isinstance(right, ast.Unary):
+		return (left.op == right.op
+		        and same_expression(left.operand, right.operand))
+	if isinstance(left, ast.Binary) and isinstance(right, ast.Binary):
+		return (left.op == right.op
+		        and same_expression(left.left, right.left)
+		        and same_expression(left.right, right.right))
+	if isinstance(left, ast.Call) and isinstance(right, ast.Call):
+		return (left.name == right.name
+		        and len(left.args) == len(right.args)
+		        and all(same_expression(one, two)
+		                for one, two in zip(left.args, right.args)))
+	return False
 
 
 def _not_resolvable(expr: ast.Expr, name: str, env: Env) -> Interval:

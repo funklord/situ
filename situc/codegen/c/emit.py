@@ -972,6 +972,15 @@ class Emitter:
 
 		nested = "." in placement.path[len(struct.name) + 1 :]
 		if nested and placement.sealed_by is None:
+			# One exception, and it is the read an expression needs. A member
+			# of a nested struct that is a *text number* can drive a length --
+			# `u8 name[header.namesize]` in a cpio entry -- and an expression
+			# over it names `<outer>_<path>_value`, which the loop below emits
+			# only for the struct's own members. The name was already right;
+			# nothing emitted the function, so the generated C called
+			# something that does not exist.
+			if placement.radix is not None and placement.offset_bits is not None:
+				return self._text_value_helper(struct, placement)
 			return []
 
 		if placement.kind == "reserved":
@@ -2946,11 +2955,26 @@ class Emitter:
 		# emitted verbatim -- an identifier in C that does not exist.
 		by_local = {local_name(struct, placement): placement
 		            for placement in readable_names(struct)}
+		# Constants too. A `const` is a compile-time value and the renderer
+		# only rewrote *fields*, so `align_up(HEADER_BYTES + n, 4)` reached
+		# the target as `HEADER_BYTES` -- an identifier that exists in the
+		# schema and in no generated file. Folding it here keeps the emitted
+		# arithmetic the arithmetic the schema wrote.
+		consts = self.resolved.layout.env.consts
 
 		def read(local: str) -> str:
+			if local in consts:
+				return str(consts[local])
 			placement = by_local[local]
 			if "." not in local:
 				return (f"{ident(self.prefix, struct.name, c_name(local), 'get')}"
+				        f"({held})")
+			# A text number is digits, not bytes of an integer. Reading it
+			# where it sits gave `situ_get_be32` over eight ASCII characters
+			# -- a plausible number nobody wrote, which is the shape 26.32
+			# rates worst. The value helper parses them.
+			if placement.radix is not None:
+				return (f"{ident(self.prefix, struct.name, c_name(local), 'value')}"
 				        f"({held})")
 			# A nested member has no accessor of this struct's own, and its
 			# offset is a constant here, so it is read where it sits.
@@ -2959,7 +2983,7 @@ class Emitter:
 			                             f"{held}.base")
 
 		return expand_calls(
-			over_fields(list(by_local), source, read), c_spelling)
+			over_fields([*by_local, *consts], source, read), c_spelling)
 
 	def _record_prologue(self, base: str, delim: bytes, sym: str,
 			extent: str) -> list[str]:
@@ -4256,6 +4280,17 @@ class Emitter:
 		ctype  = self._field_ctype(placement)
 		limit  = (1 << scalar.bits) - 1
 
+		# A nested member has no `_ptr`/`_len` pair of this struct's own, and
+		# does not need one: its offset is a constant here and its width is
+		# the digit count.
+		if "." in placement.path[len(struct.name) + 1:]:
+			assert placement.array_count is not None
+			source = (f"view.base + {placement.offset_bytes}u",
+			          f"{placement.array_count}u")
+		else:
+			source = (f"{ident(self.prefix, struct.name, local, 'ptr')}(view)",
+			          f"{ident(self.prefix, struct.name, local, 'len')}(view)")
+
 		return [
 			"",
 			"/* The same digits, read where an error cannot be returned: the",
@@ -4271,8 +4306,7 @@ class Emitter:
 			"{",
 			"	uint64_t value = 0u;",
 			"",
-			f"	(void)situ_parse_uint({ident(self.prefix, struct.name, local, 'ptr')}(view),"
-			f" {ident(self.prefix, struct.name, local, 'len')}(view),"
+			f"	(void)situ_parse_uint({source[0]}, {source[1]},"
 			f" {placement.radix}u, {limit}u, &value);",
 			f"	return ({ctype})value;",
 			"}",

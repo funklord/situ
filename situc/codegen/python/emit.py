@@ -292,6 +292,8 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._explained(struct, entry))
 
+		lines.extend(self._nested_text_values(struct))
+
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._extent_property(struct))
@@ -1675,6 +1677,46 @@ class Emitter:
 			]
 		return []
 
+	def _nested_text_values(self, struct: ResolvedStruct) -> list[str]:
+		"""The non-failing read of a *nested* text number.
+
+		A member of a nested struct can drive a length -- `u8
+		name[header.namesize]` in a cpio entry -- and an expression over it
+		names a helper on *this* struct. The nested struct has its own, at its
+		own offsets; this one reads the digits where they sit here. Nothing
+		emitted it, so the generated code called a function that does not
+		exist.
+		"""
+		lines: list[str] = []
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.radix is None or placement.offset_bits is None:
+				continue
+			if "." not in placement.path[len(struct.name) + 1:]:
+				continue
+			scalar = placement.scalar
+			if scalar is None or placement.array_count is None:
+				continue
+
+			name  = c_name(local_name(struct, placement))
+			limit = (1 << scalar.bits) - 1
+			at    = placement.offset_bits // BITS_PER_BYTE
+			lines.extend([
+				"",
+				"\t@property",
+				f"\tdef {name}_value(self) -> int:",
+				f'\t\t"""{placement.path}, where an error cannot be raised:',
+				"\t\tthe offset arithmetic after it is not fallible, and",
+				"\t\t`validate` refuses a frame whose digits are not"
+				' digits."""',
+				"\t\tself._check()",
+				f"\t\traw = self._msg.buffer[self._at + {at}:"
+				f"self._at + {at + placement.array_count}]",
+				f"\t\tvalue = parse_uint(raw, {placement.radix}, {limit})",
+				"\t\treturn 0 if value is None else value",
+			])
+		return lines
+
 	def _explained(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""One member, and where it has no setter, why.
 
@@ -2505,18 +2547,32 @@ class Emitter:
 		# path was emitted verbatim -- an attribute Python does not have.
 		by_local = {local_name(struct, placement): placement
 		            for placement in readable_names(struct)}
+		# Constants too. A `const` is a compile-time value and the renderer
+		# only rewrote *fields*, so `align_up(HEADER_BYTES + n, 4)` reached
+		# the target as `HEADER_BYTES` -- an identifier that exists in the
+		# schema and in no generated file. Folding it here keeps the emitted
+		# arithmetic the arithmetic the schema wrote.
+		consts = self.resolved.layout.env.consts
 
 		def read(local: str) -> str:
+			if local in consts:
+				return str(consts[local])
 			if "." not in local:
 				return f"{held}.{c_name(local)}"
+			placement = by_local[local]
+			# A text number is digits, not bytes of an integer. Reading it
+			# where it sits gave `situ_get_be32` over eight ASCII characters
+			# -- a plausible number nobody wrote, which is the shape 26.32
+			# rates worst. The value helper parses them.
+			if placement.radix is not None:
+				return f"{held}.{c_name(local)}_value"
 			# A nested member has no attribute of this struct's own, and its
 			# offset is a constant here, so it is read where it sits.
-			placement = by_local[local]
 			assert placement.scalar is not None
 			return f"({self._raw_load(placement, placement.scalar)})"
 
 		return expand_calls(
-			_pythonic(over_fields(list(by_local), source, read)),
+			_pythonic(over_fields([*by_local, *consts], source, read)),
 			python_spelling)
 
 	def _repeat_while(self, struct: ResolvedStruct,

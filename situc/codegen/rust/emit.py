@@ -292,6 +292,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._getter(struct, entry))
 
+		lines.extend(self._nested_text_values(struct))
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
@@ -2236,6 +2237,45 @@ class Emitter:
 			"\t}",
 		]
 
+	def _nested_text_values(self, struct: ResolvedStruct) -> list[str]:
+		"""The non-failing read of a *nested* text number.
+
+		A member of a nested struct can drive a length -- `u8
+		name[header.namesize]` in a cpio entry -- and an expression over it
+		names a method on *this* type. Nothing emitted it.
+		"""
+		lines: list[str] = []
+		for entry in struct.entries:
+			placement = entry.placement
+			scalar    = placement.scalar
+			if placement.radix is None or placement.offset_bits is None:
+				continue
+			if "." not in placement.path[len(struct.name) + 1:]:
+				continue
+			if scalar is None or placement.array_count is None:
+				continue
+
+			name  = _ident(c_name(local_name(struct, placement)))
+			rtype = self._field_type(placement, writing=True)
+			limit = (1 << scalar.bits) - 1
+			at    = placement.offset_bits // BITS_PER_BYTE
+			lines.extend([
+				"",
+				f"\t/// `{placement.path}`, where an error cannot be returned:",
+				"\t/// the offset arithmetic after it is not fallible, and",
+				"\t/// `validate` refuses a frame whose digits are not digits.",
+				f"\tpub fn {name}_value(&self) -> {rtype} {{",
+				f"\t\tlet raw = &self.bytes[{at}..{at + placement.array_count}];",
+				"",
+				f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix},"
+				f" {limit}) {{",
+				f"\t\t\tSome(value) => value as {rtype},",
+				"\t\t\tNone => 0,",
+				"\t\t}",
+				"\t}",
+			])
+		return lines
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			held: str) -> str:
 		names = [entry.placement.name for entry in struct.entries
@@ -2264,9 +2304,22 @@ class Emitter:
 		# guard and the whole extent chain were reading the wrong field.
 		by_path = {local_name(struct, placement): placement
 		           for placement in readable_names(struct)}
+		# Constants too. A `const` is a compile-time value and the renderer
+		# only rewrote *fields*, so `align_up(HEADER_BYTES + n, 4)` reached
+		# the target as `HEADER_BYTES` -- an identifier that exists in the
+		# schema and in no generated file. Folding it here keeps the emitted
+		# arithmetic the arithmetic the schema wrote.
+		consts = self.resolved.layout.env.consts
 
 		def read(name: str) -> str:
+			if name in consts:
+				return str(consts[name])
 			held_at = by_path[name]
+			# A text number is digits, not bytes of an integer: reading it
+			# where it sits parses ASCII as a binary integer, which is a
+			# plausible number nobody wrote.
+			if "." in name and held_at.radix is not None:
+				return f"({held}.{_ident(c_name(name))}_value() as usize)"
 			# A nested member has no accessor of this struct's own -- `at
 			# file.pixel_offset` in `examples/bmp` -- and its offset is a
 			# constant here, so it is read where it sits. Same spelling as
@@ -2278,7 +2331,7 @@ class Emitter:
 				return f"({self._unparen(raw)} as usize)"
 			return f"({held}.{_ident(c_name(name))}() as usize)"
 
-		return expand_calls(over_fields(list(by_path), source, read),
+		return expand_calls(over_fields([*by_path, *consts], source, read),
 		                    rust_spelling)
 
 

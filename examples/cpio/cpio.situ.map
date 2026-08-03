@@ -1,0 +1,46 @@
+# situ capability map v1
+# schema: cpio.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct cpio_entry size=111 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  cpio_entry.header                      offset=AbsoluteStatic(0x00) size=Fixed(110) align=Aligned(8) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.magic                offset=AbsoluteStatic(0x00) size=Fixed(6) align=Aligned(8) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.ino                  offset=AbsoluteStatic(0x06) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.mode                 offset=AbsoluteStatic(0x0E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.uid                  offset=AbsoluteStatic(0x16) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.gid                  offset=AbsoluteStatic(0x1E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.nlink                offset=AbsoluteStatic(0x26) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.mtime                offset=AbsoluteStatic(0x2E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.filesize             offset=AbsoluteStatic(0x36) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.devmajor             offset=AbsoluteStatic(0x3E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.devminor             offset=AbsoluteStatic(0x46) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.rdevmajor            offset=AbsoluteStatic(0x4E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.rdevminor            offset=AbsoluteStatic(0x56) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.namesize             offset=AbsoluteStatic(0x5E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.check                offset=AbsoluteStatic(0x66) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_entry.name                        offset=AbsoluteStatic(0x6E) size=Bounded(1, 4096) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical
+  cpio_entry.<reserved0>                 offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  cpio_entry.data                        offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  cpio_entry.<reserved1>                 offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct cpio_header size=110 repr=TextConverted atomic=NonAtomic
+  cpio_header.magic                      offset=AbsoluteStatic(0x00) size=Fixed(6) align=Aligned(8) repr=TextConverted atomic=NonAtomic
+  cpio_header.ino                        offset=AbsoluteStatic(0x06) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.mode                       offset=AbsoluteStatic(0x0E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.uid                        offset=AbsoluteStatic(0x16) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.gid                        offset=AbsoluteStatic(0x1E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.nlink                      offset=AbsoluteStatic(0x26) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.mtime                      offset=AbsoluteStatic(0x2E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.filesize                   offset=AbsoluteStatic(0x36) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.devmajor                   offset=AbsoluteStatic(0x3E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.devminor                   offset=AbsoluteStatic(0x46) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.rdevmajor                  offset=AbsoluteStatic(0x4E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.rdevminor                  offset=AbsoluteStatic(0x56) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.namesize                   offset=AbsoluteStatic(0x5E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
+  cpio_header.check                      offset=AbsoluteStatic(0x66) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic

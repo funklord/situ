@@ -481,11 +481,22 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 	return []
 
 
+#: The largest instance these checks will build on the stack.
+#:
+#: The worst case is the right size in principle and not in practice: a cpio
+#: entry declares its file size in eight hex digits, so its worst case is four
+#: gigabytes, and `uint8_t buf[4294971507u]` is neither a stack frame nor a
+#: `uint32_t`. The checks assert *offsets* over a zeroed instance, where every
+#: data-decided length reads zero -- so the worst case was never what they
+#: needed, only what they asked for.
+INSTANCE_CEILING = 64 * 1024
+
+
 def _buffer_size(layout: object) -> int | None:
-	"""A buffer big enough for the worst case, or None if there is no worst case."""
+	"""A buffer big enough for the worst case, or as much of it as fits."""
 	maximum = getattr(layout, "size_max_bytes", None)
 	if maximum is not None:
-		return max(int(maximum), 1)
+		return min(max(int(maximum), 1), INSTANCE_CEILING)
 	minimum = getattr(layout, "size_bytes", 0)
 	if getattr(layout, "is_fixed_size", False):
 		return max(int(minimum), 1)

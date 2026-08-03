@@ -204,6 +204,8 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._explained(struct, entry))
 
+		lines.extend(self._nested_text_values(struct))
+
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._offsets(struct))
@@ -1675,18 +1677,71 @@ class Emitter:
 		# (`at file.pixel_offset`, in `examples/bmp`).
 		by_name = {local_name(struct, placement): placement
 		           for placement in readable_names(struct)}
+		# Constants too. A `const` is a compile-time value and the renderer
+		# only rewrote *fields*, so `align_up(HEADER_BYTES + n, 4)` reached
+		# the target as `HEADER_BYTES` -- an identifier that exists in the
+		# schema and in no generated file. Folding it here keeps the emitted
+		# arithmetic the arithmetic the schema wrote.
+		consts = self.resolved.layout.env.consts
 
 		def read(name: str) -> str:
+			if name in consts:
+				return str(consts[name])
 			held = by_name[name]
 			if "." in name:
+			# A text number is digits, not bytes of an integer: reading it
+			# where it sits parses eight ASCII characters as a binary
+			# integer, which is a plausible number nobody wrote.
+				if held.radix is not None:
+					return f"{c_name(name)}_value()"
 				assert held.scalar is not None
 				return f"({self._load(held.scalar, held, None)})"
 			if held.type_name in self.enums and held.scalar is not None:
 				return f"({self._load(held.scalar, held, None)})"
 			return f"{c_name(name)}()"
 
-		return expand_calls(over_fields(list(by_name), source, read),
+		return expand_calls(over_fields([*by_name, *consts], source, read),
 		                    c_spelling)
+
+	def _nested_text_values(self, struct: ResolvedStruct) -> list[str]:
+		"""The non-failing read of a *nested* text number.
+
+		A member of a nested struct can drive a length -- `u8
+		name[header.namesize]` in a cpio entry -- and an expression over it
+		names a helper on *this* class. Nothing emitted it.
+		"""
+		lines: list[str] = []
+		for entry in struct.entries:
+			placement = entry.placement
+			scalar    = placement.scalar
+			if placement.radix is None or placement.offset_bits is None:
+				continue
+			if "." not in placement.path[len(struct.name) + 1:]:
+				continue
+			if scalar is None or placement.array_count is None:
+				continue
+
+			name  = c_name(local_name(struct, placement))
+			ctype = self._field_ctype(placement)
+			limit = (1 << scalar.bits) - 1
+			at    = placement.offset_bits // BITS_PER_BYTE
+			lines.extend([
+				"",
+				f"\t/* {placement.path}, where an error cannot be returned:",
+				"\t * the offset arithmetic after it is not fallible, and",
+				"\t * `validate` refuses a frame whose digits are not"
+				" digits. */",
+				f"\t[[nodiscard]] {ctype} {name}_value() const noexcept",
+				"\t{",
+				"\t\tstd::uint64_t value = 0;",
+				"",
+				f"\t\t(void)situ_parse_uint(base() + {at},"
+				f" {placement.array_count}, {placement.radix}, {limit},"
+				" &value);",
+				f"\t\treturn static_cast<{ctype}>(value);",
+				"\t}",
+			])
+		return lines
 
 	def _fits(self, struct: ResolvedStruct, placement: Placement,
 			bytes_: int) -> str | None:
