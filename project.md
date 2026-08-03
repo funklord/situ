@@ -6137,13 +6137,83 @@ reader knows it was measured rather than skipped:
 - **A `[remaining]` member cannot be written in any backend and says so.** That
   is `mutate = Shifting` doing its job, not a gap -- listed here because a
   reader looking for the write surface should find the boundary stated.
-- Beyond those: the two shapes the differential check cannot ask about (26.31),
-  26.33's runtime image, and `examples/ble`, which waits on a citable source for
-  its field constants because 26.32's rule makes a recalled one a false claim.
+- Beyond those: the two shapes the differential check cannot ask about (26.31)
+  and 26.33's runtime image, which stays deliberately late -- the image's shape
+  depends on which consumer is primary and no consumer exists yet to be one.
+  `examples/ble` was here and is written (26.36).
 
 **Status:** 2595 unit tests, 7 skipped; generated C compiled and run on the host
 and under aarch64 emulation; every dissector executed; both codec harnesses run
 against implementations; `make fuzz` clean at thirty seconds a harness.
+
+### 26.36 The example that needed a construct
+
+Three commits, and the middle one is the point. 26.35 left `examples/ble`
+unwritten because 26.32 makes a worked example a claim and a recalled constant
+a false one, and the source it waited on turned out to be on this machine: the
+Linux Bluetooth stack, cited by file and line.
+
+**What a header gives, and what only a parser gives.** The event framing, the
+advertising report, the address and AD types are all in
+`include/net/bluetooth/hci.h`. Two facts are not:
+
+- `struct hci_ev_le_advertising_info` ends in a flexible `data[]`, and the RSSI
+  that follows it is read by `hci_event.c:6421` as `info->data[info->length]`.
+  A schema written from the struct alone puts the second report one byte early.
+- A zero length ends the AD run rather than describing an empty structure
+  (`eir.h:70`). The schema says `[min = 1]` and `validate` enforces it, which
+  is the same fact stated where a reader of the schema will find it.
+
+That is the argument for deriving an example from an implementation rather than
+from a specification's field list: the layout is in the struct, and the *rules*
+are in the code that walks it.
+
+**And the construct situ did not have.** `num` reports, each carrying its own
+`data[data_length]`, is a count of *elements* with no stride to index by. Three
+backends declined it, saying the size was one they could not resolve -- true of
+a byte range and not of this -- and C emitted an accessor naming a `SIZE_FIXED`
+macro that a variable struct does not have, so `situc build` succeeded and the
+header did not compile. All four walk it now, element by element, which is the
+terminated run's walk with the count as its stopping rule.
+
+Four more things fell out of one example, and all four are the same shape as
+the last fold's: a sample nobody had exercised.
+
+- `gen-tests` refused a vector for any struct without a single size -- which is
+  every real protocol in the tree. Every existing vector file happened to be
+  for a fixed struct, so nothing had asked.
+- Its round trip called the plain setter for a field that drives a length,
+  whose setter takes the message (12.3). No schema with a driver in its own
+  struct had a vector before.
+- `gen-checks` did the same, and separately emitted a byte-span check for a
+  member whose extent the data decides: `bytes 2..1`, a loop that never ran,
+  and an assertion that failed for a schema that was right.
+- C++ emitted `enum class address_kind { public = 0 }`. Rust escapes a keyword
+  with `r#` and decision 0025 renames a class and aliases it back; an
+  enumerator has neither, so the name is refused at compile time now with the
+  reason and a suggestion. The kernel's own constant is `ADDR_LE_DEV_PUBLIC`,
+  so nothing is lost by renaming it in the schema.
+
+**Two sweeps that found nothing, recorded.** `situc explain` over all 458 paths
+the map names, and hover and go-to-definition at all 89,280 positions of every
+schema plus the out-of-range ones an editor sends when a document shrinks. Both
+clean; neither kept. The first restates what the map already holds, and the
+second costs fifty-four seconds -- a 45% increase in the suite for something
+that has never had anything to say. They join the two from 26.35 in the list of
+things measured and left alone, which is a different statement from silence.
+
+**And the README, which had drifted six ways**, all in one direction: the work
+moved and the front page did not. Three checks became more than three; four
+executed dissectors became twenty-five; two subcommands were missing from a
+table that is now checked against the parser; the status section pointed at
+26.31 for what is open when 26.31 is where the *frontier* is and the open list
+lives in the latest fold. A front page is an artifact like any other here, and
+it had not been re-derived since the work it describes.
+
+**Status:** 2627 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; both codec
+harnesses run against implementations; five worked examples carrying bytes an
+independent implementation wrote.
 
 ### Invariants to hold across all phases
 
