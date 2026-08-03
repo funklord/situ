@@ -36,20 +36,37 @@ class Interval:
 	"""The range of values an expression can take.
 
 	`hi` of None means unbounded above, which is what an unconstrained field
-	reference through an unbounded construct produces. `lo` is always known:
-	nothing here produces a value with no lower bound.
+	reference through an unbounded construct produces.
+
+	`lo_known` is False where the rules below could not derive a lower bound
+	at all, and then `lo` is a placeholder rather than a fact. It used to be
+	neither: every widening returned `Interval(0, None)`, and the zero was
+	read as "this cannot be negative" by the one check that asks. So
+	`x[align_up(n, 4) - n - 10]`, which is negative for every `n`, was
+	accepted -- the widening had *granted* the property the check was looking
+	for. A conservative approximation that happens to satisfy the predicate
+	you are about to test is not conservative.
 	"""
 
 	lo: int
 	hi: int | None = UNBOUNDED
+	lo_known: bool = True
 
 	@staticmethod
 	def point(value: int) -> Interval:
 		return Interval(value, value)
 
+	@staticmethod
+	def unknown() -> Interval:
+		"""Nothing derivable, and saying so. Both ends, deliberately: an
+		interval with an unknown lower bound and a known upper one has no
+		consumer here, and pretending `lo <= hi` for it invites the same
+		confusion the placeholder zero caused."""
+		return Interval(0, UNBOUNDED, lo_known = False)
+
 	@property
 	def is_point(self) -> bool:
-		return self.hi is not None and self.lo == self.hi
+		return self.hi is not None and self.lo == self.hi and self.lo_known
 
 	@property
 	def is_bounded(self) -> bool:
@@ -62,7 +79,8 @@ class Interval:
 	def render(self) -> str:
 		if self.is_point:
 			return str(self.lo)
-		return f"[{self.lo}, {'inf' if self.hi is None else self.hi}]"
+		low = str(self.lo) if self.lo_known else "unknown"
+		return f"[{low}, {'inf' if self.hi is None else self.hi}]"
 
 
 def scalar_interval(bits: int, signed: bool) -> Interval:
@@ -72,19 +90,39 @@ def scalar_interval(bits: int, signed: bool) -> Interval:
 	return Interval(0, (1 << bits) - 1)
 
 
-def _combine(a: Interval, b: Interval, op: Callable[[int, int], int]) -> Interval:
+def _span(lo: int | None, hi: int | None) -> Interval:
+	"""An interval from bounds either of which may be unknown."""
+	if lo is None:
+		return Interval.unknown()
+	return Interval(lo, hi)
+
+
+def _nonneg(x: Interval) -> bool:
+	return x.lo_known and x.lo >= 0
+
+
+def _mask(value: int) -> int:
+	"""The largest integer with no more bits set than `value` has."""
+	return (1 << value.bit_length()) - 1
+
+
+def _corners(a: Interval, b: Interval, op: Callable[[int, int], int]) -> Interval:
 	"""Interval arithmetic by corner enumeration.
 
-	Sound for the monotone operators this language has: the extremes of a
-	monotone binary function over two ranges lie at the corners.
+	Sound only where `op` is monotone in each argument separately -- then the
+	extremes over a box lie at its corners. **That is a property of the
+	operator, and this language has operators that do not have it.** `%`, `&`,
+	`|` and `^` were all put through this function, and `(4 - n % 4) % 4` came
+	out `[0, 1]` for an expression whose range is `0..3`: the corners `1 % 4`
+	and `4 % 4` are 1 and 0, and the values in between are not. The map then
+	*understated* a member's size, which is the direction that grants a
+	capability rather than costing one.
 
-	An unbounded operand makes the result unbounded, and an operation that
-	cannot be evaluated at a corner -- a division by a range spanning zero --
-	widens to unbounded rather than guessing. Both are the conservative
-	direction: they cost a capability rather than granting one.
+	Each of those four has its own rule below. This one is for the operators
+	whose docstring claim was true.
 	"""
-	if a.hi is None or b.hi is None:
-		return Interval(0, UNBOUNDED)
+	if a.hi is None or b.hi is None or not (a.lo_known and b.lo_known):
+		return Interval.unknown()
 
 	corners = []
 	for left in (a.lo, a.hi):
@@ -92,9 +130,129 @@ def _combine(a: Interval, b: Interval, op: Callable[[int, int], int]) -> Interva
 			try:
 				corners.append(op(left, right))
 			except (ValueError, ZeroDivisionError):
-				return Interval(0, UNBOUNDED)
+				return Interval.unknown()
 
 	return Interval(min(corners), max(corners))
+
+
+def _add_interval(a: Interval, b: Interval) -> Interval:
+	lo = a.lo + b.lo if a.lo_known and b.lo_known else None
+	hi = None if a.hi is None or b.hi is None else a.hi + b.hi
+	return _span(lo, hi)
+
+
+def _sub_interval(a: Interval, b: Interval) -> Interval:
+	"""Where the placeholder zero did its damage: `x - y` with `y` unbounded
+	above has no lower bound at all, and returning zero for it said the
+	subtraction could not go negative."""
+	lo = a.lo - b.hi if a.lo_known and b.hi is not None else None
+	hi = None if a.hi is None or not b.lo_known else a.hi - b.lo
+	return _span(lo, hi)
+
+
+def _mul_interval(a: Interval, b: Interval) -> Interval:
+	if _nonneg(a) and _nonneg(b):
+		hi = None if a.hi is None or b.hi is None else a.hi * b.hi
+		return Interval(a.lo * b.lo, hi)
+	return _corners(a, b, BINARY_OPS["*"])
+
+
+def _div_interval(a: Interval, b: Interval) -> Interval:
+	"""The divisor cannot span zero -- `interval_of` refuses that first."""
+	if _nonneg(a) and b.lo_known and b.lo > 0:
+		lo = 0 if b.hi is None else a.lo // b.hi
+		hi = None if a.hi is None else a.hi // b.lo
+		return Interval(lo, hi)
+	return _corners(a, b, BINARY_OPS["/"])
+
+
+def _mod_interval(a: Interval, b: Interval) -> Interval:
+	"""`a % b` is not monotone in `a`, which is what corner enumeration
+	assumed. For a non-negative dividend and a positive divisor the range is
+	`0 .. min(a.hi, b.hi - 1)`, and where the dividend cannot reach the
+	divisor the modulo is the identity."""
+	if not (_nonneg(a) and b.lo_known and b.lo > 0):
+		return Interval.unknown()
+	if a.hi is not None and a.hi < b.lo:
+		return a
+
+	limits = [limit for limit in (a.hi, None if b.hi is None else b.hi - 1)
+	          if limit is not None]
+	return Interval(0, min(limits) if limits else UNBOUNDED)
+
+
+def _and_interval(a: Interval, b: Interval) -> Interval:
+	"""No bit survives that both operands do not have, so neither operand's
+	maximum is exceeded. Not monotone: `5 & 3` is 1 and `4 & 3` is 0."""
+	if not (_nonneg(a) and _nonneg(b)):
+		return Interval.unknown()
+	limits = [limit for limit in (a.hi, b.hi) if limit is not None]
+	return Interval(0, min(limits) if limits else UNBOUNDED)
+
+
+def _or_interval(a: Interval, b: Interval) -> Interval:
+	"""At least each operand, and no wider than the widest of them."""
+	if not (_nonneg(a) and _nonneg(b)):
+		return Interval.unknown()
+	lo = max(a.lo, b.lo)
+	if a.hi is None or b.hi is None:
+		return Interval(lo, UNBOUNDED)
+	return Interval(lo, _mask(max(a.hi, b.hi)))
+
+
+def _xor_interval(a: Interval, b: Interval) -> Interval:
+	if not (_nonneg(a) and _nonneg(b)):
+		return Interval.unknown()
+	if a.hi is None or b.hi is None:
+		return Interval(0, UNBOUNDED)
+	return Interval(0, _mask(max(a.hi, b.hi)))
+
+
+def _shl_interval(a: Interval, b: Interval) -> Interval:
+	if _nonneg(a) and _nonneg(b):
+		hi = None if a.hi is None or b.hi is None else a.hi << b.hi
+		return Interval(a.lo << b.lo, hi)
+	return _corners(a, b, BINARY_OPS["<<"])
+
+
+def _shr_interval(a: Interval, b: Interval) -> Interval:
+	if _nonneg(a) and _nonneg(b):
+		lo = 0 if b.hi is None else a.lo >> b.hi
+		hi = None if a.hi is None else a.hi >> b.lo
+		return Interval(lo, hi)
+	return _corners(a, b, BINARY_OPS[">>"])
+
+
+def _predicate_interval(a: Interval, b: Interval) -> Interval:
+	"""A comparison answers 0 or 1 whatever its operands are."""
+	del a, b
+	return Interval(0, 1)
+
+
+#: One rule per operator, because soundness is a property of the operator.
+#: Section 8's sizes and section 11's `size` axis are read off these, so a
+#: rule that is merely plausible shows up as a capability the map does not
+#: have or a bound the generated code does not hold to.
+INTERVAL_RULES: dict[str, Callable[[Interval, Interval], Interval]] = {
+	"+":  _add_interval,
+	"-":  _sub_interval,
+	"*":  _mul_interval,
+	"/":  _div_interval,
+	"%":  _mod_interval,
+	"&":  _and_interval,
+	"|":  _or_interval,
+	"^":  _xor_interval,
+	"<<": _shl_interval,
+	">>": _shr_interval,
+	"==": _predicate_interval,
+	"!=": _predicate_interval,
+	"<":  _predicate_interval,
+	">":  _predicate_interval,
+	"<=": _predicate_interval,
+	">=": _predicate_interval,
+	"&&": _predicate_interval,
+	"||": _predicate_interval,
+}
 
 
 def interval_of(expr: ast.Expr, env: Env) -> Interval:
@@ -134,12 +292,14 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 	if isinstance(expr, ast.Unary):
 		operand = interval_of(expr.operand, env)
 		if expr.op == "-":
-			if operand.hi is None:
-				return Interval(0, UNBOUNDED)
+			if operand.hi is None or not operand.lo_known:
+				return Interval.unknown()
 			return Interval(-operand.hi, -operand.lo)
 		if operand.is_point:
 			return Interval.point(UNARY_OPS[expr.op](operand.value()))
-		return Interval(0, UNBOUNDED)
+		if expr.op == "!":
+			return Interval(0, 1)
+		return Interval.unknown()
 
 	if isinstance(expr, ast.Binary):
 		left      = interval_of(expr.left, env)
@@ -157,7 +317,12 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 			_guard(expr, right.value())
 			return Interval.point(operation(left.value(), right.value()))
 
-		if expr.op in ("/", "%") and right.lo <= 0 <= (right.hi if right.hi is not None else 1):
+		padding = _padding_interval(expr, env)
+		if padding is not None:
+			return padding
+
+		if expr.op in ("/", "%") and (not right.lo_known
+				or right.lo <= 0 <= (right.hi if right.hi is not None else 1)):
 			raise error(
 				"divisor may be zero",
 				expr.right.span,
@@ -166,7 +331,10 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 				         "rule zero out"],
 			)
 
-		return _combine(left, right, operation)
+		rule = INTERVAL_RULES.get(expr.op)
+		if rule is None:
+			return Interval.unknown()
+		return rule(left, right)
 
 	if isinstance(expr, ast.Call):
 		return _call_interval(expr, env)
@@ -176,6 +344,38 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 		return Interval(0, UNBOUNDED)
 
 	raise error("expression is not usable as a size or bound", expr.span)
+
+
+def _padding_interval(expr: ast.Binary, env: Env) -> Interval | None:
+	"""`align_up(x, k) - x`: how many bytes of padding follow `x`.
+
+	Interval arithmetic has no memory of which ranges came from the same
+	value, so it reads this as an unrelated `[k, x.hi + k] - [x.lo, x.hi]` and
+	answers "may be negative" for an expression that is between 0 and `k - 1`
+	always. That refusal falls on the one thing anybody writes `align_up` for:
+	the kernel spells it `NLA_ALIGN(len) - len` and calls it `nla_padlen`
+	(include/net/netlink.h), and a builtin whose only real use the solver
+	rejects is a builtin that does not work.
+
+	Recognised rather than inferred, and narrowly: the same *field* on both
+	sides, and a constant alignment. The answer is exact rather than
+	conservative, which is why it is worth the special case -- correlation is
+	not something a wider rule would recover.
+	"""
+	if expr.op != "-" or not isinstance(expr.left, ast.Call):
+		return None
+	call = expr.left
+	if call.name != "align_up" or len(call.args) != 2:
+		return None
+
+	subject = path_text(call.args[0])
+	if subject is None or subject != path_text(expr.right):
+		return None
+
+	alignment = interval_of(call.args[1], env)
+	if not alignment.is_point or alignment.value() <= 0:
+		return None
+	return Interval(0, alignment.value() - 1)
 
 
 def _not_resolvable(expr: ast.Expr, name: str, env: Env) -> Interval:
@@ -202,6 +402,9 @@ def _call_interval(expr: ast.Call, env: Env) -> Interval:
 		if all(arg.is_point for arg in args):
 			return Interval.point(_call(expr, env))
 
+		if not all(arg.lo_known for arg in args):
+			return Interval.unknown()
+
 		if expr.name == "min":
 			hi = None if any(a.hi is None for a in args) else min(
 				a.hi for a in args if a.hi is not None)
@@ -210,7 +413,18 @@ def _call_interval(expr: ast.Call, env: Env) -> Interval:
 			hi = None if any(a.hi is None for a in args) else max(
 				a.hi for a in args if a.hi is not None)
 			return Interval(max(a.lo for a in args), hi)
-		return Interval(0, UNBOUNDED)
+
+		# `align_up` had no rule and widened to "nothing known", which is how
+		# a padding member -- the one construct that needs it -- came out
+		# `size=Unbounded` for a range of three bytes. It is monotone
+		# non-decreasing in its first argument, so where the alignment is a
+		# constant the bounds are just the rounded ends.
+		value, alignment = args
+		if alignment.is_point and alignment.value() > 0 and _nonneg(value):
+			unit = alignment.value()
+			hi = None if value.hi is None else _round_up(value.hi, unit)
+			return Interval(_round_up(value.lo, unit), hi)
+		return Interval.unknown()
 
 	# size(), offset() and count() answer from a solved layout, so they are
 	# always single points when they answer at all.
@@ -411,6 +625,17 @@ def _call(expr: ast.Call, env: Env) -> int:
 	)
 
 
+def _round_up(value: int, alignment: int) -> int:
+	"""The arithmetic `align_up` names, with no diagnostics attached.
+
+	Shared with the interval rule and with what the backends emit, so the
+	three cannot drift: a generated `align_up` that rounds differently from
+	the one that folded a constant is a schema whose meaning depends on
+	whether the alignment was written as a literal.
+	"""
+	return ((value + alignment - 1) // alignment) * alignment
+
+
 def _align_up(expr: ast.Call, value: int, alignment: int) -> int:
 	if alignment <= 0:
 		raise error(
@@ -418,7 +643,7 @@ def _align_up(expr: ast.Call, value: int, alignment: int) -> int:
 			expr.args[1].span,
 			label = f"evaluates to {alignment}",
 		)
-	return ((value + alignment - 1) // alignment) * alignment
+	return _round_up(value, alignment)
 
 
 def _layout_call(expr: ast.Call, env: Env) -> int:

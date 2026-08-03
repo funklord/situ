@@ -1941,6 +1941,20 @@ class Solver:
 		env   = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
 		count = interval_of(member.array.size, env)
 
+		if not count.lo_known:
+			# Distinct from the negative case, and worth its own sentence: the
+			# solver has not shown this is negative, it has failed to show
+			# that it is not. That used to read as `[0, inf]` and pass, the
+			# widening having handed the check the answer it was looking for.
+			raise error(
+				"array length has no lower bound the solver can derive",
+				member.array.size.span,
+				label = "may be negative",
+				notes = ["every field an expression reads has to be bounded for "
+				         "its result to be (project.md section 8.5)",
+				         "`[min = N]` on the fields it reads is what supplies one"],
+			)
+
 		if count.lo < 0:
 			raise error(f"array length {count.render()} may be negative",
 			            member.array.size.span, label="must be zero or more")
