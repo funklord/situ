@@ -144,6 +144,13 @@ def _label(struct: ResolvedStruct, placement: Placement) -> str:
 	# fixed-width parser.
 	if placement.delimiter is not None:
 		return f"{local}..."
+	# A text number's bracket is a width in bytes, not a count of elements
+	# (8.6.2), so `magic[6]` reads as six magics where there is one number in
+	# six digits. The Size column already says six bytes; the name saying it
+	# again, in the notation an array uses, is the `name[1]` mistake in its
+	# other form.
+	if placement.radix is not None:
+		return local
 	if placement.array_count is not None:
 		return f"{local}[{placement.array_count}]"
 	if placement.sized_by is not None:
@@ -366,7 +373,19 @@ def _notes(placement: Placement) -> list[str]:
 		notes.append(f"fixed point, /{scalar.scale}")
 	if scalar is not None and scalar.is_bcd:
 		notes.append(f"{scalar.digits} packed digits, 0 to {scalar.decimal_max}")
-	if placement.endian is not None and placement.size_bits > BITS_PER_BYTE:
+	# Byte order is a property of a multi-byte *number*, and the test was the
+	# member's total width -- so a two-byte marker, a four-byte address and a
+	# 110-byte nested struct all carried it. `bmp.signature` is the sharpest
+	# case: its own comment says it is bytes rather than a `u16` so that its
+	# value does not depend on byte order, and the document said it did.
+	#
+	# The element's width is the question, which also keeps the note where it
+	# belongs on `u16 samples[4]`. A number written as digits has no byte
+	# order at all: the bytes are characters, and `repr = TextConverted` is
+	# the axis saying so.
+	if placement.endian is not None and placement.radix is None \
+			and scalar is not None and not scalar.is_bit_packed \
+			and scalar.bits > BITS_PER_BYTE:
 		notes.append(f"{placement.endian.value} endian")
 	for attr in placement.attrs:
 		# Skip the ones rendered in prose above. `since = 2` and "from version

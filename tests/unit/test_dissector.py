@@ -295,6 +295,45 @@ def test_a_dissector_shows_the_fields_a_real_packet_holds(tmp_path: Path) -> Non
 	]
 
 
+#: The first entry of the archive `examples/cpio/cpio.vectors` records, which
+#: GNU cpio wrote. 110 bytes of header, a 13-byte name, one byte of padding,
+#: six bytes of file and two more of padding.
+CPIO_ENTRY = bytes.fromhex(
+	"30373037303130303142313132393030303038314234303030303033453830303030303345383030303030303031364137304241424230303030303030363030303030303030303030303030324230303030303030303030303030303030303030303030304430303030303030306772656574696e672e747874000068656c6c6f0a0000")
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_dissector_walks_a_format_written_in_digits(tmp_path: Path) -> None:
+	"""Every number in a cpio header is ASCII, and three things went wrong.
+
+	The bracket of `hex u32 ino[8]` is a width and was read as a count, so
+	every header field was declared four times too wide and overlapped the
+	ones after it. The name length was read with `uint()` over eight
+	characters -- a number nobody wrote, and one Wireshark refuses outright
+	above four bytes. And the padding between the name and the data was
+	reported as "no bytes of its own", so the walk finished three bytes short
+	of the entry it had just read (26.42).
+
+	The offsets below are GNU cpio's, and the last of them is the one that
+	only comes out right if all three are fixed.
+	"""
+	consumed, rows = dissect(
+		tmp_path, ROOT / "examples" / "cpio" / "cpio.situ", "cpio_entry",
+		CPIO_ENTRY)
+
+	assert consumed == len(CPIO_ENTRY)
+
+	shown = {name: (offset, length) for name, offset, length, _ in rows}
+	assert shown["cpio_entry.name"]      == (110, 13)
+	assert shown["cpio_entry.reserved0"] == (123, 1)
+	assert shown["cpio_entry.data"]      == (124, 6)
+	assert shown["cpio_entry.reserved1"] == (130, 2)
+
+	# ...and the header's own fields are eight bytes each, not thirty-two.
+	assert shown["cpio_header.ino"]      == (6, 8)
+	assert shown["cpio_header.namesize"] == (94, 8)
+
+
 @pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
 def test_bit_packed_fields_come_out_masked_and_shifted(tmp_path: Path) -> None:
 	"""`45 00 ...` is version 4 and IHL 5 in one byte, which is the read a

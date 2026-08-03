@@ -29,6 +29,8 @@ bytes with a note rather than guessed at.
 
 from __future__ import annotations
 
+import re
+
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.names import (
@@ -53,6 +55,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	struct names, and Wireshark abbrevs are already namespaced by the protocol
 	they hang off.
 	"""
+	_CONSTS.clear()
+	_CONSTS.update(resolved.layout.env.consts)
+
 	lines = _preamble(basename)
 
 	# Only where something scans. A helper nobody calls is dead Lua in a file
@@ -203,6 +208,17 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	if placement.type_name in resolved.structs:
 		return ""			# a nested struct: its own Proto dissects it
+
+	# Before the array branch, which it looks exactly like from here: the
+	# bracket of `hex u32 ino[8]` is a width in bytes and not a count, and
+	# reading it as a count declared a field of eight `u32`s -- thirty-two
+	# bytes for an eight-byte number, overlapping everything after it. Shown
+	# as a string, which is what the bytes are: an analyst reading a cpio
+	# header wants to see "070701".
+	if placement.radix is not None and placement.delimiter is None:
+		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
+
 	if placement.sized_by is not None or placement.array_count is not None:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
@@ -483,6 +499,16 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		])
 		return lines
 
+	# Before `_repeated`, for the reason `_field` is: the bracket is a width.
+	if placement.radix is not None:
+		span = byte_span(placement)
+		if span is not None:
+			first, count = span
+			return [
+				f"\tsubtree:add({field}, tvb({first}, {count}))",
+				f"\tat = {first + count}",
+			]
+
 	if placement.sized_by is not None or placement.array_count is not None:
 		return _repeated(resolved, struct, placement, field, seek)
 
@@ -505,7 +531,34 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# "no bytes of its own", which is a strange thing to say about a u16.
 		width = _dynamic_width(placement)
 		if width is None:
-			return [f"\t-- {placement.path}: no bytes of its own"]
+			# ...and where the *length* is an expression too, it is still a
+			# run of bytes and the walk still has to step over it. A cpio
+			# entry's padding is `align_up(110 + namesize, 4) - (110 +
+			# namesize)`, and reporting "no bytes of its own" left `at` three
+			# bytes short of the next entry for the whole archive.
+			# Base "0": the fields this length reads are members of *this*
+			# struct, at offsets from its own start, which is where the tvb
+			# begins. `at` is the running cursor and would read the driver
+			# from wherever the walk happens to have got to.
+			length = _length(resolved, struct, placement, "0")
+			if length is None:
+				return [f"\t-- {placement.path}: no bytes of its own"]
+			name = _lua(_local(struct, placement))
+			return [
+				f"\t-- {placement.path}: a length the data decides",
+				*seek,
+				f"\tlocal {name}_n = {length}",
+				# The declared length is the message's, so the frame need not
+				# hold it. Advancing by it anyway walked a UDP header's cursor
+				# sixteen bytes past an eight-byte packet -- and `consumed`
+				# is what a caller chains dissectors on.
+				f"\tif tvb:len() >= at + {name}_n then",
+				f"\t\tsubtree:add({field}, tvb(at, {name}_n))",
+				f"\t\tat = at + {name}_n",
+				"\telse",
+				"\t\tat = tvb:len()",
+				"\tend",
+			]
 		return [
 			f"\t-- {placement.path}: after a member the data sizes",
 			*note,
@@ -557,6 +610,15 @@ def _read(placement: Placement, base: str) -> str | None:
 	if off % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
 		first = off // BITS_PER_BYTE
 		count = width // BITS_PER_BYTE
+
+		# Digits are parsed, not loaded. `tvb(94, 8):uint()` over eight ASCII
+		# characters is a number nobody wrote -- and Wireshark's `uint` tops
+		# out at four bytes, so for a cpio header it is an error rather than a
+		# wrong answer. Lua's own `tonumber` takes the base.
+		if placement.radix is not None:
+			return (f"(tonumber(tvb({_at(base, first)}, {count}):string(),"
+			        f" {placement.radix}) or 0)")
+
 		if count > 4:
 			return None		# `uint` tops out at four bytes; `uint64` is a
 					# different type and no length field needs it
@@ -577,6 +639,13 @@ def _read(placement: Placement, base: str) -> str | None:
 	return f"({byte} % {1 << position.width})"
 
 
+#: Every `const` the schema declares, so an expression naming one folds rather
+#: than reaching Lua as a global. Set once per `generate`, because a dissector
+#: is rendered for one schema at a time and threading it through nine call
+#: sites would be nine parameters for one dictionary.
+_CONSTS: dict[str, int] = {}
+
+
 def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
 	"""A schema expression rewritten as Lua reads over `base`.
 
@@ -590,14 +659,37 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
 	reads: dict[str, str] = {}
 	for entry in struct.entries:
 		held = entry.placement
-		if held.scalar is None or "." in held.path[len(struct.name) + 1:]:
+		if held.scalar is None:
+			continue
+		# Nested scalars too: a cpio entry's padding is an expression over
+		# `header.namesize`, and stopping at the dot left the dotted path in
+		# the emitted Lua as a global that does not exist.
+		local = held.path[len(struct.name) + 1:]
+		if "." in local and held.offset_bits is None:
 			continue
 		one = _read(held, base)
 		if one is not None:
-			reads[held.name] = one
+			reads[local] = one
+
+	for name, value in _CONSTS.items():
+		reads.setdefault(name, str(value))
 
 	if not reads:
 		return None
+
+	# Every name the expression uses has to be one of them. `over_fields`
+	# substitutes what it is given and leaves the rest alone, so a field this
+	# backend declines to read -- a host-order length, say -- came out as a
+	# bare identifier and Lua saw a global: `attempt to perform arithmetic on
+	# a nil value (global 'nla_len')`, at the first packet. Declining the
+	# whole expression is the honest answer, and every caller already handles
+	# it.
+	for entry in struct.entries:
+		local = entry.placement.path[len(struct.name) + 1:]
+		if entry.placement.scalar is None or local in reads:
+			continue
+		if re.search(rf"\b{re.escape(local)}\b", source):
+			return None
 	try:
 		return expand_calls(
 			over_fields(sorted(reads), source, lambda name: reads[name]),
@@ -1017,6 +1109,15 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	byte  = driver.placement.offset_bits // BITS_PER_BYTE
 	width = driver.placement.size_bits // BITS_PER_BYTE
+
+	# A driver written as digits is parsed, not loaded. `_read` above says the
+	# same thing for the same reason; this is the copy that decides how long a
+	# *run* is, and it read a cpio name length as an eight-byte integer --
+	# which Wireshark's `uint` refuses outright, above four.
+	if driver.placement.radix is not None:
+		return (f"(tonumber(tvb({byte}, {width}):string(),"
+		        f" {driver.placement.radix}) or 0)")
+
 	read  = "le_uint" if driver.placement.endian is ast.Endian.LITTLE else "uint"
 	return f"tvb({byte}, {width}):{read}()"
 

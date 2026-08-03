@@ -64,6 +64,16 @@ function Range:bytes()
 	return self.buffer:sub(self.offset + 1, self.offset + self.length)
 end
 
+--- The range as text, which is what Wireshark's `TvbRange:string()` gives.
+--- A schema whose numbers are written as digits reads them through this and
+--- `tonumber`, because `uint()` over eight ASCII characters is a number
+--- nobody wrote -- and above four bytes Wireshark refuses it outright. The
+--- stub had no `string`, so the first schema to use one died here rather than
+--- in the dissector (26.42).
+function Range:string()
+	return self.buffer:sub(self.offset + 1, self.offset + self.length)
+end
+
 --- A sub-tvb over this range. The absolute base travels with it, so a field
 --- a nested dissector adds is reported where it is in the original buffer.
 function Range:tvb()
