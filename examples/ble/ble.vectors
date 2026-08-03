@@ -1,0 +1,33 @@
+# Golden vectors for the LE advertising report.
+#
+# Laid out by the Linux Bluetooth stack's own field order and constants,
+# copied from the tree rather than recalled -- 26.32's rule is that a worked
+# example is a claim, and a constant nobody read makes it a false one:
+#
+#   include/net/bluetooth/hci.h:2809   HCI_EV_LE_META            0x3e
+#   include/net/bluetooth/hci.h:2911   HCI_EV_LE_ADVERTISING_REPORT 0x02
+#   include/net/bluetooth/hci.h:2881   LE_ADV_IND 0x00, LE_ADV_SCAN_RSP 0x04
+#   include/net/bluetooth/hci.h:2906   ADDR_LE_DEV_PUBLIC 0x00, _RANDOM 0x01
+#   include/net/bluetooth/hci.h:743    EIR_FLAGS 0x01, EIR_UUID16_ALL 0x03,
+#                                      EIR_NAME_COMPLETE 0x09, EIR_TX_POWER 0x0A
+#   net/bluetooth/eir.h:48             eir_append_data(): length, type, data
+#   net/bluetooth/hci_event.c:6421     rssi = info->data[info->length]
+#
+# The last line is the one a header cannot give: `data[]` is a flexible array
+# in `struct hci_ev_le_advertising_info`, and the RSSI that follows it is read
+# by the parser. A schema written from the struct alone would put the second
+# report one byte early.
+#
+# The exchange: a heart-rate beacon at a public address advertising flags 0x06
+# and UUID 0x180D, and a scan response from a random address carrying the name
+# "situ" and a transmit power of -4 dBm.
+#
+# `plen` is 0x26 -- 38 bytes after the two-byte event header -- and the two
+# reports are 21 and 17 bytes, which is what makes this the shape the language
+# gained a construct for: the count is elements, and each says how long it is.
+
+le_advertising_report two_reports 3E 26 02 02 00 00 66 55 44 33 22 11 07 02 01 06 03 03 0D 18 C5 04 01 CC BB AA 99 88 77 09 05 09 73 69 74 75 02 0A FC B0
+	evt      = 0x3E
+	plen     = 0x26
+	subevent = 0x02
+	num      = 2

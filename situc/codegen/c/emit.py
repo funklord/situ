@@ -2177,6 +2177,20 @@ class Emitter:
 		return (placement.delimiter is not None
 		        and placement.type_name in self.structs)
 
+	def _is_counted_run(self, placement: Placement) -> bool:
+		"""`T x[n]` where T is a struct with no single size.
+
+		The count says how many, and each one says how long it is. A fixed
+		element needs none of this -- `base + index * stride` reaches it --
+		and a variable one has no stride to multiply.
+		"""
+		if placement.type_name not in self.structs:
+			return False
+		if placement.sized_by is None and placement.array_count is None:
+			return False
+		inner = self.resolved.structs.get(placement.type_name or "")
+		return inner is not None and not inner.layout.is_fixed_size
+
 	def _is_run_element(self, name: str) -> bool:
 		"""Whether anything needs to know how long one `name` is.
 
@@ -2189,6 +2203,13 @@ class Emitter:
 		return any((self._is_record_run(entry.placement)
 		            or entry.placement.repeat_while is not None
 		            or entry.placement.kind == "indexed"
+		            # A *count*-driven run of struct elements walks them too,
+		            # and this did not name it: `adv_report reports[num]`,
+		            # where each report carries its own `data[data_length]`,
+		            # got no extent function -- and the accessor above reached
+		            # for `SIZE_FIXED` on a struct that has no such macro
+		            # (26.36).
+		            or self._is_counted_run(entry.placement)
 		            or self._is_nested_member(entry.placement))
 		           and entry.placement.type_name == name
 		           for other in self.resolved.structs.values()
@@ -4194,6 +4215,67 @@ class Emitter:
 		count = (macro(self.prefix, struct.name, local, "COUNT")
 		         if placement.array_count is not None
 		         else f"{ident(self.prefix, struct.name, local, 'count')}(view)")
+
+		inner = self.resolved.structs.get(nested or "")
+		fixed = inner is not None and inner.layout.is_fixed_size
+
+		if not fixed:
+			# An element with no single size is walked rather than indexed:
+			# `base + index * stride` needs a stride, and the whole point of
+			# this shape is that there is not one. The walk is the terminated
+			# run's, with the count as the stopping rule instead of a
+			# condition -- which is what an HCI advertising report is, `num`
+			# reports each carrying its own `data[data_length]`.
+			#
+			# This emitted `SIZE_FIXED` for a struct that has no such macro,
+			# so `situc build` succeeded and the header did not compile. The
+			# other three backends declined the construct and said so; C
+			# answered on its own and answered with a name nothing defines
+			# (26.36).
+			if inner is None or not self._struct_extent(inner):
+				return lines + [
+					f"/* No {ident(self.prefix, struct.name, local, 'at')}():"
+					f" one `{nested}` cannot be",
+					" * measured from its own bytes, so a run of them cannot be"
+					" walked. */",
+				]
+			lines.extend([
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'at')}"
+				"(situ_view_t view, uint32_t index, situ_view_t *out)",
+				"{",
+				f"\tuint32_t at = {base};",
+				"\tuint32_t n  = 0u;",
+				"",
+				f"\tif (index >= {count}) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"",
+				"\twhile (at < view.limit) {",
+				"\t\tsitu_view_t element;",
+				"\t\tuint32_t    size;",
+				"",
+				"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+				" != SITU_OK) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+				f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}(element);",
+				"\t\tif (size == 0u || at + size > view.limit) {",
+				"\t\t\t/* A zero-extent element would walk here forever, and"
+				" one",
+				"\t\t\t * running past the limit was never in this frame. */",
+				"\t\t\tbreak;",
+				"\t\t}",
+				"\t\tif (n == index) {",
+				"\t\t\treturn situ_view_sub(view, at, size, out);",
+				"\t\t}",
+				"\t\tat = at + size;",
+				"\t\tn  = n + 1u;",
+				"\t}",
+				"\treturn SITU_ERR_BOUNDS;",
+				"}",
+			])
+			return lines
 
 		lines.extend([
 			f"static inline situ_err_t "

@@ -1,0 +1,145 @@
+// Bluetooth LE: an HCI advertising report, as a scanner receives it.
+//
+// SOURCE. Every constant and every field order here is taken from the Linux
+// Bluetooth stack in a tree on this machine, cited by file and line rather
+// than recalled:
+//
+//   include/net/bluetooth/hci.h:3330   struct hci_event_hdr { evt, plen }
+//   include/net/bluetooth/hci.h:2809   HCI_EV_LE_META            0x3e
+//   include/net/bluetooth/hci.h:2810   struct hci_ev_le_meta { subevent }
+//   include/net/bluetooth/hci.h:2911   HCI_EV_LE_ADVERTISING_REPORT 0x02
+//   include/net/bluetooth/hci.h:2912   struct hci_ev_le_advertising_info
+//   include/net/bluetooth/hci.h:2920   struct hci_ev_le_advertising_report
+//   include/net/bluetooth/hci.h:2881   LE_ADV_IND .. LE_ADV_SCAN_RSP
+//   include/net/bluetooth/hci.h:2906   ADDR_LE_DEV_PUBLIC .. _RANDOM_RESOLVED
+//   include/net/bluetooth/hci.h:743    EIR_FLAGS and the rest of the AD types
+//   include/net/bluetooth/hci.h:1672   HCI_MAX_AD_LENGTH         31
+//   net/bluetooth/hci_event.c:6421     rssi = info->data[info->length]
+//   net/bluetooth/eir.h:62             the AD walk
+//
+// 26.32's rule is that a worked example is a claim, so a constant recalled
+// rather than read would make it a false one. The two facts that a header
+// alone does not give are the ones the *parsers* carry: the RSSI trails each
+// report's data rather than being a field of the struct (hci_event.c:6421,
+// which indexes `info->data[info->length]`), and a zero length ends the AD
+// run inside `data` (eir.h:70, `if (field_len == 0) break`).
+//
+// WHY THIS ONE. It is the shape situ could not describe until it was written:
+// `num` reports, each carrying its own `data[data_length]`, so the count is
+// elements and there is no stride to index by. Three backends declined it and
+// C emitted a header naming a macro that does not exist (26.36). A worked
+// example is how that gets found.
+
+target buffer;
+endian little;                  // HCI is little-endian on the wire
+
+// hci.h:2881. What kind of advertisement this was, which decides whether a
+// scanner may connect to it and whether the payload is a response.
+enum advertising_event : u8 {
+	ind             = 0x00,     // connectable and scannable undirected
+	direct_ind      = 0x01,     // connectable directed
+	scan_ind        = 0x02,     // scannable undirected
+	nonconn_ind     = 0x03,     // non-connectable undirected
+	scan_rsp        = 0x04,     // response to a scan request
+}
+
+// hci.h:2906. Whether the six address bytes are a public device address or a
+// random one, and whether the controller resolved a private address for us.
+// `public_device` rather than `public`, which is a C++ keyword: an enum
+// member cannot be aliased the way decision 0025 aliases a class, so the
+// backend has to rename it and a caller then writes a different name in one
+// language. The schema is the better place to avoid that, and the kernel's
+// own constants are `ADDR_LE_DEV_PUBLIC` and `ADDR_LE_DEV_RANDOM`, so nothing
+// is lost. `situc` refuses the collision now rather than emitting a header
+// that does not compile (26.36).
+enum address_kind : u8 {
+	public_device   = 0x00,
+	random_device   = 0x01,
+	public_resolved = 0x02,
+	random_resolved = 0x03,
+}
+
+// hci.h:743 onwards. The AD types this example names; the registry has more,
+// and `default = pass` is what says so rather than refusing an advertisement
+// carrying one situ has no name for.
+enum ad_type : u8 {
+	flags           = 0x01,
+	uuid16_all      = 0x03,
+	name_complete   = 0x09,
+	tx_power        = 0x0A,
+	service_data    = 0x16,
+	appearance      = 0x19,
+}
+
+// One AD structure: a length, a type, and length-1 bytes of value.
+//
+// The length counts the type byte, which is why the value is `length - 1` and
+// why a length of zero is not an empty structure but the end of the run --
+// eir.h:70 breaks on it, and eir.h:88 refuses a length of one as "zero length
+// data". Both are the format saying that a run of these has no terminator
+// other than running out of length or meeting a zero.
+struct ad_structure {
+	// `[min = 1]` is eir.h:70 stated rather than assumed: a length of zero is
+	// not an empty structure, it is the end of the run, so a structure with
+	// one is malformed and `validate` says so. Without it the value's length
+	// is `[-1, 254]` and the compiler refuses the schema -- which is the
+	// right refusal, and asking why is what sends a reader to the parser.
+	u8       length  [min = 1];
+	ad_type  type  [default = pass];
+	u8       value[length - 1];
+}
+
+// One report. `data` is the advertising payload, and `rssi` is the byte after
+// it -- which the struct in hci.h does not show, because `data[]` is a
+// flexible array there and the trailing byte is read by the parser
+// (hci_event.c:6421). A member after a variable-length member is exactly the
+// shape 26.27 is about, and getting it from the parser rather than the struct
+// is the difference between describing the format and describing the header.
+struct adv_report {
+	advertising_event  event_type    [default = pass];
+	address_kind       address_type  [default = pass];
+
+	// Little-endian on the wire: `11:22:33:44:55:66` arrives as 66 55 44 33
+	// 22 11. Bytes rather than a u48, because an address is an identifier and
+	// not a number -- giving it a numeric type would make its value depend on
+	// byte order for no reason, which is the argument `bmp.signature` makes.
+	u8    address[6];
+
+	u8    data_length  [max = 31];   // HCI_MAX_AD_LENGTH, hci.h:1672
+	u8    data[data_length];
+	i8    rssi;                      // dBm, or 127 for "not available"
+}
+
+// The event, from the first byte a host reads off the transport.
+//
+// `reports[num]` is the construct this example exists for: `num` elements,
+// each measuring itself. The count says how many and each report says how
+// long it is, so there is no stride and the run is walked.
+struct le_advertising_report {
+	u8          evt       [must_eq = 0x3E];   // HCI_EV_LE_META
+	u8          plen;
+	u8          subevent  [must_eq = 0x02];   // ..._ADVERTISING_REPORT
+	u8          num;
+	adv_report  reports[num];
+}
+
+require absolute_static(le_advertising_report.num);
+
+// The address is byte-addressable and freely writable: it is six plain bytes
+// at a constant offset inside its own report.
+require aligned(adv_report.address, 1);
+require in_place(adv_report.data_length);
+
+// Recorded rather than required, and the cost of the format: a report's own
+// members are at constant offsets *within the report*, and finding the report
+// is a walk. Nothing about `num` reports of self-declared length can be
+// random-access, which is why a scanner reads them in order.
+assert absolute_static(le_advertising_report.reports);
+assert random_access(le_advertising_report.reports);
+
+// And what a payload costs. `data` is bytes here rather than a run of
+// `ad_structure`, because a nested struct sized by a field is not something
+// this language has: the AD structures are walked by a caller over the bytes
+// `data` hands back, one `ad_structure` at a time. Section 9.8's located
+// members are the nearest construct and address the wrong thing.
+assert absolute_static(adv_report.rssi);

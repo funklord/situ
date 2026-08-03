@@ -151,14 +151,24 @@ def _check(resolved: ResolvedSchema, case: Case) -> None:
 	if struct is None:
 		raise ValueError(f"vector `{case.name}` names unknown struct `{case.struct}`")
 
-	expected = struct.layout.size_bytes
 	if not struct.layout.is_byte_sized:
 		raise ValueError(f"`{case.struct}` is not a whole number of bytes")
 
-	if len(case.data) != expected:
+	expected = struct.layout.size_bytes
+	if struct.layout.is_fixed_size:
+		if len(case.data) != expected:
+			raise ValueError(
+				f"vector `{case.name}` is {len(case.data)} bytes, but "
+				f"`{case.struct}` is {expected}")
+	elif len(case.data) < expected:
+		# A variable struct has a minimum rather than a size, and the vector
+		# is a message: the caller supplies the length, which is what the
+		# acquiring call takes. Requiring an exact match here refused a vector
+		# for every real protocol in the tree -- an HCI advertising report,
+		# an HTTP head, anything with a length field (26.36).
 		raise ValueError(
-			f"vector `{case.name}` is {len(case.data)} bytes, but "
-			f"`{case.struct}` is {expected}")
+			f"vector `{case.name}` is {len(case.data)} bytes, which is short "
+			f"of `{case.struct}`'s minimum of {expected}")
 
 	for path, value in case.expectations:
 		if resolved.find(f"{case.struct}.{path}") is None:
@@ -189,8 +199,16 @@ def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
 	struct = resolved.find_struct(case.struct)
 	assert struct is not None
 
-	size  = macro(prefix, case.struct, "SIZE_FIXED")
+	# A fixed struct sizes the buffer from its own macro; a variable one is
+	# a message whose length the caller supplies, and the vector is that
+	# length. The acquiring call differs the same way.
+	fixed  = struct.layout.is_fixed_size
+	size   = (macro(prefix, case.struct, "SIZE_FIXED") if fixed
+	          else str(len(case.data)) + "u")
 	bytes_ = ", ".join(f"0x{byte:02X}" for byte in case.data)
+	acquire = (f"{ident(prefix, case.struct, 'view')}(&msg, 0, &view)" if fixed
+	           else f"{ident(prefix, case.struct, 'view')}(&msg, 0, {size},"
+	                " &view)")
 
 	lines = [
 		f"/* {case.struct} / {case.name} */",
@@ -207,8 +225,7 @@ def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
 		"\t(void)state;",
 		f"\tmemcpy(buf, vector_{case.name}, sizeof(buf));",
 		f"\tsitu_msg_init(&msg, buf, {size});",
-		f"\tassert_int_equal({ident(prefix, case.struct, 'view')}(&msg, 0, &view),"
-		" SITU_OK);",
+		f"\tassert_int_equal({acquire}, SITU_OK);",
 		f"\tassert_int_equal({ident(prefix, case.struct, 'validate')}(view), SITU_OK);",
 		"",
 	]
@@ -323,6 +340,15 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 	Reserved regions are excluded: they carry no information and no accessor
 	restores them, which is the whole point of them being reserved.
 	"""
+	# A field whose value decides where a later member starts writes through
+	# a setter that takes the message and bumps its generation (12.3), so its
+	# signature is not the plain one. `le_advertising_report.num` is the case:
+	# the round trip called the two-argument form and the suite did not
+	# compile (26.36).
+	drivers = {placement.sized_by for placement in
+	           (entry.placement for entry in struct.entries)
+	           if placement.sized_by and placement.sized_by != "remaining"}
+
 	writes = []
 	for entry in struct.entries:
 		placement = entry.placement
@@ -330,13 +356,20 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 			continue
 		if placement.array_count is not None:
 			continue
-		if "." in placement.path[len(struct.name) + 1 :]:
+
+		local = placement.path[len(struct.name) + 1 :]
+		if "." in local:
+			continue
+		# A covered field's setter takes the message too, and marking a tag
+		# stale in the middle of a round trip is not what this asserts.
+		if placement.covered_by:
 			continue
 
-		local  = c_name(placement.path[len(struct.name) + 1 :])
-		getter = ident(prefix, struct.name, local, "get")
-		setter = ident(prefix, struct.name, local, "set")
-		writes.append(f"\t{setter}(view, {getter}(view));")
+		named  = c_name(local)
+		getter = ident(prefix, struct.name, named, "get")
+		setter = ident(prefix, struct.name, named, "set")
+		taken  = "&msg, view" if local in drivers else "view"
+		writes.append(f"\t{setter}({taken}, {getter}(view));")
 
 	if not writes:
 		return ["\t/* No settable scalar fields to round-trip. */"]

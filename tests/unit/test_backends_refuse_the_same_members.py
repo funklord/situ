@@ -86,6 +86,16 @@ def refused(text: str, paths: set[str]) -> set[str]:
 	for phrase in REFUSALS:
 		for match in re.finditer(re.escape(phrase), flat):
 			window = flat[max(0, match.start() - 120):match.end() + 40]
+
+			# `required` declines to *frame the struct*, naming no member --
+			# "one of its members has no length this can compute" (20.3). The
+			# window before it catches whatever accessor happens to precede
+			# it, which in Python is the run this note is about and in the
+			# other three is not: the same schema then looked like a
+			# disagreement about `reports` (26.36).
+			if "`required`" in window or "_required`" in window:
+				continue
+
 			found.update(name for name in PATH.findall(window)
 			             if name in paths)
 

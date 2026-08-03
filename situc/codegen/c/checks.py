@@ -24,6 +24,8 @@ knowing anything about how the accessor is written.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from situc import ast
@@ -34,6 +36,7 @@ from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Obligation, has_computable_extent, obligations, own_members,
+	local_name,
 )
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -243,8 +246,21 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	disagreement mean something.
 	"""
 	members = own_members(struct)
-	drivers = sorted({placement.sized_by for placement in members
-	                  if placement.sized_by and placement.sized_by != "remaining"})
+	# A member sized by *arithmetic* is driven too, and this counted only the
+	# bare references: `u8 value[length - 1]` has a `size_expr` and no
+	# `sized_by`, so `length` was left at zero and the span check came out as
+	# "bytes 2..1" -- an empty range whose loop never ran and whose assertion
+	# therefore failed. `examples/ble`'s AD structure is the shape (26.36).
+	named = {placement.sized_by for placement in members
+	         if placement.sized_by and placement.sized_by != "remaining"}
+	for placement in members:
+		if placement.size_expr is not None:
+			# `size_expr` is the rendered source, not a tree: the identifiers
+			# in it are the fields it reads.
+			named |= {word for word in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*",
+			                                      placement.size_expr)
+			          if resolved.find(f"{struct.name}.{word}") is not None}
+	drivers = sorted(named)
 
 	chosen  = {path: INSTANCE_COUNT for path in drivers}
 	setters = []
@@ -796,6 +812,18 @@ def _extent_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	"""
 	placement = entry.placement
 	assert placement.offset_bits is not None, "checked by the caller"
+
+	# A member whose extent the data decides has no byte span to claim:
+	# `size_bits` is its *minimum*, which for `u8 value[length - 1]` is zero
+	# and makes the range `2..1`. The loop over it never ran, so the check
+	# asserted that a getter noticed a change in none of the bytes, and
+	# failed for a schema that was right (26.36).
+	#
+	# What the map says about such a member is a rule rather than a range,
+	# which is `_round_trip_check`'s business and the differential drivers'.
+	if not placement.is_fixed_size or placement.size_bits == 0:
+		return
+
 	first = placement.offset_bits // BITS_PER_BYTE
 	last  = (placement.offset_bits + placement.size_bits - 1) // BITS_PER_BYTE
 
@@ -856,6 +884,15 @@ def _round_trip_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		return
 	if placement.covered_by or placement.marker is not None:
 		return		# a covered write takes the message; checked separately
+
+	# So does a field that decides where a later member starts: writing it
+	# moves them, so the setter bumps the message generation (12.3) and takes
+	# two more arguments than this writes. No schema in the tree had a driver
+	# whose own struct was checked here until `examples/ble` arrived with
+	# `num`, and the suite did not compile (26.36).
+	if any(other.placement.sized_by == local_name(struct, placement)
+	       for other in struct.entries):
+		return
 	if placement.kind != "field" or placement.type_name != scalar.name:
 		return		# enum-typed setters take the enum, not an integer
 

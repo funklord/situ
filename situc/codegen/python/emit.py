@@ -2143,12 +2143,16 @@ class Emitter:
 		start  = self._offset_expression(struct, placement)
 		length = self._length_expression(struct, placement)
 
-		if start is None or length is None:
+		nested = self.resolved.structs.get(placement.type_name or "")
+
+		# The length is the member's total extent, which a walk does not need:
+		# it steps element by element. Asking for it first refused a run of
+		# variable-size records before the branch that walks them ran (26.36).
+		if start is None or (length is None and (nested is None
+		                                         or nested.layout.is_fixed_size)):
 			return ["", f"\t# {placement.path}: sized by"
 			        f" `{placement.sized_by}`, which this backend cannot",
 			        "\t# resolve yet."]
-
-		nested = self.resolved.structs.get(placement.type_name or "")
 		# Accumulating, like the delimited members' own offset elsewhere in
 		# this file. This summed instead, and every term in the sum re-derived
 		# its base by rescanning the members before it -- so the fix of 26.30
@@ -2176,9 +2180,30 @@ class Emitter:
 			f'\t\t"""Element `index`, bounded by the count as well as the extent."""',
 			f"\t\tif not 0 <= index < self.{name}_count:",
 			f"\t\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
-			f"\t\treturn {inner}(self._msg,",
-			f"\t\t\tself._at + self.{name}_offset + index * {inner}.SIZE_BYTES,",
-			f"\t\t\t{inner}.SIZE_BYTES)",
+			*([f"\t\treturn {inner}(self._msg,",
+			   f"\t\t\tself._at + self.{name}_offset"
+			   f" + index * {inner}.SIZE_BYTES,",
+			   f"\t\t\t{inner}.SIZE_BYTES)"]
+			  if nested.layout.is_fixed_size else [
+				# No stride to index by, so the run is walked -- the
+				# terminated run's walk with the count as its stopping rule.
+				f"\t\tat = self.{name}_offset",
+				"\t\tn  = 0",
+				"",
+				"\t\twhile at < self._len:",
+				f"\t\t\telement = {inner}(self._msg, self._at + at,",
+				"\t\t\t\tself._len - at)",
+				"\t\t\tsize    = element._extent",
+				"\t\t\tif size == 0 or at + size > self._len:",
+				"\t\t\t\t# A zero-extent element would walk here forever,",
+				"\t\t\t\t# and one past the limit was never in this frame.",
+				"\t\t\t\tbreak",
+				"\t\t\tif n == index:",
+				f"\t\t\t\treturn {inner}(self._msg, self._at + at, size)",
+				"\t\t\tat += size",
+				"\t\t\tn  += 1",
+				f"\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
+			  ]),
 		])
 		return lines
 
@@ -2781,11 +2806,21 @@ class Emitter:
 
 	def _extent_property(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
-		# A run walks them and a nested member sizes itself from one.
-		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
-		               Member.INDEXED)
-		           and entry.placement.type_name == struct.name
+		# A run walks them and a nested member sizes itself from one -- and a
+		# *count*-driven run of elements with no single size walks them too,
+		# which this did not name (26.36).
+		def walks(holder: ResolvedStruct, entry: Resolved) -> bool:
+			placement = entry.placement
+			if placement.type_name != struct.name:
+				return False
+			if classify(holder, placement, self.structs) in (
+					Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
+					Member.INDEXED):
+				return True
+			return (placement.sized_by is not None
+			        and not struct.layout.is_fixed_size)
+
+		if not any(walks(other, entry)
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
 			return []

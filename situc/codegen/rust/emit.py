@@ -2726,11 +2726,21 @@ class Emitter:
 
 	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
-		# A run walks them and a nested member sizes its slice from one.
-		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
-		               Member.INDEXED)
-		           and entry.placement.type_name == struct.name
+		# A run walks them and a nested member sizes its slice from one -- and
+		# a *count*-driven run of elements with no single size walks them too,
+		# which this did not name (26.36).
+		def walks(holder: ResolvedStruct, entry: Resolved) -> bool:
+			placement = entry.placement
+			if placement.type_name != struct.name:
+				return False
+			if classify(holder, placement, self.structs) in (
+					Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
+					Member.INDEXED):
+				return True
+			return (placement.sized_by is not None
+			        and not struct.layout.is_fixed_size)
+
+		if not any(walks(other, entry)
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
 			return []
@@ -3218,11 +3228,15 @@ class Emitter:
 		start  = self._offset_expression(struct, placement)
 		length = self._length_expression(struct, placement)
 
-		if start is None or length is None:
+		nested = self.resolved.structs.get(placement.type_name or "")
+
+		# The length is the member's total extent, which a walk does not need:
+		# it steps element by element. Asking for it first refused a run of
+		# variable-size records before the branch that walks them ran (26.36).
+		if start is None or (length is None and (nested is None
+		                                         or nested.layout.is_fixed_size)):
 			return ["", f"\t// {placement.path}: sized by"
 			        f" `{placement.sized_by}`, which this backend cannot resolve."]
-
-		nested = self.resolved.structs.get(placement.type_name or "")
 		lines  = [
 			"",
 			f"\t/// {placement.path}: offset and extent both from the data.",
@@ -3237,6 +3251,10 @@ class Emitter:
 		]
 
 		if nested is None:
+			# `length` is not None here: the refusal above only lets a
+			# missing one through for a variable-size struct element, which
+			# this branch is not.
+			assert length is not None
 			# Clamped to what the slice holds. The length is a field, so it is
 			# whatever the message says, and `&bytes[at..at + declared]`
 			# *panics* on a message that claims more than it carries -- which
@@ -3269,9 +3287,32 @@ class Emitter:
 			f"\t\tif index >= self.{_ident(base + '_count')}() {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			f"\t\tlet at = self.{_ident(base + '_offset')}()"
-			f" + index * {inner}::SIZE;",
-			f"\t\t{inner}::new(&self.bytes[at..])",
+			*([f"\t\tlet at = self.{_ident(base + '_offset')}()"
+			   f" + index * {inner}::SIZE;",
+			   f"\t\t{inner}::new(&self.bytes[at..])"]
+			  if nested.layout.is_fixed_size else [
+				# No stride to index by, so the run is walked -- the
+				# terminated run's walk with the count as its stopping rule.
+				f"\t\tlet mut at = self.{_ident(base + '_offset')}();",
+				"\t\tlet mut n  = 0usize;",
+				"",
+				"\t\twhile at < self.bytes.len() {",
+				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+				"\t\t\tlet size    = element.extent();",
+				"",
+				"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+				"\t\t\t\t// A zero-extent element would walk here forever,",
+				"\t\t\t\t// and one past the end was never in this frame.",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tif n == index {",
+				f"\t\t\t\treturn {inner}::new(&self.bytes[at..at + size]);",
+				"\t\t\t}",
+				"\t\t\tat += size;",
+				"\t\t\tn  += 1;",
+				"\t\t}",
+				"\t\tErr(Error::Bounds)",
+			  ]),
 			"\t}",
 		])
 		return lines

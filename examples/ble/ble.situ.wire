@@ -1,0 +1,42 @@
+# situ wire signature v0
+# schema: ble.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian little
+target buffer
+
+enum advertising_event : u8 unknown=error
+  ind=0 direct_ind=1 scan_ind=2 nonconn_ind=3 scan_rsp=4
+
+enum address_kind : u8 unknown=error
+  public_device=0 random_device=1 public_resolved=2 random_resolved=3
+
+enum ad_type : u8 unknown=error
+  flags=1 uuid16_all=3 name_complete=9 tx_power=10 service_data=22 appearance=25
+
+struct ad_structure size=2..256
+  @0x0000   1         u8         length  min=1
+  @0x0001   1         ad_type    type
+  @0x0002   0..254    u8         value
+
+struct adv_report size=10..41
+  @0x0000   1         advertising_event event_type
+  @0x0001   1         address_kind address_type
+  @0x0002   6         u8         address  little
+  @0x0008   1         u8         data_length  max=31
+  @0x0009   0..31     u8         data  sized-by=data_length
+  ~         1         i8         rssi
+
+struct le_advertising_report size=4..10459
+  @0x0000   1         u8         evt  must_eq=0x3E
+  @0x0001   1         u8         plen
+  @0x0002   1         u8         subevent  must_eq=0x02
+  @0x0003   1         u8         num
+  @0x0004   0..10455  adv_report reports  sized-by=num

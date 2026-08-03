@@ -48,6 +48,7 @@ def check(schema: ast.Schema) -> None:
 	check_unique_declarations(schema)
 	check_const_names_do_not_shadow_attributes(schema)
 	check_unique_enum_members(schema)
+	check_enum_members_are_spellable(schema)
 	check_unique_member_names(schema)
 	check_unique_attributes(schema)
 	check_types_resolve(schema)
@@ -833,6 +834,64 @@ def check_unique_enum_members(schema: ast.Schema) -> None:
 			if previous is not None:
 				raise _redeclaration("enum member", member.name, previous, member)
 			seen[member.name] = member
+
+
+#: Words a generated C++ enumerator may not be. Rust escapes a keyword with
+#: `r#` and decision 0025 renames a *class* and aliases the schema's name back,
+#: but an enumerator has neither escape nor alias: `enum class k { public = 0 }`
+#: does not compile, and renaming it silently would mean a C++ caller writing a
+#: name the schema does not contain.
+#:
+#: Only the ones a protocol plausibly reaches for. A schema naming a member
+#: `reinterpret_cast` has other problems.
+CPP_KEYWORDS = frozenset({
+	"alignas", "alignof", "and", "asm", "auto", "bitand", "bitor", "bool",
+	"break", "case", "catch", "char", "class", "compl", "concept", "const",
+	"consteval", "constexpr", "continue", "decltype", "default", "delete",
+	"do", "double", "else", "enum", "explicit", "export", "extern", "false",
+	"float", "for", "friend", "goto", "if", "inline", "int", "long", "mutable",
+	"namespace", "new", "noexcept", "not", "nullptr", "operator", "or",
+	"private", "protected", "public", "register", "requires", "return",
+	"short", "signed", "sizeof", "static", "struct", "switch", "template",
+	"this", "throw", "true", "try", "typedef", "typeid", "typename", "union",
+	"unsigned", "using", "virtual", "void", "volatile", "while", "xor",
+})
+
+
+def check_enum_members_are_spellable(schema: ast.Schema) -> None:
+	"""An enum member's name has to be an identifier in every backend.
+
+	Found by writing `examples/ble`, whose address types are `public` and
+	`random` in the kernel's own constants: C++ emitted
+	`enum class address_kind { public = 0, ... }` and the header did not
+	compile, with nothing said at generation time (26.36). Section 17.0's rule
+	is that a construct situ cannot represent is an error rather than a
+	surprise later, and a name one backend cannot spell is exactly that.
+
+	Refused rather than renamed, because renaming is the worse answer here:
+	decision 0025 could alias a class back to the schema's name and an
+	enumerator has no such alias, so the rename would reach a caller. The
+	schema is where the choice belongs, and every such name has an ordinary
+	alternative -- the kernel itself writes `ADDR_LE_DEV_PUBLIC`.
+	"""
+	for decl in schema.enums():
+		for member in decl.members:
+			if member.name not in CPP_KEYWORDS:
+				continue
+			raise error(
+				f"`{member.name}` is a C++ keyword and cannot name an enum "
+				"member",
+				member.span,
+				label = "not spellable in one of the backends",
+				notes = [
+					"Rust escapes a keyword with `r#` and a class can be "
+					"renamed and aliased back (decision 0025); an enumerator "
+					"has neither, so the generated C++ would not compile",
+					f"give it a name that is not a keyword -- "
+					f"`{member.name}_device`, `{member.name}_mode`, or "
+					"whatever the format's own documentation calls it",
+				],
+			)
 
 
 def check_unique_member_names(schema: ast.Schema) -> None:

@@ -1618,10 +1618,24 @@ class Emitter:
 		# four read the same method -- and the fourth was missing, so an
 		# indexed region reported an extent it could not compute when the
 		# extent was simply not emitted.
-		if not any(classify(other, entry.placement, self.structs)
-		           in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
-		               Member.INDEXED)
-		           and entry.placement.type_name == struct.name
+		# A *count*-driven run of these walks them too, and this did not name
+		# it: `adv_report reports[num]`, where each report carries its own
+		# `data[data_length]`, got no `extent()` -- and the accessor that
+		# walks such a run then called a method nothing emits (26.36). It
+		# classifies as VARIABLE, because a count of elements and a byte
+		# length look alike until you ask what the element is.
+		def walks(holder: ResolvedStruct, entry: Resolved) -> bool:
+			placement = entry.placement
+			if placement.type_name != struct.name:
+				return False
+			if classify(holder, placement, self.structs) in (
+					Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
+					Member.INDEXED):
+				return True
+			return (placement.sized_by is not None
+			        and not struct.layout.is_fixed_size)
+
+		if not any(walks(other, entry)
 		           for other in self.resolved.structs.values()
 		           for entry in other.entries):
 			return []
@@ -1961,12 +1975,19 @@ class Emitter:
 		start  = self._offset_expression(struct, placement)
 		length = self._length_expression(struct, placement)
 
-		if start is None or length is None:
+		nested = self.resolved.structs.get(placement.type_name or "")
+
+		# The length is the *member's* total extent, which a walk does not
+		# need: it steps element by element. Asking for it first refused a
+		# run of variable-size records before the branch that walks them ever
+		# ran -- and `_element_bytes` has no answer for an element with no
+		# single size, which is the whole shape (26.36).
+		wanted = length is None and (nested is None
+		                             or nested.layout.is_fixed_size)
+		if start is None or wanted:
 			return ["", f"\t/* {placement.path}: sized by"
 			        f" `{placement.sized_by}`, which this backend cannot resolve"
 			        f" yet. */"]
-
-		nested = self.resolved.structs.get(placement.type_name or "")
 		lines  = ["",
 		          f"\t/* {placement.path}: offset and extent both from the data. */",
 		          f"\t[[nodiscard]] std::uint32_t {name}_offset() const noexcept",
@@ -1998,6 +2019,69 @@ class Emitter:
 			"\t{",
 			f"\t\treturn {count};",
 			"\t}",
+		])
+
+		# An element with no single size is walked rather than indexed: there
+		# is no stride to multiply. Same walk a terminated run uses, with the
+		# count as the stopping rule -- which is what an HCI advertising
+		# report is, `num` reports each carrying its own data (26.36).
+		if not nested.layout.is_fixed_size:
+			if not has_computable_extent(self.resolved.structs, nested):
+				return lines + [
+					"",
+					f"\t/* No {name}_at(): one `{placement.type_name}` cannot"
+					" be measured",
+					"\t * from its own bytes, so a run of them cannot be"
+					" walked. */",
+				]
+			return lines + [
+				"",
+				f"\t/* Element `index` of a run whose elements have no single",
+				"\t * size: walked, because there is no stride to index by. */",
+				f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,",
+				f"\t\t\t{inner} &out) const noexcept",
+				"\t{",
+				f"\t\tstd::uint32_t at = {name}_offset();",
+				"\t\tstd::uint32_t n  = 0;",
+				"",
+				f"\t\tif (index >= {name}_count()) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				"",
+				"\t\twhile (at < limit()) {",
+				"\t\t\tsitu_view_t raw;",
+				"",
+				"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)",
+				"\t\t\t\t\t!= SITU_OK) {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"",
+				f"\t\t\tconst {inner} element(raw);",
+				"\t\t\tconst std::uint32_t size = element.extent();",
+				"",
+				"\t\t\tif (size == 0 || at + size > limit()) {",
+				"\t\t\t\t/* A zero-extent element would walk here forever,",
+				"\t\t\t\t * and one past the limit was never in this frame. */",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tif (n == index) {",
+				"\t\t\t\tsitu_view_t narrowed;",
+				"\t\t\t\tconst situ_err_t e =",
+				"\t\t\t\t\tsitu_view_sub(this->raw(), at, size, &narrowed);",
+				"",
+				"\t\t\t\tif (e == SITU_OK) {",
+				f"\t\t\t\t\tout = {inner}(narrowed);",
+				"\t\t\t\t}",
+				"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
+				"\t\t\t}",
+				"\t\t\tat += size;",
+				"\t\t\tn  += 1;",
+				"\t\t}",
+				"\t\treturn ::situ::rt::err::bounds;",
+				"\t}",
+			]
+
+		lines.extend([
 			"",
 			f"\t/* Element `index`, or an error past the end. The count is",
 			"\t * checked as well as the extent: bytes after the array are",
