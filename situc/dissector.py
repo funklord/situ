@@ -265,6 +265,31 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	        f"ProtoField.{kind}({', '.join(args)})")
 
 
+def _host_order_inside(struct: ResolvedStruct) -> bool:
+	"""Whether any of this struct's own scalars is host order.
+
+	Asked of a run's element type: if the length that drives the walk is one
+	the capture cannot decide, the run cannot be walked, and saying *that* is
+	different from saying the elements have no size (invariant 18).
+	"""
+	return any(_host_order(entry.placement) for entry in struct.entries)
+
+
+def _unreadable(struct: ResolvedStruct, path: str | None) -> str:
+	"""Why a field an expression names cannot be read here.
+
+	Host order is a fact about the format; anything else is a limit of this
+	backend. Telling a reader the second when the first is true sends them
+	looking for a better dissector generator.
+	"""
+	held = next((entry.placement for entry in struct.entries
+	             if entry.placement.name == path), None)
+	if held is not None and _host_order(held):
+		return (f"`{path}` is `endian native`, and the capture does not record"
+		        " which machine wrote it")
+	return "its discriminant is not one this dissector can read"
+
+
 def _host_order(placement: Placement) -> bool:
 	"""Whether this member's byte order is the *sending* machine's (8.3).
 
@@ -762,8 +787,7 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 	"""
 	held = _over_fields(struct, placement.discriminant or "", "0")
 	if held is None:
-		return [f"\t-- {placement.path}: its discriminant is not one this"
-		        " dissector can read"]
+		return [f"\t-- {placement.path}: {_unreadable(struct, placement.discriminant)}"]
 
 	lines = [f"\t-- {placement.path}: whichever arm"
 	         f" `{placement.discriminant}` selects", *seek,
@@ -809,6 +833,10 @@ def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 	whole reason a record run is worth generating one for.
 	"""
 	element = resolved.structs.get(placement.type_name or "")
+	if element is not None and _host_order_inside(element):
+		return [f"\t-- {placement.path}: an element's length is `endian"
+		        " native`, and the",
+		        "\t-- capture does not record which machine wrote it."]
 	if element is None or not _run_span(resolved, struct, placement):
 		return [f"\t-- {placement.path}: elements of no size this dissector"
 		        " can compute"]

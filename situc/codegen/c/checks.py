@@ -430,16 +430,38 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 			])
 			return lines
 
+		if placement.repeat_while is not None:
+			# How many there are depends on the bytes, and this instance is
+			# zeroed -- so whether there is even *one* depends on what the
+			# condition makes of a zeroed element. Every `while` run in the
+			# tree yielded one until `examples/netlink`, whose condition is
+			# `nla_len >= 4`: a zeroed attribute declares a length of zero,
+			# which is not an attribute, and the run is empty.
+			#
+			# So the assertion is that the count and the element accessor
+			# agree, and that where there is an element it is where the map
+			# says. Asking only the second question asserted that a zeroed
+			# buffer produces an element, which is a property of the schema
+			# rather than of the accessors.
+			count = ident(prefix, struct.name, local, "count")
+			lines.extend([
+				f"\tsitu_view_t {first};",
+				f"\tif ({count}(view) > 0u) {{",
+				f"\t\tassert_int_equal({at}(view, 0u, &{first}), SITU_OK);",
+				f"\t\tassert_int_equal((uint32_t)({first}.base - view.base),"
+				f" {offset}u);",
+				"\t} else {",
+				f"\t\tassert_int_equal({at}(view, 0u, &{first}),"
+				" SITU_ERR_BOUNDS);",
+				"\t}",
+			])
+			return lines
+
 		lines.extend([
 			f"\tsitu_view_t {first};",
 			f"\tassert_int_equal({at}(view, 0u, &{first}), SITU_OK);",
 			f"\tassert_int_equal((uint32_t)({first}.base - view.base), {offset}u);",
 		])
-		if placement.repeat_while is not None:
-			# How many there are depends on the bytes, and this instance is
-			# zeroed. Where the first one starts is the question this check
-			# asks, and the only one it can answer.
-			return lines
 		if placement.sized_by and placement.sized_by != "remaining":
 			count = ident(prefix, struct.name, local, "count")
 			lines.append(f"\tassert_int_equal({count}(view),"

@@ -1669,8 +1669,13 @@ class Emitter:
 		# chain, the `default: error` check, the arm guards -- so a schema
 		# with `case K.a:` did not compile at all. No C++ test had one, and
 		# neither did Rust, which had the same bug in its own spelling.
+		# Own members only, and keyed by the same filter `names` uses: a
+		# nested member of the same name is later in layout order and won,
+		# so an expression over `x` read the `x` of a struct nested inside
+		# this one.
 		by_name = {entry.placement.name: entry.placement
-		           for entry in struct.entries}
+		           for entry in struct.entries
+		           if "." not in entry.placement.path[len(struct.name) + 1:]}
 
 		def read(name: str) -> str:
 			held = by_name.get(name)

@@ -2213,8 +2213,15 @@ class Emitter:
 		# Every use of this was wrong for an enum discriminant -- the extent
 		# chain, the `default: error` check, the arm guards -- so a schema
 		# with `case K.a:` did not compile at all. No Rust test had one.
+		# Own members only, and keyed by the same filter `names` uses. Keyed
+		# by every entry, a *nested* member with the same name won -- entries
+		# are in layout order and the deeper one comes later -- so a variant
+		# switching on `nlmsg_type` read the `nlmsg_type` of the `nlmsghdr`
+		# echoed inside its own error arm, twenty bytes further on. Every arm
+		# guard and the whole extent chain were reading the wrong field.
 		by_path = {entry.placement.name: entry.placement
-		           for entry in struct.entries}
+		           for entry in struct.entries
+		           if "." not in entry.placement.path[len(struct.name) + 1:]}
 
 		def read(name: str) -> str:
 			held_at = by_path.get(name)

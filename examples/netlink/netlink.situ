@@ -1,0 +1,208 @@
+// Netlink: an rtnetlink address message, as a program reads it off the socket.
+//
+// SOURCE. Every constant, field order and framing rule here is taken from the
+// Linux tree on this machine, cited by file and line rather than recalled:
+//
+//   include/uapi/linux/netlink.h:52    struct nlmsghdr
+//   include/uapi/linux/netlink.h:46    "Length of message including header"
+//   include/uapi/linux/netlink.h:98    NLMSG_ALIGNTO             4
+//   include/uapi/linux/netlink.h:107   NLMSG_OK: the framing rule
+//   include/uapi/linux/netlink.h:119   struct nlmsgerr { error, msg }
+//   include/uapi/linux/netlink.h:229   struct nlattr { nla_len, nla_type }
+//   include/uapi/linux/netlink.h:244   NLA_F_NESTED         (1 << 15)
+//   include/uapi/linux/netlink.h:245   NLA_F_NET_BYTEORDER  (1 << 14)
+//   include/uapi/linux/netlink.h:248   NLA_ALIGNTO               4
+//   include/net/netlink.h:1304         nla_ok: what makes an attribute real
+//   include/net/netlink.h:1319         nla_next: NLA_ALIGN(nla_len)
+//   include/net/netlink.h:1734         nla_get_u32: no byte swap anywhere
+//   include/uapi/linux/rtnetlink.h:37  RTM_NEWADDR              20
+//   include/uapi/linux/if_addr.h:8     struct ifaddrmsg
+//   include/uapi/linux/if_addr.h:26    IFA_ADDRESS .. IFA_PROTO
+//   lib/nlattr.c:910                   the padding is zeroed by the sender
+//
+// WHY THIS ONE. Netlink is the format that made three of situ's own claims
+// false at once, and each of them had gone unexercised for the same reason:
+// no schema in this repository had ever asked (26.37).
+//
+//   - It is host byte order. Not big, not little: whatever the machine that
+//     wrote the bytes uses, which for a kernel-to-userspace socket is the
+//     machine at both ends. `nla_get_u32` at netlink.h:1734 is a plain
+//     dereference where `nla_get_be32` twelve lines down is the one that
+//     swaps, and that pair is the format saying so. This is the first schema
+//     here to use `endian native`, and two backends were reading every such
+//     field big-endian in silence.
+//   - Its attributes are padded to four bytes, and the padding is not counted
+//     in the length that precedes it. `align_up(nla_len, 4) - nla_len` is the
+//     kernel's `nla_padlen`, and it is the first size expression in this
+//     repository to call a builtin or to be a `reserved` run the message
+//     sizes. Both crashed the compiler.
+//   - The padding bytes are a malleability surface exactly as section 8.8
+//     describes: the sender zeroes them (lib/nlattr.c:910) and no reader in
+//     the kernel checks. `reserved` defaults to `must_be_zero`, so the
+//     generated `validate` is stricter than the kernel here -- deliberately,
+//     and this is the sentence recording it.
+
+target buffer;
+
+// netlink.h has no byte-order annotations at all, and that is the statement:
+// every field is read with a plain dereference. The `[allow_host_dependent]`
+// on each struct below is situ requiring the author to say out loud that the
+// bytes mean different things on different machines (8.3), which for a local
+// IPC socket is a fact about the format rather than a defect in it.
+endian native;
+
+// rtnetlink.h:37 and netlink.h:112. Only the types this example describes;
+// there are about a hundred, which is what `default = pass` is for -- a
+// receiver skips a message it does not recognise rather than refusing the
+// batch it arrived in.
+enum msg_type : u16 {
+	noop     = 0x1,
+	error    = 0x2,
+	done     = 0x3,
+	overrun  = 0x4,
+	newaddr  = 20,
+	deladdr  = 21,
+	getaddr  = 22,
+	default  = pass,
+}
+
+// if_addr.h:26. The attribute types an address message carries.
+enum ifa_attr : u16 {
+	unspec         = 0,
+	address        = 1,
+	local          = 2,
+	label          = 3,
+	broadcast      = 4,
+	anycast        = 5,
+	cacheinfo      = 6,
+	multicast      = 7,
+	flags          = 8,
+	rt_priority    = 9,
+	target_netnsid = 10,
+	proto          = 11,
+	default        = pass,
+}
+
+// One attribute. netlink.h:229 gives the two fields; everything else here
+// comes from the walk at netlink.h:1304 and :1319.
+//
+// `nla_len` counts the four header bytes as well as the payload, which is why
+// the payload is `nla_len - 4` and why `[min = 4]` is not decoration: it is
+// `nla_ok`'s second clause, and without it the payload's length has a range
+// that includes -4 and the compiler refuses the schema. Asking why is what
+// sends a reader to the parser.
+//
+// The two flag bits at the top of `nla_type` are *not* a bit field here, and
+// that is the one place this schema stops describing the format. situ's bit
+// fields are a construct over the byte stream: a `bit` at the front of a u16
+// is the top bit of the first byte. On a little-endian machine `NLA_F_NESTED`
+// -- `1 << 15` of a host-order word -- is the top bit of the *second*. There
+// is no declaration order that is right on both, because this is a mask on a
+// value rather than a packing of the stream, so the word stays whole and the
+// masks are constants below.
+struct nlattr [allow_host_dependent] {
+	u16       nla_len   [min = 4];
+	ifa_attr  nla_type;
+	u8        payload[nla_len - 4];
+
+	// netlink.h:1319. The next attribute starts at `NLA_ALIGN(nla_len)`, so
+	// these bytes are between the elements and outside the length that
+	// describes them. `lib/nlattr.c:910` memsets them, and nothing in the
+	// kernel reads them back.
+	reserved u8 [align_up(nla_len, 4) - nla_len] [must_be_zero];
+}
+
+// netlink.h:52. Sixteen bytes, and `nlmsg_len` counts them (netlink.h:46).
+struct nlmsghdr [allow_host_dependent] {
+	u32       nlmsg_len    [min = 16];
+	msg_type  nlmsg_type;
+	u16       nlmsg_flags;
+	u32       nlmsg_seq;
+	u32       nlmsg_pid;
+}
+
+// if_addr.h:8. What an address message says before its attributes.
+struct ifaddrmsg [allow_host_dependent] {
+	u8   ifa_family;
+	u8   ifa_prefixlen;
+	u8   ifa_flags;
+	u8   ifa_scope;
+	u32  ifa_index;
+}
+
+// netlink.h:119. An error carries the header of the message it is about, so a
+// requester can match it to what they sent.
+struct nlmsgerr [allow_host_dependent] {
+	i32       error;
+	nlmsghdr  msg;
+}
+
+// The message a reader frames off the socket.
+//
+// The header's fields are repeated here rather than reached through a nested
+// `nlmsghdr`, because the variant switches on `nlmsg_type` and a discriminant
+// is a field of the struct that holds the variant.
+//
+// `new_addr` and `del_addr` are the same eight bytes under two names: situ has
+// no case fall-through, so two discriminant values selecting one payload have
+// to name it twice (section 9.6). The alternative would be a member whose
+// identity depends on which case selected it, and section 4 is the reason
+// there is not one -- the name is the identity here.
+struct nl_message [allow_host_dependent] {
+	u32       nlmsg_len    [min = 16];
+	msg_type  nlmsg_type;
+	u16       nlmsg_flags;
+	u32       nlmsg_seq;
+	u32       nlmsg_pid;
+
+	variant body switch (nlmsg_type) {
+		case msg_type.newaddr: ifaddrmsg  new_addr;
+		case msg_type.deladdr: ifaddrmsg  del_addr;
+		case msg_type.error:   nlmsgerr   err;
+		case msg_type.done:    i32        terminator;
+		default: opaque rest[nlmsg_len - 16];
+	}
+
+	// The attributes fill whatever is left of *this message*, which is the
+	// frame: `nlmsg_len` bytes from the header. That is not a restatement of
+	// how situ works, it is netlink's own rule -- NLMSG_OK at netlink.h:107
+	// refuses a message claiming more than the caller has, and the caller is
+	// expected to have framed one before reading its attributes.
+	//
+	// `while (nla_len >= 4)` is `nla_ok`'s middle clause, and the difference
+	// from the kernel's loop is worth stating: situ's run ends *after* the
+	// element that fails the test and the kernel's stops *before* it, so for
+	// a malformed message this walks one attribute the kernel would not. The
+	// element is refused by `validate` either way, and a walk with no
+	// stopping rule at all would loop on a length of zero (invariant 24).
+	nlattr  attrs[] while (nla_len >= 4);
+}
+
+// netlink.h:246. `nla_type & NLA_TYPE_MASK` is what the kernel compares
+// against IFA_*, and these two bits are what it masks off first.
+const NLA_F_NESTED        = 0x8000;
+const NLA_F_NET_BYTEORDER = 0x4000;
+const NLA_TYPE_MASK       = 0x3FFF;
+
+// What the header costs and what it buys. Every field of the fixed header is
+// at a constant offset from the start of the message, which is the whole
+// reason a netlink reader can look at `nlmsg_len` before it has looked at
+// anything else.
+require absolute_static(nl_message.nlmsg_len);
+require absolute_static(nl_message.nlmsg_type);
+require in_place(nl_message.nlmsg_seq);
+
+// And what the attributes cost, recorded rather than required. An attribute's
+// own fields are at constant offsets *within* the attribute; finding the
+// attribute is a walk, because each one says how long it is and the padding
+// between them depends on that length. Nothing about this can be random
+// access, which is why every netlink library iterates.
+assert absolute_static(nl_message.attrs);
+assert random_access(nl_message.attrs);
+
+// The one capability the host-order decision costs, and it costs it
+// everywhere: bytes that mean different things on different machines are not
+// canonical, so no netlink message has a byte-exact form two hosts agree on.
+// That is fine for an IPC socket and would not be for anything signed, which
+// is the trade `endian native` makes and the reason it has to be declared.
+assert canonical(nl_message.nlmsg_seq);

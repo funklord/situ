@@ -247,10 +247,16 @@ def _is_bounded_size(context: Context) -> bool:
 	length moves nothing (section 8.1.1); a variant names its arms and costs
 	equalizing them. Letting this row fire as well would meet the values to the
 	same place but bury the reason, and the reason is the product.
+
+	`opaque` and `tlv` are *not* excluded, though they own their mutate
+	effect: excluding the whole row dropped the size effect with it, so an
+	`opaque` region whose extent the data decides kept the default `Fixed` --
+	rendered without a number, which is the tell that no rule ever set it. The
+	unbounded row beside this one has always emitted the size effect and
+	withheld only the mutate one; this one had drifted a construct behind it.
 	"""
 	placement = context.placement
-	return (not _owns_its_mutate(placement)
-	        and not _has_unequal_arms(context)
+	return (not _has_unequal_arms(context)
 	        and placement.size_max_bits is not None
 	        and placement.size_max_bits != placement.size_bits)
 
@@ -1054,7 +1060,7 @@ TABLE: tuple[Row, ...] = (
 				Effect(Axis.MUTATE, Value("Shifting"),
 				       "writing a different length moves every member after "
 				       "this one"),
-			),
+			),		# withheld per construct; see _bounded_effects
 			remedy    = "pin the length with `[must_eq = N]` to make it fixed, "
 			            "or `[max = N]` to bound the worst case",
 		),
@@ -1565,6 +1571,8 @@ def apply(context: Context) -> Resolved:
 			effects = _frame_effects(context)
 		elif row.rule.name == "variant-unequal-arms":
 			effects = _variant_effects(context)
+		elif row.rule.name == "bounded-size":
+			effects = _bounded_effects(context)
 		elif row.rule.name == "unbounded-size":
 			effects = _unbounded_effects(context)
 		elif row.rule.name == "covered-by-tag":
@@ -1658,6 +1666,29 @@ def _coverage_effects(context: Context) -> tuple[Effect, ...]:
 	return (Effect(Axis.AUTH, Value("Covered", tags),
 	               f"{subject} these bytes, so writing them leaves {stale} stale "
 	               "until finalize recomputes it"),)
+
+
+def _row(name: str) -> Rule:
+	"""One rule by name, so a computed effect list starts from the table.
+
+	Copying the effects into the function would be two statements of one rule,
+	which is invariant 1 with the table one level in.
+	"""
+	return next(row.rule for row in TABLE if row.rule.name == name)
+
+
+def _bounded_effects(context: Context) -> tuple[Effect, ...]:
+	"""The size effect always, the mutate effect only where nothing owns it.
+
+	The same split `_unbounded_effects` has always made, arrived at from the
+	other direction: this row used to withhold *both* by not applying at all,
+	which left `opaque` and `tlv` regions claiming a fixed size they have not
+	got.
+	"""
+	effects = [effect for effect in _row("bounded-size").effects
+	           if effect.axis is not Axis.MUTATE
+	           or not _owns_its_mutate(context.placement)]
+	return tuple(effects)
 
 
 def _unbounded_effects(context: Context) -> tuple[Effect, ...]:

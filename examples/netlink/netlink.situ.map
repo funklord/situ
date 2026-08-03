@@ -1,0 +1,74 @@
+# situ capability map v1
+# schema: netlink.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct ifaddrmsg size=8 canonical=NonCanonical
+  ifaddrmsg.ifa_family                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  ifaddrmsg.ifa_prefixlen                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ifaddrmsg.ifa_flags                    offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  ifaddrmsg.ifa_scope                    offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ifaddrmsg.ifa_index                    offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+
+struct nl_message size=20 access=Sequential mutate=RewriteRequired address=Unstable atomic=NonAtomic canonical=NonCanonical
+  nl_message.nlmsg_len                   offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.nlmsg_type                  offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.nlmsg_flags                 offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.nlmsg_seq                   offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.nlmsg_pid                   offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body                        offset=AbsoluteStatic(0x10) size=Bounded(0, 4294967279) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  nl_message.body.new_addr               offset=AbsoluteStatic(0x10) size=Fixed(8) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  nl_message.body.new_addr.ifa_family    offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.new_addr.ifa_prefixlen offset=AbsoluteStatic(0x11) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.new_addr.ifa_flags     offset=AbsoluteStatic(0x12) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.new_addr.ifa_scope     offset=AbsoluteStatic(0x13) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.new_addr.ifa_index     offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.del_addr               offset=AbsoluteStatic(0x10) size=Fixed(8) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  nl_message.body.del_addr.ifa_family    offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.del_addr.ifa_prefixlen offset=AbsoluteStatic(0x11) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.del_addr.ifa_flags     offset=AbsoluteStatic(0x12) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.del_addr.ifa_scope     offset=AbsoluteStatic(0x13) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  nl_message.body.del_addr.ifa_index     offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.err                    offset=AbsoluteStatic(0x10) size=Fixed(20) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  nl_message.body.err.error              offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.err.msg                offset=AbsoluteStatic(0x14) size=Fixed(16) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  nl_message.body.err.msg.nlmsg_len      offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.err.msg.nlmsg_type     offset=AbsoluteStatic(0x18) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.err.msg.nlmsg_flags    offset=AbsoluteStatic(0x1A) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.err.msg.nlmsg_seq      offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.err.msg.nlmsg_pid      offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.terminator             offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nl_message.body.rest                   offset=AbsoluteStatic(0x10) size=Bounded(0, 4294967279) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=RewriteRequired
+  nl_message.attrs                       offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  nl_message.attrs[]                     offset=FrameStatic(0x00) size=Bounded(4, 65538) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  nl_message.attrs[].nla_len             offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable canonical=NonCanonical
+  nl_message.attrs[].nla_type            offset=FrameStatic(0x02) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable canonical=NonCanonical
+  nl_message.attrs[].payload             offset=FrameStatic(0x04) size=Bounded(0, 65531) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  nl_message.attrs[].<reserved0>         offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct nlattr size=4 mutate=Shifting address=Unstable canonical=NonCanonical
+  nlattr.nla_len                         offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlattr.nla_type                        offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlattr.payload                         offset=AbsoluteStatic(0x04) size=Bounded(0, 65531) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  nlattr.<reserved0>                     offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct nlmsgerr size=20 atomic=NonAtomic canonical=NonCanonical
+  nlmsgerr.error                         offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsgerr.msg                           offset=AbsoluteStatic(0x04) size=Fixed(16) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  nlmsgerr.msg.nlmsg_len                 offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsgerr.msg.nlmsg_type                offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsgerr.msg.nlmsg_flags               offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsgerr.msg.nlmsg_seq                 offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsgerr.msg.nlmsg_pid                 offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+
+struct nlmsghdr size=16 canonical=NonCanonical
+  nlmsghdr.nlmsg_len                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsghdr.nlmsg_type                    offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsghdr.nlmsg_flags                   offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsghdr.nlmsg_seq                     offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  nlmsghdr.nlmsg_pid                     offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical

@@ -5106,7 +5106,14 @@ class Emitter:
 		# the same statement, whatever the byte order, so the byte loop
 		# answers it without needing a load at an offset that is not a
 		# constant.
+		#
+		# An element's own members are checked under the element's struct, not
+		# here -- the same rule the variant and delimiter cases above state,
+		# and a run's reserved padding is exactly that: `attrs[].<reserved0>`
+		# appears in this struct's entries because the map names it, and its
+		# length expression reads a field of the *element*.
 		if scalar is not None and placement.kind == "reserved" \
+				and "." not in placement.path[len(struct.name) + 1:] \
 				and (placement.array_count is not None
 				     or data_sized(placement)
 				     or (placement.offset_bits is None

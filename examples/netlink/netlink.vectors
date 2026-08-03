@@ -1,0 +1,51 @@
+# Golden vectors for rtnetlink, written by the Linux kernel.
+#
+# Not laid out by hand. These are the bytes a NETLINK_ROUTE socket on this
+# machine handed back for an `RTM_GETADDR` dump -- a program that writes a
+# 24-byte request and hexdumps the reply, so every byte below was produced by
+# `inet_dump_ifaddr` in net/ipv4/devinet.c and the `nla_put` helpers in
+# lib/nlattr.c. 26.32's rule is that a worked example is a claim; the strongest
+# form of it is bytes an independent implementation wrote.
+#
+# The message is the first of the batch: the loopback interface's 127.0.0.1.
+#
+#   4C 00 00 00   nlmsg_len   = 76, and it counts these sixteen bytes
+#   14 00         nlmsg_type  = 20, RTM_NEWADDR (rtnetlink.h:37)
+#   02 00         nlmsg_flags = NLM_F_MULTI (netlink.h:63) -- more follow
+#   01 00 00 00   nlmsg_seq   = 1, echoed from the request
+#   57 92 30 00   nlmsg_pid   = the requesting socket's port id
+#
+# then `struct ifaddrmsg` (if_addr.h:8):
+#
+#   02            ifa_family    = AF_INET
+#   08            ifa_prefixlen = 8, which is 127.0.0.0/8
+#   80            ifa_flags     = IFA_F_PERMANENT
+#   FE            ifa_scope     = RT_SCOPE_HOST (254)
+#   01 00 00 00   ifa_index     = 1
+#
+# and then five attributes, of which the third is the reason this file is
+# worth having:
+#
+#   08 00 01 00 7F 00 00 01               IFA_ADDRESS    127.0.0.1
+#   08 00 02 00 7F 00 00 01               IFA_LOCAL      127.0.0.1
+#   07 00 03 00 6C 6F 00 | 00             IFA_LABEL      "lo\0", one pad byte
+#   08 00 08 00 80 00 00 00               IFA_FLAGS      0x80
+#   14 00 06 00 FF FF FF FF FF FF FF FF   IFA_CACHEINFO  infinite lifetimes,
+#               E7 04 00 00 E7 04 00 00                  1255 seconds since
+#
+# `07 00 03 00 6C 6F 00` is seven bytes -- four of header and three of "lo\0" --
+# and the byte after it is the padding `NLA_ALIGN` requires and `nla_len` does
+# not count. The kernel zeroes it at lib/nlattr.c:910. That single byte is what
+# `align_up(nla_len, 4) - nla_len` describes, and a schema without it puts
+# IFA_FLAGS one byte early and reads the rest of the message as nonsense.
+#
+# Every multi-byte number here is little-endian because this machine is: the
+# lengths, the types and the interface index would all be byte-reversed in a
+# capture taken on a big-endian host, and nothing in the message says which it
+# was. That is what `endian native` costs, stated in bytes.
+
+nl_message loopback_address 4C 00 00 00 14 00 02 00 01 00 00 00 57 92 30 00 02 08 80 FE 01 00 00 00 08 00 01 00 7F 00 00 01 08 00 02 00 7F 00 00 01 07 00 03 00 6C 6F 00 00 08 00 08 00 80 00 00 00 14 00 06 00 FF FF FF FF FF FF FF FF E7 04 00 00 E7 04 00 00
+	nlmsg_len   = 76
+	nlmsg_type  = 20
+	nlmsg_flags = 2
+	nlmsg_seq   = 1

@@ -331,6 +331,15 @@ def _size(placement: Placement) -> str:
 		return f"to {shown}"
 	if placement.sized_by is not None:
 		return f"[{placement.sized_by}]"
+	if placement.size_expr is not None and placement.array_count is None:
+		# The same question `sized_by` answers, for a length written as
+		# arithmetic rather than as a bare field reference. Without it this
+		# fell to the fixed-size branch below and printed the *minimum* --
+		# "0 bytes" for a payload that is `nla_len - 4`, beside a diagram
+		# saying "(variable)". Three constructs above have their own comment
+		# recording this same mistake; the fourth is here because the
+		# predicate was `sized_by` rather than `traverse.data_sized`.
+		return f"[{placement.size_expr}]"
 	if placement.kind == "variant" and placement.discriminant is not None:
 		# The fixed-size branch below reported `size_bits`, which for a
 		# variant is the *smallest* arm -- printed as "0 bytes" beside a

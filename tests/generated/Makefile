@@ -52,7 +52,8 @@ SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   examples/arp/arp.situ examples/ble/ble.situ examples/bmp/bmp.situ \
 		   examples/dns/dns.situ examples/dnsname/dnsname.situ examples/ethernet/ethernet.situ examples/http/http.situ \
 		   examples/icmp/icmp.situ examples/ipv6ext/ipv6ext.situ examples/ipv4/ipv4.situ \
-		   examples/message/message.situ examples/ntp/ntp.situ \
+		   examples/message/message.situ examples/netlink/netlink.situ \
+		   examples/ntp/ntp.situ \
 		   examples/packet/packet.situ examples/protobuf/protobuf.situ \
 		   examples/registers/registers.situ examples/rtc/rtc.situ examples/smtp/smtp.situ \
 		   examples/sqlite/sqlite.situ \
@@ -70,7 +71,7 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 # `header` alone, and one schema is a sample of the constructs that schema
 # happens to have -- the argument FUZZ_SCHEMAS above already makes. `bmp` is
 # here because its vectors are two files ImageMagick wrote (26.35).
-VECTOR_SCHEMAS	:= header bmp arp ntp rtc ble
+VECTOR_SCHEMAS	:= header bmp arp ntp rtc ble netlink
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 
 # Fuzz harnesses, for every schema. This was `header` alone once: the harness
