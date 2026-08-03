@@ -6602,6 +6602,72 @@ host and under aarch64 emulation; every dissector executed; seven worked
 examples carrying bytes an independent implementation wrote, and one of them
 now carries a checksum the kernel computed -- in two languages.
 
+### 26.40 The radix nothing had used
+
+Invariant 30 says each new example is worth writing until one stops finding
+something, and this one was chosen by measurement rather than by taste. Every
+construct the language offers, against every schema in the repository: `hex`
+had no users at all. `namespace`, `[equalize]`, `[escape]`, `[unknown]` and
+`[allow_unverified_read]` have none either, and several more are used only by
+`tests/schemas/edges.situ` -- which is to say by no real protocol.
+
+`hex` is the one a real format uses everywhere. A cpio `newc` header is
+thirteen eight-digit hexadecimal numbers in a row, and one of them is the
+length of the name that follows it, so the example presses the text-number
+machinery in the place it had never been pressed: as a *driver*.
+
+**Seven defects, and the first two are one defect twice.**
+
+- **A text number could not drive a length.** `record_interval` skips an array
+  because "an array has no single value", and a text number is not an array
+  however much its bracket looks like one. 26.31 records that exact
+  distinction for the classifier; this is the other place that had to learn
+  it. The diagnostic was "no fields are in scope at this point", which reads
+  as though nothing preceded it -- the same sentence the varint case beside it
+  already quotes, from the last time this happened.
+- **And a *nested* one could not either.** `record_nested_intervals` has its
+  own copy of the same test.
+- **A nested text number was read as a binary integer.** `situ_get_be32` over
+  eight ASCII characters, in all four backends: a plausible number nobody
+  wrote. The helper that parses digits was emitted only for a struct's own
+  members, and the expression renderer already *named* it correctly for a
+  nested one -- so the generated C called a function that does not exist,
+  which is the good half of the failure.
+- **A `const` reached the target verbatim.** `HEADER_BYTES` is an identifier
+  in the schema and in no generated file. The renderer rewrote fields and left
+  constants alone, because until now no size expression had named one.
+- **The padding idiom was recognised only for a bare field.** 26.37 added
+  `align_up(x, k) - x`; cpio writes `align_up(110 + namesize, 4) - (110 +
+  namesize)`, which is the same value twice where neither occurrence is a
+  path. Structural equality is what "the same value written twice" means, and
+  the narrower rule was the first thing that fit rather than the right one.
+- **`gen-tests` called a text getter as though it could not fail**, and it
+  can: the digits may not be digits. No vector had ever named one, the two
+  schemas with text numbers having no `.vectors` file.
+- **`gen-checks` asked for a four-gigabyte stack buffer.** A cpio entry
+  declares its file size in eight hex digits, so its worst case is 4 GB. The
+  checks assert offsets over a *zeroed* instance, where every data-decided
+  length reads zero -- so the worst case was never what they needed, only what
+  they asked for.
+
+And a fourth site for `traverse.data_sized`, in the vector round trip: a run
+the message sizes has a pointer and a length, not a getter and a setter, and
+`array_count is None` made it look like a scalar. That predicate has now been
+missing from four places; each was found by a schema rather than by a search,
+which is an argument for the search.
+
+**The boundary is at the archive rather than at the entry.** A cpio archive
+ends at an entry whose *name* is "TRAILER!!!" (init/initramfs.c:374), and
+situ's `while` tests an expression over the element just read -- arithmetic
+over numbers, with no comparison against a byte string in it. So the entry is
+described completely and the archive is a caller's loop, which is
+`examples/dnsname`'s shape: the boundary is the view model rather than a gap
+in the layout.
+
+**Status:** 2729 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; eight worked
+examples carrying bytes an independent implementation wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7083,7 +7149,16 @@ now carries a checksum the kernel computed -- in two languages.
    refusal is written, ask which cases it is *about*, not only which cases it
    is true of.
 
-57. **A frame is not a message, and only one construct makes them differ.**
+57. **A bracket is not always a count, and every place that reads one has to
+   know it.** `decimal u16 code[3]` is one number in three digits and `hex u32
+   x[8]` is one number in eight; the classifier learned that when three
+   backends read the bracket as an element count, and two more places went on
+   asking "is this an array" and answering yes. A construct that *looks* like
+   another one has to be distinguished everywhere the resemblance reaches, and
+   the way to find those places is to grep for the shape rather than to wait
+   for a schema.
+
+58. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
