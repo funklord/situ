@@ -48,12 +48,53 @@ def over_fields(names: list[str], source: str,
 	invariant 29 is about -- generated code shares a namespace with names the
 	schema chose. A single alternation cannot match its own output.
 	"""
-	if not names:
-		return source
-	pattern = "|".join(re.escape(name)
-	                   for name in sorted(names, key=len, reverse=True))
-	return re.sub(rf"\b(?:{pattern})\b", lambda hit: getter(hit.group(0)),
-	              source)
+	rewritten = source
+	if names:
+		pattern   = "|".join(re.escape(name)
+		                     for name in sorted(names, key=len, reverse=True))
+		rewritten = re.sub(rf"\b(?:{pattern})\b",
+		                   lambda hit: getter(hit.group(0)), source)
+
+	# And nothing left over. This substitutes what it is given and passed the
+	# rest through, so a name the caller did not list reached the target
+	# verbatim: Lua saw a global (invariant 60, fixed there), and C saw `if
+	# (which != 17u)` with no `which` in scope -- a discriminant behind a
+	# delimited member, which `readable_names` used to leave out. A rewriter
+	# that cannot rewrite a name has not got an answer, and saying so is the
+	# difference between a caller that declines the member and generated code
+	# that does not build.
+	leftover = _unrewritten(source, names)
+	if leftover is not None:
+		raise UnknownName(leftover)
+	return rewritten
+
+
+class UnknownName(KeyError):
+	"""An expression names something the caller cannot read."""
+
+
+def _unrewritten(source: str, names: list[str]) -> str | None:
+	"""The first identifier in `source` that is neither a name nor a builtin.
+
+	Dotted paths count as one name, so `hdr.n` is looked for whole rather
+	than as `hdr` and `n` -- which is what the caller lists.
+	"""
+	known = set(names) | set(CALL_ARITY)
+	# Not inside a number: `0x11` contains `x11`, and a hex literal is the
+	# commonest thing in a `while` condition. The lookbehind is what keeps
+	# this reading identifiers rather than substrings.
+	for hit in re.finditer(
+			r"(?<![A-Za-z0-9_.])[A-Za-z_][A-Za-z0-9_]*"
+			r"(?:\.[A-Za-z_][A-Za-z0-9_]*)*", source):
+		name = hit.group(0)
+		if name in known:
+			continue
+		# A dotted name whose head is known is a read of that name's field,
+		# which the caller listed under the whole path or not at all.
+		if any(name == one or name.startswith(f"{one}.") for one in known):
+			continue
+		return name
+	return None
 
 
 def translate_operators(source: str, *, conj: str, disj: str,

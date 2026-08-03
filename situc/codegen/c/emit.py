@@ -1924,6 +1924,17 @@ class Emitter:
 			" * other end. */",
 		]
 
+		# Its offset, where the variant's own is the message's. Every accessor
+		# below names `<member>_offset(view)` through `_base_expression`, and
+		# this path returned before the block that emits one -- so an arm
+		# behind a delimited member produced a header calling a function
+		# nothing defines. The ordinary members have had this since 26.27.
+		if placement.offset_bits is None:
+			blocker = self._offset_blocker(struct, placement)
+			if blocker is not None:
+				return head + self._unresolvable_offset(placement, blocker)
+			head.extend(self._offset_function(struct, placement))
+
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None:
 			ctype = self._field_ctype(placement)
@@ -1996,8 +2007,21 @@ class Emitter:
 				        " measured, so there is no",
 				        " * sub-view to hand back. */"]
 
-			lines = [
-				*head,
+			lines = [*head]
+
+			# How many bytes this arm occupies, where its type has no one
+			# size. The variant's own length chain names this helper -- it is
+			# what places whatever follows the variant -- and only the
+			# *ordinary* nested member emitted one, so an arm of a
+			# variable-size struct produced a header calling a function
+			# nothing defines. Ungated on purpose: the switch that calls it
+			# has already asked which arm is there, and a measurement that
+			# refused would make that switch unable to add anything up.
+			if size == "size":
+				lines.extend(self._arm_extent(struct, placement, local, base,
+				                              nested.name))
+
+			lines.extend([
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, 'view')}"
 				"(situ_view_t view, situ_view_t *out)",
@@ -2005,7 +2029,7 @@ class Emitter:
 				f"\tif ({test}) {{",
 				"\t\treturn SITU_ERR_VERSION;",
 				"\t}",
-			]
+			])
 			if size == "size":
 				lines.extend([
 					"\tsitu_view_t whole;",
@@ -2025,6 +2049,31 @@ class Emitter:
 
 		return [*head, f"/* ...and `{placement.name}` is not a shape this"
 		        " backend reaches into yet. */"]
+
+	def _arm_extent(self, struct: ResolvedStruct, placement: Placement,
+			local: str, base: str, nested: str) -> list[str]:
+		"""How many bytes an arm of a variable-size struct occupies here.
+
+		The same helper `_sub_view` emits for an ordinary nested member, and
+		for the same reason: an expression cannot make a view positioned at
+		the member, so the member emits something that can.
+		"""
+		site   = ident(self.prefix, struct.name, local, "extent")
+		extent = ident(self.prefix, nested, "extent")
+		return [
+			f"/* How many bytes `{placement.name}` occupies, for the switch",
+			" * that places whatever follows the variant. */",
+			f"static inline uint32_t {site}(situ_view_t view)",
+			"{",
+			"\tsitu_view_t whole;",
+			"",
+			f"\tif (situ_view_sub(view, {base}, "
+			f"situ_remaining_u32(view.limit, {base}), &whole) != SITU_OK) {{",
+			"\t\treturn 0u;",
+			"\t}",
+			f"\treturn {extent}(whole);",
+			"}",
+		]
 
 	def _arm_elements(self, struct: ResolvedStruct, placement: Placement,
 			local: str, base: str, test: str,

@@ -161,12 +161,22 @@ def readable_names(struct: ResolvedStruct) -> list[Placement]:
 	Its own varints only. A nested struct's varint has no accessor on this
 	struct and no `_value` helper either, and claiming it is readable would
 	trade a bare identifier for a call to a function nobody emits.
+
+	The constant-offset rule is the *nested* one's, and it was applied to a
+	struct's own fields too -- so a discriminant behind a delimited member was
+	not a name an expression could use, and `over_fields` passes through what
+	it does not recognise (invariant 60). The generated C read `if (which !=
+	17u)` with no `which` in scope. A field of this struct has an accessor
+	wherever it sits, and every backend has emitted one for a dynamic offset
+	since 26.27; the constant is only needed where the read is a load at a
+	fixed displacement, which is what a nested member's is.
 	"""
 	return [entry.placement for entry in struct.entries
-	        if entry.placement.offset_bits is not None
-	        and (entry.placement.scalar is not None
-	             or (entry.placement.varint is not None
-	                 and "." not in entry.placement.path[len(struct.name) + 1:]))]
+	        if (entry.placement.scalar is not None
+	            or entry.placement.varint is not None)
+	        and ("." not in entry.placement.path[len(struct.name) + 1:]
+	             or (entry.placement.offset_bits is not None
+	                 and entry.placement.scalar is not None))]
 
 
 def data_sized(placement: Placement) -> bool:
@@ -1011,25 +1021,47 @@ def _walk_order(struct: ResolvedStruct,
 	members before the region and then the region's interior -- the region
 	itself contributes no bytes beyond that interior, and what follows the
 	region does not precede anything inside it.
+
+	And the same for a member inside a variant arm, where each arm starts at
+	the variant's own base: what precedes it is what precedes the variant,
+	and then whatever else its *own* arm declares. The other arms do not
+	precede it -- they are the alternatives to it.
+
+	The two are one function because they are one question -- where does a
+	member that is not the struct's own begin -- and answering it twice is how
+	a sealed interior came to be placed seventeen bytes late while an arm
+	member named an offset function nobody emitted.
 	"""
 	members = own_members(struct)
-	if placement.sealed_by is None or placement.kind != "field":
+	if placement.kind != "field":
 		return members
 
-	region = next((held for held in members
-	               if held.name == placement.sealed_by), None)
-	if region is None or region.path == placement.path:
+	container: Placement | None = None
+	interior: list[Placement] = []
+
+	if placement.sealed_by is not None:
+		container = next((held for held in members
+		                  if held.name == placement.sealed_by), None)
+		if container is not None and container.path != placement.path:
+			interior = [entry.placement for entry in struct.entries
+			            if entry.placement.sealed_by == container.name
+			            and entry.placement.kind == "field"
+			            and entry.placement.path != container.path]
+	else:
+		found = arm_of(struct, placement)
+		if found is not None:
+			container = found[0]
+			interior  = [held for arm, held in arm_members(struct, container)
+			             if held is not None and arm is found[1]]
+
+	if container is None:
 		return members
 
 	before: list[Placement] = []
 	for held in members:
-		if held.path == region.path:
+		if held.path == container.path:
 			break
 		before.append(held)
-	interior = [entry.placement for entry in struct.entries
-	            if entry.placement.sealed_by == region.name
-	            and entry.placement.kind == "field"
-	            and entry.placement.path != region.path]
 	return before + interior
 
 

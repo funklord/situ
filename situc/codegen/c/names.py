@@ -43,9 +43,18 @@ def c_name(path: str) -> str:
 	brackets situ puts around a synthesised name come off: `<reserved0>` is the
 	compiler's own label for a field the schema did not name, and it is not an
 	identifier anywhere.
+
+	And anything else that is not an identifier character, because one of
+	these fragments is not a schema name at all: the include guard is built
+	from the *file* name, and `situc build my-schema.situ` emitted `#ifndef
+	SITU_MY-SCHEMA_H` -- a subtraction in a directive, which every C compiler
+	warns about and none of them means. A schema is free to live in a file
+	named the way files are named.
 	"""
-	return (path.replace("::", "_").replace(".", "_")
-	            .replace("[]", "").replace("<", "").replace(">", ""))
+	flattened = (path.replace("::", "_").replace(".", "_")
+	                 .replace("[]", "").replace("<", "").replace(">", ""))
+	return "".join(character if character.isalnum() or character == "_" else "_"
+	               for character in flattened)
 
 
 @dataclass(frozen=True)

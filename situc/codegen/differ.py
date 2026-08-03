@@ -678,7 +678,12 @@ def _c_writes(resolved: ResolvedSchema, prefix: str) -> list[str]:
 
 
 def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
-	call = ident(prefix, struct, ask.local, "{}")
+	# The stem, with the suffix left to `format`. Built from the parts rather
+	# than by handing `ident` a `{}` to flatten: `c_name` maps anything that
+	# is not an identifier character to an underscore -- which is what keeps a
+	# hyphenated file name out of an include guard -- and a format placeholder
+	# is exactly that. It came back as `situ_s_n___`.
+	call = ident(prefix, struct, ask.local) + "_{}"
 	if ask.probe is Probe.SCALAR:
 		return [f'\t\t\tprintf("{ask.local} %lld\\n",'
 		        f' (long long){call.format("get")}(view));']
