@@ -18,6 +18,17 @@ enum hardware_type : u16 unknown=error
 enum operation : u16 unknown=error
   request=1 reply=2
 
+struct arp_generic size=12..56
+  @0x0000   2         hardware_type hardware_type  big must_eq=hardware_type.ethernet
+  @0x0002   2         u16        protocol_type  big must_eq=0x0800
+  @0x0004   1         u8         hardware_length  min=1 max=8
+  @0x0005   1         u8         protocol_length  min=1 max=16
+  @0x0006   2         operation  operation  big
+  @0x0008   1..8      u8         sender_hardware  sized-by=hardware_length
+  ~         1..16     u8         sender_protocol  sized-by=protocol_length
+  ~         1..8      u8         target_hardware  sized-by=hardware_length
+  ~         1..16     u8         target_protocol  sized-by=protocol_length
+
 struct arp_packet size=28
   @0x0000   2         hardware_type hardware_type  big must_eq=hardware_type.ethernet
   @0x0002   2         u16        protocol_type  big must_eq=0x0800

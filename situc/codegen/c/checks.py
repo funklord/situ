@@ -35,8 +35,8 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Obligation, has_computable_extent, obligations, own_members,
-	local_name,
+	Obligation, enclosing_arm, has_computable_extent, obligations,
+	own_members, local_name,
 )
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -1533,6 +1533,40 @@ def _enum_checks(suite: Suite, schema: ast.Schema,
 			 " described. */"])
 
 
+def _select_arm(struct: ResolvedStruct, placement: Placement,
+		extent: int) -> list[str] | None:
+	"""Statements putting the discriminant where this member exists.
+
+	Empty where the member is not inside a variant arm at all -- which is
+	every member of every struct in this repository until an ICMP message
+	grew one. None where the arm cannot be selected from here, so the caller
+	drops the check rather than asserting about bytes nobody selected.
+	"""
+	found = enclosing_arm(struct, placement)
+	if found is None:
+		return []
+
+	variant, arm = found
+	if arm.value is None:
+		return None			# the default arm: no value selects it
+
+	held = next((entry.placement for entry in struct.entries
+	             if entry.placement.name == variant.discriminant), None)
+	if held is None or held.offset_bits is None or held.scalar is None:
+		return None
+
+	placed = _placed_bytes(held.offset_bits, held.size_bits, arm.value,
+	                       held.endian, held.bit_order,
+	                       held.scalar.is_bit_packed)
+	if placed is None or max(placed) >= extent:
+		return None
+
+	return [f"\t/* Select the arm this member is in: "
+	        f"{variant.discriminant} = {arm.value}. */",
+	        *(f"\tbuf[{at}u] |= {placed[at]:#04x}u;"
+	          for at in sorted(placed) if placed[at])]
+
+
 def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 		prefix: str, extent: int, baseline: list[str]) -> None:
 	"""Reserved bits are a constraint, and section 8.8 says why.
@@ -1561,6 +1595,16 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 		if placement.offset_bits + placement.size_bits > extent * BITS_PER_BYTE:
 			continue
 
+		# A member inside a variant arm is only in the message when the
+		# discriminant selects that arm, so the poke below has to select it
+		# first. Without this the check flipped bytes belonging to whichever
+		# arm a zeroed discriminant picks and asserted that `validate` would
+		# refuse them -- an assertion about the wrong bytes, which passed only
+		# as long as no schema had a reserved field inside an arm.
+		select = _select_arm(struct, placement, extent)
+		if select is None:
+			continue
+
 		# Break exactly this field: the bits it owns, flipped away from what the
 		# policy demands. Everything else stays at the baseline, so a refusal
 		# can only be about this one.
@@ -1583,6 +1627,7 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			body.append("\t * about the field this check breaks and nothing else. */")
 			body.extend(baseline)
 			body.append("")
+		body.extend(select)
 		body.append(f"\tassert_int_equal({validate}(view), SITU_OK);")
 		body.append("")
 		body.append(f"\t/* {placement.path} declares {policy}. */")

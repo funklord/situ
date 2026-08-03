@@ -11,7 +11,7 @@
 struct ipv4_address size=4 atomic=NonAtomic
   ipv4_address.octets                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
 
-struct ipv4_header size=20 repr=ValueConverted atomic=NonAtomic
+struct ipv4_header size=20 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   ipv4_header.version                    offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   ipv4_header.ihl                        offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   ipv4_header.dscp                       offset=AbsoluteStatic(0x01) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
@@ -29,3 +29,4 @@ struct ipv4_header size=20 repr=ValueConverted atomic=NonAtomic
   ipv4_header.source.octets              offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
   ipv4_header.destination                offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   ipv4_header.destination.octets         offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  ipv4_header.options                    offset=AbsoluteStatic(0x14) size=Bounded(0, 40) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

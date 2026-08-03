@@ -430,6 +430,53 @@ class SchemaLayout:
 			return offset // BITS_PER_BYTE
 		return placement.array_count
 
+	def explain(self, builtin: str, path: str) -> tuple[str, str]:
+		"""Why `lookup` had no answer: the message, and the label under it.
+
+		`lookup` returns None for four different reasons and the caller
+		reported all of them as "unknown path" -- so `size(udp_header)` on a
+		struct that is plainly declared said it was not declared, when what is
+		true is that it no longer *has* one size. Three of those four are
+		facts about the layout rather than about the name, and a reader told
+		the wrong one goes looking for a typo (invariant 18).
+		"""
+		unknown = (f"unknown path `{path}`", "not a declared struct or field")
+
+		head, _, rest = path.partition(".")
+		layout = self.structs.get(head)
+		if layout is None:
+			return unknown
+
+		if not rest:
+			if builtin != "size":
+				return (f"`{builtin}` takes a member path, not a struct",
+				        "a struct has no offset or count of its own")
+			if layout.is_frame:
+				return (f"`{head}` has no single size: its extent depends on "
+				        "the data", "a variable-length struct")
+			if not layout.is_byte_sized:
+				return (f"`{head}` is not a whole number of bytes",
+				        "a bit-packed struct")
+			return unknown
+
+		placement = self.find(path)
+		if placement is None:
+			return unknown
+
+		if builtin == "size":
+			if not placement.is_fixed_size:
+				return (f"`{path}` has no single size: the data decides it",
+				        "a variable-length member")
+			return (f"`{path}` is not a whole number of bytes",
+			        "a bit-packed member")
+		if builtin == "offset":
+			if placement.offset_bits is None:
+				return (f"`{path}` has no single offset: it is placed at "
+				        "run time", "a dynamically placed member")
+			return (f"`{path}` does not start on a byte boundary",
+			        "a bit-packed member")
+		return (f"`{path}` is not a counted array", "no count to report")
+
 	def find(self, path: str) -> Placement | None:
 		head, _, _ = path.partition(".")
 		layout = self.structs.get(head)
@@ -677,7 +724,7 @@ class Solver:
 	def place_opaque(self, member: ast.Opaque, scope: Scope,
 			layout: StructLayout, prefix: str, state: Walk) -> None:
 		"""A sized region with no interior schema (section 9.4)."""
-		env    = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		env    = self.result.env.with_layout(self.result.lookup, self.result.explain).with_fields(state.fields)
 		size   = interval_of(member.size, env)
 		cursor = state.cursor
 
@@ -959,7 +1006,7 @@ class Solver:
 		-- a tag is normally declared after the regions it covers, so it cannot
 		be resolved here.
 		"""
-		env    = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		env    = self.result.env.with_layout(self.result.lookup, self.result.explain).with_fields(state.fields)
 		cursor = state.cursor
 		scalar = member.type_ref.scalar
 
@@ -1059,7 +1106,7 @@ class Solver:
 		fixed, and it is why insertion is unsupported: every later offset would
 		have to move.
 		"""
-		env      = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		env      = self.result.env.with_layout(self.result.lookup, self.result.explain).with_fields(state.fields)
 		cursor   = state.cursor
 		element  = member.members[0]
 
@@ -1564,7 +1611,7 @@ class Solver:
 		if until.cap is None:
 			return Interval(floor, None)
 
-		env  = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		env  = self.result.env.with_layout(self.result.lookup, self.result.explain).with_fields(state.fields)
 		size = interval_of(until.cap, env)
 
 		if size.hi is None or size.hi < len(until.delimiter):
@@ -1938,7 +1985,7 @@ class Solver:
 
 		self.check_not_behind_codec(member.array.size, state)
 
-		env   = self.result.env.with_layout(self.result.lookup).with_fields(state.fields)
+		env   = self.result.env.with_layout(self.result.lookup, self.result.explain).with_fields(state.fields)
 		count = interval_of(member.array.size, env)
 
 		if not count.lo_known:
@@ -2118,7 +2165,7 @@ class Solver:
 		(project.md section 4): insert a field above a pinned one and the pin
 		catches the drift.
 		"""
-		env = self.result.env.with_layout(self.result.lookup)
+		env = self.result.env.with_layout(self.result.lookup, self.result.explain)
 
 		for name, decl in self.structs.items():
 			layout = self.result.structs[name]

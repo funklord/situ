@@ -47,6 +47,22 @@ struct bitmap_info_header {
 	u32          important_colours;
 }
 
+// The file, which is what makes the two headers above a format rather than
+// two structs. `pixels` is `at file.pixel_offset` -- placed where the data
+// says, measured from the start of the message rather than from a running sum
+// of what precedes it (section 9.8). That is the one construct BMP needs and
+// the network protocols in this directory do not: a header that points at its
+// payload instead of preceding it.
+//
+// The arithmetic this makes checkable was in `tests/generated/test_bmp.c` and
+// nowhere else: that the pixels begin where the two headers end, and that the
+// declared file size is that plus the pixel bytes.
+struct bitmap_file {
+	bitmap_file_header  file;
+	bitmap_info_header  info;
+	u8  pixels[info.image_size] at file.pixel_offset;
+}
+
 require size(bitmap_file_header) == 14;
 require size(bitmap_info_header) == 40;
 require absolute_static(bitmap_file_header);
@@ -67,6 +83,10 @@ assert aligned(bitmap_file_header.file_size, 4);
 require in_place(bitmap_info_header.width);
 require stable_address(bitmap_info_header.width);
 
-// PHASE 5: the pixel array is `u8 pixels[image_size];` starting at
-// `pixel_offset`, which is a field-driven base rather than a running offset.
-// That is a frame, and its interior would be frame-static.
+// What a located member costs, and it is the whole of the offset axis:
+// `pixels` is `DataPlaced`, which is weaker than `Dynamic` -- a dynamically
+// placed member is at least *after* the things before it, and this one is
+// wherever a four-byte field says. Its own accessor bounds-checks against the
+// message on every call, because there is no frame it can be inside by
+// construction.
+assert absolute_static(bitmap_file.pixels);

@@ -12,9 +12,20 @@ struct udp_header {
 	u16  destination_port;
 	u16  length  [min = 8];
 	u16  checksum;
+
+	// The payload the length points at. UDP's own header does not describe
+	// it -- the port does -- so it is bytes, and the length counts the eight
+	// header bytes as well as the payload, which is why `[min = 8]` above is
+	// what makes this expression legal rather than decoration.
+	u8   payload[length - 8];
 }
 
-require size(udp_header) == 8;
+// `size(udp_header)` was `== 8` here until the payload was written, and a
+// struct with a payload has no single size -- which the diagnostic now says
+// rather than claiming the struct is not declared. What is still eight is
+// where the payload starts, and that is the claim worth making: every field a
+// receiver reads is at a constant offset, and the variable part is last.
+require offset(udp_header.payload) == 8;
 require absolute_static(udp_header);
 require canonical(udp_header);
 require aligned(udp_header.length, 2);
@@ -25,6 +36,7 @@ require aligned(udp_header.length, 2);
 // declare it `checksum` and gain the dirty-tracking of section 14.2.
 require in_place(udp_header.checksum);
 
-// PHASE 5: the payload is `u8 payload[length - 8];`, which makes nothing after
-// it static -- but there is nothing after it, so UDP pays no price for being
-// variable length. That is not an accident of the design.
+// The payload makes nothing after it static -- and there is nothing after it,
+// so UDP pays no price at all for being variable length. That is not an
+// accident of the design: every field a receiver has to read to demultiplex
+// the datagram sits ahead of the only member whose length the data decides.

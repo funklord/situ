@@ -8,6 +8,17 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
+struct arp_generic size=12 mutate=Shifting address=Unstable repr=ValueConverted
+  arp_generic.hardware_type              offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  arp_generic.protocol_type              offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  arp_generic.hardware_length            offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  arp_generic.protocol_length            offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  arp_generic.operation                  offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  arp_generic.sender_hardware            offset=AbsoluteStatic(0x08) size=Bounded(1, 8) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  arp_generic.sender_protocol            offset=Dynamic size=Bounded(1, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arp_generic.target_hardware            offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arp_generic.target_protocol            offset=Dynamic size=Bounded(1, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
 struct arp_packet size=28 repr=ValueConverted atomic=NonAtomic
   arp_packet.hardware_type               offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   arp_packet.protocol_type               offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

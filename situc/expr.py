@@ -448,12 +448,16 @@ class Env:
 	# expression can only ever see fields declared before it -- which is the
 	# no-forward-reference rule of section 10, enforced by construction.
 	fields: dict[str, Interval]		= field(default_factory=dict)
+	#: Why a `lookup` came back empty, for the diagnostic. Optional because
+	#: only the solver has it and every other caller wants the value alone.
+	explain: Callable[[str, str], tuple[str, str]] | None = None
 
-	def with_layout(self, resolver: Callable[[str, str], int | None]) -> Env:
-		return Env(self.consts, self.enums, resolver, self.fields)
+	def with_layout(self, resolver: Callable[[str, str], int | None],
+			explain: Callable[[str, str], tuple[str, str]] | None = None) -> Env:
+		return Env(self.consts, self.enums, resolver, self.fields, explain)
 
 	def with_fields(self, fields: dict[str, Interval]) -> Env:
-		return Env(self.consts, self.enums, self.layout, fields)
+		return Env(self.consts, self.enums, self.layout, fields, self.explain)
 
 
 def evaluate(expr: ast.Expr, env: Env) -> int:
@@ -665,11 +669,12 @@ def _layout_call(expr: ast.Call, env: Env) -> int:
 
 	value = env.layout(expr.name, path)
 	if value is None:
-		raise error(
-			f"unknown path `{path}`",
-			expr.args[0].span,
-			label = "not a declared struct or field",
-		)
+		# Four reasons, one of which was reported for all of them. See
+		# `SchemaLayout.explain`.
+		message, label = (
+			env.explain(expr.name, path) if env.explain is not None
+			else (f"unknown path `{path}`", "not a declared struct or field"))
+		raise error(message, expr.args[0].span, label = label)
 	return value
 
 

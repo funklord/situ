@@ -138,6 +138,25 @@ class Member(Enum):
 	NOTHING   = "nothing"
 
 
+def readable_names(struct: ResolvedStruct) -> list[Placement]:
+	"""Which fields an expression written in this struct may name.
+
+	Its own scalars, and the scalars of the structs nested inside it: BMP's
+	pixel array sits `at file.pixel_offset`, where `file` is a nested header,
+	and every backend's name list stopped at the dot. The path was emitted
+	verbatim into the generated code, which in C is `file.pixel_offset` as an
+	identifier and does not compile.
+
+	A nested member is only readable where its offset is a constant in *this*
+	struct's frame -- which is what a nested member's offset is, since a
+	struct at a dynamic offset contributes nothing an expression can name at
+	compile time.
+	"""
+	return [entry.placement for entry in struct.entries
+	        if entry.placement.scalar is not None
+	        and entry.placement.offset_bits is not None]
+
+
 def data_sized(placement: Placement) -> bool:
 	"""Whether this member's extent comes from an expression over the data.
 
@@ -988,6 +1007,37 @@ def declares_its_own_length(placement: Placement) -> bool:
 	        and placement.sized_by != "remaining"
 	        and placement.delimiter is None
 	        and placement.located is None)
+
+
+def enclosing_arm(struct: ResolvedStruct,
+		placement: Placement) -> tuple[Placement, Arm] | None:
+	"""The arm this member is *inside*, which is not the same question.
+
+	`arm_of` asks whether a placement **is** an arm's member; this asks
+	whether it is one or lives within one. A reserved field inside a struct
+	an arm selects is neither in the enclosing struct's bytes nor out of
+	them: it is there only when the discriminant says so.
+
+	`gen-checks` needed the difference. It poked the bytes of an arm nobody
+	had selected and asserted `validate` would refuse them -- which it will
+	not, because those bytes belong to whichever arm *is* selected, and the
+	one selected by a zeroed discriminant had nothing to say about them.
+	"""
+	local = placement.path[len(struct.name) + 1:]
+	if "." not in local:
+		return None
+
+	head = local.split(".")[0]
+	variant = next((held for held in own_members(struct)
+	                if held.kind == "variant" and held.name == head), None)
+	if variant is None or variant.discriminant is None:
+		return None
+
+	for arm, member in arm_members(struct, variant):
+		if member is not None and (placement.path == member.path
+		                           or placement.path.startswith(member.path + ".")):
+			return variant, arm
+	return None
 
 
 def arm_of(struct: ResolvedStruct,

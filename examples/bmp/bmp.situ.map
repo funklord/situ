@@ -8,6 +8,27 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
+struct bitmap_file size=54 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  bitmap_file.file                       offset=AbsoluteStatic(0x00) size=Fixed(14) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.file.signature             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  bitmap_file.file.file_size             offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.file.<reserved0>           offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  bitmap_file.file.<reserved1>           offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  bitmap_file.file.pixel_offset          offset=AbsoluteStatic(0x0A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info                       offset=AbsoluteStatic(0x0E) size=Fixed(40) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.header_size           offset=AbsoluteStatic(0x0E) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.width                 offset=AbsoluteStatic(0x12) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.height                offset=AbsoluteStatic(0x16) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.planes                offset=AbsoluteStatic(0x1A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  bitmap_file.info.bits_per_pixel        offset=AbsoluteStatic(0x1C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  bitmap_file.info.compression           offset=AbsoluteStatic(0x1E) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.image_size            offset=AbsoluteStatic(0x22) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.x_pixels_per_meter    offset=AbsoluteStatic(0x26) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.y_pixels_per_meter    offset=AbsoluteStatic(0x2A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.colours_used          offset=AbsoluteStatic(0x2E) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.info.important_colours     offset=AbsoluteStatic(0x32) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  bitmap_file.pixels                     offset=DataPlaced size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
 struct bitmap_file_header size=14 repr=ValueConverted atomic=NonAtomic
   bitmap_file_header.signature           offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   bitmap_file_header.file_size           offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic

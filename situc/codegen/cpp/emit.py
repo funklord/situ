@@ -43,6 +43,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, Member, arm_members, containment_order, covered_run, data_sized,
+	readable_names,
 	decode_bound, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
@@ -1655,10 +1656,6 @@ class Emitter:
 		]
 
 	def _over_fields(self, struct: ResolvedStruct, source: str) -> str:
-		names = [entry.placement.name for entry in struct.entries
-		         if entry.placement.scalar is not None
-		         and "." not in entry.placement.path[len(struct.name) + 1:]]
-
 		# An enum-typed field's getter hands back an `enum class`, which has
 		# no implicit conversion -- `k() != 1u` does not compile. So an
 		# expression over one reads the backing bytes, which is what the
@@ -1669,22 +1666,27 @@ class Emitter:
 		# chain, the `default: error` check, the arm guards -- so a schema
 		# with `case K.a:` did not compile at all. No C++ test had one, and
 		# neither did Rust, which had the same bug in its own spelling.
-		# Own members only, and keyed by the same filter `names` uses: a
-		# nested member of the same name is later in layout order and won,
-		# so an expression over `x` read the `x` of a struct nested inside
-		# this one.
-		by_name = {entry.placement.name: entry.placement
-		           for entry in struct.entries
-		           if "." not in entry.placement.path[len(struct.name) + 1:]}
+		#
+		# Keyed by the *local path* rather than the name, and including the
+		# scalars of nested structs. Keyed by name over every entry, a nested
+		# member of the same name won -- entries are in layout order and the
+		# deeper one comes last -- and the dotted paths themselves were left
+		# unrewritten, which in C++ is a member function call
+		# (`at file.pixel_offset`, in `examples/bmp`).
+		by_name = {local_name(struct, placement): placement
+		           for placement in readable_names(struct)}
 
 		def read(name: str) -> str:
-			held = by_name.get(name)
-			if held is not None and held.type_name in self.enums \
-					and held.scalar is not None:
+			held = by_name[name]
+			if "." in name:
+				assert held.scalar is not None
+				return f"({self._load(held.scalar, held, None)})"
+			if held.type_name in self.enums and held.scalar is not None:
 				return f"({self._load(held.scalar, held, None)})"
 			return f"{c_name(name)}()"
 
-		return expand_calls(over_fields(names, source, read), c_spelling)
+		return expand_calls(over_fields(list(by_name), source, read),
+		                    c_spelling)
 
 	def _fits(self, struct: ResolvedStruct, placement: Placement,
 			bytes_: int) -> str | None:
@@ -2951,7 +2953,13 @@ class Emitter:
 			]
 
 		if scalar is not None and scalar.bits == BITS_PER_BYTE:
-			length = self._length_expression(struct, placement)
+			# A constant count is a length too, and `_length_expression`
+			# answers only for the ones the data decides -- so `u8
+			# gateway[4]`, an ICMP redirect's whole payload, was declined
+			# with a note saying its length could not be computed. Four.
+			length = (self._length_expression(struct, placement)
+			          if placement.array_count is None
+			          else f"{placement.array_count}u")
 			if length is None:
 				return [*head, "\t/* ...and its length is not one this can"
 				        " compute. */"]
@@ -4191,7 +4199,42 @@ class Emitter:
 		for _, member in arm_members(struct, placement):
 			if member is not None:
 				found.extend(self._arm_fits_check(struct, member))
+				found.extend(self._arm_validation(struct, member))
 		return found
+
+	def _arm_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Validate the arm the discriminant selects, through its own type.
+
+		Nothing did, in any backend: a variant's check was the discriminant
+		and nothing else, so every constraint inside an arm was declared by
+		the schema and enforced by nobody. Through the arm's own accessor,
+		which already refuses the arm that is not present.
+		"""
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None:
+			return []
+		if not inner.layout.is_fixed_size \
+				and not has_computable_extent(self.resolved.structs, inner):
+			return []
+
+		name = c_name(local_name(struct, placement))
+		return [
+			f"\t\t/* {placement.path}: the arm the discriminant selects",
+			"\t\t * carries its own constraints, and its own validator is",
+			"\t\t * what knows them. */",
+			"\t\t{",
+			f"\t\t\t::situ::{class_name(inner)} arm;",
+			"",
+			f"\t\t\tif ({name}(arm) == ::situ::rt::err::ok) {{",
+			"\t\t\t\tconst ::situ::rt::err inner = arm.validate();",
+			"",
+			"\t\t\t\tif (inner != ::situ::rt::err::ok) {",
+			"\t\t\t\t\treturn inner;",
+			"\t\t\t\t}",
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _arm_fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

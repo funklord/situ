@@ -244,6 +244,15 @@ def _reads(struct: ResolvedStruct, prefix: str,
 			lines.extend(_walk_read(struct, local, prefix))
 			continue
 
+		# Before the data-sized branch, and for the same reason: a located
+		# member is sized by a field and reached through a `_view` that takes
+		# the message as well as the frame (9.8), so `_len` and `_ptr` are not
+		# what it has. Its accessor is the one a fuzzer most wants pointed at
+		# it -- an offset the *data* chooses, bounds-checked on every call.
+		if placement.located is not None:
+			lines.extend(_located_read(struct, local, prefix))
+			continue
+
 		# Before the data-sized branch, which this looks like from the
 		# outside: an `indexed` region is `sized_by` its count field and is
 		# not an array. It reached for `_len` and `_ptr`, which an offset
@@ -371,6 +380,25 @@ def _has_sub_view(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return False
 	return nested.layout.is_fixed_size \
 		or has_computable_extent(resolved.structs, nested)
+
+
+def _located_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:
+	"""A member the data positions: take its view and read what it reached."""
+	view = ident(prefix, struct.name, local, "view")
+	return [
+		f"\t/* {struct.name}.{local}: placed where the data says. */",
+		"\t{",
+		"\t\tsitu_view_t placed;",
+		"",
+		f"\t\tif ({view}(&msg, view, &placed) == SITU_OK) {{",
+		"\t\t\tsitu_fuzz_sink((uint64_t)placed.limit);",
+		"\t\t\tif (placed.limit > 0u) {",
+		"\t\t\t\tsitu_fuzz_sink((uint64_t)placed.base[0]);",
+		"\t\t\t\tsitu_fuzz_sink((uint64_t)placed.base[placed.limit - 1u]);",
+		"\t\t\t}",
+		"\t\t}",
+		"\t}",
+	]
 
 
 def _indexed_read(struct: ResolvedStruct, local: str,

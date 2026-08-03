@@ -1,12 +1,24 @@
-// ICMP echo request and reply (RFC 792).
+// ICMP (RFC 792), as the kernel reads it.
 //
 // Eight bytes, and the smallest example of a field whose meaning depends on an
-// earlier field: the last four bytes are an identifier and a sequence number
-// for echo messages, and something else entirely for destination-unreachable
-// or redirect messages.
+// earlier field: the last four are an identifier and a sequence number for an
+// echo, a gateway address for a redirect, and an MTU for a fragmentation
+// failure. The kernel writes that as a union and switches on `type`; situ
+// writes it as a variant and switches on the same field.
 //
-// That is a `variant switch (type)`, which phase 6 adds. Until then this
-// schema describes the echo shape only and says so.
+// SOURCE. The layout and every constant here are from the tree on this
+// machine, and the arms are the ones its own parsers reach for:
+//
+//   include/uapi/linux/icmp.h:89   struct icmphdr, and the union at :93
+//   include/uapi/linux/icmp.h:26   ICMP_ECHOREPLY .. ICMP_PARAMETERPROB
+//   net/ipv4/icmp.c:1149           info = ntohs(icmph->un.frag.mtu)
+//   net/ipv4/icmp.c:1163           info = ntohl(icmph->un.gateway) >> 24
+//   net/ipv4/icmp.c:1294           icmphdr->un.echo.sequence
+//
+// The union has a fourth member -- `__u8 reserved[4]` -- and it is the arm
+// this schema calls `unused`: four bytes nobody reads, which is what an
+// unreachable or a time-exceeded message carries before the datagram that
+// caused it.
 
 target buffer;
 endian big;
@@ -18,35 +30,79 @@ enum icmp_type : u8 {
 	echo_request            = 8,
 	time_exceeded           = 11,
 	parameter_problem       = 12,
+	default                 = error,
 }
 
-struct icmp_echo {
-	icmp_type  type  [must_eq = icmp_type.echo_request];
-	u8        code  [must_be_zero];
-	u16       checksum;
-	u16        identifier;
-	u16       sequence;
+// The echo arm: `un.echo`, two 16-bit fields a pinger matches replies with.
+struct icmp_echo_id {
+	u16  identifier;
+	u16  sequence;
 }
 
-require size(icmp_echo) == 8;
-require absolute_static(icmp_echo);
-require in_place(icmp_echo.sequence);
+// The fragmentation arm: `un.frag`. Two unused bytes and the MTU the router
+// could not exceed, which is the field `icmp.c:1149` reads.
+struct icmp_frag {
+	reserved  u16;
+	u16       mtu;
+}
 
-// The checksum covers the whole message including the payload, so mutating
-// `sequence` invalidates it. Modelled as a plain field here, which means the
-// caller is responsible for recomputation and nothing warns them.
+// One message. The variant is four bytes whichever arm is selected, which is
+// unusual and worth saying: a variant normally costs the offset axis for
+// everything after it, and this one costs nothing because RFC 792 sized every
+// arm the same. That is a property of the format, and the map is where it
+// shows.
+struct icmp_message {
+	icmp_type  type;
+	u8         code;
+
+	// Covers the whole message, so mutating anything below marks it stale --
+	// and it is a plain `u16` here rather than a `checksum`, for the reason
+	// at the bottom of this file.
+	u16        checksum;
+
+	variant body switch (type) {
+		case icmp_type.echo_request:            icmp_echo_id  echo;
+		case icmp_type.echo_reply:              icmp_echo_id  reply;
+		case icmp_type.redirect:                u8            gateway[4];
+		case icmp_type.destination_unreachable: icmp_frag     frag;
+		case icmp_type.time_exceeded:           u8            unused[4];
+		case icmp_type.parameter_problem:       u8            pointer[4];
+	}
+}
+
+require size(icmp_message) == 8;
+require absolute_static(icmp_message);
+require in_place(icmp_message.body.echo.sequence);
+
+// What the variant costs, which is nothing. Every arm is four bytes, so the
+// message has one size and every member of every arm sits at a constant
+// offset -- the one case where `variant` weakens neither `offset` nor `size`.
+// Compare `examples/dnsname`, where the arms differ and everything after the
+// variant becomes Dynamic.
+assert random_access(icmp_message.body);
+
+// `default = error` on the enum rather than `default:` on the variant: an ICMP
+// type situ does not name is a message this schema cannot place, and section
+// 14.5 says an unmatched discriminant is refused rather than guessed at. The
+// generated `validate` returns the version error for one.
+
+// THE CHECKSUM, and the one thing in this header situ cannot say.
 //
-// PHASE 8: declaring it `checksum u16 [covers(...)]` instead gives the field
-// the tag-dirty machinery of section 14.2 -- mutating a covered field marks
-// the checksum stale and the generated API refuses to hand out a transmittable
-// buffer until it is recomputed. That is the same mechanism as a cryptographic
-// tag, minus the cryptography (section 13.4).
-
-// PHASE 6: the body is
-//     variant body switch (type) {
-//         case icmp_type.echo_request: echo_body echo;
-//         case icmp_type.time_exceeded: unused_then_datagram exceeded;
-//         default: error;
-//     }
-// All the arms are four bytes, so unusually for a variant this one costs
-// nothing on the offset axis.
+// It covers the whole message, so mutating `sequence` invalidates it: exactly
+// the tag machinery of section 14.2, which would mark it stale on a covered
+// write and refuse to hand out the buffer until it was recomputed. Writing
+// that means wrapping the message in `authenticated { }` and declaring
+//
+//     checksum u8 checksum[2] covers(message);
+//
+// and situ refuses it, correctly for what it knows:
+//
+//     error: `checksum` is inside the region it covers
+//     = computing it would take its own bytes as input
+//
+// True of a cryptographic tag and false of this one: RFC 1071 says the
+// checksum field is taken as *zero* while the sum is computed, so the coverage
+// is self-inclusive by definition. `examples/ipv4` carries the same note, and
+// TCP and UDP in this directory have the same checksum. Four askers, one
+// construct, and until it exists the field stays plain and the caller
+// recomputes it with nothing to warn them if they forget.

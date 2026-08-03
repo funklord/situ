@@ -41,7 +41,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, arm_members, arm_of, classify_check, containment_order,
-	covered_run, data_sized, offset_plan, region_extent,
+	covered_run, data_sized, local_name, offset_plan, readable_names,
+	region_extent,
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
@@ -926,6 +927,11 @@ class Emitter:
 		# place in the offset chain and nothing follows it.
 		if placement.located is not None:
 			lines.extend(self._located_accessor(struct, placement))
+			# Every unwritable member says why (26.35), and this one said
+			# nothing: the view *is* the accessor here, so the branch that
+			# writes the refusal for a plain member was never reached and
+			# `bitmap_file.pixels` was the first member to reach this one.
+			lines.extend(self._setter_refusal(entry) or [])
 			return lines
 
 		if placement.kind in ("tag", "checksum"):
@@ -2867,12 +2873,25 @@ class Emitter:
 		getter over the view named by `held`. Longest name first, or `len`
 		would rewrite the `len` inside `hdr_ext_len`.
 		"""
-		names = [entry.placement.name for entry in struct.entries
-		         if entry.placement.scalar is not None
-		         and "." not in entry.placement.path[len(struct.name) + 1:]]
-		return expand_calls(over_fields(names, source, lambda name:
-			f"{ident(self.prefix, struct.name, c_name(name), 'get')}({held})"),
-			c_spelling)
+		# Its own scalars and its nested structs': `at file.pixel_offset` names
+		# a field of a header nested in this struct, and the dotted path was
+		# emitted verbatim -- an identifier in C that does not exist.
+		by_local = {local_name(struct, placement): placement
+		            for placement in readable_names(struct)}
+
+		def read(local: str) -> str:
+			placement = by_local[local]
+			if "." not in local:
+				return (f"{ident(self.prefix, struct.name, c_name(local), 'get')}"
+				        f"({held})")
+			# A nested member has no accessor of this struct's own, and its
+			# offset is a constant here, so it is read where it sits.
+			assert placement.scalar is not None
+			return self._load_expression(placement.scalar, placement,
+			                             f"{held}.base")
+
+		return expand_calls(
+			over_fields(list(by_local), source, read), c_spelling)
 
 	def _record_prologue(self, base: str, delim: bytes, sym: str,
 			extent: str) -> list[str]:
@@ -5002,7 +5021,52 @@ class Emitter:
 		"""
 		return [*self._fits_check(struct, entry.placement),
 		        *self._arm_fits_check(struct, entry.placement),
+		        *self._arm_validation(struct, entry.placement),
 		        *self._member_checks(struct, entry)]
+
+	def _arm_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Validate the arm the discriminant selects, through its own type.
+
+		Nothing did. A variant's check was the discriminant and nothing else,
+		so every constraint inside an arm -- a `[must_eq]`, an enum with
+		`default = error`, a `reserved` field the format says is zero -- was
+		declared by the schema and enforced by no backend. It went unnoticed
+		because no arm in this repository had a struct with a constraint in it
+		until an ICMP fragmentation message did.
+
+		Through the arm's own accessor, which already refuses the arm that is
+		not present: asking the discriminant again here would be a second
+		place that has to agree about which arm is there.
+		"""
+		found = arm_of(struct, placement)
+		if found is None or placement.type_name not in self.structs:
+			return []
+
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None or (not inner.layout.is_fixed_size
+		                     and not self._struct_extent(inner)):
+			return []
+
+		local = c_name(self._local(struct, placement))
+		return [
+			f"\t/* {placement.path}: the arm the discriminant selects carries",
+			"\t * its own constraints, and its own validator is what knows",
+			"\t * them. The accessor refuses an arm that is not present. */",
+			"\t{",
+			"\t\tsitu_view_t arm;",
+			"",
+			f"\t\tif ({ident(self.prefix, struct.name, local, 'view')}"
+			"(view, &arm) == SITU_OK) {",
+			f"\t\t\tconst situ_err_t err = "
+			f"{ident(self.prefix, placement.type_name or '', 'validate')}(arm);",
+			"",
+			"\t\t\tif (err != SITU_OK) {",
+			"\t\t\t\treturn err;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _arm_fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

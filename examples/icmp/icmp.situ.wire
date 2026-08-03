@@ -15,9 +15,16 @@ target buffer
 enum icmp_type : u8 unknown=error
   echo_reply=0 destination_unreachable=3 redirect=5 echo_request=8 time_exceeded=11 parameter_problem=12
 
-struct icmp_echo size=8
-  @0x0000   1         icmp_type  type  must_eq=icmp_type.echo_request
-  @0x0001   1         u8         code  must_be_zero
+struct icmp_echo_id size=4
+  @0x0000   2         u16        identifier  big
+  @0x0002   2         u16        sequence  big
+
+struct icmp_frag size=4
+  @0x0000   2         u16        <reserved0>  big
+  @0x0002   2         u16        mtu  big
+
+struct icmp_message size=8
+  @0x0000   1         icmp_type  type
+  @0x0001   1         u8         code
   @0x0002   2         u16        checksum  big
-  @0x0004   2         u16        identifier  big
-  @0x0006   2         u16        sequence  big
+  @0x0004   4         variant    body

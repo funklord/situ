@@ -39,6 +39,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Check, Member, arm_members, covered_run, data_sized, decode_bound, offset_plan,
+	readable_names,
 	region_extent,
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
@@ -1434,9 +1435,17 @@ class Emitter:
 			]
 
 		if scalar is not None and scalar.bits == BITS_PER_BYTE:
-			length = self._length_expression(struct, placement)
+			# A constant count is a length too, and `_length_expression`
+			# answers only for the ones the data decides -- so `u8
+			# gateway[4]`, an ICMP redirect's whole payload, got no accessor
+			# and, unlike C++ next door, no note either. Silence about a
+			# member is the one thing a reader cannot ask about.
+			length = (self._length_expression(struct, placement)
+			          if placement.array_count is None
+			          else str(placement.array_count))
 			if length is None:
-				return []
+				return [*head, f"\t// ...and its length is not one this"
+				        " backend can compute."]
 			return [
 				*head,
 				f"\tpub fn {name}(&self) -> Result<&[u8]> {{",
@@ -2219,19 +2228,24 @@ class Emitter:
 		# switching on `nlmsg_type` read the `nlmsg_type` of the `nlmsghdr`
 		# echoed inside its own error arm, twenty bytes further on. Every arm
 		# guard and the whole extent chain were reading the wrong field.
-		by_path = {entry.placement.name: entry.placement
-		           for entry in struct.entries
-		           if "." not in entry.placement.path[len(struct.name) + 1:]}
+		by_path = {local_name(struct, placement): placement
+		           for placement in readable_names(struct)}
 
 		def read(name: str) -> str:
-			held_at = by_path.get(name)
-			if held_at is not None and held_at.type_name in self.enums \
-					and held_at.scalar is not None:
+			held_at = by_path[name]
+			# A nested member has no accessor of this struct's own -- `at
+			# file.pixel_offset` in `examples/bmp` -- and its offset is a
+			# constant here, so it is read where it sits. Same spelling as
+			# the enum case below, which needs the bytes for its own reason.
+			if "." in name or (held_at.type_name in self.enums
+			                   and held_at.scalar is not None):
+				assert held_at.scalar is not None
 				raw = self._raw_load(held_at, held_at.scalar)
 				return f"({self._unparen(raw)} as usize)"
 			return f"({held}.{_ident(c_name(name))}() as usize)"
 
-		return expand_calls(over_fields(names, source, read), rust_spelling)
+		return expand_calls(over_fields(list(by_path), source, read),
+		                    rust_spelling)
 
 
 	def _run_index(self, struct: ResolvedStruct, placement: Placement,
@@ -2853,6 +2867,33 @@ class Emitter:
 			f"\t\tif {held}.len().saturating_sub({placement.offset_bytes})"
 			f" < {width} {{",
 			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+		]
+
+	def _arm_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Validate the arm the discriminant selects, through its own type.
+
+		Nothing did, in any backend: a variant's check was the discriminant
+		and nothing else, so every constraint inside an arm was declared by
+		the schema and enforced by nobody. Through the arm's own accessor,
+		which already refuses the arm that is not present -- so an `Err` here
+		means "not this arm" and is not the message being wrong.
+		"""
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None:
+			return []
+		if not inner.layout.is_fixed_size \
+				and not has_computable_extent(self.resolved.structs, inner):
+			return []
+
+		name = _ident(c_name(local_name(struct, placement)))
+		return [
+			f"\t\t// {placement.path}: the arm the discriminant selects",
+			"\t\t// carries its own constraints, and its own validator is",
+			"\t\t// what knows them.",
+			f"\t\tif let Ok(arm) = self.{name}() {{",
+			"\t\t\tarm.validate()?;",
 			"\t\t}",
 		]
 
@@ -3844,6 +3885,7 @@ class Emitter:
 				for _, member in arm_members(struct, placement):
 					if member is not None:
 						checks.extend(self._arm_fits_check(struct, member))
+						checks.extend(self._arm_validation(struct, member))
 				continue
 			if check is Check.DELIMITED:
 				checks.extend(self._delimiter_checks(struct, placement))

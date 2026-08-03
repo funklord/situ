@@ -19,7 +19,7 @@ enum protocol : u8 unknown=error
 struct ipv4_address size=4
   @0x0000   4         u8         octets  big
 
-struct ipv4_header size=20
+struct ipv4_header size=20..60
   @0x0000   4bit      u4         version  msb_first must_eq=4
   @0x0000:4 4bit      u4         ihl  msb_first min=5
   @0x0001   6bit      u6         dscp  msb_first
@@ -35,3 +35,4 @@ struct ipv4_header size=20
   @0x000a   2         u16        header_checksum  big
   @0x000c   4         ipv4_address source  big
   @0x0010   4         ipv4_address destination  big
+  @0x0014   0..40     u8         options

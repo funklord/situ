@@ -12,10 +12,11 @@
 # format wearing the same extension -- and `header_size [must_eq = 40]` is
 # what says so. Written by ImageMagick 7.1.1-43.
 #
-# A case is one struct, so these are the two headers of each file rather than
-# the file. What the headers say *about* the file -- that the pixels start
-# where the two structs end, and that the declared size is that plus the
-# pixels -- is arithmetic between them, and is in tests/generated/test_bmp.c.
+# The first two cases are one header each, and the third is a whole file: the
+# `bitmap_file` struct places the pixels `at file.pixel_offset`, so what the
+# headers say *about* the file -- that the pixels start where the two structs
+# end, and that the declared size is that plus the pixels -- is now arithmetic
+# the schema does rather than arithmetic in tests/generated/test_bmp.c.
 
 # -- 3x2 truecolour, red. 78 bytes: 54 of header, two 12-byte rows.
 
@@ -48,3 +49,17 @@ bitmap_info_header white_info 28 00 00 00 01 00 00 00 01 00 00 00 01 00 18 00 00
 	height         = 1
 	bits_per_pixel = 24
 	image_size     = 4
+
+# -- and the whole 3x2 file, header and pixels together.
+#
+# Three BGR pixels of red per row -- `00 00 FF` -- padded to a four-byte
+# boundary, twice. `pixel_offset` is 54, which is where the two headers end,
+# and 54 + 24 is the 78 that `file_size` declares. Nothing in this file is
+# situ's arithmetic: it is the same `convert` invocation as above, whole.
+
+bitmap_file red_whole 42 4D 4E 00 00 00 00 00 00 00 36 00 00 00 28 00 00 00 03 00 00 00 02 00 00 00 01 00 18 00 00 00 00 00 18 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 FF 00 00 FF 00 00 FF 00 00 00 00 00 FF 00 00 FF 00 00 FF 00 00 00
+	file.file_size     = 78
+	file.pixel_offset  = 54
+	info.image_size    = 24
+	info.width         = 3
+	info.height        = 2

@@ -7,10 +7,10 @@
 //    Straddling forces a multi-byte read-modify-write, which is why situ makes
 //    the author say so rather than discovering it in generated code.
 //
-// 2. Options are what make the real header variable length. They are omitted
-//    here deliberately: this schema describes the 20-byte fixed portion only,
-//    and `ihl` is the field that would drive the options array once phase 5
-//    lands. See the note at the bottom.
+// 2. Options are what make the real header variable length, and `ihl` is what
+//    drives them. What they cost is nothing at all above them and everything
+//    below them -- of which there is nothing, which is a fact about where IPv4
+//    put its variable part rather than about situ.
 
 target buffer;
 endian big;
@@ -49,9 +49,16 @@ struct ipv4_header [allow_straddle] {
 	u16       header_checksum;
 	ipv4_address  source       @ 0x0C;
 	ipv4_address  destination  @ 0x10;
+
+	// `ihl` counts 32-bit words including the twenty fixed bytes, so the
+	// options are `(ihl - 5) * 4` bytes and `[min = 5]` above is what makes
+	// that subtraction legal. Every field before them keeps AbsoluteStatic;
+	// nothing after them would, and there is nothing after them, which is the
+	// same shape UDP has and for the same reason.
+	u8        options[(ihl - 5) * 4];
 }
 
-require size(ipv4_header) == 20;
+require offset(ipv4_header.options) == 20;
 require absolute_static(ipv4_header);
 
 // The addresses are byte arrays at byte-aligned offsets, so they keep the
@@ -64,8 +71,28 @@ require in_place(ipv4_header.time_to_live);
 // schema documents the cost without failing the build.
 assert atomic(ipv4_header.fragment_offset);
 
-// PHASE 5: the variable part. Once counted arrays land this becomes
-//     u8 options[(ihl - 5) * 4];
-// and every byte after it loses AbsoluteStatic. `header_checksum` covering a
-// variable range is the reason a checksum is modelled with the tag machinery
-// (project.md section 13.4) rather than as a plain field.
+// THE CHECKSUM, and the one thing in this header situ cannot say.
+//
+// `header_checksum` covers the header including the options -- a range the
+// data decides -- which is exactly what the tag machinery of section 14.2 is
+// for: mutating a covered byte marks the tag stale and the generated API
+// refuses to hand out the buffer until it is recomputed. Writing that here
+// means wrapping the header in `authenticated { }` and declaring
+//
+//     checksum u8 header_checksum[2] covers(header);
+//
+// and situ refuses it, correctly for what it knows:
+//
+//     error: `header_checksum` is inside the region it covers
+//     = computing it would take its own bytes as input
+//
+// Which is true of a cryptographic tag and false of this one. RFC 1071 says
+// the checksum field is taken as *zero* while the sum is computed, so the
+// coverage is self-inclusive by definition rather than by accident -- and the
+// same is true of ICMP, TCP and UDP in this directory, of GPT's header CRC,
+// and of tar's header sum, which uses spaces rather than zero.
+//
+// So it stays a plain `u16`, and the cost is stated rather than hidden: the
+// caller recomputes it and nothing warns them if they forget. Four formats in
+// this directory ask for the same construct, which is more askers than any
+// other construct here waited for.

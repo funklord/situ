@@ -39,10 +39,21 @@ def over_fields(names: list[str], source: str,
 	and the result names a getter that does not exist. That is not
 	hypothetical: those two fields sit side by side in an IPv6 extension
 	header, which is the schema this was written for.
+
+	**One pass, not one per name.** Sequential substitution can rewrite what
+	an earlier substitution wrote: every backend's getter mentions the view it
+	reads through, so a schema with a field called `view` or `self` would have
+	had that word replaced inside the reads already emitted. Nothing in the
+	tree is named either, which is exactly the kind of latent collision
+	invariant 29 is about -- generated code shares a namespace with names the
+	schema chose. A single alternation cannot match its own output.
 	"""
-	for name in sorted(names, key=len, reverse=True):
-		source = re.sub(rf"\b{re.escape(name)}\b", getter(name), source)
-	return source
+	if not names:
+		return source
+	pattern = "|".join(re.escape(name)
+	                   for name in sorted(names, key=len, reverse=True))
+	return re.sub(rf"\b(?:{pattern})\b", lambda hit: getter(hit.group(0)),
+	              source)
 
 
 def translate_operators(source: str, *, conj: str, disj: str,

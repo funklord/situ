@@ -169,7 +169,7 @@ class Outcome:
 
 
 def discharge(schema: ast.Schema, resolved: ResolvedSchema) -> list[Outcome]:
-	env      = resolved.layout.env.with_layout(resolved.layout.lookup)
+	env      = resolved.layout.env.with_layout(resolved.layout.lookup, resolved.layout.explain)
 	outcomes = []
 
 	for requirement in schema.requirements():

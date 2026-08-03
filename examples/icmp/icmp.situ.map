@@ -8,9 +8,28 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct icmp_echo size=8 repr=ValueConverted
-  icmp_echo.type                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  icmp_echo.code                         offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  icmp_echo.checksum                     offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  icmp_echo.identifier                   offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  icmp_echo.sequence                     offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+struct icmp_echo_id size=4 repr=ValueConverted
+  icmp_echo_id.identifier                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  icmp_echo_id.sequence                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct icmp_frag size=4 repr=ValueConverted
+  icmp_frag.<reserved0>                  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  icmp_frag.mtu                          offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct icmp_message size=8 repr=ValueConverted atomic=NonAtomic
+  icmp_message.type                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  icmp_message.code                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  icmp_message.checksum                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  icmp_message.body                      offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  icmp_message.body.echo                 offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  icmp_message.body.echo.identifier      offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  icmp_message.body.echo.sequence        offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  icmp_message.body.reply                offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  icmp_message.body.reply.identifier     offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  icmp_message.body.reply.sequence       offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  icmp_message.body.gateway              offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  icmp_message.body.frag                 offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  icmp_message.body.frag.<reserved0>     offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  icmp_message.body.frag.mtu             offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  icmp_message.body.unused               offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  icmp_message.body.pointer              offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic

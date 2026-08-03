@@ -45,7 +45,32 @@ require canonical(arp_packet);
 require aligned(arp_packet.sender_hardware, 2);
 assert aligned(arp_packet.target_protocol, 4);
 
-// PHASE 5: without the [must_eq] pins the address fields become
-// `u8 sender_hardware[hardware_length];` and everything after the first one
-// loses AbsoluteStatic. Comparing the two capability maps is the clearest
-// demonstration of what pinning a length buys.
+// And the same packet without the pins, which is the comparison this example
+// exists for. Nothing here is different except that the two length fields are
+// what RFC 826 says they are -- numbers the sender chooses -- and the four
+// address fields are sized by them rather than by the schema.
+//
+// Read the two maps side by side. Every member of `arp_packet` is
+// AbsoluteStatic and Fixed; in `arp_generic` the first address field is still
+// static and everything after it is Dynamic, its size a range, and its mutate
+// Shifting. That is the whole cost of a length the data decides, and it is
+// four bytes of pinning that buys it.
+struct arp_generic {
+	hardware_type  hardware_type    [must_eq = hardware_type.ethernet];
+	u16           protocol_type    [must_eq = 0x0800];
+	u8            hardware_length  [min = 1, max = 8];
+	u8            protocol_length  [min = 1, max = 16];
+	operation     operation;
+
+	u8            sender_hardware[hardware_length];
+	u8            sender_protocol[protocol_length];
+	u8            target_hardware[hardware_length];
+	u8            target_protocol[protocol_length];
+}
+
+// The claim above, as requirements rather than as prose: the pinned packet
+// keeps everything, and the generic one keeps only what precedes its first
+// data-sized member.
+require absolute_static(arp_generic.operation);
+assert absolute_static(arp_generic.target_protocol);
+assert in_place(arp_generic.target_protocol);

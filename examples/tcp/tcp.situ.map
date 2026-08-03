@@ -8,7 +8,7 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct tcp_header size=20 repr=ValueConverted atomic=NonAtomic
+struct tcp_header size=20 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   tcp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   tcp_header.destination_port            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
   tcp_header.sequence                    offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
@@ -26,3 +26,4 @@ struct tcp_header size=20 repr=ValueConverted atomic=NonAtomic
   tcp_header.window                      offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
   tcp_header.checksum                    offset=AbsoluteStatic(0x10) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   tcp_header.urgent_pointer              offset=AbsoluteStatic(0x12) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  tcp_header.options                     offset=AbsoluteStatic(0x14) size=Bounded(0, 40) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

@@ -39,6 +39,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, Member, arm_members, containment_order, covered_run, data_sized,
+	readable_names,
 	decode_bound, region_extent, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
@@ -1576,9 +1577,16 @@ class Emitter:
 			return [*head, f"\t\treturn {self._raw_load(placement, scalar)}"]
 
 		if scalar is not None and scalar.bits == BITS_PER_BYTE:
-			length = self._length_expression(struct, placement)
+			# A constant count is a length too, and `_length_expression`
+			# answers only for the ones the data decides -- so `u8
+			# gateway[4]`, an ICMP redirect's whole payload, got no accessor
+			# and no note in three backends out of four.
+			length = (self._length_expression(struct, placement)
+			          if placement.array_count is None
+			          else str(placement.array_count))
 			if length is None:
-				return []
+				return [*head, f"\t\t# ...and its length is not one this"
+				        " backend can compute."]
 			return [
 				*head,
 				"\t\tself._check()",
@@ -2435,12 +2443,23 @@ class Emitter:
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			held: str) -> str:
-		names = [entry.placement.name for entry in struct.entries
-		         if entry.placement.scalar is not None
-		         and "." not in entry.placement.path[len(struct.name) + 1:]]
+		# Its own scalars and its nested structs': `at file.pixel_offset`
+		# names a field of a header nested in this struct, and the dotted
+		# path was emitted verbatim -- an attribute Python does not have.
+		by_local = {local_name(struct, placement): placement
+		            for placement in readable_names(struct)}
+
+		def read(local: str) -> str:
+			if "." not in local:
+				return f"{held}.{c_name(local)}"
+			# A nested member has no attribute of this struct's own, and its
+			# offset is a constant here, so it is read where it sits.
+			placement = by_local[local]
+			assert placement.scalar is not None
+			return f"({self._raw_load(placement, placement.scalar)})"
+
 		return expand_calls(
-			_pythonic(over_fields(names, source,
-			                      lambda name: f"{held}.{c_name(name)}")),
+			_pythonic(over_fields(list(by_local), source, read)),
 			python_spelling)
 
 	def _repeat_while(self, struct: ResolvedStruct,
@@ -3318,7 +3337,38 @@ class Emitter:
 		for _, member in arm_members(struct, placement):
 			if member is not None:
 				found.extend(self._arm_fits_check(struct, member))
+				found.extend(self._arm_validation(struct, member))
 		return found
+
+	def _arm_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Validate the arm the discriminant selects, through its own type.
+
+		Nothing did, in any backend: a variant's check was the discriminant
+		and nothing else, so every constraint inside an arm was declared by
+		the schema and enforced by nobody. Through the arm's own accessor,
+		which already refuses the arm that is not present.
+		"""
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None:
+			return []
+		if not inner.layout.is_fixed_size \
+				and not has_computable_extent(self.resolved.structs, inner):
+			return []
+
+		# A name per arm, not one `arm` reused: the arms have different
+		# types, and mypy --strict reads a second assignment to the same
+		# local as a type error rather than as a new variable.
+		name = c_name(local_name(struct, placement)).replace(".", "_")
+		return [
+			f"\t\t# {placement.path}: the arm the discriminant selects",
+			"\t\t# carries its own constraints, and its own validator knows",
+			"\t\t# them.",
+			"\t\ttry:",
+			f"\t\t\tself.{name}.validate()",
+			"\t\texcept VersionError:",
+			f"\t\t\tpass\t\t# not the arm this message carries",
+		]
 
 	def _arm_fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

@@ -67,9 +67,11 @@ require in_place(dns_header.answer_count);
 // DNS responses are a well-known covert channel.
 require canonical(dns_header);
 
-// OUT OF SCOPE: the question and answer sections. A DNS name is a chain of
+// OUT OF SCOPE HERE, and described next door. A DNS name is a chain of
 // length-prefixed labels which may terminate in a two-byte pointer to an
-// earlier offset in the same message. Resolving one means following a pointer
-// graph, which situ does not model at any phase -- project.md section 2 rules
-// out object graphs and cyclic references. A real dissector would treat the
-// body as `opaque` (phase 6) and hand it to a name parser.
+// earlier offset in the same message. `examples/dnsname` writes that chain out
+// and walks it: the labels are a run ending at the root, and the pointer is a
+// variant arm. What it does not do is *follow* the pointer, because resolving
+// one means following a pointer graph and section 2 rules out object graphs
+// and cyclic references at any phase. The boundary is the view model rather
+// than a gap, which is the sentence that example exists to earn.

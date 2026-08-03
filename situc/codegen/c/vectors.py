@@ -154,8 +154,16 @@ def _check(resolved: ResolvedSchema, case: Case) -> None:
 	if not struct.layout.is_byte_sized:
 		raise ValueError(f"`{case.struct}` is not a whole number of bytes")
 
+	# A located member is placed where the *data* says, measured from the
+	# start of the message (9.8), so a struct that has one is fixed-size in
+	# its own frame and open-ended in the message a vector actually is. This
+	# asked the frame and refused a whole BMP file -- 78 bytes for a struct
+	# whose two headers are 54 -- for a schema that describes it exactly.
+	placed = any(entry.placement.located is not None
+	             for entry in struct.entries)
+
 	expected = struct.layout.size_bytes
-	if struct.layout.is_fixed_size:
+	if struct.layout.is_fixed_size and not placed:
 		if len(case.data) != expected:
 			raise ValueError(
 				f"vector `{case.name}` is {len(case.data)} bytes, but "
@@ -202,9 +210,17 @@ def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
 	# A fixed struct sizes the buffer from its own macro; a variable one is
 	# a message whose length the caller supplies, and the vector is that
 	# length. The acquiring call differs the same way.
+	#
+	# ...and the two questions are not the same question. A struct with a
+	# `located` member has a fixed *frame* and a message that reaches past it
+	# to wherever the data puts that member (9.8), so the acquire takes no
+	# length and the buffer is still the vector's. Sizing both from the frame
+	# declared `buf[54]` and initialised it from 78 bytes of BMP.
 	fixed  = struct.layout.is_fixed_size
-	size   = (macro(prefix, case.struct, "SIZE_FIXED") if fixed
-	          else str(len(case.data)) + "u")
+	placed = any(entry.placement.located is not None
+	             for entry in struct.entries)
+	size   = (macro(prefix, case.struct, "SIZE_FIXED")
+	          if fixed and not placed else str(len(case.data)) + "u")
 	bytes_ = ", ".join(f"0x{byte:02X}" for byte in case.data)
 	acquire = (f"{ident(prefix, case.struct, 'view')}(&msg, 0, &view)" if fixed
 	           else f"{ident(prefix, case.struct, 'view')}(&msg, 0, {size},"
@@ -359,6 +375,12 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 
 		local = placement.path[len(struct.name) + 1 :]
 		if "." in local:
+			continue
+		# A located member is reached through a view, not a getter: it is
+		# `u8 pixels[...] at file.pixel_offset`, and it has no plain accessor
+		# pair to round-trip. The same shape as the driver below -- an
+		# accessor whose signature is not the one this loop assumes.
+		if placement.located is not None:
 			continue
 		# A covered field's setter takes the message too, and marking a tag
 		# stale in the middle of a round trip is not what this asserts.

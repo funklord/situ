@@ -12,8 +12,9 @@
 endian big
 target buffer
 
-struct udp_header size=8
+struct udp_header size=8..65535
   @0x0000   2         u16        source_port  big
   @0x0002   2         u16        destination_port  big
   @0x0004   2         u16        length  big min=8
   @0x0006   2         u16        checksum  big
+  @0x0008   0..65527  u8         payload

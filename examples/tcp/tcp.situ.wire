@@ -13,7 +13,7 @@ bit_order msb_first
 endian big
 target buffer
 
-struct tcp_header size=20
+struct tcp_header size=20..60
   @0x0000   2         u16        source_port  big
   @0x0002   2         u16        destination_port  big
   @0x0004   4         u32        sequence  big
@@ -31,3 +31,4 @@ struct tcp_header size=20
   @0x000e   2         u16        window  big
   @0x0010   2         u16        checksum  big
   @0x0012   2         u16        urgent_pointer  big
+  @0x0014   0..40     u8         options

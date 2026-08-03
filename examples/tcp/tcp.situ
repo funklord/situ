@@ -35,9 +35,15 @@ struct tcp_header {
 	u16       window        @ 0x0E;
 	u16       checksum;
 	u16       urgent_pointer;
+
+	// `data_offset` counts 32-bit words including the twenty fixed bytes, so
+	// the options are `(data_offset - 5) * 4` bytes -- the same shape as an
+	// IPv6 extension header's, and the reason `[min = 5]` above is what makes
+	// the subtraction legal rather than a note about sensible values.
+	u8        options[(data_offset - 5) * 4];
 }
 
-require size(tcp_header) == 20;
+require offset(tcp_header.options) == 20;
 require absolute_static(tcp_header);
 require in_place(tcp_header.syn);
 require aligned(tcp_header.sequence, 4);
@@ -47,6 +53,12 @@ require aligned(tcp_header.sequence, 4);
 // them. Stated here so the schema records it.
 assert atomic(tcp_header.syn);
 
-// PHASE 5: options are `u8 options[(data_offset - 5) * 4];`, and phase 6 would
-// describe their interior as a TLV region -- which is where TCP stops being
-// randomly addressable.
+// Where TCP stops being randomly addressable, and it is the options that do
+// it rather than the bit packing above them. Each option is a kind, a length
+// and a value, so their interior is a `tlv` region -- described here as bytes
+// because the one thing a `tlv` needs is a rule for the tags it does not know,
+// and TCP's is "skip it by its length", which two of the four defined options
+// (End of Option List and No-Operation) do not follow: they are one byte with
+// no length at all. A region whose skip rule has two exceptions is a region
+// situ would describe by lying about it.
+assert absolute_static(tcp_header.options);
