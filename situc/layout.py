@@ -983,6 +983,12 @@ class Solver:
 		for index, held in enumerate(layout.placements):
 			tags = {name for region in held.regions
 			        for name in covering.get(region, ())}
+			# A tag does not cover itself. It can now sit inside the region it
+			# covers (14.2, `[self_as]`), and coverage means "writing these
+			# bytes leaves that tag stale" -- which is false of the bytes the
+			# tag is *written into*, and would tell a caller that computing
+			# the checksum invalidates the checksum.
+			tags.discard(held.name)
 			if not tags:
 				continue
 

@@ -69,6 +69,10 @@ reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
  * `tag` and an unnamed sealed region is `sealed` -- which is what lets
  * `require verify_gated(Packet.sealed)` resolve in example 5.3. See
  * docs/decisions/0010-region-and-tag-names.md. *)
+(* `[self_as = N]` says what the tag's own bytes read as while the algorithm
+ * runs, and is what lets a checksum sit inside the region it covers: RFC 1071
+ * defines the Internet checksum over the header including the checksum field,
+ * taken as zero. Without it, a tag inside its own coverage is an error. *)
 tag_field	= ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
 		  [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
 

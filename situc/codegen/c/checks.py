@@ -147,7 +147,7 @@ def _struct_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 		_field_checks(suite, resolved, struct, entry, prefix, extent)
 
 	_validate_checks(suite, schema, resolved, struct, prefix, extent)
-	_coverage_checks(suite, schema, struct, prefix, extent)
+	_coverage_checks(suite, schema, resolved, struct, prefix, extent)
 	_gate_checks(suite, struct, prefix, extent)
 
 
@@ -1647,7 +1647,8 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			 " * authenticated. */"])
 
 
-def _coverage_checks(suite: Suite, schema: ast.Schema, struct: ResolvedStruct,
+def _coverage_checks(suite: Suite, schema: ast.Schema,
+		resolved: ResolvedSchema, struct: ResolvedStruct,
 		prefix: str, extent: int) -> None:
 	"""`auth = Covered(o)` is a claim that writing marks `o` stale.
 
@@ -1663,7 +1664,7 @@ def _coverage_checks(suite: Suite, schema: ast.Schema, struct: ResolvedStruct,
 
 	for one in held:
 		if one.kind == "tag":
-			_span_check(suite, struct, prefix, extent, one.name)
+			_span_check(suite, resolved, struct, prefix, extent, one.name)
 
 	_dirty_mask_check(suite, struct, held, prefix, extent)
 
@@ -1768,8 +1769,8 @@ def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,
 		 "\t * question. */"])
 
 
-def _span_check(suite: Suite, struct: ResolvedStruct, prefix: str,
-		extent: int, tag: str) -> None:
+def _span_check(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
+		prefix: str, extent: int, tag: str) -> None:
 	"""What the tag's algorithm actually runs over.
 
 	The span is not recomputed here. A region's extent is its interior put
@@ -1803,10 +1804,20 @@ def _span_check(suite: Suite, struct: ResolvedStruct, prefix: str,
 	begins = first // BITS_PER_BYTE
 	ends   = last // BITS_PER_BYTE
 
+	# On an instance that satisfies the schema, not on a zeroed buffer. The
+	# span reaches to the end of what the region holds, and where that is a
+	# length the data decides, a zeroed instance decides a nonsense one: an
+	# IPv4 header with `ihl = 0` breaks `[min = 5]` and puts the end of the
+	# options twenty bytes before their start. A check has to ask about a
+	# message the schema admits.
+	baseline = _baseline(resolved, struct, extent) or []
+
 	suite.add(
 		f"check_{c_name(struct.name)}_{c_name(tag)}_covers_what_it_claims",
 		[
 			*_acquire(struct, prefix, extent),
+			"",
+			*baseline,
 			"",
 			"\tuint32_t offset = 0;",
 			"\tuint32_t len    = 0;",

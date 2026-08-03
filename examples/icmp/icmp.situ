@@ -52,27 +52,41 @@ struct icmp_frag {
 // arm the same. That is a property of the format, and the map is where it
 // shows.
 struct icmp_message {
-	icmp_type  type;
-	u8         code;
+	authenticated message {
+		icmp_type  type;
+		u8         code;
 
-	// Covers the whole message, so mutating anything below marks it stale --
-	// and it is a plain `u16` here rather than a `checksum`, for the reason
-	// at the bottom of this file.
-	u16        checksum;
+		// RFC 792, and RFC 1071 for how it is computed: the one's-complement
+		// sum of the whole message *including these two bytes*, which are
+		// taken as zero while it runs. `[self_as = 0]` is that sentence, and
+		// it is what lets a checksum sit inside the region it covers.
+		//
+		// What it buys is section 14.2's dirty bit: writing any covered byte
+		// marks the checksum stale and the generated API says so, where a
+		// plain `u16` left the caller to remember.
+		checksum u8 checksum[2] covers(message) [self_as = 0];
 
-	variant body switch (type) {
-		case icmp_type.echo_request:            icmp_echo_id  echo;
-		case icmp_type.echo_reply:              icmp_echo_id  reply;
-		case icmp_type.redirect:                u8            gateway[4];
-		case icmp_type.destination_unreachable: icmp_frag     frag;
-		case icmp_type.time_exceeded:           u8            unused[4];
-		case icmp_type.parameter_problem:       u8            pointer[4];
+		variant body switch (type) {
+			case icmp_type.echo_request:            icmp_echo_id  echo;
+			case icmp_type.echo_reply:              icmp_echo_id  reply;
+			case icmp_type.redirect:                u8            gateway[4];
+			case icmp_type.destination_unreachable: icmp_frag     frag;
+			case icmp_type.time_exceeded:           u8            unused[4];
+			case icmp_type.parameter_problem:       u8            pointer[4];
+		}
 	}
 }
 
 require size(icmp_message) == 8;
 require absolute_static(icmp_message);
-require in_place(icmp_message.body.echo.sequence);
+
+// And the conflict section 14.2 exists to make visible: `sequence` is inside
+// the coverage, so writing it is still a store to the same two bytes and it
+// leaves the checksum stale. `in_place` reads both axes and fails; the form
+// that asks only about the store is `in_place_dirty`, and the difference
+// between the two is the whole point.
+require in_place_dirty(icmp_message.body.echo.sequence);
+assert in_place(icmp_message.body.echo.sequence);
 
 // What the variant costs, which is nothing. Every arm is four bytes, so the
 // message has one size and every member of every arm sits at a constant
@@ -86,23 +100,16 @@ assert random_access(icmp_message.body);
 // 14.5 says an unmatched discriminant is refused rather than guessed at. The
 // generated `validate` returns the version error for one.
 
-// THE CHECKSUM, and the one thing in this header situ cannot say.
+// WHAT THE COMPILER CONTRIBUTES, and what it does not. The algorithm is the
+// caller's -- a signature says what a transform does, never how (13.1) -- so
+// what is generated is the two things only the compiler knows: the span the
+// sum runs over, and where inside that span the checksum's own bytes are.
 //
-// It covers the whole message, so mutating `sequence` invalidates it: exactly
-// the tag machinery of section 14.2, which would mark it stale on a covered
-// write and refuse to hand out the buffer until it was recomputed. Writing
-// that means wrapping the message in `authenticated { }` and declaring
+//     situ_icmp_message_checksum_covered(view, &at, &len)
+//     situ_icmp_message_checksum_self_span(view, &hole, &n)
+//     SITU_ICMP_MESSAGE_CHECKSUM_SELF_AS
 //
-//     checksum u8 checksum[2] covers(message);
-//
-// and situ refuses it, correctly for what it knows:
-//
-//     error: `checksum` is inside the region it covers
-//     = computing it would take its own bytes as input
-//
-// True of a cryptographic tag and false of this one: RFC 1071 says the
-// checksum field is taken as *zero* while the sum is computed, so the coverage
-// is self-inclusive by definition. `examples/ipv4` carries the same note, and
-// TCP and UDP in this directory have the same checksum. Four askers, one
-// construct, and until it exists the field stays plain and the caller
-// recomputes it with nothing to warn them if they forget.
+// A caller sums `len` bytes from `at`, substituting SELF_AS for the `n` bytes
+// at `hole`. That is RFC 1071 with nothing left implicit, and it is the same
+// shape a GPT header CRC needs, which zeroes its own field, and a tar header
+// sum, which uses spaces -- which is why `self_as` carries a value.

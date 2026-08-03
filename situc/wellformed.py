@@ -1287,24 +1287,51 @@ def _check_covers_resolve(tag: ast.TagField, covers: tuple[str, ...],
 		)
 
 
+def _attr(attrs: tuple[ast.Attr, ...], name: str) -> ast.Attr | None:
+	return next((attr for attr in attrs if attr.name == name), None)
+
+
 def _check_tag_is_outside_its_coverage(tag: ast.TagField, covers: tuple[str, ...],
 		by_name: dict[str, ast.Authenticated | ast.Sealed]) -> None:
-	"""A tag may not sit inside the bytes it authenticates.
+	"""A tag may not sit inside the bytes it authenticates, unless it says
+	what its own bytes read as while it is computed.
 
-	Computing it would need its own value as input. Nothing about this is
-	recoverable at run time, so it is an error here.
+	Computing it would otherwise need its own value as input, which is not
+	recoverable at run time and so is an error here. That is true of a
+	cryptographic tag and false of the checksum family: RFC 1071 defines the
+	Internet checksum over the header *including* the checksum field, taken as
+	zero, and IPv4, ICMP, TCP and UDP all carry one. GPT's header CRC zeroes
+	its own field the same way and tar's header sum uses spaces, which is why
+	`self_as` carries a value rather than being a flag.
 	"""
-	for name in covers:
-		region = by_name.get(name)
-		if region is not None and any(held is tag for held in tag_fields(region.members)):
-			raise error(
-				f"`{tag.name}` is inside the region it covers",
-				tag.span,
-				label = f"declared inside `{name}`",
-				notes = ["computing it would take its own bytes as input",
-				         f"move it out of `{name}`, or narrow its `covers` "
-				         "clause to regions that do not contain it"],
-			)
+	inside = next((name for name in covers
+	               if (region := by_name.get(name)) is not None
+	               and any(held is tag for held in tag_fields(region.members))),
+	              None)
+	filler = _attr(tag.attrs, "self_as")
+
+	if inside is not None and filler is None:
+		raise error(
+			f"`{tag.name}` is inside the region it covers",
+			tag.span,
+			label = f"declared inside `{inside}`",
+			notes = ["computing it would take its own bytes as input",
+			         f"move it out of `{inside}`, or narrow its `covers` "
+			         "clause to regions that do not contain it",
+			         "a checksum defined over its own field -- the Internet "
+			         "checksum, a GPT header CRC -- declares what those bytes "
+			         "read as instead: `[self_as = 0]`"],
+		)
+
+	if inside is None and filler is not None:
+		raise error(
+			f"`{tag.name}` is not inside the region it covers",
+			filler.span,
+			label = "`self_as` has nothing to stand in for",
+			notes = ["it says what the tag's *own* bytes read as while the "
+			         "algorithm runs, which is a question only a tag inside "
+			         "its own coverage has"],
+		)
 
 
 def _check_coverage_is_disjoint_or_nested(

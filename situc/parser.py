@@ -127,6 +127,8 @@ ATTRIBUTE_NAMES = frozenset({
 	"equalize",
 	# section 14: cryptographic model
 	"secret", "nonce", "covers", "allow_unverified_read", "trusted",
+	# section 14.2: a checksum that covers its own bytes, taken as this
+	"self_as",
 	# section 15.2: register access modes and side effects (phase 10)
 	"rw", "ro", "wo", "w1c", "w0c", "w1s", "w0s", "rc", "rs", "wo_once", "rsvd",
 	"on_read", "on_write", "volatile", "no_rmw",

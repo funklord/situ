@@ -90,6 +90,14 @@ KEYWORDS = frozenset({
 UNESCAPABLE = frozenset({"crate", "self", "Self", "super"})
 
 
+def _self_as(attrs: tuple[ast.Attr, ...]) -> int | None:
+	"""What a self-covering tag's own bytes read as, or None (14.2)."""
+	for attr in attrs:
+		if attr.name == "self_as" and isinstance(attr.value, ast.IntLiteral):
+			return int(attr.value.value)
+	return None
+
+
 def _reader(endian: ast.Endian | None) -> str:
 	"""Which runtime read a scalar goes through.
 
@@ -988,6 +996,32 @@ class Emitter:
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
 				"\t\tOk((start, end - start))",
+				"\t}",
+			])
+
+		filler = _self_as(placement.attrs)
+		if filler is not None:
+			# A checksum defined over its own field runs the algorithm with
+			# those bytes taken as a constant. They are still there, so what
+			# the compiler hands out is where they are and what they read as
+			# (14.2); substituting them is the caller's loop.
+			lines.extend([
+				"",
+				f"\t/// What `{placement.name}`'s own bytes read as while it is",
+				"\t/// computed, and where they are. Sum the covered span,",
+				"\t/// substituting this value for those bytes. RFC 1071 is the",
+				"\t/// case this exists for.",
+				f"\tpub const SELF_AS_{c_name(placement.name).upper()}: u8 ="
+				f" {filler:#04x};",
+				"",
+				f"\tpub fn {name}_self_span(&self) -> Result<(usize, usize)> {{",
+				f"\t\tlet at = {self._unparen(self._offset_expression(struct, placement) or '0')};",
+				f"\t\tlet n  = {placement.size_bits // BITS_PER_BYTE};",
+				"",
+				"\t\tif at + n > self.bytes.len() {",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				"\t\tOk((at, n))",
 				"\t}",
 			])
 

@@ -441,6 +441,8 @@ class Emitter:
 				"}",
 			])
 
+		lines.extend(self._self_as_hole(struct, placement))
+
 		lines.extend([
 			f"static inline int "
 			f"{ident(self.prefix, struct.name, local, 'is_dirty')}"
@@ -456,6 +458,46 @@ class Emitter:
 		])
 
 		return lines
+
+	def _self_as_hole(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Where the tag's own bytes sit inside what it covers (14.2).
+
+		A checksum defined over its own field -- the Internet checksum, a GPT
+		header CRC -- runs the algorithm with those bytes taken as a constant.
+		The bytes are still there, so the compiler cannot hand out a span with
+		a hole in it and generated code never allocates a copy (invariant 4).
+		What it can say is exactly where the hole is and what it reads as,
+		which is the whole of what only the compiler knows.
+		"""
+		filler = _self_as(placement.attrs)
+		if filler is None:
+			return []
+
+		local = c_name(self._local(struct, placement))
+		return [
+			f"/* `{placement.name}` covers its own bytes, which the algorithm",
+			f" * takes as {filler:#04x} rather than as what is there. Sum the",
+			" * covered span, substituting that value for the `len` bytes at",
+			" * `offset` below. RFC 1071 is the case this exists for. */",
+			f"#define {macro(self.prefix, struct.name, local + '_self_as')}"
+			f" {filler:#04x}u",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'self_span')}"
+			"(situ_view_t view, uint32_t *offset, uint32_t *len)",
+			"{",
+			f"	const uint32_t at = {self._base_expression(struct, placement)};",
+			f"	const uint32_t n  = {self._fixed_extent(placement) or 0}u;",
+			"",
+			"	if (!situ_in_bounds(view, at, n)) {",
+			"		return SITU_ERR_BOUNDS;",
+			"	}",
+			"",
+			"	*offset = at;",
+			"	*len    = n;",
+			"	return SITU_OK;",
+			"}",
+		]
 
 	def _covered_spans(self, struct: ResolvedStruct,
 			tag: Placement) -> tuple[str, str] | None:
@@ -488,11 +530,37 @@ class Emitter:
 			return f"{region.offset_bytes + region.size_bits // BITS_PER_BYTE}u"
 
 		members = self._top_level(struct)
-		index   = next(i for i, held in enumerate(members)
-		               if held.path == region.path)
+		index   = next((i for i, held in enumerate(members)
+		                if held.path == region.path), None)
+
+		# An `authenticated` region is not one of them: it consumes no bytes
+		# of its own and names bytes its members already account for, which is
+		# why `own_members` drops it (see `traverse.NOT_A_MEMBER`). So its end
+		# is the end of its last member. Reaching for the region itself was a
+		# StopIteration out of the emitter for the first schema whose
+		# authenticated region is not fixed-size -- an IPv4 header, whose
+		# checksum covers its options.
+		if index is None:
+			inside = [i for i, held in enumerate(members)
+			          if region.name in held.regions]
+			if not inside:
+				return "view.limit"
+			index = inside[-1]
 
 		if index + 1 < len(members):
 			return self._base_expression(struct, members[index + 1])
+
+		# Nothing follows, so the region runs to the end of what it holds --
+		# which is the end of the *view* only where its last member's extent
+		# is not something this backend can compute. An IPv4 header's checksum
+		# covers to the end of its options, and a caller who framed the whole
+		# datagram would otherwise be told to sum the payload too.
+		last = members[index]
+		if self._has_length(struct, last):
+			return (f"({self._base_expression(struct, last)}"
+			        f" + ({self._length_expression(struct, last)}))")
+		if last.is_fixed_size and last.offset_bits is not None:
+			return f"{last.offset_bytes + last.size_bits // BITS_PER_BYTE}u"
 		return "view.limit"
 
 	def _sealed_gate(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
@@ -5486,6 +5554,14 @@ def _all_ones(bits: int) -> str:
 
 def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:
 	return any(attr.name == name for attr in attrs)
+
+
+def _self_as(attrs: tuple[ast.Attr, ...]) -> int | None:
+	"""What a self-covering tag's own bytes read as, or None (14.2)."""
+	for attr in attrs:
+		if attr.name == "self_as" and isinstance(attr.value, ast.IntLiteral):
+			return int(attr.value.value)
+	return None
 
 
 def _reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:

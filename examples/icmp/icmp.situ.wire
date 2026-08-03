@@ -26,5 +26,6 @@ struct icmp_frag size=4
 struct icmp_message size=8
   @0x0000   1         icmp_type  type
   @0x0001   1         u8         code
-  @0x0002   2         u16        checksum  big
+  @0x0002   2         u8         checksum
   @0x0004   4         variant    body
+  checksum covers: body echo identifier sequence frag <reserved0> mtu gateway pointer reply identifier sequence unused code message type

@@ -2493,6 +2493,22 @@ Rules:
 - `require no_tag_invalidation(expr)` is statically checkable: it passes only
   if the mutated field is `Uncovered`.
 
+**A checksum may cover its own bytes, if it says what they read as.** A
+cryptographic tag inside the region it covers is an error -- computing it would
+take its own value as input -- and the checksum family is the exception the
+rule has to admit. RFC 1071 defines the Internet checksum over the header
+*including* the checksum field, taken as zero; a GPT header CRC zeroes its own
+field the same way, and a tar header sum uses spaces. `[self_as = N]` on the
+tag is that sentence, and it carries a value for the reason tar gives.
+
+What the compiler contributes is unchanged -- the algorithm is the caller's
+(13.1) -- but there are now two things only it knows rather than one: the span
+the algorithm runs over, and where inside that span the tag's own bytes are.
+The generated pair is `X_covered()` and `X_self_span()` with `X_SELF_AS`; the
+bytes are still in the buffer, so nothing is copied and nothing is allocated
+(invariant 4). Writing the tag does not mark it stale: it is not covered by
+itself.
+
 **Coverage weakens `auth` and leaves `mutate` alone.** Writing a covered field
 is still a store to the same bytes at the same offset; what it costs is a tag
 recomputation, and that obligation is what the `auth` axis records. Conflating

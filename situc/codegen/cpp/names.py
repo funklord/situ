@@ -65,7 +65,8 @@ SUFFIXES = frozenset({
 	"at", "big", "count", "covered", "decode", "decoded_max", "digits", "eq",
 	"extent", "finalize", "find", "first", "from", "gate", "host", "index",
 	"indexed", "is_dirty", "is_little", "is_stale", "item", "len", "little",
-	"next", "of_host", "offset", "raw_len", "read", "span", "span_from", "t",
+	"next", "of_host", "offset", "raw_len", "read", "self_span", "span",
+	"span_from", "t",
 	"terminated", "terminated_from", "valid", "value",
 })
 

@@ -81,6 +81,14 @@ def _order(endian: ast.Endian | None) -> str:
 	return str(endian is not ast.Endian.LITTLE)
 
 
+def _self_as(attrs: tuple[ast.Attr, ...]) -> int | None:
+	"""What a self-covering tag's own bytes read as, or None (14.2)."""
+	for attr in attrs:
+		if attr.name == "self_as" and isinstance(attr.value, ast.IntLiteral):
+			return int(attr.value.value)
+	return None
+
+
 def _pythonic(source: str) -> str:
 	"""A schema expression as Python.
 
@@ -243,7 +251,29 @@ class Emitter:
 		lines.extend(f"\t{c_name(member.name)} = {values[member.name]}"
 		             for member in decl.members)
 		lines.append("")
+
+		# An alias, where some struct has a member of the same name. Inside a
+		# class body the member's property shadows the enum, so every
+		# annotation written *after* it resolves to the property object --
+		# `def set_protocol(self, value: protocol | int)` in an IPv4 header,
+		# where `protocol` is both the enum and the field. Decision 0025 makes
+		# the same move in C++ for the same reason: rename the reference, not
+		# the name the schema chose.
+		if c_name(decl.name) in self._shadowed_enums():
+			lines.extend([
+				f"#: `{decl.name}` again, for annotations inside a class that",
+				"#: has a member of that name and so shadows it.",
+				f"_situ_{c_name(decl.name)} = {c_name(decl.name)}",
+				"",
+			])
 		return lines
+
+	def _shadowed_enums(self) -> set[str]:
+		"""Enum names some struct also uses as a member name."""
+		members = {c_name(entry.placement.name)
+		           for struct in self.resolved.structs.values()
+		           for entry in struct.entries}
+		return {c_name(name) for name in self.enums} & members
 
 	# -- structs -------------------------------------------------------
 
@@ -1155,6 +1185,30 @@ class Emitter:
 				"\t\treturn start, end - start",
 			])
 
+		filler = _self_as(placement.attrs)
+		if filler is not None:
+			# A checksum defined over its own field runs the algorithm with
+			# those bytes taken as a constant. They are still there, so what
+			# the compiler hands out is where they are and what they read as
+			# (14.2); substituting them is the caller's loop.
+			lines.extend([
+				"",
+				f"	SELF_AS_{c_name(placement.name).upper()} = {filler:#04x}",
+				"",
+				f"	def {name}_self_span(self) -> tuple[int, int]:",
+				f'		"""Where {placement.name}\'s own bytes sit inside what it',
+				"		covers. Sum the covered span, substituting",
+				f"		SELF_AS_{c_name(placement.name).upper()} for these bytes.",
+				'		RFC 1071 is the case this exists for."""',
+				"		self._check()",
+				f"		at = {self._offset_expression(struct, placement) or '0'}",
+				f"		n  = {placement.size_bits // BITS_PER_BYTE}",
+				"",
+				"		if at + n > self._len:",
+				f'			raise BoundsError("{placement.name}: outside this frame")',
+				"		return at, n",
+			])
+
 		held = obligation(self.schema, struct, placement.name)
 		if held is not None:
 			bit = f"self.DIRTY_{c_name(placement.name).upper()}"
@@ -2009,7 +2063,10 @@ class Emitter:
 		admits it outright. So the hint is honest about both.
 		"""
 		if placement.type_name in self.enums:
-			return f"{c_name(placement.type_name)} | int"
+			name = c_name(placement.type_name)
+			if name in self._shadowed_enums():
+				name = f"_situ_{name}"
+			return f"{name} | int"
 		return "int"
 
 	def _located(self, struct: ResolvedStruct, placement: Placement) -> list[str]:

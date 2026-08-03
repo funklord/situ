@@ -3833,6 +3833,40 @@ class Emitter:
 				"\t}",
 			])
 
+		filler = _self_as(placement.attrs)
+		if filler is not None:
+			# A checksum defined over its own field runs the algorithm with
+			# those bytes taken as a constant. They are still there, so what
+			# the compiler hands out is where they are and what they read as
+			# (14.2); substituting them is the caller's loop.
+			lines.extend([
+				"",
+				f"\t/* What {placement.name}'s own bytes read as while it is",
+				"\t * computed, and where they are. Sum the covered span,",
+				"\t * substituting this value for those bytes. RFC 1071 is the",
+				"\t * case this exists for. */",
+				f"\tstatic constexpr std::uint8_t"
+				f" self_as_{c_name(placement.name)} = {filler:#04x};",
+				"",
+				f"\t[[nodiscard]] ::situ::rt::err {name}_self_span("
+				"std::uint32_t &offset,",
+				"\t\t\tstd::uint32_t &len) const noexcept",
+				"\t{",
+				f"\t\tconst std::uint32_t at ="
+				f" {self._offset_expression(struct, placement) or '0'};",
+				f"\t\tconst std::uint32_t n  ="
+				f" {placement.size_bits // BITS_PER_BYTE};",
+				"",
+				"\t\tif (!situ_in_bounds(raw(), at, n)) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				"",
+				"\t\toffset = at;",
+				"\t\tlen    = n;",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			])
+
 		held = obligation(self.schema, struct, placement.name)
 		if held is not None:
 			lines.extend([
@@ -4487,6 +4521,14 @@ def _storage_width(bits: int) -> int:
 		if bits <= width:
 			return width
 	return 64
+
+
+def _self_as(attrs: tuple[ast.Attr, ...]) -> int | None:
+	"""What a self-covering tag's own bytes read as, or None (14.2)."""
+	for attr in attrs:
+		if attr.name == "self_as" and isinstance(attr.value, ast.IntLiteral):
+			return int(attr.value.value)
+	return None
 
 
 def _order_suffix(endian: ast.Endian | None) -> str:
