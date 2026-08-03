@@ -227,7 +227,7 @@ class Emitter:
 		lines.extend(self._offsets(struct))
 
 		for entry in own_entries(struct):
-			lines.extend(self._member(struct, entry))
+			lines.extend(self._explained(struct, entry))
 
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
@@ -1568,6 +1568,32 @@ class Emitter:
 				f"\t\t\t{inner}.SIZE_BYTES)",
 			]
 		return []
+
+	def _explained(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""One member, and where it has no setter, why.
+
+		Section 1: the absence of an operation is "deliberate, explained, and
+		assertable". This backend explained a weakened `mutate` for a scalar
+		and said nothing for a delimited or variable member, which is the
+		commonest case there is (26.35).
+		"""
+		lines  = self._member(struct, entry)
+		mutate = entry.vector.get(Axis.MUTATE)
+
+		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
+			return lines
+		if any("mutate is" in line or "setter" in line for line in lines):
+			return lines
+		if not any("memoryview" in line for line in lines):
+			return lines
+
+		name = c_name(local_name(struct, entry.placement))
+		return lines + [
+			"",
+			f"\t# No {name} setter: mutate is {mutate.render()}. The bytes",
+			"\t# above are where they are; making room for more of them is a",
+			"\t# rewrite of the frame rather than a store.",
+		]
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement

@@ -201,7 +201,7 @@ class Emitter:
 		lines.extend(self._dirty_constants(struct))
 
 		for entry in own_entries(struct):
-			lines.extend(self._member(struct, entry))
+			lines.extend(self._explained(struct, entry))
 
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
@@ -2909,6 +2909,34 @@ class Emitter:
 
 		return [*head, f"\t/* ...and `{placement.name}` is not a shape this"
 		        " backend reaches into yet. */"]
+
+	def _explained(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""One member, and where it has no setter, why.
+
+		Section 1: the absence of an operation is "deliberate, explained, and
+		assertable". The explanation lived in the scalar branch, which a
+		delimited or variable member never reaches -- so
+		`http.request_line.method` had a span, a length, no setter and nothing
+		saying so (26.35).
+		"""
+		lines  = self._member(struct, entry)
+		mutate = entry.vector.get(Axis.MUTATE)
+
+		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
+			return lines
+		if any("mutate is" in line or "No setter" in line for line in lines):
+			return lines
+		if not any("::situ::rt::bytes" in line or "const_bytes" in line
+		           for line in lines):
+			return lines
+
+		return lines + [
+			"",
+			f"\t/* No setter: mutate is {mutate.render()}. The span above is",
+			"\t * where the bytes are; making room for more of them is a"
+			" rewrite",
+			"\t * of the frame rather than a store. */",
+		]
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement

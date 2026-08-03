@@ -126,6 +126,76 @@ def promised(struct: ResolvedStruct) -> list[str]:
 	return found
 
 
+def unwritable(struct: ResolvedStruct) -> list[str]:
+	"""The struct's own members that have an accessor and no setter.
+
+	`mutate` weakened below `InPlaceFixed` is the map saying a write does not
+	fit where the member sits. Section 1 says the absence is "deliberate,
+	explained, and assertable", and the explanation is the part a reader of
+	the header needs: a span, a length and no setter, with nothing saying
+	which of the two it is -- an oversight, or the schema.
+	"""
+	found: list[str] = []
+
+	for entry in struct.entries:
+		placement = entry.placement
+
+		if "." in local_name(struct, placement) or "[]" in placement.path:
+			continue
+		if placement.kind not in ("field",):
+			continue
+		if placement.scalar is None or placement.type_name in ("", None):
+			continue
+		# A member with no accessor at all has already been declined, and the
+		# branch that declined it said why. Two refusals read as two problems.
+		if placement.sealed_by or placement.marker is not None:
+			continue
+		if any(attr.name == "secret" for attr in placement.attrs):
+			continue
+
+		if entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
+		                                          "InPlaceSlack"):
+			continue
+
+		found.append(c_name(local_name(struct, placement)))
+
+	return found
+
+
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_unwritable_member_says_why(schema: Path) -> None:
+	"""The other half of the claim, and the half three backends did not keep.
+
+	`http.request_line.method` is `mutate = Shifting`: a delimited member's
+	length is wherever the delimiter turns out to be, so a longer value needs
+	the bytes after it to move. Three backends emitted a pointer, a length and
+	no setter, and said nothing at all -- Rust alone explained it, from a
+	setter emitter it calls for every member (26.35)."""
+	source, resolved, _ = analyse(schema)
+	parsed = parse(source)
+
+	emitted = {name: "\n".join(generate(parsed, resolved, "unit").files().values())
+	           for name, generate in BACKENDS.items()}
+
+	silent: list[str] = []
+	for struct in resolved.structs.values():
+		if struct.layout.register is not None:
+			continue
+
+		for local in unwritable(struct):
+			for backend, text in emitted.items():
+				# The note names the member or the operation it would have
+				# been: `No set_method(): mutate is Shifting.` in Rust, `No
+				# name setter: ...` in Python, and a block comment in C and
+				# C++ that follows the member's own accessors.
+				if "mutate is" not in text:
+					silent.append(f"{backend}: {struct.name}.{local}")
+
+	assert not silent, (
+		f"{schema.name}: no setter and no explanation:\n  "
+		+ "\n  ".join(sorted(set(silent))))
+
+
 @pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
 def test_every_writable_member_has_a_setter(schema: Path) -> None:
 	source, resolved, _ = analyse(schema)

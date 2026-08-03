@@ -3575,7 +3575,19 @@ class Emitter:
 			return []
 		if scalar is None or placement.array_count is not None \
 				or placement.sized_by is not None:
-			return []
+			# A run has no setter: its bytes are the slice above. Where the
+			# map has *weakened* `mutate`, though, that is a claim about the
+			# member and section 1 says the absence is explained -- and this
+			# said nothing for `message.opts`, whose length a field decides.
+			mutate = entry.vector.get(Axis.MUTATE)
+			if scalar is None or mutate.base in ("InPlaceFixed",
+			                                     "InPlaceSlack"):
+				return []
+			name = _ident(f"set_{c_name(local_name(struct, placement))}")
+			return ["",
+			        f"\t// No {name}(): mutate is {mutate.render()}. The slice",
+			        "\t// above is where the bytes are; making room for more of",
+			        "\t// them is a rewrite of the frame rather than a store."]
 		if placement.type_name in self.structs:
 			return []
 

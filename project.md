@@ -6205,6 +6205,25 @@ setter bumps the view generation (12.3), and an enum takes its own type in two
 languages and an integer in two. Each is written down where the subset is
 chosen -- the same rule the read subset follows.
 
+**Re-deriving 26.31, as section 0 asks.** Every refusal in every generated file
+in every backend, collected and read: the list is still empty in the sense that
+matters -- nothing claims a construct is unsupported that is supported. What
+came out of it instead is an asymmetry in the *explanations*.
+
+Section 1 says a field that cannot be mutated in place "does not get an
+in-place setter. The absence is deliberate, explained, and assertable."
+`http.request_line.method` is `mutate = Shifting`, because a delimited member's
+length is wherever the delimiter turns out to be and a longer value moves the
+bytes after it. Three backends emitted a pointer, a length, no setter, and
+nothing at all. Rust explained it -- and had the same silence for a run whose
+length a *field* decides, which no backend explained.
+
+Both are explained in all four now, and a check holds them there: every member
+the map calls unwritable, in every schema, must say why in every backend. The
+explanation matters more than it sounds. A span with no setter beside it reads
+as an oversight; the same span with `mutate is Shifting` and the blame chain
+that produced it reads as the schema, which is what the capability map is for.
+
 **Every subcommand, over every schema.** Ten of the fourteen CLI commands take
 a schema and produce something, and every pair had been exercised by *some*
 test on *some* schema -- which is not the same claim as every pair. Running all
@@ -6377,7 +6396,7 @@ had four dead `type: ignore` comments, which strict mode calls errors, and it
 is checked now. The generated modules are checked in the suite, once, over
 every schema at a time.
 
-**Status:** 2570 unit tests, 7 skipped; generated C compiled and run on the
+**Status:** 2595 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation.
 
 ### Invariants to hold across all phases

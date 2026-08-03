@@ -231,7 +231,7 @@ class Emitter:
 		lines.extend(self._view_acquisition(struct))
 
 		for entry in struct.entries:
-			lines.extend(self._field(struct, entry))
+			lines.extend(self._explained(struct, entry))
 
 		# After the members, not before: it sums their `_span` functions, and
 		# the C preprocessor is not a scope. Emitting it beside the size
@@ -848,6 +848,37 @@ class Emitter:
 		return lines
 
 	# -- one field ------------------------------------------------------
+
+	def _explained(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		"""One member, and where it has no setter, why.
+
+		Section 1: "A field that cannot be mutated in place does not get an
+		in-place setter. The absence is deliberate, explained, and
+		assertable." The explanation lived in `_scalar_set`, which a delimited
+		or variable member never reaches -- so `http.request_line.method` had
+		a pointer, a length, no setter and nothing saying so. Rust alone said
+		it, from a setter emitter it calls for every member (26.35).
+
+		A member with no accessor at all is left alone: the branch that
+		declined it has already said why, and two refusals read as two
+		problems.
+		"""
+		lines  = self._field(struct, entry)
+		mutate = entry.vector.get(Axis.MUTATE)
+
+		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
+			return lines
+		if any("mutate is" in line or "No setter" in line or "No plain setter"
+		       in line for line in lines):
+			return lines
+		# A pointer *is* the write path for a byte run, and the map says
+		# `Shifting` because the run's length moves what follows rather than
+		# because the bytes are unreachable.
+		if any("_ptr(" in line or "No accessor" in line for line in lines):
+			refusal = self._setter_refusal(entry)
+			return lines if refusal is None else lines + ["", *refusal]
+
+		return lines
 
 	def _field(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
