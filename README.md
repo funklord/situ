@@ -265,9 +265,9 @@ regions.
 
 Six of them carry a `.vectors` file, and what is in it matters more than that
 it exists: bytes some *other* implementation wrote, with that implementation
-named. ImageMagick for `bmp`, glibc's `struct arphdr` for `arp`, lwIP's SNTP
-client for `ntp`, U-Boot's `bin2bcd` and DS1307 driver for `rtc`, the Linux
-Bluetooth stack for `ble`, and for `netlink` the reply a `NETLINK_ROUTE` socket
-gave to a dump request. A description that agrees only with its own compiler
-has demonstrated nothing, and two of those six disagreed with the schema on
-arrival.
+named. ImageMagick for `bmp` -- a whole file, header and pixels -- glibc's
+`struct arphdr` for `arp`, lwIP's SNTP client for `ntp`, U-Boot's `bin2bcd` and
+DS1307 driver for `rtc`, the Linux Bluetooth stack for `ble`, and for `netlink`
+the reply a `NETLINK_ROUTE` socket gave to a dump request. A description that
+agrees only with its own compiler has demonstrated nothing, and two of those
+six disagreed with the schema on arrival.

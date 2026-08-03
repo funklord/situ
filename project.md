@@ -6397,6 +6397,109 @@ host and under aarch64 emulation; every dissector executed; `make fuzz` clean
 over 26 harnesses; six worked examples carrying bytes an independent
 implementation wrote.
 
+### 26.38 The notes that outlived their phases
+
+Six of the oldest worked examples carried a `// PHASE n:` note describing what
+they would say once some phase landed. Every one of those phases landed a long
+time ago. UDP's payload, IPv4's and TCP's options, ICMP's variant, BMP's pixel
+array: each note described a construct the language has had for months, in a
+file the README tells a reader to open first.
+
+That is worse than a stale README, and for a reason worth stating. These are
+the schemas somebody meets situ through, and they were frozen at phase 4 while
+every example written since -- `http`, `ble`, `netlink` -- does the whole job.
+A reader comparing them would conclude the language could not do in 2026 what
+it demonstrably does two directories along.
+
+The examples/README convention for this is `// STATUS: needs phase N.`, and a
+test enforces it for any example carrying that marker. None of these six used
+that spelling, so the check that exists for exactly this drift never saw them.
+There is nothing clever to add: the notes are written out now, and the phases
+they named are gone from the tree.
+
+#### What writing them found
+
+Nine defects, and not one of them was in the construct the note described. The
+constructs work; what had never been asked is what the *artifacts around them*
+do when a real format uses them.
+
+**An expression could not name a nested field.** `at file.pixel_offset` -- BMP's
+pixel array, placed where the file header says it is -- was emitted verbatim
+into all four languages, because every backend's name list stopped at the dot.
+The dotted path is an identifier in C, a member function in C++, an attribute
+in Python. `traverse.readable_names` answers the question once now.
+
+Fixing it exposed a second one in the rewriter itself: it substituted one name
+at a time over the whole string, so a later substitution could rewrite what an
+earlier one wrote. Every backend's getter mentions the view it reads through,
+which makes a schema with a field called `view` or `self` a silent collision
+waiting for somebody to write it. One alternation, one pass, cannot match its
+own output.
+
+**Nothing validated a variant's arms.** In any backend. A variant's check was
+the discriminant and nothing else, so every constraint inside an arm -- a
+`[must_eq]`, an enum with `default = error`, a `reserved` field the format says
+is zero -- was declared by the schema and enforced by nobody. It went unnoticed
+because no arm in this repository had a struct with a constraint in it until
+ICMP's fragmentation message did. Through the arm's own accessor, which already
+refuses the arm that is not present.
+
+**A constant-sized byte array arm was unreachable in three backends.** `u8
+gateway[4]` is an ICMP redirect's entire payload. C++ declined it with a note
+saying its length was not one it could compute; Rust and Python emitted nothing
+and said nothing. The length is four. The shared cause is one question asked
+wrongly -- "does the *data* decide this length" where "is there a length" was
+meant -- which is 26.37's predicate lesson arriving from the other side.
+
+**`gen-checks` poked bytes nobody had selected.** It flipped a reserved field
+inside a variant arm and asserted `validate` would refuse it, without setting
+the discriminant that puts the arm in the message. The bytes it broke belonged
+to whichever arm a zeroed discriminant selects, and that arm had nothing to say
+about them.
+
+**Three artifacts assumed a struct's frame is its message.** A `located` member
+reaches past the frame by construction (9.8), so `gen-tests` refused a 78-byte
+BMP file for a 54-byte struct and then, once it accepted it, declared a
+54-byte buffer for it; `gen-fuzz` reached for the `_len` and `_ptr` a located
+member has not got; and C emitted no setter for one and, alone among the four,
+no explanation either. Three artifacts, one wrong assumption, and the construct
+had existed unexercised long enough for all three to grow it.
+
+**And `size(X)` blamed the wrong thing.** `SchemaLayout.lookup` returns None for
+four different reasons and the caller reported all of them as "unknown path" --
+so `size(udp_header)` on a struct that is plainly declared said it was not
+declared. What is true is that a struct with a payload no longer *has* one
+size, which is the thing a reader needs to be told. Invariant 18, four reasons
+down.
+
+#### The construct four formats are asking for
+
+IPv4, ICMP, TCP and UDP all carry the Internet checksum, and situ cannot
+express it. Not because the tag machinery is missing -- it is exactly what
+these want, and 14.2's dirty bit is the mechanism -- but because the checksum
+covers the header *including its own bytes*, taken as zero (RFC 1071). situ
+refuses that, and the refusal is right for what it knows:
+
+    error: `checksum` is inside the region it covers
+    = computing it would take its own bytes as input
+
+True of a cryptographic tag and false of this one. The same shape appears in
+GPT's header CRC, which zeroes its own field, and in tar's header sum, which
+uses spaces. What it needs is an attribute on the tag saying what its own bytes
+read as while it is computed, and what that costs is the finalize path in four
+backends.
+
+Four askers is more than any construct in this language has waited for --
+invariant 31 asks for two. It is not built here because building it belongs in
+its own fold rather than at the end of one about stale comments, and the two
+schemas that most want it now say so where a reader will find it.
+
+**Status:** 2685 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; seven worked
+examples carrying bytes an independent implementation wrote -- `bmp`'s is now a
+whole file rather than its two headers, which is the arithmetic between them
+made checkable by the schema rather than by a hand-written test.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -6851,6 +6954,30 @@ implementation wrote.
    again, for ever. It hung rather than emitting anything wrong, which is the
    good failure, and only a schema that actually calls one could produce it.
    A rewrite over generated text has to move forward past what it wrote.
+
+54. **A note saying "when phase N lands" is a promise with an expiry nobody
+   set.** Six worked examples carried one, every phase named had landed, and
+   the newest of those notes was months stale -- in the files the front page
+   tells a reader to open first. The convention for this is
+   `// STATUS: needs phase N.` and a test enforces it; none of the six used
+   that spelling, so the check written for exactly this drift never saw them.
+   A deferral has to be written in the one form something looks for, or it is
+   a comment like any other, and comments do not expire.
+
+55. **A construct nothing exercised is a construct the artifacts around it
+   have not met either.** `located` had worked since section 9.8 landed and
+   nothing had ever put one in a schema, so `gen-tests` sized its buffer from
+   the frame, `gen-fuzz` reached for accessors it has not got, and C omitted
+   its setter refusal. None of those is a bug in `located`; all three are
+   places that grew a rule while the construct sat unreachable. Ask what
+   *reads* a construct, not only what emits it.
+
+56. **A frame is not a message, and only one construct makes them differ.**
+   Every struct in this repository had a frame that was the whole message
+   until one placed a member `at` an offset the data chose. Three artifacts
+   asked the struct how big it was and got an answer about the frame -- which
+   is what "fixed size" means for a struct with a located member, and is not
+   what a vector, a fuzz buffer or a bounds check wants to know.
 
 ---
 
