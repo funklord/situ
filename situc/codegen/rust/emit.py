@@ -32,13 +32,13 @@ from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
 )
-from situc.names import over_fields, render_delimiter
+from situc.names import expand_calls, over_fields, render_delimiter, rust_spelling
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Check, Member, arm_members, covered_run, decode_bound, offset_plan,
+	Check, Member, arm_members, covered_run, data_sized, decode_bound, offset_plan,
 	region_extent,
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
@@ -2203,7 +2203,7 @@ class Emitter:
 				return f"({self._unparen(raw)} as usize)"
 			return f"({held}.{_ident(c_name(name))}() as usize)"
 
-		return over_fields(names, source, read)
+		return expand_calls(over_fields(names, source, read), rust_spelling)
 
 
 	def _run_index(self, struct: ResolvedStruct, placement: Placement,
@@ -3823,7 +3823,7 @@ class Emitter:
 				checks.extend(self._delimiter_checks(struct, placement))
 				continue
 			if check is Check.REPEATED:
-				checks.extend(self._array_checks(placement, name))
+				checks.extend(self._array_checks(struct, placement, name))
 				continue
 			if check is Check.NESTED:
 				# Only where the accessor exists.
@@ -3897,25 +3897,62 @@ class Emitter:
 			"\t}",
 		]
 
-	def _array_checks(self, placement: Placement, name: str) -> list[str]:
+	def _reserved_checks(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Reserved bytes hold their pattern, however many of them there are.
+
+		This backend was the one that did not crash on a run the message
+		sizes, because it returned early on a count of None -- so it emitted
+		no check at all and said nothing, which invariant 27 rates below the
+		crash.
+		"""
+		policy = _reserved_policy(placement.attrs)
+		scalar = placement.scalar
+		if policy not in ("must_be_zero", "must_be_one") or scalar is None:
+			return []
+		if scalar.is_bit_packed or scalar.bits % BITS_PER_BYTE != 0:
+			return []
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return [f"\t\t// {placement.path}: this backend cannot resolve"
+			        " where the reserved bytes are."]
+
+		width = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			count: str | None = str(placement.array_count * width)
+		elif data_sized(placement):
+			count = self._length_expression(struct, placement)
+			if count is None:
+				return [f"\t\t// {placement.path}: this backend cannot resolve"
+				        " how many reserved bytes there are."]
+		else:
+			count = str(width)
+
+		want = 0 if policy == "must_be_zero" else 0xFF
+		return [
+			f"\t\t// {placement.path} is reserved [{policy}]",
+			"\t\t{",
+			f"\t\t\tlet at = {start};",
+			f"\t\t\tlet n = {count};",
+			"\t\t\tlet end = core::cmp::min(at + n, self.bytes.len());",
+			f"\t\t\tif self.bytes[core::cmp::min(at, end)..end]"
+			f".iter().any(|&b| b != {want}) {{",
+			"\t\t\t\treturn Err(Error::Constraint);",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
+	def _array_checks(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
 		checks: list[str] = []
+		if placement.kind == "reserved":
+			return self._reserved_checks(struct, placement)
+
 		count = placement.array_count
 		if count is None or placement.scalar is None:
 			return checks
 		if placement.scalar.bits != BITS_PER_BYTE:
-			return checks
-
-		if placement.kind == "reserved":
-			policy = _reserved_policy(placement.attrs)
-			if policy in ("must_be_zero", "must_be_one"):
-				want  = 0 if policy == "must_be_zero" else 0xFF
-				start = placement.offset_bytes
-				checks.extend([
-					f"\t\tif self.bytes[{start}..{start + count}]"
-					f".iter().any(|&b| b != {want}) {{",
-					"\t\t\treturn Err(Error::Constraint);",
-					"\t\t}",
-				])
 			return checks
 
 		for attr in placement.attrs:

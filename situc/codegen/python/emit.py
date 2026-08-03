@@ -29,13 +29,16 @@ from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
 )
-from situc.names import over_fields, render_delimiter, translate_operators
+from situc.names import (
+	expand_calls, over_fields, python_spelling, render_delimiter,
+	translate_operators,
+)
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, containment_order, covered_run,
+	Check, Member, arm_members, containment_order, covered_run, data_sized,
 	decode_bound, region_extent, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
@@ -64,7 +67,7 @@ def _pythonic(source: str) -> str:
 	separately.
 	"""
 	return translate_operators(source, conj=" and ", disj=" or ",
-	                           ne="!=", neg="not ")
+	                           ne="!=", neg="not ", div="//")
 
 
 @dataclass
@@ -2394,8 +2397,10 @@ class Emitter:
 		names = [entry.placement.name for entry in struct.entries
 		         if entry.placement.scalar is not None
 		         and "." not in entry.placement.path[len(struct.name) + 1:]]
-		return _pythonic(over_fields(names, source,
-		                             lambda name: f"{held}.{c_name(name)}"))
+		return expand_calls(
+			_pythonic(over_fields(names, source,
+			                      lambda name: f"{held}.{c_name(name)}")),
+			python_spelling)
 
 	def _repeat_while(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -3341,6 +3346,11 @@ class Emitter:
 		assert scalar is not None
 
 		if check is Check.RESERVED:
+			# At a dynamic offset there is no constant to load from, and
+			# reaching for one crashed the compiler. For a whole-byte scalar
+			# the byte comparison says the same thing in either byte order.
+			if placement.offset_bits is None:
+				return self._reserved_check(struct, placement)
 			policy = _reserved_policy(placement.attrs)
 			if policy not in ("must_be_zero", "must_be_one"):
 				return []
@@ -3375,29 +3385,59 @@ class Emitter:
 			])
 		return lines
 
+	def _reserved_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Reserved bytes hold their pattern, however many of them there are.
+
+		A run the *message* sizes -- the padding after a variable-length
+		member -- reached the scalar branch and read a static offset it has
+		not got, which crashed the compiler rather than diagnosing anything.
+		"""
+		policy = _reserved_policy(placement.attrs)
+		scalar = placement.scalar
+		if policy not in ("must_be_zero", "must_be_one") or scalar is None:
+			return []
+		if scalar.is_bit_packed or scalar.bits % BITS_PER_BYTE != 0:
+			return []
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return [f"\t\t# {placement.path}: this backend cannot resolve"
+			        " where the reserved bytes are."]
+
+		width = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			count = str(placement.array_count * width)
+		elif data_sized(placement):
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return [f"\t\t# {placement.path}: this backend cannot resolve"
+				        " how many reserved bytes there are."]
+			count = length
+		else:
+			count = str(width)
+
+		want = 0 if policy == "must_be_zero" else 0xFF
+		return [
+			"\t\tself._check()",
+			f"\t\tat, n = self._at + ({start}), ({count})",
+			f"\t\tif any(b != {want} for b in self._msg.buffer[at:at + n]):",
+			f"\t\t\traise ConstraintError("
+			f"\"{placement.path} is reserved [{policy}]\")",
+		]
+
 	def _array_check(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType | None, name: str) -> list[str]:
 		if scalar is None or scalar.bits != BITS_PER_BYTE:
 			return []
+
+		if placement.kind == "reserved":
+			return self._reserved_check(struct, placement)
 		if placement.sized_by is not None:
 			return []
 
 		count = placement.array_count or 0
 		lines: list[str] = []
-
-		if placement.kind == "reserved":
-			policy = _reserved_policy(placement.attrs)
-			if policy in ("must_be_zero", "must_be_one"):
-				want = 0 if policy == "must_be_zero" else 0xFF
-				start = placement.offset_bytes
-				lines.extend([
-					f"\t\tself._check()",
-					f"\t\tif any(b != {want} for b in self._msg.buffer["
-					f"self._at + {start}:self._at + {start + count}]):",
-					f"\t\t\traise ConstraintError("
-					f"\"{placement.path} is reserved [{policy}]\")",
-				])
-			return lines
 
 		for attr in placement.attrs:
 			if attr.name == "encoding":

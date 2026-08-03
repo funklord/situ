@@ -46,7 +46,7 @@ def over_fields(names: list[str], source: str,
 
 
 def translate_operators(source: str, *, conj: str, disj: str,
-		ne: str, neg: str) -> str:
+		ne: str, neg: str, div: str = "/") -> str:
 	"""A schema condition in a target that does not spell C's operators.
 
 	The schema's operators are C's, which is a choice the language made once
@@ -57,9 +57,129 @@ def translate_operators(source: str, *, conj: str, disj: str,
 	**`!=` before `!`.** Rewriting negation first eats the `!` of an
 	inequality and leaves `not =`, which is not an expression in either
 	language. It is one line either way and the wrong line reads fine.
+
+	**`div` is the same shape and was not handled.** `/` is integer division
+	in C, C++ and Rust and float division in Python and Lua, so `body[n / 2]`
+	generated a Python slice bound of `2.5` -- `TypeError: slice indices must
+	be integers` -- and an offset that stayed a float from there on. The
+	docstring above this one had named that hazard as an analogy for the `||`
+	it did fix, which is as close as a comment gets to being a bug report.
+	Both spell floor division `//`, and floor and truncation agree wherever
+	both operands are non-negative: every size is, since a size whose lower
+	bound the solver cannot derive is refused (section 8.5). A signed operand
+	inside a *condition* is where the two still part.
 	"""
 	source = source.replace("!=", "\x00")		# park it out of reach of `!`
 	source = re.sub(r"!", neg, source)
 	source = source.replace("\x00", ne)
 	source = source.replace("&&", conj).replace("||", disj)
+	if div != "/":
+		source = re.sub(r"(?<![/*])/(?![/*])", div, source)
 	return re.sub(r"\s+", " ", source).strip()
+
+
+#: How many arguments each value builtin takes. `situc.expr` is authoritative
+#: about which exist; this is what a backend has to be able to spell.
+CALL_ARITY = {"min": 2, "max": 2, "align_up": 2}
+
+
+def expand_calls(source: str, spell: Callable[[str, list[str]], str]) -> str:
+	"""Rewrite each builtin call in a rendered expression as the target
+	spells it.
+
+	The expression reaches a backend as source text, and every backend passed
+	it through unchanged -- so `align_up(nla_len, 4)` arrived in C, C++,
+	Python and Rust as a call to a function that exists in none of them, and
+	the generated code did not compile. It had never been noticed because no
+	schema in the repository used a builtin in a size, which is a fact about
+	which schemas got written rather than a fact about the language.
+
+	`spell` is the backend's, because this is the one part of an expression
+	that genuinely differs: C has a conditional operator and Python has
+	`min`. What the *arithmetic* is stays here, so four targets cannot round
+	an alignment three ways.
+
+	Called after the field names have been rewritten, so the arguments are
+	already reads. They can therefore contain parentheses and, where a
+	builtin nests, commas -- both of which is why this counts depth rather
+	than reaching for a regex.
+	"""
+	for name in sorted(CALL_ARITY, key=len, reverse=True):
+		source = _expand_one(source, name, spell)
+	return source
+
+
+def _expand_one(source: str, name: str,
+		spell: Callable[[str, list[str]], str]) -> str:
+	pattern = re.compile(rf"\b{re.escape(name)}\s*\(")
+	while True:
+		found = pattern.search(source)
+		if found is None:
+			return source
+		args, end = _arguments(source, found.end())
+		if args is None or end is None:
+			return source		# unbalanced: leave it for the target to reject
+		source = source[:found.start()] + spell(name, args) + source[end:]
+
+
+def _rounded(value: str, unit: str, one: str, div: str) -> str:
+	"""`align_up`, as arithmetic. One definition, four targets.
+
+	The same rounding `situc.expr` folds a constant with, which is the reason
+	it is written once: a generated `align_up` that rounds differently from
+	the one the solver folded would make a schema mean two things depending on
+	whether the alignment was a literal.
+	"""
+	return f"((({value}) + ({unit}) - {one}) {div} ({unit}) * ({unit}))"
+
+
+def c_spelling(name: str, args: list[str]) -> str:
+	"""C and C++: a conditional operator, and unsigned literals for the flags
+	this project builds generated code under."""
+	left, right = args
+	if name == "align_up":
+		return _rounded(left, right, "1u", "/")
+	comparison = "<" if name == "min" else ">"
+	return f"((({left}) {comparison} ({right})) ? ({left}) : ({right}))"
+
+
+def rust_spelling(name: str, args: list[str]) -> str:
+	left, right = args
+	if name == "align_up":
+		return _rounded(left, right, "1", "/")
+	comparison = "<" if name == "min" else ">"
+	return f"(if ({left}) {comparison} ({right}) {{ ({left}) }} else {{ ({right}) }})"
+
+
+def python_spelling(name: str, args: list[str]) -> str:
+	left, right = args
+	if name == "align_up":
+		return _rounded(left, right, "1", "//")
+	return f"{name}(({left}), ({right}))"
+
+
+def lua_spelling(name: str, args: list[str]) -> str:
+	left, right = args
+	if name == "align_up":
+		return f"(math.floor((({left}) + ({right}) - 1) / ({right})) * ({right}))"
+	return f"math.{name}(({left}), ({right}))"
+
+
+def _arguments(source: str, start: int) -> tuple[list[str] | None, int | None]:
+	"""The comma-separated arguments of a call whose `(` is at `start - 1`."""
+	depth = 1
+	args: list[str] = []
+	piece = start
+	for index in range(start, len(source)):
+		char = source[index]
+		if char in "([":
+			depth += 1
+		elif char in ")]":
+			depth -= 1
+			if depth == 0:
+				args.append(source[piece:index].strip())
+				return args, index + 1
+		elif char == "," and depth == 1:
+			args.append(source[piece:index].strip())
+			piece = index + 1
+	return None, None

@@ -36,13 +36,13 @@ from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
 )
-from situc.names import over_fields, render_delimiter
+from situc.names import c_spelling, expand_calls, over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, containment_order, covered_run,
+	Check, Member, arm_members, containment_order, covered_run, data_sized,
 	decode_bound, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
@@ -1679,7 +1679,7 @@ class Emitter:
 				return f"({self._load(held.scalar, held, None)})"
 			return f"{c_name(name)}()"
 
-		return over_fields(names, source, read)
+		return expand_calls(over_fields(names, source, read), c_spelling)
 
 	def _fits(self, struct: ResolvedStruct, placement: Placement,
 			bytes_: int) -> str | None:
@@ -4275,6 +4275,12 @@ class Emitter:
 		lines: list[str] = []
 
 		if check is Check.RESERVED:
+			# At a dynamic offset there is no constant to load from, and
+			# reaching for one crashed the compiler. For a whole-byte scalar
+			# the byte loop says the same thing -- zero is zero in either
+			# byte order -- so the two cases share one emitter.
+			if placement.offset_bits is None:
+				return self._reserved_checks(struct, placement)
 			policy = _reserved_policy(placement.attrs)
 			if policy in ("must_be_zero", "must_be_one"):
 				want = "0" if policy == "must_be_zero" \
@@ -4315,6 +4321,54 @@ class Emitter:
 			])
 		return lines
 
+	def _reserved_checks(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Reserved bytes hold their pattern, however many of them there are.
+
+		A run the *message* sizes -- padding after a variable-length member --
+		has no constant to loop to and no static offset to read from, and
+		reaching for either crashed the compiler rather than diagnosing
+		anything.
+		"""
+		policy  = _reserved_policy(placement.attrs)
+		scalar  = placement.scalar
+		if policy not in ("must_be_zero", "must_be_one") or scalar is None:
+			return []
+		if scalar.is_bit_packed or scalar.bits % BITS_PER_BYTE != 0:
+			return []
+
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return [f"\t\t/* {placement.path}: this backend cannot resolve"
+			        " where the reserved bytes are. */"]
+
+		width = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			count: str | None = str(placement.array_count * width)
+		elif data_sized(placement):
+			count = self._length_expression(struct, placement)
+			if count is None:
+				return [f"\t\t/* {placement.path}: this backend cannot resolve"
+				        " how many reserved bytes there are. */"]
+		else:
+			count = str(width)
+
+		want = "0" if policy == "must_be_zero" else "0xFF"
+		return [
+			f"\t\t/* reserved {placement.type_name}"
+			f"[{placement.array_count or placement.size_expr or width}]"
+			f" [{policy}] */",
+			"\t\t{",
+			f"\t\t\tconst std::uint32_t at = {start};",
+			f"\t\t\tconst std::uint32_t n  = {count};",
+			"\t\t\tfor (std::uint32_t i = 0; i < n; i++) {",
+			f"\t\t\t\tif (*(base() + at + i) != {want}) {{",
+			"\t\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t\t}",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _array_checks(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:
 		if scalar.bits != BITS_PER_BYTE:
@@ -4325,18 +4379,7 @@ class Emitter:
 		lines: list[str] = []
 
 		if placement.kind == "reserved":
-			policy = _reserved_policy(placement.attrs)
-			if policy in ("must_be_zero", "must_be_one"):
-				want = "0" if policy == "must_be_zero" else "0xFF"
-				lines.extend([
-					f"\t\t/* reserved {placement.type_name}[{count}] [{policy}] */",
-					f"\t\tfor (std::uint32_t i = 0; i < {count}; i++) {{",
-					f"\t\t\tif (*(base() + {placement.offset_bytes} + i) != {want}) {{",
-					"\t\t\t\treturn ::situ::rt::err::constraint;",
-					"\t\t\t}",
-					"\t\t}",
-				])
-			return lines
+			return self._reserved_checks(struct, placement)
 
 		for attr in placement.attrs:
 			if attr.name == "encoding":

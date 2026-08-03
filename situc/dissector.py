@@ -32,7 +32,8 @@ from __future__ import annotations
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.names import (
-	over_fields, render_delimiter, translate_operators,
+	expand_calls, lua_spelling, over_fields, render_delimiter,
+	translate_operators,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
@@ -491,7 +492,15 @@ def _read(placement: Placement, base: str) -> str | None:
 
 
 def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
-	"""A schema expression rewritten as Lua reads over `base`."""
+	"""A schema expression rewritten as Lua reads over `base`.
+
+	`align_up` comes out as `math.floor` arithmetic rather than as `//`, for
+	decision 0021's reason: Wireshark bundles Lua 5.2 in older builds, `//`
+	is a syntax error there, and a dissector that fails to load is worse than
+	one that divides. A bare `/` in a schema expression is the one place this
+	file still parts from the compiled backends -- Lua's is float division,
+	theirs truncates -- and no schema in this repository has one (26.37).
+	"""
 	reads: dict[str, str] = {}
 	for entry in struct.entries:
 		held = entry.placement
@@ -504,7 +513,9 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
 	if not reads:
 		return None
 	try:
-		return over_fields(sorted(reads), source, lambda name: reads[name])
+		return expand_calls(
+			over_fields(sorted(reads), source, lambda name: reads[name]),
+			lua_spelling)
 	except KeyError:
 		return None		# names something this cannot read
 

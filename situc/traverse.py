@@ -138,6 +138,31 @@ class Member(Enum):
 	NOTHING   = "nothing"
 
 
+def data_sized(placement: Placement) -> bool:
+	"""Whether this member's extent comes from an expression over the data.
+
+	The one question, asked once. It was asked in three places and answered
+	differently in each: `classify` learned that `size_expr` counts as well as
+	`sized_by` -- a length written as arithmetic over a field, which is about
+	as common as a length gets -- and the other two did not.
+
+	`classify_check` therefore called such a member a scalar, so `reserved u8
+	[align_up(n, 4) - n]` reached a load at a static offset and crashed the
+	compiler in three backends. And `declares_its_own_length` said no, so the
+	length check of invariant 41 was never emitted for one: `u8 data[(len + 1)
+	* 8 - 2]` could claim two kilobytes inside a forty-byte frame and
+	`validate` returned OK, in all four backends, for the shape
+	`examples/ipv6ext` is built out of.
+
+	`array_count` is the honest question for "did the schema decide this":
+	`sized_by` also names a compile-time constant, and `x[remaining]` sets it
+	to a word rather than to a path.
+	"""
+	return (placement.array_count is None
+	        and (placement.sized_by is not None
+	             or placement.size_expr is not None))
+
+
 def classify(struct: ResolvedStruct, placement: Placement,
 		structs: Container[str]) -> Member:
 	"""Which kind of member this is, asked in the order that is safe.
@@ -249,9 +274,7 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	#
 	# The same conflation `gen-fuzz` had, found the same way: a member the
 	# schema sizes is not a member the message sizes.
-	if placement.array_count is None \
-			and (placement.sized_by is not None
-			     or placement.size_expr is not None):
+	if data_sized(placement):
 		return Member.VARIABLE
 
 	# Before ARRAY, which it looks exactly like: `decimal u16 code[3]` is one
@@ -344,7 +367,7 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 
 	# Before NESTED: an array of structs is not a nested struct, and calling
 	# `self.recs().validate()` on one names a method that takes an index.
-	if placement.array_count is not None or placement.sized_by is not None:
+	if placement.array_count is not None or data_sized(placement):
 		return Check.REPEATED if placement.scalar is not None else Check.NOTHING
 
 	if placement.scalar is None:
@@ -954,10 +977,15 @@ def declares_its_own_length(placement: Placement) -> bool:
 	the wrong question, and the right one -- does it fit the message -- is
 	asked by its accessor, on every call, because the offset is the message's
 	as well (section 9.8).
+
+	Through `data_sized`, which is the fix for what this asked before: only
+	`sized_by`, so a length written as arithmetic -- `u8 data[(len + 1) * 8 -
+	2]`, the shape `examples/ipv6ext` is made of -- was not a length the
+	message declares as far as this was concerned, and no backend emitted the
+	check for one.
 	"""
-	return (placement.sized_by is not None
+	return (data_sized(placement)
 	        and placement.sized_by != "remaining"
-	        and placement.array_count is None
 	        and placement.delimiter is None
 	        and placement.located is None)
 

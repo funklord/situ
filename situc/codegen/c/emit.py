@@ -35,13 +35,13 @@ from situc.diagnostics import Diagnostic
 from situc.layout import (
 	BITS_PER_BYTE, IndexTable, Placement, TlvGrammar, ValueRule,
 )
-from situc.names import over_fields, render_delimiter
+from situc.names import c_spelling, expand_calls, over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	Check, arm_members, arm_of, classify_check, containment_order,
-	covered_run, offset_plan, region_extent,
+	covered_run, data_sized, offset_plan, region_extent,
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
 	decode_bound,
@@ -906,7 +906,17 @@ class Emitter:
 			return []
 
 		if placement.kind == "reserved":
-			return self._reserved_note(placement)
+			# No accessor, and one function all the same: `validate` has to
+			# reach the bytes, and where the offset is a sum of lengths the
+			# message chose there is nothing else that can resolve it. The
+			# alternative was a second accumulation inside `validate`, which
+			# is invariant 34 -- two places computing one offset will compute
+			# it differently -- and this one saturates at the view already.
+			lines = []
+			if placement.offset_bits is None \
+					and self._offset_blocker(struct, placement) is None:
+				lines.extend(self._offset_function(struct, placement))
+			return [*lines, *self._reserved_note(placement)]
 
 		lines = ["", *self._field_comment(entry)]
 		lines.extend(self._scale_macros(struct, placement))
@@ -2860,8 +2870,9 @@ class Emitter:
 		names = [entry.placement.name for entry in struct.entries
 		         if entry.placement.scalar is not None
 		         and "." not in entry.placement.path[len(struct.name) + 1:]]
-		return over_fields(names, source, lambda name:
-			f"{ident(self.prefix, struct.name, c_name(name), 'get')}({held})")
+		return expand_calls(over_fields(names, source, lambda name:
+			f"{ident(self.prefix, struct.name, c_name(name), 'get')}({held})"),
+			c_spelling)
 
 	def _record_prologue(self, base: str, delim: bytes, sym: str,
 			extent: str) -> list[str]:
@@ -5084,8 +5095,22 @@ class Emitter:
 		# disturbing the tag. Section 8.8 calls that malleability control and
 		# it is the reason reserved fields are a constraint rather than a
 		# comment.
-		if scalar is not None and placement.array_count is not None \
-				and placement.kind == "reserved":
+		# ...and a reserved run the *message* sizes is one too. It reached the
+		# scalar branch below instead -- `array_count` being None for one --
+		# and read it at a static offset it has not got, which is an assertion
+		# out of the layout module rather than a diagnostic.
+		#
+		# A plain `reserved u16;` after a variable-length member is the same
+		# crash with fewer moving parts, and it goes through here as well: for
+		# a whole-byte scalar "the value is zero" and "every byte is zero" are
+		# the same statement, whatever the byte order, so the byte loop
+		# answers it without needing a load at an offset that is not a
+		# constant.
+		if scalar is not None and placement.kind == "reserved" \
+				and (placement.array_count is not None
+				     or data_sized(placement)
+				     or (placement.offset_bits is None
+				         and not scalar.is_bit_packed)):
 			return self._reserved_array_check(struct, placement, scalar)
 
 		# `[encoding]` is a claim about what the bytes are. Section 8.6 offers
@@ -5255,24 +5280,46 @@ class Emitter:
 
 	def _reserved_array_check(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:
-		"""Every element of a reserved array must hold the required pattern."""
+		"""Every element of a reserved array must hold the required pattern.
+
+		However many there are. A run whose length the message decides -- the
+		padding after a variable-length member, which is the only reason
+		anybody writes one -- has no constant to loop to, and the count is the
+		same length expression everything else about the member reads. The
+		`_fits_check` above has already refused a frame that does not contain
+		it, so the loop is inside the view by the time it runs.
+		"""
 		policy = _reserved_policy(placement.attrs)
 		if policy not in ("must_be_zero", "must_be_one"):
 			return []
-		if placement.offset_bits is None or scalar.bits != BITS_PER_BYTE:
+		if scalar.is_bit_packed or scalar.bits % BITS_PER_BYTE != 0:
 			return []
+		if placement.offset_bits is None \
+				and self._offset_blocker(struct, placement) is not None:
+			return []		# no offset function was emitted to read from
 
-		count  = placement.array_count or 0
 		expect = "0u" if policy == "must_be_zero" else "0xFFu"
-		base   = placement.offset_bytes
+		base   = self._base_expression(struct, placement)
+		width  = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			count = f"{placement.array_count * width}u"
+			shown = f"[{placement.array_count}]"
+		elif data_sized(placement):
+			count = self._length_expression(struct, placement)
+			shown = f"[{placement.size_expr or placement.sized_by}]"
+		else:
+			count = f"{width}u"
+			shown = ""
 
 		return [
-			f"\t/* reserved {placement.type_name}[{count}] [{policy}] */",
+			f"\t/* reserved {placement.type_name}{shown} [{policy}] */",
 			"\t{",
+			f"\t\tconst uint32_t at = {base};",
+			f"\t\tconst uint32_t n  = {count};",
 			"\t\tuint32_t i;",
 			"",
-			f"\t\tfor (i = 0; i < {count}u; i++) {{",
-			f"\t\t\tif ((view.base)[{base}u + i] != {expect}) {{",
+			"\t\tfor (i = 0; i < n; i++) {",
+			f"\t\t\tif ((view.base)[at + i] != {expect}) {{",
 			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t\t}",
 			"\t\t}",
