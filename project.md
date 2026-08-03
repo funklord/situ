@@ -7009,6 +7009,77 @@ the second spelling of a question hides.
 host and under aarch64 emulation; every dissector executed; eight worked
 examples carrying bytes an independent implementation wrote.
 
+### 26.47 Putting the last fold's shapes in a schema
+
+26.46 found six shapes by writing them, fixed five, and proved each fix with a
+unit test: the Python module executed, the other three matched against their
+generated text. No committed schema had any of them, and that sentence is in
+the commit message as the *point* -- each is an ordinary thing to write and
+nothing here had written one.
+
+So this fold begins by writing them down, in `tests/schemas/edges.situ`, which
+is the file whose header says a construct nothing exercises is a construct
+whose generated code has never run. Three structs, no compiler changes, and
+`make test-c` stopped building: `gen-fuzz` emitted `situ_packed_driver_d_ptr`
+for a member that has no pointer. The unit tests all still passed. They test
+the emitters; a schema in that file reaches four compilers, the random-bytes
+differ, the dissector, `doc`, the fuzz harness and the generated checks, and
+none of those had ever seen the shapes.
+
+**What the harness was reaching for.** `u32 d[n]` -- an element wider than a
+byte, in a run the *message* counts. Every one of 26.46's shapes has one,
+because a length field is usually a length of something, and the family behind
+that turned out to be the fold.
+
+**Four backends, four answers, for `u16 a[n]`.** C indexed it and decoded the
+values. C++ handed back a `bytes`, Python a `memoryview`, Rust a `&[u8]` -- the
+raw bytes, so a caller who cast one read host byte order for a schema that
+names its own. And each of those three does the opposite for `u16 a[4]`, three
+lines away in the same emitter, under a generated comment that says why: *the
+element is ValueConverted, so bytes handed back whole would not be the values*.
+The rule was written down, enforced for the spelling with the count in the
+schema, and never asked for the spelling with the count in the message.
+
+**And C had two answers of its own.** `u16 b[n + 1]` sets neither
+`array_count` nor `sized_by`, so it fell past the array dispatch to the scalar
+one and got a getter returning the first element: no index, no length, and the
+rest of the array unreachable in the one backend that decoded any of it. That
+dispatch is the fourth site the docstring on `traverse.data_sized` describes
+-- "the one question, asked once. It was asked in three places and answered
+differently in each" -- and the fifth and sixth turned up behind it, in
+`gen-checks`, which checked `u8 halved[units / 2 + 1]` as a scalar against the
+scalar getter C should not have been emitting, and in `gen-fuzz`.
+
+**The index had no bound.** `situ_s_a_get(view, index)` computed
+`base + index * stride` and read. The count is the message's: an `n` of 200 in
+an eight-byte frame handed back element 99 from four hundred bytes past the
+end, and a caller looping to `n` is doing what the schema says. Invariant 41
+was written for exactly this and about a different accessor. All four now
+clamp the count to the frame and bound the read; `_count` is the name in every
+language, and it answers how many elements are *here* rather than how many the
+message claims.
+
+**One artifact had it right the whole time.** `situc explain` on such a member
+prints, under `repr := ValueConverted`, "no pointer accessor is generated for
+this field; use the by-value getter". Three backends were generating one.
+Invariant 19 is about two doors giving different answers; this is the case
+where the door nobody opened was the accurate one, and the generated comment
+in three backends said the same thing directly above the code contradicting
+it.
+
+**`doc` said something false as well**, and in the column somebody sizes a
+buffer from: the Size of a data-sized array is printed as its count, which for
+`u16 a[n]` is half the bytes it occupies, beside a constant array two rows
+down whose size is printed in bytes. It reads `[n] x 2 bytes` now. The member
+was also named `b` where its neighbour was named `a[n]`, the arithmetic
+spelling having no bracket to print, so the table called one member of a kind
+an array and the other a scalar.
+
+**Status:** 2790 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; the four backends compared over
+`tests/schemas/edges.situ` on the shapes above; the new stride check falsified
+by widening the emitted stride and watching it fail.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7593,6 +7664,28 @@ examples carrying bytes an independent implementation wrote.
    asked the struct how big it was and got an answer about the frame -- which
    is what "fixed size" means for a struct with a located member, and is not
    what a vector, a fuzz buffer or a bounds check wants to know.
+
+71. **A unit test over an emitter is not the artifact suite.** Five defects
+   were fixed in 26.46 and each was proved by generating one module and
+   reading or running it. Writing the same shapes into a schema this
+   repository *builds* broke the fuzz harness immediately -- it asked for a
+   byte pointer on a member that has none -- and then the checks generator,
+   and then `doc`. Invariant 15 says a new construct lands in a schema in the
+   same commit; a combination is not a construct, so nobody applied the rule
+   to one, and the artifacts around it went on never having met the shape.
+   Where a fix is proved by a hand-written schema, that schema belongs in the
+   tree.
+
+72. **Where the count comes from and how wide an element is are two
+   questions, and every branch that asks one has to ask the other.** Three
+   backends decide "bytes or values" by the element width for `u16 x[4]` and
+   decided it by nothing at all for `u16 x[n]`, handing back a span the
+   comment three lines above says is not the member. C decided the *other* one
+   by the count's spelling, so `x[n]` was an array and `x[n + 1]` was a
+   scalar. Four backends, three answers, one array. The shape of the fix is
+   invariant 34: `traverse.indexed_elements` is the question, asked in one
+   place, by the four emitters and by the fuzz harness, the checks and the
+   differ.
 
 ---
 
