@@ -29,6 +29,14 @@ struct arithmetic size=14..43
   ~         1..4      u8         padded
   ~         2         u16        tail  big
 
+struct beat size=2
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         payload
+
+struct beats size=4..14
+  @0x0000   2..12     beat       pulse  big
+  ~         2         u16        after  big
+
 struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling
@@ -94,6 +102,15 @@ struct messy size=3..
 struct quoted_row size=1..
   @0x0000   until:2c  u8         field  quote=0x22
   ~         0..       u8         rest  sized-by=remaining
+
+struct segment size=1..256
+  @0x0000   1         u8         length
+  @0x0001   0..255    u8         body  sized-by=length
+
+struct segments size=3..65283
+  @0x0000   1         u8         count
+  @0x0001   0..65280  segment    parts  sized-by=count
+  ~         2         u16        after  big
 
 struct texty size=2..65543
   @0x0000   until:0d0a u16        count  big radix=10 cap=8

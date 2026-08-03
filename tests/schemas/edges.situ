@@ -196,6 +196,42 @@ struct linked {
 	u8    tail[remaining];
 }
 
+// A run walked over a *fixed-size* element. Every other run here walks a
+// variable one, which is what `extent_parts` was written for -- it answers
+// None for a fixed struct, correctly, because the extent is the size. Three
+// backends read that None as "cannot measure", emitted no walk, and went on
+// emitting the members after the run, whose offsets call the span function
+// they had declined to write.
+struct beat {
+	u8  kind;
+	u8  payload;
+}
+
+struct beats {
+	beat  pulse[] while (kind == 0x33) max 6;
+	u16   after;
+}
+
+// A *counted* run of variable-length elements: the count says how many, and
+// each element says how long it is. There is no stride to multiply and no
+// span function, so the run is walked and nothing here returns the total --
+// which is why `after` below has no accessor in any of the four backends.
+//
+// Here because C used to answer: it fell through to the counted-array branch
+// and multiplied the count by an element width of one, so whatever followed
+// such a run was placed `count` *bytes* past its start. A plausible number,
+// which is the failure this repository rates worst.
+struct segment {
+	u8  length;
+	u8  body[length];
+}
+
+struct segments {
+	u8       count;
+	segment  parts[count];
+	u16      after;
+}
+
 // A coded region whose interior the *data* sizes, which is the shape nothing
 // in this repository had.
 //

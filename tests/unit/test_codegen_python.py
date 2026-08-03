@@ -158,6 +158,45 @@ def test_a_varint_can_drive_an_arithmetic_length(tmp_path: Path) -> None:
 	assert held.tail == 0xABCD
 
 
+def test_a_run_may_walk_a_fixed_size_element(tmp_path: Path) -> None:
+	"""Executed. Two elements of two bytes each, the second failing the
+	condition, so the run is four bytes and `tail` is at 4."""
+	module = load(tmp_path, "struct e { u8 k; u8 pad; }\n"
+	                        "struct s { e c[] while (k == 1) max 4; u16 tail; }\n")
+
+	buf = bytearray(32)
+	buf[0] = 1				# first element continues the run
+	buf[2] = 0				# second ends it, and is part of it
+	buf[4], buf[5] = 0xAB, 0xCD
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.c_count == 2
+	assert held.c_span == 4
+	assert held.tail == 0xABCD
+
+
+def test_a_counted_run_of_variable_records_has_a_span(tmp_path: Path) -> None:
+	"""Executed. Two records of two and three bytes, so the run is five and
+	`tail` is at 6.
+
+	The count says how many there are and each one says how long it is, which
+	is a walk and not a stride. Nothing emitted a span for it: three backends
+	declined every member after such a run, and C fell through to the
+	counted-array branch and measured the run as `count` *bytes*."""
+	module = load(tmp_path, "struct e { u8 k; u8 body[k]; }\n"
+	                        "struct s { u8 c; e recs[c]; u16 tail; }\n")
+
+	buf = bytearray(32)
+	buf[0] = 2
+	buf[1], buf[2] = 1, 0x11
+	buf[3], buf[4], buf[5] = 2, 0x22, 0x33
+	buf[6], buf[7] = 0xAB, 0xCD
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.recs_span == 5
+	assert held.tail == 0xABCD
+
+
 # -- the surface ------------------------------------------------------------
 
 

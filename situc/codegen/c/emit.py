@@ -48,7 +48,7 @@ from situc.traverse import (
 	decode_bound,
 	extent_parts, extern_symbol, frameable,
 	element_bytes, has_computable_extent, index_entry_bytes, is_run,
-	matched_values, preceding_parts,
+	is_counted_run, matched_values, preceding_parts,
 	obligation, obligations,
 	own_members,
 )
@@ -2277,18 +2277,8 @@ class Emitter:
 		        and placement.type_name in self.structs)
 
 	def _is_counted_run(self, placement: Placement) -> bool:
-		"""`T x[n]` where T is a struct with no single size.
-
-		The count says how many, and each one says how long it is. A fixed
-		element needs none of this -- `base + index * stride` reaches it --
-		and a variable one has no stride to multiply.
-		"""
-		if placement.type_name not in self.structs:
-			return False
-		if placement.sized_by is None and placement.array_count is None:
-			return False
-		inner = self.resolved.structs.get(placement.type_name or "")
-		return inner is not None and not inner.layout.is_fixed_size
+		"""`T x[n]` where T is a struct with no single size."""
+		return is_counted_run(self.resolved.structs, placement)
 
 	def _is_run_element(self, name: str) -> bool:
 		"""Whether anything needs to know how long one `name` is.
@@ -3917,7 +3907,28 @@ class Emitter:
 		Emitting arithmetic that ignored that would put every later accessor on
 		the wrong bytes, which is the one failure mode worse than a missing
 		accessor.
+
+		A counted run of variable-length elements is the other reason, and
+		this said the codec sentence about it: `e recs[c]` has no codec, and a
+		note naming one for a struct is a diagnostic that is simply false.
 		"""
+		if self._is_counted_run(blocker):
+			return [
+				f"/* No accessor for `{placement.name}`: it starts after "
+				f"`{blocker.name}`, a run",
+				f" * of `{blocker.type_name}`, whose length is the sum of its"
+				" elements' extents.",
+				" * The count says how many there are and each one says how"
+				" long it is,",
+				" * so the run is walked rather than measured -- and this"
+				" backend emits",
+				" * no walk that returns the total.",
+				" *",
+				" * A fixed-size element gives the run a stride, and a"
+				" delimiter or a",
+				" * `while` condition gives it a span function. */",
+			]
+
 		return [
 			f"/* No accessor for `{placement.name}`: it starts after "
 			f"`{blocker.name}`, whose",
@@ -3953,6 +3964,13 @@ class Emitter:
 		if not declares_its_own_length(placement):
 			extent = self._fixed_extent(placement)
 			if extent is None or placement.offset_bits is not None:
+				return []
+			# And only where the offset exists. `validate` called the offset
+			# function of a member the emitter had just declined to place, so
+			# a schema with a counted run of variable elements produced a
+			# header that names a function nothing defines -- the same
+			# mistake the accessor block above documents, one function along.
+			if self._offset_blocker(struct, placement) is not None:
 				return []
 			return [
 				f"\t/* {placement.path}: its offset is a sum of lengths the"
@@ -4071,7 +4089,8 @@ class Emitter:
 		# delimiter turns out to be. The member emits its own `_span`, which
 		# scans, and everything downstream sums that call rather than trying to
 		# inline the search (section 8.6.1).
-		if placement.delimiter is not None or placement.repeat_while is not None:
+		if (placement.delimiter is not None or placement.repeat_while is not None
+				or self._is_counted_run(placement)):
 			# One name for "how far this member reaches", whichever kind it
 			# is: a byte array's `_span` is its content plus the delimiter, a
 			# record run's is its elements plus the terminator, and a `while`
@@ -4207,6 +4226,14 @@ class Emitter:
 		# call an accessor this decided not to emit.
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is not None and not element.layout.is_fixed_size:
+			# A *counted* run of variable elements. Its length is the sum of
+			# `count` extents, which is a loop and not a closed form -- and
+			# no backend emits a span function for it. This fell through to
+			# the counted-array branch below, which multiplies the count by
+			# an element width: `e recs[c]` where `e` is variable placed
+			# whatever follows the run `c` *bytes* past its start, silently.
+			# The other three decline the member and say so, so C was alone
+			# in answering, and alone in answering wrongly.
 			nested_member = (placement.kind == "field"
 			                 and placement.delimiter is None
 			                 and placement.array_count is None
@@ -4420,6 +4447,56 @@ class Emitter:
 				"\t\tn  = n + 1u;",
 				"\t}",
 				"\treturn SITU_ERR_BOUNDS;",
+				"}",
+				"",
+				"/* How far the whole run reaches. The count says how many"
+				" elements there",
+				" * are and each one says how long it is, so this is the same"
+				" walk with no",
+				" * index to stop at -- and it is what places every member"
+				" after the run.",
+				" *",
+				" * Without it the run fell through to the counted-array"
+				" branch, which",
+				" * multiplies the count by an element width: a run of `n`"
+				" variable",
+				" * records was measured as `n` bytes, and whatever followed"
+				" it read the",
+				" * middle of the run. The other three backends declined the"
+				" member",
+				" * instead, so the four disagreed about the schema as well"
+				" (26.46). */",
+				f"static inline uint32_t "
+				f"{ident(self.prefix, struct.name, local, 'span')}_from"
+				"(situ_view_t view, uint32_t start)",
+				"{",
+				"\tuint32_t at = start;",
+				"\tuint32_t n  = 0u;",
+				"",
+				f"\twhile (n < {count} && at < view.limit) {{",
+				"\t\tsitu_view_t element;",
+				"\t\tuint32_t    size;",
+				"",
+				"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+				" != SITU_OK) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+				f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}(element);",
+				"\t\tif (size == 0u || at + size > view.limit) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+				"\t\tat = at + size;",
+				"\t\tn  = n + 1u;",
+				"\t}",
+				"\treturn at - start;",
+				"}",
+				"",
+				f"static inline uint32_t "
+				f"{ident(self.prefix, struct.name, local, 'span')}"
+				"(situ_view_t view)",
+				"{",
+				f"\treturn {ident(self.prefix, struct.name, local, 'span')}_from"
+				f"(view, {base});",
 				"}",
 			])
 			return lines

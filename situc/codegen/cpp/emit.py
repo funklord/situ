@@ -50,7 +50,8 @@ from situc.traverse import (
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
 	local_name,
-	element_bytes, matched_values, obligation, preceding_parts,
+	element_bytes, is_counted_run, matched_values, obligation,
+	preceding_parts,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarKind, ScalarType, lookup
@@ -1597,6 +1598,15 @@ class Emitter:
 		The arithmetic and the refusals are shared (traverse.extent_parts);
 		what is left here is rendering one length in C++.
 		"""
+		# A fixed-size element still has an extent: it is the size. Only
+		# variable structs reach `extent_parts`, which says so by returning
+		# None for a fixed one -- so a `while` run over `struct e { u8 k; u8
+		# pad; }` got no walk at all, and every member after the run went on
+		# calling the span function nobody emitted. C computes this from the
+		# size directly and was the only backend that built such a schema.
+		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+			return [str(int(struct.layout.size_bytes))]
+
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:
 			return None
@@ -1910,6 +1920,11 @@ class Emitter:
 		# one. `sized_by` holds a path and holds nothing for this, so the
 		# member fell through to the scalar case and this backend handed back
 		# one byte and called it the field.
+		if is_counted_run(self.resolved.structs, placement):
+			name = c_name(local_name(struct, placement))
+			return (f"{name}_span_from({running})" if running is not None
+			        else f"{name}_span()")
+
 		if placement.size_expr is not None:
 			rendered = (f"static_cast<std::uint32_t>("
 			            f"{self._over_fields(struct, placement.size_expr)})")
@@ -2147,6 +2162,42 @@ class Emitter:
 				"\t\t\tn  += 1;",
 				"\t\t}",
 				"\t\treturn ::situ::rt::err::bounds;",
+				"\t}",
+				"",
+				"\t/* How far the whole run reaches: the walk above with no",
+				"\t * index to stop at. It is what places every member after",
+				"\t * the run, and nothing emitted it -- so those members were",
+				"\t * declined as having an offset this could not resolve,",
+				"\t * which was true only because this was missing. */",
+				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+				"(std::uint32_t start) const noexcept",
+				"\t{",
+				"\t\tstd::uint32_t at = start;",
+				"\t\tstd::uint32_t n  = 0;",
+				"",
+				f"\t\twhile (n < {name}_count() && at < limit()) {{",
+				"\t\t\tsitu_view_t raw;",
+				"",
+				"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)",
+				"\t\t\t\t\t!= SITU_OK) {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"",
+				f"\t\t\tconst {inner} element(raw);",
+				"\t\t\tconst std::uint32_t size = element.extent();",
+				"",
+				"\t\t\tif (size == 0 || at + size > limit()) {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tat += size;",
+				"\t\t\tn  += 1;",
+				"\t\t}",
+				"\t\treturn at - start;",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from({name}_offset());",
 				"\t}",
 			]
 

@@ -684,6 +684,61 @@ def test_an_expression_may_name_a_varint(target: str) -> None:
 	assert VARINT_ARITHMETIC_READ[target] in source
 
 
+#: A `while` run whose element is a *fixed-size* struct. Every run in this
+#: repository walks a variable one, which is the case `extent_parts` was
+#: written for.
+FIXED_ELEMENT_RUN = (
+	"struct e { u8 k; u8 pad; }\n"
+	"struct s { e c[] while (k == 1) max 4; u16 tail; }\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_run_may_walk_a_fixed_size_element(target: str) -> None:
+	"""`extent_parts` returns None for a fixed struct, which is right --
+	its extent is its size and callers have that already. Three backends read
+	the None as "cannot measure" and emitted no walk at all, then went on
+	emitting the members after the run, whose offsets call the span function
+	that was not written. Rust and C++ do not compile; Python raises.
+
+	C computes it from the size directly and was the only one that built such
+	a schema, which is invariant 20 pointing the other way again."""
+	schema   = parse_text(PREAMBLE + FIXED_ELEMENT_RUN)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "c_span" in source
+	assert "has no extent" not in source
+
+
+COUNTED_RECORD_RUN = (
+	"struct e { u8 k; u8 body[k]; }\n"
+	"struct s { u8 c; e recs[c]; u16 tail; }\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_counted_run_of_variable_records_has_a_span(target: str) -> None:
+	"""`T x[n]` where `T` has no single size: there is no stride to multiply,
+	so the run is walked and how far it reaches is the sum of the walk.
+
+	Three backends emitted the indexing walk and no span, and declined every
+	member after the run for want of one. C emitted neither and fell through
+	to the counted-array branch, which multiplies the count by an element
+	width -- so a run of `n` variable records measured `n` bytes and whatever
+	followed it read the middle of the run."""
+	schema   = parse_text(PREAMBLE + COUNTED_RECORD_RUN)
+	resolved = resolve(schema, solve(schema))
+	emit, _  = BACKENDS[target]
+
+	source = "\n".join(emit(schema, resolved, "unit").files().values())
+
+	assert "recs_span" in source
+	assert "No accessor for `tail`" not in source
+
+
 def test_a_sized_opaque_region_moves_what_follows_it() -> None:
 	"""And the fact under the four spellings: `tail` is not at a constant
 	offset, and its offset is the region's size rather than zero."""

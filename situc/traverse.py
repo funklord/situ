@@ -981,6 +981,33 @@ def preceding_parts(struct: ResolvedStruct,
 	return parts
 
 
+def is_counted_run(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> bool:
+	"""`T x[n]` where `T` is a struct with no single size.
+
+	The count says how many and each element says how long it is: there is no
+	stride to multiply, so the run is walked, and how far it reaches is the
+	sum of what the walk stepped over.
+
+	Only the C backend had a name for this shape, and only for deciding what
+	to emit -- the length question fell through to the counted-array branch,
+	which multiplied the count by an element width of one. The other three
+	had no name for it at all and declined every member after such a run.
+
+	Not an `indexed` region, which also carries a count and a variable
+	element and is not walked at all: its elements are reached through an
+	offset table, and `index_entry_bytes` is what says how long *it* is.
+	`examples/sqlite` is that shape, and calling it a counted run asked for a
+	span function the indexed path does not emit.
+	"""
+	if placement.kind == "indexed" or placement.type_name not in structs:
+		return False
+	if placement.sized_by is None and placement.array_count is None:
+		return False
+	inner = structs.get(placement.type_name or "")
+	return inner is not None and not inner.layout.is_fixed_size
+
+
 def is_run(placement: Placement, structs: Container[str]) -> bool:
 	"""A run of elements rather than a run of bytes.
 

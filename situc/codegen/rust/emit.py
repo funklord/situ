@@ -46,7 +46,8 @@ from situc.traverse import (
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
 	local_name,
-	element_bytes, matched_values, obligation, preceding_parts,
+	element_bytes, is_counted_run, matched_values, obligation,
+	preceding_parts,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -2847,6 +2848,15 @@ class Emitter:
 		"""How many bytes one instance of a variable struct occupies."""
 		# The arithmetic and the refusals are shared
 		# (traverse.extent_parts); rendering one length is Rust's business.
+		# A fixed-size element still has an extent: it is the size. Only
+		# variable structs reach `extent_parts`, which says so by returning
+		# None for a fixed one -- so a `while` run over `struct e { u8 k; u8
+		# pad; }` got no walk at all, and every member after the run went on
+		# calling the span function nobody emitted. C computes this from the
+		# size directly and was the only backend that built such a schema.
+		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+			return str(int(struct.layout.size_bytes))
+
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:
 			return None
@@ -3284,6 +3294,12 @@ class Emitter:
 		# Arithmetic over a field rather than a reference to one. Without this
 		# the member fell through to the scalar case and this backend read one
 		# byte and called it the field.
+		if is_counted_run(self.resolved.structs, placement):
+			base = c_name(local_name(struct, placement))
+			return (f"self.{_ident(base + '_span_from')}({running})"
+			        if running is not None
+			        else f"self.{_ident(base + '_span')}()")
+
 		if placement.size_expr is not None:
 			rendered = self._over_fields(struct, placement.size_expr, "self")
 			each     = element_bytes(placement)
@@ -3478,6 +3494,39 @@ class Emitter:
 			  ]),
 			"\t}",
 		])
+
+		if not nested.layout.is_fixed_size:
+			lines.extend([
+				"",
+				"\t/// How far the whole run reaches: the walk above with no",
+				"\t/// index to stop at. It is what places every member after",
+				"\t/// the run, and nothing emitted it -- so those members",
+				"\t/// were declined as having an offset this could not",
+				"\t/// resolve, which was true only because this was missing.",
+				f"\tpub fn {_ident(base + '_span_from')}(&self, start: usize)"
+				" -> usize {",
+				"\t\tlet mut at = start;",
+				"\t\tlet mut n  = 0usize;",
+				"",
+				f"\t\twhile n < self.{_ident(base + '_count')}()"
+				" && at < self.bytes.len() {",
+				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+				"\t\t\tlet size    = element.extent();",
+				"",
+				"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tat += size;",
+				"\t\t\tn  += 1;",
+				"\t\t}",
+				"\t\tat - start",
+				"\t}",
+				"",
+				f"\tpub fn {_ident(base + '_span')}(&self) -> usize {{",
+				f"\t\tself.{_ident(base + '_span_from')}"
+				f"(self.{_ident(base + '_offset')}())",
+				"\t}",
+			])
 		return lines
 
 	def _scalar_array(self, struct: ResolvedStruct, placement: Placement,

@@ -46,7 +46,8 @@ from situc.traverse import (
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, is_run,
 	local_name,
-	element_bytes, matched_values, obligation, preceding_parts,
+	element_bytes, is_counted_run, matched_values, obligation,
+	preceding_parts,
 	obligations, own_entries, own_members,
 )
 from situc.types import ScalarType, lookup
@@ -2359,7 +2360,49 @@ class Emitter:
 				f"\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
 			  ]),
 		])
+
+		if not nested.layout.is_fixed_size and count is not None:
+			lines.extend(self._counted_run_span(struct, placement, count))
 		return lines
+
+	def _counted_run_span(self, struct: ResolvedStruct, placement: Placement,
+			count: str) -> list[str]:
+		"""How far a counted run of variable elements reaches.
+
+		The count says how many there are and each one says how long it is, so
+		this is the indexing walk with no index to stop at -- and it is what
+		places every member after the run. Nothing emitted it, so this backend
+		declined those members and said their offsets could not be resolved,
+		which was true only because the walk that resolves them was missing.
+		"""
+		name  = c_name(local_name(struct, placement))
+		inner = c_name(placement.type_name or "")
+
+		return [
+			"",
+			f"	def {name}_span_from(self, start: int) -> int:",
+			f'		"""The walk, from a base the caller already knows -- the'
+			' same',
+			'		helper every other walked run has."""',
+			"		self._check()",
+			"		at = start",
+			"		n  = 0",
+			"",
+			f"		while n < {count} and at < self._len:",
+			f"			element = {inner}(self._msg, self._at + at,"
+			" self._len - at)",
+			"			size    = element._extent",
+			"			if size == 0 or at + size > self._len:",
+			"				break",
+			"			at += size",
+			"			n  += 1",
+			"",
+			"		return at - start",
+			"",
+			"	@property",
+			f"	def {name}_span(self) -> int:",
+			f"		return self.{name}_span_from(self.{name}_offset)",
+		]
 
 	# -- dynamic arithmetic --------------------------------------------
 
@@ -2976,6 +3019,15 @@ class Emitter:
 		"""How many bytes one instance of a variable struct occupies."""
 		# The arithmetic and the refusals are shared
 		# (traverse.extent_parts); rendering one length is Python's business.
+		# A fixed-size element still has an extent: it is the size. Only
+		# variable structs reach `extent_parts`, which says so by returning
+		# None for a fixed one -- so a `while` run over `struct e { u8 k; u8
+		# pad; }` got no walk at all, and every member after the run went on
+		# calling the span function nobody emitted. C computes this from the
+		# size directly and was the only backend that built such a schema.
+		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+			return str(int(struct.layout.size_bytes))
+
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:
 			return None
@@ -3251,7 +3303,8 @@ class Emitter:
 		# A delimited member's extent is wherever the delimiter turns out to
 		# be, and `_span` is the member's own answer. One name for "how far
 		# this member reaches", whether it is a byte run or a run of records.
-		if placement.delimiter is not None or placement.repeat_while is not None:
+		if (placement.delimiter is not None or placement.repeat_while is not None
+				or is_counted_run(self.resolved.structs, placement)):
 			name = c_name(local_name(struct, placement))
 			# Every kind that reaches here has the `_from` form: a byte array's
 			# scan, a record run's walk and a `while` run's. The runs were the

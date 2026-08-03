@@ -26,6 +26,17 @@ struct arithmetic size=14 mutate=Shifting address=Unstable repr=ValueConverted a
   arithmetic.padded                      offset=Dynamic size=Bounded(1, 4) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
   arithmetic.tail                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct beat size=2
+  beat.kind                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  beat.payload                           offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct beats size=4 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  beats.pulse                            offset=AbsoluteStatic(0x00) size=Bounded(2, 12) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  beats.pulse[]                          offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  beats.pulse[].kind                     offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  beats.pulse[].payload                  offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  beats.after                            offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
 struct coded_run size=2 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic stage=TransformTime
   coded_run.n                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   coded_run.body                         offset=AbsoluteStatic(0x01) size=Bounded(0, 510) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
@@ -101,6 +112,18 @@ struct messy size=3 access=Sequential mutate=Shifting address=Unstable canonical
 struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
   quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   quoted_row.rest                        offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
+struct segment size=1 mutate=Shifting
+  segment.length                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  segment.body                           offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct segments size=3 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  segments.count                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  segments.parts                         offset=AbsoluteStatic(0x01) size=Bounded(0, 65280) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  segments.parts[]                       offset=FrameStatic(0x00) size=Bounded(1, 256) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  segments.parts[].length                offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  segments.parts[].body                  offset=FrameStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  segments.after                         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
 struct texty size=2 access=Sequential mutate=Shifting address=Unstable repr=TextConverted canonical=NonCanonical
   texty.count                            offset=AbsoluteStatic(0x00) size=Bounded(2, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
