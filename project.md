@@ -7128,6 +7128,76 @@ in all four, agreed. The sweep is only evidence when it says both.
 host and under aarch64 emulation; five probe schemas built and run through
 all four backends, three of them now in `tests/schemas/edges.situ`.
 
+### 26.49 An offset the message decides, in the places that assumed otherwise
+
+The sweep continued into the constructs that *make* an offset dynamic, and
+what it found is one sentence in eleven places: a member behind a
+variable-length one has an offset nobody can write down at compile time, and
+most of this compiler knew that only where somebody had written a schema
+that has one.
+
+**A nested struct behind a variable-length member crashed three backends.** A
+header, a variable-length field, and another header. No schema here had one,
+so `placement.offset_bytes` -- which asserts -- was reached by C++, Python and
+Rust, and the assertion came out as a Python traceback. C had emitted it since
+phase 4.
+
+**And the gate leaked, in both directions.** Section 14.3's claim is that a
+sealed interior cannot be reached without a verification token, and:
+
+  * C's indexed accessor family was the one written without a gate parameter,
+    so every element of a `u16 x[4]` inside a `sealed` region was readable
+    through a plain view -- while the scalar beside it demanded the gate and
+    the map said `stage = VerifyGated` about both;
+  * C++, Python and Rust emitted the flattened covered *setter* for a sealed
+    member on the outer view, so a caller could write plaintext into a sealed
+    region without ever verifying it. Invariant 28 again: the write side is
+    the one that escapes the object, and it was three backends this time.
+
+**A member inside a region was placed by walking the wrong list.**
+`preceding_parts` steps over the struct's own members, and a member inside a
+sealed region is not one of them -- so the walk never met it, never stopped,
+and summed the whole struct, the region, and *the tag that follows the
+region*. C read `body.trailer` seventeen bytes past where it is. The other
+three dropped it, which is the only reason nothing had noticed.
+
+**An `authenticated` region has no offset function**, because it is not a
+member: it owns no bytes and names bytes its members already account for. Two
+callers in C named one anyway -- the covered span a tag hands its algorithm,
+and `validate`'s bounds check -- so the generated header did not compile for
+a tag over a region behind a variable-length member. Its start is its first
+member's, which is the rule `_region_end` had already stated for its end.
+
+**A frame-relative offset is not an offset.** The nested copy of a member
+behind a variable-length one is measured from *its own struct*, and four
+consumers read it as absolute: the covered setter wrote `head.seq` over the
+top of `n` in C, and the generated coverage check demanded that a tag cover
+bytes 0..3 of a frame whose covered region starts at 1.
+
+**The differ had been lying about the one claim it exists to make.**
+`mac_is_dirty` is a method in Python and a bound method is truthy, so
+`dirty=%d % (1 if view.mac_is_dirty else 0)` printed 1 whatever the write
+did. Every covered-write comparison in that backend was vacuous, and it
+surfaced only when C started *refusing* a write and printed the zero Python
+could not.
+
+**And the dissector took a negative length.** Lua's `tonumber` reads a leading
+minus; situ's text numbers are digits (8.6.2). Four bytes of `"-26"` gave a
+length of -26 and an offset of -48, which is an error out of Wireshark rather
+than a short field. The first fix walked straight into invariant 53 -- a
+`math.max` inside an expression the builtin expansion then rewrote into
+`math.math.max` -- so the clamp is a named helper the expansion does not
+recognise.
+
+That last one was found by the random-packet sweep drawing a *different*
+packet once the schema grew. The seed is fixed, the draw is not: adding a
+struct to `edges.situ` reshuffles every packet after it, and a latent bug in
+a construct added two folds ago fell out.
+
+**Status:** 2819 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; six probe schemas through all four
+backends, three of them now in `tests/schemas/edges.situ`.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7733,7 +7803,24 @@ all four backends, three of them now in `tests/schemas/edges.situ`.
    has it never had", and the neighbours worth trying first are the ones that
    make something else about the member dynamic.
 
-73. **Where the count comes from and how wide an element is are two
+73. **A gate is a parameter, and an accessor family written without one has
+   no gate.** Section 14.3's claim is enforced accessor by accessor: each one
+   that reaches a sealed member takes the gate type. The indexed family was
+   added for arrays and never given the parameter, so an array inside a
+   sealed region handed out its elements through a plain view in C -- and
+   three backends handed out a *setter* for a sealed scalar on the outer
+   view. A security property held by convention across N call sites is held
+   by whichever of them somebody remembered.
+
+74. **A frame-relative offset is a different number with the same name.** The
+   nested copy of a member behind a variable-length one is measured from its
+   own struct; four consumers added it to the parent's base. `head.seq` at
+   "offset 0" is at offset 0 *of `head`*, and writing there wrote over the
+   length field at the start of the frame. Where a field's meaning depends on
+   another field beside it -- here `frame_relative` and `frame_base_dynamic`
+   -- reading it without them is not reading it.
+
+75. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
