@@ -39,11 +39,25 @@ nothing installed.
 from __future__ import annotations
 
 import enum
+import sys
 from typing import Final, TypeVar
 
 #: The enum a generated getter hands back, or the integer where the
 #: value is not one the schema names (8.7).
 EnumT = TypeVar("EnumT", bound=enum.Enum)
+
+#: Whether *this* machine is big-endian, for `endian native` (8.3).
+#:
+#: Read here rather than decided by the compiler: situc runs on the machine
+#: building the code and not on the machine running it, and a byte order
+#: baked in by the generator is right only by coincidence on a cross build
+#: (invariant 8). It is the reason this constant exists at all rather than
+#: the emitter writing `big=True` or `big=False`.
+#:
+#: `endian native` read every field big-endian in this backend and in Rust,
+#: silently, on every little-endian host -- no note, no diagnostic, the wrong
+#: number. Nothing noticed because no schema in the repository used it.
+NATIVE_BIG: Final = sys.byteorder == "big"
 
 
 class SituError(Exception):

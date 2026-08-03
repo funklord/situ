@@ -52,6 +52,34 @@ from situc.types import ScalarType, lookup
 from situc.unparse import expr_to_source as unparse_expr
 
 
+def _byte_order(endian: ast.Endian | None) -> str:
+	"""The `int.from_bytes` order argument, as source.
+
+	A third answer, and this had two: a field asked `is not LITTLE` and read
+	`native` big-endian, while an indexed table's entry asked `is BIG` and
+	read the same schema's `native` little-endian. `NATIVE_BIG` is a runtime
+	constant so the choice is the target machine's.
+	"""
+	if endian is ast.Endian.NATIVE:
+		return '("big" if NATIVE_BIG else "little")'
+	return '"big"' if endian is ast.Endian.BIG else '"little"'
+
+
+def _order(endian: ast.Endian | None) -> str:
+	"""What the `big=` argument of a read or a write is, as source.
+
+	`native` resolves in the generated module rather than here: situc runs on
+	the machine building the code and not on the machine running it, so a
+	byte order decided at generation time is right only by coincidence
+	(invariant 8). It used to be neither -- `endian is not LITTLE` put native
+	in the big-endian branch, so every field of a host-order schema came back
+	byte-swapped on a little-endian machine, with nothing said.
+	"""
+	if endian is ast.Endian.NATIVE:
+		return "NATIVE_BIG"
+	return str(endian is not ast.Endian.LITTLE)
+
+
 def _pythonic(source: str) -> str:
 	"""A schema expression as Python.
 
@@ -130,6 +158,7 @@ class Emitter:
 			"\tadvance,",
 			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
+			*(["\tNATIVE_BIG,"] if self._has_native_order() else []),
 			"\tcompose, nul_len, open_gate, utf8_valid,",
 			*self._tlv_imports(),
 			*self._delimited_imports(),
@@ -514,6 +543,18 @@ class Emitter:
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries)
 
+	def _has_native_order(self) -> bool:
+		"""Whether anything here is `endian native` (8.3).
+
+		Imported only where used, for `_delimited_imports`' reason: an unused
+		import is a warning in every linter a caller might run over this, and
+		invariant 23 says generated code that warns teaches a reader to ignore
+		warnings.
+		"""
+		return any(entry.placement.endian is ast.Endian.NATIVE
+		           for struct in self.resolved.structs.values()
+		           for entry in struct.entries)
+
 	def _tlv_imports(self) -> list[str]:
 		"""`varint_get`, where something walks a tlv region."""
 		placements = [entry.placement
@@ -561,7 +602,7 @@ class Emitter:
 		name    = c_name(local_name(struct, placement))
 		width   = table.entry_bits // BITS_PER_BYTE
 		element = self.resolved.structs.get(table.element or "")
-		order   = "big" if placement.endian is ast.Endian.BIG else "little"
+		order   = _byte_order(placement.endian)
 
 		count = self._count_expression(struct, placement)
 		if count is None:
@@ -603,7 +644,7 @@ class Emitter:
 			f'\t\t\traise BoundsError(f"entry {{index}} runs past the region")',
 			"",
 			f"\t\treturn int.from_bytes(self.bytes[at:at + {width}],"
-			f' "{order}")',
+			f" {order})",
 		]
 		lines.extend(self._index_element(struct, placement, table, name,
 		                                 element, start))
@@ -893,12 +934,12 @@ class Emitter:
 
 		scalar = lookup(length_type)
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
-		order  = "big" if endian is ast.Endian.BIG else "little"
+		order  = _byte_order(endian)
 		return [
 			f"{indent}if len(data) - at < {width}:",
 			f'{indent}\traise BoundsError(',
 			f'{indent}\t\tf"a length prefix at {{at}} runs past the region")',
-			f"{indent}size = int.from_bytes(data[at:at + {width}], \"{order}\")",
+			f"{indent}size = int.from_bytes(data[at:at + {width}], {order})",
 			f"{indent}at = at + {width}",
 		]
 
@@ -1905,7 +1946,7 @@ class Emitter:
 
 	def _raw_load(self, placement: Placement, scalar: ScalarType,
 			offset: str | None = None) -> str:
-		big = placement.endian is not ast.Endian.LITTLE
+		big = _order(placement.endian)
 
 		if scalar.is_bit_packed:
 			if placement.offset_bits is None:
@@ -1928,7 +1969,7 @@ class Emitter:
 
 	def _store(self, placement: Placement, scalar: ScalarType,
 			offset: str | None = None) -> str:
-		big   = placement.endian is not ast.Endian.LITTLE
+		big   = _order(placement.endian)
 		value = "int(value)"
 
 		if scalar.is_bcd:

@@ -20,6 +20,9 @@ import pytest
 from situc import ast
 from situc.capability import Axis, Value
 from situc.codegen.c import generate
+from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.python import generate as generate_py
+from situc.codegen.rust import generate as generate_rs
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.propagate import Resolved
@@ -151,3 +154,81 @@ def test_an_endian_marker_reads_the_same_host_constant() -> None:
 
 	assert "#if SITU_HOST_BIG" in generated
 	assert "__BYTE_ORDER__" not in generated
+
+
+# -- the other three backends -----------------------------------------------
+#
+# Everything above asks C, which has answered correctly since phase 4. The
+# question was never put to the other three, and two of them got it wrong:
+# `endian native` read big-endian in Python and in Rust, silently, on every
+# little-endian host. Nothing noticed because no schema in this repository
+# used host order until `examples/netlink` (26.37).
+
+
+def emitted(body: str) -> dict[str, str]:
+	"""One schema through all four backends."""
+	schema   = parse_text(body)
+	resolved = resolve(schema, solve(schema))
+	return {
+		"c":      generate(schema, resolved, "unit").header,
+		"cpp":    generate_cpp(schema, resolved, "unit").header,
+		"python": generate_py(schema, resolved, "unit").module,
+		"rust":   generate_rs(schema, resolved, "unit").module,
+	}
+
+
+#: What each backend calls "read this in the order the target runs in".
+DEFERS = {
+	"c":      "situ_get_ne",
+	"cpp":    "situ_get_ne",
+	"python": "NATIVE_BIG",
+	"rust":   "read_ne",
+}
+
+#: ...and what it must not say instead. A fixed order here is the answer
+#: resolved on the wrong machine.
+RESOLVED = {
+	"c":      ("situ_get_be32", "situ_get_le32"),
+	"cpp":    ("situ_get_be32", "situ_get_le32"),
+	"python": ("big=True", "big=False"),
+	"rust":   ("read_be", "read_le"),
+}
+
+
+@pytest.mark.parametrize("backend", sorted(DEFERS))
+def test_every_backend_defers_a_native_read_to_the_target(backend: str) -> None:
+	output = emitted(NATIVE)[backend]
+
+	assert DEFERS[backend] in output
+	for fixed in RESOLVED[backend]:
+		assert fixed not in output, \
+			f"{backend} resolved `native` to {fixed} at generation time"
+
+
+def test_a_native_indexed_entry_reads_the_same_way_its_fields_do() -> None:
+	"""One schema, one byte order.
+
+	Two backends disagreed with *themselves*: a field asked "is this not
+	little-endian" and read `native` big, while an indexed table's entry asked
+	"is this big-endian" and read the same schema's `native` little. Whichever
+	answer is right, a schema that means two things inside one generated file
+	means nothing at all.
+	"""
+	body = """target buffer;
+endian native;
+struct entry [allow_host_dependent] {
+	u16 value;
+}
+struct table [allow_host_dependent] {
+	u8 count;
+	indexed(offset_type = u16, count = count, base = region) {
+		entry rows[];
+	}
+}
+"""
+	for backend, marker in DEFERS.items():
+		output = emitted(body)[backend]
+		for fixed in RESOLVED[backend]:
+			assert fixed not in output, \
+				f"{backend} read part of a native schema as {fixed}"
+		assert marker in output

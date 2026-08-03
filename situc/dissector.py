@@ -220,6 +220,12 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
+	# Host order: the bytes are what this dissector can honestly show, since
+	# the capture does not say which machine wrote them.
+	if _host_order(placement):
+		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
+
 	scalar = placement.scalar
 	if scalar is None:
 		return ""
@@ -257,6 +263,22 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 	        f"ProtoField.{kind}({', '.join(args)})")
+
+
+def _host_order(placement: Placement) -> bool:
+	"""Whether this member's byte order is the *sending* machine's (8.3).
+
+	The one thing a capture does not record. Everything else here is decided
+	by the schema; `endian native` is decided by whichever machine wrote the
+	bytes, and the machine reading the capture is a different one -- so there
+	is no answer to guess at and the number would be wrong half the time.
+
+	The module docstring has said "added as bytes with a note rather than
+	guessed at" since this backend was written, and the code guessed: the
+	order test was `is LITTLE`, so a native field was read big-endian in
+	silence. A promise nobody checked, which is section 0's rule 6 again.
+	"""
+	return placement.endian is ast.Endian.NATIVE
 
 
 def _enum_names(resolved: ResolvedSchema) -> frozenset[str]:
@@ -353,6 +375,9 @@ def _version_guard(struct: ResolvedStruct, placement: Placement) -> str | None:
 	if span is None:
 		return None
 
+	if _host_order(field):
+		return None		# no answer a capture can give
+
 	first, count = span
 	read = "le_uint" if field.endian is ast.Endian.LITTLE else "uint"
 	return f"if tvb({first}, {count}):{read}() >= {placement.since} then"
@@ -417,6 +442,16 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	add  = "add_le" if placement.endian is ast.Endian.LITTLE else "add"
 	span = byte_span(placement)
 
+	# The note the module docstring has promised since this backend was
+	# written. `add` on a `ProtoField.bytes` shows the bytes whichever way it
+	# is called, so the order argument is moot here -- what matters is that
+	# the reader is told why they are looking at bytes rather than a number.
+	note = ([f"\t-- {placement.path}: `endian native`. The capture does not"
+	         " record which",
+	         "\t-- machine wrote these, so they are shown as bytes rather"
+	         " than guessed at."]
+	        if _host_order(placement) else [])
+
 	if span is None:
 		# `byte_span` is None for a dynamic offset, and *where* it sits is the
 		# only thing unknown -- how wide it is was never in doubt. Reported as
@@ -426,6 +461,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			return [f"\t-- {placement.path}: no bytes of its own"]
 		return [
 			f"\t-- {placement.path}: after a member the data sizes",
+			*note,
 			*seek,
 			f"\tif tvb:len() >= at + {width} then",
 			f"\t\tsubtree:{add}({field}, tvb(at, {width}))",
@@ -435,6 +471,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	first, count = span
 	return [
+		*note,
 		f"\tsubtree:{add}({field}, tvb({first}, {count}))",
 		f"\tat = {first + count}",
 	]
@@ -476,6 +513,8 @@ def _read(placement: Placement, base: str) -> str | None:
 		if count > 4:
 			return None		# `uint` tops out at four bytes; `uint64` is a
 					# different type and no length field needs it
+		if _host_order(placement):
+			return None		# no answer a capture can give
 		read = "le_uint" if placement.endian is ast.Endian.LITTLE else "uint"
 		return f"tvb({_at(base, first)}, {count}):{read}()"
 
@@ -922,6 +961,9 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return None
 	if driver.placement.offset_bits % BITS_PER_BYTE:
 		return None
+
+	if _host_order(driver.placement):
+		return None		# no answer a capture can give
 
 	byte  = driver.placement.offset_bits // BITS_PER_BYTE
 	width = driver.placement.size_bits // BITS_PER_BYTE

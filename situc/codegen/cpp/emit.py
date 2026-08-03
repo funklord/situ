@@ -2226,7 +2226,7 @@ class Emitter:
 		"""One table entry, in the region's byte order."""
 		if width == 1:
 			return "static_cast<std::uint32_t>(base()[at])"
-		order = "be" if placement.endian is ast.Endian.BIG else "le"
+		order = _order_suffix(placement.endian)
 		return (f"static_cast<std::uint32_t>"
 		        f"(situ_get_{order}{width * 8}(base() + at))")
 
@@ -2550,7 +2550,7 @@ class Emitter:
 		scalar = lookup(length_type)
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
-		order  = "be" if endian is ast.Endian.BIG else "le"
+		order  = _order_suffix(endian)
 		read   = ("static_cast<std::uint32_t>(base()[at])" if suffix is None
 		          else f"static_cast<std::uint32_t>"
 		               f"(situ_get_{order}{suffix}(base() + at))")
@@ -3455,7 +3455,7 @@ class Emitter:
 		if scalar.bits in WORD_WIDTHS:
 			return f"static_cast<{ctype}>(situ_get_{suffix}{scalar.bits}({base}))"
 
-		assembly = "lsb" if placement.endian is ast.Endian.LITTLE else "msb"
+		assembly = _bit_assembly(placement.endian)
 		return (f"static_cast<{ctype}>(situ_bits_get_{assembly}(base(),"
 		        f" {placement.offset_bits}, {scalar.bits}))")
 
@@ -3492,7 +3492,7 @@ class Emitter:
 			return (f"situ_put_{suffix}{scalar.bits}({base},"
 			        f" static_cast<std::uint{scalar.bits}_t>({value}));")
 
-		assembly = "lsb" if placement.endian is ast.Endian.LITTLE else "msb"
+		assembly = _bit_assembly(placement.endian)
 		return (f"situ_bits_set_{assembly}(base(), {placement.offset_bits},"
 		        f" {scalar.bits}, static_cast<std::uint64_t>({value}));")
 
@@ -4445,6 +4445,13 @@ def _order_suffix(endian: ast.Endian | None) -> str:
 	if endian is ast.Endian.NATIVE:
 		return "ne"
 	return "le" if endian is ast.Endian.LITTLE else "be"
+
+
+def _bit_assembly(endian: ast.Endian | None) -> str:
+	"""The same choice for widths that are not a word: u24, u48."""
+	if endian is ast.Endian.NATIVE:
+		return "ne"
+	return "lsb" if endian is ast.Endian.LITTLE else "msb"
 
 
 def _reserved_policy(attrs: tuple[ast.Attr, ...]) -> str | None:

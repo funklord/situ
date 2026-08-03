@@ -89,6 +89,27 @@ KEYWORDS = frozenset({
 UNESCAPABLE = frozenset({"crate", "self", "Self", "super"})
 
 
+def _reader(endian: ast.Endian | None) -> str:
+	"""Which runtime read a scalar goes through.
+
+	Three answers rather than two, and this backend gave two -- in two
+	different ways. A field asked `endian is not LITTLE` and so read `native`
+	big-endian; an indexed table's entry asked `endian is BIG` and so read the
+	same schema's `native` little-endian. One backend disagreeing with itself
+	about what a schema means is the shape invariant 21 is about, one level
+	below "which of two errors fires".
+	"""
+	if endian is ast.Endian.NATIVE:
+		return "read_ne"
+	return "read_le" if endian is ast.Endian.LITTLE else "read_be"
+
+
+def _writer(endian: ast.Endian | None) -> str:
+	if endian is ast.Endian.NATIVE:
+		return "write_ne"
+	return "write_le" if endian is ast.Endian.LITTLE else "write_be"
+
+
 def _ident(name: str) -> str:
 	"""A schema name as a Rust identifier.
 
@@ -368,7 +389,7 @@ class Emitter:
 		name    = c_name(local_name(struct, placement))
 		width   = table.entry_bits // BITS_PER_BYTE
 		element = self.resolved.structs.get(table.element or "")
-		reader  = "read_be" if placement.endian is ast.Endian.BIG else "read_le"
+		reader  = _reader(placement.endian)
 
 		# A literal count needs no read; a field-driven one is the driver's own
 		# accessor, which already lands in `usize`.
@@ -692,7 +713,7 @@ class Emitter:
 
 		scalar = lookup(length_type)
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
-		reader = "read_be" if endian is ast.Endian.BIG else "read_le"
+		reader = _reader(endian)
 		return [
 			f"{indent}if self.bytes.len() - at < {width} {{",
 			f"{indent}\treturn Err(Error::Bounds);",
@@ -3470,7 +3491,6 @@ class Emitter:
 
 	def _raw_load(self, placement: Placement, scalar: ScalarType,
 			offset: str | None = None) -> str:
-		big = placement.endian is not ast.Endian.LITTLE
 		at  = offset if offset is not None else str(placement.offset_bytes)
 
 		if scalar.is_bit_packed:
@@ -3494,7 +3514,7 @@ class Emitter:
 				return f"situ_rt::sign_extend({raw}, {scalar.bits})"
 			return raw
 
-		reader = "read_be" if big else "read_le"
+		reader = _reader(placement.endian)
 		raw    = (f"situ_rt::{reader}(self.bytes, {at},"
 		          f" {scalar.bits // BITS_PER_BYTE})")
 		if scalar.signed:
@@ -3756,7 +3776,6 @@ class Emitter:
 
 	def _store(self, placement: Placement, scalar: ScalarType,
 			offset: str | None = None) -> str:
-		big   = placement.endian is not ast.Endian.LITTLE
 		at    = offset if offset is not None else str(placement.offset_bytes)
 		value = "value as u64"
 
@@ -3784,7 +3803,7 @@ class Emitter:
 			        f" else {{ situ_rt::write_be(self.bytes, {at}, {width},"
 			        f" {value}) }}")
 
-		writer = "write_be" if big else "write_le"
+		writer = _writer(placement.endian)
 		return (f"situ_rt::{writer}(self.bytes, {at},"
 		        f" {scalar.bits // BITS_PER_BYTE}, {value});")
 

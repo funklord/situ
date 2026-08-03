@@ -200,6 +200,34 @@ pub fn write_le(bytes: &mut [u8], at: usize, width: usize, value: u64) {
 	}
 }
 
+/// Host order, for `endian native` (8.3).
+///
+/// `cfg!` rather than a constant situc writes into the output: situc runs on
+/// the machine building the code and not on the machine running it, so the
+/// order has to be decided by the compiler that has the target in front of it
+/// (invariant 8). Both arms compile on both, and the dead one folds away.
+///
+/// This backend had neither, and read every `native` field big-endian --
+/// silently, on every little-endian host. Nothing noticed because no schema in
+/// the repository used host order until `examples/netlink`.
+#[inline]
+pub fn read_ne(bytes: &[u8], at: usize, width: usize) -> u64 {
+	if cfg!(target_endian = "big") {
+		read_be(bytes, at, width)
+	} else {
+		read_le(bytes, at, width)
+	}
+}
+
+#[inline]
+pub fn write_ne(bytes: &mut [u8], at: usize, width: usize, value: u64) {
+	if cfg!(target_endian = "big") {
+		write_be(bytes, at, width, value)
+	} else {
+		write_le(bytes, at, width, value)
+	}
+}
+
 /// A bit-packed field, read through the bytes it lives in.
 ///
 /// `msb` selects the bit numbering: most significant first is the wire

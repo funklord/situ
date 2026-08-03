@@ -1391,7 +1391,7 @@ class Emitter:
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
 		if suffix is None:
 			return "(uint32_t)view.base[at]"
-		order = "be" if endian is ast.Endian.BIG else "le"
+		order = _order_suffix(endian)
 		return f"(uint32_t)situ_get_{order}{suffix}(view.base + at)"
 
 	def _tlv_cursor(self, struct: ResolvedStruct, placement: Placement,
@@ -1570,7 +1570,7 @@ class Emitter:
 		"""One table entry, in the region's byte order."""
 		if width == 1:
 			return "(uint32_t)view.base[at]"
-		order = "be" if placement.endian is ast.Endian.BIG else "le"
+		order = _order_suffix(placement.endian)
 		return f"(uint32_t)situ_get_{order}{width * 8}(view.base + at)"
 
 	def _index_base_noun(self, table: IndexTable) -> str:
