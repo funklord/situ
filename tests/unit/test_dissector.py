@@ -295,6 +295,55 @@ def test_a_dissector_shows_the_fields_a_real_packet_holds(tmp_path: Path) -> Non
 	]
 
 
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_member_sized_by_arithmetic_is_walked(tmp_path: Path) -> None:
+	"""`payload[length - 8]`. `sized_by` holds a path and holds nothing for
+	arithmetic over one, and both places this file asked the question asked it
+	that way -- so UDP's payload was declared as a field, never shown, and the
+	member was reported as "sized by `None`, which this dissector cannot
+	locate". Its driver is `length`, four bytes back.
+
+	The same packet as above with the payload actually present: length 24 is
+	eight of header and sixteen of payload."""
+	packet = bytes.fromhex("04d2005000180000") + bytes(range(16))
+	consumed, rows = dissect(
+		tmp_path, ROOT / "examples" / "udp" / "udp.situ", "udp_header", packet)
+
+	assert consumed == 24
+	assert rows[-1][:3] == ("udp_header.payload", 8, 16)
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_dissector_consumes_no_more_than_the_frame(tmp_path: Path) -> None:
+	"""A length is the message's claim, not the frame's. The `if` above the
+	advance already declined to show bytes that are not there and the advance
+	counted them anyway, so an eight-byte header declaring 24 reported having
+	consumed 24 -- past the end of what it was handed."""
+	consumed, _ = dissect(
+		tmp_path, ROOT / "examples" / "udp" / "udp.situ", "udp_header",
+		bytes.fromhex("04d2005000180000"))
+
+	assert consumed == 8
+
+
+def test_an_operator_lua_spells_differently_is_declined() -> None:
+	"""Lua's `/` is floating point and its `^` is exponentiation, and `<<`,
+	`>>`, `&` and `|` arrived in 5.3 -- which decision 0021 says this backend
+	cannot assume. Nothing reached any of them while every member sized by
+	arithmetic was declined for a different reason; the first packet through
+	the fixed version died on `tvb(at, 2.5)`.
+
+	`^` is the one that would not have died: `(units ^ 1) + 1` is a number Lua
+	computes happily and nobody meant."""
+	text = emit("struct s { u8 n [min = 1, max = 4];"
+	            " u8 half[n / 2 + 1]; u8 flip[(n ^ 1) + 1];"
+	            " u8 sum[n + 1]; u16 tail; }\n")
+
+	assert "sized by `n / 2 + 1`" in text
+	assert "sized by `(n ^ 1) + 1`" in text
+	assert "local sum_n = tvb(0, 1):uint() + 1" in text	# and the rest still walks
+
+
 #: The first entry of the archive `examples/cpio/cpio.vectors` records, which
 #: GNU cpio wrote. 110 bytes of header, a 13-byte name, one byte of padding,
 #: six bytes of file and two more of padding.
@@ -358,6 +407,16 @@ def test_bit_packed_fields_come_out_masked_and_shifted(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_condition_keeps_its_logical_operators() -> None:
+	"""`&&` and `||` are not operators Lua spells differently -- they are
+	rendered as `and` and `or`. Declining them declined every `while` run in
+	the repository, which is what the first version of the guard above did."""
+	text = emit(DNS_LABEL)
+
+	assert "(tvb(last, 1):uint() % 64) ~= 0) then break end" in code(text)
+	assert " and " in code(text) and "&&" not in code(text)
+
+
 def test_a_dns_name_is_walked_label_by_label(tmp_path: Path) -> None:
 	"""`www.example.com`, then qtype and qclass.
 

@@ -39,8 +39,8 @@ from situc.names import (
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	arm_members, byte_span, container_bits, extent_parts, local_name,
-	own_members,
+	arm_members, byte_span, container_bits, data_sized, element_bytes,
+	extent_parts, local_name, own_members,
 )
 
 #: Widths Wireshark has a `ProtoField.uintN` for. Unlike C it has a 24-bit one,
@@ -219,7 +219,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
 
-	if placement.sized_by is not None or placement.array_count is not None:
+	if data_sized(placement) or placement.array_count is not None:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
@@ -509,7 +509,13 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 				f"\tat = {first + count}",
 			]
 
-	if placement.sized_by is not None or placement.array_count is not None:
+	# `data_sized` rather than `sized_by`, which holds a path and holds nothing
+	# for `body[n + 1]`. Both asked the question themselves and both missed the
+	# arithmetic form, so a run the data sizes was shown at its *minimum* --
+	# one byte for `[n + 1]` -- and everything after it was placed on top of
+	# its bytes. Silently: the note above the member still said "after a member
+	# the data sizes", which is the one part of the output that was right.
+	if data_sized(placement) or placement.array_count is not None:
 		return _repeated(resolved, struct, placement, field, seek)
 
 	add  = "add_le" if placement.endian is ast.Endian.LITTLE else "add"
@@ -646,6 +652,30 @@ def _read(placement: Placement, base: str) -> str | None:
 _CONSTS: dict[str, int] = {}
 
 
+#: Operators the schema has and Lua either spells differently or does not have,
+#: on the oldest Lua this backend targets (decision 0021: Wireshark bundles 5.2
+#: in older builds, and a dissector that fails to load is worse than one that
+#: divides).
+#:
+#:   `/`   Lua divides in floating point. `tvb(at, 2.5)` is not a short read,
+#:         it is `bad argument #1 to 'format'` at the first packet.
+#:   `^`   is exponentiation, not exclusive or. `(units ^ 1) + 1` is a number
+#:         Lua computes happily and nobody meant -- the one silently wrong
+#:         answer in this list.
+#:   `<< >> & |`  arrived in Lua 5.3. This file reads bit-packed fields with
+#:         arithmetic for that reason; an expression is no different.
+#:
+#: 26.37 recorded that no schema in this repository has a bare `/`. It was true
+#: of `examples/`, and `tests/schemas/edges.situ` has one in every operator on
+#: this list -- which is what it is for. Nothing reached them, because until
+#: now every member sized by arithmetic was declined for a different reason.
+#: `&&` and `||` are not on it: `translate_operators` renders those as `and`
+#: and `or`, and every `while` condition in this repository has one -- the
+#: first version of this matched the halves and declined every run walk in the
+#: file.
+_UNSPELLABLE = re.compile(r"/|\^|<<|>>|(?<!&)&(?!&)|(?<!\|)\|(?!\|)")
+
+
 def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
 	"""A schema expression rewritten as Lua reads over `base`.
 
@@ -690,6 +720,9 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
 			continue
 		if re.search(rf"\b{re.escape(local)}\b", source):
 			return None
+
+	if _UNSPELLABLE.search(source):
+		return None
 	try:
 		return expand_calls(
 			over_fields(sorted(reads), source, lambda name: reads[name]),
@@ -843,15 +876,18 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return f"{_span_name(struct, placement)}(tvb, {base})"
 
 	if placement.size_expr is not None:
-		return _over_fields(struct, placement.size_expr, base)
+		rendered = _over_fields(struct, placement.size_expr, base)
+		each     = element_bytes(placement)
+		return None if rendered is None else (
+			rendered if each == 1 else f"({rendered}) * {each}")
 
 	if placement.sized_by is not None and placement.sized_by != "remaining":
 		count = _over_fields(struct, placement.sized_by, base)
 		if count is None:
 			return None
-		each = _element_bytes(resolved, placement)
-		return None if each is None else (
-			count if each == 1 else f"({count}) * {each}")
+		width = _element_bytes(resolved, placement)
+		return None if width is None else (
+			count if width == 1 else f"({count}) * {width}")
 
 	nested = resolved.structs.get(placement.type_name or "")
 	if nested is not None and not nested.layout.is_fixed_size \
@@ -1036,8 +1072,13 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	count = _count_expression(resolved, struct, placement)
 	if count is None:
+		# Whichever way the length is written. It said "sized by `None`" for
+		# every member sized by arithmetic, `sized_by` holding a path and
+		# holding nothing for those -- a note naming the field it could not
+		# read, naming instead the fact that it had not looked.
+		written = placement.size_expr or placement.sized_by
 		return [
-			f"\t-- {placement.path}: sized by `{placement.sized_by}`, which this",
+			f"\t-- {placement.path}: sized by `{written}`, which this",
 			"\t-- dissector cannot locate; the rest of the frame is shown raw",
 			*seek,
 			"\tif tvb:len() > at then",
@@ -1056,7 +1097,7 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			"\tat = tvb:len()",
 		]
 
-	each = _element_bytes(resolved, placement)
+	each = 1 if placement.kind == "opaque" else _element_bytes(resolved, placement)
 	if each is None:
 		return [f"\t-- {placement.path}: elements of no fixed size"]
 
@@ -1070,7 +1111,13 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tif tvb:len() >= at + {name}_len then",
 			f"\t\tsubtree:add({field}, tvb(at, {name}_len))",
 			"\tend",
-			f"\tat = at + {name}_len",
+			# Clamped, because the length is the message's claim and not the
+			# frame's: the `if` above already declines to *show* bytes that
+			# are not there, and the advance below went on to count them
+			# anyway. A dissector returns what it consumed, so an eight-byte
+			# UDP header declaring a length of 24 reported consuming 24 --
+			# and the run walking it is the same shape.
+			f"\tat = math.min(at + {name}_len, tvb:len())",
 		])
 		return lines
 
@@ -1097,6 +1144,17 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return str(placement.array_count)
 	if placement.sized_by == "remaining":
 		return "remaining"
+
+	# An arithmetic size. `sized_by` holds a path and holds nothing for it, so
+	# the lookup below found no driver and the member was shown as "sized by
+	# `None`, which this dissector cannot locate" -- for `body[n + 1]`, whose
+	# driver is `n` and is right there.
+	if placement.size_expr is not None:
+		# `"0"`, matching the absolute offset the driver read below uses: a
+		# length field precedes the member it sizes, so it is at a constant
+		# offset from the struct, and the struct a dissector dissects starts
+		# at the frame.
+		return _over_fields(struct, placement.size_expr, "0")
 
 	driver = resolved.find(f"{struct.name}.{placement.sized_by}")
 	if driver is None or driver.placement.offset_bits is None:
