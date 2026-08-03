@@ -17,11 +17,11 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | Example | Demonstrates |
 |---|---|
 | [ethernet](ethernet/) | The control case. Every capability at its strongest value. |
-| [udp](udp/) | The smallest header with a length field pointing at a payload it does not describe. |
-| [icmp](icmp/) | A field whose meaning depends on an earlier one, and a checksum modelled the wrong way on purpose. |
-| [arp](arp/) | A generic format pinned into a static one with `[must_eq]`. |
+| [udp](udp/) | The smallest header with a length field pointing at a payload it does not describe -- and the payload, which costs nothing because nothing follows it. |
+| [icmp](icmp/) | A field whose meaning depends on an earlier one -- a variant whose arms are all four bytes, so it costs nothing -- and a checksum that covers its own bytes. `[self_as = 0]` is RFC 1071 said in the schema; `tests/generated/test_icmp.c` computes it and compares against a number the kernel wrote. |
+| [arp](arp/) | A generic format pinned into a static one with `[must_eq]`, and the same packet unpinned beside it: two capability maps for one format, which is what pinning a length buys, in one file. |
 | [tcp](tcp/) | Dense bit packing where every group closes on a byte boundary. |
-| [ipv4](ipv4/) | The same, where one field does not: `u13` forces `[allow_straddle]`. |
+| [ipv4](ipv4/) | The same, where one field does not: `u13` forces `[allow_straddle]`. Also a checksum covering a span the data decides -- the options -- and what covering everything costs a router that rewrites `time_to_live` on every hop. |
 | [dns](dns/) | Sub-byte enums, and an honest boundary where the format stops being a layout. |
 | [ntp](ntp/) | A format designed with alignment in mind, and where `repr` starts to matter. |
 | [bmp](bmp/) | Little endian, and the canonical misaligned layout. |

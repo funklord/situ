@@ -6516,6 +6516,75 @@ examples carrying bytes an independent implementation wrote -- `bmp`'s is now a
 whole file rather than its two headers, which is the arithmetic between them
 made checkable by the schema rather than by a hand-written test.
 
+### 26.39 The checksum that covers itself
+
+26.38 ended by naming a construct with four askers and not building it. This is
+that construct, and the reason it is a fold of its own is that it turned out to
+be small: `[self_as = N]` on a tag, and the two things a caller cannot compute
+without.
+
+**The refusal was right and its scope was wrong.** A tag declared inside the
+region it covers was an error, and the diagnostic said why -- "computing it
+would take its own bytes as input". True of a cryptographic tag. False of the
+checksum family, where the self-inclusion is the *definition*: RFC 1071 sums
+the header including the checksum field, taken as zero. IPv4, ICMP, TCP and UDP
+all carry one; GPT's header CRC is the same shape with the same filler, and
+tar's octal header sum is the same shape with spaces, which is why the
+attribute carries a value rather than being a flag.
+
+**What the compiler contributes did not change in kind.** The algorithm is the
+caller's -- a signature says what a transform does, never how (13.1) -- so what
+is generated is what only the compiler knows, and there are two such things now
+rather than one: the span the algorithm runs over, and where inside that span
+the tag's own bytes are. The bytes stay in the buffer, because generated code
+never allocates (invariant 4), so there is no copy-with-a-hole to hand out and
+substituting the filler is three lines in the caller's loop.
+
+That loop is written once, in `tests/generated/test_icmp.c`, and checked against
+a number this repository did not compute: the bytes are an echo reply read off
+an `IPPROTO_ICMP` socket, so the checksum in them is the kernel's own. A span
+off by two bytes, or a hole in the wrong place, yields a plausible number that
+is not that one -- which is the only way to test a construct whose whole job is
+to describe an algorithm it does not run.
+
+**Three defects fell out of building it, and one out of using it.**
+
+- **A tag was covered by itself.** Coverage means "writing these bytes leaves
+  that tag stale", which is false of the bytes the tag is written *into*: it
+  told a caller that computing the checksum invalidates the checksum. Harmless
+  only because the order a caller writes in happens to hide it.
+- **An `authenticated` region whose extent the data decides crashed the C
+  emitter.** `own_members` drops such a region deliberately -- it consumes no
+  bytes of its own -- and `_region_end` reached for it in that list anyway. No
+  schema had a variable-size authenticated region until an IPv4 header did.
+- **A trailing region ended at the view rather than at its last member**, so a
+  caller who framed a whole datagram would have been told to sum the payload
+  too. The comment said "if nothing follows, the region runs to the end of the
+  view", which is right only where the last member's extent is not computable.
+- And **`gen-checks` asserted the covered span on a zeroed instance**: an IPv4
+  header with `ihl = 0`, which `[min = 5]` forbids, puts the end of the options
+  twenty bytes before their start. The baseline mechanism for exactly this
+  already existed and this check had never used it.
+
+**And one that had been latent since enums landed.** A Python member named
+after its own enum type shadows it inside the class body, so every annotation
+written after the property resolved to the property rather than to the enum --
+`def set_protocol(self, value: protocol | int)` in an IPv4 header. It surfaced
+only when the field became covered and grew a second method after its property.
+Decision 0025 makes the same move in C++ for the same reason: rename the
+reference, not the name the schema chose.
+
+**What is still open here**, and it is the interesting half: `examples/tcp` and
+`examples/udp` carry the same checksum over a *pseudo-header* -- source and
+destination addresses from the IP layer, which are not in the struct at all.
+`self_as` does nothing for that, and neither does anything else here: it is
+coverage over bytes another schema owns. Two askers, and no design yet.
+
+**Status:** 2696 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; seven worked
+examples carrying bytes an independent implementation wrote, and one of them
+now carries a checksum the kernel computed.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -6988,7 +7057,16 @@ made checkable by the schema rather than by a hand-written test.
    places that grew a rule while the construct sat unreachable. Ask what
    *reads* a construct, not only what emits it.
 
-56. **A frame is not a message, and only one construct makes them differ.**
+56. **A refusal's scope is a claim, and it is usually about the construct
+   rather than about the case.** "A tag may not sit inside the bytes it
+   authenticates" was written about a cryptographic tag and enforced against
+   every tag, including the family whose definition is exactly that -- four of
+   which are worked examples in this repository. The diagnostic was correct,
+   the reasoning was correct, and the rule was over-broad by one word. When a
+   refusal is written, ask which cases it is *about*, not only which cases it
+   is true of.
+
+57. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
