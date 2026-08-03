@@ -6952,6 +6952,63 @@ eight-byte UDP header declaring a length of 24 reported having consumed 24.
 host and under aarch64 emulation; every dissector executed; eight worked
 examples carrying bytes an independent implementation wrote.
 
+### 26.46 Writing the schemas nobody wrote
+
+26.45 ended on a defect found by construction rather than by an example: a
+schema no file here contains, written to see what the compiler would do with
+it. That worked, so this fold is the method applied on purpose.
+
+The sweep is mechanical. Take each construct that can size or place a member,
+write the smallest schema using it, generate all four backends, execute the
+Python one, and compare the offset it reads against one computed by hand. Six
+shapes in, five produced code that does not build or does not agree.
+
+**A packed pair before a variable-length member.** The offset sum divided each
+preceding member by eight and added the quotients, so a `u4` and a `u4`
+contributed nothing: everything after the first variable member read one byte
+early. `extent_parts` states this rule in its own docstring, having been fixed
+there for the *extent* -- "a `u2` and a `u6` are one byte together and zero
+apart. All four backends had this separately." The offset accumulation
+alongside it, in seven places across the four, was never touched.
+
+**A fixed-width text number driving a length.** An expression over a text
+driver names `<field>_value`, the read that cannot fail, and only the
+delimited and nested forms of a text number emitted it. Every text driver in
+`examples/` is one of those two.
+
+**A varint driving a size written as arithmetic.** `readable_names` is the one
+list of what an expression may name and it asks for a scalar, which a varint
+has not -- so the name reached the output verbatim.
+
+**A run walked over a fixed-size element.** `extent_parts` answers None for a
+fixed struct, correctly. Three backends read that as "cannot measure",
+declined the walk, and emitted the members after it anyway -- calling a span
+function they had just declined to write.
+
+**A counted run of variable-length elements.** The count says how many and
+each element says how long it is, so the run is walked and its length is the
+sum of the walk. Nothing emitted that sum. Three backends declined every
+member after such a run; C multiplied the count by an element width and
+measured a run of `n` records as `n` bytes.
+
+**The pattern is one pattern.** Six of the seven defects in this fold and the
+last are the same sentence: a question with two spellings, answered for one.
+`sized_by` and `size_expr`. Extent and offset. Delimited and fixed-width.
+Scalar and varint. In every case the first was found by a real schema, fixed,
+and written up; the second was never asked, because no schema here has it.
+
+That is the argument for writing schemas nobody wrote. `tests/schemas/edges.situ`
+already exists for exactly this and its header says so -- "a construct the
+language offers and nothing exercises is a construct whose generated code has
+never run". What it collected were constructs. What this fold adds is
+*combinations*: a packed pair and a length field are both well covered, and
+the pair before the length is not a construct at all. The combination is where
+the second spelling of a question hides.
+
+**Status:** 2776 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; eight worked
+examples carrying bytes an independent implementation wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7522,7 +7579,15 @@ examples carrying bytes an independent implementation wrote.
    most expensive change in a schema sorted above the cheapest and above every
    other rule. Where one number both ranks and reports, say which it is.
 
-69. **A frame is not a message, and only one construct makes them differ.**
+69. **A construct is covered; a combination is not.** Every defect in 26.46
+   was found by writing a schema that uses two well-covered constructs
+   together -- a packed pair *before* a length field, a varint *driving*
+   arithmetic, a count *of* variable records. Coverage of the constructs is
+   what made each one look already tested. When a construct's code path
+   branches on a property of its neighbour, the neighbour is part of the
+   construct.
+
+70. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
