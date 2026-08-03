@@ -6722,6 +6722,65 @@ host and under aarch64 emulation; every dissector executed; `make fuzz` clean
 over 27 harnesses; eight worked examples carrying bytes an independent
 implementation wrote.
 
+### 26.42 The search, and where the bracket was still a count
+
+26.40 recorded that `traverse.data_sized` had been missing from four places,
+each found by a schema rather than by a search, and called that an argument
+for the search. This is it, and it is worth writing down as a method because
+it worked.
+
+**How.** Grep for the *shape* of asking by hand a question a shared module
+answers -- `array_count is not None`, `sized_by is not None`, `radix is not
+None`, `offset_bits is None` -- and count them per file. Three hundred and
+sixty occurrences, which is not a defect list: a backend asking "does this
+member have a constant count" to choose a spelling is a fair question about
+the data. Then narrow to the one shape with a known failure mode: every test
+of `array_count` with no mention of `radix` within a dozen lines, because a
+text number carries a count and is not an array (invariant 57). Thirty-seven
+candidates, and reading them took an hour.
+
+**Six were the mistake, and every one is an artifact a reader sees.**
+
+- **`doc` labelled a text number as an array.** `magic[6]` reads as six magics
+  where there is one number in six digits -- the `name[1]` mistake in its
+  other form, and the Size column beside it already said six bytes.
+- **`doc` put a byte order on things that have none.** The test was the
+  member's *total* width, so a two-byte marker, a four-byte address and a
+  110-byte nested struct all carried one. `examples/bmp`'s signature is the
+  sharpest case: its own comment says it is bytes rather than a `u16` so that
+  its value does not depend on byte order, and the document said it did.
+- **The dissector read a text number as an array of its scalar**, declaring
+  every field of a cpio header four times too wide and overlapping everything
+  after it.
+- **The dissector read digits as a binary integer**, in both of the two copies
+  of that question -- and `uint()` over eight bytes is not a wrong answer in
+  Wireshark, it is an error.
+- **A reserved run the data sizes was "no bytes of its own"**, so the walk
+  finished three bytes short of every cpio entry.
+- **An expression naming a field the dissector declines to read left that name
+  in the emitted Lua**, where it is a global. `attempt to perform arithmetic
+  on a nil value (global 'nla_len')`, at the first packet. `over_fields`
+  substitutes what it is given and leaves the rest alone, which is right for a
+  rewriter and wrong for a caller that had no way to notice.
+
+**And two the fixes found.** The Lua stub had no `TvbRange:string()`, so the
+first schema to need one died in the harness rather than in the dissector --
+a gap in the model of Wireshark's API, which is the thing the stub *is*. And
+a declared length the frame does not hold advanced the cursor past the end of
+the packet, which is the number a caller chains dissectors on.
+
+**What this says about where to look.** Every one of the six is in `doc` or
+`dissector` -- the two artifacts with no compiler behind them. The four code
+backends have C, C++, rustc and mypy reading their output; a document and a
+Lua script have a person, and only if the person looks. That is not an
+argument for trusting the backends. It is an argument for pointing the next
+search at whatever has no reader.
+
+**Status:** 2730 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed, and one of them
+now walks a GNU cpio archive with every offset checked against what cpio
+wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7227,7 +7286,22 @@ implementation wrote.
    output that does not compile. A check on generated code has to ask the
    question in the target's terms.
 
-60. **A frame is not a message, and only one construct makes them differ.**
+60. **A rewriter that leaves what it does not recognise is not safe for a
+   caller that cannot check.** `over_fields` substitutes the names it is given
+   and passes everything else through, which is correct for a rewriter and
+   became a Lua global -- `attempt to perform arithmetic on a nil value` -- the
+   moment an expression named a field the dissector had declined to read.
+   Where the set of names is known in advance, a name outside it is an error
+   rather than a passthrough, and the caller that cannot render the expression
+   should be told so rather than handed a broken one.
+
+61. **The artifacts with no compiler behind them are where the defects live.**
+   Six mistakes found in one search, all six in `doc` or the dissector.
+   Generated C, C++ and Rust are read by three compilers and generated Python
+   by mypy; a document and a Lua script are read by a person, and only if the
+   person looks. Point the next search at whatever has no reader.
+
+62. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
