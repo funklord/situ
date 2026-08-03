@@ -227,3 +227,32 @@ struct coded_run {
 	}
 	u8  trailer;
 }
+
+// Every operator a size expression can carry.
+//
+// A measurement rather than a hunch: across every schema this repository
+// builds, the only operators that ever reached a backend's expression renderer
+// were `+`, `-` and `*`, and the only builtin was none at all. That is a fact
+// about which protocols somebody wrote up, not about the language -- and the
+// two things it hid were a compile error in four target languages and a
+// division that returned a float in one of them (26.37).
+//
+// `[min = 1]` on the driver is what makes `/` and `%` legal at all: a divisor
+// whose range includes zero is refused, which is the compiler doing its job.
+struct arithmetic {
+	u8   units  [min = 1, max = 4];
+
+	u8   halved[units / 2 + 1];		// integer division, not 2.5
+	u8   modulo[units % 3 + 1];		// not monotone; its own interval rule
+	u8   shifted[units << 1];
+	u8   dropped[units >> 1 | 1];		// bitwise or, on a shifted range
+	u8   masked[(units & 3) + 1];
+	u8   flipped[(units ^ 1) + 1];
+	u8   clamped[min(units, 3)];		// an attribute name, being called
+	u8   raised[max(units, 2)];
+	u8   padded[align_up(units, 4) - units + 1];
+
+	u16  tail;
+}
+
+require absolute_static(arithmetic.units);

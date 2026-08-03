@@ -1925,7 +1925,18 @@ class Parser:
 				inner.append(token)
 			cursor += 1
 
-		return len(inner) == 1 and inner[0].is_ident(*ATTRIBUTE_NAMES)
+		if len(inner) != 1 or not inner[0].is_ident(*ATTRIBUTE_NAMES):
+			return False
+
+		# ...unless it is being *called*. `min` and `max` are attribute names
+		# and expression builtins both, so `x[min(a, b)]` came out as a lone
+		# known attribute -- the arguments sat at depth 2 and never reached
+		# `inner` -- and the parser then reported "expected `]`" at the open
+		# bracket of a perfectly good size expression. No attribute takes
+		# parentheses, so the following token settles it.
+		after = self.tokens[self.pos + 1 + len(inner)] \
+			if self.pos + 1 + len(inner) < len(self.tokens) else None
+		return not (after is not None and after.is_symbol("("))
 
 	def parse_array_spec(self) -> ast.ArraySpec | None:
 		if self.bracket_is_attrs():

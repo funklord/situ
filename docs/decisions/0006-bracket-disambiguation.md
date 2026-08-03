@@ -43,7 +43,18 @@ A bracket group is an attribute list when:
 1. it contains `=` or `,` at bracket depth 1, or
 2. it contains exactly one token, an identifier that is a known attribute name.
 
+3. ...unless that identifier is immediately followed by `(`, in which case it
+   is a call and the group is a size expression.
+
 Otherwise it is an array spec.
+
+Rule 3 arrived late and closes a collision the first two created rather than
+resolved. `min` and `max` are attribute names *and* expression builtins
+(`situc.expr.VALUE_BUILTINS`), and in `x[min(a, b)]` the arguments sit at
+bracket depth 2, so the comma never reaches rule 1 and the lone `min` matches
+rule 2. The parser then read a perfectly good size expression as an attribute
+list and reported "expected `]`" at the open parenthesis. No attribute takes
+parentheses, so the token after settles it with no new vocabulary.
 
 `parser.ATTRIBUTE_NAMES` holds the full vocabulary, including names belonging to
 phases not yet implemented. Listing them early is deliberate: the parse of

@@ -408,10 +408,16 @@ def test_a_run_of_records_says_it_is_not_unrolled() -> None:
 def test_a_versioned_member_is_guarded() -> None:
 	"""Without the guard it read `tvb(3, 4)` on a three-byte v1 message and
 	Wireshark showed the packet as malformed -- blaming the capture for the
-	schema."""
+	schema.
+
+	Two questions, and this asked one of them for a long time: a *v3* message
+	that stops after three bytes passes the version test and reads past the
+	end just the same. Executing every dissector over pseudo-random packets is
+	what found the second, on a draw that happened to put 0x20 in the version
+	byte (26.37)."""
 	lua = emit("struct s [version = v] { u8 v; u16 a; u32 b [since = 2]; }")
 
-	assert "if tvb(0, 1):uint() >= 2 then" in lua
+	assert "if tvb:len() >= 7 and tvb(0, 1):uint() >= 2 then" in lua
 	assert "-- present from version 2" in lua
 
 

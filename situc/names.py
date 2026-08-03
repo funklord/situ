@@ -111,15 +111,35 @@ def expand_calls(source: str, spell: Callable[[str, list[str]], str]) -> str:
 
 def _expand_one(source: str, name: str,
 		spell: Callable[[str, list[str]], str]) -> str:
+	"""One pass, left to right, never re-reading what it has written.
+
+	Rescanning from the start was an infinite loop the moment a target spells
+	a builtin with the builtin's own name: Python's `min` *is* `min`, so the
+	expansion found its own output and expanded it again. `situc build` hung
+	rather than emitting anything wrong, which is the good failure -- and it
+	took a schema that actually calls one to find it (invariant 15).
+
+	Arguments are expanded before the call around them, so a nested builtin
+	still gets its own spelling.
+	"""
 	pattern = re.compile(rf"\b{re.escape(name)}\s*\(")
+	pieces: list[str] = []
+	cursor = 0
+
 	while True:
-		found = pattern.search(source)
+		found = pattern.search(source, cursor)
 		if found is None:
-			return source
+			pieces.append(source[cursor:])
+			return "".join(pieces)
+
 		args, end = _arguments(source, found.end())
 		if args is None or end is None:
-			return source		# unbalanced: leave it for the target to reject
-		source = source[:found.start()] + spell(name, args) + source[end:]
+			pieces.append(source[cursor:])
+			return "".join(pieces)	# unbalanced: leave it for the target
+
+		pieces.append(source[cursor:found.start()])
+		pieces.append(spell(name, [expand_calls(arg, spell) for arg in args]))
+		cursor = end
 
 
 def _rounded(value: str, unit: str, one: str, div: str) -> str:
@@ -144,11 +164,35 @@ def c_spelling(name: str, args: list[str]) -> str:
 
 
 def rust_spelling(name: str, args: list[str]) -> str:
+	"""`core::cmp` rather than a conditional expression.
+
+	`if a < b { (a) } else { (b) }` is correct Rust and `-D warnings` refuses
+	it -- "unnecessary parentheses around block return value" -- and dropping
+	the parentheses would change what the arithmetic means. Invariant 23 is
+	the reason that matters: generated code that warns teaches a reader to
+	ignore warnings.
+	"""
 	left, right = args
 	if name == "align_up":
 		return _rounded(left, right, "1", "/")
-	comparison = "<" if name == "min" else ">"
-	return f"(if ({left}) {comparison} ({right}) {{ ({left}) }} else {{ ({right}) }})"
+	return f"core::cmp::{name}({_unwrap(left)}, {_unwrap(right)})"
+
+
+def _unwrap(text: str) -> str:
+	"""One layer of parentheses, where they wrap the whole expression.
+
+	The field renderer parenthesises every read, and `-D warnings` calls a
+	parenthesised function argument unnecessary. Only where the outer pair
+	matches, so `(a) + (b)` is left alone.
+	"""
+	if not (text.startswith("(") and text.endswith(")")):
+		return text
+	depth = 0
+	for index, char in enumerate(text):
+		depth += 1 if char == "(" else -1 if char == ")" else 0
+		if depth == 0 and index < len(text) - 1:
+			return text
+	return text[1:-1]
 
 
 def python_spelling(name: str, args: list[str]) -> str:

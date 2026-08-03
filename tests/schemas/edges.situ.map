@@ -12,6 +12,19 @@
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
 
+struct arithmetic size=14 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  arithmetic.units                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  arithmetic.halved                      offset=AbsoluteStatic(0x01) size=Bounded(1, 3) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  arithmetic.modulo                      offset=Dynamic size=Bounded(1, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.shifted                     offset=Dynamic size=Bounded(2, 8) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.dropped                     offset=Dynamic size=Bounded(1, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.masked                      offset=Dynamic size=Bounded(1, 4) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.flipped                     offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.clamped                     offset=Dynamic size=Bounded(1, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.raised                      offset=Dynamic size=Bounded(2, 4) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.padded                      offset=Dynamic size=Bounded(1, 4) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  arithmetic.tail                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
 struct coded_run size=2 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic stage=TransformTime
   coded_run.n                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   coded_run.body                         offset=AbsoluteStatic(0x01) size=Bounded(0, 510) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting

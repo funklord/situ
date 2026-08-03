@@ -13,6 +13,19 @@ bit_order msb_first
 endian big
 target buffer
 
+struct arithmetic size=14..43
+  @0x0000   1         u8         units  min=1 max=4
+  @0x0001   1..3      u8         halved
+  ~         1..3      u8         modulo
+  ~         2..8      u8         shifted  big
+  ~         1..3      u8         dropped
+  ~         1..4      u8         masked
+  ~         1..8      u8         flipped
+  ~         1..3      u8         clamped
+  ~         2..4      u8         raised  big
+  ~         1..4      u8         padded
+  ~         2         u16        tail  big
+
 struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling

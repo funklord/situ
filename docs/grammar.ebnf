@@ -89,7 +89,9 @@ variant		= "variant" ident "switch" "(" expr ")" "{"		(* PHASE 6 *)
  * written: `u8 x [foo];` is either an array of `foo` elements or a scalar
  * carrying the flag `foo`. Resolved by the closed attribute vocabulary in
  * docs/decisions/0006-bracket-disambiguation.md -- a bracket group is attrs
- * when it holds "=" or "," at depth 1, or a lone known attribute name. *)
+ * when it holds "=" or "," at depth 1, or a lone known attribute name that is
+ * not immediately followed by "(" -- `min` and `max` are attribute names and
+ * expression builtins both. *)
 array_spec	= "[" [ size_expr ] "]" ;
 size_expr	= expr | "remaining" ;
 

@@ -284,6 +284,23 @@ def test_struct_level_attributes() -> None:
 	assert [attr.name for attr in decl.attrs] == ["allow_straddle"]
 
 
+def test_a_called_attribute_name_is_a_size_expression() -> None:
+	"""Decision 0006, rule 3. `min` and `max` are attribute names *and*
+	expression builtins, and in `x[min(a, b)]` the comma sits at bracket depth
+	2 -- so the lone `min` matched the attribute rule and the parser reported
+	"expected `]`" at the open parenthesis of a perfectly good size."""
+	member = only_struct("struct S { u8 n; u8 buf[min(n, 4)]; }").members[1]
+	assert isinstance(member, ast.Field)
+	assert member.array is not None
+	assert member.attrs == ()
+
+
+def test_a_bare_attribute_name_is_still_an_attribute() -> None:
+	field = first_field("struct S { u8 n [min = 4]; }")
+	assert field.array is None
+	assert [attr.name for attr in field.attrs] == ["min"]
+
+
 def test_dotted_array_size_is_not_attributes() -> None:
 	field = first_field("struct S { u8 opts[hdr.length]; }")
 	assert field.array is not None

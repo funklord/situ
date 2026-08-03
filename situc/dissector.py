@@ -386,6 +386,24 @@ def _member(resolved: ResolvedSchema, struct: ResolvedStruct,
 	        *[f"\t{line}" for line in lines], "\tend"]
 
 
+def _reaches(placement: Placement) -> str | None:
+	"""`tvb:len() >= N`, where N is the byte after this member.
+
+	The version guard says the *version* admits the member. Whether the
+	capture is long enough to hold it is a second question, and a truncated
+	v3 message answered the first and not the second: `tvb(3, 4)` on three
+	bytes is a Lua error, and Wireshark shows the packet as malformed --
+	blaming the capture for a message that simply stops early. Which is what
+	the comment above this function already said about the *version*, one
+	question short.
+	"""
+	span = byte_span(placement)
+	if span is None:
+		return None
+	first, count = span
+	return f"tvb:len() >= {first + count}"
+
+
 def _version_guard(struct: ResolvedStruct, placement: Placement) -> str | None:
 	"""`if <version> >= N then`, reading the version where the accessors do."""
 	if placement.since is None or placement.version_field is None:
@@ -404,8 +422,12 @@ def _version_guard(struct: ResolvedStruct, placement: Placement) -> str | None:
 		return None		# no answer a capture can give
 
 	first, count = span
-	read = "le_uint" if field.endian is ast.Endian.LITTLE else "uint"
-	return f"if tvb({first}, {count}):{read}() >= {placement.since} then"
+	read  = "le_uint" if field.endian is ast.Endian.LITTLE else "uint"
+	test  = f"tvb({first}, {count}):{read}() >= {placement.since}"
+	holds = _reaches(placement)
+	if holds is not None:
+		test = f"{holds} and {test}"
+	return f"if {test} then"
 
 
 def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
