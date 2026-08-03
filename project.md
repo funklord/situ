@@ -3645,6 +3645,11 @@ situ/
                               four backends. Not a test and not in the suite:
                               a wall-clock number is the machine's, so 26.30
                               records the machine beside it
+    sweep.py                  every composition of constructs the language
+                              admits, through four backends. Not in the suite
+                              either -- the whole space is minutes -- and
+                              `test_composed_schemas` runs a fixed sample of
+                              it on every commit (26.50)
   tests/
     unit/                     compiler tests (pytest), one file per module
     generated/                cmocka tests over generated C
@@ -7198,6 +7203,81 @@ a construct added two folds ago fell out.
 host and under aarch64 emulation; six probe schemas through all four
 backends, three of them now in `tests/schemas/edges.situ`.
 
+### 26.50 The sweep, as machinery rather than as an afternoon
+
+Three folds of hand-written probes found about twenty defects, one schema at a
+time, and every one of them the same way: take two constructs this repository
+covers several times over, put them next to each other, generate four
+backends, run them, diff. That is a person doing a machine's job, and the
+method's own record says so -- the shapes that found things were never the
+ones anybody would have picked, they were the ones nobody had.
+
+So the method is machinery now. `tests/unit/compose.py` enumerates the space
+along five axes, each a question a backend's emitters branch on:
+
+| axis | values |
+|---|---|
+| the driver | a field, a nibble, a varint, digits, a nested struct's field |
+| the form | `x[n]`, `x[n + 1]`, `x[remaining]` |
+| the element | bytes, a wide value, a fixed record, a variable one |
+| what precedes it | nothing, a variable-length run, a delimiter |
+| where it sits | the frame, a nested struct, `authenticated`, `sealed`, an arm |
+
+1350 cells. `tests/unit/probe.py` runs one through every oracle there is --
+the compiler must not fall over, each backend must compile what it emitted,
+the four must agree over sixteen hostile buffers, and the dissector must
+survive its own schema's bytes. `tools/sweep.py` walks as much of it as you
+ask for; `tests/unit/test_composed_schemas.py` runs a fixed sample on every
+commit.
+
+**A refusal is a pass**, and this is the part that makes the whole thing
+work. Most of the space is illegal -- a bit-packed field at a dynamic offset,
+`[remaining]` with a member after it, a varint inside a run -- and a
+diagnostic is the correct answer to every one of them. What is not a pass is
+a traceback out of the compiler, generated code that will not build, or four
+backends that build and then disagree. Without that distinction the sweep
+would report a thousand failures and mean nothing by any of them.
+
+**The first run of sixty cells: nineteen agreed, three were refused, and
+thirty-eight failed with six distinct causes.** Six, not thirty-eight, which
+is what a sweep buys over a list of symptoms. Fixed here:
+
+  * `readable_names` required a constant offset for a struct's *own* fields
+    as well as for a nested struct's, so a discriminant behind a delimited
+    member was not a name an expression could use -- and `over_fields`
+    substitutes what it is given and passes the rest through, so twelve cells
+    emitted `if (which != 17u)` with no `which` in scope. That rewriter now
+    refuses a name it was not given, which is invariant 60 held one level up
+    from where the dissector held it;
+  * a member inside a variant arm was placed by walking the *struct's* member
+    list, which never met it and never stopped -- the same defect 26.49 fixed
+    for a sealed region's interior, in the other construct that has one. Both
+    ask `traverse._walk_order` now;
+  * an arm's accessors named an offset function nobody emitted, and an arm of
+    a variable-size struct named an extent helper nobody emitted;
+  * `c_name` mapped only the characters a schema path can contain, so a file
+    named `my-schema.situ` produced `#ifndef SITU_MY-SCHEMA_H` -- a
+    subtraction in a directive. Found by naming a scratch file with a hyphen,
+    which is a thing a person does and a schema in this repository never had.
+
+That last fix then broke the differ, which built an accessor name by handing
+`ident()` a `{}` to fill in later -- and a placeholder is exactly the kind of
+thing the new `c_name` maps to underscores. `situ_s_n___`. A tightening that
+finds its own caller within the hour is the argument for having a sweep at
+all.
+
+**What is left is written down rather than waved at.** Fifteen of the
+twenty-four sampled cells still fail, in five classes, and each is named in
+`test_composed_schemas.KNOWN` with what it dies of. The list is checked both
+ways: a cell not in it must pass, and a cell in it must still fail, so fixing
+one fails the suite until somebody removes the entry. A known-failure list
+that could quietly keep a stale row would be the comment invariant 11 warns
+about.
+
+**Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; 1350 cells enumerated, 24 of them run on
+every commit, 15 of those recorded as failing.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7820,7 +7900,23 @@ backends, three of them now in `tests/schemas/edges.situ`.
    another field beside it -- here `frame_relative` and `frame_base_dynamic`
    -- reading it without them is not reading it.
 
-75. **Where the count comes from and how wide an element is are two
+75. **A method worth repeating is a method worth generating.** Three folds
+   found twenty defects by writing schemas by hand, and the shapes that found
+   them were never the ones anybody would have picked -- they were the ones
+   nobody had. A person choosing what to try next is the least reliable part
+   of that loop, and the only part that was not automated. Where a technique
+   has found something three times running, the question to ask is what
+   enumerates it.
+
+76. **A sweep needs an oracle that says which failures are failures.** Most of
+   a composition space is illegal, and a refusal with a blame chain is the
+   right answer to all of it. Without the distinction between "refused",
+   "does not build" and "four answers", the first run reports a thousand
+   failures and a reader learns nothing; with it, thirty-eight failures were
+   six causes. Classify the outcomes before running anything, or the run is
+   noise with a total at the bottom.
+
+77. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
