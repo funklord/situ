@@ -901,3 +901,91 @@ def test_an_element_of_a_counted_run_is_bounded(target: str) -> None:
 	}[target]
 
 	assert bounded in source
+
+
+#: A member whose byte order the message decides, behind a member whose length
+#: it decides. `examples/tiff` is the only marker in the tree and its fields
+#: are all at constant offsets, so the marker-conditional load had never been
+#: asked for a dynamic one.
+MARKED_DYNAMIC = (
+	"endian_marker mark : u16 { little = 0x4949, big = 0x4D4D }\n"
+	"struct s [endian = from(mark)] {\n"
+	"\tendian_marker  mark;\n"
+	"\tu8             n;\n"
+	"\tu8             pad[n];\n"
+	"\tu16            after;\n"
+	"}\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_a_marker_governs_a_member_at_a_dynamic_offset(target: str) -> None:
+	"""C asked the placement for a constant offset while every other load on
+	that path takes one from the caller, and crashed inside `offset_bytes` --
+	an internal error where section 17 asks for a diagnostic.
+
+	Rust emitted `self.as_ref().as_ref()` in the setter: the rewrite that
+	moves a read onto the immutable view rewrote an `as_ref()` the store had
+	already put on the marker predicate (invariant 53)."""
+	source = sources(MARKED_DYNAMIC)[target]
+	reads  = {
+		"c":      "situ_s_mark_is_little(view) ? situ_get_le16",
+		"cpp":    "mark_is_little() ? situ_get_le16",
+		"python": "big=not self.mark_is_little",
+		"rust":   "if self.mark_is_little() { situ_rt::read_le",
+	}[target]
+
+	assert reads in source
+	assert "as_ref().as_ref()" not in source
+
+
+#: A variant arm that is a run of values wider than a byte, counted by the
+#: message and by the schema. An arm may be a scalar, a byte run or a struct,
+#: and this was none of those in any backend.
+ARM_RUN = (
+	"enum k : u8 { one = 0x11, two = 0x22, default = error }\n"
+	"struct s {\n"
+	"\tk   which;\n"
+	"\tu8  n;\n"
+	"\tvariant body switch (which) {\n"
+	"\t\tcase k.one: u16  wide[n];\n"
+	"\t\tcase k.two: i16  pinned[3];\n"
+	"\t}\n"
+	"}\n"
+)
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_an_arm_may_be_a_run_of_wide_values(target: str) -> None:
+	"""All four declined it: C and C++ said so in the generated file, Python
+	and Rust said nothing at all. The count and the indexed getter are what an
+	ordinary run gets, and the arm test goes in front of the count, which the
+	getter reaches through."""
+	source = sources(ARM_RUN)[target]
+	indexed = {
+		"c":      "situ_s_body_wide_get(situ_view_t view, uint32_t index,"
+		          " uint16_t *out)",
+		"cpp":    "err body_wide(std::uint32_t index, std::uint16_t &out)",
+		"python": "def body_wide(self, index: int) -> int:",
+		"rust":   "pub fn body_wide(&self, index: usize) -> Result<u16> {",
+	}[target]
+
+	assert indexed in source
+	assert "not a shape this backend reaches into" not in source
+
+
+@pytest.mark.parametrize("target", sorted(BACKENDS))
+def test_an_arm_of_wide_values_counts_what_is_there(target: str) -> None:
+	"""The count is the arm's own, clamped to the frame like every other one
+	the message decides -- and the schema-counted spelling beside it was as
+	unreachable as the message-counted one, an arm's base being dynamic
+	whatever its count says."""
+	source = sources(ARM_RUN)[target]
+	counts = {
+		"c":      "situ_s_body_pinned_count(situ_view_t view, uint32_t *out)",
+		"cpp":    "err body_pinned_count(std::uint32_t &out)",
+		"python": "def body_pinned_count(self) -> int:",
+		"rust":   "pub fn body_pinned_count(&self) -> Result<usize> {",
+	}[target]
+
+	assert counts in source

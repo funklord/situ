@@ -435,7 +435,14 @@ def _notes(placement: Placement) -> list[str]:
 	# belongs on `u16 samples[4]`. A number written as digits has no byte
 	# order at all: the bytes are characters, and `repr = TextConverted` is
 	# the axis saying so.
-	if placement.endian is not None and placement.radix is None \
+	if placement.marker is not None and placement.kind != "marker" \
+			and scalar is not None and scalar.bits > BITS_PER_BYTE:
+		# A field whose byte order the *message* decides. The column said
+		# nothing, which reads as host order beside every neighbour that names
+		# one -- and the fact a reader most needs about such a field is which
+		# other field to read first.
+		notes.append(f"byte order from {placement.marker}")
+	elif placement.endian is not None and placement.radix is None \
 			and scalar is not None and not scalar.is_bit_packed \
 			and scalar.bits > BITS_PER_BYTE:
 		notes.append(f"{placement.endian.value} endian")

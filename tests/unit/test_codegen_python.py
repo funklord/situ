@@ -1868,3 +1868,64 @@ def test_every_generated_module_type_checks(tmp_path: Path) -> None:
 		capture_output=True, text=True)
 
 	assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_an_arm_of_wide_values_is_read_by_index(tmp_path: Path) -> None:
+	"""Executed. The arm the discriminant selects hands back values by index;
+	the other one raises, which is this backend's spelling of the refusal
+	every backend makes.
+
+	No backend emitted either accessor before: a variant arm may be a scalar,
+	a byte run or a struct, and a run of values is none of those."""
+	module = load(tmp_path, (
+		"enum k : u8 { one = 0x11, two = 0x22, default = error }\n"
+		"struct s {\n"
+		"\tk   which;\n"
+		"\tu8  n;\n"
+		"\tvariant body switch (which) {\n"
+		"\t\tcase k.one: u16  wide[n];\n"
+		"\t\tcase k.two: u8   raw[n];\n"
+		"\t}\n"
+		"}\n"))
+
+	buf = bytearray(8)
+	buf[0] = 0x11				# the counted-run arm
+	buf[1] = 3				# three claimed, three carried
+	buf[2], buf[3] = 0x12, 0x34
+	buf[4], buf[5] = 0xAB, 0xCD
+	buf[6], buf[7] = 0x00, 0x01
+
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.body_wide_count == 3
+	assert held.body_wide(0) == 0x1234
+	assert held.body_wide(2) == 1
+	with pytest.raises(IndexError):
+		held.body_wide(3)
+
+	buf[0] = 0x22				# ...and now it is the other arm
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	with pytest.raises(module.VersionError):
+		held.body_wide_count
+
+
+def test_a_marker_governs_a_member_behind_a_variable_one(
+		tmp_path: Path) -> None:
+	"""Executed, in both orders. Every marker in the tree governs fields at
+	constant offsets, so a marker-conditional read at an offset the message
+	decides had never run."""
+	module = load(tmp_path, (
+		"endian_marker mark : u16 { little = 0x4949, big = 0x4D4D }\n"
+		"struct s [endian = from(mark)] {\n"
+		"\tendian_marker  mark;\n"
+		"\tu8             n;\n"
+		"\tu8             pad[n];\n"
+		"\tu16            after;\n"
+		"}\n"), preamble="target buffer;\n")
+
+	buf = bytearray(b"\x4d\x4d\x02\x00\x00\x12\x34")	# "MM": big
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.after == 0x1234
+
+	buf[0], buf[1] = 0x49, 0x49				# "II": little
+	held = module.s.at(module.Message(buf), 0, len(buf))
+	assert held.after == 0x3412

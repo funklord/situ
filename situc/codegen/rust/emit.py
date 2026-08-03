@@ -22,6 +22,8 @@ a `&mut` they do not need.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from situc import ast
@@ -1470,6 +1472,44 @@ class Emitter:
 				f" as {self._rust_type(scalar)})",
 				"\t}",
 			]
+
+		if scalar is not None and indexed_elements(placement):
+			# A run of values wider than a byte. The slice below is not
+			# available to it -- the element is ValueConverted, so the bytes
+			# are not the values -- so it is the count and the indexed getter
+			# an ordinary run gets, each of them a `Result` because the arm
+			# may not be the one present.
+			width  = scalar.bits // BITS_PER_BYTE
+			length = (self._length_expression(struct, placement)
+			          if placement.array_count is None
+			          else str(placement.array_count * width))
+			if length is not None:
+				rtype = self._rust_type(scalar)
+				load  = self._load(placement, scalar,
+				                   offset=f"{self._unparen(start)}"
+				                          f" + index * {width}")
+				return [
+					*head,
+					f"\tpub fn {_ident(name + '_count')}(&self)"
+					" -> Result<usize> {",
+					*refuse,
+					f"\t\tlet at = {self._unparen(start)};",
+					f"\t\tOk(core::cmp::min({self._unparen(length)},",
+					"\t\t\tself.bytes.len().saturating_sub(at))"
+					f" / {width})",
+					"\t}",
+					"",
+					f"\t/// Element `index` of `{placement.path}`. No slice",
+					"\t/// accessor: the element is ValueConverted, so bytes",
+					"\t/// handed back whole would not be the values.",
+					f"\tpub fn {name}(&self, index: usize)"
+					f" -> Result<{rtype}> {{",
+					f"\t\tif index >= self.{_ident(name + '_count')}()? {{",
+					"\t\t\treturn Err(Error::Bounds);",
+					"\t\t}",
+					f"\t\tOk({self._unparen(load)})",
+					"\t}",
+				]
 
 		if scalar is not None and scalar.bits == BITS_PER_BYTE:
 			# A constant count is a length too, and `_length_expression`
@@ -4001,9 +4041,17 @@ class Emitter:
 		# Through `as_ref()`: the offset is a read -- a scan or a sum of
 		# lengths -- and those helpers live on the immutable view. `bytes` is
 		# the one thing both types have.
+		#
+		# Past what somebody else already wrote, which is invariant 53 in its
+		# other form: `_store` puts an `as_ref()` on a marker predicate itself,
+		# because every other setter site needs one, and this rewrote that into
+		# `self.as_ref().as_ref()`. A marker-governed member behind a
+		# variable-length one is the only shape that reaches both, and no
+		# schema here has one -- `examples/tiff` is a header of constant
+		# offsets.
 		def reading(text: str) -> str:
-			return text.replace("self.", "self.as_ref().") \
-			           .replace("self.as_ref().bytes", "self.bytes")
+			return re.sub(r"self\.(?!as_ref\(\))(?!bytes\b)",
+			              "self.as_ref().", text)
 
 		rtype = self._field_type(placement, writing=True)
 		return [

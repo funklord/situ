@@ -98,8 +98,8 @@ from situc.capability import Axis
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	Member, arm_members, classify, containment_order, indexed_elements,
-	local_name, own_entries, own_members,
+	Member, arm_members, classify, containment_order, data_sized,
+	indexed_elements, local_name, own_entries, own_members,
 )
 
 
@@ -126,6 +126,9 @@ class Probe(Enum):
 	ARM_BYTES = "arm_bytes"
 	#: `name ok=<0|1> value=<v>` -- a variant's scalar arm.
 	ARM_VALUE = "arm_value"
+	#: `name ok=<0|1> count=<n> [0]=<v>` -- a variant's arm that is a run of
+	#: values wider than a byte, which is reached by index like any other.
+	ARM_ELEMENT = "arm_element"
 	#: `name refused=<0|1> opened=<0|1>` -- a sealed region's stage gate,
 	#: asked to open on a failed check and then on a passed one.
 	SEALED    = "sealed"
@@ -468,6 +471,15 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 				and (member.sized_by is not None
 				     or member.array_count is not None):
 			found.append(Ask(Probe.ARM_BYTES, local))
+		elif indexed_elements(member) \
+				and (member.array_count is not None or data_sized(member)):
+			# An arm that is a *run* of wide values. This asked it the scalar
+			# question -- a getter with no index -- so the driver named a
+			# function no backend emits and did not compile, for a shape no
+			# schema here had. All four declined the arm itself as well, two
+			# of them silently.
+			found.append(Ask(Probe.ARM_ELEMENT, local, None,
+			                 max(8, scalar.bits), scalar.signed))
 		elif not scalar.is_bit_packed and not scalar.is_bcd \
 				and member.type_name in _SCALAR_TYPES:
 			found.append(Ask(Probe.ARM_VALUE, local, None,
@@ -739,6 +751,22 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        f'\t\t\t\tprintf("{ask.local} ok=%d len=%u\\n",'
 		        " e == SITU_OK ? 1 : 0, e == SITU_OK ? len : 0u);",
 		        "\t\t\t}"]
+	if ask.probe is Probe.ARM_ELEMENT:
+		return ["\t\t\t{",
+		        f"\t\t\t\t{'int' if ask.signed else 'uint'}{ask.bits}_t"
+		        " held = 0;",
+		        "\t\t\t\tuint32_t n = 0u;",
+		        f"\t\t\t\tconst situ_err_t e = {call.format('count')}"
+		        "(view, &n);",
+		        "",
+		        "\t\t\t\tif (e == SITU_OK && n > 0u) {",
+		        f"\t\t\t\t\t(void){call.format('get')}(view, 0u, &held);",
+		        "\t\t\t\t}",
+		        f'\t\t\t\tprintf("{ask.local} ok=%d count=%u [0]=%lld\\n",',
+		        "\t\t\t\t\te == SITU_OK ? 1 : 0, e == SITU_OK ? n : 0u,",
+		        "\t\t\t\t\t(long long)held);",
+		        "\t\t\t}"]
+
 	if ask.probe is Probe.ARM_VALUE:
 		return ["\t\t\t{",
 		        f"\t\t\t\t{'int' if ask.signed else 'uint'}{ask.bits}_t"
@@ -944,6 +972,23 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\te == ::situ::rt::err::ok"
 		        " ? static_cast<std::uint32_t>(held.size()) : 0u);",
 		        "\t\t\t}"]
+	if ask.probe is Probe.ARM_ELEMENT:
+		return ["\t\t\t{",
+		        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
+		        f"{ask.bits}_t held = 0;",
+		        "\t\t\t\tstd::uint32_t n = 0;",
+		        f"\t\t\t\tconst auto e = view.{ask.local}_count(n);",
+		        "",
+		        "\t\t\t\tif (e == ::situ::rt::err::ok && n > 0) {",
+		        f"\t\t\t\t\t(void)view.{ask.local}(0, held);",
+		        "\t\t\t\t}",
+		        f'\t\t\t\tstd::printf("{ask.local} ok=%d count=%u'
+		        ' [0]=%lld\\n",',
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? n : 0,",
+		        "\t\t\t\t\tstatic_cast<long long>(held));",
+		        "\t\t\t}"]
+
 	if ask.probe is Probe.ARM_VALUE:
 		return ["\t\t\t{",
 		        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
@@ -1136,6 +1181,17 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        ' len={}", held.len()),',
 		        f'\t\t\t\t\tErr(_)   => println!("{ask.local} ok=0 len=0"),',
 		        "\t\t\t\t}"]
+	if ask.probe is Probe.ARM_ELEMENT:
+		return [f"\t\t\t\tmatch view.{rust_ident(ask.local + '_count')}() {{",
+		        "\t\t\t\t\tOk(n) => println!(",
+		        f'\t\t\t\t\t\t"{ask.local} ok=1 count={{}} [0]={{}}", n,',
+		        "\t\t\t\t\t\tif n == 0 { 0i64 } else"
+		        f" {{ view.{call}(0).map(|held| held as i64)"
+		        ".unwrap_or(0) }),",
+		        f'\t\t\t\t\tErr(_) => println!("{ask.local} ok=0 count=0'
+		        ' [0]=0"),',
+		        "\t\t\t\t}"]
+
 	if ask.probe is Probe.ARM_VALUE:
 		return [f"\t\t\t\tmatch view.{call}() {{",
 		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
@@ -1296,6 +1352,15 @@ def _python_ask(ask: Ask) -> list[str]:
 		        f'\tprint("{ask.local} ok=0 len=0")',
 		        "else:",
 		        f'\tprint("{ask.local} ok=1 len=%d" % len(held))']
+	if ask.probe is Probe.ARM_ELEMENT:
+		return ["try:",
+		        f"\tn = view.{ask.local}_count",
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local} ok=0 count=0 [0]=0")',
+		        "else:",
+		        f'\tprint("{ask.local} ok=1 count=%d [0]=%d"'
+		        f" % (n, 0 if n == 0 else view.{ask.local}(0)))"]
+
 	if ask.probe is Probe.ARM_VALUE:
 		return ["try:",
 		        f"\theld = view.{ask.local}",

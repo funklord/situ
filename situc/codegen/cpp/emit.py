@@ -3105,6 +3105,44 @@ class Emitter:
 				"\t}",
 			]
 
+		if scalar is not None and indexed_elements(placement):
+			# A run of values wider than a byte. The span above is not
+			# available to it -- the element is ValueConverted, so the bytes
+			# are not the values -- so it is the count and the indexed getter
+			# an ordinary run gets, each behind the discriminant test.
+			width  = scalar.bits // BITS_PER_BYTE
+			length = (self._length_expression(struct, placement)
+			          if placement.array_count is None
+			          else f"{placement.array_count * width}u")
+			if length is not None:
+				ctype = self._field_ctype(placement)
+				return [
+					*head,
+					f"\t[[nodiscard]] ::situ::rt::err {name}_count"
+					"(std::uint32_t &out) const noexcept",
+					"\t{",
+					*refuse,
+					f"\t\tout = situ_min_u32({length},",
+					f"\t\t\tsitu_remaining_u32(limit(), {start})) / {width}u;",
+					"\t\treturn ::situ::rt::err::ok;",
+					"\t}",
+					f"\t[[nodiscard]] ::situ::rt::err {name}"
+					f"(std::uint32_t index, {ctype} &out) const noexcept",
+					"\t{",
+					"\t\tstd::uint32_t held = 0;",
+					f"\t\tconst ::situ::rt::err e = {name}_count(held);",
+					"",
+					"\t\tif (e != ::situ::rt::err::ok) {",
+					"\t\t\treturn e;",
+					"\t\t}",
+					"\t\tif (index >= held) {",
+					"\t\t\treturn ::situ::rt::err::bounds;",
+					"\t\t}",
+					f"\t\tout = {self._load(scalar, placement, f'({start}) + index * {width}')};",
+					"\t\treturn ::situ::rt::err::ok;",
+					"\t}",
+				]
+
 		nested = self.resolved.structs.get(placement.type_name or "")
 		if nested is not None and nested.layout.is_fixed_size:
 			return [

@@ -26,6 +26,14 @@ struct arithmetic size=14 mutate=Shifting address=Unstable repr=ValueConverted a
   arithmetic.padded                      offset=Dynamic size=Bounded(1, 4) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
   arithmetic.tail                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct arm_run size=2 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  arm_run.which                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  arm_run.n                              offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  arm_run.body                           offset=AbsoluteStatic(0x02) size=Bounded(0, 6) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  arm_run.body.wide                      offset=AbsoluteStatic(0x02) size=Bounded(0, 6) align=Aligned(2) repr=ValueConverted atomic=AtomicWord mutate=Shifting
+  arm_run.body.pinned                    offset=AbsoluteStatic(0x02) size=Fixed(6) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  arm_run.body.raw                       offset=AbsoluteStatic(0x02) size=Bounded(0, 3) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct beat size=2
   beat.kind                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   beat.payload                           offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
@@ -104,6 +112,13 @@ struct linked size=4 access=Sequential mutate=Shifting address=Unstable atomic=N
   linked.chain[].units                   offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   linked.chain[].body                    offset=FrameStatic(0x02) size=Bounded(2, 1022) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   linked.tail                            offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct marked size=5 mutate=Shifting address=Unstable repr=ConditionallyConverted(edge_order) atomic=NonAtomic canonical=CanonicalGiven(edge_order)
+  marked.edge_order                      offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  marked.n                               offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  marked.pad                             offset=AbsoluteStatic(0x03) size=Bounded(0, 4) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  marked.after                           offset=Dynamic size=Fixed(2) align=Unaligned repr=ConditionallyConverted(edge_order) atomic=NonAtomic address=Unstable canonical=CanonicalGiven(edge_order)
+  marked.samples                         offset=Dynamic size=Bounded(0, 8) align=Unaligned repr=ConditionallyConverted(edge_order) atomic=NonAtomic mutate=Shifting address=Unstable canonical=CanonicalGiven(edge_order)
 
 struct messy size=3 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
   messy.name                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead

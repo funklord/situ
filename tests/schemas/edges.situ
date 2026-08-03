@@ -458,3 +458,55 @@ struct wide_run {
 	i32  b[n + 1];
 	u16  tail;
 }
+
+// The same run as a variant arm, and the arm nothing reached into.
+//
+// An arm may be a scalar, a byte run or a struct, and every backend emits
+// those. A run of *values* -- an element wider than a byte, counted by the
+// schema or by the message -- was declined by all four: C and C++ said so in
+// the generated file, Python and Rust said nothing at all, which is the floor
+// invariant 27 sets and below it. Nothing composes these two constructs, so
+// nothing asked.
+//
+// The differ asked, and asked wrongly: it read the arm as a scalar and named
+// a getter taking no index, so the driver for a schema shaped like this did
+// not compile.
+struct arm_run {
+	arm_shape  which;
+	u8         n [max = 3];
+	variant body switch (which) {
+		case arm_shape.counted: u16  wide[n];
+		case arm_shape.fixed:   i16  pinned[3];
+		case arm_shape.bytes:   u8   raw[n];
+	}
+}
+
+enum arm_shape : u8 {
+	counted = 0x11,
+	fixed   = 0x22,
+	bytes   = 0x33,
+	default = error,
+}
+
+// A member whose byte order the message decides, behind a member whose length
+// it decides.
+//
+// `examples/tiff` is the only marker in the tree and it is a header of
+// constant offsets, so the marker-conditional load had never been asked for a
+// dynamic one: C crashed on the assertion inside `offset_bytes` -- an internal
+// error where section 17 asks for a diagram and a remedy -- and Rust emitted
+// `self.as_ref().as_ref()` in the setter, because the rewrite that moves a
+// read onto the immutable view rewrote an `as_ref()` the store had already
+// put there (invariant 53).
+endian_marker edge_order : u16 {
+	little = 0x4949,
+	big    = 0x4D4D,
+}
+
+struct marked [endian = from(edge_order)] {
+	endian_marker  edge_order;
+	u8             n [max = 4];
+	u8             pad[n];
+	u16            after;
+	u16            samples[n];
+}

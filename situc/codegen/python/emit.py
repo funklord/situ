@@ -1634,6 +1634,42 @@ class Emitter:
 				and placement.sized_by is None:
 			return [*head, f"\t\treturn {self._raw_load(placement, scalar)}"]
 
+		if scalar is not None and indexed_elements(placement):
+			# A run of values wider than a byte, which the slice below is not
+			# available to: the element is ValueConverted, so the bytes handed
+			# back whole would not be the values. The count and the indexed
+			# getter an ordinary run gets, with the arm test on the count --
+			# which the getter reaches through, so both refuse.
+			width  = scalar.bits // BITS_PER_BYTE
+			length = (self._length_expression(struct, placement)
+			          if placement.array_count is None
+			          else str(placement.array_count * width))
+			if length is not None:
+				load = self._load(placement, scalar,
+				                  offset=f"({start}) + index * {width}")
+				return [
+					"", "\t@property",
+					f"\tdef {name}_count(self) -> int:",
+					f'\t\t"""How many {scalar.name} elements of'
+					f' {placement.path} are here,',
+					f'\t\twhen the discriminant selects'
+					f' `{arm.source or arm.value}`."""',
+					f"\t\tif {test}:",
+					f'\t\t\traise VersionError("{placement.path}: that arm is'
+					' not the one present")',
+					f"\t\treturn min(({length}),",
+					f"\t\t\tmax(0, self._len - ({start}))) // {width}",
+					"", f"\tdef {name}(self, index: int) -> int:",
+					f'\t\t"""Element `index`, an {scalar.name}.',
+					"",
+					"\t\tNo slice accessor: the element is ValueConverted, so"
+					" bytes",
+					'\t\thanded back whole would not be the values."""',
+					f"\t\tif not 0 <= index < self.{name}_count:",
+					f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+					f"\t\treturn {load}",
+				]
+
 		if scalar is not None and scalar.bits == BITS_PER_BYTE:
 			# A constant count is a length too, and `_length_expression`
 			# answers only for the ones the data decides -- so `u8

@@ -47,7 +47,8 @@ from situc.traverse import (
 	declares_its_own_length,
 	decode_bound,
 	extent_parts, extern_symbol, frameable,
-	element_bytes, has_computable_extent, index_entry_bytes, is_run,
+	element_bytes, has_computable_extent, index_entry_bytes,
+	indexed_elements, is_run,
 	is_counted_run, matched_values, preceding_parts,
 	obligation, obligations,
 	own_members,
@@ -1939,6 +1940,12 @@ class Emitter:
 				"}",
 			]
 
+		if scalar is not None and indexed_elements(placement):
+			lines = self._arm_elements(struct, placement, local, base, test,
+			                           scalar)
+			if lines is not None:
+				return [*head, *lines]
+
 		# A struct-typed arm: `case msg_type.hello: Hello hello;`, which is
 		# section 9.6's own example and so the common shape rather than the
 		# exotic one. A sub-view over it, guarded the same way -- the arm's
@@ -1985,6 +1992,70 @@ class Emitter:
 
 		return [*head, f"/* ...and `{placement.name}` is not a shape this"
 		        " backend reaches into yet. */"]
+
+	def _arm_elements(self, struct: ResolvedStruct, placement: Placement,
+			local: str, base: str, test: str,
+			scalar: ScalarType) -> list[str] | None:
+		"""An arm that is a run of values wider than a byte.
+
+		The byte-run arm above hands back a pointer and a length, which this
+		one may not: the element is ValueConverted, so the bytes are not the
+		values. So it is the pair the ordinary run got in 26.47 -- a count and
+		an indexed getter -- with the discriminant test in front of each, and
+		an error rather than a value because there is nothing to return when
+		the arm is not the one present.
+
+		Both spellings of the count. `u16 x[3]` in an arm is as unreachable as
+		`u16 x[n]` was: the arm's base is usually dynamic, so neither of them
+		is covered by the acquiring bounds check either.
+
+		None where the length has no closed form, which the caller reports the
+		way it does for a byte run.
+		"""
+		width = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			declared: str | None = f"{placement.array_count * width}u"
+		elif self._has_length(struct, placement):
+			declared = self._length_expression(struct, placement)
+		else:
+			declared = None
+		if declared is None:
+			return None
+
+		ctype  = self._field_ctype(placement)
+		count  = ident(self.prefix, struct.name, local, "count")
+		getter = ident(self.prefix, struct.name, local, "get")
+		load   = self._load_expression(
+			scalar, placement, f"view.base + {base} + index * {width}u", offset=0)
+
+		return [
+			f"static inline situ_err_t {count}(situ_view_t view, uint32_t *out)",
+			"{",
+			f"\tif ({test}) {{",
+			"\t\treturn SITU_ERR_VERSION;",
+			"\t}",
+			# Clamped to the frame, like every other count the message
+			# decides: what this answers is how many elements are here.
+			f"\t*out = situ_min_u32({declared},",
+			f"\t\tsitu_remaining_u32(view.limit, {base})) / {width}u;",
+			"\treturn SITU_OK;",
+			"}",
+			f"static inline situ_err_t {getter}(situ_view_t view,"
+			f" uint32_t index, {ctype} *out)",
+			"{",
+			"\tuint32_t held = 0u;",
+			"\tconst situ_err_t e = " f"{count}(view, &held);",
+			"",
+			"\tif (e != SITU_OK) {",
+			"\t\treturn e;",
+			"\t}",
+			"\tif (index >= held) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			f"\t*out = ({ctype})({load});",
+			"\treturn SITU_OK;",
+			"}",
+		]
 
 	def _arm_guard(self, struct: ResolvedStruct,
 			placement: Placement) -> tuple[str, str] | None:
@@ -5032,7 +5103,7 @@ class Emitter:
 
 		if placement.marker is not None and not scalar.is_bit_packed \
 				and scalar.bits > BITS_PER_BYTE:
-			return self._conditional_load(scalar, placement, base)
+			return self._conditional_load(scalar, placement, base, offset)
 
 		if scalar.is_bit_packed:
 			order = "lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST else "msb"
@@ -5062,22 +5133,42 @@ class Emitter:
 		return f"({self._ctype(scalar)}){raw}"
 
 	def _conditional_load(self, scalar: ScalarType, placement: Placement,
-			base: str) -> str:
+			base: str, offset: int | None = None) -> str:
 		"""A parse-time branch on the marker.
 
 		The branch is on a public, layout-irrelevant value, so it is not a side
 		channel (section 11.1).
+
+		`offset` comes from the caller, as it does for every other load: a
+		member at a dynamic offset has that offset folded into `base` and reads
+		at zero. This asked the placement for a constant instead, and a
+		marker-governed field behind a variable-length member crashed the
+		compiler on the assertion inside `offset_bytes` -- an internal error
+		where section 17 asks for a diagnostic, in the one backend that has had
+		markers since phase 4. Every marker in the tree is in a header whose
+		fields are all at constant offsets.
 		"""
 		predicate = self._marker_predicate(placement)
 		width     = scalar.bits
-		offset    = placement.offset_bytes
+		offset    = placement.offset_bytes if offset is None else offset
 		if width in WORD_WIDTHS:
 			return (f"{predicate} ? situ_get_le{width}({base} + {offset}u)"
 			        f" : situ_get_be{width}({base} + {offset}u)")
 
-		bits = placement.offset_bits
+		bits = self._load_bits(placement, offset)
 		return (f"{predicate} ? situ_bits_get_lsb({base}, {bits}u, {width}u)"
 		        f" : situ_bits_get_msb({base}, {bits}u, {width}u)")
+
+	def _load_bits(self, placement: Placement, offset: int) -> int:
+		"""Where the bit path starts reading, in bits from `base`.
+
+		A statically placed field carries its own bit displacement; a
+		dynamically placed one has the whole offset in the pointer already, so
+		what is left is whatever byte displacement the caller passed.
+		"""
+		if placement.offset_bits is not None:
+			return placement.offset_bits
+		return offset * BITS_PER_BYTE
 
 	def _marker_predicate(self, placement: Placement) -> str:
 		owner = placement.path.partition(".")[0]
@@ -5106,7 +5197,7 @@ class Emitter:
 				        f"\t\tsitu_put_be{width}({base} + {offset}u, "
 				        f"(uint{width}_t){value});\n"
 				        f"\t}}")
-			bits = placement.offset_bits
+			bits = self._load_bits(placement, offset)
 			return (f"if ({predicate}) {{\n"
 			        f"\t\tsitu_bits_set_lsb({base}, {bits}u, {width}u, "
 			        f"(uint64_t){value});\n"
