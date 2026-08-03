@@ -126,7 +126,7 @@ def _harness(struct: ResolvedStruct, prefix: str,
 def _fixed_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 	size = macro(prefix, struct.name, "SIZE_FIXED")
 	return [
-		f"static void fuzz_{struct.name}(const uint8_t *data, size_t size)",
+		f"static void fuzz_{c_name(struct.name)}(const uint8_t *data, size_t size)",
 		"{",
 		"\tsitu_msg_t  msg;",
 		"\tsitu_view_t view;",
@@ -193,7 +193,7 @@ def _variable_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 	]
 
 	return [
-		f"static void fuzz_{struct.name}(const uint8_t *data, size_t size)",
+		f"static void fuzz_{c_name(struct.name)}(const uint8_t *data, size_t size)",
 		"{",
 		"\tsitu_msg_t  msg;",
 		"\tsitu_view_t view;",
@@ -598,7 +598,7 @@ def _entry_point(structs: list[ResolvedStruct], basename: str,
 		])
 		for index, struct in enumerate(structs):
 			lines.append(f"\tcase {index}u:")
-			lines.append(f"\t\tfuzz_{struct.name}(data + 1, size - 1u);")
+			lines.append(f"\t\tfuzz_{c_name(struct.name)}(data + 1, size - 1u);")
 			lines.append("\t\tbreak;")
 		lines.extend(["\tdefault:", "\t\tbreak;", "\t}"])
 

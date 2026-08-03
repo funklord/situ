@@ -226,7 +226,7 @@ def test_registers_are_not_dissected() -> None:
 	source, resolved, _ = analyse(ROOT / "examples" / "registers" / "registers.situ")
 	text = generate(parse(source), resolved, "registers")
 
-	assert "Not dissected: ctrl_reg, status_reg" in text
+	assert "Not dissected: ctrl_reg, irq_reg, status_reg" in text
 	assert "Proto(" not in text
 
 

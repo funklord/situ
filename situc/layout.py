@@ -1509,7 +1509,7 @@ class Solver:
 			sized_by       = self.sizing_field(member),
 			size_expr      = _size_source(member),
 			access_mode    = _access_mode(member, decl),
-			on_read        = _side_effect(member.attrs, "on_read"),
+			on_read        = _read_effect(member, decl),
 			on_write       = _side_effect(member.attrs, "on_write"),
 			register       = decl.register,
 			dynamic_cause      = state.cause[0] if state.cause else None,
@@ -2438,6 +2438,26 @@ def _access_mode(member: ast.Field | ast.Reserved,
 		if mode is not None:
 			return mode
 	return ast.AccessMode.RW
+
+
+def _read_effect(member: ast.Field | ast.Reserved,
+		decl: ast.StructDecl) -> ast.SideEffect:
+	"""What reading this field does, from the clause *or* from the mode.
+
+	`rc` and `rs` are `on_read = clear` and `on_read = set` written in
+	SystemRDL's other vocabulary, and situ read only the clause -- so a
+	read-to-clear field declared the short way was `effect = Pure`, which is
+	the axis reporting a destructive read as a pure one.
+	"""
+	declared = _side_effect(member.attrs, "on_read")
+	if declared is not ast.SideEffect.NONE:
+		return declared
+
+	mode = _access_mode(member, decl)
+	if mode is not None and mode.reading_has_an_effect:
+		return (ast.SideEffect.CLEAR if mode is ast.AccessMode.RC
+		        else ast.SideEffect.TRIGGER)
+	return ast.SideEffect.NONE
 
 
 def _side_effect(attrs: tuple[ast.Attr, ...], name: str) -> ast.SideEffect:

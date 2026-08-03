@@ -256,3 +256,81 @@ struct arithmetic {
 }
 
 require absolute_static(arithmetic.units);
+
+// The constructs the survey found with no users at all.
+//
+// Every one of these is in the grammar, in project.md, and in no schema --
+// which by this file's own header is a construct whose generated code has
+// never run. Two of the register modes were wrong when a schema finally used
+// them (26.41); these five were not, and that is worth recording rather than
+// assuming, since the only way to tell was to write them.
+
+// One level of namespacing (decision 0012). Nesting is refused, and the
+// separator is `::` because a dot is already a path.
+namespace wire {
+	struct framed_body {
+		u8   kind;
+		u16  length;
+	}
+}
+
+// A delimiter the content may contain, made inert by an escape byte (8.6.1).
+// `quoted` above is the other half of the same question; nothing had ever
+// written this one.
+struct escaped_run {
+	u8  field[] until "," max 64 [escape = "\\"];
+	u8  rest[remaining];
+}
+
+// The fourth reserved policy (8.8). `must_be_zero` and `must_be_one` are
+// checked, `preserve` is copied, and `unknown` is the one that says the bits
+// mean nothing this schema knows -- so nothing is checked and nothing is
+// promised, which is a different statement from `preserve`.
+struct unknown_reserved {
+	u8        version;
+	reserved  u8   [unknown];
+	u16       tail;
+}
+
+// `[equalize]` pads every arm to the largest, which is what buys back the
+// offset axis for everything after the variant (17.0). Without it `tail` is
+// Dynamic; with it the struct has one size and `tail` is at 9.
+struct equalized {
+	arm_kind  which;
+	variant body switch (which) [equalize] {
+		case arm_kind.first:  u8  tiny[2];
+		case arm_kind.second: u8  big[8];
+	}
+	u16  tail;
+}
+
+require size(equalized) == 11;
+require absolute_static(equalized.tail);
+
+enum arm_kind : u8 {
+	first  = 0x11,
+	second = 0x22,
+	default = error,
+}
+
+// `[allow_unverified_read]` waives the stage gate of 14.3: the interior is
+// reachable without a verification token. It is the one construct in this
+// language whose whole purpose is to give up a guarantee, so a schema that
+// uses it should have to write it down -- which is what this is.
+codec sealing_aead {
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+impl sealing_aead extern "my_sealing_aead";
+
+struct unverified {
+	u8  hop;
+	sealed body(sealing_aead) [allow_unverified_read] {
+		u16  seq;
+	}
+	tag u8  mac[16] covers(body);
+}

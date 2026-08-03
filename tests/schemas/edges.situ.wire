@@ -13,6 +13,9 @@ bit_order msb_first
 endian big
 target buffer
 
+enum arm_kind : u8 unknown=error
+  first=17 second=34
+
 struct arithmetic size=14..43
   @0x0000   1         u8         units  min=1 max=4
   @0x0001   1..3      u8         halved
@@ -46,6 +49,15 @@ struct edges size=19
   @0x0002:4 4bit      u4         channel  msb_first
   @0x0003   8         u16        samples  big
   @0x000b   8         i32        deltas  big
+
+struct equalized size=11
+  @0x0000   1         arm_kind   which
+  @0x0001   8         variant    body
+  @0x0009   2         u16        tail  big
+
+struct escaped_run size=1..
+  @0x0000   until:2c  u8         field  escape=0x5c cap=64
+  ~         0..       u8         rest  sized-by=remaining
 
 struct framed size=9..
   @0x0000   4         u8         magic  big
@@ -98,8 +110,23 @@ struct two_tags size=23
   tag covers: <reserved0> flags inner kind
   checksum covers: outer sequence
 
+struct unknown_reserved size=4
+  @0x0000   1         u8         version
+  @0x0001   1         u8         <reserved0>
+  @0x0002   2         u16        tail  big
+
+struct unverified size=19
+  @0x0000   1         u8         hop
+  @0x0001   2         sealing_aead body  codec=sealing_aead
+  @0x0003   16        u8         mac
+  mac covers: body seq
+
 struct versioned size=3..9
   @0x0000   1         u8         ver
   @0x0001   2         u16        length  big
   @0x0003   4         u32        flags  big since=2
   @0x0007   2         u16        extra  big since=3
+
+struct wire::framed_body size=3
+  @0x0000   1         u8         kind
+  @0x0001   2         u16        length  big

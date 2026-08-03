@@ -72,3 +72,47 @@ situ_err_t my_doubling_decode(const uint8_t *in, uint32_t in_len,
 	*out_len = in_len / 2u;
 	return SITU_OK;
 }
+
+/* my_sealing_aead -- length-preserving, so the sealed region in
+ * `tests/schemas/edges.situ` has something to link against.
+ *
+ * `[allow_unverified_read]` needs a codec that *authenticates* -- a gate
+ * cannot be waived where there is no gate -- and the doubling codec above
+ * does not. This one declares the four properties that sealing asks for and
+ * keeps them: XOR with a constant is its own inverse, so it is invertible and
+ * deterministic; it changes no length, so it is length-preserving and every
+ * interior offset survives it.
+ *
+ * It authenticates nothing, which is the one property here that is a lie. It
+ * is a lie the schema tells too -- `impl ... extern` binds a symbol and says
+ * nothing about what is behind it -- and the whole of section 13.1 is that
+ * situ describes a transform's *properties* and never its algorithm. A test
+ * that needed real AES-GCM to exercise the stage gate would be a test of
+ * OpenSSL.
+ */
+
+situ_err_t my_sealing_aead_encode(const uint8_t *in, uint32_t in_len,
+		uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+situ_err_t my_sealing_aead_decode(const uint8_t *in, uint32_t in_len,
+		uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+
+situ_err_t my_sealing_aead_encode(const uint8_t *in, uint32_t in_len,
+		uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	uint32_t i;
+
+	if (out_cap < in_len) {
+		return SITU_ERR_BOUNDS;
+	}
+	for (i = 0u; i < in_len; i++) {
+		out[i] = (uint8_t)(in[i] ^ 0x5Au);
+	}
+	*out_len = in_len;
+	return SITU_OK;
+}
+
+situ_err_t my_sealing_aead_decode(const uint8_t *in, uint32_t in_len,
+		uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	return my_sealing_aead_encode(in, in_len, out, out_cap, out_len);
+}

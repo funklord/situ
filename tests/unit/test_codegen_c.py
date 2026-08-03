@@ -437,14 +437,20 @@ def test_every_fuzzable_struct_reaches_the_harness(path: Path) -> None:
 	resolved = resolve(schema, solve(schema))
 	text     = fuzz.generate(schema, resolved, path.stem)
 
+	from situc.codegen.c.names import c_name
+
 	for name, struct in resolved.structs.items():
 		if struct.layout.register is not None or not struct.layout.is_byte_sized:
 			continue
 		if struct.layout.is_fixed_size and struct.layout.size_bytes == 0:
 			continue
-		assert f"static void fuzz_{name}(" in text, \
+		# `c_name`, because a namespaced struct is `wire::framed_body` and
+		# `::` is not an identifier in C -- which the harness emitted anyway,
+		# where the compiler read it as a label and a stray colon.
+		flat = c_name(name)
+		assert f"static void fuzz_{flat}(" in text, \
 			f"{path.name}: nothing fuzzes `{name}`"
-		assert f"fuzz_{name}(data + 1, size - 1u);" in text, \
+		assert f"fuzz_{flat}(data + 1, size - 1u);" in text, \
 			f"{path.name}: the entry point never dispatches to `{name}`"
 
 

@@ -1044,7 +1044,28 @@ class AccessMode(Enum):
 
 	@property
 	def writable(self) -> bool:
-		return self not in (AccessMode.RO, AccessMode.RSVD)
+		"""Whether the bus offers a write for this field at all.
+
+		`rc` and `rs` are *read*-triggered: reading clears or sets, and there
+		is no write side. They were writable here because the test was "not
+		read-only", so both generated a setter that wrote a whole word of
+		ones with one bit cleared -- an operation the hardware does not have,
+		aimed at a field nobody can write.
+		"""
+		return self not in (AccessMode.RO, AccessMode.RSVD,
+		                    AccessMode.RC, AccessMode.RS)
+
+	@property
+	def reading_has_an_effect(self) -> bool:
+		"""Whether *reading* changes the field, from the mode alone.
+
+		`rc` and `rs` say the same thing `on_read = clear` says; SystemRDL
+		spells it two ways and situ understood only one, so a register that
+		declared read-to-clear in the vocabulary rather than in the
+		side-effect clause came out `effect = Pure` -- the axis reporting a
+		destructive read as a pure one.
+		"""
+		return self in (AccessMode.RC, AccessMode.RS)
 
 	@property
 	def is_assignment(self) -> bool:

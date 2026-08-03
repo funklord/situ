@@ -21,6 +21,16 @@ struct ctrl_reg size=4
   @0x0000:6 1bit      bit        error  lsb_first
   @0x0000:7 25bit     u25        <reserved0>  little lsb_first
 
+struct irq_reg size=4
+  @0x0000   1bit      bit        pending  lsb_first
+  @0x0000:1 1bit      bit        armed  lsb_first
+  @0x0000:2 1bit      bit        mask_enable  lsb_first
+  @0x0000:3 1bit      bit        mask_disable  lsb_first
+  @0x0000:4 1bit      bit        drain  lsb_first
+  @0x0000:5 1bit      bit        lock  lsb_first
+  @0x0000:6 2bit      u2         spare  lsb_first
+  @0x0001   3         u24        fifo  little
+
 struct status_reg size=4
   @0x0000   1bit      bit        ready  lsb_first
   @0x0000:1 1bit      bit        fifo_empty  lsb_first

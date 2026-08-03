@@ -44,6 +44,58 @@ register status_reg @ 0x04 {
 	reserved  u21         [preserve];
 }
 
+// The rest of SystemRDL's vocabulary, in the register that uses it: an
+// interrupt controller. Every mode below was in the table at 15.2 and in no
+// schema, which is how two of them came to be wrong (26.41).
+//
+// `rc` and `rs` are the pair worth reading. They are *read*-triggered -- the
+// read is what clears or sets the bit -- so there is no write at all, and the
+// read is not pure. situ had them as writable-and-pure, which is both halves
+// of the fact backwards.
+register irq_reg @ 0x08 {
+	width        = 32;
+	access_width = 32;
+	volatile;
+
+	// Reading clears it: the interrupt is acknowledged by the read. Equivalent
+	// to `[ro, on_read = clear]`, and SystemRDL spells it both ways.
+	bit  pending      [rc];
+
+	// The other direction, and rare: reading arms it.
+	bit  armed        [rs];
+
+	// Write-one-to-set and write-zero-to-clear, which are the two halves of a
+	// mask register. Neither is an assignment, so neither gets a setter that
+	// takes a value: `mask_enable_set()` and `mask_disable_clear()` are what
+	// the bus offers.
+	bit  mask_enable  [w1s];
+	bit  mask_disable [w0c];
+
+	// Write-zero-to-set. In the table, in no hardware this author has met,
+	// and here because the table has it.
+	bit  drain        [w0s];
+
+	// A configuration lock: written once, and readable never. `wo_once` means
+	// the second write is the hardware's business rather than the schema's --
+	// what situ says is that there is no getter, because the bus returns
+	// nothing for it.
+	bit  lock         [wo_once];
+
+	// `rsvd` is SystemRDL's reserved, and is not `reserved u2 [preserve]`:
+	// the mode says the *field* is reserved, so it has neither a getter nor
+	// a setter, where `preserve` says what a reserved field's bits must do.
+	u2   spare        [rsvd];
+
+	// A FIFO data port: reading pops. That is the strongest `effect` there
+	// is, and it is what makes the whole register `EffectOnRead`.
+	u24  fifo         [ro, on_read = pop];
+}
+
+// What a read-triggered field costs, which is everything on the mutate axis:
+// there is no write, so it is `Immutable`, and the read is not repeatable.
+require immutable(irq_reg.pending);
+require immutable(irq_reg.armed);
+
 // THE HEADLINE. This fails, and the message is the product: it names both
 // facts that combined, because either one alone would have been fine.
 //

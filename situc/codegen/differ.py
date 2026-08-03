@@ -184,6 +184,13 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		# itself there -- the region is `sealed_by` the region -- so asking
 		# that question first skipped the one member this probe exists for.
 		if placement.kind == "sealed":
+			# ...unless the schema waived it. `[allow_unverified_read]` is
+			# the one construct whose purpose is to give up this guarantee
+			# (14.3), and then there is no gate type and no `_open` to call:
+			# the driver named both and did not compile, for the first schema
+			# to write the waiver down.
+			if placement.unverified_ok:
+				continue
 			found.append(Ask(Probe.SEALED, local, None, 0, False,
 			                 _gated(struct, placement)))
 			continue

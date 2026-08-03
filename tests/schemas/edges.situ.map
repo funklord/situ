@@ -11,6 +11,7 @@
 # codecs. `trusted` means the properties are declared and
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
+codec sealing_aead trusted length_preserving seekable=linear granularity=stream authenticated invertible deterministic
 
 struct arithmetic size=14 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   arithmetic.units                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
@@ -46,6 +47,17 @@ struct edges size=19 repr=ValueConverted atomic=NonAtomic
   edges.channel                          offset=AbsoluteStatic(0x02:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   edges.samples                          offset=AbsoluteStatic(0x03) size=Fixed(8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   edges.deltas                           offset=AbsoluteStatic(0x0B) size=Fixed(8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+
+struct equalized size=11 repr=ValueConverted atomic=NonAtomic
+  equalized.which                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  equalized.body                         offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  equalized.body.tiny                    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  equalized.body.big                     offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  equalized.tail                         offset=AbsoluteStatic(0x09) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+
+struct escaped_run size=1 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  escaped_run.field                      offset=AbsoluteStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical
+  escaped_run.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
 struct framed size=9 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
   framed.magic                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
@@ -105,8 +117,23 @@ struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic au
   two_tags.sequence                      offset=AbsoluteStatic(0x13) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
   two_tags.checksum                      offset=AbsoluteStatic(0x15) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
+struct unknown_reserved size=4 repr=ValueConverted canonical=NonCanonical
+  unknown_reserved.version               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  unknown_reserved.<reserved0>           offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  unknown_reserved.tail                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct unverified size=19 mutate=Immutable repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
+  unverified.hop                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  unverified.body                        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic stage=TransformTime auth=Covered(mac)
+  unverified.body.seq                    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
+  unverified.mac                         offset=AbsoluteStatic(0x03) size=Fixed(16) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
 struct versioned size=3 repr=ValueConverted atomic=NonAtomic stage=ParseTime
   versioned.ver                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   versioned.length                       offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   versioned.flags                        offset=AbsoluteStatic(0x03) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
   versioned.extra                        offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
+
+struct wire::framed_body size=3 repr=ValueConverted atomic=NonAtomic
+  wire::framed_body.kind                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  wire::framed_body.length               offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
