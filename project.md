@@ -6781,6 +6781,48 @@ host and under aarch64 emulation; every dissector executed, and one of them
 now walks a GNU cpio archive with every offset checked against what cpio
 wrote.
 
+### 26.43 Reading the artifact nothing compiles
+
+26.42 ended by saying where to look next: the artifacts with no compiler behind
+them, because generated C, C++ and Rust are read by three compilers and
+generated Python by mypy, while a document and a Lua script are read by a
+person and only if the person looks. This is that look, at `doc`.
+
+**A cut label was silent.** `cell_count (cont.)` in a fifteen-character box came
+out as `cell_count (con`: a field name that is not any field's name, in the one
+artifact whose entire purpose is that somebody implements from it. The
+truncation is marked now -- but only where there is room for a marker. A
+one-bit box gets a bare prefix, which is what RFC 791 does with its own flags,
+and the IPv4 and TCP diagrams here read `|r|d|m|` and `|c|e|u|a|p|r|s|f|` as a
+reader of those RFCs would expect. Where a continuation is too narrow for
+`name (cont.)` it says `(cont.)`, because which half a reader needs is not the
+name.
+
+**And then the document found a compiler bug.** `decimal_max` -- the largest
+value a BCD field can hold -- answered "all nines" from the digit count alone.
+Decision 0027 exists because a register puts a control bit above packed
+decimal: `bcd2 [bits = 7]` has three bits for its tens digit, so it stops at
+79. Every narrowed field in `examples/rtc` was wrong: seconds and minutes said
+99 for 79, hours 99 for 39, month 99 for 19, weekday 9 for 7.
+
+It is not a document bug. It reaches a `_MAX` macro in the generated header, a
+note in the C doc comment, and the bounds a generated check probes -- so a
+caller who trusted the macro and wrote 99 into seven bits reads back 19,
+silently. The document is where it was *visible*, because the document is the
+one artifact that states a field's range in a sentence a person reads.
+
+Nothing had asked. The only schema with a narrowed BCD field is
+`examples/rtc`, and the only thing that reads its maximum is a caller.
+
+**Which is the argument, restated.** The reason to read the artifact nothing
+compiles is not that it is the buggiest. It is that it says in prose what
+every other artifact says in a way only a machine checks -- and a machine
+checks that the output is *well formed*, never that it is *true*.
+
+**Status:** 2734 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; every dissector executed; eight worked
+examples carrying bytes an independent implementation wrote.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7301,7 +7343,23 @@ wrote.
    by mypy; a document and a Lua script are read by a person, and only if the
    person looks. Point the next search at whatever has no reader.
 
-62. **A frame is not a message, and only one construct makes them differ.**
+62. **A document states in prose what the code states in a form only a
+   machine checks.** `decimal_max` reached a macro, a doc comment and a
+   generated check, and all three were consistent and all three were wrong; it
+   was the sentence "the value runs from 0 to 99" beside a seven-bit field
+   that made it visible. A compiler checks that generated output is well
+   formed and never that it is true, so the artifact a person reads is where
+   an untrue claim surfaces -- which is a reason to render one, not only a
+   reason to read it.
+
+63. **Truncation in a document is a wrong answer, not a display detail.** A
+   diagram that cut `cell_count (cont.)` to `cell_count (con` produced a field
+   name that exists nowhere, in the artifact somebody implements from. Where a
+   generated artifact must abbreviate, it has to say that it did -- unless the
+   space is too small for the saying to fit, which is the case a convention
+   already covers.
+
+64. **A frame is not a message, and only one construct makes them differ.**
    Every struct in this repository had a frame that was the whole message
    until one placed a member `at` an offset the data chose. Three artifacts
    asked the struct how big it was and got an answer about the frame -- which
