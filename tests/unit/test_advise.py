@@ -46,6 +46,18 @@ def only(body: str, rule: str) -> advise.Suggestion:
 # -- the reordering suggestion, which section 26.9 names ---------------------
 
 
+# Two arms of different sizes, and nothing after the variant: the padding buys
+# a fixed size for `s` itself rather than an absolute offset for anything.
+UNEQUAL_ARMS = """enum k : u8 { a = 1, b = 2, }
+struct small { u16 x; }
+struct large { u8 y[10]; }
+struct s {
+	k kind;
+	variant body switch (kind) { case k.a: small p; case k.b: large q; }
+}
+"""
+
+
 BADLY_ORDERED = """struct bad {
 	u16 length [max = 1500];
 	u8  opts[length];
@@ -61,7 +73,7 @@ def test_a_badly_ordered_schema_gets_the_reordering_suggestion() -> None:
 
 	assert found.subject == "bad.opts"
 	assert "move this variable-length member after the fixed ones" in found.summary
-	assert "3 member(s)" in found.detail
+	assert "3 members" in found.detail
 	assert "`seq`, `kind`, `tail`" in found.detail
 
 
@@ -71,8 +83,10 @@ def test_the_reordering_suggestion_costs_nothing_and_says_so() -> None:
 
 	assert found.cost.typical == 0
 	assert found.cost.worst == 0
-	assert found.cost.render() == "cost: nothing"
-	assert "3 member(s) return to AbsoluteStatic" in found.yields
+	assert found.cost.render() == ("cost: nothing (reordering moves no bytes, "
+	                               "and every deployed peer reads the old "
+	                               "order)")
+	assert "3 members return to AbsoluteStatic" in found.yields
 
 
 def test_the_reordering_suggestion_ranks_first() -> None:
@@ -128,24 +142,75 @@ def test_an_unbounded_region_is_priced_as_unknown() -> None:
 	found = only("struct s { u8 rest[remaining]; }", "bound-unbounded")
 
 	assert found.cost.unknown
-	assert found.cost.render() == "cost: depends on the bound chosen"
+	assert found.cost.render() == ("cost: depends on the bound chosen (the "
+	                               "bound is the cost, and it is unchosen)")
 	assert "statically allocatable" in found.yields
 	assert "instead of `remaining`" in found.detail
 
 
 def test_unequal_variant_arms_are_priced_as_padding() -> None:
-	found = only("""enum k : u8 { a = 1, b = 2, }
-	struct small { u16 x; }
-	struct large { u8 y[10]; }
-	struct s {
-		k kind;
-		variant body switch (kind) { case k.a: small p; case k.b: large q; }
-	}
-	""", "equalize-variant-arms")
+	found = only(UNEQUAL_ARMS, "equalize-variant-arms")
 
 	assert found.cost.worst == 8			# 10 - 2
 	assert found.cost.typical == 4			# averaged over the arms
 	assert "typical" in found.cost.render() and "worst case" in found.cost.render()
+
+
+def test_every_suggestion_prints_the_basis_it_was_costed_on() -> None:
+	"""`Cost.basis` says where the number came from. Eight rules supplied one
+	and `render` dropped every one of them, so the advisor printed "cost: 31
+	bytes typical" with no statement of what was being counted -- and a number
+	whose derivation is not shown is a number a reader has to trust."""
+	seen = [item for body in (BADLY_ORDERED, UNEQUAL_ARMS,
+	                          "struct s { u8 rest[remaining]; }")
+	        for item in suggestions(body)]
+
+	assert seen
+	for item in seen:
+		assert item.cost.basis, f"{item.rule} costs without saying on what"
+		assert f"({item.cost.basis})" in item.cost.render()
+
+
+def test_counts_in_a_suggestion_are_spelled_with_a_plural() -> None:
+	"""The advisor is prose a person reads before editing a schema."""
+	one = only("""struct s { u8 n; u8 body[n]; u16 tail; }""",
+	           "move-dynamic-to-tail")
+
+	assert "1 member behind it" in one.detail
+	assert one.yields.startswith("1 member return")
+
+	assert advise._bytes(1) == "1 byte"
+	assert advise._bytes(-1) == "1 byte saved"
+	assert advise._bytes(2) == "2 bytes"
+
+
+def test_equalizing_is_ranked_by_what_it_buys_not_by_what_it_costs() -> None:
+	"""`weight` orders the catalog, and this rule handed it the padding: the
+	more absurd the equalization, the higher it sorted. `examples/netlink`'s
+	`default: opaque` arm prices at four gigabytes and outranked every useful
+	suggestion in the file."""
+	found = only(UNEQUAL_ARMS.rstrip()[:-1] + "\tu32 after;\n}\n",
+	             "equalize-variant-arms")
+
+	assert found.cost.worst == 8
+	assert found.weight < found.cost.worst
+
+
+def test_equalizing_a_trailing_variant_claims_only_what_it_delivers() -> None:
+	"""Nothing follows the variant, so no member regains an absolute offset --
+	but the struct holding it becomes a fixed size, which is the whole reason
+	to pay the padding. Reporting "0 member(s) after the variant keep absolute
+	offsets" states the change is worthless; it is not."""
+	trailing = UNEQUAL_ARMS
+	found    = only(trailing, "equalize-variant-arms")
+
+	assert "`s` itself becomes a fixed size" in found.yields
+	assert "member" not in found.yields
+
+	# And taking it does that. The yield is measured, not asserted.
+	assert not build(trailing).structs["s"].layout.is_fixed_size
+	equalized = trailing.replace("switch (kind) {", "switch (kind) [equalize] {")
+	assert build(equalized).structs["s"].layout.is_fixed_size
 
 
 def test_an_alignment_hole_is_free_to_fill() -> None:
@@ -411,7 +476,7 @@ def test_the_reordering_suggestion_yields_what_it_says() -> None:
 	          if base != "AbsoluteStatic"
 	          and after.get(path) == "AbsoluteStatic"]
 
-	assert found.yields.startswith(f"{len(gained)} member(s)"), \
+	assert found.yields.startswith(f"{len(gained)} member"), \
 		f"advisor promised `{found.yields}`, the rewrite delivered {gained}"
 
 

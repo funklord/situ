@@ -46,20 +46,39 @@ class Cost:
 	basis: str   = ""
 
 	def render(self) -> str:
+		"""The number, and what it is a number *of*.
+
+		Every rule in the catalogue supplies a `basis` and none of them was
+		ever printed, so eight different changes all read "cost: nothing" or
+		"cost: N bytes" with no way to tell what was being counted. The basis
+		is the half that keeps the number honest: "nothing" for a reordering
+		means no bytes move, and says nothing about the peers already
+		speaking the old order.
+		"""
 		if self.unknown:
-			return "cost: depends on the bound chosen"
-		if self.typical == self.worst:
-			return f"cost: {_bytes(self.typical)}"
-		return (f"cost: {_bytes(self.typical)} typical, "
-		        f"{_bytes(self.worst)} worst case")
+			body = "depends on the bound chosen"
+		elif self.typical == self.worst:
+			body = _bytes(self.typical)
+		else:
+			body = (f"{_bytes(self.typical)} typical, "
+			        f"{_bytes(self.worst)} worst case")
+
+		return f"cost: {body}" if not self.basis else f"cost: {body} ({self.basis})"
 
 
 def _bytes(count: int) -> str:
 	if count == 0:
 		return "nothing"
 	if count < 0:
-		return f"{-count} bytes saved"
-	return f"{count} bytes"
+		return f"{_count(-count, 'byte')} saved"
+	return _count(count, "byte")
+
+
+def _count(many: int, noun: str) -> str:
+	"""`1 byte`, `2 bytes`. The advisor is read by a person deciding whether to
+	change a schema, and "1 bytes saved" is the register of a program that was
+	not read after it was written."""
+	return f"{many} {noun}" if many == 1 else f"{many} {noun}s"
 
 
 @dataclass(frozen=True)
@@ -197,11 +216,13 @@ def _find_tail_reordering(resolved: ResolvedSchema) -> list[Suggestion]:
 				subject = entry.placement.path,
 				span    = entry.placement.span,
 				summary = (f"move this variable-length member {destination}"),
-				detail  = (f"its extent is not fixed, so {len(behind)} member(s) "
-				           f"behind it are Dynamic: {listed}"),
-				cost    = Cost(basis="reordering moves no bytes"),
-				yields  = (f"{len(behind)} member(s) return to AbsoluteStatic, and "
-				           "their accessors to base + K"),
+				detail  = (f"its extent is not fixed, so "
+				           f"{_count(len(behind), 'member')} behind it are "
+				           f"Dynamic: {listed}"),
+				cost    = Cost(basis="reordering moves no bytes, and every "
+				               "deployed peer reads the old order"),
+				yields  = (f"{_count(len(behind), 'member')} return to "
+				           "AbsoluteStatic, and their accessors to base + K"),
 				rank    = 0,
 				weight  = len(behind),
 			))
@@ -348,6 +369,8 @@ def _find_variant_equalization(resolved: ResolvedSchema) -> list[Suggestion]:
 			average = (sum(largest - size for _, size in sizes)
 			           // (len(sizes) * BITS_PER_BYTE))
 
+			behind, encloses = _behind(struct, placement)
+
 			found.append(Suggestion(
 				rule    = "equalize-variant-arms",
 				subject = placement.path,
@@ -357,10 +380,15 @@ def _find_variant_equalization(resolved: ResolvedSchema) -> list[Suggestion]:
 				           f"discriminant: {_arms(sizes)}"),
 				cost    = Cost(typical=average, worst=worst,
 				               basis="padding to the largest arm"),
-				yields  = "a fixed extent, so members after the variant keep "
-				          "absolute offsets",
+				yields  = _equalized_yield(struct, behind, encloses),
 				rank    = 3,
-				weight  = worst,
+				# What it buys, not what it costs. `weight` orders the
+				# catalogue and this rule handed it the padding, so the most
+				# expensive equalization in a schema sorted above the
+				# cheapest -- and `examples/netlink`, whose `default: opaque`
+				# arm prices at four gigabytes, sorted above every genuinely
+				# useful suggestion in the file.
+				weight  = behind + (1 if encloses else 0),
 			))
 
 	return found
@@ -369,6 +397,43 @@ def _find_variant_equalization(resolved: ResolvedSchema) -> list[Suggestion]:
 def _arms(sizes: tuple[tuple[str, int], ...]) -> str:
 	return ", ".join(f"`{name}` {size // BITS_PER_BYTE}"
 	                 for name, size in sizes) + " bytes"
+
+
+def _behind(struct: ResolvedStruct,
+		placement: Placement) -> tuple[int, bool]:
+	"""How many of the struct's own members follow this one, and whether
+	pinning this one's extent pins the whole struct's.
+
+	The second is not implied by the first. A variant that is the last member
+	has nothing behind it and equalizing it still buys something -- it is what
+	makes `examples/dnsname`'s `label` a fixed 64 bytes -- but only when every
+	other member of the struct is already fixed. Measured rather than promised.
+	"""
+	members = [entry.placement for entry in own_entries(struct)]
+	index   = next((i for i, held in enumerate(members)
+	                if held.path == placement.path), None)
+	if index is None:
+		return 0, False
+
+	others   = members[:index] + members[index + 1:]
+	encloses = all(held.size_max_bits == held.size_bits
+	               and held.size_bits is not None for held in others)
+	return len(members) - index - 1, encloses
+
+
+def _equalized_yield(struct: ResolvedStruct, behind: int,
+		encloses: bool) -> str:
+	"""What the padding actually returns, in the order it is worth having."""
+	gains = []
+	if behind:
+		gains.append(f"{_count(behind, 'member')} after the variant keep "
+		             "absolute offsets")
+	if encloses:
+		gains.append(f"`{struct.name}` itself becomes a fixed size")
+	if not gains:
+		return "a fixed extent for the variant, and nothing else in this struct"
+
+	return "a fixed extent, so " + ", and ".join(gains)
 
 
 def _find_alignment_holes(resolved: ResolvedSchema) -> list[Suggestion]:
@@ -400,15 +465,27 @@ def _find_alignment_holes(resolved: ResolvedSchema) -> list[Suggestion]:
 			if placement.kind != "field" or placement.offset_bits is None:
 				continue
 
+			# ...and the padding has to be enough to reach the boundary. The
+			# rule fired on "some padding exists somewhere", which for a
+			# `u32` one byte into a struct with one reserved byte suggests a
+			# reordering that lands it at two -- still unaligned, and there
+			# is nothing else to move. Invariant 64: this is advice checked
+			# by taking it.
+			width = scalar.bits // BITS_PER_BYTE
+			at    = placement.offset_bits // BITS_PER_BYTE
+			if (width - at % width) % width > padding:
+				continue
+
 			found.append(Suggestion(
 				rule    = "fill-alignment-holes",
 				subject = placement.path,
 				span    = placement.span,
 				summary = "reorder to put this on its natural boundary",
 				detail  = (f"it is a {scalar.bits}-bit scalar at an unaligned "
-				           f"offset, and the struct already spends {padding} "
-				           "bytes on reserved padding"),
-				cost    = Cost(basis="the padding bytes are already spent"),
+				           f"offset, and the struct already spends "
+				           f"{_bytes(padding)} on reserved padding"),
+				cost    = Cost(basis="the padding bytes are already spent, and "
+				               "every deployed peer reads the old order"),
 				yields  = "an aligned access, which faults on some targets and "
 				          "is split on others when it is not",
 				rank    = 4,
