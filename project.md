@@ -7727,6 +7727,76 @@ languages under it; generated C compiled and run on the host and under
 aarch64 emulation; the full composed space re-run after both of the above --
 2700 cells over six shards, 2700 agreed, nothing refused and nothing failed.
 
+### 26.59 A constraint behind a version
+
+The sweep is clean and the examples keep landing, so the question became
+which constructs are claimed by nothing but a synthetic schema. Two, and
+`[since]` is the interesting one: the whole of 19.4 -- a version field,
+append-only members, four accessor shapes in a table -- exercised by three
+unconstrained scalars in `edges.situ` and by nothing else in the tree.
+
+**Putting an attribute on a versioned member broke all four backends, in
+four different ways.** A versioned member's getter takes an out-parameter and
+returns an error, there being no value to return when the field is not there;
+`validate` was written against the ordinary getter.
+
+- **C and C++** emitted `if (situ_s_magic_get(view) != 4660)` against
+  `situ_err_t situ_s_magic_get(view, uint16_t *out)`. No compiler takes it.
+- **Rust** reads bytes rather than calling the getter, so it compiled -- and
+  enforced the constraint against a member the message does not carry. A
+  `[must_eq]` behind a `[since = 2]` was checked, in a version 1 message,
+  against whatever is at that offset.
+- **Python** raised `VersionError` out of `validate`, rejecting a message
+  that is not malformed at all, only older than the field.
+
+Four wrong answers and no schema in the tree to notice any of them. The
+fixed shape is one sentence in four languages: read through the accessor,
+treat "older than this field" as nothing to check, and treat any other
+refusal as the frame failing to hold what it claims -- which is invariant 87,
+found three days earlier in variant arms and true here for the same reason.
+
+**And the accessor's type is not the backing scalar's width.** An enum
+member's out-parameter is `situ_dialect_t *`. The fuzz harness, the check
+generator and the C++ validator each declared `uint8_t`, each computing the
+width from `scalar.bits` where the header computes the type from the name.
+Three generators, one mistake, none of it reachable until a versioned member
+was an enum -- which is one line of schema nobody had written.
+
+**`gen-checks` poked a versioned member without making the message carry
+it**, which is 26.57's variant-arm defect one construct over and gets the
+same answer: `_prelude` reaches the version as well as selecting the arm.
+
+**The differ asked whether a member was versioned and not whether it was one
+value or many** (invariant 86), so a versioned `u16 data[n]` got the scalar
+probe and a versioned `[remaining]` got a probe for a getter that does not
+exist.
+
+**What is refused now, rather than accepted and ignored.** Chasing that last
+one down found the thing worth finding: `[since]` on a run is gated by *no
+backend*. A run answers with a length, a count and an index, and none of the
+four consults the version field, so `u16 data[n] [since = 2]` handed a
+version 1 message as many elements as `n` claimed, out of bytes belonging to
+whatever follows. A struct-typed versioned member is the same -- its sub-view
+accessor checks bounds and never the version.
+
+Gating them properly means the length, the count, the index, the struct's
+extent and the framing helper in four backends: a construct's worth of work,
+not a patch. So the compiler refuses `[since]` on anything but a single
+scalar, with a diagnostic saying which of the two it is and what to do
+instead. Invariant 5 -- never silently downgrade -- and an attribute four
+backends drop on the floor is the loudest case of it there is.
+
+**The lesson about the differ is the one to keep.** Three of these five were
+found by a probe, and the probe was ten schemas written by hand in an
+afternoon, aimed at one attribute the sweep does not vary. The composed
+sweep has five axes and 2700 cells and versioning is not one of them, so all
+2700 agreed about this the whole time. A space you have swept exhaustively is
+still only the space you enumerated.
+
+**Status:** 2949 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; `edges.situ` grows the constrained
+versioned struct that found all of it.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8480,6 +8550,33 @@ aarch64 emulation; the full composed space re-run after both of the above --
    generate? -- and the answer is a test, not an assumption. Everything was
    clean when the gate went in, which is the normal outcome and not a reason
    to have skipped it.
+
+91. **An exhaustively swept space is still only the space you enumerated.**
+   The composed sweep runs 2700 cells over five axes and every one of them
+   agreed while a constraint behind a `[since]` broke all four backends in
+   four different ways. Versioning is not one of the five axes, so the sweep
+   was not wrong -- it was silent, which reads the same from outside.
+   Machinery earns confidence about the axes it varies and none at all about
+   the ones it does not, and the cheapest way to find out which is which is
+   ten schemas written by hand against one construct.
+
+92. **A construct with no worked example is a construct held up by nobody.**
+   `[since]` had a version field, append-only members, a per-backend
+   accessor table and a section of this document -- and three unconstrained
+   scalars in a synthetic schema was the whole of what exercised it. The
+   first attribute anybody put on a versioned member found five defects, one
+   of them in three generators at once. Before trusting a construct, ask
+   which committed schema would fail if it broke; if the answer is none, that
+   is the measurement, not the reassurance.
+
+93. **A width and a type are different things, and a generator that computes
+   one from `scalar.bits` has not answered the other.** An enum member's
+   accessor takes `situ_dialect_t *`, and the fuzz harness, the check
+   generator and the C++ validator each declared `uint8_t` -- three
+   generators reaching for the width where the header reaches for the name.
+   Wherever generated code declares a variable to receive an accessor's
+   value, the type has to come from the same place the accessor's signature
+   came from.
 
 ---
 
