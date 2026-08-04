@@ -7994,6 +7994,69 @@ more than an adoption would have been.
 three oracles ran, none skipped for absence except the network formats, which
 have no local decoder.
 
+### 26.62 Seven oracles, and the one that was flaky before it was right
+
+26.61 ended with three oracles and a gap: no `tshark`, so eight network
+examples had no independent witness. The gap is closed and the total is seven
+over layout plus two over arithmetic.
+
+**`randpkt` is what made the network formats possible**, and it is worth
+naming why. The obstacle was never the decoder -- it was that something has
+to *write* a packet, and capturing one needs a network and root. `randpkt`
+ships with Wireshark but is a separate program from the dissection engine, so
+the bytes and the interpretation still come from different code. Its packets
+carry random field values, which is better here than a well-known capture
+would be: a hand-picked packet exercises the values somebody thought of, and
+what both sides must agree on is whatever number sits at whatever offset.
+
+The layer offsets come from tshark's own `_raw` entries rather than being
+computed here. An offset this file worked out for itself would be this
+project's opinion about the framing, which is the thing under test.
+
+**Three more of a different kind.** `sqlite3` writes the database and counts
+the rows while situ reads the b-tree leaf page header and counts the cells --
+verified to track rather than coincide, at 1, 3 and 17. `file` reads the same
+bitmap ImageMagick wrote, from a different codebase, and reports two fields
+ImageMagick does not. And the CRC oracle checks what situ *computes* rather
+than where the bytes are: `gen-derived` turns a kernel description into a
+computed 256-entry table, and nothing outside this project had ever checked
+one. A table generated from a wrong polynomial is wrong consistently, so
+situ's own property tests -- which read the same description -- would agree
+with it forever. `zlib.crc32` and `binascii.crc_hqx` do not share that
+description. Both match, and `crc16_ccitt` returns 0x29B1 for "123456789",
+which is the published check value.
+
+**Every oracle now has to be shown capable of failing**, not one of them.
+`test_each_oracle_notices_a_schema_that_lies` swaps two adjacent members in
+each schema -- the fields all still exist, only their offsets move -- and
+requires the comparison to go red. A refusal counts as noticing, because a
+swap can move a member past the frame and an accessor reporting that is doing
+its job. Agreement does not.
+
+**The arp oracle was flaky before it was right, and that is the finding.**
+`randpkt` is random, so it passed in isolation and failed in the full run.
+The cause was not a defect in either tool: randpkt truncates, and on some
+frames tshark dissects the eight-byte fixed header out of a ten-byte layer
+while situ declines to acquire a view for a struct whose minimum is twelve.
+Both are correct. They are answering **different questions** -- "what can I
+read here" against "is this a whole one" -- and a differential test compares
+answers, so it has to be given frames where the question is the same.
+
+That distinction only appeared because the corpus was random. A fixed capture
+would have been either short or long, and whichever it was would have looked
+like the whole truth. Nondeterminism in a test is usually a defect; here it
+was the instrument.
+
+The filter drops those frames on both sides through one predicate, and
+`arp_situ` asserts its constant against the generated module's own `SIZE_MIN`
+-- so a schema change fails loudly rather than quietly filtering every frame
+away and leaving a green comparison of nothing. That last hole is guarded
+directly too: both sides must produce rows.
+
+**Status:** 2962 unit tests, 7 skipped; `make check` clean over 109 files;
+seven layout oracles and two computation ones, all running here; twelve
+consecutive runs of the oracle suite clean after the frame filter.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8813,6 +8876,26 @@ have no local decoder.
    assert that the corpus really came from the other implementation. This is
    the oracle version of "never conclude a test passes from a binary the
    build did not rebuild".
+
+98. **A differential test compares answers, so both sides must be answering
+   the same question.** tshark dissects the eight-byte ARP header it can see
+   in a ten-byte layer; situ refuses to acquire a view for a struct whose
+   minimum is twelve. Neither is wrong, and comparing them is still
+   meaningless. Where two implementations legitimately scope differently --
+   partial dissection against whole-struct acquisition, a field one reports
+   and the other does not -- the frames where the scopes differ are excluded
+   by one predicate applied to both sides, never by editing whichever side is
+   inconvenient. And the exclusion needs its own guard, because a filter that
+   removes everything leaves a comparison of nothing, which passes.
+
+99. **A random corpus finds what a fixed one cannot, and its flakiness is
+   the instrument.** The scope mismatch above surfaced only because `randpkt`
+   produces different packets every run: the oracle passed alone and failed
+   in the suite. A committed capture would have been either short or long,
+   and whichever it was would have looked like the whole truth. Nondeterminism
+   in a test is usually a defect to remove; in a differential oracle it is
+   what makes the test explore. Remove the *cause* of the flake, never the
+   randomness.
 
 ---
 
