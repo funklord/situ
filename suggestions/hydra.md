@@ -152,3 +152,47 @@ current output on real bytes.
 The obvious next step, if hydra adopts any of this, is to run both readers over
 the same captured session file and diff, which is a thing hydra already has the
 harness shape for.
+
+## Added after the evaluation: blame is the strongest part, and it is buried
+
+`situc explain pickle_string16.data` did not stop at the weakened axis. It gave:
+
+    blame:
+      size := Bounded(0, 8589934590)
+        a member whose length comes from an earlier field
+        the extent is a range, not a number, so a caller must size buffers for
+        the worst case
+        remedy: pin the length with `[must_eq = N]` to make it fixed, or
+        `[max = N]` to bound the worst case
+
+The remedy is correct and immediately actionable: a Chromium tab title is not
+four gigabytes, so `[max = 4096]` is the right schema and would turn an
+unbounded run into a bounded one. **A tool that says what is wrong, why, and
+which edit fixes it is doing something almost nothing else in this space does.**
+
+Two suggestions follow from that rather than from any shortcoming:
+
+- **Lead with `explain`, not with `build`.** The README opens with an `explain`
+  excerpt and then spends its length on what is generated. For a reader
+  deciding whether to adopt, the generated accessors are table stakes -- every
+  IDL emits accessors. The blame chain is the differentiator, and the quickstart
+  runs `build`, `map` and `doc` before it. Putting `situc explain` second in
+  the quickstart, on a field that is actually weakened, would show the thing
+  worth having within thirty seconds of cloning.
+
+- **`advise` is listed and never demonstrated.** The command table says it gives
+  "ranked, costed schema changes that would restore what was lost", which sounds
+  like exactly the same value as blame with an ordering over it. Nothing in the
+  README or the examples shows its output. It was not run here because nothing
+  suggested it would say more than `explain` already had -- which is a
+  discoverability problem rather than a capability one, and the cheapest fix in
+  this file.
+
+## One correction to the section above
+
+The padding suggestion asks for `[pad_to = 4]`. Having then read `explain`'s
+remedies, the better shape may be to keep `reserved` as the primitive and let
+the *map* name it: the entry currently reads `<reserved0>`, and a padding run
+that showed as `padding(4)` would make the schema's intent legible in the
+artifact a test diffs, without adding syntax. Either is an improvement; the
+second costs less.
