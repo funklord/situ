@@ -2883,9 +2883,16 @@ error: requirement not satisfied
    = 2 further members lost absolute addressing: recs, trailer
    = remedy: move `opts` after `recs` and `trailer`
              cost: 0 bytes; restores AbsoluteStatic for 2 members
-   = remedy: pin `opts` to a fixed size with [size = 1500]
-             cost: +1500 bytes typical, +0 worst case
+   = remedy: give `hdr.length` a [max = 1500]
+             cost: nothing on the wire; bounds the worst case
 ```
+
+This block said `pin `opts` to a fixed size with [size = 1500]` for a long
+time, and the advisor said it too. `[size = N]` is in the parser's vocabulary
+and read by nothing: a reader who took the advice got a schema that compiled,
+changed nothing, and produced the same suggestion on the next run. It is
+refused now (`UNIMPLEMENTED_ATTRS`), and the advice names something the
+compiler implements -- see 26.60.
 
 Also emit machine-readable diagnostics (`--diagnostics=json`) so the advisor,
 editors, and CI can consume them without parsing prose.
@@ -3829,6 +3836,10 @@ That is a decision for whoever owns the project, and the packaging records the
 gap instead of papering over it.
 
 ## 25. Conventions
+
+**The long form is `code-style.md` at the repo root**, which carries these
+rules in detail along with the schema identifier rules and the decision
+references. This section is the brief.
 
 - **ASCII only** in all source, comments, and docstrings. Non-ASCII belongs
   only in intentional runtime data values, and there are none in this project.
@@ -7797,6 +7808,55 @@ still only the space you enumerated.
 host and under aarch64 emulation; `edges.situ` grows the constrained
 versioned struct that found all of it.
 
+### 26.60 The advice that recommended an attribute nobody implemented
+
+26.59 ended on invariant 92 -- ask which committed schema would fail if a
+construct broke -- so the next thing was to answer it for the whole attribute
+vocabulary rather than for the one attribute that had just gone wrong. The
+vocabulary is closed and lives in `parser.ATTRIBUTE_NAMES`; the question is
+which names appear in no schema in the repository, examples and tests alike.
+
+Six do. Most are register or crypto attributes waiting for their phase, and
+two are worse than unexercised.
+
+**`[size = N]` is read by nothing.** Every hit for `"size"` in the compiler
+is the `size(x)` builtin or the capability axis; the attribute is parsed and
+dropped. That alone would be a gap. What makes it a defect is that the
+**advisor recommended it**: `_find_unbounded_regions` ended its remedy list
+with "pin the region with `[size = N]`", and this document printed the same
+line in section 20. A reader who took the advice got a schema that compiled,
+changed nothing, and produced the identical suggestion on the next run.
+
+`[no_rmw]` is the same, without the advice in front of it.
+
+**The fix was already here and had been deleted.** `UNIMPLEMENTED_ATTRS`
+existed for `encoding` and `nul_terminated`, refusing each with "not
+implemented by this build" until both were implemented -- at which point the
+dict emptied and went, leaving its own explanatory comment stranded above
+`TEXT_ENCODINGS`. That orphaned comment is what made this findable: it
+describes a mechanism, and the mechanism was not there. It is back, with the
+two names that need it.
+
+**And the advice now names something the compiler implements.** What reaches
+that branch is an unbounded *scan* -- `u8 name[] until "\r\n"` with no cap --
+and what bounds a scan is `max N`, which `examples/smtp` has carried since it
+was written. So the advisor was not only recommending a no-op, it was
+recommending the wrong kind of thing for the member that reaches it. No
+committed schema reaches that branch, which is why nobody had read the
+sentence: invariant 92 twice in one fold.
+
+**The remaining hole, recorded rather than closed.** An attribute is checked
+for spelling and never for *place*: `[minimal]` on a binary scalar,
+`[equalize]` on a field that is not an arm, `[volatile]` on a buffer target,
+`[secret]` where nothing is encrypted -- all eight tried are accepted and
+dropped. Each is individually read by something somewhere, so none is
+`UNIMPLEMENTED`; what is missing is a table of attribute against the member
+kinds that consume it. That is a construct's worth of work and it is the next
+thing this section should be about.
+
+**Status:** 2949 unit tests, 7 skipped; `make lint` and `make check` clean;
+generated C compiled and run on the host and under aarch64 emulation.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8577,6 +8637,25 @@ versioned struct that found all of it.
    Wherever generated code declares a variable to receive an accessor's
    value, the type has to come from the same place the accessor's signature
    came from.
+
+94. **A remedy is a claim about the compiler, and it has to be checked like
+   one.** The advisor told readers to "pin the region with `[size = N]`" and
+   `[size = N]` is read by nothing, so taking the advice produced a schema
+   that compiled, changed nothing, and drew the same advice again. This is
+   26.36 for the second time, which is the tell: an advisor's output is
+   generated code aimed at a human, and generated code aimed at a human gets
+   the same scrutiny as generated code aimed at a compiler. Every remedy
+   needs a schema that takes it and a check that the suggestion then goes
+   away.
+
+95. **A deleted mechanism leaves its comment behind, and the comment is
+   evidence.** `UNIMPLEMENTED_ATTRS` refused parsed-but-unread attributes,
+   emptied as they were implemented, and was removed -- stranding the
+   paragraph that explained it above the next constant. That orphan is what
+   made two silently-accepted attributes findable. When a mechanism goes,
+   its documentation goes with it; when documentation describes something
+   that is not there, one of the two is a bug and it is worth finding out
+   which.
 
 ---
 
