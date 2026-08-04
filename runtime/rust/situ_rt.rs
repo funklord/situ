@@ -160,7 +160,23 @@ pub fn advance(at: usize, by: usize, limit: usize) -> usize {
 	at + if by < room { by } else { room }
 }
 
+/// Zero where the bytes are not all there, which is what the C runtime's
+/// accessors answer and what `advance` above exists to make necessary.
+///
+/// Indexing was the alternative and it is a *panic*: in a `no_std` build an
+/// abort, over bytes the caller did not choose. Every generated accessor is
+/// supposed to have asked first, and the ones that had not were found one at a
+/// time by four backends disagreeing -- three of them returning zero while
+/// this one died. The floor belongs here rather than in each caller (26.51).
+#[inline]
+fn holds(len: usize, at: usize, width: usize) -> bool {
+	width <= len && at <= len - width
+}
+
 pub fn read_be(bytes: &[u8], at: usize, width: usize) -> u64 {
+	if !holds(bytes.len(), at, width) {
+		return 0;
+	}
 	let mut value: u64 = 0;
 	let mut i = 0;
 	while i < width {
@@ -173,6 +189,9 @@ pub fn read_be(bytes: &[u8], at: usize, width: usize) -> u64 {
 /// The same, little end first.
 #[inline]
 pub fn read_le(bytes: &[u8], at: usize, width: usize) -> u64 {
+	if !holds(bytes.len(), at, width) {
+		return 0;
+	}
 	let mut value: u64 = 0;
 	let mut i = width;
 	while i > 0 {
@@ -184,6 +203,12 @@ pub fn read_le(bytes: &[u8], at: usize, width: usize) -> u64 {
 
 #[inline]
 pub fn write_be(bytes: &mut [u8], at: usize, width: usize, value: u64) {
+	// Nothing where the bytes are not all there. A setter that panicked over
+	// an offset the message chose is the same denial of service the reads
+	// were, and the other three do nothing here.
+	if !holds(bytes.len(), at, width) {
+		return;
+	}
 	let mut i = 0;
 	while i < width {
 		bytes[at + i] = (value >> (8 * (width - 1 - i))) as u8;
@@ -193,6 +218,9 @@ pub fn write_be(bytes: &mut [u8], at: usize, width: usize, value: u64) {
 
 #[inline]
 pub fn write_le(bytes: &mut [u8], at: usize, width: usize, value: u64) {
+	if !holds(bytes.len(), at, width) {
+		return;
+	}
 	let mut i = 0;
 	while i < width {
 		bytes[at + i] = (value >> (8 * i)) as u8;

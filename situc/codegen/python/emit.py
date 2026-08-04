@@ -295,6 +295,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._explained(struct, entry))
 
+		lines.extend(self._sealed_runs(struct))
 		lines.extend(self._nested_text_values(struct))
 
 		lines.extend(self._covered_nested_setters(struct))
@@ -305,6 +306,29 @@ class Emitter:
 		lines.extend(self._validate(struct))
 		lines.extend(self._gates(struct))
 		lines.append("")
+		return lines
+
+	def _sealed_runs(self, struct: ResolvedStruct) -> list[str]:
+		"""A run of records inside a sealed region, walked from out here.
+
+		The interior is reached through the gate; how far the run *reaches* is
+		a different question, and it is what places every member after the
+		region and what the tag covering it spans. `own_entries` drops a
+		dotted path, so this backend had no walk while its own accessors named
+		one -- an `AttributeError` at the first read. The other three emit the
+		same family for the same reason.
+		"""
+		lines: list[str] = []
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.sealed_by is None or placement.kind != "field":
+				continue
+			if placement.type_name not in self.structs:
+				continue
+			if not is_counted_run(self.resolved.structs, placement) \
+					and placement.repeat_while is None:
+				continue
+			lines.extend(self._variable(struct, placement))
 		return lines
 
 	def _covered_nested_setters(self, struct: ResolvedStruct) -> list[str]:
@@ -1672,8 +1696,15 @@ class Emitter:
 			' the one present")',
 		]
 
+		# `data_sized` in the guard, not just the two spellings that name a
+		# count: `i32 run[n + 1]` sets neither `array_count` nor `sized_by`,
+		# so an arm that is a run of values looked exactly like a scalar arm
+		# and got a getter for the first element. The same sentence 26.47
+		# wrote about the ordinary member dispatch, in the parallel one an
+		# arm has.
 		if scalar is not None and placement.array_count is None \
-				and placement.sized_by is None:
+				and placement.sized_by is None \
+				and not data_sized(placement):
 			return [*head, f"\t\treturn {self._raw_load(placement, scalar)}"]
 
 		if scalar is not None and indexed_elements(placement):
@@ -2444,6 +2475,20 @@ class Emitter:
 
 		count = self._count_expression(struct, placement)
 		inner = c_name(placement.type_name or "")
+
+		# `x[remaining]` over elements with no single size: the bytes left are
+		# known and how many elements are in them is not, so the count is the
+		# walk. Without it `_count_expression` had no answer, the property
+		# read `None`, and the span every member after the run is placed by
+		# was never emitted at all -- an `AttributeError` at the first access
+		# rather than a wrong number, which is the good failure and still a
+		# schema this backend could not read.
+		walked = (placement.sized_by == "remaining"
+		          and not nested.layout.is_fixed_size
+		          and has_computable_extent(self.resolved.structs, nested))
+		if walked:
+			count = f"self.{name}_span_from(self.{name}_offset, count_only=True)"
+
 		lines.extend([
 			"", "\t@property", f"\tdef {name}_count(self) -> int:",
 			f"\t\treturn {count}",
@@ -2478,7 +2523,8 @@ class Emitter:
 		])
 
 		if not nested.layout.is_fixed_size and count is not None:
-			lines.extend(self._counted_run_span(struct, placement, count))
+			lines.extend(self._counted_run_span(
+				struct, placement, None if walked else count))
 		return lines
 
 	def _variable_elements(self, struct: ResolvedStruct, placement: Placement,
@@ -2517,7 +2563,7 @@ class Emitter:
 		]
 
 	def _counted_run_span(self, struct: ResolvedStruct, placement: Placement,
-			count: str) -> list[str]:
+			count: str | None) -> list[str]:
 		"""How far a counted run of variable elements reaches.
 
 		The count says how many there are and each one says how long it is, so
@@ -2529,9 +2575,16 @@ class Emitter:
 		name  = c_name(local_name(struct, placement))
 		inner = c_name(placement.type_name or "")
 
+		# `None` where the run is `[remaining]`: there is no count to stop at,
+		# the frame is the bound, and the walk is what *produces* the count.
+		# `count_only` is that second caller -- one walk with two questions,
+		# rather than two walks that would have to agree.
+		stop = "" if count is None else f"n < {count} and "
+
 		return [
 			"",
-			f"	def {name}_span_from(self, start: int) -> int:",
+			f"	def {name}_span_from(self, start: int,",
+			"			count_only: bool = False) -> int:",
 			f'		"""The walk, from a base the caller already knows -- the'
 			' same',
 			'		helper every other walked run has."""',
@@ -2539,7 +2592,7 @@ class Emitter:
 			"		at = start",
 			"		n  = 0",
 			"",
-			f"		while n < {count} and at < self._len:",
+			f"		while {stop}at < self._len:",
 			f"			element = {inner}(self._msg, self._at + at,"
 			" self._len - at)",
 			"			size    = element._extent",
@@ -2548,7 +2601,7 @@ class Emitter:
 			"			at += size",
 			"			n  += 1",
 			"",
-			"		return at - start",
+			"		return n if count_only else at - start",
 			"",
 			"	@property",
 			f"	def {name}_span(self) -> int:",
@@ -2758,8 +2811,11 @@ class Emitter:
 			if "." not in local:
 				# A varint's own property raises on a truncated encoding;
 				# `_value` is the read that cannot, which is what the count
-				# form already uses.
-				suffix = "_value" if placement.varint is not None else ""
+				# form already uses -- and a text number's raises for the
+				# same reason, which only the nested branch below knew.
+				suffix = ("_value"
+				          if placement.varint is not None
+				          or placement.radix is not None else "")
 				return f"{held}.{c_name(local)}{suffix}"
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
@@ -3205,7 +3261,10 @@ class Emitter:
 					Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
 					Member.INDEXED):
 				return True
-			return (placement.sized_by is not None
+			# `data_sized`, not `sized_by`: the arithmetic spelling of a
+			# count is a count, and reading only the bare one left a run
+			# of variable records without the `extent` its own walk calls.
+			return (data_sized(placement)
 			        and not struct.layout.is_fixed_size)
 
 		if not any(walks(other, entry)
@@ -3525,6 +3584,16 @@ class Emitter:
 
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
+		# A count written as arithmetic. `sized_by` holds a path and holds
+		# nothing for `x[n + 1]`, so this looked up a driver named "None",
+		# found none, and handed its caller a Python `None` -- which C++
+		# formatted straight into `return None;`. The expression *is* the
+		# count; it is only the bare-reference form that needs a driver
+		# looked up (invariant 69, in the fourth place that spells this
+		# question two ways).
+		if placement.sized_by is None and placement.size_expr is not None:
+			return self._over_fields(struct, placement.size_expr, "self")
+
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None

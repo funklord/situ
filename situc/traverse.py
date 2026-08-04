@@ -1013,7 +1013,7 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	return constant_bits // BITS_PER_BYTE, variable
 
 
-def _walk_order(struct: ResolvedStruct,
+def walk_order(struct: ResolvedStruct,
 		placement: Placement) -> list[Placement]:
 	"""The members to step over when placing `placement`, in order.
 
@@ -1094,7 +1094,7 @@ def preceding_parts(struct: ResolvedStruct,
 	# the one backend that emits an accessor for such a member -- read it 17
 	# bytes past where it is. What precedes it is what precedes the region,
 	# then the region's own earlier members.
-	for other in _walk_order(struct, placement):
+	for other in walk_order(struct, placement):
 		if other.path == placement.path:
 			break
 		if other.is_fixed_size:
@@ -1130,10 +1130,18 @@ def is_counted_run(structs: dict[str, ResolvedStruct],
 	offset table, and `index_entry_bytes` is what says how long *it* is.
 	`examples/sqlite` is that shape, and calling it a counted run asked for a
 	span function the indexed path does not emit.
+
+	`T x[n + 1]` too. The count is a count however it is written, and asking
+	only about `sized_by` left the arithmetic spelling to fall through to the
+	nested-struct branch -- which names an `_extent` helper, emitted for one
+	struct rather than for a run of them. The member after such a run called a
+	function nobody defines. The docstring on `data_sized` lists the places
+	that have asked this question and answered it for one spelling; this is
+	another.
 	"""
 	if placement.kind == "indexed" or placement.type_name not in structs:
 		return False
-	if placement.sized_by is None and placement.array_count is None:
+	if placement.array_count is None and not data_sized(placement):
 		return False
 	inner = structs.get(placement.type_name or "")
 	return inner is not None and not inner.layout.is_fixed_size

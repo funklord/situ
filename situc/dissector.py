@@ -40,7 +40,7 @@ from situc.names import (
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
-	extent_parts, local_name, own_members,
+	extent_parts, is_counted_run, local_name, own_members,
 )
 
 #: Widths Wireshark has a `ProtoField.uintN` for. Unlike C it has a 24-bit one,
@@ -66,6 +66,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	       for struct in resolved.structs.values()
 	       for entry in struct.entries):
 		lines.extend(SCAN_HELPER)
+
+	lines.extend(READ_HELPER)
 
 	# Same rule: only where a number is written as digits.
 	if any(entry.placement.radix is not None
@@ -95,6 +97,27 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines.extend(_registration(resolved, roots))
 	return "\n".join(lines).rstrip() + "\n"
+
+
+READ_HELPER = [
+	"-- One field's bytes as a number, or zero where they are not all there.",
+	"--",
+	"-- Wireshark raises on a range past the end of the capture, and an extent",
+	"-- function reads a length field of a record that a truncated packet may",
+	"-- not carry -- so the walk over a short frame died in the dissector",
+	"-- rather than showing what it had. Zero is what the C accessors answer",
+	"-- for a member the frame does not reach (26.51).",
+	"local function situ_uint(tvb, at, width, little)",
+	"\tif at < 0 or at + width > tvb:len() then",
+	"\t\treturn 0",
+	"\tend",
+	"\tif little then",
+	"\t\treturn tvb(at, width):le_uint()",
+	"\tend",
+	"\treturn tvb(at, width):uint()",
+	"end",
+	"",
+]
 
 
 DIGITS_HELPER = [
@@ -233,7 +256,13 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	name  = _local(struct, placement)
 	abbrev = f"{struct.name}.{name}"
 
-	if placement.type_name in resolved.structs:
+	# An array or a run of structs is not a nested struct, which is the order
+	# `traverse.Member` puts these two questions in and the order this did
+	# not: a run of them was read as one nested struct, declared no field,
+	# and the body then added the name anyway -- `subtree:add(nil, ...)`, a
+	# Lua error at the first packet rather than a wrong display.
+	if placement.type_name in resolved.structs \
+			and placement.array_count is None and not data_sized(placement):
 		return ""			# a nested struct: its own Proto dissects it
 
 	# Before the array branch, which it looks exactly like from here: the
@@ -663,8 +692,8 @@ def _read(placement: Placement, base: str) -> str | None:
 					# different type and no length field needs it
 		if _host_order(placement):
 			return None		# no answer a capture can give
-		read = "le_uint" if placement.endian is ast.Endian.LITTLE else "uint"
-		return f"tvb({_at(base, first)}, {count}):{read}()"
+		little = "true" if placement.endian is ast.Endian.LITTLE else "false"
+		return f"situ_uint(tvb, {_at(base, first)}, {count}, {little})"
 
 	# A bit field, and only one that sits inside a single byte: a straddling
 	# one is refused rather than guessed at, and no length field straddles.
@@ -672,7 +701,7 @@ def _read(placement: Placement, base: str) -> str | None:
 	if position is None or position.straddles:
 		return None
 
-	byte = f"tvb({_at(base, position.byte)}, 1):uint()"
+	byte = f"situ_uint(tvb, {_at(base, position.byte)}, 1, false)"
 	if position.shift:
 		byte = f"math.floor({byte} / {1 << position.shift})"
 	return f"({byte} % {1 << position.width})"
@@ -808,13 +837,26 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	ways -- by the buffer, and by refusing to advance on a zero-extent
 	element.
 	"""
-	if placement.repeat_while is None:
+	counted = is_counted_run(resolved.structs, placement)
+	if placement.repeat_while is None and not counted:
 		return []
 
 	element = resolved.structs.get(placement.type_name or "")
 	if element is None or not _extent_terms(resolved, element):
 		return []
 
+	# A run the message *counts*, whose elements each say how long they are.
+	# There is no stride to multiply, so the only way to know where it ends is
+	# the same walk -- with the count as the stopping rule rather than a
+	# condition. Without it this fell through to the length branch below and
+	# measured a run of `n` records as `n` bytes: the wrong-answer half of what
+	# 26.46 found in C, in the artifact that has no compiler to catch it.
+	if counted:
+		return _counted_span(resolved, struct, placement, element)
+
+	# Not None past the `counted` return above: a run is one or the other, and
+	# `wellformed` refuses a member that says twice where its run ends.
+	assert placement.repeat_while is not None
 	if _over_fields(element, placement.repeat_while, "last") is None:
 		return []
 	condition = _run_condition(resolved, struct, placement)
@@ -828,7 +870,8 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 		f"-- The run ends after the element for which `{placement.repeat_while}`",
 		"-- is false -- that element is part of it, the condition being asked",
 		"-- once it has been read.",
-		f"local function {name}(tvb, at)",
+		f"local function {name}(tvb, at, at_struct)",
+		"	local _ = at_struct",
 		"	local start = at",
 		"	local n = 0",
 		f"	while at < tvb:len(){guard} do",
@@ -846,6 +889,40 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 def _extent_name(struct: ResolvedStruct) -> str:
 	return f"{_lua(struct.name)}_extent"
+
+
+def _counted_span(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, element: ResolvedStruct) -> list[str]:
+	"""How far a counted run of variable records reaches, as a Lua function.
+
+	The four backends' `_span_from` in Lua: walk until the count runs out,
+	and stop early on a zero-length element or one the frame does not hold --
+	the two bounds every generated walk carries (invariant 24).
+	"""
+	count = (_over_fields(struct, placement.size_expr, "at_struct")
+	         if placement.size_expr is not None
+	         else _over_fields(struct, placement.sized_by or "", "at_struct"))
+	if count is None:
+		return []
+
+	name = _span_name(struct, placement)
+	return [
+		"",
+		f"-- How far `{placement.path}` reaches from `at`.",
+		"-- The count says how many, and each element says how long it is, so",
+		"-- the run is walked rather than multiplied.",
+		f"local function {name}(tvb, at, at_struct)",
+		"	local start = at",
+		"	local n = 0",
+		f"	while n < ({count}) and at < tvb:len() do",
+		f"		local size = {_extent_name(element)}(tvb, at)",
+		"		if size == 0 or at + size > tvb:len() then break end",
+		"		at = at + size",
+		"		n = n + 1",
+		"	end",
+		"	return at - start",
+		"end",
+	]
 
 
 def _extent_function(resolved: ResolvedSchema,
@@ -901,12 +978,23 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base)
 
-	if placement.repeat_while is not None:
+	if placement.repeat_while is not None \
+			or is_counted_run(resolved.structs, placement):
 		# Before the nested-struct case below, which named the element's
 		# extent and so measured a run of labels as one label.
 		if not _run_span(resolved, struct, placement):
 			return None
-		return f"{_span_name(struct, placement)}(tvb, {base})"
+		# From where the *run* starts, not where the struct does. Every run in
+		# this repository is its struct's first member, so the two coincided
+		# and the walk was handed the struct's base -- which for a run at any
+		# other offset walks the members before it as though they were
+		# elements. A composed schema put one at offset 3 and said so.
+		if placement.offset_bits is None:
+			return None		# and where the run itself moves, decline
+		if placement.offset_bits % BITS_PER_BYTE:
+			return None
+		start = _at(base, placement.offset_bits // BITS_PER_BYTE)
+		return f"{_span_name(struct, placement)}(tvb, {start}, {base})"
 
 	if placement.size_expr is not None:
 		rendered = _over_fields(struct, placement.size_expr, base)

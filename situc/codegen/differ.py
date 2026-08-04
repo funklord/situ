@@ -414,6 +414,12 @@ def writes(struct: ResolvedStruct) -> list[Ask]:
 
 		if "." not in local_name(struct, placement) or not covers:
 			continue
+		# Not a field of an *element* of a run. Its setter belongs to the
+		# element type, reached through the walk; on the parent it would
+		# write element zero under the run's name, which is why no backend
+		# emits one any more (invariant 74). This asked for it in C.
+		if "[]" in placement.path:
+			continue
 		if scalar is None or placement.kind != "field":
 			continue
 		# A sealed region's interior is reached through the gate, whose type
@@ -467,9 +473,15 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 		scalar = member.scalar
 		if scalar is None:
 			continue		# a struct arm: its own accessors are its type's
+		# `data_sized` as well as the two spellings that name a count, or the
+		# arithmetic form of a byte run falls past this to the scalar probe --
+		# which asks a getter that takes an out-parameter of a member whose
+		# accessor is a pointer and a length. The same missing spelling, in
+		# the file whose job is to ask four backends one question.
 		if scalar.bits == BITS_PER_BYTE \
 				and (member.sized_by is not None
-				     or member.array_count is not None):
+				     or member.array_count is not None
+				     or data_sized(member)):
 			found.append(Ask(Probe.ARM_BYTES, local))
 		elif indexed_elements(member) \
 				and (member.array_count is not None or data_sized(member)):
@@ -501,8 +513,20 @@ def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
 		placement = entry.placement
 		if placement.sealed_by != region.name or placement.kind != "field":
 			continue
+		# Not a field of an *element* of a run: that belongs to the element
+		# type, and the accessor three backends emitted for it on the gate
+		# read element zero under the run's name. They stopped emitting it;
+		# this stopped asking.
+		if "[]" in placement.path:
+			continue
+		# `data_sized` as well as the two spellings that name a count: a run
+		# sized by arithmetic is neither, so `u16 run[n + 1]` inside a gate
+		# reached this list and the probe called its indexed getter with no
+		# index. The same missing spelling `traverse.data_sized` was written
+		# for, in the one file whose whole job is to ask four backends the
+		# same question.
 		if placement.scalar is None or placement.array_count is not None \
-				or placement.sized_by is not None:
+				or placement.sized_by is not None or data_sized(placement):
 			continue
 		if placement.scalar.is_bit_packed or placement.scalar.is_bcd:
 			continue

@@ -24,6 +24,7 @@ function with a body and it is `inline` too.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from situc import ast
@@ -36,13 +37,16 @@ from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
 )
-from situc.names import c_spelling, expand_calls, over_fields, render_delimiter
+from situc.names import (
+	UnknownName, c_spelling, expand_calls, over_fields, render_delimiter,
+)
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	Check, Member, arm_members, containment_order, covered_run, data_sized,
+	Check, Member, arm_members, arm_of, containment_order, covered_run,
+	data_sized,
 	dynamic_frame_owner,
 	readable_names,
 	decode_bound, region_extent, offset_plan,
@@ -207,6 +211,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._explained(struct, entry))
 
+		lines.extend(self._sealed_runs(struct))
 		lines.extend(self._nested_text_values(struct))
 
 		lines.extend(self._covered_nested_setters(struct))
@@ -627,6 +632,11 @@ class Emitter:
 		inside  = [entry for entry in struct.entries
 		           if entry.placement.sealed_by == region.name
 		           and entry.placement.kind == "field"
+		           # Not a field of an element of a run: the element type has
+		           # its own accessors and the walk is how a caller reaches
+		           # one. Emitted here it read element zero at the region's
+		           # base, under a name that reads as the run's field.
+		           and "[]" not in entry.placement.path
 		           and entry.placement.scalar is not None
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None]
@@ -700,6 +710,55 @@ class Emitter:
 		])
 		return lines
 
+	def _in_gate(self, struct: ResolvedStruct, text: str) -> str:
+		"""One expression, moved from the struct's vocabulary into the gate's.
+
+		Everything the expression machinery renders is written for the
+		enclosing class: `base()` and `limit()` from the view it derives from,
+		and a member call for every field an expression names. None of those
+		resolve inside the gate, which is a nested class and has no enclosing
+		object -- so the header did not compile the moment an interior member's
+		offset depended on anything but a constant.
+
+		Three sites each patched the two spellings they had met -- `base()`
+		everywhere, `limit()` in two of the three -- and the rest went through
+		untouched: `label_span()`, `n_len()`, `n_value()`, and `limit()` in the
+		site that had not been told. Four symptoms, one cause, and a fifth was
+		one schema away.
+
+		So the rewrite happens once, from a list the struct itself supplies.
+		The gate's `raw_` *is* the enclosing view -- `with_` hands it `raw()` --
+		so an outer object built from it answers exactly what the enclosing
+		object would, and the accessors keep their meaning rather than being
+		re-derived here.
+		"""
+		owner = f"{class_name(struct)}(raw_)"
+
+		# The accessor names this struct emits, from its members rather than
+		# from a list somebody keeps current: a stem per member, and the
+		# suffixes an expression can name it through. Anything outside this set
+		# is a runtime helper (`situ_advance_u32`, `static_cast`) and is left
+		# alone, which is why the set is derived rather than guessed at.
+		# The *outer* members only. A name an interior expression could also
+		# mean -- one of the gate's own accessors -- must not be prefixed:
+		# `n()` inside the gate is the gate's `n()` where the region declares
+		# one, and reaching for the enclosing object would be reaching for a
+		# member that is not there.
+		stems = {c_name(local_name(struct, held))
+		         for held in own_members(struct)}
+		if not stems:
+			return text.replace("base()", "raw_.base") \
+			           .replace("limit()", "raw_.limit")
+
+		pattern = "|".join(re.escape(stem)
+		                   for stem in sorted(stems, key=len, reverse=True))
+		# The view's own two first, or the alternation below would leave them
+		# for a member that happens to be called `base`.
+		text = text.replace("base()", "raw_.base").replace("limit()", "raw_.limit")
+		return re.sub(
+			rf"\b(?:{pattern})(?:_span|_value|_len|_offset|_count|_extent)?\(\)",
+			lambda hit: f"{owner}.{hit.group(0)}", text)
+
 	def _gated_span(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A byte run inside a sealed region.
@@ -715,7 +774,7 @@ class Emitter:
 			return ["", f"\t\t/* {placement.path}: element type"
 			        f" {placement.type_name} is not reachable through the gate. */"]
 
-		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		name  = self._gate_name(struct, placement)
 		start = self._offset_expression(struct, placement)
 		count = (str(placement.array_count) if placement.array_count is not None
 		         else self._count_expression(struct, placement))
@@ -724,9 +783,12 @@ class Emitter:
 			return ["", f"\t\t/* {placement.path}: this backend cannot resolve"
 			        f" its extent. */"]
 
-		# Inside the gate the view is `raw_`, not `base()`.
-		start = start.replace("base()", "raw_.base")
-		count = count.replace("base()", "raw_.base")
+		# Rendered for the enclosing class, then moved into the gate's
+		# vocabulary in one pass. This patched `base()` and left `limit()`
+		# alone, so a run whose offset is clamped to the frame named a member
+		# function of the view with no object to call it on.
+		start = self._in_gate(struct, start)
+		count = self._in_gate(struct, count)
 
 		return [
 			"",
@@ -749,7 +811,7 @@ class Emitter:
 		indexed getter taking a plain view, which is the stage gate of 14.3
 		with a hole in it.
 		"""
-		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		name  = self._gate_name(struct, placement)
 		width = scalar.bits // BITS_PER_BYTE
 		start = self._offset_expression(struct, placement)
 		length = (str(placement.array_count * width)
@@ -759,16 +821,15 @@ class Emitter:
 			return ["", f"\t\t/* {placement.path}: this backend cannot resolve"
 			        f" its extent. */"]
 
-		# Inside the gate the view is `raw_`, not `base()`.
-		def inside(text: str) -> str:
-			return text.replace("base()", "raw_.base") \
-			           .replace("limit()", "raw_.limit")
-
-		start  = inside(start)
-		length = inside(length)
-		load   = inside(self._load(scalar, placement,
-		                           f"({start}) + index * {width}")) \
-			.replace("raw_.base.base", "raw_.base")
+		# Built in the enclosing class's vocabulary and moved into the gate's
+		# once, at the end. Transforming the pieces first and then embedding
+		# them is what produced `raw_.base.base` here and needed a third
+		# `replace` to undo -- a rewriter reading its own output (invariant
+		# 53).
+		load   = self._in_gate(struct, self._load(
+			scalar, placement, f"({start}) + index * {width}"))
+		start  = self._in_gate(struct, start)
+		length = self._in_gate(struct, length)
 
 		return [
 			"",
@@ -788,13 +849,31 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _gate_name(self, struct: ResolvedStruct, placement: Placement) -> str:
+		"""What an interior member is called on the gate class.
+
+		The member's local name with the region's stripped, which is the same
+		derivation C spells out in full -- `situ_s_body_run_a_get` -- and the
+		same one the differential drivers ask for. This took the *last* path
+		component, which is the same answer for a member of the region and a
+		different one for anything deeper: a field of an element of a run
+		inside the region came out as `a()`, with nothing left to say which
+		run it belongs to, and two runs in one region would have collided on
+		it. The driver asked for `run_a()` and the header had no such member.
+		"""
+		local  = c_name(local_name(struct, placement))
+		region = c_name(placement.sealed_by or "")
+		if region and local.startswith(f"{region}_"):
+			return local[len(region) + 1:]
+		return local
+
 	def _gated_accessor(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
 		assert scalar is not None
 
-		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		name  = self._gate_name(struct, placement)
 		ctype = self._field_ctype(placement)
 
 		if any(attr.name == "secret" for attr in placement.attrs):
@@ -811,16 +890,18 @@ class Emitter:
 		# offset itself turned out to be wrong.
 		where = (str(placement.offset_bytes) if placement.offset_bits is not None
 		         else self._offset_expression(struct, placement))
-		if where is not None:
-			# Inside the gate the view is `raw_`, and the offset expression is
-			# written for the outer accessors, which have `base()`.
-			where = where.replace("base()", "raw_.base") \
-			             .replace("limit()", "raw_.limit")
 		if where is None:
 			return ["", f"\t\t/* {placement.path}: this backend cannot resolve",
 			        "\t\t * where it starts. */"]
-		load = self._raw_load(scalar, placement, f"raw_.base + ({where})")
-		load = load.replace("base()", "raw_.base").replace("limit()", "raw_.limit")
+		# The offset is written for the enclosing class -- `label_span()` for a
+		# member behind a delimited one, `n_value()` for a text driver -- and
+		# none of those resolve in a nested class. One pass moves the whole
+		# expression into the gate's vocabulary, at the end: transforming
+		# `where` and then embedding it in the load rewrote what the first
+		# pass had written, and produced `s(raw_).s(raw_).label_span()`.
+		load  = self._in_gate(
+			struct, self._raw_load(scalar, placement, f"base() + ({where})"))
+		where = self._in_gate(struct, where)
 		if placement.type_name in self.enums:
 			load = f"static_cast<{ctype}>({load})"
 
@@ -1723,7 +1804,12 @@ class Emitter:
 					Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
 					Member.INDEXED):
 				return True
-			return (placement.sized_by is not None
+			# `data_sized`, not `sized_by`: the arithmetic spelling of a
+			# count is a count, and reading only the bare one left
+			# `vrec run[n + 1]` without an `extent()` while the walk that
+			# indexes it called one. The same missing spelling this file
+			# has now met in four places.
+			return (data_sized(placement)
 			        and not struct.layout.is_fixed_size)
 
 		if not any(walks(other, entry)
@@ -1785,10 +1871,22 @@ class Emitter:
 				assert held.scalar is not None
 				return f"({self._load(held.scalar, held, None)})"
 			if held.type_name in self.enums and held.scalar is not None:
-				return f"({self._load(held.scalar, held, None)})"
+				# The backing bytes, because the getter hands back an `enum
+				# class` and nothing compares that to a number. At a dynamic
+				# offset there is no constant to read them at -- a
+				# discriminant behind a delimited member is exactly that --
+				# and asking the placement for one asserted out of the
+				# compiler.
+				at = (None if held.offset_bits is not None
+				      else self._offset_expression(struct, held))
+				if held.offset_bits is None and at is None:
+					raise UnknownName(name)
+				return f"({self._load(held.scalar, held, at)})"
 			# A varint's own getter reports a truncated encoding; `_value` is
-			# the read that cannot fail, which is what the count form uses.
-			if held.varint is not None:
+			# the read that cannot fail, which is what the count form uses --
+			# and a text number's getter reports one too, which only the
+			# nested branch above knew about.
+			if held.varint is not None or held.radix is not None:
 				return f"{c_name(name)}_value()"
 			return f"{c_name(name)}()"
 
@@ -1996,6 +2094,20 @@ class Emitter:
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)
 
+		# A run inside a variant arm has no length here, because the arm
+		# emitter has no walk: an arm is emitted by a family of its own, and
+		# that family reaches a scalar, a byte run, a run of wide values and
+		# one fixed-size struct -- never a run of records. Answering anyway
+		# named `<arm>_span()`, which nothing defines, so `framed()` did not
+		# compile for `vrec run[n + 1]` in an arm. C declines the same member
+		# for the same reason; the gap is one gap in four backends rather
+		# than four answers to one schema.
+		if arm_of(struct, placement) is not None \
+				and (placement.repeat_while is not None
+				     or placement.delimiter is not None
+				     or is_counted_run(self.resolved.structs, placement)):
+			return None
+
 		# A size that is arithmetic over a field rather than a reference to
 		# one. `sized_by` holds a path and holds nothing for this, so the
 		# member fell through to the scalar case and this backend handed back
@@ -2077,6 +2189,16 @@ class Emitter:
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""The value of the field that sizes a member, read at run time."""
+		# A count written as arithmetic. `sized_by` holds a path and holds
+		# nothing for `x[n + 1]`, so this looked up a driver named "None",
+		# found none, and handed its caller a Python `None` -- which C++
+		# formatted straight into `return None;`. The expression *is* the
+		# count; it is only the bare-reference form that needs a driver
+		# looked up (invariant 69, in the fourth place that spells this
+		# question two ways).
+		if placement.sized_by is None and placement.size_expr is not None:
+			return self._over_fields(struct, placement.size_expr)
+
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None
@@ -2189,12 +2311,69 @@ class Emitter:
 
 		count = self._count_expression(struct, placement)
 		inner = f"::{self.namespace}::{c_name(placement.type_name or '')}"
-		lines.extend([
-			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
-			"\t{",
-			f"\t\treturn {count};",
-			"\t}",
-		])
+
+		# `[remaining]` says how many *bytes* are left, not how many elements
+		# are in them, and an element with no single size has no stride to
+		# divide the one by to get the other -- so there is no count here that
+		# is not the walk itself. This pasted the Python `None` it came back
+		# as straight into the header, where `return None;` is not an
+		# identifier in any language.
+		#
+		# The walk is the answer rather than a refusal: every accessor below
+		# reads `_count()`, and so does the offset of every member after the
+		# run, so declining it would take the rest of the struct with it.
+		walked = (count is None and not nested.layout.is_fixed_size
+		          and has_computable_extent(self.resolved.structs, nested))
+		if count is None and not walked:
+			return lines + [
+				"",
+				f"\t/* No {name}_count(): one `{placement.type_name}` cannot be",
+				"\t * measured from its own bytes, so a run of them can neither",
+				"\t * be counted nor walked. */",
+			]
+
+		# ...and where the count *is* the walk, the walks below stop at the
+		# frame rather than calling it. A stopping rule that walks would make
+		# every step of a walk a walk of its own.
+		bound = "" if count is None else f"n < {name}_count() && "
+
+		lines.extend(
+			[
+				f"\t/* How many elements are here: `{placement.sized_by}` gives",
+				"\t * the bytes that are left, and only the walk says how many",
+				"\t * elements fit in them. */",
+				f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+				"\t{",
+				f"\t\tstd::uint32_t at = {name}_offset();",
+				"\t\tstd::uint32_t n  = 0;",
+				"",
+				"\t\twhile (at < limit()) {",
+				"\t\t\tsitu_view_t raw;",
+				"",
+				"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)",
+				"\t\t\t\t\t!= SITU_OK) {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"",
+				f"\t\t\tconst {inner} element(raw);",
+				"\t\t\tconst std::uint32_t size = element.extent();",
+				"",
+				"\t\t\tif (size == 0 || at + size > limit()) {",
+				"\t\t\t\t/* A zero-extent element would walk here forever,",
+				"\t\t\t\t * and one past the limit was never in this frame. */",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tat += size;",
+				"\t\t\tn  += 1;",
+				"\t\t}",
+				"\t\treturn n;",
+				"\t}",
+			] if count is None else [
+				f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+				"\t{",
+				f"\t\treturn {count};",
+				"\t}",
+			])
 
 		# An element with no single size is walked rather than indexed: there
 		# is no stride to multiply. Same walk a terminated run uses, with the
@@ -2219,10 +2398,12 @@ class Emitter:
 				f"\t\tstd::uint32_t at = {name}_offset();",
 				"\t\tstd::uint32_t n  = 0;",
 				"",
-				f"\t\tif (index >= {name}_count()) {{",
-				"\t\t\treturn ::situ::rt::err::bounds;",
-				"\t\t}",
-				"",
+				*([] if count is None else [
+					f"\t\tif (index >= {name}_count()) {{",
+					"\t\t\treturn ::situ::rt::err::bounds;",
+					"\t\t}",
+					"",
+				]),
 				"\t\twhile (at < limit()) {",
 				"\t\t\tsitu_view_t raw;",
 				"",
@@ -2266,7 +2447,7 @@ class Emitter:
 				"\t\tstd::uint32_t at = start;",
 				"\t\tstd::uint32_t n  = 0;",
 				"",
-				f"\t\twhile (n < {name}_count() && at < limit()) {{",
+				f"\t\twhile ({bound}at < limit()) {{",
 				"\t\t\tsitu_view_t raw;",
 				"",
 				"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)",
@@ -2393,6 +2574,16 @@ class Emitter:
 		count   = self._count_expression(struct, placement)
 		width   = table.entry_bits // BITS_PER_BYTE
 		element = self.resolved.structs.get(table.element or "")
+
+		# The same hazard the run count above carries, in the other place a
+		# count reaches the output: `_count_expression` answers None where it
+		# cannot read the driving field, and every accessor below reads
+		# `_count()`. No schema here has an index table whose count it cannot
+		# read, which is why this had never pasted a `None` -- and is not a
+		# reason to leave the paste there.
+		if count is None:
+			return ["", f"\t/* {placement.path}: this backend cannot read the",
+			        "\t * field that says how many entries the table has. */"]
 
 		lines = [
 			"",
@@ -3039,6 +3230,30 @@ class Emitter:
 			"\t}",
 		]
 
+	def _sealed_runs(self, struct: ResolvedStruct) -> list[str]:
+		"""A run of records inside a sealed region, walked from out here.
+
+		Everything else in a sealed region is reached through the gate, and a
+		run is too -- but how far it *reaches* is not a question about the
+		plaintext: it is what places the members after the region and what the
+		tag covering it has to span. `own_entries` drops a dotted path, so
+		this class had no walk at all while its own `mac()` named one, and the
+		header did not compile. C emits the same family on the view for the
+		same reason.
+		"""
+		lines: list[str] = []
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.sealed_by is None or placement.kind != "field":
+				continue
+			if placement.type_name not in self.structs:
+				continue
+			if not is_counted_run(self.resolved.structs, placement) \
+					and placement.repeat_while is None:
+				continue
+			lines.extend(self._variable(struct, placement))
+		return lines
+
 	def _covered_nested_setters(self, struct: ResolvedStruct) -> list[str]:
 		"""A covered write for a field of a *nested* struct, on the parent.
 
@@ -3178,8 +3393,15 @@ class Emitter:
 		          "\t\t\treturn ::situ::rt::err::version;",
 		          "\t\t}"]
 
+		# `data_sized` in the guard, not just the two spellings that name a
+		# count: `i32 run[n + 1]` sets neither `array_count` nor `sized_by`,
+		# so an arm that is a run of values looked exactly like a scalar arm
+		# and got a getter for the first element. The same sentence 26.47
+		# wrote about the ordinary member dispatch, in the parallel one an
+		# arm has.
 		if scalar is not None and placement.array_count is None \
-				and placement.sized_by is None:
+				and placement.sized_by is None \
+				and not data_sized(placement):
 			ctype = self._field_ctype(placement)
 			return [
 				*head,
@@ -4589,6 +4811,15 @@ class Emitter:
 				and not has_computable_extent(self.resolved.structs, inner):
 			return []
 
+		# One of them, not a run of them. The arm accessor is emitted for an
+		# arm that *is* a struct, and this named it for an arm that is a run
+		# of one -- so `validate` called `body_run(arm)` for `vrec run[n]`,
+		# which the arm emitter had declined a page earlier. A validator
+		# naming what its own backend refused to emit is that refusal arriving
+		# as a compile error.
+		if not self._is_arm_struct(placement):
+			return []
+
 		name = c_name(local_name(struct, placement))
 		return [
 			f"\t\t/* {placement.path}: the arm the discriminant selects",
@@ -4606,6 +4837,18 @@ class Emitter:
 			"\t\t\t}",
 			"\t\t}",
 		]
+
+	def _is_arm_struct(self, placement: Placement) -> bool:
+		"""Whether an arm is one struct rather than a run of them.
+
+		The same question C asks before naming an arm's sub-view, and the same
+		answer: a bracket after the type makes it a run, whichever way the
+		count is written.
+		"""
+		return (placement.array_count is None
+		        and placement.delimiter is None
+		        and placement.repeat_while is None
+		        and not data_sized(placement))
 
 	def _arm_fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

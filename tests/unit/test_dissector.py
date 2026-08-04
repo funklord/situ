@@ -341,7 +341,7 @@ def test_an_operator_lua_spells_differently_is_declined() -> None:
 
 	assert "sized by `n / 2 + 1`" in text
 	assert "sized by `(n ^ 1) + 1`" in text
-	assert "local sum_n = tvb(0, 1):uint() + 1" in text	# and the rest still walks
+	assert "local sum_n = situ_uint(tvb, 0, 1, false) + 1" in text	# and the rest still walks
 
 
 #: The first entry of the archive `examples/cpio/cpio.vectors` records, which
@@ -413,7 +413,7 @@ def test_a_condition_keeps_its_logical_operators() -> None:
 	the repository, which is what the first version of the guard above did."""
 	text = emit(DNS_LABEL)
 
-	assert "(tvb(last, 1):uint() % 64) ~= 0) then break end" in code(text)
+	assert "(situ_uint(tvb, last, 1, false) % 64) ~= 0) then break end" in code(text)
 	assert " and " in code(text) and "&&" not in code(text)
 
 
@@ -573,7 +573,7 @@ def test_the_discriminant_is_read_from_the_struct_not_from_the_cursor() -> None:
 	body = emit(DNS_LABEL)
 	arm  = next(line for line in body.splitlines() if "local arm =" in line)
 
-	assert "tvb(0, 1)" in arm
+	assert "situ_uint(tvb, 0, 1, false)" in arm
 	# A word boundary: `at` is a substring of `math.floor`, and the crude
 	# check passed for the wrong reason before the fix as well as after.
 	assert not re.search(r"\bat\b", arm.split("=", 1)[1])

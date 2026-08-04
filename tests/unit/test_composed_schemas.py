@@ -6,18 +6,20 @@ sits -- and `tools/sweep.py` runs as much of that space as you ask for. This
 runs a fixed sample of it, so the method that found 26.47 through 26.49 keeps
 running without anybody choosing what to try.
 
-**The failing cells are named rather than hidden.** The space is not clean:
-the first sweep found six distinct causes behind two thirds of the cells it
-touched, and this repository does not have a way to say "these are known" that
-does not rot. So the list below is both halves of the claim -- a cell not in
-it must pass, and a cell in it must still fail. Fixing one fails this test,
-which is the point: the list is a measurement, and a measurement that quietly
-kept a stale entry would be back to a comment.
+**`KNOWN` is empty, and that is the claim.** It was not: the first sweep found
+six distinct causes behind two thirds of the cells it touched, and this file
+carried their names for as long as they stood. The list is checked both ways --
+a cell not in it must pass, and a cell in it must still fail -- so an entry
+cannot quietly outlive its defect, and the day the last one was fixed this
+test said so by failing.
 
-Each entry carries what it fails with, so a reader can tell six causes from
-twenty-four symptoms. `python3 tools/sweep.py --only <fragment>` reproduces
-one.
+A cell that fails here is a real finding: a traceback out of the compiler,
+generated code that will not build, or four backends that build and disagree.
+A *refusal* is a pass -- most of the composition space is illegal and a
+diagnostic is the right answer to all of it. `python3 tools/sweep.py --only
+<fragment>` reproduces one; `--all` walks the whole space.
 """
+
 
 from __future__ import annotations
 
@@ -36,36 +38,11 @@ from probe import run
 SEED  = 20260804
 COUNT = 24
 
-#: Cells that do not pass today, and what each dies of. Six causes:
-#:
-#:   * an offset function named for a member inside a region or an arm that
-#:     nothing emits -- `implicit declaration`;
-#:   * `offset is dynamic`, which is a backend asking a placement for a
-#:     constant offset it has not got: the crash 26.49 fixed in three places
-#:     and did not finish;
-#:   * a Rust panic on an index into a slice whose length the message chose;
-#:   * `too few arguments`, a text driver's value helper called as the plain
-#:     getter;
-#:   * `None` reaching generated C++ as an identifier, which is a Python
-#:     value formatted into a template;
-#:   * a span function named for a run inside a region that nothing emits.
-KNOWN: dict[str, str] = {
-	"nested-arith-i32-after-nothing-in-sealed":             "too few arguments",
-	"nested-arith-u16-after-nothing-in-sealed":             "too few arguments",
-	"nested-arith-vrec-after-nothing-in-nested":            "implicit declaration",
-	"nested-count-vrec-after-delim-in-arm":                 "implicit declaration",
-	"nested-remaining-vrec-after-nothing-in-authenticated": "implicit declaration",
-	"packed-arith-vrec-after-delim-in-arm":                 "offset is dynamic",
-	"packed-arith-vrec-after-nothing-in-arm":               "implicit declaration",
-	"text-arith-u16-after-nothing-in-authenticated":        "too few arguments",
-	"text-arith-u8-after-bytes-in-frame":                   "too few arguments",
-	"u16-arith-i32-after-delim-in-arm":                     "implicit declaration",
-	"u16-count-vrec-after-bytes-in-sealed":                 "implicit declaration",
-	"u16-count-vrec-after-delim-in-arm":                    "implicit declaration",
-	"u8-count-rec-after-bytes-in-nested":                   "rust panic",
-	"varint-arith-u16-after-bytes-in-arm":                  "implicit declaration",
-	"varint-remaining-vrec-after-delim-in-sealed":          "implicit declaration",
-}
+#: Cells that do not pass today, and what each dies of. Empty, and kept as a
+#: mapping rather than deleted: the next defect this sweep finds goes here
+#: with its symptom while it is being fixed, and the test above holds the
+#: entry to being true in both directions.
+KNOWN: dict[str, str] = {}
 
 
 def sample() -> list[Case]:

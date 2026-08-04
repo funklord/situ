@@ -50,7 +50,7 @@ from situc.traverse import (
 	decode_bound,
 	extent_parts, extern_symbol, frameable,
 	element_bytes, has_computable_extent, index_entry_bytes,
-	indexed_elements, is_run,
+	indexed_elements, is_run, walk_order,
 	is_counted_run, matched_values, preceding_parts,
 	obligation, obligations,
 	own_members,
@@ -656,6 +656,12 @@ class Emitter:
 		           if entry.placement.covered_by
 		           and entry.placement.scalar is not None
 		           and entry.placement.kind == "field"
+		           # Not a field of an *element* of a run: it belongs to the
+		           # element type, and a setter here would write element zero
+		           # under the run's name. The getter beside it was removed
+		           # for the same reason; a write with that name is worse
+		           # (invariant 28).
+		           and "[]" not in entry.placement.path
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None
 		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
@@ -1005,6 +1011,16 @@ class Emitter:
 		if guard is not None:
 			return self._arm_member(struct, placement, *guard)
 
+		# A field of an *element* of a run is the element type's to emit, not
+		# this struct's. Inside a sealed region the interior loop reached them
+		# and emitted `<run>_<field>_get(gate)` reading at the region's base --
+		# element zero's field, under a name that reads as the run's. The
+		# walk beside it (`_at`) is how a caller reaches an element, and then
+		# the element type's own accessors answer: one way in, and a name that
+		# says what it does (invariants 25 and 74).
+		if "[]" in placement.path:
+			return []
+
 		nested = "." in placement.path[len(struct.name) + 1 :]
 		if nested and placement.sealed_by is None:
 			# One exception, and it is the read an expression needs. A member
@@ -1057,6 +1073,15 @@ class Emitter:
 			return lines
 
 		if placement.kind == "sealed":
+			# Its offset first, where the data decides it. A sealed region is
+			# a member and gets one -- but this branch returned before the
+			# block that emits it, so a tag's covered span and `validate`
+			# both named `<region>_offset` and the header did not compile.
+			# The same omission the tag branch above documents, in the
+			# construct the tag is usually over.
+			if placement.offset_bits is None \
+					and self._offset_blocker(struct, placement) is None:
+				lines.extend(self._offset_function(struct, placement))
 			lines.extend(self._sealed_gate(struct, entry))
 			return lines
 
@@ -1935,8 +1960,15 @@ class Emitter:
 				return head + self._unresolvable_offset(placement, blocker)
 			head.extend(self._offset_function(struct, placement))
 
+		# `data_sized` in the guard, not just the two spellings that name a
+		# count: `i32 run[n + 1]` sets neither `array_count` nor `sized_by`,
+		# so an arm that is a run of values looked exactly like a scalar arm
+		# and got a getter for the first element. The same sentence 26.47
+		# wrote about the ordinary member dispatch, in the parallel one an
+		# arm has.
 		if scalar is not None and placement.array_count is None \
-				and placement.sized_by is None:
+				and placement.sized_by is None \
+				and not data_sized(placement):
 			ctype = self._field_ctype(placement)
 			# The placement's own base and offset, the way the ordinary
 			# scalar getter reads one. Passing the member's byte offset as
@@ -3143,7 +3175,16 @@ class Emitter:
 				# A varint's `_get` is fallible and takes an out-parameter;
 				# `_value` is the read that cannot fail, which is what an
 				# offset sum needs and what the count form already uses.
-				which = "value" if placement.varint is not None else "get"
+				#
+				# And a text number's is fallible for the same reason -- the
+				# digits may not be digits -- so it has the same helper. Only
+				# the *nested* branch below knew that, so `decimal u32 n[4];
+				# u8 run[n + 1]` called a two-argument function with one
+				# argument. The count form beside it has been right since
+				# 26.46: two spellings, one of them asked (invariant 69).
+				which = ("value"
+				         if placement.varint is not None
+				         or placement.radix is not None else "get")
 				return (f"{ident(self.prefix, struct.name, c_name(local), which)}"
 				        f"({held})")
 			# A text number is digits, not bytes of an integer. Reading it
@@ -4065,8 +4106,16 @@ class Emitter:
 
 	def _offset_blocker(self, struct: ResolvedStruct,
 			placement: Placement) -> Placement | None:
-		"""The earlier member whose extent is unknown, if there is one."""
-		for other in self._top_level(struct):
+		"""The earlier member whose extent is unknown, if there is one.
+
+		Over the members this one is *placed after*, which for a member inside
+		an arm or a sealed region is not the struct's own list: the other arm
+		of a variant does not precede it -- it is the alternative to it -- and
+		walking the struct made an arm nobody can measure block the arm beside
+		it. `traverse` decides that order once, for the same reason the offset
+		sum reads it (26.50).
+		"""
+		for other in walk_order(struct, placement):
 			if other.path == placement.path:
 				return None
 			if other.is_fixed_size:
@@ -4392,6 +4441,20 @@ class Emitter:
 
 	def _has_length(self, struct: ResolvedStruct, placement: Placement) -> bool:
 		"""Whether a member's runtime extent has a closed form."""
+		# A run inside a variant arm has no length here, because the arm
+		# emitter has no walk: the ordinary member path emits `_span`, `_at`
+		# and `_count` for a run, and an arm's parallel family emits none of
+		# them. Answering yes named a span nothing defines, and the header did
+		# not compile -- while the other three declined the member outright.
+		# The gap is real and it is the same one in all four: no backend walks
+		# a run inside an arm. A schema that wants one puts the run in a struct
+		# and the struct in the arm, which every backend does reach.
+		if arm_of(struct, placement) is not None \
+				and (placement.repeat_while is not None
+				     or self._is_record_run(placement)
+				     or self._is_counted_run(placement)):
+			return False
+
 		# A run whose element has no computable extent cannot be walked, so
 		# how far it reaches is unknown and nothing after it can be placed.
 		# Without this the offset chain called a `_span` that was never
@@ -4435,6 +4498,15 @@ class Emitter:
 		field that is itself dynamically placed, so this goes through the same
 		base resolution as any other read.
 		"""
+		# A count written as arithmetic: the expression *is* the count, and
+		# only the bare-reference form needs a driver looked up. Falling
+		# through to `array_count or 0` made `vrec run[n + 1]` a run of zero
+		# elements -- so the walk stopped immediately, and every member after
+		# it landed at the run's own start while the other three walked it
+		# (invariant 69).
+		if placement.sized_by is None and placement.size_expr is not None:
+			return f"({self._over_fields(struct, placement.size_expr, held)})"
+
 		if placement.sized_by is None:
 			return f"{placement.array_count or 0}u"
 
@@ -4460,7 +4532,7 @@ class Emitter:
 		# kind of wrong that produces a plausible number: "10" came out as
 		# 0x3130.
 		if target.placement.radix is not None:
-			return self._text_count_expression(struct, target.placement)
+			return self._text_count_expression(struct, target.placement, held)
 
 		loaded = self._load_expression(
 			target.placement.scalar, target.placement,
@@ -4469,7 +4541,7 @@ class Emitter:
 		return f"({loaded})"
 
 	def _text_count_expression(self, struct: ResolvedStruct,
-			driver: Placement) -> str:
+			driver: Placement, held: str = "view") -> str:
 		"""A length written as digits, as an expression that cannot fail.
 
 		The parse can fail, and this cannot: an offset function returning an
@@ -4482,9 +4554,14 @@ class Emitter:
 		An unvalidated frame gets zero here, which is the same bargain as
 		every other accessor on this header: they trust the bounds check they
 		did not perform.
+
+		`held` names the view in scope, which is `gate.view` inside a sealed
+		region: this said `view` whatever the caller held, so a run inside a
+		gate whose length is written in digits produced a function body
+		naming a parameter that is not there.
 		"""
 		local = c_name(self._local(struct, driver))
-		return f"{ident(self.prefix, struct.name, local, 'value')}(view)"
+		return f"{ident(self.prefix, struct.name, local, 'value')}({held})"
 
 	def _text_value_helper(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -4531,6 +4608,43 @@ class Emitter:
 			"}",
 		]
 
+	def _remaining_count(self, struct: ResolvedStruct, placement: Placement,
+			local: str, base: str, nested: str) -> list[str]:
+		"""How many elements are left, counted by walking them.
+
+		Bounded twice, as every generated walk is: by the view, and by
+		refusing to advance on a zero-length element (invariant 24).
+		"""
+		return [
+			f"/* How many `{nested}` are in what is left. There is no stride to",
+			" * divide by -- each element says how long it is -- so counting"
+			" them",
+			" * means walking them. */",
+			f"static inline uint32_t "
+			f"{ident(self.prefix, struct.name, local, 'count')}(situ_view_t view)",
+			"{",
+			f"\tuint32_t at = {base};",
+			"\tuint32_t n  = 0u;",
+			"",
+			"\twhile (at < view.limit) {",
+			"\t\tsitu_view_t element;",
+			"\t\tuint32_t    size;",
+			"",
+			"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			" != SITU_OK) {",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tsize = {ident(self.prefix, nested, 'extent')}(element);",
+			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\t\tbreak;",
+			"\t\t}",
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\treturn n;",
+			"}",
+		]
+
 	def _element_view(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Indexed access to one element of an array of structs.
@@ -4546,9 +4660,25 @@ class Emitter:
 		base   = self._base_expression(struct, placement)
 		lines  = []
 
+		inner_struct = self.resolved.structs.get(nested or "")
+		walked = (placement.sized_by == "remaining"
+		          and inner_struct is not None
+		          and not inner_struct.layout.is_fixed_size
+		          and bool(self._struct_extent(inner_struct)))
+
 		if placement.array_count is not None:
 			lines.append(f"#define {macro(self.prefix, struct.name, local, 'COUNT')} "
 			             f"{placement.array_count}u")
+		elif walked:
+			# `x[remaining]` over elements with no single size: the bytes left
+			# are known and the number of elements in them is not, so the
+			# count is the walk. `_count_expression` had no answer and
+			# returned the fallback zero -- so the run read as empty, the walk
+			# below never ran, and a schema that says "the rest of the frame
+			# is records" came back with none of them. C++ formatted a Python
+			# `None` into the same accessor, which at least did not compile.
+			lines.extend(self._remaining_count(struct, placement, local,
+			                                   base, nested or ""))
 		else:
 			lines.extend([
 				f"static inline uint32_t "
@@ -5484,6 +5614,14 @@ class Emitter:
 		if found is None or placement.type_name not in self.structs:
 			return []
 
+		# One of them, not a run of them: `_view` is emitted for an arm that
+		# *is* a struct, and this called it for an arm that is a run of one.
+		# `_has_length` says the same thing at the other end -- no backend
+		# walks a run inside an arm -- and a validator naming an accessor
+		# nobody emits is that gap arriving as a compile error.
+		if not self._is_arm_struct(placement):
+			return []
+
 		inner = self.resolved.structs.get(placement.type_name or "")
 		if inner is None or (not inner.layout.is_fixed_size
 		                     and not self._struct_extent(inner)):
@@ -5508,6 +5646,13 @@ class Emitter:
 			"\t\t}",
 			"\t}",
 		]
+
+	def _is_arm_struct(self, placement: Placement) -> bool:
+		"""Whether an arm is one struct rather than a run of them."""
+		return (placement.array_count is None
+		        and placement.delimiter is None
+		        and placement.repeat_while is None
+		        and not data_sized(placement))
 
 	def _arm_fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
