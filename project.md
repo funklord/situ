@@ -8199,6 +8199,66 @@ frames. That is invariant 91, and it is why `[since]` needed ten hand-written
 schemas rather than another sweep. A clean sweep says the composition space
 is intact and says nothing about the constructs it does not vary.
 
+### 26.66 The example three projects asked for
+
+Five sibling projects evaluated situ and wrote up what they found. Three of
+them -- `beerssh`, and by their own description `fuzzypickles` and `netcfgd`
+-- independently named the same gap, and it is not a capability:
+
+> None is the shape most applications actually have: a small private layout
+> the program invented for itself, of the order of five fields, with a
+> version byte and an encrypted tail.
+
+They are right about the inventory. All 27 directories under `examples/` are
+public formats somebody else specified -- ARP, DNS, SQLite, MQTT, protobuf --
+or exercises named for the capability they demonstrate. Not one is an
+application's own record.
+
+**The consequence is sharper than the omission.** Reading only public
+formats, situ presents as *a tool for implementing somebody else's protocol*.
+That is a fair description of the hardest thing it does and it is why a
+project holding a 33-byte header does not recognise itself in the
+documentation and never runs the trial. The evaluation that made the point
+put it best: an example at the floor would let a reader conclude **no**
+quickly and for the right reason, which is worth more than one more public
+format.
+
+`examples/keystore` is that shape. Four fields, a version byte, a sealed
+tail, and prose that says plainly that hand-rolled it is twenty-five lines of
+`offset += N` which work -- a project with exactly this and nothing else
+should write those lines.
+
+What it demonstrates is what *changes* that answer, both being things
+twenty-five lines of offset arithmetic cannot show you until it is too late
+to choose:
+
+- **The version bump re-lays the bytes.** PBKDF2 takes one parameter and
+  Argon2id takes three, so the map shows `magic`, `version`, `salt` and
+  `nonce` at constant offsets and everything after the variant going
+  `Dynamic`. The cost of the bump, stated rather than discovered. This is
+  also the trigger the evaluating project named for re-running its own
+  decision.
+- **The sealed interior is `VerifyGated` in four languages**, so there is no
+  accessor that reaches it before the tag verifies.
+
+**And writing it found something, which is invariant 92 collecting again.**
+The sealed body was first `secret_key[32]` beside `plaintext[length - 32]`,
+and the compiler refused: `length` admits zero, so the subtraction admits
+-32. A hand-written reader makes that subtraction without ever being asked
+whether the field can be small. The refusal is kept in the file's comments,
+because 26.56's rule is that the refusal is the evidence.
+
+**What is still owed.** The same evaluation asked for a stated floor -- a
+field count, a language count, a version count below which situ is not worth
+it -- observing that the README argues from what situ does when it *cannot*
+generate something, which persuades somebody already holding a complicated
+format and does not help somebody deciding whether theirs is complicated
+enough. This example is the beginning of an answer rather than the answer.
+
+**Status:** 3009 unit tests, 7 skipped; `make test-c` clean with the new
+example built, fuzzed and checked; four backends agree about it over random
+bytes; `make check` clean.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9070,6 +9130,18 @@ is intact and says nothing about the constructs it does not vary.
    subtler than invariant 100: nothing was excluded and nothing was
    swallowed. Check that each side's input is *the argument it was given*,
    not something equivalent it can obtain for itself.
+
+103. **A tool is adopted from the example a reader recognises, not from the
+   hardest one it can do.** Twenty-seven worked examples, every one a public
+   format or a capability demonstration, and three independent evaluations
+   said none of them was the shape they had. The missing example was the
+   smallest: a private record with a version byte. Leading with the hardest
+   case argues well to somebody already convinced they have a hard problem
+   and is no help to the reader deciding whether their problem qualifies --
+   who is most of them. An example at the floor, honest that the
+   hand-written version is twenty lines and works, lets that reader reach
+   **no** quickly and for the right reason, which is worth more than a
+   trial they never run.
 
 ---
 
