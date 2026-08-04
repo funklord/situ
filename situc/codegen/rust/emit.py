@@ -299,7 +299,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines.extend(self._getter(struct, entry))
 
-		lines.extend(self._sealed_runs(struct))
+		lines.extend(self._region_runs(struct))
 		lines.extend(self._nested_text_values(struct))
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._extent_method(struct))
@@ -2096,8 +2096,8 @@ class Emitter:
 			])
 		return lines
 
-	def _sealed_runs(self, struct: ResolvedStruct) -> list[str]:
-		"""A run of records inside a sealed region, walked from out here.
+	def _region_runs(self, struct: ResolvedStruct) -> list[str]:
+		"""A run of records inside a region, walked from out here.
 
 		Everything else in a sealed region is reached through the gate, and a
 		run is too -- but how far it *reaches* is not a question about the
@@ -2109,7 +2109,19 @@ class Emitter:
 		lines: list[str] = []
 		for entry in struct.entries:
 			placement = entry.placement
-			if placement.sealed_by is None or placement.kind != "field":
+			if placement.kind != "field":
+				continue
+			# A `coded` region's interior as well as a `sealed` one's: the
+			# region names its own length through its members, and a run
+			# is measured by a walk whichever kind of region it is in.
+			# Keyed on `sealed_by` alone, a run inside a `coded` region
+			# named a span nothing emitted -- the same defect one
+			# container over, found the day that container joined the
+			# composed space.
+			inside = (placement.sealed_by is not None
+			          or (placement.codec is not None
+			              and "." in placement.path[len(struct.name) + 1:]))
+			if not inside:
 				continue
 			if placement.type_name not in self.structs:
 				continue
@@ -3625,7 +3637,7 @@ class Emitter:
 		region.
 		"""
 		rule = region_extent(struct, region,
-		                     self.codecs.get(region.type_name))
+		                     self.codecs.get(region.type_name), self.resolved.structs)
 		if rule is None:
 			return None
 

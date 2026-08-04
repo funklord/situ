@@ -86,12 +86,19 @@ BEFORE: dict[str, str] = {
 	"nothing": "",
 	"bytes":   "\tu8   gap[{read}];\n",
 	"delim":   "\tu8   label[] until \"\\0\" max 8;\n",
+	# A varint: the offsets after it are dynamic for a reason nothing else
+	# here has -- its width is in its own bytes rather than in a field.
+	"varint":  "\tedge_varint  skip;\n",
+	# A run of records ending at a terminator. Everything after it is placed
+	# by a *walk*, which is a third way for an offset to stop being a
+	# constant: not a sum, not a scan, a loop.
+	"records": "\tmark  seen[] until \"\\xff\";\n",
 }
 
 #: Where the member under test sits. Each is its own accessor family: a gate
 #: takes a parameter, an arm takes a discriminant test, a nested struct is
 #: addressed from its own frame.
-PLACES = ("frame", "nested", "authenticated", "sealed", "arm")
+PLACES = ("frame", "nested", "authenticated", "sealed", "coded", "arm")
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
@@ -124,6 +131,24 @@ ARM_DECL = (
 
 HDR_DECL = "struct hdr { u16 lead; u8 n [max = 4]; }\n"
 
+#: A record for a terminated run to walk. Fixed size, so what the run costs
+#: an offset is the walk itself rather than the element's own measurement.
+MARK_DECL = "struct mark { u8 kind; u8 weight; }\n"
+
+#: A codec that doubles, so the arithmetic between a region's interior and its
+#: bytes on the wire is visible: a two-byte interior is four bytes of region,
+#: and a length that forgot the ratio would still look plausible.
+CODED_DECL = (
+	"codec doubling {\n"
+	"\texpansion = ratio_exact(2, 1);\n"
+	"\tgranularity = byte;\n"
+	"\tseekable = linear;\n"
+	"\tinvertible;\n"
+	"\tdeterministic;\n"
+	"}\n"
+	"\nimpl doubling extern \"my_doubling\";\n"
+)
+
 
 @dataclass(frozen=True)
 class Case:
@@ -154,8 +179,14 @@ class Case:
 			head.append(decl)
 		if self.place == "sealed":
 			head.append(SEAL_DECL)
+		if self.place == "coded":
+			head.append(CODED_DECL)
 		if self.place == "arm":
 			head.append(ARM_DECL)
+		if self.before == "varint" and self.driver != "varint":
+			head.append(VARINT_DECL)
+		if self.before == "records":
+			head.append(MARK_DECL)
 
 		# The member under test, and a scalar after it: what follows a member
 		# the data sizes is where a wrong extent shows up, and half of what
@@ -185,6 +216,13 @@ class Case:
 			inner = ""
 			body += (f"\tsealed body(seal) {{\n\t{member}\t}}\n"
 			         "\ttag u8 mac[16] covers(body);\n")
+		elif self.place == "coded":
+			# The fourth container, and the one whose bytes on the wire are
+			# not its interior: what the region occupies is its members put
+			# through the codec's expansion.
+			inner = ""
+			body += (f"\tcoded body(doubling) {{\n\t{member}\t}}\n"
+			         + tail)
 		else:
 			inner = ""
 			body += ("\tarm_kind  which;\n"

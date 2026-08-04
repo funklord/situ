@@ -494,13 +494,54 @@ class RegionExtent:
 	group_out: int		= 0
 
 
+def unmeasurable_inside(structs: dict[str, "ResolvedStruct"],
+		member: Placement) -> bool:
+	"""Whether this member's extent cannot be had from outside its region.
+
+	Two shapes, and the one question `region_extent` refuses on and the differ
+	declines to ask about:
+
+	  * a *walk* -- a delimited run, a `while` run, a counted run of variable
+	    records. It reads each element's own length off the wire, and inside a
+	    region the wire is the codec's output: stuffed bytes for a stuffing
+	    codec, ciphertext for an AEAD;
+	  * `[remaining]`, which means "to the end of the frame" and inside a
+	    region has nothing to mean. Where the region ends is the question the
+	    extent is being asked, so an interior sized by the rest of it is
+	    circular.
+
+	A length driven by a field *outside* the region is neither, and is the
+	shape 26.35 wrote the extent rule for.
+	"""
+	return (member.delimiter is not None
+	        or member.repeat_while is not None
+	        or member.sized_by == "remaining"
+	        or is_counted_run(structs, member))
+
+
 def region_extent(struct: "ResolvedStruct", region: Placement,
-		codec: object) -> RegionExtent | None:
+		codec: object,
+		structs: dict[str, "ResolvedStruct"] | None = None) -> RegionExtent | None:
 	"""The extent rule for a coded region, or None where there is none.
 
 	None where the expansion has no closed form -- a bounded ratio or an
 	unbounded one -- because the length genuinely is not computable without
 	decoding, and a wrong number would silently misplace every member after it.
+
+	And None where measuring the interior would mean *reading* it. The rule
+	26.35 established is that a region's extent is its interior's extent put
+	through the codec's expansion, and that holds while the interior's extent
+	comes from fields outside the region -- `u8 content[n]` with `n` declared
+	before it, which is the shape it was written for. A *run* inside a region
+	is not that: how far it reaches is a walk, and a walk reads each element's
+	own length off the wire, where the bytes are the codec's output. For a
+	stuffing codec they are stuffed and for an AEAD they are ciphertext, so
+	the number that comes back is not a length of anything.
+
+	Four backends named a span for such a run and none of them emitted one, so
+	this arrived as a header that would not compile -- which is the good
+	failure, and it hid the real answer: the extent is not computable, and
+	every member after the region has to say so.
 	"""
 	if codec is None:
 		return None
@@ -516,8 +557,10 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 	for member in interior:
 		if member.is_fixed_size:
 			constant += member.size_bits // BITS_PER_BYTE
-		else:
-			variable.append(member)
+			continue
+		if unmeasurable_inside(structs or {}, member):
+			return None		# a walk over the codec's output
+		variable.append(member)
 
 	expansion = getattr(codec, "expansion", None)
 	name      = getattr(expansion, "value", None)
@@ -1421,4 +1464,14 @@ def decode_bound(codec: object, placement: Placement) -> int | None:
 	ratio: tuple[int, int] | None = getattr(codec, "ratio", None)
 	if ratio is None or not ratio[0] or placement.size_max_bits is None:
 		return None
-	return (placement.size_max_bits // BITS_PER_BYTE) * ratio[1] // ratio[0]
+
+	bound = (placement.size_max_bits // BITS_PER_BYTE) * ratio[1] // ratio[0]
+
+	# None rather than a number no target can hold. A region sized by a varint
+	# has a maximum of 2^64 bytes -- the varint's own -- and doubling it is a
+	# constant that does not fit the type it is emitted as: Rust said `literal
+	# out of range for usize` and refused to compile, which is the loud end;
+	# C would have wrapped it. A bound that cannot be represented is not a
+	# bound, and the accessor that sizes a buffer from it is better absent
+	# (26.53).
+	return None if bound >= 1 << 32 else bound

@@ -99,7 +99,7 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Member, arm_members, classify, containment_order, data_sized,
-	indexed_elements, local_name, own_entries, own_members,
+	indexed_elements, local_name, own_entries, own_members, unmeasurable_inside,
 )
 
 
@@ -184,7 +184,22 @@ def asks(struct: ResolvedStruct, structs: set[str],
 	found: list[Ask] = []
 	structs_by_name = structs_by_name or {}
 
-	for entry in own_entries(struct):
+	# Nothing after a region whose interior has to be walked. Such a region
+	# has no computable extent (see `traverse.region_extent`), so no backend
+	# can place what follows it -- and asking anyway named accessors that four
+	# backends had each, correctly, declined to emit.
+	stop = len(struct.entries) + 1
+	for index, entry in enumerate(own_entries(struct)):
+		# A `sealed` region as well as a `coded` one: both are measured by
+		# the same rule and both refuse it for the same interiors.
+		if entry.placement.kind in ("coded", "sealed") \
+				and _region_walks(struct, entry.placement, structs_by_name):
+			stop = index + 1
+			break
+
+	for index, entry in enumerate(own_entries(struct)):
+		if index >= stop:
+			break
 		placement = entry.placement
 		kind      = classify(struct, placement, structs)
 		local     = c_name(local_name(struct, placement))
@@ -227,7 +242,14 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		if placement.codec is not None:
 			if placement.delimiter is not None:
 				found.append(Ask(Probe.DELIMITED, local))
-			elif placement.kind == "coded":
+			elif placement.kind == "coded" \
+					and not _region_walks(struct, placement, structs_by_name):
+				# ...and only where the region has a length to hand back. Its
+				# extent is its interior's put through the codec's expansion,
+				# and an interior that has to be *walked* has none: the walk
+				# would read the codec's output as though it were the
+				# plaintext. Four backends decline the region there, and this
+				# asked for its bytes anyway.
 				found.append(Ask(Probe.BYTES, local))
 			continue
 
@@ -327,7 +349,19 @@ def asks(struct: ResolvedStruct, structs: set[str],
 	return found
 
 
-def writes(struct: ResolvedStruct) -> list[Ask]:
+def _region_walks(struct: ResolvedStruct, region: Placement,
+		structs_by_name: dict[str, ResolvedStruct]) -> bool:
+	"""Whether this region's interior has to be walked to be measured."""
+	prefix = region.path + "."
+	return any(unmeasurable_inside(structs_by_name, entry.placement)
+	           for entry in struct.entries
+	           if entry.placement.path.startswith(prefix)
+	           and "." not in entry.placement.path[len(prefix):]
+	           and entry.placement.kind != "element")
+
+
+def writes(struct: ResolvedStruct,
+		structs_by_name: dict[str, ResolvedStruct] | None = None) -> list[Ask]:
 	"""Which members this struct can be *written*, in declaration order.
 
 	Every backend emits setters and nothing compared them: the drivers read,
@@ -360,7 +394,20 @@ def writes(struct: ResolvedStruct) -> list[Ask]:
 
 	found: list[Ask] = []
 
-	for entry in own_entries(struct):
+	# Nothing after a region whose interior cannot be measured from outside
+	# it: no backend can place what follows, and the read pass stops there
+	# for the same reason.
+	stop = len(struct.entries) + 1
+	for index, entry in enumerate(own_entries(struct)):
+		if entry.placement.kind in ("coded", "sealed") \
+				and _region_walks(struct, entry.placement,
+				                  structs_by_name or {}):
+			stop = index + 1
+			break
+
+	for index, entry in enumerate(own_entries(struct)):
+		if index >= stop:
+			break
 		placement = entry.placement
 		scalar    = placement.scalar
 
@@ -648,7 +695,7 @@ def _c_writes(resolved: ResolvedSchema, prefix: str) -> list[str]:
 	any_write = False
 
 	for struct in structs_of(resolved):
-		asked = writes(struct)
+		asked = writes(struct, resolved.structs)
 		if not asked:
 			continue
 		any_write = True
@@ -877,7 +924,7 @@ def _cpp_writes(resolved: ResolvedSchema) -> list[str]:
 	any_write = False
 
 	for struct in structs_of(resolved):
-		asked = writes(struct)
+		asked = writes(struct, resolved.structs)
 		if not asked:
 			continue
 		any_write = True
@@ -1095,7 +1142,8 @@ def _rust_writes(resolved: ResolvedSchema) -> list[str]:
 	and the writes happen against the copy, which is the same bytes the other
 	three mutate in place.
 	"""
-	asked_any = [(struct, writes(struct)) for struct in structs_of(resolved)]
+	asked_any = [(struct, writes(struct, resolved.structs))
+	             for struct in structs_of(resolved)]
 	asked_any = [(struct, asked) for struct, asked in asked_any if asked]
 	if not asked_any:
 		return []
@@ -1291,7 +1339,7 @@ def _python_writes(resolved: ResolvedSchema) -> list[str]:
 	any_write = False
 
 	for struct in structs_of(resolved):
-		asked = writes(struct)
+		asked = writes(struct, resolved.structs)
 		if not asked:
 			continue
 		any_write = True

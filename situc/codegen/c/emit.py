@@ -1066,7 +1066,17 @@ class Emitter:
 			# A tag lands after everything it covers, so its own offset is
 			# usually dynamic and has to be resolved before either its bytes or
 			# its covered span can be reached.
+			#
+			# ...and where something before it has no computable extent, there
+			# is no offset to emit and nothing after it to emit either: a tag
+			# behind a region whose interior cannot be measured named an
+			# offset function that was a comment, and `_ptr` called it. The
+			# ordinary members ask this before emitting; the tag branch runs
+			# before they do.
 			if placement.offset_bits is None:
+				blocker = self._offset_blocker(struct, placement)
+				if blocker is not None:
+					return lines + self._unresolvable_offset(placement, blocker)
 				lines.extend(self._offset_function(struct, placement))
 			lines.extend(self._array(struct, entry))
 			lines.extend(self._tag_support(struct, entry))
@@ -4420,7 +4430,7 @@ class Emitter:
 		member after it.
 		"""
 		rule = region_extent(struct, region,
-		                     self.codecs.get(region.type_name))
+		                     self.codecs.get(region.type_name), self.resolved.structs)
 		if rule is None:
 			return None
 
