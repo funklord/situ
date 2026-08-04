@@ -154,6 +154,50 @@ unwritable says why. A backend that silently omits an operation the map
 promises is invisible to a backend-versus-backend check unless the four happen
 to disagree.
 
+## Is your format worth a schema?
+
+Situ is worth its cost above a floor, and the floor is not a field count. Five
+projects evaluated it against real trees and two said no; what follows is
+their reasoning rather than an argument from this side.
+
+**The wrong axis is size.** A five-field record read by two implementations in
+two languages is above the floor. A forty-field format parsed once into native
+objects, in one language, by one program, may be below it. Counting fields
+predicts almost nothing.
+
+**Four things decide it, and any one is usually enough:**
+
+- **More than one implementation reads the bytes.** Two languages, two teams,
+  or a client and a server built separately. What the schema replaces is the
+  agreement nobody wrote down, and that agreement is what drifts.
+- **The format will be versioned.** If a version byte is already in your
+  header, you have promised something you will later have to keep. Section 19
+  is where that promise becomes a compile error instead of an `if (version !=
+  1) return false;` that turns into a branch, and then two branches.
+- **You hold a buffer and take fields out of it -- especially to write them
+  back.** This is what situ optimises: zero-copy reads, in-place mutation, and
+  a derived account of when those are impossible. A program that parses once
+  into native objects and never writes a byte pays for all of that and uses
+  none of it.
+- **Getting it wrong is dangerous.** Attacker-controlled input, a parser
+  running as root, or bytes under a MAC. Situ's bounds and its verify gate are
+  worth most exactly where a mistake is worst.
+
+**Below all four, write the twenty lines.** A single private record, read in
+one language by one program that never mutates it, is twenty-five lines of
+`offset += N` and they work. `examples/keystore` is deliberately that shape,
+so you can see the floor rather than infer it -- and it shows what changes the
+answer, which is the version bump re-laying the bytes and the sealed body
+nothing may read before the tag verifies.
+
+**One trap worth naming, because it is invisible from outside.** The layer
+situ fits may not be the layer that is hard. A project whose index format is
+stanzas of `Key: value` found situ described that layer well -- and that layer
+was fifteen lines that had never had a bug, while the difficulty was an
+expression grammar inside one field's *text*, which situ does not generate and
+should not. Check that the part situ would take is the part costing you
+something.
+
 ## What it will not do
 
 - No wire format of its own. Situ describes formats that already exist.

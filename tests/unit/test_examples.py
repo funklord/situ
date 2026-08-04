@@ -209,3 +209,26 @@ def test_committed_wire_signature_is_current(path: Path) -> None:
 def test_future_examples_have_no_stale_signature(path: Path) -> None:
 	"""A schema that does not build cannot have a contract to commit."""
 	assert not path.with_suffix(".situ.wire").exists()
+
+
+def test_every_example_the_readmes_name_exists() -> None:
+	"""The front page is an artifact like any other here.
+
+	Nothing held either README to the tree, and the top-level one is the first
+	thing a prospective adopter reads: it names example directories, and a
+	name that has been renamed or removed reads exactly like one that is
+	there. This is the same check `test_the_cli_section_lists_every_command`
+	makes about the command list, for the same reason -- prose drifts slowly
+	because a wrong paragraph usually reads wrong, and a *reference* does not.
+	"""
+	named: set[str] = set()
+	for readme in (EXAMPLES.parent / "README.md", EXAMPLES / "README.md"):
+		named |= set(re.findall(r"examples/([a-z0-9_]+)", readme.read_text(
+			encoding="ascii")))
+		# examples/README.md links relatively: `[mqtt](mqtt/)`.
+		if readme.parent.name == "examples":
+			named |= set(re.findall(r"\]\(([a-z0-9_]+)/\)", readme.read_text(
+				encoding="ascii")))
+
+	missing = sorted(name for name in named if not (EXAMPLES / name).is_dir())
+	assert not missing, f"the READMEs name examples that do not exist: {missing}"
