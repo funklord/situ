@@ -3032,6 +3032,37 @@ Explicitly rejected alternative: unknown-field retention. It is what makes
 canonical encoding impossible (Section 3) and it is a malleability surface in
 an authenticated protocol.
 
+**The generator's output is not versioned, and that is a position rather than
+an omission.** An adopter evaluating situ asked for the intended answer -- a
+version marker in the generated header, a stability policy for output across
+releases -- on the reasoning that every serious adopter reaches the question
+and each inventing a different answer is how a generated-code ecosystem goes
+bad. The answer is that there is nothing to version.
+
+situc's job is to model the format as it actually is. Generated accessors are
+therefore either **right or wrong** about the bytes, and a version number on
+them would describe which release produced a wrong answer rather than making
+it right. A schema that says what the format does yields accessors that agree
+with the format; regenerate with a later situc and they agree with it still.
+Where output does change between releases, either the earlier one was wrong --
+in which case the fix is the point, and pinning to it is pinning to a defect
+-- or the format description changed, which is `situc wire`'s question and is
+answered there.
+
+This is also the reason a compatibility promise about output would be
+dishonest: it would be a promise that a future situc will keep reproducing a
+byte layout regardless of whether that layout is correct.
+
+**What situ owes the user instead is contradiction.** We cannot protect
+anybody from a schema that misdescribes reality -- a wrong directive produces
+wrong accessors, and no amount of versioning changes that. What we can do is
+generate enough independent ways of looking at the same claim that a wrong one
+*collides with something*: the capability map against the accessors
+(`gen-checks`), the accessors against arbitrary bytes (`gen-fuzz`), the four
+backends against each other, and -- 26.61 -- the accessors against a
+third-party implementation of the same format. A contradiction is a solution
+in progress. A version number is neither.
+
 ### 19.2 Importing `.proto`
 
 `situc import-proto foo.proto -o foo.situ` produces a Situ schema describing the
