@@ -33,6 +33,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
+from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -354,9 +356,19 @@ def sqlite_situ(module: object, database: bytes) -> dict[str, object]:
 # whether the accessors *read the same bytes tshark read*, which is a
 # different question from whether the packet is well-formed.
 
-def _randpkt(tmp: Path, kind: str, count: int = 8) -> Path:
+#: How many packets a network oracle asks `randpkt` for.
+#:
+#: Forty rather than a handful, because randpkt truncates and the comparable
+#: frames are a fraction of what it writes: with eight, a tcp run produced no
+#: usable frame about one time in twenty and the "compared nothing" guard --
+#: correctly -- failed the suite. The cure for a flake is its cause, and the
+#: cause here was too small a sample rather than the randomness (invariant 99).
+RANDPKT_COUNT = 40
+
+
+def _randpkt(tmp: Path, kind: str, count: int = RANDPKT_COUNT) -> Path:
 	out = tmp / f"{kind}.pcap"
-	_run(["randpkt", "-b", "80", "-c", str(count), "-t", kind,
+	_run(["randpkt", "-b", "120", "-c", str(count), "-t", kind,
 	      "-F", "pcap", str(out)])
 	return out
 
@@ -494,6 +506,138 @@ def arp_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 	return found
 
 
+# -- the rest of the network stack --------------------------------------------
+#
+# One shape, five formats. Each names the randpkt type that writes the bytes,
+# the tshark layer that reads them back, and the fields the two sides both
+# name. `situ` is a function because what it takes out of the layer differs --
+# a bit-packed nibble is not a `u16` -- but everything else is a table.
+
+def _comparable(frame: dict[str, object], layer: str,
+		fields: tuple[tuple[str, str, int], ...], least: int) -> bool:
+	"""Whether both tools are answering the same question about this frame.
+
+	Two ways they are not, and `randpkt` produces both because it truncates:
+	tshark reached only part of the header and reports what it got, or the
+	layer is shorter than the struct's own minimum, where situ declines to
+	hand out a view at all. Neither is a disagreement about the bytes
+	(invariant 98).
+
+	One predicate, evaluated identically on both sides, so neither gets to
+	choose its own subset -- which is what a `try/except: continue` on the
+	situ side amounts to, and it is how the udp oracle first read seven rows
+	against tshark's eight.
+	"""
+	seen = frame.get(layer)
+	if not isinstance(seen, dict):
+		return False
+	if not all(name in seen for name, _, _ in fields):
+		return False
+
+	raw = frame.get(f"{layer}_raw")
+	return isinstance(raw, list) and len(bytes.fromhex(raw[0])) >= least
+
+
+def _reader(layer: str, fields: tuple[tuple[str, str, int], ...],
+		least: int) -> Callable[[bytes, Path], list[dict[str, int]]]:
+	"""What tshark says about `layer`, for frames both tools can answer."""
+
+	def says(corpus: bytes, tmp: Path) -> list[dict[str, int]]:
+		return [{ours: int(str(frame[layer][theirs]), base)      # type: ignore[index]
+		         for theirs, ours, base in fields}
+		        for frame in _frames(_capture(corpus, tmp))
+		        if _comparable(frame, layer, fields, least)]
+
+	return says
+
+
+def _situ_reader(layer: str, fields: tuple[tuple[str, str, int], ...],
+		struct: str, read: Callable[[Any], dict[str, int]],
+		least: int) -> Callable[[object, bytes], list[dict[str, int]]]:
+	"""The same frames, through situ's accessors on the same byte span.
+
+	`least` is asserted against the generated module rather than trusted: a
+	schema whose minimum moves would otherwise start filtering frames neither
+	side mentions, and a comparison that quietly shrinks to nothing passes.
+	"""
+
+	def situ(module: object, corpus: bytes) -> list[dict[str, int]]:
+		from situ_runtime import Message
+
+		held  = getattr(module, struct)
+		# A fixed-size struct's `at` takes no length: its extent is the
+		# constant, and passing one is a TypeError rather than a bounds
+		# check.
+		fixed = getattr(held, "SIZE_BYTES", 0)
+		floor = getattr(held, "SIZE_MIN", 0) or fixed
+		assert floor == least, (
+			f"{struct}'s minimum is {floor}, not the {least} this oracle "
+			f"filters on; update it or the comparison silently shrinks")
+
+		found = []
+		for frame in _frames(_capture(corpus)):
+			if not _comparable(frame, layer, fields, least):
+				continue
+			raw  = bytes.fromhex(frame[f"{layer}_raw"][0])  # type: ignore[index]
+			view = (held.at(Message(bytearray(raw)), 0) if fixed
+			        else held.at(Message(bytearray(raw)), 0, len(raw)))
+			found.append(read(view))
+		return found
+
+	return situ
+
+
+#: tshark's name for a field, situ's name for it, and the base tshark prints
+#: it in. Everything else about these five oracles is shared machinery.
+IPV4_FIELDS = (
+	("ip.version", "version", 10),
+	("ip.hdr_len", "ihl", 10),
+	("ip.ttl", "time_to_live", 10),
+	("ip.proto", "protocol", 10),
+	("ip.len", "total_length", 10),
+	("ip.id", "identification", 16),
+)
+
+ICMP_FIELDS = (
+	("icmp.type", "type", 10),
+	("icmp.code", "code", 10),
+)
+
+UDP_FIELDS = (
+	("udp.srcport", "source_port", 10),
+	("udp.dstport", "destination_port", 10),
+	("udp.length", "length", 10),
+)
+
+#: The raw sequence numbers. tshark's `tcp.seq` is relative to the stream it
+#: has been tracking, which is its own bookkeeping rather than the bytes.
+TCP_FIELDS = (
+	("tcp.srcport", "source_port", 10),
+	("tcp.dstport", "destination_port", 10),
+	("tcp.seq_raw", "sequence", 10),
+	("tcp.ack_raw", "acknowledgement", 10),
+)
+
+DNS_FIELDS = (
+	("dns.id", "id", 16),
+	("dns.count.queries", "question_count", 10),
+	("dns.count.answers", "answer_count", 10),
+	("dns.count.auth_rr", "authority_count", 10),
+	("dns.count.add_rr", "additional_count", 10),
+)
+
+
+def _ipv4_read(view: Any) -> dict[str, int]:
+	"""An `authenticated` region flattens onto its struct, so these are
+	`view.version` rather than `view.header.version`."""
+	# tshark reports `ip.hdr_len` in bytes; the field on the wire is words.
+	return {"version": int(view.version), "ihl": int(view.ihl) * 4,
+	        "time_to_live": int(view.time_to_live),
+	        "protocol": int(view.protocol),
+	        "total_length": int(view.total_length),
+	        "identification": int(view.identification)}
+
+
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
 		name   = "cpio",
@@ -529,6 +673,40 @@ ORACLES: tuple[Oracle, ...] = (
 		          "hand-picked packet exercises the values somebody thought "
 		          "of. `validate()` is not called -- randpkt's ARP is not "
 		          "valid ARP, and situ is right to say so."),
+	),
+	Oracle(
+		name   = "ipv4",
+		schema = ROOT / "examples" / "ipv4" / "ipv4.situ",
+		tool   = "tshark",
+		why    = ("A bit-packed version and header length in the first byte, "
+		          "which is where a nibble read from the wrong end shows up."),
+	),
+	Oracle(
+		name   = "icmp",
+		schema = ROOT / "examples" / "icmp" / "icmp.situ",
+		tool   = "tshark",
+		why    = "Type and code, ahead of a variant that switches on the type.",
+	),
+	Oracle(
+		name   = "udp",
+		schema = ROOT / "examples" / "udp" / "udp.situ",
+		tool   = "tshark",
+		why    = "Four fixed u16s; any disagreement is byte order.",
+	),
+	Oracle(
+		name   = "tcp",
+		schema = ROOT / "examples" / "tcp" / "tcp.situ",
+		tool   = "tshark",
+		why    = ("32-bit sequence and acknowledgement numbers, read raw: "
+		          "tshark's relative ones are its own bookkeeping, not the "
+		          "bytes."),
+	),
+	Oracle(
+		name   = "dns",
+		schema = ROOT / "examples" / "dns" / "dns.situ",
+		tool   = "tshark",
+		why    = ("Four counts behind a bit-packed flags word, so a wrong "
+		          "flags width moves all four."),
 	),
 	Oracle(
 		name   = "sqlite",
@@ -573,6 +751,16 @@ LIES = {
 	# mutation has to be one the schema still compiles under, or the test
 	# would be proving the parser rejects nonsense rather than proving the
 	# oracle compares bytes.
+	"udp": ("\tu16  source_port;\n\tu16  destination_port;",
+	        "\tu16  destination_port;\n\tu16  source_port;"),
+	"tcp": ("\tu32       sequence;\n\tu32       acknowledgement;",
+	        "\tu32       acknowledgement;\n\tu32       sequence;"),
+	"dns": ("\tu16           question_count;\n\tu16           answer_count;",
+	        "\tu16           answer_count;\n\tu16           question_count;"),
+	"ipv4": ("\t\tu16       total_length;\n\t\tu16       identification;",
+	         "\t\tu16       identification;\n\t\tu16       total_length;"),
+	"icmp": ("\t\ticmp_type  type;\n\t\tu8         code;",
+	         "\t\tu8         code;\n\t\ticmp_type  type;"),
 	"arp": ("\thardware_type  hardware_type    [must_eq = hardware_type.ethernet];\n"
 	        "\tu16           protocol_type    [must_eq = 0x0800];",
 	        "\tu16           protocol_type    [must_eq = 0x0800];\n"
@@ -589,4 +777,38 @@ DRIVERS = {
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"ethernet": (eth_corpus, eth_says, eth_situ),
 	"arp":      (eth_corpus, arp_says, arp_situ),
+	# From the udp capture rather than the `ip` one: `randpkt -t ip` fills the
+	# header with noise, so tshark reports `ip.version` and gives up, and the
+	# comparison filters to nothing. The udp generator emits a well-formed IP
+	# header underneath -- the corpus still comes from randpkt, and the layer
+	# under test is still IPv4.
+	"ipv4": (lambda tmp: _randpkt(tmp, "udp").read_bytes(),
+	         _reader("ip", IPV4_FIELDS, 20),
+	         _situ_reader("ip", IPV4_FIELDS, "ipv4_header", _ipv4_read, 20)),
+	"icmp": (lambda tmp: _randpkt(tmp, "icmp").read_bytes(),
+	         _reader("icmp", ICMP_FIELDS, 8),
+	         _situ_reader("icmp", ICMP_FIELDS, "icmp_message",
+	                      lambda v: {"type": int(v.type),
+	                                 "code": int(v.code)}, 8)),
+	"udp":  (lambda tmp: _randpkt(tmp, "udp").read_bytes(),
+	         _reader("udp", UDP_FIELDS, 8),
+	         _situ_reader("udp", UDP_FIELDS, "udp_header",
+	                      lambda v: {"source_port": int(v.source_port),
+	                                 "destination_port": int(v.destination_port),
+	                                 "length": int(v.length)}, 8)),
+	"tcp":  (lambda tmp: _randpkt(tmp, "tcp").read_bytes(),
+	         _reader("tcp", TCP_FIELDS, 20),
+	         _situ_reader("tcp", TCP_FIELDS, "tcp_header",
+	                      lambda v: {"source_port": int(v.source_port),
+	                                 "destination_port": int(v.destination_port),
+	                                 "sequence": int(v.sequence),
+	                                 "acknowledgement": int(v.acknowledgement)}, 20)),
+	"dns":  (lambda tmp: _randpkt(tmp, "dns").read_bytes(),
+	         _reader("dns", DNS_FIELDS, 12),
+	         _situ_reader("dns", DNS_FIELDS, "dns_header",
+	                      lambda v: {"id": int(v.id),
+	                                 "question_count": int(v.question_count),
+	                                 "answer_count": int(v.answer_count),
+	                                 "authority_count": int(v.authority_count),
+	                                 "additional_count": int(v.additional_count)}, 12)),
 }
