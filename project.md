@@ -3795,7 +3795,14 @@ into an embedded build environment (Section 22).
   column. If lines are short enough to merge, merge rather than align.
 - No prescriptive tab width anywhere in the codebase or in generated output.
   Elastic tabstops are the model: the viewer decides width.
-- Generated C follows the same tab/space rule, and so does the Python.
+- Generated C follows the same tab/space rule, and so does the Python -- and
+  that is checked rather than assumed. `make lint` cannot see emitted code: it
+  lands in `build/`, which is skipped, and before that in string literals,
+  which are excluded so section 17's golden texts keep their gutter. So
+  `lint_conventions.check_text` takes text rather than a path, and
+  `tests/unit/test_generated_sources_follow_the_conventions.py` runs it over
+  what every schema generates in all four languages plus the checks, the fuzz
+  harness and the dissector (26.58).
 - **No autoformatter.** `black` and `ruff format` rewrite tabs to spaces
   unconditionally and cannot be configured out of it, so `tools/lint_conventions.py`
   under `make lint` is the enforcement instead. See
@@ -7581,6 +7588,103 @@ is to write the schema that would need it.
 host and under aarch64 emulation; MQTT built by four backends and compared
 over random buffers, now with three variants on a bit.
 
+### 26.57 Modbus, and the arm nobody selected
+
+The oldest protocol in `examples/` and the one most likely to be behind a
+physical thing that moves. What it adds that the others do not is a shape:
+**the same field means two layouts, and which one is in front of you is not
+in the bytes.** Function code 03 is four bytes of address and count going one
+way and a byte count with that many bytes coming back, and nothing in a
+Modbus frame says which direction it travelled. So the schema is two structs
+over one enum, `request` and `response`, and the choice belongs to the caller
+who knows whether it opened the socket or accepted it. Section 5's exception
+response needs no construct at all: it is defined as *a different function
+code*, the original with bit 7 set, so `0x83` is a value of the same enum and
+an arm like any other. The boundary is the serial line -- RTU separates
+frames by 3.5 character times of silence, and a duration is not a byte.
+
+Three defects, and the middle one is the interesting one.
+
+**A field named `function` is a Lua keyword.** The dissector emitted it as
+one. `_lua` suffixes the reserved words now; the balance test strips string
+literals before counting and imports `LUA_KEYWORDS` rather than keeping a
+second copy of the list, which is invariant 34 applied to a word list.
+
+**`validate` skipped an arm whose accessor refused, and the accessor refuses
+for two different reasons.** Not-this-arm is nothing to check. This-arm-does-
+not-fit is a malformed message: a read response whose byte count claims 256
+bytes of a 40-byte frame. C, C++ and Rust treated both the same and accepted
+the frame; Python caught only `VersionError` and reported the rest. So the
+four-way comparison found a case where **the majority was wrong** -- three
+backends agreeing is not evidence, and the value of comparing four is that
+one dissenter is enough to make somebody look. Invariant 42 says safety and
+diagnosis are different answers, and this is that sentence one level in: the
+accessor was right to hand out nothing, and the validator was wrong to call
+that nothing to say.
+
+**`gen-checks` wrote ten checks that could not pass.** A constrained field
+inside a variant arm, poked while the discriminant still named a different
+arm -- so the byte belonged to somebody else and `validate` was right to
+accept it. `_select_arm` already existed and the reserved checks already used
+it; the enum and `must_eq` checks did not, which is the same defect in the
+same file, two functions apart. They share one answer now.
+
+And the baseline underneath them was building a message that does not exist.
+It satisfied *every* arm's constraints at once, which for Modbus's ten
+exception arms sharing one byte is ten mutually exclusive layouts written
+over each other. It happened to be harmless there -- all ten wanted the same
+value -- and would not have been in any schema whose arms disagree. The
+baseline now satisfies exactly the arm the message carries: the one the check
+selects, or, for a check about a member outside every variant, whichever arm
+the discriminant's own baseline value lands on. That second half is the part
+that is easy to miss, and missing it is what made `request.function`'s check
+fail: with `function = 1` the frame is a read request, whose `quantity` has
+`[min = 1]`, and a baseline that skipped it called an invalid buffer valid.
+
+**Status:** 2908 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; Modbus built by four backends and compared
+over random buffers.
+
+### 26.58 The conventions reached the sources and stopped there
+
+Two exclusions met in the middle, and between them lay every line this
+compiler emits.
+
+A generated file has a suffix `make lint` would check -- `.c`, `.h`, `.lua`
+-- but it is written into `build/`, which the lint skips as a build product.
+Before it is written it lives in string literals inside the emitters, and
+`literal_lines` excludes those on purpose: section 17's golden diagnostic
+texts have a space gutter that the tab rule must not touch. So the tab rule
+governed `situc/codegen/c/emit.py` and not one line of the C that file
+produces. Four backends and five artifact generators, held to the convention
+by the habits of whoever last edited the emitter.
+
+The line rules move into `check_text`, which takes text rather than a path,
+and a test runs them over what every schema in the repository generates:
+header, source, C++, Rust, Python, checks, fuzz harness, dissector. Not the
+capability map -- that is a table, aligned with spaces deliberately, and the
+lint exempts `.map` for exactly that reason. `.cpp`, `.hpp` and `.rs` join
+the indent suffixes as well; they had been missing for as long as there have
+been C++ and Rust backends.
+
+**Everything was already clean.** All 224 generated artifacts, and both
+hand-written runtime files in the two unchecked languages. That is the usual
+shape of this kind of finding and it is not a reason to skip it: the tree was
+clean because the people editing it knew the rule, which is a property of the
+people rather than of the repository. The first thing the widened lint caught
+was a continuation line in its own new comment -- written by someone who had
+just read the rule twice.
+
+**How it was verified to bite.** A gate that cannot fail is worth nothing, so
+one emitted line in the C backend was changed to spaces, the test was run and
+named the five places it came out, and the change was reverted. That is the
+same argument 26.51 makes about a test whose input fails for its own reasons.
+
+**Status:** 2938 unit tests, 7 skipped; `make lint` clean with three more
+languages under it; generated C compiled and run on the host and under
+aarch64 emulation; the full composed space re-run after both of the above --
+2700 cells over six shards, 2700 agreed, nothing refused and nothing failed.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8301,6 +8405,39 @@ over random buffers, now with three variants on a bit.
    invariant 34: `traverse.indexed_elements` is the question, asked in one
    place, by the four emitters and by the fuzz harness, the checks and the
    differ.
+
+87. **An accessor that refuses is answering two questions, and a caller that
+   reads only "refused" hears the wrong one.** A variant arm's accessor says
+   no both to "this is not the arm this message carries" and to "it is, and
+   it does not fit the frame". Three backends skipped on either, so a Modbus
+   response claiming 256 bytes of a 40-byte frame validated clean. Where a
+   refusal is used as control flow, the code that distinguishes the reasons
+   has to be the code that reads it.
+
+88. **Three backends agreeing is not evidence; one dissenting is.** The
+   four-way comparison is usually read as a majority: where three say the
+   same thing, the fourth has the bug. It found the reverse here -- Python
+   alone reported a malformed frame and was right, and the value of the
+   comparison was not the vote but that somebody had to go and look. Never
+   resolve a disagreement by counting.
+
+89. **A generated check that cannot pass is worse than no check.** Ten
+   `gen-checks` cases poked a byte belonging to an arm nobody had selected
+   and asserted `validate` would refuse it. They are not merely useless: they
+   fail, and a suite with a permanently red test in it trains everyone
+   reading it to skip that line. A check about a member inside a variant arm
+   must select the arm first, and the baseline it stands on must build a
+   message that exists -- one arm per variant, not all of them at once.
+
+90. **A rule enforced on the sources is not enforced on what the sources
+   produce.** The tab convention covered `emit.py` and not one line of the C
+   `emit.py` writes: the generated files live in `build/`, which the lint
+   skips, and before that in string literals, which it excludes so section
+   17's golden texts keep their gutter. Every rule this project states about
+   source has a second question attached -- does it hold for the code we
+   generate? -- and the answer is a test, not an assumption. Everything was
+   clean when the gate went in, which is the normal outcome and not a reason
+   to have skipped it.
 
 ---
 
