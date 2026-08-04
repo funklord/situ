@@ -3841,6 +3841,42 @@ gap instead of papering over it.
 rules in detail along with the schema identifier rules and the decision
 references. This section is the brief.
 
+### 25.0 Commits come in two parts, and that is deliberate
+
+A finding lands as **two commits**: the work, and then a `fold:` commit
+carrying the section 26 entry and any invariants it produced. This is the
+practice the whole of section 26 is written by, and the history is full of
+the pairs.
+
+**It diverges from the standing rule that documentation rides along with the
+code commit it describes, and the divergence is settled rather than
+accidental.** It was raised and decided on 2026-08-04; what follows is the
+reasoning, recorded so it is not relitigated.
+
+The fold is not documentation *about* the work. It is the finding -- what
+broke, which of the four backends were wrong and in what different ways, what
+the shape of the defect turned out to be, and what invariant now holds. It is
+routinely longer than the diff that provoked it, and it is the part with the
+longer useful life: 26.59's five defects took a few hours to fix and the
+paragraph explaining why a versioned accessor's shape defeats a validator is
+what stops the sixth. Attaching that to the code commit would misrepresent
+both -- the diff reads as though it came with an essay, and the essay reads as
+a footnote to a diff.
+
+Two practical consequences, and they are the reason the split earns its keep:
+
+- **A fold is written after the work is green**, because half of what it says
+  is what the tests then found. A combined commit would either be made before
+  the fold could be written or held open until it was.
+- **`git log --oneline` reads as a list of findings.** Alternating work and
+  `fold:` lines is a table of contents for section 26, which is what somebody
+  looking for "when did we learn that" actually searches.
+
+What this is *not* a licence for: an ordinary comment fix, a typo, or a
+paragraph that merely restates what the diff already says. Those ride along
+with the code, as the standing rule requires. The exception is for a fold --
+a numbered section 26 entry with its invariants -- and for nothing else.
+
 - **ASCII only** in all source, comments, and docstrings. Non-ASCII belongs
   only in intentional runtime data values, and there are none in this project.
 - **Tabs carry structural indent level; spaces carry alignment within a level.**
