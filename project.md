@@ -7391,6 +7391,59 @@ something structural changes; run the sample on every commit.
 **Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; 1350 composed cells with no failures.
 
+### 26.53 Widening the space, and what a region's extent means
+
+26.52 ran the whole space and it came back clean, which makes the *space* the
+next thing to doubt: five axes, and the values in them were a choice somebody
+made in an afternoon. The constructs missing from it are the ones nothing
+composes -- which is the sentence this whole method rests on, applied to the
+method itself.
+
+Three values added: a `coded` region as a fifth container, and two
+neighbours -- a varint, and a run of records ending at a terminator. They are
+a third and fourth way for an offset to stop being a constant: not a sum, not
+a scan, a loop. 1350 cells became 2700, and six of the first eighty sampled
+failed, every one of them in the new container.
+
+**And behind them a question about what a region's extent is.** 26.35 settled
+that a region's extent is its interior's extent put through the codec's
+expansion, and the shape it settled it on was `u8 content[n]` with `n`
+declared *before* the region. That rule holds exactly as far as the interior
+is measured from outside it. A run inside a region is not: how far it reaches
+is a walk, and a walk reads each element's own length off the wire -- where
+the bytes are the codec's output, stuffed for a stuffing codec and ciphertext
+for an AEAD. `[remaining]` inside a region is not either: it means "to the end
+of the frame", and where the region ends is the question being asked.
+
+`traverse.region_extent` refuses both now, all four backends decline what
+follows, and the differ stops asking about it. **That retracts a fix made
+earlier the same day**: 26.51 gave three backends a walk over a sealed
+region's interior so that the enclosing struct's framing had a number, and
+the number was a length computed from ciphertext. It compiled, four backends
+agreed on it, and it meant nothing -- which is the failure this repository
+rates worst, arrived at by fixing a compile error without asking what the
+value was.
+
+Two more from the same eighty cells:
+
+  * a tag behind such a region named an offset function that was only a
+    comment. The ordinary members ask whether anything before them can be
+    measured; the tag branch runs before they do and did not;
+  * Rust refused to compile `BODY_DECODED_MAX: usize = 18446744073709551616`.
+    A region sized by a varint has a maximum of 2^64 bytes -- the varint's
+    own -- and a codec that doubles it produces a constant no target can
+    hold. Rust said so; C would have wrapped it silently. A bound that cannot
+    be represented is not a bound, and the accessor that sizes a buffer from
+    it is better absent.
+
+**2700 cells: 1920 agreed, 780 refused, nothing else.** The refusals tripled,
+which is what widening a space along axes that mostly do not compose looks
+like -- and is why "a refusal is a pass" had to be settled before any of this
+could be read.
+
+**Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; 2700 composed cells with no failures.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8062,7 +8115,22 @@ host and under aarch64 emulation; 1350 composed cells with no failures.
    sample belongs on every commit and the space belongs after anything
    structural; neither is evidence for the other.
 
-81. **Where the count comes from and how wide an element is are two
+81. **A value computed from the wrong bytes is worse than one that will not
+   compile.** Four backends named a span for a run inside a region and none
+   emitted one, so the header did not build -- and the fix was read as
+   "emit the walk", which produced a length measured over ciphertext. It
+   compiled, the four agreed on it, and it meant nothing. When a missing
+   accessor is the symptom, ask what the value would have *been* before
+   supplying one.
+
+82. **A bound that cannot be represented is not a bound.** A region sized by a
+   varint has a maximum of 2^64 bytes and a codec that doubles it produces a
+   constant no target holds. Rust refused it at compile time, which is the
+   loud end; C would have wrapped it and sized a buffer from the wrap. Where
+   a computed limit is emitted as a literal, check it against the type it is
+   emitted as, and emit nothing rather than a number that has overflowed.
+
+83. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
