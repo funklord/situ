@@ -8057,6 +8057,52 @@ directly too: both sides must produce rows.
 seven layout oracles and two computation ones, all running here; twelve
 consecutive runs of the oracle suite clean after the frame filter.
 
+### 26.63 The rest of the stack, and a filter that had to be shared
+
+26.62 left five formats with `randpkt` types and no oracle. They have them
+now: ipv4, icmp, udp, tcp and dns, which with the earlier seven makes twelve
+over layout and two over arithmetic. Every one of them has a mutation in
+`LIES`, so every one has been shown able to fail.
+
+Five formats, one shape. `_reader` and `_situ_reader` are built from a table
+of tshark's name for a field, situ's name for it, and the base tshark prints
+it in; only the extraction differs, because a bit-packed nibble is not a
+`u16`. The layer offsets still come from tshark's own `_raw` entries.
+
+**The first version had the bug invariant 98 was written about**, three days
+after writing it. `_situ_reader` wrapped its accessor call in `try/except:
+continue`, on the reasoning that a frame situ refuses is a frame situ cannot
+answer about -- which is true, and which quietly let the situ side choose its
+own subset. The udp oracle read seven rows against tshark's eight, every
+shared value identical, one frame simply missing from one side. The rule was
+already written down and the code broke it anyway, because dropping a frame
+where you happen to be standing looks like error handling rather than like
+choosing a subset.
+
+`_comparable` is the fix: one predicate, evaluated identically on both sides,
+taking the struct's own minimum. `_situ_reader` asserts that minimum against
+the generated module's `SIZE_MIN`, so a schema whose extent moves fails here
+instead of silently filtering frames neither side mentions.
+
+**Two adjustments where randpkt's output and situ's question did not meet.**
+
+`randpkt -t ip` fills the header with noise, so tshark reports `ip.version`
+and gives up, and the comparison filtered to nothing. The IPv4 oracle takes
+its corpus from the udp generator instead, which emits a well-formed IP
+header underneath -- still randpkt's bytes, still the IPv4 layer under test.
+
+And `tcp` was flaky at one run in twenty, always as *"tshark reported nothing
+to compare"* -- the empty-comparison guard from 26.62 doing precisely its
+job. Measured rather than guessed at: with eight packets a tcp run yields
+zero comparable frames about five percent of the time. Forty packets, and
+zero in twenty trials. The cause was the sample size, not the randomness,
+which is invariant 99 in the direction it is easy to get wrong: the fix that
+suggests itself is to relax the guard.
+
+**Status:** 2972 unit tests, 7 skipped; `make check` clean over 109 files;
+twelve layout oracles and two computation ones; twenty-six consecutive runs
+of the oracle suite clean after the sample size went up.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8896,6 +8942,17 @@ consecutive runs of the oracle suite clean after the frame filter.
    in a test is usually a defect to remove; in a differential oracle it is
    what makes the test explore. Remove the *cause* of the flake, never the
    randomness.
+
+100. **`except: continue` in a comparison is choosing a subset, and it does
+   not look like one.** Invariant 98 was three days old when `_situ_reader`
+   was written with a `try/except: continue` around its accessor call, on the
+   reasoning that a frame situ refuses is one it cannot answer about. That is
+   true and it still let one side silently drop a frame the other kept: the
+   udp oracle read seven rows against tshark's eight, every shared value
+   identical. Swallowing an error where you happen to be standing reads as
+   error handling rather than as filtering, which is why writing the rule down
+   did not prevent breaking it. Any exclusion in a comparison belongs in a
+   named predicate both sides call, where it can be seen and counted.
 
 ---
 
