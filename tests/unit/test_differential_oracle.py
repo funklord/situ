@@ -169,7 +169,8 @@ def test_the_corpus_is_not_this_project_s_opinion() -> None:
 	# `_pymodbus(` is here because Modbus's independent implementation is a
 	# library rather than a command. The rule is "not written here", not
 	# "spawned a process".
-	elsewhere = ("subprocess", "_run(", "_randpkt(", "_pymodbus(")
+	elsewhere = ("subprocess", "_run(", "_randpkt(", "_pymodbus(",
+	             "_paho_packets(")
 
 	for oracle in ORACLES:
 		corpus = DRIVERS[oracle.name][0]

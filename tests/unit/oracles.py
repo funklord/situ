@@ -746,6 +746,146 @@ def modbus_situ(module: object, stream: bytes) -> list[dict[str, int]]:
 	return found
 
 
+# -- mqtt ---------------------------------------------------------------------
+#
+# Three implementations touch these bytes and none of them is this file.
+# `paho-mqtt` lays out the packets -- it is a client, so it is given a socket
+# that records instead of sending. `text2pcap` wraps each one in a TCP frame,
+# which is carriage rather than interpretation. `tshark` dissects them, from a
+# codebase entirely unrelated to paho's. situ reads the raw MQTT bytes.
+#
+# One packet per frame on purpose: several MQTT packets in one TCP segment are
+# collapsed into a single `mqtt` layer by tshark's JSON output, and the
+# comparison would silently be about the last one.
+#
+# The remaining length is the field worth the trouble. It is a varint, and
+# paho emits 207 as two bytes with the continuation bit set -- the case a
+# fixed vector never happens to contain.
+
+MQTT_PACKETS = (
+	("connect", 60, None, None, 0),
+	("publish", 0, b"sensor/temp", b"21.5", 0),
+	("publish", 7, b"a/b", b"x" * 200, 1),
+	("subscribe", 0, b"topic/#", None, 2),
+	("pingreq", 0, None, None, 0),
+	("disconnect", 0, None, None, 0),
+)
+
+
+class _Recorder:
+	"""A socket that keeps what was written to it."""
+
+	def __init__(self) -> None:
+		self.out = bytearray()
+
+	def send(self, data: bytes) -> int:
+		self.out += data
+		return len(data)
+
+	def fileno(self) -> int:
+		return -1
+
+	def close(self) -> None:
+		pass
+
+
+def _paho_packets() -> list[bytes]:
+	import paho.mqtt.client as mqtt
+
+	# `CallbackAPIVersion` is re-exported rather than declared in
+	# `paho.mqtt.client`, which mypy is right to point out and which is
+	# paho's business rather than ours.
+	client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,   # type: ignore[attr-defined]
+	                     client_id="situ-oracle")
+	sock   = _Recorder()
+	client._sock = sock                                # type: ignore[assignment]
+
+	made: list[bytes] = []
+	for kind, number, topic, payload, qos in MQTT_PACKETS:
+		sock.out.clear()
+		if kind == "connect":
+			client._send_connect(number)
+		elif kind == "publish":
+			client._send_publish(number, topic or b"", payload or b"", qos=qos,
+			                     info=mqtt.MQTTMessageInfo(number))
+		elif kind == "subscribe":
+			client._send_subscribe(False, [(topic or b"", qos)])
+		elif kind == "pingreq":
+			client._send_pingreq()
+		else:
+			client._send_disconnect()
+		made.append(bytes(sock.out))
+	return made
+
+
+def mqtt_corpus(tmp: Path) -> bytes:
+	"""Every packet, one per line, as text2pcap's hex-dump input.
+
+	The corpus is that text rather than a pcap: `_capture` writes what it is
+	given to a file, and turning it into frames is the reader's job -- both
+	readers get the identical bytes out of it.
+	"""
+	lines = []
+	for packet in _paho_packets():
+		lines.append("000000 " + " ".join(f"{byte:02x}" for byte in packet))
+	return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def _mqtt_pcap(corpus: bytes, tmp: Path | None = None) -> Path:
+	where = Path(tempfile.mkdtemp(prefix="mqtt-")) if tmp is None else tmp
+	text  = where / "mqtt.txt"
+	text.write_bytes(corpus)
+	made = where / "mqtt.pcap"
+	_run(["text2pcap", "-q", "-T", "45000,1883", str(text), str(made)])
+	return made
+
+
+MQTT_FIELDS = (("mqtt.msgtype", "kind"), ("mqtt.len", "length"))
+
+
+def mqtt_says(corpus: bytes, tmp: Path) -> list[dict[str, int]]:
+	found = []
+	for frame in _frames(_mqtt_pcap(corpus, tmp)):
+		seen = frame.get("mqtt")
+		for one in (seen if isinstance(seen, list) else [seen]):
+			if not isinstance(one, dict):
+				continue
+			flags = one.get("mqtt.hdrflags_tree")
+			if not isinstance(flags, dict):
+				continue
+			found.append({"kind": int(str(flags["mqtt.msgtype"])),
+			              "length": int(str(one["mqtt.len"]))})
+	return found
+
+
+def _unhex(corpus: bytes) -> list[bytes]:
+	"""The corpus back into packets.
+
+	Read from the corpus rather than by calling paho again: a reader that
+	regenerates its own input is not reading the bytes the other side read,
+	and the two only agree for as long as the generator stays deterministic.
+	The hex dump is this file's own carriage format, so reversing it is not
+	parsing a protocol.
+	"""
+	found = []
+	for line in corpus.decode("ascii").splitlines():
+		_, _, body = line.partition(" ")
+		if body:
+			found.append(bytes.fromhex(body.replace(" ", "")))
+	return found
+
+
+def mqtt_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
+	from situ_runtime import Message
+
+	found = []
+	for packet in _unhex(corpus):
+		view = module.packet.at(Message(bytearray(packet)), 0, len(packet))  # type: ignore[attr-defined]
+		view.validate()
+		found.append({"kind": int(view.kind), "length": int(view.length)})
+	return found
+
+
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
 		name   = "cpio",
@@ -817,6 +957,15 @@ ORACLES: tuple[Oracle, ...] = (
 		          "flags width moves all four."),
 	),
 	Oracle(
+		name   = "mqtt",
+		schema = ROOT / "examples" / "mqtt" / "mqtt.situ",
+		tool   = "tshark",
+		why    = ("paho lays the packets out, tshark dissects them, and "
+		          "neither knows the other. The remaining length is a "
+		          "varint: paho emits 207 as two bytes with the continuation "
+		          "bit set, which a fixed vector never happens to contain."),
+	),
+	Oracle(
 		name   = "modbus",
 		schema = ROOT / "examples" / "modbus" / "modbus.situ",
 		tool   = "pymodbus",
@@ -870,6 +1019,12 @@ LIES = {
 	# Swapping `length` and `unit_id` moves the length field by a byte and
 	# changes its width, so the frame walk lands in the wrong place -- which
 	# is exactly the arithmetic this oracle exists to check.
+	# Two four-bit fields in one byte: swapping them keeps every offset and
+	# reads the flags nibble as the packet kind.
+	"mqtt": ("\tcontrol_kind      kind;                         // 2.2.1\n"
+	         "\tu4                flags;                        // 2.2.2",
+	         "\tu4                flags;                        // 2.2.2\n"
+	         "\tcontrol_kind      kind;                         // 2.2.1"),
 	"modbus": ("\tu16  length       [min = 2, max = 254]; // unit + PDU, 1 + 253 at most\n"
 	           "\tu8   unit_id;",
 	           "\tu8   unit_id;\n"
@@ -899,6 +1054,7 @@ DRIVERS = {
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"modbus":   (modbus_corpus, modbus_says, modbus_situ),
+	"mqtt":     (mqtt_corpus, mqtt_says, mqtt_situ),
 	"ethernet": (eth_corpus, eth_says, eth_situ),
 	"arp":      (eth_corpus, arp_says, arp_situ),
 	# From the udp capture rather than the `ip` one: `randpkt -t ip` fills the
