@@ -1072,6 +1072,14 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	nested = resolved.structs.get(placement.type_name or "")
 	if nested is not None and not nested.layout.is_fixed_size \
 			and placement.array_count is None and placement.delimiter is None:
+		# ...and only where that extent function exists. A struct ending in
+		# `[remaining]` has none -- where it ends is where the *frame* does,
+		# which its own bytes never say -- and naming one anyway is a Lua
+		# global that is nil, which is an error at the first packet rather
+		# than a bad number. MQTT's SUBSCRIBE body is that shape and is an
+		# arm of a variant, so the variant's own length reached for it.
+		if _extent_terms(resolved, nested) is None:
+			return None
 		return f"{_extent_name(nested)}(tvb, {where})"
 
 	if placement.is_fixed_size and placement.size_bits % BITS_PER_BYTE == 0:

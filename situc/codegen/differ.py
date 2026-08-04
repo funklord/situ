@@ -244,6 +244,7 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			if placement.delimiter is not None:
 				found.append(Ask(Probe.DELIMITED, local))
 			elif placement.kind == "coded" \
+					and placement.size_max_bits is not None \
 					and not _region_walks(struct, placement, structs_by_name):
 				# ...and only where the region has a length to hand back. Its
 				# extent is its interior's put through the codec's expansion,

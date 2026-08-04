@@ -1,0 +1,80 @@
+# situ wire signature v0
+# schema: mqtt.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+enum control_kind : u4 unknown=error
+  connect=1 connack=2 publish=3 puback=4 pubrec=5 pubrel=6 pubcomp=7 subscribe=8 suback=9 unsubscribe=10 unsuback=11 pingreq=12 pingresp=13 disconnect=14
+
+enum qos_level : u2 unknown=error
+  at_most_once=0 at_least_once=1 exactly_once=2
+
+enum connect_return : u8 unknown=error
+  accepted=0 unacceptable_protocol=1 identifier_rejected=2 server_unavailable=3 bad_credentials=4 not_authorized=5
+
+struct connack_body size=2
+  @0x0000   7bit      u7         <reserved0>  msb_first must_be_zero
+  @0x0000:7 1bit      u1         session_present  msb_first
+  @0x0001   1         connect_return return_code
+
+struct connect_body size=12..65547
+  @0x0000   2         u16        protocol_name_length  big must_eq=4
+  @0x0002   4         u8         protocol_name  big
+  @0x0006   1         u8         protocol_level  must_eq=4
+  @0x0007   1bit      u1         user_name_flag  msb_first
+  @0x0007:1 1bit      u1         password_flag  msb_first
+  @0x0007:2 1bit      u1         will_retain  msb_first
+  @0x0007:3 2bit      qos_level  will_qos  msb_first
+  @0x0007:5 1bit      u1         will_flag  msb_first
+  @0x0007:6 1bit      u1         clean_session  msb_first
+  @0x0007:7 1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0008   2         u16        keep_alive  big
+  @0x000a   2         u16        client_id_length  big
+  @0x000c   0..65535  u8         client_id  sized-by=client_id_length
+
+struct ident_body size=2
+  @0x0000   2         u16        packet_id  big
+
+struct mqtt_string size=2..65537
+  @0x0000   2         u16        length  big
+  @0x0002   0..65535  u8         value  sized-by=length
+
+struct nothing size=0
+
+struct packet size=2..
+  @0x0000   4bit      control_kind kind  msb_first
+  @0x0000:4 4bit      u4         flags  msb_first
+  @0x0001   1..4      remaining_length length  varint=remaining_length
+  ~         0..       variant    body
+
+struct publish_body size=2..
+  @0x0000   2         u16        topic_length  big
+  @0x0002   0..65535  u8         topic  sized-by=topic_length
+  ~         0..       u8         payload  sized-by=remaining
+
+struct suback_body size=2..
+  @0x0000   2         u16        packet_id  big
+  @0x0002   0..       u8         codes  sized-by=remaining
+
+struct subscribe_body size=2..
+  @0x0000   2         u16        packet_id  big
+  @0x0002   0..       subscription filters  sized-by=remaining
+
+struct subscription size=3..65538
+  @0x0000   2         u16        filter_length  big
+  @0x0002   0..65535  u8         filter  sized-by=filter_length
+  ~         1         u8         requested_qos  max=2
+
+struct unsubscribe_body size=2..
+  @0x0000   2         u16        packet_id  big
+  @0x0002   0..       mqtt_string filters  sized-by=remaining

@@ -1,0 +1,294 @@
+// MQTT 3.1.1: a control packet, as a broker reads one off the socket.
+//
+// SOURCE. Every field, order and constant here is from the OASIS standard
+// "MQTT Version 3.1.1", 29 October 2014, cited by section rather than
+// recalled:
+//
+//   1.5.2   integers are big-endian ("MSB first")
+//   1.5.3   a UTF-8 encoded string is a two-byte length and then the bytes
+//   2.2.1   the control packet type is bits 7-4 of byte one
+//   2.2.2   bits 3-0 are flags, specific to the type
+//   2.2.3   Remaining Length: a variable byte integer, one to four bytes,
+//           seven bits each with the top bit as a continuation flag
+//   3.1.2   CONNECT variable header: name, level, flags, keep alive
+//   3.1.3   CONNECT payload, in order: client id, will topic, will message,
+//           user name, password -- each present per a flag
+//   3.2.2   CONNACK: session present in bit 0, then a return code
+//   3.3.2   PUBLISH: topic name, then a packet identifier if QoS > 0
+//   3.8.3   SUBSCRIBE payload: topic filter and requested QoS, repeated
+//   3.9.3   SUBACK payload: one return code per filter, 0x80 for failure
+//   3.12    PINGREQ, and 3.13 PINGRESP, and 3.14 DISCONNECT: no body at all
+//
+// WHY THIS ONE. It is the protocol behind most of what people call IoT, and
+// it puts four constructs together that this repository had only ever
+// exercised apart: a *varint* length that is the frame's own size, a
+// discriminated union over a *four-bit* type, a run of variable-length
+// records that ends where the packet does, and packets whose body is empty.
+//
+// Three of those the language already had. The fourth found something: a
+// variant needs an arm for every value of its discriminant, and three MQTT
+// packets carry nothing -- so `struct nothing { }` is an arm, and a zero-byte
+// struct turns out to be exactly what "no variable header and no payload"
+// means. Section 3.12 says it in words; this says it in the layout.
+//
+// THE BOUNDARY, and it is the same one twice: a member whose *presence*
+// depends on a flag. Both are recorded where they arise, in `connect_body`
+// and `publish_body`. situ has `[since = N]` for a member that arrives in a
+// later version and `variant` for one shape or another, and neither is "this
+// field is here when that bit is set". Naming the construct rather than the
+// absence: a `case` over a one-bit field whose arms may be empty is what
+// covers it, which is what `nothing` above already is -- the missing half is
+// letting a variant switch on a bit of a *different* struct.
+//
+// The second half of the boundary is not a limitation but a modelling choice,
+// and it is written down because a reader would otherwise wonder. MQTT 5.0
+// adds a property list to every packet -- a length, then a run of
+// (identifier, value) pairs whose value type the identifier decides. situ can
+// describe that with `tlv` (section 9.5); it is a different protocol version
+// and belongs in its own file rather than as arms bolted onto this one.
+
+target buffer;
+endian big;                     // 1.5.2
+bit_order msb_first;            // 2.2.1: the type is the *high* nibble
+
+// 2.2.3. Seven bits of value per byte, least significant group first, with
+// the top bit saying another byte follows -- which is LEB128 exactly. Four
+// bytes at most, so 28 bits: 268435455, the largest packet MQTT admits.
+//
+// `max_bytes` is the check that matters here. A fifth continuation byte is
+// how a sender says "keep reading" forever, and the standard's own words for
+// it are "the receiver MUST close the network connection".
+varint_type remaining_length {
+	encoding  = leb128;
+	max_bits  = 28;
+	max_bytes = 4;
+}
+
+// 2.2.1. Zero and fifteen are Reserved and Forbidden; `default = error` is
+// how a schema says a value outside the list is a malformed packet rather
+// than something to pass through.
+enum control_kind : u4 {
+	connect     = 1,
+	connack     = 2,
+	publish     = 3,
+	puback      = 4,
+	pubrec      = 5,
+	pubrel      = 6,
+	pubcomp     = 7,
+	subscribe   = 8,
+	suback      = 9,
+	unsubscribe = 10,
+	unsuback    = 11,
+	pingreq     = 12,
+	pingresp    = 13,
+	disconnect  = 14,
+	default     = error,
+}
+
+// 4.3. Two bits, and three of the four values are defined: 3 is malformed.
+enum qos_level : u2 {
+	at_most_once  = 0,
+	at_least_once = 1,
+	exactly_once  = 2,
+	default       = error,
+}
+
+// 3.2.2.3. The whole of what a 3.1.1 server may answer with.
+enum connect_return : u8 {
+	accepted              = 0,
+	unacceptable_protocol = 1,
+	identifier_rejected   = 2,
+	server_unavailable    = 3,
+	bad_credentials       = 4,
+	not_authorized        = 5,
+	default               = error,
+}
+
+// 3.12, 3.13, 3.14. PINGREQ, PINGRESP and DISCONNECT have no variable header
+// and no payload, and a variant arm has to name something -- so it names the
+// struct that is nothing. Zero bytes is a size like any other, and saying it
+// this way keeps the packet type in the same switch as every other one
+// rather than in a note beside it.
+struct nothing {
+}
+
+require size(nothing) == 0;
+
+// 3.1.2. The variable header, and the client identifier that follows it.
+//
+// The protocol name is modelled as its four bytes rather than as a
+// length-prefixed string, and the length beside it is pinned to four. That is
+// what 3.1.2.1 specifies for this version -- the name is "MQTT" and nothing
+// else -- and it buys the connect flags a constant offset. Written the other
+// way, as `u8 name[name_length]`, the flags would follow a member the data
+// sizes, and a bit-packed field cannot: its byte is not known until parse
+// time, which the compiler says in those words. A server that means to read
+// *any* protocol name reads the length itself and stops here.
+struct connect_body {
+	u16  protocol_name_length  [must_eq = 4];
+	u8   protocol_name[4];                          // "MQTT"
+	u8   protocol_level        [must_eq = 4];       // 3.1.2.2: 4 is 3.1.1
+
+	// 3.1.2.3, from bit 7 down. `will_qos` is meaningless unless `will_flag`
+	// is set, which is a rule about values rather than about layout, and one
+	// this schema cannot state: `[must_eq]` compares a field against a
+	// constant, not against another field.
+	u1         user_name_flag;
+	u1         password_flag;
+	u1         will_retain;
+	qos_level  will_qos;
+	u1         will_flag;
+	u1         clean_session;
+	reserved   u1  [must_be_zero];                  // 3.1.2.3: MUST be 0
+
+	u16  keep_alive;                                // 3.1.2.10, in seconds
+
+	// 3.1.3.1. Always present, and may be zero-length -- a client asking the
+	// server to assign it one.
+	u16  client_id_length;
+	u8   client_id[client_id_length];
+
+	// THE BOUNDARY. What follows in the payload is the will topic, the will
+	// message, the user name and the password, in that order, each present
+	// only if its flag above is set (3.1.3). situ has no way to say that: a
+	// member is in the layout or it is not, `[since = N]` gates on a version
+	// field rather than on a bit, and a `variant` chooses between shapes
+	// rather than between presence and absence.
+	//
+	// The construct that would cover it is a variant whose discriminant is a
+	// bit field and whose arms may be empty -- both halves of which exist
+	// here already: `qos_level` is a two-bit discriminant type and `nothing`
+	// is an empty arm. What is missing is only that a variant may not switch
+	// on a field of a *different* struct, and these flags are in this one.
+	//
+	// So a client reading a CONNECT gets the header and the client id from
+	// this schema, and walks the four optional strings itself -- which is
+	// where `mqtt_string` below is for.
+}
+
+// 1.5.3. A UTF-8 encoded string: two bytes of length, then that many bytes.
+// The one shape MQTT repeats everywhere, and what a caller walking CONNECT's
+// optional fields reads them as.
+struct mqtt_string {
+	u16  length;
+	u8   value[length];
+}
+
+// 3.2.2. Two bytes, and seven of the sixteen bits are required to be zero.
+struct connack_body {
+	reserved u7  [must_be_zero];                    // 3.2.2.1: bits 7-1
+	u1              session_present;                // 3.2.2.2
+	connect_return  return_code;                    // 3.2.2.3
+}
+
+require size(connack_body) == 2;
+require absolute_static(connack_body);
+
+// 3.3. The topic, and then the message.
+struct publish_body {
+	u16  topic_length;
+	u8   topic[topic_length];                       // 3.3.2.1
+
+	// THE BOUNDARY, again. 3.3.2.2: a two-byte packet identifier sits here,
+	// and only when the QoS in the *fixed header's* flags is 1 or 2. It is
+	// the same missing construct as CONNECT's optional fields with the
+	// discriminant one struct further away: the bits that decide are in the
+	// packet's first byte, and this struct is the body.
+	//
+	// A caller that has read the fixed header knows the QoS, so it knows
+	// whether the two bytes are there; what it cannot do is ask this schema.
+	// A schema that assumed QoS 0 would silently read two bytes of the
+	// payload as the last of the topic on every retained message, which is
+	// why this says so rather than guessing.
+
+	u8   payload[remaining];                        // 3.3.3
+}
+
+// 3.8.3. One entry of a SUBSCRIBE payload.
+//
+// The requested QoS is a whole byte here rather than `reserved u6` and a
+// two-bit `qos_level`, and the reason is a real limit: the byte follows the
+// filter, whose length the data gives, so a bit-packed field in it has no
+// resolvable bit position until parse time. The compiler refuses that and
+// says to widen it to a whole number of bytes, which is what this is. What
+// the schema gives up is checking that bits 7-2 are zero (3.8.3.1); `max`
+// keeps the value in range, which is the part a reader acts on.
+struct subscription {
+	u16  filter_length;
+	u8   filter[filter_length];
+	u8   requested_qos  [max = 2];
+}
+
+struct subscribe_body {
+	u16           packet_id;                        // 3.8.2
+	subscription  filters[remaining];               // 3.8.3, at least one
+}
+
+// 3.9.3. One byte per filter, in the order the filters were sent. 0x80 is a
+// failure and the rest are the granted maximum QoS, which is why this is not
+// `qos_level`: 128 is not a QoS.
+struct suback_body {
+	u16  packet_id;                                 // 3.9.2
+	u8   codes[remaining];
+}
+
+// 3.10. The filters to forget, each a string, to the end of the packet.
+struct unsubscribe_body {
+	u16          packet_id;                         // 3.10.2
+	mqtt_string  filters[remaining];                // 3.10.3
+}
+
+// 3.4 through 3.7, and 3.11. PUBACK, PUBREC, PUBREL, PUBCOMP and UNSUBACK
+// are a packet identifier and nothing else, so they share a body type and
+// differ only in which arm names it.
+struct ident_body {
+	u16  packet_id;
+}
+
+require size(ident_body) == 2;
+
+// 2.2, and the whole packet under it.
+//
+// The fixed header is two fields in one byte and then the length, and the
+// body is a switch on the first of them. Every value of `control_kind` has an
+// arm, which is what the compiler demands -- there is no "the rest of them"
+// here, and `default: error` catches the two values the standard reserves.
+struct packet {
+	control_kind      kind;                         // 2.2.1
+	u4                flags;                        // 2.2.2
+	remaining_length  length;                       // 2.2.3
+
+	variant body switch (kind) {
+		case control_kind.connect:     connect_body      connect;
+		case control_kind.connack:     connack_body      connack;
+		case control_kind.publish:     publish_body      publish;
+		case control_kind.puback:      ident_body        puback;
+		case control_kind.pubrec:      ident_body        pubrec;
+		case control_kind.pubrel:      ident_body        pubrel;
+		case control_kind.pubcomp:     ident_body        pubcomp;
+		case control_kind.subscribe:   subscribe_body    subscribe;
+		case control_kind.suback:      suback_body       suback;
+		case control_kind.unsubscribe: unsubscribe_body  unsubscribe;
+		case control_kind.unsuback:    ident_body        unsuback;
+		case control_kind.pingreq:     nothing           pingreq;
+		case control_kind.pingresp:    nothing           pingresp;
+		case control_kind.disconnect:  nothing           disconnect;
+		default: error;
+	}
+}
+
+// What the fixed header costs, and it is the whole of what an MQTT reader
+// pays: the length is a varint, so the body starts one to four bytes in and
+// nothing after it has a constant offset. That is the trade the protocol
+// made deliberately -- a two-byte packet on a battery-powered radio -- and
+// naming it here is the point of the map.
+assert absolute_static(packet.kind);
+assert absolute_static(packet.flags);
+
+// The flags nibble is not typed per packet, and cannot be: 2.2.2 gives it a
+// different meaning for each type -- DUP, QoS and RETAIN for PUBLISH (3.3.1),
+// a required 0b0010 for PUBREL, SUBSCRIBE and UNSUBSCRIBE, and 0b0000 for the
+// rest -- and it is *read before* the type in the same byte. A `variant`
+// needs its discriminant parsed first, which this is, but the flags would
+// have to be the arm rather than after it. Recorded because a reader will
+// look for `qos_level` here and should know why it is a bare `u4`.

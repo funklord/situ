@@ -3493,6 +3493,41 @@ class Emitter:
 				]
 
 		nested = self.resolved.structs.get(placement.type_name or "")
+
+		# A *variable-size* struct arm, measured from its own bytes. C has
+		# emitted one since variants landed and the other three demanded a
+		# single size -- while `validate` called the accessor regardless, so
+		# the header did not compile for a schema with such an arm. MQTT is
+		# four of them: CONNECT, PUBLISH, SUBSCRIBE and UNSUBSCRIBE all end
+		# in something the data sizes (26.55).
+		if nested is not None and not nested.layout.is_fixed_size \
+				and has_computable_extent(self.resolved.structs, nested):
+			inner = c_name(nested.name)
+			return [
+				*head,
+				f"\t[[nodiscard]] ::situ::rt::err {name}"
+				f"(::{self.namespace}::{inner} &out) const noexcept",
+				"\t{",
+				*refuse,
+				"\t\tsitu_view_t whole;",
+				f"\t\tsitu_err_t e = situ_view_sub(this->raw(), {start},",
+				f"\t\t\tsitu_remaining_u32(limit(), {start}), &whole);",
+				"",
+				"\t\tif (e != SITU_OK) {",
+				"\t\t\treturn static_cast<::situ::rt::err>(e);",
+				"\t\t}",
+				"",
+				"\t\t/* Twice: once over what is left, to give the extent",
+				"\t\t * something to measure, and once at the size it says. */",
+				f"\t\te = situ_view_sub(this->raw(), {start},",
+				f"\t\t\t::{self.namespace}::{inner}(whole).extent(), &whole);",
+				"\t\tif (e == SITU_OK) {",
+				f"\t\t\tout = ::{self.namespace}::{inner}(whole);",
+				"\t\t}",
+				"\t\treturn static_cast<::situ::rt::err>(e);",
+				"\t}",
+			]
+
 		if nested is not None and nested.layout.is_fixed_size:
 			return [
 				*head,

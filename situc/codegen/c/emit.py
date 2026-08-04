@@ -2851,7 +2851,15 @@ class Emitter:
 			"{",
 			"\t(void)data;",
 			f"\t*need = {size};",
-			f"\treturn have >= {size} ? SITU_OK : SITU_ERR_TRUNCATED;",
+			# A struct of no bytes is in every buffer, including an empty one,
+			# and saying that as `have >= 0` is a comparison the compiler
+			# knows is always true -- an error under `-Werror=type-limits`,
+			# which the generated C is built with. MQTT has three such
+			# structs: PINGREQ, PINGRESP and DISCONNECT carry nothing, and
+			# `struct nothing { }` is how a variant arm says so.
+			*(["\t(void)have;", "\treturn SITU_OK;"]
+			  if struct.layout.size_bytes == 0 else
+			  [f"\treturn have >= {size} ? SITU_OK : SITU_ERR_TRUNCATED;"]),
 			"}",
 		]
 

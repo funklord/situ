@@ -1784,6 +1784,28 @@ class Emitter:
 		# 9.6's own example. Its members belong to its type, so handing back
 		# one of those is the whole of the work.
 		nested = self.resolved.structs.get(placement.type_name or "")
+
+		# A *variable-size* struct arm, measured from its own bytes. C has
+		# emitted one since variants landed and the other three required the
+		# arm's type to have a single size -- while `validate` called the
+		# accessor regardless, so a schema with such an arm produced a module
+		# that raised `AttributeError` on the first check. MQTT is four of
+		# them: CONNECT, PUBLISH, SUBSCRIBE and UNSUBSCRIBE all end in
+		# something the data sizes (26.55).
+		if nested is not None and not nested.layout.is_fixed_size \
+				and has_computable_extent(self.resolved.structs, nested):
+			inner = c_name(nested.name)
+			return [
+				*head,
+				f"\t\twhole = {inner}(self._msg, self._at + ({start}),",
+				f"\t\t\tmax(0, self._len - ({start})))",
+				"\t\tsize  = whole._extent",
+				f"\t\tif self._len - ({start}) < size:",
+				f'\t\t\traise BoundsError("{placement.path}: the frame does'
+				' not reach it")',
+				f"\t\treturn {inner}(self._msg, self._at + ({start}), size)",
+			]
+
 		if nested is not None and nested.layout.is_fixed_size:
 			inner = c_name(nested.name)
 			return [

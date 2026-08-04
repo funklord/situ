@@ -1628,6 +1628,36 @@ class Emitter:
 		# A struct-typed arm: its members belong to its type, so handing back
 		# one of those is the whole of the work.
 		nested = self.resolved.structs.get(placement.type_name or "")
+
+		# A *variable-size* one, measured from its own bytes. C has emitted
+		# this since variants landed and the other three demanded a single
+		# size -- while `validate` called the accessor regardless, so a schema
+		# with such an arm produced a module that does not compile. MQTT is
+		# four of them: CONNECT, PUBLISH, SUBSCRIBE and UNSUBSCRIBE all end in
+		# something the data sizes (26.55).
+		if nested is not None and not nested.layout.is_fixed_size \
+				and has_computable_extent(self.resolved.structs, nested):
+			inner = _pascal(nested.name)
+			return [
+				*head,
+				f"\tpub fn {name}(&self) -> Result<{inner}<'_>> {{",
+				*refuse,
+				f"\t\tlet at = {self._unparen(start)};",
+				"\t\tif self.bytes.len() < at {",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				"",
+				"\t\t// Twice: once over what is left, to give the extent",
+				"\t\t// something to measure, and once at the size it says.",
+				f"\t\tlet whole = {inner} {{ bytes: &self.bytes[at..] }};",
+				"\t\tlet size  = whole.extent();",
+				"\t\tif self.bytes.len() - at < size {",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\tOk({inner} {{ bytes: &self.bytes[at..at + size] }})",
+				"\t}",
+			]
+
 		if nested is not None and nested.layout.is_fixed_size:
 			inner = _pascal(nested.name)
 			return [
@@ -3973,7 +4003,12 @@ class Emitter:
 				f"\tpub fn {_ident(base + '_span_from')}(&self, start: usize)"
 				" -> usize {",
 				"\t\tlet mut at = start;",
-				"\t\tlet mut n  = 0usize;",
+				# The counter only where the stopping rule reads it. A run the
+				# message counts stops at `n`; one that runs to the end of the
+				# frame does not, and incrementing a number nothing looks at is
+				# a warning -- which `-D warnings` makes an error, and which
+				# invariant 23 says not to teach a reader to ignore.
+				*([] if not bound else ["\t\tlet mut n  = 0usize;"]),
 				"",
 				f"\t\twhile {bound}at < self.bytes.len() {{",
 				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
@@ -3983,7 +4018,7 @@ class Emitter:
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"\t\t\tat += size;",
-				"\t\t\tn  += 1;",
+				*([] if not bound else ["\t\t\tn  += 1;"]),
 				"\t\t}",
 				"\t\tat - start",
 				"\t}",
