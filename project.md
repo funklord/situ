@@ -7522,23 +7522,64 @@ What it found, in the order it found it:
     is where the frame does; as a variant arm, the variant's own length
     reached for a measurement nobody emits.
 
-**The boundary, and MQTT needs it twice.** A member whose *presence* depends on
-a flag: CONNECT's will topic, will message, user name and password (3.1.3), and
-PUBLISH's packet identifier, which is there only when the QoS in the fixed
-header is 1 or 2 (3.3.2.2). situ has `[since = N]` for a member that arrives in
-a later version and `variant` for one shape or another, and neither of them is
-"this field is here when that bit is set". Both halves of the construct that
-would cover it already exist -- `qos_level` is a two-bit discriminant type and
-`nothing` is an empty arm -- and what is missing is that a variant may not
-switch on a field of a *different* struct. That is written in the schema, where
-somebody implementing from it will read it, rather than here.
-
-By invariant 31 this is one protocol asking. The second asker is what would
-turn it into a construct.
+**The boundary, as first written and then corrected.** The paragraph that
+stood here said MQTT needs a member whose presence depends on a flag, twice,
+and that situ has no construct for it. Half of that was wrong, and 26.56 is
+what came of checking.
 
 **Status:** 2876 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; MQTT built by four backends and compared
 over random buffers.
+
+### 26.56 The limitation that was not one
+
+26.55 recorded a boundary in the MQTT example: a member whose *presence*
+depends on a flag, which it said situ could not express. The next thing done
+after committing it was to try, and it took four lines:
+
+```situ
+variant will switch (will_flag) {
+    case 1:  will_message  will_present;
+    case 0:  nothing       will_absent;
+    default: error;
+}
+```
+
+A variant may switch on a one-bit field, and an arm may be `nothing`. Both
+halves were in the same file already -- the paragraph claiming the gap named
+them -- and nobody put them together, because the shape was written up as a
+limitation rather than tried as a schema.
+
+This is invariant 12 in the place it hurts most. A declared gap that is not
+there is worse than silence: a reader designs around a limit that does not
+exist, and this one was in a worked example, which section 26.32 calls a
+claim. CONNECT's will, user name and password are now expressed rather than
+described.
+
+**What is actually left is narrower and real.** PUBLISH's packet identifier is
+present when the QoS in the *fixed header* says so, and the fixed header is
+one struct while the body is another. A variant switches on a field it can
+name, and an arm's members cannot see the struct the arm is in. That
+limitation stands, in `publish_body`, where it arises.
+
+**And expressing it found three more.** The variable-size struct arm 26.55
+gave to three backends needs an extent helper beside it -- the variant's
+length chain names `<arm>_extent`, which only the ordinary nested member
+emitted -- so C++ and Rust would not compile and Python would not type-check
+the moment a schema had one. Three arms in one struct is what makes MQTT's
+CONNECT the first schema to ask.
+
+**Why the check was worth making at all.** The thing that prompted it was
+looking for a *second* protocol to ask for the construct, since invariant 31
+says one asker is not evidence. WebSocket was the candidate -- its mask key is
+present only when the MASK bit is set -- and writing that shape down took four
+lines of situ, which answered a different question than the one being asked.
+A limitation is a claim about the language, and the cheapest way to check one
+is to write the schema that would need it.
+
+**Status:** 2876 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; MQTT built by four backends and compared
+over random buffers, now with three variants on a bit.
 
 ### Invariants to hold across all phases
 
@@ -8242,7 +8283,15 @@ over random buffers.
    implementer reads it. A generator explores the language; an example
    explores the distance between the language and a protocol.
 
-85. **Where the count comes from and how wide an element is are two
+85. **A limitation is a claim, and the cheapest way to check one is to write
+   the schema.** The MQTT example recorded a construct situ does not have,
+   and situ had it: a variant on a one-bit field with an empty arm, both
+   halves named in the paragraph claiming the gap. Writing a limitation up
+   takes longer than trying it. Before recording that something cannot be
+   expressed, express it and watch the compiler refuse -- and keep the
+   refusal, because that is the evidence.
+
+86. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
