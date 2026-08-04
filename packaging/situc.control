@@ -1,0 +1,20 @@
+Package: situc
+Version: @VERSION@
+Section: devel
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.11)
+Maintainer: @MAINTAINER@
+Homepage: https://github.com/funklord/situ
+Description: compiler for situ byte-layout schemas
+ situ is a schema language for data whose layout is decided by somebody else:
+ network protocols, file formats and device registers, where the bytes are
+ fixed and the reader has to match them exactly.
+ .
+ A schema states what the bytes are, and situc derives accessors for C, C++,
+ Rust and Python from it, along with a capability map saying what each field
+ costs to reach, a Wireshark dissector, a fuzz harness and a test suite that
+ holds the generated code to the map.
+ .
+ This package contains the compiler. The C runtime the generated C needs is
+ in libsitu-dev.

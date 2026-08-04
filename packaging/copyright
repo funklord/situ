@@ -1,0 +1,15 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: situ
+Source: https://github.com/funklord/situ
+
+Files: *
+Copyright: 2026 Nabeel Sowan <nabeel@vibes.se>
+License: UNDECIDED
+ No licence has been declared for this source tree: there is no LICENSE file
+ and no licence field in pyproject.toml. Under copyright law the default in
+ that situation is that no rights are granted, so these packages are built for
+ local evaluation and are not distributable as they stand.
+ .
+ This file is the packaging stating what it found rather than choosing on the
+ project's behalf. Add a LICENSE file to the tree and replace this stanza with
+ it before publishing a package anywhere.

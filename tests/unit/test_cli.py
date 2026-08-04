@@ -381,18 +381,22 @@ def test_the_cli_section_lists_every_command() -> None:
 def test_it_names_only_the_flags_that_are_global() -> None:
 	"""`--out` and `--target` read like global options and are not; a reader
 	who believes the old line writes `situc --target=rust build` and gets a
-	usage error."""
+	usage error.
+
+	`--version` is global and is listed, because a packaged tool that cannot
+	say which version it is cannot be evaluated."""
 	globals_ = {option
 	            for action in build_parser()._actions
 	            for option in action.option_strings
 	            if option.startswith("--")}
 	text = SPEC.read_text(encoding="utf-8")
 	section = text[text.index("## 21. CLI surface"):text.index("## 22.")]
-	claimed = section[section.index("One global flag"):]
+	claimed = section[section.index("Two global flags"):]
 
 	# `--help` is argparse's, not situ's, and the section does not list it.
-	assert globals_ - {"--help"} == {"--diagnostics"}
+	assert globals_ - {"--help"} == {"--diagnostics", "--version"}
 	assert "--diagnostics" in claimed
+	assert "--version" in claimed
 	for local in ("--out", "--target", "--prefix"):
 		assert f"`{local}" in claimed or f"`{local}=" in claimed
 

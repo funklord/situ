@@ -46,7 +46,7 @@ export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check lint bench fuzz \
-	cross cross-test install uninstall clean help
+	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
 
@@ -64,10 +64,12 @@ help:
 	@echo '  cross-test run generated accessors on aarch64 under emulation'
 	@echo '  install    install situc and the runtime under PREFIX'
 	@echo '  uninstall  remove what install put there'
+	@echo '  deb        build situc and libsitu-dev .deb packages'
+	@echo '  deb-check  build them, then install into a scratch root and run'
 	@echo '  clean      remove the build tree'
 	@echo ''
 	@echo 'Variables: CC AR LD CFLAGS CROSS_COMPILE ARCH BUILD_ROOT PYTHON'
-	@echo '           PREFIX DESTDIR (install)'
+	@echo '           PREFIX DESTDIR (install)  DEB_MAINTAINER (deb)'
 
 runtime:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime'
@@ -141,6 +143,96 @@ uninstall:
 	rm -rf '$(DESTDIR)$(PREFIX)/lib/situc' '$(DESTDIR)$(PREFIX)/share/situc'
 	rm -f '$(DESTDIR)$(PREFIX)/bin/situc' '$(DESTDIR)$(PREFIX)/include/situ.h'
 	rm -f '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
+
+# -- packaging ---------------------------------------------------------------
+#
+# Two packages, because they do not have the same architecture: `situc` is
+# Python and runs anywhere, `libsitu.a` is compiled objects and does not. One
+# package would have to claim the narrower of the two, which would make the
+# schema compiler uninstallable on every machine it was not built on -- for a
+# tool whose whole purpose is generating code for targets other than the build
+# host, exactly the wrong way round. See packaging/README.md.
+#
+# The version is read from the package rather than kept here, so `situc
+# --version` and the `.deb` can never disagree.
+DEB_VERSION	:= $(shell $(PYTHON) -c "import situc; print(situc.__version__)")
+DEB_ARCH	:= $(shell dpkg --print-architecture 2>/dev/null || echo all)
+DEB_MAINTAINER	?= situ maintainers <noreply@example.invalid>
+DEB_DIR		:= $(BUILD_ROOT)/deb
+DEB_STAGE	:= $(DEB_DIR)/stage
+
+# The changelog needs a date, and `date -R` would put the build clock in the
+# package -- two builds of one commit producing two different files. The last
+# commit's own date is the honest answer and is reproducible; SOURCE_DATE_EPOCH
+# wins where a packaging environment has set one.
+DEB_DATE	:= $(shell \
+	if [ -n "$$SOURCE_DATE_EPOCH" ]; then date -R -d "@$$SOURCE_DATE_EPOCH"; \
+	else git log -1 --format=%cD 2>/dev/null || date -R; fi)
+
+deb: runtime
+	@rm -rf '$(DEB_DIR)'
+	@mkdir -p '$(DEB_DIR)'
+	@# Stage once, through the same install rule a user runs, then split the
+	@# tree between the two packages. A packaging bug and an install bug
+	@# cannot be different bugs this way.
+	@$(MAKE) --no-print-directory install PREFIX=/usr DESTDIR='$(DEB_STAGE)'
+	@mkdir -p '$(DEB_STAGE)-situc/usr' '$(DEB_STAGE)-libsitu-dev/usr'
+	@mv '$(DEB_STAGE)/usr/bin' '$(DEB_STAGE)-situc/usr/'
+	@mv '$(DEB_STAGE)/usr/share' '$(DEB_STAGE)-situc/usr/'
+	@mkdir -p '$(DEB_STAGE)-situc/usr/lib'
+	@mv '$(DEB_STAGE)/usr/lib/situc' '$(DEB_STAGE)-situc/usr/lib/'
+	@mkdir -p '$(DEB_STAGE)-libsitu-dev/usr/lib' \
+		'$(DEB_STAGE)-libsitu-dev/usr/include'
+	@mv '$(DEB_STAGE)/usr/include/situ.h' \
+		'$(DEB_STAGE)-libsitu-dev/usr/include/'
+	@mv '$(DEB_STAGE)/usr/lib/libsitu.a' '$(DEB_STAGE)-libsitu-dev/usr/lib/'
+	@# Anything left behind is something install writes and neither package
+	@# claims, which is a packaging bug and is reported as one rather than
+	@# shipped as a hole.
+	@find '$(DEB_STAGE)' -type f -printf 'unpackaged: %p\n' -quit | grep . \
+		&& { find '$(DEB_STAGE)' -type f -printf '  %P\n'; exit 1; } || true
+	@rm -rf '$(DEB_STAGE)'
+	@# The manual page belongs to the compiler package only.
+	@mkdir -p '$(DEB_STAGE)-situc/usr/share/man/man1'
+	@gzip -9nc 'packaging/situc.1' \
+		> '$(DEB_STAGE)-situc/usr/share/man/man1/situc.1.gz'
+	@for pkg in situc libsitu-dev; do \
+		mkdir -p "$(DEB_STAGE)-$$pkg/DEBIAN" \
+		         "$(DEB_STAGE)-$$pkg/usr/share/doc/$$pkg"; \
+		sed -e 's|@VERSION@|$(DEB_VERSION)|' \
+		    -e 's|@ARCH@|$(DEB_ARCH)|' \
+		    -e 's|@MAINTAINER@|$(DEB_MAINTAINER)|' \
+		    'packaging/'"$$pkg"'.control' \
+		    > "$(DEB_STAGE)-$$pkg/DEBIAN/control"; \
+		install -m644 'packaging/copyright' \
+		    "$(DEB_STAGE)-$$pkg/usr/share/doc/$$pkg/copyright"; \
+		printf '%s (%s) unstable; urgency=medium\n\n  * %s\n\n -- %s  %s\n' \
+		    "$$pkg" '$(DEB_VERSION)' 'Built from the situ source tree.' \
+		    '$(DEB_MAINTAINER)' '$(DEB_DATE)' \
+		    | gzip -9nc \
+		    > "$(DEB_STAGE)-$$pkg/usr/share/doc/$$pkg/changelog.gz"; \
+		find "$(DEB_STAGE)-$$pkg" -type d -exec chmod 755 {} +; \
+		find "$(DEB_STAGE)-$$pkg/usr/share" -type f -exec chmod 644 {} +; \
+		dpkg-deb --root-owner-group --build \
+		    "$(DEB_STAGE)-$$pkg" '$(DEB_DIR)' >/dev/null || exit 1; \
+	done
+	@rm -rf '$(DEB_STAGE)-situc' '$(DEB_STAGE)-libsitu-dev'
+	@ls -1 '$(DEB_DIR)'/*.deb
+
+# The packages are only worth anything if what comes out of them runs. This
+# unpacks both into a scratch root and compiles a schema through the installed
+# compiler against the installed runtime -- no root, and nothing touching the
+# machine's own /usr.
+deb-check: deb
+	@rm -rf '$(DEB_DIR)/root'
+	@mkdir -p '$(DEB_DIR)/root'
+	@for deb in '$(DEB_DIR)'/*.deb; do dpkg-deb -x "$$deb" '$(DEB_DIR)/root'; done
+	@'$(DEB_DIR)/root/usr/bin/situc' --version
+	@cd '$(DEB_DIR)/root' && ./usr/bin/situc build --target c \
+		'$(CURDIR)/examples/modbus/modbus.situ' --out . >/dev/null
+	@$(CC) -std=c11 $(WARNFLAGS) -c '$(DEB_DIR)/root/modbus.c' \
+		-I'$(DEB_DIR)/root/usr/include' -o '$(DEB_DIR)/root/modbus.o'
+	@echo 'deb-check: the installed situc built a schema against the installed runtime'
 
 clean:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime' clean

@@ -3451,7 +3451,9 @@ situc gen-codec-tests <schema>    property tests from codec signatures
 situc import-proto <proto> -o <schema>   [--accept-lossy]
 ```
 
-One global flag: `--diagnostics=text|json`. `--out=DIR`,
+Two global flags: `--diagnostics=text|json`, and `--version`, which prints the
+string in `situc/__init__.py` -- the same one the Debian packaging reads, so a
+package and the binary inside it cannot claim different versions. `--out=DIR`,
 `--target=c|cpp|python|rust` and `--prefix=NAME` belong to the subcommands that
 take them, which is not the same thing and was written here as though it were.
 There is no `--strict`; it was listed for a while and never existed.
@@ -3760,6 +3762,9 @@ make bench      what the offset cache costs, in all four backends (26.30)
 make cross      aarch64 build of the runtime
 make cross-test generated accessors run on aarch64 under emulation
 make install    situc, the runtime and its header under PREFIX
+make deb        situc and libsitu-dev .deb packages, into build/deb
+make deb-check  build them, unpack into a scratch root, and compile a schema
+                through the installed compiler against the installed runtime
 make help       everything else
 
 cmake -B build && cmake --build build && cmake --install build
@@ -3785,6 +3790,43 @@ generating one needs an installer and the requirement below rules that out.
 are used only to check the compiler. `situc` itself must run from a bare
 interpreter with nothing installed, which is what makes the toolchain vendor
 into an embedded build environment (Section 22).
+
+### 24.1 Packaging
+
+`make deb` produces two packages, and they are two because they do not have the
+same architecture. `situc` is Python and is `Architecture: all`; `libsitu.a` is
+compiled objects and is not. One package would have to claim the narrower of
+the two, which would make the schema compiler uninstallable on every machine it
+was not built on -- for a tool whose whole purpose is generating code for
+targets other than the build host, exactly the wrong way round. They are
+independent as well: a build machine wants the compiler and no runtime, and a
+target wants the header and no compiler, so neither depends on the other and
+`situc` depends on nothing but `python3`.
+
+Built by `dpkg-deb --build` over a tree that `make install` staged, rather than
+by `debian/` and `dpkg-buildpackage`. The packages then contain exactly what
+`make install` produces, so a packaging bug and an install bug cannot be
+different bugs -- and the step needs `dpkg-deb` and nothing else, which is the
+same argument the paragraph above makes about `pip`. Anything `install` writes
+that neither package claims stops the build rather than being quietly left out.
+
+**`make deb-check` is the part that matters.** Packages that build are not
+packages that work: it unpacks both into a scratch root and compiles a schema
+through the installed `situc` against the installed `situ.h`, which is the
+whole claim either package makes. No root, and nothing touching the machine's
+own `/usr`.
+
+The version is read from `situc/__init__.py`, which is also what `situc
+--version` prints, so a package and the binary inside it cannot disagree.
+`tests/unit/test_packaging.py` holds the control files to the tree without
+building anything; `lintian` is clean on both packages.
+
+**There is no licence in this tree**, and `packaging/copyright` says so rather
+than choosing one: no `LICENSE` file, no licence field in `pyproject.toml`, and
+the default in that situation is that no rights are granted. The packages are
+therefore built for local evaluation and are not distributable as they stand.
+That is a decision for whoever owns the project, and the packaging records the
+gap instead of papering over it.
 
 ## 25. Conventions
 

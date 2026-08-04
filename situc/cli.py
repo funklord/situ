@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from situc import ast, capmap, requirements
+from situc import __version__, ast, capmap, requirements
 from situc.diagnostics import Diagnostic, Source, SituError
 from situc.dump import dump
 from situc.layout import solve
@@ -37,6 +37,13 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	parser.add_argument("--diagnostics", choices=("text", "json"), default="text",
 	                    help="diagnostic output format")
+
+	# A packaged tool that cannot say which version it is cannot be evaluated,
+	# and the number comes from the package rather than from a second copy
+	# here: `situc/__init__.py` is what the Debian packaging reads too.
+	parser.add_argument("--version", action="version",
+	                    version=f"situc {__version__}",
+	                    help="print the version and exit")
 
 	sub = parser.add_subparsers(dest="command", required=True)
 

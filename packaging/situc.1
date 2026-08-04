@@ -1,0 +1,106 @@
+.TH SITUC 1 "" "situ" "User Commands"
+.SH NAME
+situc \- compiler for situ byte-layout schemas
+.SH SYNOPSIS
+.B situc
+.RI [ --diagnostics
+.IR text | json ]
+.I command
+.RI [ options ]
+.I schema
+.SH DESCRIPTION
+.B situ
+is a schema language for data whose layout is decided by somebody else:
+network protocols, file formats and device registers, where the bytes are
+fixed and the reader has to match them exactly. A schema states what the
+bytes are, and
+.B situc
+derives everything else from it.
+.PP
+What it derives is not only accessors. A schema also produces a capability
+map saying what each field costs to reach, a byte-level wire contract that
+makes an incompatible edit visible in review, a Wireshark dissector, a fuzz
+harness, and a test suite holding the generated code to the map.
+.SH COMMANDS
+.TP
+.B build
+Generate accessors.
+.B \-\-target
+selects
+.IR c ", " cpp ", " rust " or " python ;
+.B \-\-out
+names the output directory.
+.TP
+.B map
+Emit the capability map, or with
+.B \-\-check
+compare against the committed one.
+.TP
+.B wire
+Emit the byte-level contract, or with
+.B \-\-check
+classify what an edit changed.
+.TP
+.B doc
+RFC-style byte-layout diagrams and a field reference.
+.TP
+.B explain
+One path's capability vector and the blame chain behind it.
+.TP
+.B advise
+Ranked, costed suggestions for a schema.
+.TP
+.B diff
+Capability changes between two revisions of a schema.
+.TP
+.B gen-checks
+Tests holding the generated accessors to the capability map.
+.TP
+.B gen-fuzz
+A fuzz harness per parseable struct.
+.TP
+.B gen-dissector
+A Wireshark dissector in Lua.
+.TP
+.B gen-tests
+Golden-vector tests from a
+.I .vectors
+file.
+.TP
+.B gen-codec-tests
+Property tests from codec signatures.
+.TP
+.B gen-derived
+Implementations from kernel descriptions.
+.TP
+.B import-proto
+Import a
+.I .proto
+as a description of its wire format.
+.TP
+.B dump-ast
+Print the parsed AST, as a tree or back as situ source.
+.TP
+.B lsp
+Run a language server over stdio.
+.SH OPTIONS
+.TP
+.B \-\-diagnostics \fItext\fR|\fIjson\fR
+Diagnostic output format.
+.I json
+is for editors and CI.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH EXIT STATUS
+.B situc
+exits 0 when it accepted the schema and did what was asked, and non-zero
+when it refused. A refusal is a diagnostic with a blame chain, not a stack
+trace.
+.SH FILES
+.TP
+.I /usr/share/situc/std
+Standard schemas, including the codec signatures.
+.SH SEE ALSO
+The generated C requires the header and static library in
+.BR libsitu-dev .
