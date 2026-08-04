@@ -1000,9 +1000,21 @@ def _check_member_attrs(members: tuple[ast.Member, ...]) -> None:
 #: Attribute names the parser accepts -- they are listed in ATTRIBUTE_NAMES so
 #: that bracket disambiguation does not change meaning as phases land -- but
 #: which nothing downstream reads yet. Accepting one silently is worse than
-#: refusing it: the schema says the text is ASCII, or nul-terminated, and the
-#: generated code neither checks nor records it. Section 8.6 describes both;
-#: neither is implemented.
+#: refusing it: the schema makes a claim and the generated code neither checks
+#: nor records it.
+#:
+#: This mechanism existed for `encoding` and `nul_terminated`, emptied when
+#: both were implemented, and was deleted -- leaving its own comment stranded
+#: above `TEXT_ENCODINGS`, which is how the next two were found. They are
+#: worse than the originals, because `[size = N]` is not merely unread: the
+#: advisor used to *recommend* it, so a reader who took the advice got a
+#: schema that compiled, changed nothing, and produced the same suggestion on
+#: the next run.
+UNIMPLEMENTED_ATTRS: dict[str, str] = {
+	"size":    "an explicit size is not honoured by this build",
+	"no_rmw":  "read-modify-write suppression is not honoured by this build",
+}
+
 #: What `[encoding = ...]` may say. Section 8.6 names these two, and an
 #: unknown one is refused rather than ignored: a schema declaring `utf16` and
 #: getting no check would be worse off than one declaring nothing.
@@ -1016,6 +1028,21 @@ def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:
 		if previous is not None:
 			raise _redeclaration("attribute", attr.name, previous, attr)
 		seen[attr.name] = attr
+
+		reason = UNIMPLEMENTED_ATTRS.get(attr.name)
+		if reason is not None:
+			raise error(
+				f"`{attr.name}` is not implemented",
+				attr.span,
+				label = reason,
+				notes = [
+					"the name is in the parser's vocabulary so that bracket "
+					"disambiguation does not change meaning as phases land, "
+					"which is not the same as the attribute doing anything",
+					"remove it: a schema that states what the generated code "
+					"does not enforce is worse than one that states nothing",
+				],
+			)
 
 		if attr.name == "encoding":
 			named = getattr(attr.value, "name", None)

@@ -326,14 +326,28 @@ def _find_unbounded_regions(resolved: ResolvedSchema) -> list[Suggestion]:
 			if placement.size_max_bits is not None:
 				continue
 
+			# The remedy has to be something the compiler implements, which
+			# `[size = N]` is not: it is in the parser's closed vocabulary and
+			# read by nothing, so a reader who took this advice got a schema
+			# that compiled, changed nothing, and produced the same suggestion
+			# again on the next run. 26.36 is the same defect and was fixed
+			# there for one construct rather than as a rule.
+			#
+			# What reaches this branch with no driver is an unbounded scan,
+			# and what bounds a scan is `max N` -- the cap in the `until`
+			# clause that `examples/smtp` has been carrying since it was
+			# written.
 			driver = placement.sized_by
 			if driver == "remaining":
 				where = ("bound the enclosing frame, or size this from a length "
 				         "field instead of `remaining`")
 			elif driver:
 				where = f"give `{driver}` a `[max = N]`"
+			elif placement.delimiter is not None:
+				where = ("cap the scan with `max N` after the `until` clause, "
+				         "so a frame that never terminates stops somewhere")
 			else:
-				where = "pin the region with `[size = N]`"
+				where = "give this member a bound the compiler can read"
 
 			found.append(Suggestion(
 				rule    = "bound-unbounded",
