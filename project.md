@@ -7484,6 +7484,62 @@ the layout solver.
 **Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; 2700 composed cells, none refused.
 
+### 26.55 MQTT, and what a real protocol found this time
+
+Invariant 30 says a real protocol finds what a synthetic schema does not, and
+that each new example is worth writing until one of them stops finding
+something. This one found five things, and the first was a compiler crash.
+
+MQTT 3.1.1 is the protocol behind most of what gets called IoT, and it puts
+four constructs together that this repository had only ever exercised apart: a
+*varint* that is the frame's own remaining length, a discriminated union over a
+*four-bit* type, a run of variable-length records ending where the packet does,
+and three packets whose body is nothing at all. That last one is why
+`struct nothing { }` is in the file: a variant arm has to name something, and
+"no variable header and no payload" is a struct of no bytes, which turns out
+to be exactly what section 3.12 says in words.
+
+What it found, in the order it found it:
+
+  * **a variant with an unbounded arm asserted out of the compiler.** The rule
+    says a variant's size is `Bounded`, which promises two numbers, and
+    PUBLISH's payload is the rest of the packet. `Unbounded` is both the true
+    answer and the weaker one, which is the direction invariant 2 permits;
+  * **a variable-size struct as a variant arm had no accessor** in C++, Python
+    or Rust -- and `validate` called it in all three, so the generated code did
+    not build. C has emitted it since variants landed. MQTT is four of them:
+    CONNECT, PUBLISH, SUBSCRIBE and UNSUBSCRIBE all end in something the data
+    sizes, so this is most of the protocol rather than a corner of it;
+  * **a zero-size struct made C emit `have >= 0`**, which `-Werror=type-limits`
+    refuses. Every buffer holds a struct of no bytes, including an empty one,
+    and saying so as a comparison says it in a way the compiler knows is
+    vacuous;
+  * **Rust counted elements it never read**, in the walk over a run that ends
+    at the frame rather than at a count -- a warning, which `-D warnings` makes
+    an error, and which invariant 23 is about;
+  * **the dissector named an extent function for a struct that has none.**
+    SUBSCRIBE's body ends in a run to the end of the packet, so where it stops
+    is where the frame does; as a variant arm, the variant's own length
+    reached for a measurement nobody emits.
+
+**The boundary, and MQTT needs it twice.** A member whose *presence* depends on
+a flag: CONNECT's will topic, will message, user name and password (3.1.3), and
+PUBLISH's packet identifier, which is there only when the QoS in the fixed
+header is 1 or 2 (3.3.2.2). situ has `[since = N]` for a member that arrives in
+a later version and `variant` for one shape or another, and neither of them is
+"this field is here when that bit is set". Both halves of the construct that
+would cover it already exist -- `qos_level` is a two-bit discriminant type and
+`nothing` is an empty arm -- and what is missing is that a variant may not
+switch on a field of a *different* struct. That is written in the schema, where
+somebody implementing from it will read it, rather than here.
+
+By invariant 31 this is one protocol asking. The second asker is what would
+turn it into a construct.
+
+**Status:** 2876 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; MQTT built by four backends and compared
+over random buffers.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8178,7 +8234,15 @@ host and under aarch64 emulation; 2700 composed cells, none refused.
    be rejected have to be told apart: rejected *by the thing under test* is a
    result, and rejected because the harness wrote it wrong is not.
 
-84. **Where the count comes from and how wide an element is are two
+84. **The construct a protocol cannot use is found by writing the protocol.**
+   The composed sweep runs 2700 schemas and none of them has a member whose
+   presence depends on a flag, because the axes were built from constructs
+   situ *has*. MQTT has two such members and needed neither of them to be
+   invented -- what it needed was for the gap to be written down where an
+   implementer reads it. A generator explores the language; an example
+   explores the distance between the language and a protocol.
+
+85. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
