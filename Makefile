@@ -169,8 +169,19 @@ DEB_DATE	:= $(shell \
 	if [ -n "$$SOURCE_DATE_EPOCH" ]; then date -R -d "@$$SOURCE_DATE_EPOCH"; \
 	else git log -1 --format=%cD 2>/dev/null || date -R; fi)
 
+# Removing a directory wholesale is allowed for a staging tree this rule
+# created and nothing else, and only after checking the path resolved to what
+# it should: an unset or mistyped variable in `rm -rf $(VAR)` is precisely how
+# a build target eats a source tree. Every removal below goes through here.
+deb_discard = \
+	test -n '$(1)' || { echo 'deb: empty path, refusing to remove'; exit 1; }; \
+	case '$(1)' in \
+		'$(DEB_DIR)'|'$(DEB_DIR)'/*) rm -rf '$(1)' ;; \
+		*) echo 'deb: $(1) is not under $(DEB_DIR); refusing'; exit 1 ;; \
+	esac
+
 deb: runtime
-	@rm -rf '$(DEB_DIR)'
+	@$(call deb_discard,$(DEB_DIR))
 	@mkdir -p '$(DEB_DIR)'
 	@# Stage once, through the same install rule a user runs, then split the
 	@# tree between the two packages. A packaging bug and an install bug
@@ -191,7 +202,7 @@ deb: runtime
 	@# shipped as a hole.
 	@find '$(DEB_STAGE)' -type f -printf 'unpackaged: %p\n' -quit | grep . \
 		&& { find '$(DEB_STAGE)' -type f -printf '  %P\n'; exit 1; } || true
-	@rm -rf '$(DEB_STAGE)'
+	@$(call deb_discard,$(DEB_STAGE))
 	@# The manual page belongs to the compiler package only.
 	@mkdir -p '$(DEB_STAGE)-situc/usr/share/man/man1'
 	@gzip -9nc 'packaging/situc.1' \
@@ -216,7 +227,8 @@ deb: runtime
 		dpkg-deb --root-owner-group --build \
 		    "$(DEB_STAGE)-$$pkg" '$(DEB_DIR)' >/dev/null || exit 1; \
 	done
-	@rm -rf '$(DEB_STAGE)-situc' '$(DEB_STAGE)-libsitu-dev'
+	@$(call deb_discard,$(DEB_STAGE)-situc)
+	@$(call deb_discard,$(DEB_STAGE)-libsitu-dev)
 	@ls -1 '$(DEB_DIR)'/*.deb
 
 # The packages are only worth anything if what comes out of them runs. This
@@ -224,7 +236,7 @@ deb: runtime
 # compiler against the installed runtime -- no root, and nothing touching the
 # machine's own /usr.
 deb-check: deb
-	@rm -rf '$(DEB_DIR)/root'
+	@$(call deb_discard,$(DEB_DIR)/root)
 	@mkdir -p '$(DEB_DIR)/root'
 	@for deb in '$(DEB_DIR)'/*.deb; do dpkg-deb -x "$$deb" '$(DEB_DIR)/root'; done
 	@'$(DEB_DIR)/root/usr/bin/situc' --version
