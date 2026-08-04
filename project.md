@@ -8103,6 +8103,52 @@ suggests itself is to relax the guard.
 twelve layout oracles and two computation ones; twenty-six consecutive runs
 of the oracle suite clean after the sample size went up.
 
+### 26.64 Modbus, whose oracle is a library and whose corpus is a stream
+
+`pymodbus` builds the frames and decodes them back, which makes Modbus the
+first oracle here whose independent implementation is a library rather than a
+command, and the first whose corpus is a **stream**: four ADUs end to end,
+which is what a Modbus TCP connection carries.
+
+That second difference is the one worth having. Every other oracle hands both
+sides a single object and asks what is in it. This one makes both sides find
+where each frame *stops*, and `examples/modbus/modbus.situ` already names that
+as the arithmetic implementations get wrong: `length` counts the unit
+identifier and the PDU but not itself or the three fields ahead of it, so the
+next frame starts at `6 + length`. situ and pymodbus agree on all four
+frames, boundaries included.
+
+**Two things it changed about the harness, both of them the same mistake in
+different clothes.** `have()` asked the PATH, which for a library reports
+missing on every machine -- the oracle would have skipped silently forever,
+which is precisely the failure this file exists to prevent. And
+`test_the_corpus_is_not_this_project_s_opinion` was checking that the corpus
+function spawned a process, when the rule it stands for is *these bytes were
+not written here*. A library call satisfies that; the guard was testing the
+mechanism rather than the property.
+
+**A note for whoever meets pymodbus next**, because it reads as a situ
+problem until it is isolated: requests are decoded with
+`DecodePDU(is_server=True)`. The other way round it fails on frames pymodbus
+itself built, reading a read-holding request's address as a response's byte
+count.
+
+**And a false alarm that was worth what it cost.** Checking that the Modbus
+mutation in `LIES` really bites, a scratch script built the honest and lying
+schemas into one directory under one module name, and Python served the
+second import from the first's cached bytecode. The swapped schema appeared
+to produce identical answers -- so the evidence said the test proving
+mutations are noticed was itself giving a false green. It was not; the test
+gives each build its own `tmp_path`. But `build_module` now puts every build
+in a fresh directory and calls `invalidate_caches`, because the hazard is
+real and the next test to build two versions of one schema would have hit it
+for real. An hour spent on a false alarm is cheaper than a day spent
+believing a false green, and the difference between them was one clean
+directory.
+
+**Status:** 2974 unit tests, 7 skipped; `make check` clean over 109 files;
+thirteen layout oracles and two computation ones.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8953,6 +8999,17 @@ of the oracle suite clean after the sample size went up.
    error handling rather than as filtering, which is why writing the rule down
    did not prevent breaking it. Any exclusion in a comparison belongs in a
    named predicate both sides call, where it can be seen and counted.
+
+101. **Two versions of one module in one process need two directories.** The
+   honest schema and the deliberately broken one are the same module name
+   built twice, and sharing a directory lets the second import return the
+   first's cached bytecode. Nothing errors: the stale module answers, the
+   comparison agrees, and the test whose whole job is to prove a mutation
+   gets noticed reports that it does not. Any harness that builds a thing
+   twice to compare the results gives each build its own directory and calls
+   `importlib.invalidate_caches()` -- and this is the same rule as never
+   concluding a test passes from a binary the build did not rebuild, one
+   language over.
 
 ---
 
