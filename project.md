@@ -7341,6 +7341,56 @@ sequence readable: six causes, then five, then none.
 host and under aarch64 emulation; 200 composed cells across two unseeded draws
 with no failures; `KNOWN` empty.
 
+### 26.52 The whole space, once
+
+26.51 ended on two draws of a hundred cells with nothing in them, which is
+evidence and is not the same as having run the space. `tools/sweep.py --all`
+is 1350 cells; six shards of it take about as long as `make test` rather than
+about an hour, which is what the `--shard` flag is for. Strided rather than
+blocked: the cells are enumerated in a fixed order, so a block of them shares
+an axis value and one shard would compile every `sealed` cell while another
+compiled every `frame` one.
+
+**1152 agreed, 180 refused, 18 failed** -- and the eighteen were one shape,
+which two hundred sampled cells had not drawn: a length written as digits,
+driving a member, inside a nested struct. Every element type, both spellings
+of the count, with and without something variable before it.
+
+Two defects behind them, both in the dissector, which is where invariant 61
+says to look:
+
+**The digits read had no bound.** 26.49 gave the integer reads one --
+`situ_uint` answers zero where the bytes are not all there, as the C
+accessors do -- and the `tonumber(tvb(at, 4):string())` beside it kept
+slicing the capture directly. An extent function reads a length field of a
+record a truncated packet may not carry, so the walk over a short frame
+raised out of Wireshark rather than showing what it had.
+
+**And the extent function summed terms that were all measured from the same
+place.** A struct's extent is its constant bytes plus each variable member's
+length, and each of those lengths was computed against the *struct's* base --
+which is where the member starts only if nothing variable precedes it. Every
+variable member in this repository is its struct's first, so the two have
+always coincided; a composed schema put a nested struct after a
+variable-length field and `s_extent` measured it from the start of the frame.
+It accumulates now, which is what all four backends do.
+
+That second one is the same sentence as the run walk in 26.51, one level up,
+and the fix is to stop asking one question for two things: `_length` now takes
+where the *struct* starts, which is what a length field is read against, and
+where the *member* starts, which is what a scan, a walk or a nested extent is
+measured from.
+
+**What the full run is worth over a sample.** The CI sample is 24 cells and
+had drawn none of these; two hundred cells across two seeds had drawn none of
+them either. The shape is not exotic -- a header with a length in ASCII,
+inside a record, inside a frame -- it is simply one of 1350 cells, and a
+sample of 200 misses most of what it is a sample of. Run the whole space when
+something structural changes; run the sample on every commit.
+
+**Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; 1350 composed cells with no failures.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7998,7 +8048,21 @@ with no failures; `KNOWN` empty.
    sweep that reported a hundred failing cells would have hidden it. Fix a
    class, re-run, and expect the count to fall by less than you fixed.
 
-79. **Where the count comes from and how wide an element is are two
+79. **A base that is right for the first member is not a base.** The
+   dissector's extent summed each variable member's length measured from the
+   *struct's* base, and its run walk started there too. Both are correct for a
+   struct's first variable member, and every variable member in this
+   repository is one -- so two wrong answers agreed with the right one for as
+   long as anybody looked. Where a value is "where this starts", ask which of
+   the two starts it means: the container's, or the member's.
+
+80. **A sample of two hundred misses most of what it samples.** Two draws of a
+   hundred composed cells came back clean, and the whole space of 1350 had
+   eighteen failures in it -- one shape, in a corner no draw had reached. The
+   sample belongs on every commit and the space belongs after anything
+   structural; neither is evidence for the other.
+
+81. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
