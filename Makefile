@@ -45,7 +45,7 @@ endif
 export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
-.PHONY: all runtime compiler test test-c test-py check lint bench fuzz \
+.PHONY: all runtime compiler test test-c test-py check typecheck lint bench fuzz \ veryclean distclean style style-source style-docs
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
@@ -74,7 +74,9 @@ help:
 runtime:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime'
 
-test: test-py check lint test-c cross-test
+check: style typecheck lint test cross-test
+
+test: test-py test-c
 
 test-py:
 	$(PYTHON) -m pytest tests -q
@@ -83,7 +85,7 @@ test-py:
 # tests` reads the compiler and its suite, and `runtime/python` is neither --
 # so the module every generated module imports was the one nothing checked. It
 # had four dead `type: ignore` comments, which strict mode calls errors.
-check:
+typecheck:
 	$(PYTHON) -m mypy situc tools tests
 	$(PYTHON) -m mypy --strict runtime/python
 
@@ -257,5 +259,23 @@ clean:
 # The shared style gate: one tool, copied verbatim from
 # ~/.claude/tools/style_gate.py into every private project. It refuses to
 # run against a collapsed file list, so a pass means it actually looked.
-style:
+style: style-source style-docs
+
+style-source:
 	$(PYTHON) tools/style_gate.py check
+
+# project.md is authoritative, so it is held to the tree: a heading
+# that appears twice means whichever one you find, the other is the
+# one with the answer.
+style-docs:
+	$(PYTHON) tools/style_gate.py docs
+
+# The clean ladder, matching the sibling projects. `clean` already removes
+# the build root; `veryclean` adds the packaging output, `distclean` the
+# editor and tool droppings.
+veryclean: clean
+	rm -rf packaging/out dist
+
+distclean: veryclean
+	find . -name '*~' -o -name '*.swp' -o -name '*.orig' | xargs -r rm -f
+	find . -name .pytest_cache -type d -prune -exec rm -rf {} +

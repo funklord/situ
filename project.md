@@ -6280,7 +6280,7 @@ reader knows it was measured rather than skipped:
   a check that has never had anything to say. The position tests that name a
   spot, and `test_every_schema_analyses_without_raising`, cover the shapes.
 
-#### What is open
+#### What is open after 26.35
 
 - **`examples/telemetry` has never seen a message**, and cannot in the sense the
   other four now have: it is situ's own format, so a vector for it is a round
@@ -6514,7 +6514,7 @@ expression builtins, and the arguments sit at bracket depth 2 where decision
 0006's comma rule cannot see them, so a size expression was read as an
 attribute list and reported "expected `]`" at the open parenthesis.
 
-#### What is open
+#### What is open after 26.37
 
 Carried forward and re-derived rather than copied. The first two are unchanged
 from 26.35; the last two are this fold's.
