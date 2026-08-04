@@ -1,0 +1,151 @@
+# situ capability map v1
+# schema: modbus.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct exception_response size=1
+  exception_response.code                offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+
+struct mask_write_request size=6 repr=ValueConverted
+  mask_write_request.address             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  mask_write_request.and_mask            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  mask_write_request.or_mask             offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct mbap_header size=7 repr=ValueConverted
+  mbap_header.transaction_id             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  mbap_header.protocol_id                offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  mbap_header.length                     offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  mbap_header.unit_id                    offset=AbsoluteStatic(0x06) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+
+struct read_request size=4 repr=ValueConverted
+  read_request.start_address             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  read_request.quantity                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct read_response size=1 mutate=Shifting
+  read_response.byte_count               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  read_response.values                   offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct read_write_request size=9 mutate=Shifting repr=ValueConverted
+  read_write_request.read_start_address  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  read_write_request.read_quantity       offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  read_write_request.write_start_address offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  read_write_request.write_quantity      offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  read_write_request.byte_count          offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  read_write_request.values              offset=AbsoluteStatic(0x09) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct request size=5 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  request.function                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  request.body                           offset=AbsoluteStatic(0x01) size=Bounded(4, 264) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  request.body.read_coils                offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_coils.start_address  offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_coils.quantity       offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_inputs               offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_inputs.start_address offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_inputs.quantity      offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_holding              offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_holding.start_address offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_holding.quantity     offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_input                offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_input.start_address  offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_input.quantity       offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_coil                offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_coil.address        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_coil.value          offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_register            offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_register.address    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_register.value      offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_coils               offset=AbsoluteStatic(0x01) size=Bounded(5, 260) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  request.body.write_coils.start_address offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_coils.quantity      offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_coils.byte_count    offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  request.body.write_coils.values        offset=AbsoluteStatic(0x06) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  request.body.write_registers           offset=AbsoluteStatic(0x01) size=Bounded(5, 260) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  request.body.write_registers.start_address offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_registers.quantity  offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.write_registers.byte_count offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  request.body.write_registers.values    offset=AbsoluteStatic(0x06) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  request.body.mask_write                offset=AbsoluteStatic(0x01) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.mask_write.address        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.mask_write.and_mask       offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.mask_write.or_mask        offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_write                offset=AbsoluteStatic(0x01) size=Bounded(9, 264) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  request.body.read_write.read_start_address offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_write.read_quantity  offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_write.write_start_address offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_write.write_quantity offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  request.body.read_write.byte_count     offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  request.body.read_write.values         offset=AbsoluteStatic(0x0A) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct response size=2 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  response.function                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  response.body                          offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  response.body.read_coils               offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  response.body.read_coils.byte_count    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.read_coils.values        offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  response.body.read_inputs              offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  response.body.read_inputs.byte_count   offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.read_inputs.values       offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  response.body.read_holding             offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  response.body.read_holding.byte_count  offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.read_holding.values      offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  response.body.read_input               offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  response.body.read_input.byte_count    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.read_input.values        offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  response.body.write_coil               offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_coil.address       offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_coil.value         offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_register           offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_register.address   offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_register.value     offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_coils              offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_coils.start_address offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_coils.quantity     offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_registers          offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_registers.start_address offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.write_registers.quantity offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.mask_write               offset=AbsoluteStatic(0x01) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.mask_write.address       offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.mask_write.and_mask      offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.mask_write.or_mask       offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  response.body.read_write               offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  response.body.read_write.byte_count    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.read_write.values        offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  response.body.e01                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e01.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e02                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e02.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e03                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e03.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e04                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e04.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e05                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e05.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e06                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e06.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e0f                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e0f.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e10                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e10.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e16                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e16.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  response.body.e17                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  response.body.e17.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct write_multiple_request size=5 mutate=Shifting repr=ValueConverted
+  write_multiple_request.start_address   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  write_multiple_request.quantity        offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  write_multiple_request.byte_count      offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  write_multiple_request.values          offset=AbsoluteStatic(0x05) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct write_multiple_response size=4 repr=ValueConverted
+  write_multiple_response.start_address  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  write_multiple_response.quantity       offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct write_single size=4 repr=ValueConverted
+  write_single.address                   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  write_single.value                     offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

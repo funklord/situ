@@ -3389,8 +3389,13 @@ class Emitter:
 		Nothing did, in any backend: a variant's check was the discriminant
 		and nothing else, so every constraint inside an arm was declared by
 		the schema and enforced by nobody. Through the arm's own accessor,
-		which already refuses the arm that is not present -- so an `Err` here
-		means "not this arm" and is not the message being wrong.
+		which already refuses the arm that is not present.
+
+		`Err(Error::Version)` is what "not this arm" gets, and it is the only
+		one of the accessor's refusals that means nothing to check. Any other
+		is the arm the discriminant *did* select failing to fit the frame,
+		which is a malformed message and is what `validate` is for
+		(invariant 42).
 		"""
 		inner = self.resolved.structs.get(placement.type_name or "")
 		if inner is None:
@@ -3412,9 +3417,12 @@ class Emitter:
 		return [
 			f"\t\t// {placement.path}: the arm the discriminant selects",
 			"\t\t// carries its own constraints, and its own validator is",
-			"\t\t// what knows them.",
-			f"\t\tif let Ok(arm) = self.{name}() {{",
-			"\t\t\tarm.validate()?;",
+			"\t\t// what knows them. A different arm is nothing to check;",
+			"\t\t// this arm not fitting the frame is malformed.",
+			f"\t\tmatch self.{name}() {{",
+			"\t\t\tOk(arm) => arm.validate()?,",
+			"\t\t\tErr(Error::Version) => {}",
+			"\t\t\tErr(other) => return Err(other),",
 			"\t\t}",
 		]
 

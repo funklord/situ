@@ -5636,6 +5636,14 @@ class Emitter:
 		Through the arm's own accessor, which already refuses the arm that is
 		not present: asking the discriminant again here would be a second
 		place that has to agree about which arm is there.
+
+		The accessor refuses for two different reasons, though, and only one
+		of them is this validator's business to pass over. `SITU_ERR_VERSION`
+		is "not the arm this message carries", which is nothing to check.
+		Anything else is "the arm this message *does* carry does not fit the
+		frame" -- a Modbus read response whose byte count claims 256 bytes of
+		a 40-byte frame -- and that is a malformed message, which is the
+		question `validate` exists to answer (invariant 42).
 		"""
 		found = arm_of(struct, placement)
 		if found is None or placement.type_name not in self.structs:
@@ -5658,18 +5666,22 @@ class Emitter:
 		return [
 			f"\t/* {placement.path}: the arm the discriminant selects carries",
 			"\t * its own constraints, and its own validator is what knows",
-			"\t * them. The accessor refuses an arm that is not present. */",
+			"\t * them. A different arm is nothing to check; this arm not",
+			"\t * fitting the frame is a malformed message. */",
 			"\t{",
 			"\t\tsitu_view_t arm;",
+			f"\t\tconst situ_err_t got = {ident(self.prefix, struct.name, local, 'view')}"
+			"(view, &arm);",
 			"",
-			f"\t\tif ({ident(self.prefix, struct.name, local, 'view')}"
-			"(view, &arm) == SITU_OK) {",
+			"\t\tif (got == SITU_OK) {",
 			f"\t\t\tconst situ_err_t err = "
 			f"{ident(self.prefix, placement.type_name or '', 'validate')}(arm);",
 			"",
 			"\t\t\tif (err != SITU_OK) {",
 			"\t\t\t\treturn err;",
 			"\t\t\t}",
+			"\t\t} else if (got != SITU_ERR_VERSION) {",
+			"\t\t\treturn got;",
 			"\t\t}",
 			"\t}",
 		]

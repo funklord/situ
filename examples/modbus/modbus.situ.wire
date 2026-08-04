@@ -1,0 +1,71 @@
+# situ wire signature v0
+# schema: modbus.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+enum function_code : u8 unknown=error
+  read_coils=1 read_discrete_inputs=2 read_holding_registers=3 read_input_registers=4 write_single_coil=5 write_single_register=6 write_multiple_coils=15 write_multiple_registers=16 mask_write_register=22 read_write_multiple=23 read_coils_error=129 read_discrete_inputs_error=130 read_holding_error=131 read_input_error=132 write_single_coil_error=133 write_single_register_error=134 write_multiple_coils_error=143 write_multiple_regs_error=144 mask_write_error=150 read_write_multiple_error=151
+
+enum exception_code : u8 unknown=error
+  illegal_function=1 illegal_data_address=2 illegal_data_value=3 server_device_failure=4 acknowledge=5 server_device_busy=6 memory_parity_error=8 gateway_path_unavailable=10 gateway_target_no_answer=11
+
+struct exception_response size=1
+  @0x0000   1         exception_code code
+
+struct mask_write_request size=6
+  @0x0000   2         u16        address  big
+  @0x0002   2         u16        and_mask  big
+  @0x0004   2         u16        or_mask  big
+
+struct mbap_header size=7
+  @0x0000   2         u16        transaction_id  big
+  @0x0002   2         u16        protocol_id  big must_eq=0
+  @0x0004   2         u16        length  big min=2 max=254
+  @0x0006   1         u8         unit_id
+
+struct read_request size=4
+  @0x0000   2         u16        start_address  big
+  @0x0002   2         u16        quantity  big min=1
+
+struct read_response size=1..256
+  @0x0000   1         u8         byte_count
+  @0x0001   0..255    u8         values  sized-by=byte_count
+
+struct read_write_request size=9..264
+  @0x0000   2         u16        read_start_address  big
+  @0x0002   2         u16        read_quantity  big min=1
+  @0x0004   2         u16        write_start_address  big
+  @0x0006   2         u16        write_quantity  big min=1
+  @0x0008   1         u8         byte_count
+  @0x0009   0..255    u8         values  sized-by=byte_count
+
+struct request size=5..265
+  @0x0000   1         function_code function
+  @0x0001   4..264    variant    body
+
+struct response size=2..257
+  @0x0000   1         function_code function
+  @0x0001   1..256    variant    body
+
+struct write_multiple_request size=5..260
+  @0x0000   2         u16        start_address  big
+  @0x0002   2         u16        quantity  big min=1
+  @0x0004   1         u8         byte_count
+  @0x0005   0..255    u8         values  sized-by=byte_count
+
+struct write_multiple_response size=4
+  @0x0000   2         u16        start_address  big
+  @0x0002   2         u16        quantity  big
+
+struct write_single size=4
+  @0x0000   2         u16        address  big
+  @0x0002   2         u16        value  big

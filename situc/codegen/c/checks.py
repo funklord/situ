@@ -1512,8 +1512,44 @@ def _required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return None
 
 
+def _selected_arms(resolved: ResolvedSchema, struct: ResolvedStruct,
+		chosen: str | None) -> set[str]:
+	"""Which arms the message a baseline builds actually carries.
+
+	One per variant, and never more: `chosen` where the check being built
+	selects an arm of that variant itself, and otherwise whichever arm the
+	discriminant's own baseline value happens to name. The second half is
+	the part that is easy to forget -- a check about a member *outside*
+	every variant still leaves the discriminant somewhere, and the arm it
+	lands on has constraints of its own that the baseline has to satisfy or
+	`validate` refuses the buffer the check calls valid.
+	"""
+	held: set[str] = set()
+
+	for variant in own_members(struct):
+		if variant.kind != "variant" or variant.discriminant is None:
+			continue
+
+		arms = {arm.value: arm.member for arm in variant.arm_cases
+		        if arm.value is not None and arm.member is not None}
+		if chosen is not None and chosen in arms.values():
+			held.add(chosen)
+			continue
+
+		disc = next((entry.placement for entry in struct.entries
+		             if entry.placement.name == variant.discriminant), None)
+		if disc is None:
+			continue
+
+		landed = arms.get(_required_pattern(resolved, struct, disc) or 0)
+		if landed is not None:
+			held.add(landed)
+
+	return held
+
+
 def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
-		extent: int) -> list[str] | None:
+		extent: int, inside: str | None = None) -> list[str] | None:
 	"""Statements making the buffer satisfy every constraint the struct has.
 
 	Without this a constraint check can only show that a wrong value is
@@ -1522,11 +1558,20 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 	Establishing that the *right* value is accepted first is what gives the
 	refusal meaning.
 
+	`inside` is the arm the check about to be built lives in, and the arms
+	are the reason this takes an argument at all. A member of an arm is in
+	the message only when the discriminant selects that arm, so satisfying
+	every arm's constraints at once writes several mutually exclusive
+	layouts over each other: Modbus has ten exception arms sharing one byte,
+	and the baseline set that byte ten times. Only the selected arm's
+	members belong here; the rest are not in this message.
+
 	`None` when some constraint cannot be satisfied from here, because a
 	baseline that is not actually valid would make every check built on it
 	assert the wrong thing.
 	"""
 	writes: list[str] = []
+	carried = _selected_arms(resolved, struct, inside)
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -1536,6 +1581,11 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 			continue
 		if "[]" in placement.path:
 			continue		# an array element; see _reserved_checks
+
+		# Not this message's arm, so not this message's constraint.
+		held = enclosing_arm(struct, placement)
+		if held is not None and held[1].member not in carried:
+			continue
 
 		value = _required_pattern(resolved, struct, placement)
 		if value in (None, 0):
@@ -1569,10 +1619,9 @@ def _validate_checks(suite: Suite, schema: ast.Schema,
 
 	env = resolved.layout.env
 
-	baseline = _baseline(resolved, struct, extent)
-	if baseline is not None:
-		_reserved_checks(suite, resolved, struct, prefix, extent, baseline)
-		_enum_checks(suite, schema, resolved, struct, prefix, extent, baseline)
+	if _baseline(resolved, struct, extent) is not None:
+		_reserved_checks(suite, resolved, struct, prefix, extent)
+		_enum_checks(suite, schema, resolved, struct, prefix, extent)
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -1595,11 +1644,19 @@ def _validate_checks(suite: Suite, schema: ast.Schema,
 
 		wrong = (demanded + 1) & 0xFF
 
+		# A `must_eq` inside a variant arm is a constraint on bytes that are
+		# only in the message when the discriminant selects that arm -- the
+		# same thing the reserved and enum checks below had to learn.
+		prelude = _prelude(resolved, struct, placement, extent)
+		if prelude is None:
+			continue
+
 		suite.add(
 			f"check_{c_name(placement.path)}_must_eq_is_enforced",
 			[
 				*_acquire(struct, prefix, extent),
 				"",
+				*(prelude + [""] if prelude else []),
 				f"\t/* The schema demands {demanded}; anything else must be refused. */",
 				f"\tbuf[{offset}u] = 0x{wrong:02X}u;",
 				f"\tassert_int_equal({ident(prefix, struct.name, 'validate')}(view),",
@@ -1612,7 +1669,7 @@ def _validate_checks(suite: Suite, schema: ast.Schema,
 
 def _enum_checks(suite: Suite, schema: ast.Schema,
 		resolved: ResolvedSchema, struct: ResolvedStruct,
-		prefix: str, extent: int, baseline: list[str]) -> None:
+		prefix: str, extent: int) -> None:
 	"""An enum field admits its members and, with `default = error`, nothing else.
 
 	Section 8.7 says so and every backend emitted it as a comment until three of
@@ -1651,14 +1708,22 @@ def _enum_checks(suite: Suite, schema: ast.Schema,
 		if unknown is None:
 			continue
 
+		# An enum inside a variant arm is read only when the discriminant
+		# selects that arm. Ten Modbus exception arms share one byte and each
+		# had a check that wrote an unknown value there while the discriminant
+		# still named a different arm -- so the byte was somebody else's, and
+		# `validate` was right to accept it.
+		prelude = _prelude(resolved, struct, placement, extent)
+		if prelude is None:
+			continue
+
 		offset = placement.offset_bits // BITS_PER_BYTE
 		suite.add(
 			f"check_{c_name(placement.path)}_rejects_a_value_no_member_names",
 			[
 				*_acquire(struct, prefix, extent),
 				"",
-				*(["\t/* Every other constraint satisfied first. */", *baseline, ""]
-				  if baseline else []),
+				*prelude,
 				f"\tassert_int_equal({validate}(view), SITU_OK);",
 				"",
 				f"\t/* {unknown} names no member of `{placement.type_name}`. */",
@@ -1700,14 +1765,58 @@ def _select_arm(struct: ResolvedStruct, placement: Placement,
 	if placed is None or max(placed) >= extent:
 		return None
 
+	mask = _placed_bytes(held.offset_bits, held.size_bits,
+	                     (1 << held.size_bits) - 1, held.endian, held.bit_order,
+	                     held.scalar.is_bit_packed)
+	if mask is None:
+		return None
+
+	# Clear the discriminant's bits and write the value, rather than OR the
+	# value in. The baseline has already been here -- an enum discriminant
+	# with `default = error` gets its lowest member written, to make the
+	# buffer valid -- and OR-ing `0x02` over that `0x01` selects arm three.
 	return [f"\t/* Select the arm this member is in: "
 	        f"{variant.discriminant} = {arm.value}. */",
-	        *(f"\tbuf[{at}u] |= {placed[at]:#04x}u;"
-	          for at in sorted(placed) if placed[at])]
+	        *(f"\tbuf[{at}u] = {placed[at]:#04x}u;" if mask[at] == 0xFF
+	          else f"\tbuf[{at}u] = (uint8_t)((buf[{at}u] & "
+	               f"(uint8_t)~{mask[at]:#04x}u) | {placed[at]:#04x}u);"
+	          for at in sorted(mask))]
+
+
+def _prelude(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, extent: int) -> list[str] | None:
+	"""The buffer as a check on this member needs it before breaking it.
+
+	Two things, and they used to be asked in three places and answered in
+	one: every constraint that applies to *this* message satisfied, and the
+	arm this member lives in selected. A member inside an arm needs both --
+	the baseline that satisfies its siblings, and the discriminant that puts
+	them in the message at all -- and the enum checks had neither, so ten
+	Modbus checks asserted that `validate` would refuse a byte belonging to
+	an arm nobody had selected.
+
+	`None` where the arm cannot be selected from here, so the caller drops
+	the check rather than asserting about bytes nobody selected.
+	"""
+	select = _select_arm(struct, placement, extent)
+	if select is None:
+		return None
+
+	found  = enclosing_arm(struct, placement)
+	inside = found[1].member if found is not None else None
+	base   = _baseline(resolved, struct, extent, inside) or []
+
+	lines: list[str] = []
+	if base:
+		lines += ["\t/* Every constraint satisfied, so a refusal below is",
+		          "\t * about the field this check breaks and nothing else. */",
+		          *base, ""]
+	lines += select
+	return lines
 
 
 def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
-		prefix: str, extent: int, baseline: list[str]) -> None:
+		prefix: str, extent: int) -> None:
 	"""Reserved bits are a constraint, and section 8.8 says why.
 
 	They are malleability control: a receiver that ignores them lets a sender
@@ -1740,8 +1849,8 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 		# arm a zeroed discriminant picks and asserted that `validate` would
 		# refuse them -- an assertion about the wrong bytes, which passed only
 		# as long as no schema had a reserved field inside an arm.
-		select = _select_arm(struct, placement, extent)
-		if select is None:
+		prelude = _prelude(resolved, struct, placement, extent)
+		if prelude is None:
 			continue
 
 		# Break exactly this field: the bits it owns, flipped away from what the
@@ -1760,13 +1869,7 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 		                     bool(placement.scalar and placement.scalar.is_bit_packed))
 		assert mask is not None
 
-		body = [*_acquire(struct, prefix, extent), ""]
-		if baseline:
-			body.append("\t/* Every constraint satisfied, so a refusal below is")
-			body.append("\t * about the field this check breaks and nothing else. */")
-			body.extend(baseline)
-			body.append("")
-		body.extend(select)
+		body = [*_acquire(struct, prefix, extent), "", *prelude]
 		body.append(f"\tassert_int_equal({validate}(view), SITU_OK);")
 		body.append("")
 		body.append(f"\t/* {placement.path} declares {policy}. */")

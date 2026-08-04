@@ -1437,7 +1437,28 @@ def _local(struct: ResolvedStruct, placement: Placement) -> str:
 	return local_name(struct, placement).strip("<>")
 
 
+#: Lua's own words. A schema may name a field `function` or `end` -- situ
+#: reserves neither -- and Lua will not take one as a table key or a local, so
+#: the generated file does not parse at all. Modbus is the first schema here
+#: with such a field: `function_code function;` is what section 4.1 of the
+#: application protocol calls it, and calling it anything else in the schema
+#: to suit the dissector would be the tail wagging the protocol (26.57).
+LUA_KEYWORDS = frozenset({
+	"and", "break", "do", "else", "elseif", "end", "false", "for", "function",
+	"goto", "if", "in", "local", "nil", "not", "or", "repeat", "return",
+	"then", "true", "until", "while",
+})
+
+
 def _lua(name: str) -> str:
 	"""A Lua identifier. `::` from a namespace is the only thing that appears
-	in a situ name and not in a Lua one."""
-	return "".join(char if char.isalnum() or char == "_" else "_" for char in name)
+	in a situ name and not in a Lua one -- and a keyword, which is not a
+	spelling problem but a parse error.
+
+	Suffixed rather than renamed: what Wireshark *shows* is the abbrev and the
+	display name, which are strings and keep the schema's spelling, so the
+	underscore is visible only to somebody reading the Lua.
+	"""
+	flattened = "".join(char if char.isalnum() or char == "_" else "_"
+	                    for char in name)
+	return f"{flattened}_" if flattened in LUA_KEYWORDS else flattened

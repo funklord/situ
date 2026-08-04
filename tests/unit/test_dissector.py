@@ -40,12 +40,10 @@ LUAC    = shutil.which("luac5.4") or shutil.which("luac")
 HARNESS = ROOT / "tests" / "lua" / "dissect.lua"
 
 #: Lua's own words, which may not be used as an identifier. A schema is free to
-#: name a field `end` or `function`; Lua is not.
-LUA_KEYWORDS = frozenset({
-	"and", "break", "do", "else", "elseif", "end", "false", "for", "function",
-	"goto", "if", "in", "local", "nil", "not", "or", "repeat", "return",
-	"then", "true", "until", "while",
-})
+#: name a field `end` or `function`; Lua is not. Imported from the generator
+#: rather than copied: the list that decides what to rename and the list that
+#: checks nothing was missed are one list, or they drift (invariant 34).
+from situc.dissector import LUA_KEYWORDS
 
 
 def emit(body: str) -> str:
@@ -113,10 +111,18 @@ def test_the_blocks_balance() -> None:
 		source, resolved, _ = analyse(path)
 		body = code(generate(parse(source), resolved, path.stem))
 
+		# String literals go too. This counts keywords, and a schema is free
+		# to name a field `function` -- Modbus does, section 4.1 -- which
+		# reaches the output as a `ProtoField` abbrev and display name, both
+		# of them strings. The generator renames the *identifier* and must
+		# not touch what Wireshark shows, so the two `function`s on that line
+		# are correct and are not blocks.
+		plain = re.sub(r'"[^"]*"', '""', body)
+
 		# `do` is not counted: `for ... do` is one block with two keywords, and
 		# no bare `do ... end` is emitted.
-		opens = len(re.findall(r"\b(function|if|for|while)\b", body))
-		ends  = len(re.findall(r"\bend\b", body))
+		opens = len(re.findall(r"\b(function|if|for|while)\b", plain))
+		ends  = len(re.findall(r"\bend\b", plain))
 
 		assert opens == ends, f"{path.name}: {opens} blocks opened, {ends} closed"
 

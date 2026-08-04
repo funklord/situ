@@ -1,0 +1,260 @@
+// Modbus TCP: the MBAP header and the PDU under it, both directions.
+//
+// SOURCE. Field orders, widths and every constant are from the two
+// specifications, cited by section rather than recalled:
+//
+//   MODBUS Application Protocol Specification V1.1b3 (26 April 2012)
+//     4.1    the PDU is a one-byte function code and its data
+//     5      the exception response is the function code with bit 7 set,
+//            followed by one exception code
+//     6.1    01 Read Coils           6.2  02 Read Discrete Inputs
+//     6.3    03 Read Holding Registers    6.4  04 Read Input Registers
+//     6.5    05 Write Single Coil    6.6  06 Write Single Register
+//     6.11   0F Write Multiple Coils 6.12 10 Write Multiple Registers
+//     6.16   16 Mask Write Register  6.17 17 Read/Write Multiple Registers
+//     7      the exception codes, 01 through 0B
+//
+//   MODBUS Messaging on TCP/IP Implementation Guide V1.0b (24 October 2006)
+//     4.1    the MBAP header: transaction, protocol, length, unit
+//     4.1    "Length: number of following bytes", which counts the unit
+//            identifier as well as the PDU
+//
+// WHY THIS ONE. Modbus is the oldest protocol in this directory and the one
+// most likely to be behind a physical thing that moves. What it adds here is
+// a shape none of the others have: **the same field means two layouts, and
+// which one is in front of you is not in the bytes**. Function code 03 is
+// four bytes of address and count going one way and a byte count with that
+// many bytes coming back. Nothing in a Modbus frame says which direction it
+// travelled.
+//
+// So this schema is two structs over one enum -- `request` and `response` --
+// and the choice between them belongs to the caller, who knows whether it
+// opened the socket or accepted it. That is not a limitation of situ; it is
+// the protocol having no field for it, and a schema that guessed would read
+// a byte count as the high half of an address.
+//
+// The exception response needs no separate construct: section 5 defines it as
+// a *different function code*, the original with bit 7 set, so `0x83` is a
+// value of the same enum and an arm like any other. Writing it that way keeps
+// the whole response in one switch, and makes `default: error` mean what it
+// says -- a code Modbus does not define.
+//
+// THE BOUNDARY is at the serial line rather than in this file. Modbus RTU
+// frames the same PDU with a one-byte address in front and a CRC-16 behind,
+// and separates one frame from the next by *silence*: 3.5 character times of
+// idle line (V1.02 of the serial spec, section 2.5.1.1). A duration is not a
+// byte, so situ cannot describe where an RTU frame ends -- the framing lives
+// in the UART's timers, and a schema that pretended otherwise would be
+// describing a format nobody sends. Modbus TCP exists precisely because that
+// framing does not survive a packet network, and it is the one written here.
+
+target buffer;
+endian big;                     // V1.1b3 section 4.2: MSB first on the wire
+
+// V1.1b3 sections 6 and 5. The codes this schema describes, and the
+// exception form of each -- the same code with bit 7 set, which is a
+// different value of the same field rather than a flag beside it.
+//
+// `default = error` is the claim that a code outside this list is a malformed
+// frame rather than something to skip: Modbus has no length inside the PDU,
+// so a reader that does not recognise the function does not know how many
+// bytes it occupies either.
+enum function_code : u8 {
+	read_coils                  = 0x01,
+	read_discrete_inputs        = 0x02,
+	read_holding_registers      = 0x03,
+	read_input_registers        = 0x04,
+	write_single_coil           = 0x05,
+	write_single_register       = 0x06,
+	write_multiple_coils        = 0x0F,
+	write_multiple_registers    = 0x10,
+	mask_write_register         = 0x16,
+	read_write_multiple         = 0x17,
+
+	read_coils_error            = 0x81,
+	read_discrete_inputs_error  = 0x82,
+	read_holding_error          = 0x83,
+	read_input_error            = 0x84,
+	write_single_coil_error     = 0x85,
+	write_single_register_error = 0x86,
+	write_multiple_coils_error  = 0x8F,
+	write_multiple_regs_error   = 0x90,
+	mask_write_error            = 0x96,
+	read_write_multiple_error   = 0x97,
+
+	default                     = error,
+}
+
+// V1.1b3 section 7. The whole of what a server may answer with.
+enum exception_code : u8 {
+	illegal_function         = 0x01,
+	illegal_data_address     = 0x02,
+	illegal_data_value       = 0x03,
+	server_device_failure    = 0x04,
+	acknowledge              = 0x05,
+	server_device_busy       = 0x06,
+	memory_parity_error      = 0x08,
+	gateway_path_unavailable = 0x0A,
+	gateway_target_no_answer = 0x0B,
+	default                  = error,
+}
+
+// TCP guide section 4.1. Seven bytes in front of every PDU.
+//
+// `length` counts the unit identifier and the PDU, not itself and not the
+// three fields before it -- so a reader frames the next message at
+// `6 + length`. That is the one arithmetic fact a Modbus TCP implementation
+// gets wrong, and the reason it is written here rather than left implied.
+struct mbap_header {
+	u16  transaction_id;
+	u16  protocol_id  [must_eq = 0];        // 0 is Modbus; nothing else is
+	u16  length       [min = 2, max = 254]; // unit + PDU, 1 + 253 at most
+	u8   unit_id;
+}
+
+require size(mbap_header) == 7;
+require absolute_static(mbap_header);
+require canonical(mbap_header);
+
+// -- what a client sends ---------------------------------------------------
+
+// 6.1 through 6.4. Where to start and how many, for all four reads. The
+// quantity limits differ per function -- 2000 bits, 125 registers -- and
+// this schema states neither, because `[max]` is one number and this struct
+// serves four codes. The arm names say which is which.
+struct read_request {
+	u16  start_address;
+	u16  quantity  [min = 1];
+}
+
+// 6.5 and 6.6. One address, one value. For a coil the value is 0x0000 or
+// 0xFF00 and nothing else, which is a constraint over two values that
+// `[must_eq]` cannot state -- it takes one -- so it is the caller's.
+struct write_single {
+	u16  address;
+	u16  value;
+}
+
+// 6.11 and 6.12. The count of *bytes* is redundant against the count of
+// items and the wire carries both; a reader that trusts the wrong one on a
+// malformed frame reads past the PDU. `values` is sized by `byte_count`,
+// which is the one the bytes are actually laid out by.
+struct write_multiple_request {
+	u16  start_address;
+	u16  quantity  [min = 1];
+	u8   byte_count;
+	u8   values[byte_count];
+}
+
+// 6.16. Read-modify-write in one frame: the register becomes
+// (current AND and_mask) OR (or_mask AND NOT and_mask).
+struct mask_write_request {
+	u16  address;
+	u16  and_mask;
+	u16  or_mask;
+}
+
+// 6.17. A read and a write in one transaction, the write performed first.
+struct read_write_request {
+	u16  read_start_address;
+	u16  read_quantity   [min = 1];
+	u16  write_start_address;
+	u16  write_quantity  [min = 1];
+	u8   byte_count;
+	u8   values[byte_count];
+}
+
+// -- what a server answers -------------------------------------------------
+
+// 6.1 through 6.4, and 6.17's read half. A byte count and that many bytes,
+// which is every read response in Modbus.
+struct read_response {
+	u8   byte_count;
+	u8   values[byte_count];
+}
+
+// 6.11 and 6.12. The server echoes where it started and how many it did.
+struct write_multiple_response {
+	u16  start_address;
+	u16  quantity;
+}
+
+// Section 5. One byte, and the frame ends.
+struct exception_response {
+	exception_code  code;
+}
+
+require size(exception_response) == 1;
+
+// -- the two directions ----------------------------------------------------
+
+// 4.1. A request PDU: the function code, and the data that code takes.
+//
+// The exception codes are in the enum and get no arm here, so `default:
+// error` rejects them -- a client does not send `0x83`, and a frame claiming
+// it is malformed rather than merely unusual. That is the same switch
+// answering a different question in each direction, which is what having two
+// structs over one enum buys.
+struct request {
+	function_code  function;
+
+	variant body switch (function) {
+		case function_code.read_coils:               read_request  read_coils;
+		case function_code.read_discrete_inputs:     read_request  read_inputs;
+		case function_code.read_holding_registers:   read_request  read_holding;
+		case function_code.read_input_registers:     read_request  read_input;
+		case function_code.write_single_coil:        write_single  write_coil;
+		case function_code.write_single_register:    write_single  write_register;
+		case function_code.write_multiple_coils:
+			write_multiple_request  write_coils;
+		case function_code.write_multiple_registers:
+			write_multiple_request  write_registers;
+		case function_code.mask_write_register:
+			mask_write_request  mask_write;
+		case function_code.read_write_multiple:
+			read_write_request  read_write;
+		default: error;
+	}
+}
+
+// 4.1 and 5. A response PDU: the same code, the other layout, and the ten
+// exception forms beside them.
+struct response {
+	function_code  function;
+
+	variant body switch (function) {
+		case function_code.read_coils:               read_response  read_coils;
+		case function_code.read_discrete_inputs:     read_response  read_inputs;
+		case function_code.read_holding_registers:   read_response  read_holding;
+		case function_code.read_input_registers:     read_response  read_input;
+		case function_code.write_single_coil:        write_single   write_coil;
+		case function_code.write_single_register:    write_single   write_register;
+		case function_code.write_multiple_coils:
+			write_multiple_response  write_coils;
+		case function_code.write_multiple_registers:
+			write_multiple_response  write_registers;
+		case function_code.mask_write_register:
+			mask_write_request  mask_write;      // 6.16: the server echoes it
+		case function_code.read_write_multiple:      read_response  read_write;
+
+		case function_code.read_coils_error:            exception_response  e01;
+		case function_code.read_discrete_inputs_error:  exception_response  e02;
+		case function_code.read_holding_error:          exception_response  e03;
+		case function_code.read_input_error:            exception_response  e04;
+		case function_code.write_single_coil_error:     exception_response  e05;
+		case function_code.write_single_register_error: exception_response  e06;
+		case function_code.write_multiple_coils_error:  exception_response  e0f;
+		case function_code.write_multiple_regs_error:   exception_response  e10;
+		case function_code.mask_write_error:            exception_response  e16;
+		case function_code.read_write_multiple_error:   exception_response  e17;
+
+		default: error;
+	}
+}
+
+// What the protocol costs, and it is almost nothing: the header is seven
+// fixed bytes and a PDU's first byte is at a constant offset. Everything
+// after the function code moves, because the code decides what follows --
+// which is a variant doing exactly what a variant is for.
+assert absolute_static(request.function);
+assert absolute_static(response.function);

@@ -4866,6 +4866,10 @@ class Emitter:
 		and nothing else, so every constraint inside an arm was declared by
 		the schema and enforced by nobody. Through the arm's own accessor,
 		which already refuses the arm that is not present.
+
+		Two reasons it refuses, and only one of them is nothing to check:
+		`version` is a different arm, and anything else is this arm not
+		fitting the frame, which is a malformed message (invariant 42).
 		"""
 		inner = self.resolved.structs.get(placement.type_name or "")
 		if inner is None:
@@ -4887,16 +4891,20 @@ class Emitter:
 		return [
 			f"\t\t/* {placement.path}: the arm the discriminant selects",
 			"\t\t * carries its own constraints, and its own validator is",
-			"\t\t * what knows them. */",
+			"\t\t * what knows them. A different arm is nothing to check;",
+			"\t\t * this arm not fitting the frame is malformed. */",
 			"\t\t{",
 			f"\t\t\t::situ::{class_name(inner)} arm;",
+			f"\t\t\tconst ::situ::rt::err got = {name}(arm);",
 			"",
-			f"\t\t\tif ({name}(arm) == ::situ::rt::err::ok) {{",
+			"\t\t\tif (got == ::situ::rt::err::ok) {",
 			"\t\t\t\tconst ::situ::rt::err inner = arm.validate();",
 			"",
 			"\t\t\t\tif (inner != ::situ::rt::err::ok) {",
 			"\t\t\t\t\treturn inner;",
 			"\t\t\t\t}",
+			"\t\t\t} else if (got != ::situ::rt::err::version) {",
+			"\t\t\t\treturn got;",
 			"\t\t\t}",
 			"\t\t}",
 		]
