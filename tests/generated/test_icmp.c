@@ -57,9 +57,9 @@ static uint16_t ones_complement(situ_view_t view)
 	for (i = 0; i + 1u < len; i += 2u) {
 		const uint32_t a  = at + i;
 		const uint8_t  hi = (a >= hole && a < hole + held)
-			? SITU_ICMP_MESSAGE_CHECKSUM_SELF_AS : view.base[a];
+		    ? SITU_ICMP_MESSAGE_CHECKSUM_SELF_AS : view.base[a];
 		const uint8_t  lo = (a + 1u >= hole && a + 1u < hole + held)
-			? SITU_ICMP_MESSAGE_CHECKSUM_SELF_AS : view.base[a + 1u];
+		    ? SITU_ICMP_MESSAGE_CHECKSUM_SELF_AS : view.base[a + 1u];
 
 		sum += ((uint32_t)hi << 8) | (uint32_t)lo;
 	}
@@ -70,7 +70,7 @@ static uint16_t ones_complement(situ_view_t view)
 }
 
 static void open_reply(situ_msg_t *msg, situ_view_t *view, uint8_t *buf,
-		uint32_t length)
+        uint32_t length)
 {
 	situ_msg_init(msg, buf, length);
 	assert_int_equal(situ_icmp_message_view(msg, 0, view), SITU_OK);

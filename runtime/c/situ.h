@@ -191,7 +191,7 @@ static inline uint16_t situ_get_be16(const uint8_t *p)
 static inline uint32_t situ_get_be32(const uint8_t *p)
 {
 	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
-	     | ((uint32_t)p[2] <<  8) | ((uint32_t)p[3]);
+		 | ((uint32_t)p[2] <<  8) | ((uint32_t)p[3]);
 }
 
 static inline uint64_t situ_get_be64(const uint8_t *p)
@@ -207,7 +207,7 @@ static inline uint16_t situ_get_le16(const uint8_t *p)
 static inline uint32_t situ_get_le32(const uint8_t *p)
 {
 	return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16)
-	     | ((uint32_t)p[1] <<  8) | ((uint32_t)p[0]);
+		 | ((uint32_t)p[1] <<  8) | ((uint32_t)p[0]);
 }
 
 static inline uint64_t situ_get_le64(const uint8_t *p)
@@ -397,11 +397,11 @@ static inline void situ_bits_set_lsb(uint8_t *base, uint32_t off, uint32_t width
 static inline uint64_t situ_bits_get_ne(const uint8_t *base, uint32_t off, uint32_t width)
 {
 	return SITU_HOST_BIG ? situ_bits_get_msb(base, off, width)
-	                     : situ_bits_get_lsb(base, off, width);
+		                 : situ_bits_get_lsb(base, off, width);
 }
 
 static inline void situ_bits_set_ne(uint8_t *base, uint32_t off, uint32_t width,
-		uint64_t v)
+	    uint64_t v)
 {
 	if (SITU_HOST_BIG) {
 		situ_bits_set_msb(base, off, width, v);
@@ -516,7 +516,7 @@ static inline uint32_t situ_advance_u32(uint32_t at, uint32_t by, uint32_t limit
  * against the spec they are implementing.
  */
 static inline uint32_t situ_scan(const uint8_t *data, uint32_t limit,
-		const uint8_t *delim, uint32_t delim_len)
+	    const uint8_t *delim, uint32_t delim_len)
 {
 	uint32_t i;
 	uint32_t j;
@@ -551,8 +551,8 @@ static inline uint32_t situ_scan(const uint8_t *data, uint32_t limit,
 #define SITU_NO_BYTE 0x100u
 
 static inline uint32_t situ_scan_relaxed(const uint8_t *data, uint32_t limit,
-		const uint8_t *delim, uint32_t delim_len,
-		uint32_t quote, uint32_t escape)
+	    const uint8_t *delim, uint32_t delim_len,
+	    uint32_t quote, uint32_t escape)
 {
 	uint32_t i;
 	uint32_t j;
@@ -594,7 +594,7 @@ static inline uint32_t situ_scan_relaxed(const uint8_t *data, uint32_t limit,
  * header-injection check, which is why it is generated rather than remembered.
  */
 static inline int situ_delimiter_absent(const uint8_t *data, uint32_t len,
-		const uint8_t *delim, uint32_t delim_len)
+	    const uint8_t *delim, uint32_t delim_len)
 {
 	return situ_scan(data, len, delim, delim_len) == len;
 }
@@ -616,7 +616,7 @@ static inline int situ_delimiter_absent(const uint8_t *data, uint32_t len,
  * signed types and merely wrong for unsigned ones.
  */
 static inline int situ_parse_uint(const uint8_t *data, uint32_t len,
-		uint32_t radix, uint64_t max, uint64_t *out)
+	    uint32_t radix, uint64_t max, uint64_t *out)
 {
 	uint64_t value = 0u;
 	uint32_t i;
@@ -695,11 +695,11 @@ static inline uint32_t situ_trim_len(const uint8_t *data, uint32_t len)
 static inline uint8_t situ_ascii_fold(uint8_t byte)
 {
 	return (byte >= (uint8_t)'A' && byte <= (uint8_t)'Z')
-	       ? (uint8_t)(byte + 32u) : byte;
+		   ? (uint8_t)(byte + 32u) : byte;
 }
 
 static inline int situ_bytes_eq(const uint8_t *a, uint32_t alen,
-		const uint8_t *b, uint32_t blen)
+	    const uint8_t *b, uint32_t blen)
 {
 	uint32_t i;
 
@@ -715,7 +715,7 @@ static inline int situ_bytes_eq(const uint8_t *a, uint32_t alen,
 }
 
 static inline int situ_ascii_ci_eq(const uint8_t *a, uint32_t alen,
-		const uint8_t *b, uint32_t blen)
+	    const uint8_t *b, uint32_t blen)
 {
 	uint32_t i;
 
@@ -738,7 +738,7 @@ static inline int situ_ascii_ci_eq(const uint8_t *a, uint32_t alen,
  * most formats do permit `007`, and refusing it would reject valid data.
  */
 static inline int situ_digits_minimal(const uint8_t *data, uint32_t len,
-		uint32_t radix)
+	    uint32_t radix)
 {
 	uint32_t i;
 
@@ -976,7 +976,7 @@ static inline uint64_t situ_bcd_encode(uint64_t value, uint32_t digits)
 /* Decode one varint. Returns bytes consumed, or 0 if the buffer ends mid-value
  * or the value needs more than `max_bytes`. */
 static inline uint32_t situ_varint_get(const uint8_t *p, uint32_t avail,
-		uint32_t max_bytes, uint64_t *out)
+	    uint32_t max_bytes, uint64_t *out)
 {
 	uint64_t acc   = 0;
 	uint32_t shift = 0;
@@ -1011,7 +1011,7 @@ static inline uint32_t situ_varint_get(const uint8_t *p, uint32_t avail,
  *
  * Returns bytes consumed, or 0 if the buffer ends mid-value. */
 static inline uint32_t situ_varint_be_get(const uint8_t *p, uint32_t avail,
-		uint32_t max_bytes, uint32_t terminal_bits, uint64_t *out)
+	    uint32_t max_bytes, uint32_t terminal_bits, uint64_t *out)
 {
 	uint64_t acc = 0;
 	uint32_t i;
@@ -1037,7 +1037,7 @@ static inline uint32_t situ_varint_be_get(const uint8_t *p, uint32_t avail,
 /* Encoded length of a value under `situ_varint_be_get`'s rules, for the
  * minimality check: a longer encoding of the same value is a second encoding. */
 static inline uint32_t situ_varint_be_len(uint64_t value, uint32_t max_bytes,
-		uint32_t terminal_bits)
+	    uint32_t terminal_bits)
 {
 	uint32_t n = 1;
 

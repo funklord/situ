@@ -13,15 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 
 import pytest
 
-import lint_conventions  # noqa: E402
+import style_gate  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+CFG  = style_gate.load_config(ROOT)
 
 
 def test_tree_follows_conventions() -> None:
 	problems = []
-	for path in lint_conventions.iter_sources(ROOT):
-		problems.extend(lint_conventions.check_file(path, ROOT))
+	for path in style_gate.discover(ROOT, CFG):
+		problems.extend(style_gate.check_file(path, ROOT, CFG))
 
 	assert not problems, "\n" + "\n".join(str(problem) for problem in problems)
 
@@ -30,32 +31,32 @@ def test_linter_flags_space_indent(tmp_path: Path) -> None:
 	source = tmp_path / "sample.c"
 	source.write_text("int main(void)\n{\n    return 0;\n}\n", encoding="ascii")
 
-	problems = lint_conventions.check_file(source, tmp_path)
+	problems = style_gate.check_file(source, tmp_path, CFG)
 
-	assert [problem.message for problem in problems] == ["space-indented line; use tabs"]
+	assert [problem.message for problem in problems] == ["indented 0 tab(s), structure says 1"]
 
 
 def test_linter_flags_space_before_tab(tmp_path: Path) -> None:
 	source = tmp_path / "sample.c"
 	source.write_text("int main(void)\n{\n \treturn 0;\n}\n", encoding="ascii")
 
-	problems = lint_conventions.check_file(source, tmp_path)
+	problems = style_gate.check_file(source, tmp_path, CFG)
 
-	assert [problem.message for problem in problems] == ["space before tab in indent"]
+	assert "space before tab in indent" in [problem.message for problem in problems]
 
 
 def test_linter_allows_alignment_after_tab(tmp_path: Path) -> None:
 	source = tmp_path / "sample.c"
 	source.write_text("void f(void)\n{\n\tg(a,\n\t  b);\n}\n", encoding="ascii")
 
-	assert lint_conventions.check_file(source, tmp_path) == []
+	assert style_gate.check_file(source, tmp_path, CFG) == []
 
 
 def test_linter_allows_block_comment_continuation(tmp_path: Path) -> None:
 	source = tmp_path / "sample.c"
 	source.write_text("/* one\n * two\n */\n", encoding="ascii")
 
-	assert lint_conventions.check_file(source, tmp_path) == []
+	assert style_gate.check_file(source, tmp_path, CFG) == []
 
 
 def test_linter_flags_non_ascii(tmp_path: Path) -> None:
@@ -63,7 +64,7 @@ def test_linter_flags_non_ascii(tmp_path: Path) -> None:
 	# Spelled as bytes so this file stays ASCII and passes its own check.
 	source.write_bytes(b"/* caf\xc3\xa9 */\n")
 
-	problems = lint_conventions.check_file(source, tmp_path)
+	problems = style_gate.check_file(source, tmp_path, CFG)
 
 	assert len(problems) == 1
 	assert problems[0].message.startswith("non-ASCII byte")
@@ -73,7 +74,7 @@ def test_linter_flags_trailing_whitespace(tmp_path: Path) -> None:
 	source = tmp_path / "sample.c"
 	source.write_text("int x;\t\n", encoding="ascii")
 
-	problems = lint_conventions.check_file(source, tmp_path)
+	problems = style_gate.check_file(source, tmp_path, CFG)
 
 	assert [problem.message for problem in problems] == ["trailing whitespace"]
 
@@ -82,7 +83,7 @@ def test_linter_flags_missing_final_newline(tmp_path: Path) -> None:
 	source = tmp_path / "sample.c"
 	source.write_text("int x;", encoding="ascii")
 
-	problems = lint_conventions.check_file(source, tmp_path)
+	problems = style_gate.check_file(source, tmp_path, CFG)
 
 	assert [problem.message for problem in problems] == ["no newline at end of file"]
 
@@ -93,7 +94,7 @@ def test_linter_ignores_python_string_content(tmp_path: Path) -> None:
 	source.write_text('EXPECTED = """\n   |\n41 | require x;\n   | ^^^^^^^^^^\n"""\n',
 	                  encoding="ascii")
 
-	assert lint_conventions.check_file(source, tmp_path) == []
+	assert style_gate.check_file(source, tmp_path, CFG) == []
 
 
 # -- the repository layout section (23) -------------------------------------

@@ -253,3 +253,9 @@ clean:
 	rm -rf '$(BUILD_ROOT)'
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 	rm -rf .mypy_cache .pytest_cache
+
+# The shared style gate: one tool, copied verbatim from
+# ~/.claude/tools/style_gate.py into every private project. It refuses to
+# run against a collapsed file list, so a pass means it actually looked.
+style:
+	$(PYTHON) tools/style_gate.py check

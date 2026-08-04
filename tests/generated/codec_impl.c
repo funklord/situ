@@ -25,12 +25,12 @@
 #include "situ.h"
 
 situ_err_t my_doubling_encode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
 situ_err_t my_doubling_decode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
 
 situ_err_t my_doubling_encode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
 {
 	uint32_t i;
 
@@ -48,7 +48,7 @@ situ_err_t my_doubling_encode(const uint8_t *in, uint32_t in_len,
 }
 
 situ_err_t my_doubling_decode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
 {
 	uint32_t i;
 
@@ -92,12 +92,12 @@ situ_err_t my_doubling_decode(const uint8_t *in, uint32_t in_len,
  */
 
 situ_err_t my_sealing_aead_encode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
 situ_err_t my_sealing_aead_decode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
 
 situ_err_t my_sealing_aead_encode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
 {
 	uint32_t i;
 
@@ -112,7 +112,7 @@ situ_err_t my_sealing_aead_encode(const uint8_t *in, uint32_t in_len,
 }
 
 situ_err_t my_sealing_aead_decode(const uint8_t *in, uint32_t in_len,
-		uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
 {
 	return my_sealing_aead_encode(in, in_len, out, out_cap, out_len);
 }

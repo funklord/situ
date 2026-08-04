@@ -250,7 +250,7 @@ So generated output is **not** exempt, and that is checked rather than
 assumed. `make lint` cannot see it -- it lands in `build/`, which the lint
 skips, and before that in Python string literals, which are excluded so
 section 17's golden diagnostics keep their space gutter. So
-`lint_conventions.check_text` takes text rather than a path, and
+`style_gate.check_text` takes text rather than a path, and
 `tests/unit/test_generated_sources_follow_the_conventions.py` runs it over
 what every schema generates in all four languages, plus the checks, the fuzz
 harness and the dissector (project.md 26.58).
@@ -268,7 +268,7 @@ Per the source's *Formatters* section, the verdict and the finding behind it:
   even ad hoc on a single file.**
 - **`pycodestyle`** -- usable only with W191 (`indentation contains tabs`)
   disabled.
-- **Written instead:** `tools/lint_conventions.py`, run by `make lint`. A
+- **Written instead:** `tools/style_gate.py`, run by `make style`. A
   checker that gates indentation is worth more here than a formatter that
   reflows everything, which is the source's own third option.
 
@@ -314,7 +314,7 @@ otherwise. The two do not conflict -- one governs the repository, the other
 governs the wire.
 
 **Markdown is not exempt from this**, although it is exempt from the indent
-rule. `lint_conventions.py` checks every `.md` it can see for ASCII, which is
+rule. The gate checks every `.md` it can see for ASCII, which is
 how the first draft of this file -- carrying thirteen em dashes and four
 section signs -- failed `make lint` on arrival.
 

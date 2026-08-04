@@ -35,11 +35,11 @@ static void test_cobs_matches_the_published_examples(void **state)
 		{ 1, {0x00},                3, {0x01, 0x01, 0x00} },
 		{ 2, {0x00, 0x00},          4, {0x01, 0x01, 0x01, 0x00} },
 		{ 4, {0x11, 0x22, 0x00, 0x33},
-		                            6, {0x03, 0x11, 0x22, 0x02, 0x33, 0x00} },
+			                        6, {0x03, 0x11, 0x22, 0x02, 0x33, 0x00} },
 		{ 4, {0x11, 0x22, 0x33, 0x44},
-		                            6, {0x05, 0x11, 0x22, 0x33, 0x44, 0x00} },
+			                        6, {0x05, 0x11, 0x22, 0x33, 0x44, 0x00} },
 		{ 4, {0x11, 0x00, 0x00, 0x00},
-		                            6, {0x02, 0x11, 0x01, 0x01, 0x01, 0x00} },
+			                        6, {0x02, 0x11, 0x01, 0x01, 0x01, 0x00} },
 	};
 	uint8_t  out[16];
 	uint8_t  back[16];
@@ -576,12 +576,12 @@ static void test_dot_stuffing_doubles_a_leading_period(void **state)
 		uint32_t written;
 
 		written = situ_smtp_dot_stuffing_encode(
-			(const uint8_t *)CASES[i].plain, plain, out);
+		    (const uint8_t *)CASES[i].plain, plain, out);
 		assert_int_equal(written, wire);
 		assert_memory_equal(out, CASES[i].wire, wire);
 
 		assert_int_equal(situ_smtp_dot_stuffing_decode(
-			(const uint8_t *)CASES[i].wire, wire, back), plain);
+		    (const uint8_t *)CASES[i].wire, wire, back), plain);
 		assert_memory_equal(back, CASES[i].plain, plain);
 	}
 }

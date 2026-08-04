@@ -97,7 +97,7 @@ static void open_file(struct opened *held, const uint8_t *data, uint32_t len)
 	assert_int_equal(situ_bitmap_file_header_view(&held->msg, 0, &held->file),
 	                 SITU_OK);
 	assert_int_equal(situ_bitmap_info_header_view(
-		&held->msg, SITU_BITMAP_FILE_HEADER_SIZE_FIXED, &held->info),
+	    &held->msg, SITU_BITMAP_FILE_HEADER_SIZE_FIXED, &held->info),
 	                 SITU_OK);
 }
 

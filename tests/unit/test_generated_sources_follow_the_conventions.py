@@ -39,7 +39,7 @@ from every_schema import ROOT, SCHEMAS, ids
 
 sys.path.insert(0, str(ROOT / "tools"))
 
-import lint_conventions  # noqa: E402
+import style_gate  # noqa: E402
 
 
 def emitted(path: Path) -> dict[str, str]:
@@ -76,6 +76,6 @@ def test_what_this_schema_generates_is_tab_indented(path: Path) -> None:
 		# Python is the one emitted language whose own convention is spaces,
 		# and this project emits it with tabs like the rest (section 25). The
 		# generator has no multi-line literals of its own to exempt.
-		problems.extend(lint_conventions.check_text(text, where))
+		problems.extend(style_gate.check_text(text, where))
 
 	assert not problems, "\n" + "\n".join(str(problem) for problem in problems)

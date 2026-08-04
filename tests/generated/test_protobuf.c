@@ -51,7 +51,7 @@ static const uint8_t MAX_U64[] = {
 };
 
 static situ_view_t view_over(situ_msg_t *msg, const uint8_t *data, uint32_t len,
-		uint8_t *scratch)
+        uint8_t *scratch)
 {
 	situ_view_t view;
 
