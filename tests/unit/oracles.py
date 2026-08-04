@@ -29,6 +29,7 @@ hand-written expectations had not.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -255,6 +256,85 @@ def proto_situ(module: object, message: bytes) -> dict[int, str]:
 	return found
 
 
+# -- bmp, read by a second implementation --------------------------------------
+#
+# `file` is a different codebase from ImageMagick and reports two fields
+# ImageMagick does not: `cbSize` and `bits offset`, which are the header's own
+# `file_size` and `pixel_offset`. Two independent readers of one format is
+# worth more than one -- and if the two ever disagree with each other, that is
+# a finding about them rather than about situ, which is also worth knowing.
+
+def file_says(image: bytes, tmp: Path) -> dict[str, object]:
+	"""`file`'s BMP line, which is a comma-separated list of facts."""
+	path = tmp / "read.bmp"
+	path.write_bytes(image)
+	shown = _run(["file", "-b", str(path)])
+
+	facts: dict[str, object] = {}
+	for part in (piece.strip() for piece in shown.split(",")):
+		if re.fullmatch(r"\d+ x \d+ x \d+", part):
+			width, height, depth = (int(n) for n in part.split(" x "))
+			facts.update(width=width, height=height, bits_per_pixel=depth)
+		elif part.startswith("cbSize "):
+			facts["file_size"] = int(part.split()[1])
+		elif part.startswith("bits offset "):
+			facts["pixel_offset"] = int(part.split()[2])
+	return facts
+
+
+def file_situ(module: object, image: bytes) -> dict[str, object]:
+	from situ_runtime import Message
+
+	view = module.bitmap_file.at(Message(bytearray(image)), 0)       # type: ignore[attr-defined]
+	view.validate()
+	head = view.info
+
+	return {"width": head.width, "height": abs(head.height),
+	        "bits_per_pixel": head.bits_per_pixel,
+	        "file_size": view.file.file_size,
+	        "pixel_offset": view.file.pixel_offset}
+
+
+# -- sqlite -------------------------------------------------------------------
+#
+# sqlite3 writes the database and reports how many rows are in it; situ reads
+# the b-tree leaf page header and reports how many cells the page holds. For a
+# table small enough to sit on one page those are the same number, and nothing
+# in either tool knows that the other exists.
+
+ROWS = (("42", "'situ'"), ("-7", "'oracle'"), ("999999", "'a longer value'"))
+
+
+def sqlite_corpus(tmp: Path) -> bytes:
+	made   = tmp / "made.db"
+	values = ", ".join(f"({a}, {b})" for a, b in ROWS)
+	_run(["sqlite3", str(made),
+	      f"create table t(a integer, b text); insert into t values {values};"])
+	return made.read_bytes()
+
+
+def sqlite_says(database: bytes, tmp: Path) -> dict[str, object]:
+	path = tmp / "read.db"
+	path.write_bytes(database)
+	rows = _run(["sqlite3", str(path), "select count(*) from t;"]).strip()
+	size = _run(["sqlite3", str(path), "pragma page_size;"]).strip()
+	return {"cell_count": int(rows), "page_size": int(size)}
+
+
+def sqlite_situ(module: object, database: bytes) -> dict[str, object]:
+	from situ_runtime import Message
+
+	# The file header names the page size at offset 16, big endian; the table
+	# lives on page 2, which starts one page in. Read from the format rather
+	# than assumed, because a different sqlite3 could choose differently.
+	page_size = int.from_bytes(database[16:18], "big")
+	page      = database[page_size:page_size * 2]
+
+	view = module.btree_leaf_page.at(Message(bytearray(page)), 0, len(page))  # type: ignore[attr-defined]
+	view.validate()
+	return {"cell_count": view.cell_count, "page_size": page_size}
+
+
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
 		name   = "cpio",
@@ -274,6 +354,22 @@ ORACLES: tuple[Oracle, ...] = (
 		          "them."),
 	),
 	Oracle(
+		name   = "sqlite",
+		schema = ROOT / "examples" / "sqlite" / "sqlite.situ",
+		tool   = "sqlite3",
+		why    = ("sqlite3 writes the database and counts the rows; situ "
+		          "reads the b-tree leaf page header and counts the cells. "
+		          "Neither knows the other exists."),
+	),
+	Oracle(
+		name   = "bmp-file",
+		schema = ROOT / "examples" / "bmp" / "bmp.situ",
+		tool   = "file",
+		why    = ("A second reader of the same format, from a different "
+		          "codebase than ImageMagick, and it reports two fields "
+		          "ImageMagick does not: cbSize and bits offset."),
+	),
+	Oracle(
 		name   = "bmp",
 		schema = ROOT / "examples" / "bmp" / "bmp.situ",
 		tool   = "identify",
@@ -290,4 +386,6 @@ DRIVERS = {
 	"cpio": (cpio_corpus, cpio_says, cpio_situ),
 	"bmp":  (bmp_corpus, bmp_says, bmp_situ),
 	"protobuf": (proto_corpus, proto_says, proto_situ),
+	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
+	"bmp-file": (bmp_corpus, file_says, file_situ),
 }
