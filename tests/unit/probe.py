@@ -13,6 +13,15 @@ Anything else is a defect, and which kind is worth keeping apart: a traceback
 out of the compiler is not the same failure as generated C that will not build,
 and neither is the same as four backends that build and disagree.
 
+**A refusal from the parser is not a pass.** The composer writes schemas, and
+one that does not lex or parse is a cell testing nothing -- the axes it was
+built from were never composed at all. That is `malformed`, and it is a
+failure of this file's own inputs rather than of the compiler. It had to be
+told apart the hard way: a terminator written with an escape situ does not
+have refused 540 cells, and a trailing member after `[remaining]` refused 240
+more, and the sweep counted all 780 as passes. Nine hundred cells of a
+twenty-seven hundred cell space were measuring the template (26.54).
+
 The dissector is asked too where Lua is here. It is the artifact with no
 compiler behind it, which is where invariant 61 says the defects live -- and
 the last three folds bear that out.
@@ -30,7 +39,7 @@ import fourway
 from compose import Case
 from every_schema import ROOT
 from situc.cli import analyse
-from situc.diagnostics import SituError
+from situc.diagnostics import SituError, Source
 from situc.dissector import generate as generate_dissector
 from situc.parser import parse
 
@@ -48,7 +57,8 @@ class Outcome:
 	"""What one case did. `kind` is the headline; `detail` is for a reader."""
 
 	case:   Case
-	kind:   str		# refused | empty | agreed | crash | build | disagree
+	kind:   str		# refused | empty | agreed | malformed |
+			#            crash | build | disagree
 	detail: str = ""
 
 	@property
@@ -64,6 +74,16 @@ def run(case: Case, tmp: Path, seed: int = 20260804) -> Outcome:
 	# The first oracle, and the cheapest: `situc` may refuse this, and must
 	# not fall over. A `SituError` carries a blame chain and a span; anything
 	# else is the compiler crashing on input it never rejected.
+	# Parsed first, and separately: a schema this file wrote that does not
+	# parse is a bug in the composer, and calling it a refusal would file it
+	# under "the language said no".
+	try:
+		parse(Source(str(path), path.read_text(encoding="ascii")))
+	except SituError as broken:
+		return Outcome(case, "malformed", str(broken.diagnostic.message))
+	except Exception as broken:			# noqa: BLE001
+		return Outcome(case, "crash", f"{type(broken).__name__}: {broken}")
+
 	try:
 		source, resolved, _ = analyse(path)
 	except SituError as refusal:

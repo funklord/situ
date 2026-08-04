@@ -7444,6 +7444,46 @@ could be read.
 **Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; 2700 composed cells with no failures.
 
+### 26.54 Nine hundred cells that were measuring the template
+
+The composed space was clean, so 26.53 widened it -- and the sweep's oracle
+counts a refusal as a pass, which is what made the run readable and also means
+nobody had ever read one. Reading them took a few minutes and found that of
+2700 cells, **780 were refused for reasons that had nothing to do with what
+they compose**. Two messages, both the composer's own fault:
+
+  * 540 cells: a terminator written `"\xff"`, and situ has no `\x` escape. The
+    entire `records` neighbour added in 26.53 -- a run of records before the
+    member -- had never once composed;
+  * 240 cells: a trailing `u16 tail` after a `[remaining]` member, which 8.5
+    refuses. The template appended that tail unconditionally, and it is the
+    member that makes most of this space worth running.
+
+Both are fixed and the space is fully live: 2700 cells, 0 refusals. What the
+newly-live cells then found, immediately:
+
+**A terminated run of *fixed-size* records had no walk in C.** `_struct_extent`
+is emitted only for a variable struct -- a fixed one's extent is its size --
+and reading that absence as "cannot measure" declined the run while the offset
+chain went on naming its span. That is 26.46's sentence about a `while` run
+over a fixed element, in the other construct that walks one: invariant 65,
+which says a fix stated for one construct is a fix owed to its family.
+
+**And the differ asked for a sub-view of a nested struct ending in
+`[remaining]`** -- a struct whose end is the *frame's* end, which its own bytes
+never say. Every backend declines it; the probe now asks the shared question
+they ask.
+
+**The oracle grew a third answer.** A schema the composer writes that does not
+*parse* is not a refusal by the language, it is a bug in the composer's own
+inputs -- `malformed`, and a failure. It is the distinction that would have
+caught this the day it arrived rather than a fold later, and the reason it was
+missing is that "a refusal is a pass" was written when every refusal came from
+the layout solver.
+
+**Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; 2700 composed cells, none refused.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8130,7 +8170,15 @@ host and under aarch64 emulation; 2700 composed cells with no failures.
    a computed limit is emitted as a literal, check it against the type it is
    emitted as, and emit nothing rather than a number that has overflowed.
 
-83. **Where the count comes from and how wide an element is are two
+83. **A test input that fails for its own reasons is not a test.** Seven
+   hundred and eighty composed cells were refused before they reached the
+   thing they were composed to exercise -- an escape the language does not
+   have, and a member the template put after `[remaining]`. Every one counted
+   as a pass. Where a harness generates its inputs, the reasons an input can
+   be rejected have to be told apart: rejected *by the thing under test* is a
+   result, and rejected because the harness wrote it wrong is not.
+
+84. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the

@@ -92,7 +92,7 @@ BEFORE: dict[str, str] = {
 	# A run of records ending at a terminator. Everything after it is placed
 	# by a *walk*, which is a third way for an offset to stop being a
 	# constant: not a sum, not a scan, a loop.
-	"records": "\tmark  seen[] until \"\\xff\";\n",
+	"records": "\tmark  seen[] until \"\\r\\n\";\n",
 }
 
 #: Where the member under test sits. Each is its own accessor family: a gate
@@ -193,7 +193,16 @@ class Case:
 		# this sweep has found was found in the member *after* the one being
 		# composed.
 		member = (f"\t{element}  run{FORMS[self.form].format(read=read)};\n")
-		tail   = "\tu16  tail;\n"
+
+		# Nothing after a `[remaining]` member: it runs to the end of the
+		# frame and 8.5 refuses a member behind it. The trailing scalar is
+		# what makes most of this space worth running -- what follows a
+		# variable-length member is where a wrong extent shows up -- and for
+		# this one form there is nothing that can follow. Emitted anyway, it
+		# refused 240 cells for the shape of this template rather than for
+		# anything about the composition, and the sweep counted every one of
+		# them as a pass.
+		tail   = "" if self.form == "remaining" else "\tu16  tail;\n"
 
 		body = declared + BEFORE[self.before].format(read=read)
 		if self.place == "frame":
@@ -204,7 +213,10 @@ class Case:
 			# name a field of the struct that contains its own. What the
 			# outer struct contributes is the thing that matters here, which
 			# is that `part` sits at an offset the message decides.
-			inner = f"struct held {{\n{body}{member}\tu16  seq;\n}}\n"
+			# ...and nothing after a `[remaining]` member here either, for
+			# the reason the frame has none: 8.5 refuses a member behind one.
+			seq   = "" if self.form == "remaining" else "\tu16  seq;\n"
+			inner = f"struct held {{\n{body}{member}{seq}}}\n"
 			body  = ("\tu8   lead [max = 4];\n"
 			         "\tu8   ahead[lead];\n"
 			         "\theld  part;\n") + tail

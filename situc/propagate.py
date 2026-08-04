@@ -1716,6 +1716,26 @@ def _variant_effects(context: Context) -> tuple[Effect, ...]:
 
 	detail = ", ".join(f"`{name}` {size // BITS_PER_BYTE}" for name, size in sizes)
 
+	# An arm with no upper bound takes the variant's with it. A `Bounded`
+	# here is a promise of two numbers, and the parameterisation that fills
+	# them in asserts rather than guessing -- so a variant one of whose arms
+	# ends in `[remaining]` crashed the compiler on an assertion instead of
+	# reporting anything. MQTT's PUBLISH is that shape: its payload is the
+	# rest of the packet, and it sits in a switch beside CONNACK's two bytes.
+	#
+	# Unbounded is also the true answer, and it is the *weaker* one, which is
+	# the direction invariant 2 permits: nothing in the schema limits how many
+	# bytes the selected arm can occupy.
+	if context.placement.size_max_bits is None:
+		return (
+			Effect(Axis.SIZE, Value("Unbounded"),
+			       f"the extent is whichever arm is selected: {detail} bytes,"
+			       " and one of them has no upper bound"),
+			Effect(Axis.MUTATE, Value("Shifting"),
+			       "selecting a different arm changes the extent, moving "
+			       "every member after the variant"),
+		)
+
 	return (
 		Effect(Axis.SIZE, Value("Bounded"),
 		       f"the extent is whichever arm is selected: {detail} bytes; "

@@ -3269,22 +3269,31 @@ class Emitter:
 		"""
 		assert placement.delimiter is not None
 		element = self.resolved.structs[placement.type_name]
-		if not self._struct_extent(element):
+		# A *fixed-size* element has no extent function -- its extent is its
+		# size and every caller has that already -- and reading that absence
+		# as "cannot measure" declined the whole run while the offset chain
+		# went on naming its span. The same sentence 26.46 wrote about a
+		# `while` run over a fixed element, in the other construct that walks
+		# one: a fix stated for one construct is a fix owed to its family
+		# (invariant 65).
+		fixed = element.layout.is_fixed_size
+		if not fixed and not self._struct_extent(element):
 			return self._unwalkable_run(struct, placement)
 
 		local  = c_name(self._local(struct, placement))
 		delim  = placement.delimiter
 		bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
 		base   = self._base_expression(struct, placement, gated=False)
-		extent = ident(self.prefix, element.name, "extent")
+		extent = (macro(self.prefix, element.name, "SIZE_FIXED") if fixed
+		          else f"{ident(self.prefix, element.name, 'extent')}(element)")
 
 		sym   = ident(self.prefix, struct.name, local, "delim")
 		count = ident(self.prefix, struct.name, local, "count")
 		at    = ident(self.prefix, struct.name, local, "at")
 		span  = ident(self.prefix, struct.name, local, "span")
 
-		walk = self._record_prologue(base, delim, sym, f"{extent}(element)")
-		from_ = self._record_prologue("start", delim, sym, f"{extent}(element)")
+		walk = self._record_prologue(base, delim, sym, extent)
+		from_ = self._record_prologue("start", delim, sym, extent)
 
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",

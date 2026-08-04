@@ -99,7 +99,8 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Member, arm_members, classify, containment_order, data_sized,
-	indexed_elements, local_name, own_entries, own_members, unmeasurable_inside,
+	has_computable_extent, indexed_elements, local_name, own_entries,
+	own_members, unmeasurable_inside,
 )
 
 
@@ -319,7 +320,8 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			if placement.sized_by is None:
 				continue
 			found.append(Ask(Probe.BYTES, local))
-		elif kind is Member.NESTED and placement.type_name in structs:
+		elif kind is Member.NESTED and placement.type_name in structs \
+				and _nested_is_measurable(placement, structs_by_name):
 			# A fixed-size nested struct measures its own constant; a
 			# variable one is asked. The count carries which.
 			inner_struct = structs_by_name.get(placement.type_name or "")
@@ -347,6 +349,23 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			found.append(Ask(Probe.COUNT, local))
 
 	return found
+
+
+def _nested_is_measurable(placement: Placement,
+		structs_by_name: dict[str, ResolvedStruct]) -> bool:
+	"""Whether a nested struct has a sub-view to hand back.
+
+	One with no single size is measured from its own bytes, and a struct
+	ending in `[remaining]` cannot be: where it ends is where the *frame*
+	ends, which its own bytes do not say. Every backend declines the sub-view
+	there; this asked for one anyway, which is a driver that does not compile
+	and so a schema nobody compares.
+	"""
+	inner = structs_by_name.get(placement.type_name or "")
+	if inner is None:
+		return True		# not a struct this walk knows; the caller decides
+	return (inner.layout.is_fixed_size
+	        or has_computable_extent(structs_by_name, inner))
 
 
 def _region_walks(struct: ResolvedStruct, region: Placement,

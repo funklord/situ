@@ -112,7 +112,8 @@ def main() -> int:
 			print(f"[{index}/{len(chosen)}] {outcome.kind:9} {case.name}")
 
 	print()
-	for kind in ("agreed", "refused", "empty", "crash", "build", "disagree"):
+	for kind in ("agreed", "refused", "empty",
+	             "malformed", "crash", "build", "disagree"):
 		if tally[kind]:
 			print(f"  {kind:9} {tally[kind]}")
 
