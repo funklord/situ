@@ -130,3 +130,25 @@ def test_the_copyright_file_does_not_invent_a_licence() -> None:
 
 def test_the_version_is_a_version() -> None:
 	assert re.fullmatch(r"\d+\.\d+\.\d+", situc.__version__)
+
+
+def test_the_package_declares_the_python_floor_the_project_declares() -> None:
+	"""Three statements of one number, and a `.deb` is the one that bites.
+
+	A package whose `Depends` floor is lower than the code's real floor
+	installs cleanly and then refuses to start -- which is a live bug in a
+	sibling project right now, found by an evaluation in `suggestions/`. situ
+	has had the underlying version of it too: it claimed 3.11 for six phases
+	while a PEP 701 f-string made it 3.12.
+
+	This only holds the declarations to each other.
+	`test_every_module_parses_at_the_declared_floor` is what holds the *code*
+	to them, and it skips where the interpreter is absent -- so on a machine
+	without the floor installed, the `Depends` line is an unverified claim and
+	this test does not pretend otherwise.
+	"""
+	pyproject = (ROOT / "pyproject.toml").read_text(encoding="ascii")
+	found     = re.search(r'^python_version\s*=\s*"(\d+\.\d+)"', pyproject, re.M)
+	assert found is not None
+
+	assert control("situc")["Depends"] == f"python3 (>= {found.group(1)})"
