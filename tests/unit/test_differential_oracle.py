@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import binascii
 import ctypes
+import importlib
+import itertools
 import random
 import shutil
 import subprocess
@@ -40,26 +42,42 @@ from situc.parser import parse
 from situc.resolve import resolve
 
 
+#: Each built module gets a directory of its own, counted rather than named
+#: after the schema.
+_BUILDS = itertools.count()
+
+
 def build_module(schema: Path, tmp: Path) -> object:
-	"""The Python accessors for one schema, importable."""
+	"""The Python accessors for one schema, importable.
+
+	Every build lands in a fresh directory and is imported under a fresh
+	name. Two versions of one schema in one process is exactly what the
+	honest/lying pair below is, and sharing a directory means the second
+	import can be served from the first's cached bytecode -- the module
+	stays stale, the comparison agrees, and the test that exists to prove a
+	mutation is noticed reports that it was not. That cost an hour of
+	believing a false alarm, which is cheaper than believing a false green.
+	"""
 	source   = Source(str(schema), schema.read_text(encoding="ascii"))
 	parsed   = parse(source)
 	resolved = resolve(parsed, solve(parsed))
 	emitted  = generate_py.generate(parsed, resolved, schema.stem)
 
-	(tmp / f"{schema.stem}.py").write_text(emitted.module, encoding="ascii")
+	where = tmp / f"build{next(_BUILDS)}"
+	where.mkdir()
+	(where / f"{schema.stem}.py").write_text(emitted.module, encoding="ascii")
 	runtime = ROOT / "runtime" / "python" / "situ_runtime.py"
-	(tmp / "situ_runtime.py").write_text(runtime.read_text(encoding="ascii"),
-	                                     encoding="ascii")
+	(where / "situ_runtime.py").write_text(runtime.read_text(encoding="ascii"),
+	                                       encoding="ascii")
 
-	sys.path.insert(0, str(tmp))
+	sys.path.insert(0, str(where))
 	try:
-		import importlib
+		importlib.invalidate_caches()
 		for stale in (schema.stem, "situ_runtime"):
 			sys.modules.pop(stale, None)
 		return importlib.import_module(schema.stem)
 	finally:
-		sys.path.remove(str(tmp))
+		sys.path.remove(str(where))
 
 
 @pytest.mark.parametrize("oracle", ORACLES, ids=[o.name for o in ORACLES])
@@ -144,15 +162,19 @@ def test_the_corpus_is_not_this_project_s_opinion() -> None:
 
 	import oracles
 
-	# The helpers that actually shell out. A corpus function either runs a
-	# tool itself or delegates to one of these; anything else is bytes chosen
-	# in this file, which is the thing that must not happen.
-	shells_out = ("subprocess", "_run(", "_randpkt(")
+	# The ways a corpus may legitimately be produced: run a tool, delegate to
+	# a helper that runs one, or call a third-party library. Anything else is
+	# bytes chosen in this file, which is the thing that must not happen.
+	#
+	# `_pymodbus(` is here because Modbus's independent implementation is a
+	# library rather than a command. The rule is "not written here", not
+	# "spawned a process".
+	elsewhere = ("subprocess", "_run(", "_randpkt(", "_pymodbus(")
 
 	for oracle in ORACLES:
 		corpus = DRIVERS[oracle.name][0]
 		body   = inspect.getsource(corpus)
-		assert any(mark in body for mark in shells_out), (
+		assert any(mark in body for mark in elsewhere), (
 			f"{oracle.name}: the corpus is not produced by `{oracle.tool}`")
 	assert oracles.__doc__ is not None
 

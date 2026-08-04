@@ -56,6 +56,15 @@ class Oracle:
 
 
 def have(tool: str) -> bool:
+	"""Whether the oracle's implementation is on this machine.
+
+	Most are commands. `pymodbus` is a library, so asking the PATH about it
+	would report it missing on every machine and skip the oracle silently --
+	which is the failure this whole file is about.
+	"""
+	if tool == "pymodbus":
+		import importlib.util
+		return importlib.util.find_spec("pymodbus") is not None
 	return shutil.which(tool) is not None
 
 
@@ -638,6 +647,105 @@ def _ipv4_read(view: Any) -> dict[str, int]:
 	        "identification": int(view.identification)}
 
 
+# -- modbus -------------------------------------------------------------------
+#
+# `pymodbus` builds the frames and decodes them back, and unlike every other
+# oracle here the corpus is a *stream*: several ADUs end to end, which is what
+# a Modbus TCP connection carries. Both sides therefore have to agree on where
+# each frame stops, and `examples/modbus/modbus.situ` names that as the one
+# arithmetic fact implementations get wrong -- `length` counts the unit
+# identifier and the PDU, so the next frame begins at `6 + length`.
+#
+# It is a library rather than a command, so there is no `shutil.which` to ask;
+# `have("pymodbus")` is special-cased on the import.
+
+MODBUS_REQUESTS = (
+	("read_holding", 0x1234, 7, 3, None),
+	("read_coils",   0x0020, 9, 17, None),
+	("write_multi",  0x0005, 2, 4, [9, 8]),
+	("read_input",   0x00FF, 125, 1, None),
+)
+
+
+def _pymodbus() -> tuple[Any, Any, list[Any]]:
+	import pymodbus.pdu as pdu
+	import pymodbus.pdu.bit_message as bits
+	import pymodbus.pdu.register_message as regs
+	from pymodbus.framer import FramerSocket
+
+	made: list[Any] = []
+	for name, address, count, unit, values in MODBUS_REQUESTS:
+		if name == "read_holding":
+			made.append(regs.ReadHoldingRegistersRequest(
+				address=address, count=count, dev_id=unit,
+				transaction_id=len(made) + 1))
+		elif name == "read_coils":
+			made.append(bits.ReadCoilsRequest(
+				address=address, count=count, dev_id=unit,
+				transaction_id=len(made) + 1))
+		elif name == "write_multi":
+			made.append(regs.WriteMultipleRegistersRequest(
+				address=address, count=count, registers=values, dev_id=unit,
+				transaction_id=len(made) + 1))
+		else:
+			made.append(regs.ReadInputRegistersRequest(
+				address=address, count=count, dev_id=unit,
+				transaction_id=len(made) + 1))
+
+	# `is_server=True` decodes *requests*. The other way round it fails on
+	# frames pymodbus itself built, reading a read-holding request's address
+	# as a response's byte count.
+	return FramerSocket, pdu.DecodePDU, made
+
+
+def modbus_corpus(tmp: Path) -> bytes:
+	framer_class, decode_class, made = _pymodbus()
+	framer = framer_class(decode_class(True))
+	return b"".join(framer.buildFrame(one) for one in made)
+
+
+def modbus_says(stream: bytes, tmp: Path) -> list[dict[str, int]]:
+	framer_class, decode_class, _ = _pymodbus()
+	framer = framer_class(decode_class(True))
+
+	found: list[dict[str, int]] = []
+	rest = stream
+	while rest:
+		used, one = framer.processIncomingFrame(rest)
+		if not used or one is None:
+			break
+		found.append({"transaction_id": one.transaction_id,
+		              "unit_id": one.dev_id,
+		              "function": one.function_code,
+		              "frame_bytes": used})
+		rest = rest[used:]
+	return found
+
+
+def modbus_situ(module: object, stream: bytes) -> list[dict[str, int]]:
+	from situ_runtime import Message
+
+	msg   = Message(bytearray(stream))
+	at    = 0
+	found: list[dict[str, int]] = []
+
+	while at < len(stream):
+		head = module.mbap_header.at(msg, at)           # type: ignore[attr-defined]
+		head.validate()
+		# 6 + length: the three fields ahead of `length` are not counted by
+		# it, and the unit identifier is.
+		whole = 6 + int(head.length)
+		body  = module.request.at(msg, at + 7, whole - 7)  # type: ignore[attr-defined]
+
+		found.append({"transaction_id": int(head.transaction_id),
+		              "unit_id": int(head.unit_id),
+		              "function": int(body.function),
+		              "frame_bytes": whole})
+		at += whole
+
+	return found
+
+
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
 		name   = "cpio",
@@ -709,6 +817,14 @@ ORACLES: tuple[Oracle, ...] = (
 		          "flags width moves all four."),
 	),
 	Oracle(
+		name   = "modbus",
+		schema = ROOT / "examples" / "modbus" / "modbus.situ",
+		tool   = "pymodbus",
+		why    = ("The corpus is a stream of ADUs, so both sides must agree "
+		          "where each frame stops. modbus.situ names `6 + length` as "
+		          "the one arithmetic fact implementations get wrong."),
+	),
+	Oracle(
 		name   = "sqlite",
 		schema = ROOT / "examples" / "sqlite" / "sqlite.situ",
 		tool   = "sqlite3",
@@ -751,6 +867,13 @@ LIES = {
 	# mutation has to be one the schema still compiles under, or the test
 	# would be proving the parser rejects nonsense rather than proving the
 	# oracle compares bytes.
+	# Swapping `length` and `unit_id` moves the length field by a byte and
+	# changes its width, so the frame walk lands in the wrong place -- which
+	# is exactly the arithmetic this oracle exists to check.
+	"modbus": ("\tu16  length       [min = 2, max = 254]; // unit + PDU, 1 + 253 at most\n"
+	           "\tu8   unit_id;",
+	           "\tu8   unit_id;\n"
+	           "\tu16  length       [min = 2, max = 254]; // unit + PDU, 1 + 253 at most"),
 	"udp": ("\tu16  source_port;\n\tu16  destination_port;",
 	        "\tu16  destination_port;\n\tu16  source_port;"),
 	"tcp": ("\tu32       sequence;\n\tu32       acknowledgement;",
@@ -775,6 +898,7 @@ DRIVERS = {
 	"protobuf": (proto_corpus, proto_says, proto_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
+	"modbus":   (modbus_corpus, modbus_says, modbus_situ),
 	"ethernet": (eth_corpus, eth_says, eth_situ),
 	"arp":      (eth_corpus, arp_says, arp_situ),
 	# From the udp capture rather than the `ip` one: `randpkt -t ip` fills the
