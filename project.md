@@ -8149,6 +8149,44 @@ directory.
 **Status:** 2974 unit tests, 7 skipped; `make check` clean over 109 files;
 thirteen layout oracles and two computation ones.
 
+### 26.65 MQTT, and a reader that was regenerating its own input
+
+Fourteen layout oracles now. MQTT is the last of the list 26.62 opened, and
+the only one where three implementations touch the bytes before situ sees
+them: `paho-mqtt` lays the packets out -- it is a client, so it is handed a
+socket that records instead of sending -- `text2pcap` wraps each in a TCP
+frame, which is carriage rather than interpretation, and `tshark` dissects
+them from a codebase unrelated to paho's.
+
+Six packets, and they cover the two cases a hand-written vector never happens
+to contain: a 207-byte body, whose remaining length is a **varint with the
+continuation bit set**, and the two zero-length packets that made `struct
+nothing` necessary when the example was written (26.55). situ and tshark
+agree about all six.
+
+One packet per TCP frame, because several MQTT packets in one segment are
+collapsed into a single `mqtt` layer by tshark's JSON output and the
+comparison would silently have been about the last one. That is the third
+time in three folds that a plausible-looking arrangement would have compared
+less than it appeared to.
+
+**And the fourth.** The first version of `mqtt_situ` ignored the corpus it was
+handed and called paho again to get its packets. It passed, and it was wrong:
+a reader that regenerates its own input is not reading what the other side
+read. The two agree only while the generator stays deterministic, so a
+timestamp or a random client id in some future paho would have turned this
+into a green test of nothing. It reads the corpus now.
+
+That failure mode has a shape worth naming, because it is not the same as
+invariant 100's. There the exclusion was visible as a `try/except`; here both
+sides genuinely ran, genuinely compared, and genuinely agreed -- about two
+separately-generated things that happened to match. **A comparison is only
+between two things if both of them came from the same input.**
+
+**Status:** 2976 unit tests, 7 skipped; `make check` clean over 109 files;
+fourteen layout oracles and two computation ones. Only `ble` is left without
+one, and it has no encoder here.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9010,6 +9048,16 @@ thirteen layout oracles and two computation ones.
    `importlib.invalidate_caches()` -- and this is the same rule as never
    concluding a test passes from a binary the build did not rebuild, one
    language over.
+
+102. **A comparison is only between two things if both came from the same
+   input.** The MQTT oracle's situ side first ignored the corpus it was
+   handed and regenerated its own packets from the same generator. Both
+   sides ran, both compared, both agreed -- about two separately-produced
+   artefacts that happened to match, which is not the claim the test makes
+   and stops being true the day the generator gains a timestamp. This is
+   subtler than invariant 100: nothing was excluded and nothing was
+   swallowed. Check that each side's input is *the argument it was given*,
+   not something equivalent it can obtain for itself.
 
 ---
 
