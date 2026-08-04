@@ -27,7 +27,7 @@ struct connack_body size=2
   @0x0000:7 1bit      u1         session_present  msb_first
   @0x0001   1         connect_return return_code
 
-struct connect_body size=12..65547
+struct connect_body size=12..327695
   @0x0000   2         u16        protocol_name_length  big must_eq=4
   @0x0002   4         u8         protocol_name  big
   @0x0006   1         u8         protocol_level  must_eq=4
@@ -39,8 +39,10 @@ struct connect_body size=12..65547
   @0x0007:6 1bit      u1         clean_session  msb_first
   @0x0007:7 1bit      u1         <reserved0>  msb_first must_be_zero
   @0x0008   2         u16        keep_alive  big
-  @0x000a   2         u16        client_id_length  big
-  @0x000c   0..65535  u8         client_id  sized-by=client_id_length
+  @0x000a   2..65537  mqtt_string client_id  big
+  ~         0..131074 variant    will
+  ~         0..65537  variant    user_name
+  ~         0..65537  variant    password
 
 struct ident_body size=2
   @0x0000   2         u16        packet_id  big
@@ -78,3 +80,7 @@ struct subscription size=3..65538
 struct unsubscribe_body size=2..
   @0x0000   2         u16        packet_id  big
   @0x0002   0..       mqtt_string filters  sized-by=remaining
+
+struct will_message size=4..131074
+  @0x0000   2..65537  mqtt_string topic  big
+  ~         2..65537  mqtt_string payload  big

@@ -1795,7 +1795,19 @@ class Emitter:
 		if nested is not None and not nested.layout.is_fixed_size \
 				and has_computable_extent(self.resolved.structs, nested):
 			inner = c_name(nested.name)
+			base  = c_name(local_name(struct, placement))
 			return [
+				# How many bytes this arm occupies, for the switch that places
+				# whatever follows the variant. The length chain names it and
+				# only the ordinary nested member emitted one, so the first
+				# schema with a variable-size arm named an attribute nothing
+				# defines -- MQTT's CONNECT, three times over.
+				"", "\t@property",
+				f"\tdef {base}_extent(self) -> int:",
+				f'\t\t"""How many bytes {placement.path} occupies here."""',
+				f"\t\tstart = {start}",
+				f"\t\treturn {inner}(self._msg, self._at + start,",
+				"\t\t\tmax(0, self._len - start))._extent",
 				*head,
 				f"\t\twhole = {inner}(self._msg, self._at + ({start}),",
 				f"\t\t\tmax(0, self._len - ({start})))",

@@ -3505,6 +3505,22 @@ class Emitter:
 			inner = c_name(nested.name)
 			return [
 				*head,
+				# How many bytes this arm occupies, for the switch that places
+				# whatever follows the variant. The length chain names it and
+				# only the ordinary nested member emitted one, so the first
+				# schema with a variable-size arm -- MQTT's CONNECT, three
+				# times over -- named a member function nothing defines.
+				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
+				"\t{",
+				"\t\tsitu_view_t whole;",
+				"",
+				f"\t\tif (situ_view_sub(this->raw(), {start},",
+				f"\t\t\t\tsitu_remaining_u32(limit(), {start}), &whole)"
+				" != SITU_OK) {",
+				"\t\t\treturn 0;",
+				"\t\t}",
+				f"\t\treturn ::{self.namespace}::{inner}(whole).extent();",
+				"\t}",
 				f"\t[[nodiscard]] ::situ::rt::err {name}"
 				f"(::{self.namespace}::{inner} &out) const noexcept",
 				"\t{",

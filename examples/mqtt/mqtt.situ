@@ -31,14 +31,20 @@
 // struct turns out to be exactly what "no variable header and no payload"
 // means. Section 3.12 says it in words; this says it in the layout.
 //
-// THE BOUNDARY, and it is the same one twice: a member whose *presence*
-// depends on a flag. Both are recorded where they arise, in `connect_body`
-// and `publish_body`. situ has `[since = N]` for a member that arrives in a
-// later version and `variant` for one shape or another, and neither is "this
-// field is here when that bit is set". Naming the construct rather than the
-// absence: a `case` over a one-bit field whose arms may be empty is what
-// covers it, which is what `nothing` above already is -- the missing half is
-// letting a variant switch on a bit of a *different* struct.
+// THE BOUNDARY, and it is narrower than the first draft of this file claimed.
+// A member whose *presence* depends on a flag is expressible: a `variant` may
+// switch on a one-bit field, and an arm may be `nothing`, so "here when that
+// bit is set" is a switch with an empty arm. CONNECT's will, user name and
+// password are written that way below. The first version of this schema said
+// situ had no construct for it and recorded a limitation that was not there,
+// which is worse than saying nothing: a reader designs around it (26.56).
+//
+// What is *not* expressible is the same question asked across a struct
+// boundary. PUBLISH's packet identifier is present when the QoS in the fixed
+// header says so, and the fixed header is this struct while the body is
+// another -- a variant switches on a field it can name, and an arm's members
+// cannot see the struct the arm is in. That one is recorded in
+// `publish_body`, where it arises.
 //
 // The second half of the boundary is not a limitation but a modelling choice,
 // and it is written down because a reader would otherwise wonder. MQTT 5.0
@@ -114,6 +120,13 @@ struct nothing {
 
 require size(nothing) == 0;
 
+// 1.5.3. A UTF-8 encoded string: two bytes of length, then that many bytes.
+// The one shape MQTT repeats everywhere.
+struct mqtt_string {
+	u16  length;
+	u8   value[length];
+}
+
 // 3.1.2. The variable header, and the client identifier that follows it.
 //
 // The protocol name is modelled as its four bytes rather than as a
@@ -145,33 +158,41 @@ struct connect_body {
 
 	// 3.1.3.1. Always present, and may be zero-length -- a client asking the
 	// server to assign it one.
-	u16  client_id_length;
-	u8   client_id[client_id_length];
+	mqtt_string  client_id;
 
-	// THE BOUNDARY. What follows in the payload is the will topic, the will
-	// message, the user name and the password, in that order, each present
-	// only if its flag above is set (3.1.3). situ has no way to say that: a
-	// member is in the layout or it is not, `[since = N]` gates on a version
-	// field rather than on a bit, and a `variant` chooses between shapes
-	// rather than between presence and absence.
+	// 3.1.3, and the shape this example exists to show. Each of the three is
+	// present only when its flag above is set, which is a `variant` switched
+	// on one bit with `nothing` as the other arm. The discriminant is a
+	// `u1` rather than an enum, so `default: error` is required -- the
+	// compiler cannot enumerate the values of a bare integer -- and it is
+	// unreachable here, a bit having no third value.
 	//
-	// The construct that would cover it is a variant whose discriminant is a
-	// bit field and whose arms may be empty -- both halves of which exist
-	// here already: `qos_level` is a two-bit discriminant type and `nothing`
-	// is an empty arm. What is missing is only that a variant may not switch
-	// on a field of a *different* struct, and these flags are in this one.
-	//
-	// So a client reading a CONNECT gets the header and the client id from
-	// this schema, and walks the four optional strings itself -- which is
-	// where `mqtt_string` below is for.
+	// The order is the standard's: will, then user name, then password.
+	variant will switch (will_flag) {
+		case 1:  will_message  will_present;
+		case 0:  nothing       will_absent;
+		default: error;
+	}
+
+	variant user_name switch (user_name_flag) {
+		case 1:  mqtt_string  user_present;
+		case 0:  nothing      user_absent;
+		default: error;
+	}
+
+	variant password switch (password_flag) {
+		case 1:  mqtt_string  password_present;
+		case 0:  nothing      password_absent;
+		default: error;
+	}
 }
 
-// 1.5.3. A UTF-8 encoded string: two bytes of length, then that many bytes.
-// The one shape MQTT repeats everywhere, and what a caller walking CONNECT's
-// optional fields reads them as.
-struct mqtt_string {
-	u16  length;
-	u8   value[length];
+// 3.1.3.2 and 3.1.3.3: the will is a topic and a message, and they arrive
+// together or not at all -- which is why they are one struct rather than two
+// variants over the same flag.
+struct will_message {
+	mqtt_string  topic;
+	mqtt_string  payload;
 }
 
 // 3.2.2. Two bytes, and seven of the sixteen bits are required to be zero.
@@ -189,17 +210,21 @@ struct publish_body {
 	u16  topic_length;
 	u8   topic[topic_length];                       // 3.3.2.1
 
-	// THE BOUNDARY, again. 3.3.2.2: a two-byte packet identifier sits here,
-	// and only when the QoS in the *fixed header's* flags is 1 or 2. It is
-	// the same missing construct as CONNECT's optional fields with the
-	// discriminant one struct further away: the bits that decide are in the
-	// packet's first byte, and this struct is the body.
+	// THE BOUNDARY, and the whole of it. 3.3.2.2: a two-byte packet
+	// identifier sits here, and only when the QoS in the *fixed header's*
+	// flags is 1 or 2.
+	//
+	// CONNECT's optional fields are a variant on a bit of the same struct,
+	// which is exactly what this needs and cannot have: the bits that decide
+	// are in the packet's first byte and this struct is the body, and a
+	// variant switches on a field it can name. An arm's members do not see
+	// the struct the arm is in.
 	//
 	// A caller that has read the fixed header knows the QoS, so it knows
 	// whether the two bytes are there; what it cannot do is ask this schema.
-	// A schema that assumed QoS 0 would silently read two bytes of the
-	// payload as the last of the topic on every retained message, which is
-	// why this says so rather than guessing.
+	// A schema that assumed QoS 0 would read two bytes of the payload as the
+	// last of the topic on every published message above QoS 0, which is why
+	// this says so rather than guessing.
 
 	u8   payload[remaining];                        // 3.3.3
 }
