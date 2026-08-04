@@ -130,8 +130,16 @@ DIGITS_HELPER = [
 	"-- A named helper rather than `math.max`, because the builtin expansion",
 	"-- rewrites `max` wherever it finds one -- including in what this",
 	"-- returns, which came out as `math.math.max` (invariant 53).",
-	"local function situ_digits(text, base)",
-	"\tlocal value = tonumber(text, base) or 0",
+	"--",
+	"-- Bounded like `situ_uint`, and for the same reason: an extent function",
+	"-- reads a length field of a record a truncated packet may not carry, and",
+	"-- slicing the tvb for the digits raised out of Wireshark before anything",
+	"-- could ask how long the field was.",
+	"local function situ_digits(tvb, at, width, base)",
+	"\tif at < 0 or at + width > tvb:len() then",
+	"\t\treturn 0",
+	"\tend",
+	"\tlocal value = tonumber(tvb(at, width):string(), base) or 0",
 	"\tif value < 0 then",
 	"\t\treturn 0",
 	"\tend",
@@ -684,7 +692,7 @@ def _read(placement: Placement, base: str) -> str | None:
 			# harness rather than a short field. A text number in situ is
 			# digits (8.6.2); the compiled backends have no sign to read and
 			# this had one.
-			return (f"situ_digits(tvb({_at(base, first)}, {count}):string(),"
+			return (f"situ_digits(tvb, {_at(base, first)}, {count},"
 			        f" {placement.radix})")
 
 		if count > 4:
@@ -939,14 +947,59 @@ def _extent_function(resolved: ResolvedSchema,
 		return []
 
 	constant, parts = terms
-	body = " + ".join([str(constant), *parts]) if parts else str(constant)
+	if not parts:
+		return [
+			"",
+			f"-- How many bytes one `{struct.name}` occupies at `at`.",
+			f"local function {_extent_name(struct)}(tvb, at)",
+			f"	return {constant}",
+			"end",
+		]
+
+	# Accumulating, not a sum of independent terms. Each term is measured
+	# where its member starts, and where a member starts is everything before
+	# it -- so a flat sum measured the second variable member, and every
+	# nested struct after the first, from the start of the frame. It read as
+	# one expression and was M answers about one offset.
+	body = ["	local n = at"]
+	for step in _extent_steps(resolved, struct):
+		body.append(f"	n = n + {step}")
 	return [
 		"",
 		f"-- How many bytes one `{struct.name}` occupies at `at`.",
+		"--",
+		"-- Accumulating, because a term is measured where its member starts",
+		"-- and that is the sum of everything before it.",
 		f"local function {_extent_name(struct)}(tvb, at)",
-		f"	return {body}",
+		*body,
+		"	return n - at",
 		"end",
 	]
+
+
+def _extent_steps(resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> list[str]:
+	"""Each member's bytes, in order, as Lua measured from the running `n`.
+
+	Runs of fixed members collapse into one number, which is what
+	`traverse.extent_parts` does for the constant and what keeps the emitted
+	arithmetic the shape a reader can check against the map.
+	"""
+	steps: list[str] = []
+	bits  = 0
+
+	for placement in own_members(struct):
+		if placement.is_fixed_size:
+			bits += placement.size_bits
+			continue
+		if bits:
+			steps.append(str(bits // BITS_PER_BYTE))
+			bits = 0
+		one = _length(resolved, struct, placement, "at", "n")
+		steps.append("0" if one is None else one)
+	if bits:
+		steps.append(str(bits // BITS_PER_BYTE))
+	return steps
 
 
 def _extent_terms(resolved: ResolvedSchema,
@@ -966,7 +1019,8 @@ def _extent_terms(resolved: ResolvedSchema,
 
 
 def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
-		placement: Placement, base: str = "at") -> str | None:
+		placement: Placement, base: str = "at",
+		where: str | None = None) -> str | None:
 	"""How many bytes one variable member occupies, in Lua.
 
 	`base` is where the *struct* starts. In an extent function that is `at`,
@@ -974,7 +1028,17 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	member is dissected from a tvb of its own and `at` has already walked past
 	the fields the length is read from. Getting that wrong read the
 	discriminant from the byte after itself.
+
+	`where` is where the *member* starts, which is a different question and was
+	answered with the first: a length field is read at the struct's base plus
+	its own constant offset, and a *measurement* -- a nested struct's extent, a
+	scan, a walk -- begins where the member does. The two coincide only for a
+	struct's first member, which every variable member in this repository
+	happens to be. A composed schema put a nested struct after a
+	variable-length one and `s_extent` measured it from the start of the
+	frame.
 	"""
+	where = base if where is None else where
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base)
 
@@ -989,12 +1053,7 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# and the walk was handed the struct's base -- which for a run at any
 		# other offset walks the members before it as though they were
 		# elements. A composed schema put one at offset 3 and said so.
-		if placement.offset_bits is None:
-			return None		# and where the run itself moves, decline
-		if placement.offset_bits % BITS_PER_BYTE:
-			return None
-		start = _at(base, placement.offset_bits // BITS_PER_BYTE)
-		return f"{_span_name(struct, placement)}(tvb, {start}, {base})"
+		return f"{_span_name(struct, placement)}(tvb, {where}, {base})"
 
 	if placement.size_expr is not None:
 		rendered = _over_fields(struct, placement.size_expr, base)
@@ -1013,7 +1072,7 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	nested = resolved.structs.get(placement.type_name or "")
 	if nested is not None and not nested.layout.is_fixed_size \
 			and placement.array_count is None and placement.delimiter is None:
-		return f"{_extent_name(nested)}(tvb, {base})"
+		return f"{_extent_name(nested)}(tvb, {where})"
 
 	if placement.is_fixed_size and placement.size_bits % BITS_PER_BYTE == 0:
 		return str(placement.size_bits // BITS_PER_BYTE)
@@ -1296,7 +1355,7 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if driver.placement.radix is not None:
 		# ...and never negative, for the reason `_read` gives: a minus sign is
 		# a number to `tonumber` and is not a digit to anything else here.
-		return (f"situ_digits(tvb({byte}, {width}):string(),"
+		return (f"situ_digits(tvb, {byte}, {width},"
 		        f" {driver.placement.radix})")
 
 	read  = "le_uint" if driver.placement.endian is ast.Endian.LITTLE else "uint"

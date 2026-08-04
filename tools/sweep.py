@@ -12,6 +12,13 @@ as you ask for and reports what came back.
     python3 tools/sweep.py --limit 200 --seed 7
     python3 tools/sweep.py --only sealed   # cells whose name contains this
     python3 tools/sweep.py --verbose       # print the refusals too
+    python3 tools/sweep.py --all --shard 0/6   # one slice, for running six
+                                               # of these at once
+
+Sharding is strided rather than blocked: the cells are enumerated in a fixed
+order, so a block of them shares an axis value, and one shard would compile
+every `sealed` cell while another compiled every `frame` one. Six shards over
+the whole space take about as long as a `make test` rather than about an hour.
 
 Not part of `make test`, for the reason `tools/bench.py` is not: the whole
 space is a long run, and what belongs in CI is a fixed sample of it, which
@@ -58,6 +65,8 @@ def main() -> int:
 	                    help="cells whose name contains this")
 	parser.add_argument("--verbose", action="store_true",
 	                    help="print every cell rather than the failures")
+	parser.add_argument("--shard", default="",
+	                    help="run one slice of the space, as `i/n`")
 	args = parser.parse_args()
 
 	space = [case for case in cases() if args.only in case.name]
@@ -71,7 +80,17 @@ def main() -> int:
 		rng    = random.Random(args.seed)
 		chosen = rng.sample(space, min(args.limit, len(space)))
 
-	print(f"sweep: {len(chosen)} of {len(space)} cells, seed {args.seed}")
+	# One slice of the run, for walking the whole space in parallel. Strided
+	# rather than blocked, because the cells are enumerated in a fixed order
+	# and a block of them shares an axis value: a blocked shard would compile
+	# every `sealed` cell while another compiled every `frame` one, and the
+	# two would take wildly different times. Every shard gets the same mix.
+	if args.shard:
+		index, count = (int(part) for part in args.shard.split("/"))
+		chosen = [case for n, case in enumerate(chosen) if n % count == index]
+		print(f"sweep: shard {index} of {count},", end=" ")
+
+	print(f"{len(chosen)} of {len(space)} cells, seed {args.seed}")
 
 	tally  = Counter[str]()
 	failed: list[Outcome] = []
