@@ -8187,6 +8187,18 @@ between two things if both of them came from the same input.**
 fourteen layout oracles and two computation ones. Only `ble` is left without
 one, and it has no encoder here.
 
+The full composed space was re-run after all of it: **2700 cells over six
+shards, 2700 agreed, nothing refused and nothing failed.** Worth two
+qualifications. Zero refusals is the figure that says every cell is still
+live rather than some having quietly become illegal -- the state 26.54
+reached and the one to watch. And the sweep is *not* evidence about most of
+what the last six folds changed: its five axes are driver, form, element,
+what precedes, and where it sits, so no cell carries a constraint on a
+versioned member, an attribute in a place nothing reads it, or a stream of
+frames. That is invariant 91, and it is why `[since]` needed ten hand-written
+schemas rather than another sweep. A clean sweep says the composition space
+is intact and says nothing about the constructs it does not vary.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
