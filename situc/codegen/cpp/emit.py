@@ -5029,12 +5029,21 @@ class Emitter:
 
 		name = c_name(local_name(struct, placement))
 
+		# A versioned member's accessor takes an out-parameter and returns an
+		# error, there being no value to return when the field is not there.
+		# These checks were written against the ordinary one, so a constraint
+		# behind a `[since]` emitted `if (magic() != 4660)` against
+		# `err magic(std::uint16_t &out)` and would not compile.
+		versioned = placement.since is not None \
+		            and placement.version_field is not None
+		read      = f"{name}_value" if versioned else f"{name}()"
+
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
 			lines.extend([
 				f"\t\t/* {placement.path}: `{enum.name}` rejects unknown values"
 				f" (section 8.7) */",
-				f"\t\tif (!is_known({name}())) {{",
+				f"\t\tif (!is_known({read})) {{",
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])
@@ -5044,15 +5053,50 @@ class Emitter:
 				continue
 			expected = evaluate(attr.value, self.resolved.layout.env)
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
-			cast     = (f"static_cast<{self._ctype(scalar)}>({name}())"
-			            if placement.type_name in self.enums else f"{name}()")
+			cast     = (f"static_cast<{self._ctype(scalar)}>({read})"
+			            if placement.type_name in self.enums else read)
 			lines.extend([
 				f"\t\t/* {placement.path} [{attr.name} = {expected}] */",
 				f"\t\tif ({cast} {operator} {expected}) {{",
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])
+
+		if versioned and lines:
+			return self._behind_a_version(placement, name, lines)
+
 		return lines
+
+	def _behind_a_version(self, placement: Placement, name: str,
+			checks: list[str]) -> list[str]:
+		"""Constrain a versioned member only in the messages that carry it.
+
+		`err::version` says the message is older than this field: not
+		malformed, and nothing to constrain -- there is no field there. Any
+		other refusal is the frame failing to hold a member it claims, which
+		is invariant 87's two questions in one refusal.
+		"""
+		# The accessor's own type, not the backing scalar: an enum member's
+		# out-parameter is `::situ::kind &`, and a `std::uint8_t` local does
+		# not convert to it.
+		held = self._field_ctype(placement)
+		return [
+			f"\t\t/* {placement.path} arrives in version {placement.since}. A",
+			"\t\t * message older than that does not carry it, and a field",
+			"\t\t * that is not there is not a field that is wrong. */",
+			"\t\t{",
+			f"\t\t\t{held} {name}_value{{}};",
+			f"\t\t\tconst ::situ::rt::err got = {name}({name}_value);",
+			"",
+			"\t\t\tif (got != ::situ::rt::err::ok",
+			"\t\t\t    && got != ::situ::rt::err::version) {",
+			"\t\t\t\treturn got;",
+			"\t\t\t}",
+			"\t\t\tif (got == ::situ::rt::err::ok) {",
+			*[f"\t{line}" for line in checks],
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _reserved_checks(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

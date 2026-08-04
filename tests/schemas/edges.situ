@@ -179,6 +179,26 @@ struct versioned [version = ver] {
 	u16  extra [since = 3];
 }
 
+// ...and a constraint on one of them, which is a different question. A
+// versioned member's getter takes an out-parameter and returns an error --
+// there is no value to return when the field is not there -- and `validate`
+// was written against the ordinary getter, so two backends emitted code that
+// did not compile and the other two checked a member the message does not
+// carry. Nothing had ever put an attribute on a versioned member: the struct
+// above has three of them and not one between them.
+enum dialect : u8 {
+	plain    = 1,
+	extended = 2,
+	default  = error,
+}
+
+struct constrained [version = rev] {
+	u8       rev;
+	u16      magic  [since = 2, must_eq = 0x1234];
+	dialect  how    [since = 3];
+	u8       pad    [since = 3, must_be_zero];
+}
+
 // A run that ends after the element failing a test, and an element sized by
 // arithmetic over one of its own fields.
 //

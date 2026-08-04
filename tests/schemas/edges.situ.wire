@@ -13,6 +13,9 @@ bit_order msb_first
 endian big
 target buffer
 
+enum dialect : u8 unknown=error
+  plain=1 extended=2
+
 enum arm_kind : u8 unknown=error
   first=17 second=34
 
@@ -53,6 +56,12 @@ struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling
   ~         1         u8         trailer
+
+struct constrained size=1..5
+  @0x0000   1         u8         rev
+  @0x0001   2         u16        magic  big since=2 must_eq=0x1234
+  @0x0003   1         dialect    how  since=3
+  @0x0004   1         u8         pad  since=3 must_be_zero
 
 struct covered_tail size=8..12
   @0x0000   1         u8         n  max=4

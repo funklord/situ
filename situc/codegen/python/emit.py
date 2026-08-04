@@ -3893,12 +3893,20 @@ class Emitter:
 
 		lines: list[str] = []
 
+		# A versioned member's property raises `VersionError` where the
+		# message is older than the field. Reading it here without saying so
+		# made `validate` raise that out of a message which is not malformed
+		# at all -- it is simply older than the constraint.
+		versioned = placement.since is not None \
+		            and placement.version_field is not None
+		read      = f"{name}_value" if versioned else f"self.{name}"
+
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
 			lines.extend([
-				f"\t\tif not known_enum({c_name(enum.name)}, int(self.{name})):",
+				f"\t\tif not known_enum({c_name(enum.name)}, int({read})):",
 				f"\t\t\traise ConstraintError("
-				f"f\"{placement.path} is {{int(self.{name})}}, not a"
+				f"f\"{placement.path} is {{int({read})}}, not a"
 				f" {enum.name}\")",
 			])
 
@@ -3908,11 +3916,27 @@ class Emitter:
 			expected = evaluate(attr.value, self.resolved.layout.env)
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
 			lines.extend([
-				f"\t\tif int(self.{name}) {operator} {expected}:",
+				f"\t\tif int({read}) {operator} {expected}:",
 				f"\t\t\traise ConstraintError("
-				f"f\"{placement.path} is {{self.{name}}},"
+				f"f\"{placement.path} is {{{read}}},"
 				f" {attr.name} {expected}\")",
 			])
+
+		if versioned and lines:
+			return [
+				f"\t\t# {placement.path} arrives in version {placement.since}."
+				" A message older",
+				"\t\t# than that does not carry it, and a field that is not"
+				" there is",
+				"\t\t# not a field that is wrong.",
+				"\t\ttry:",
+				f"\t\t\t{name}_value = self.{name}",
+				"\t\texcept VersionError:",
+				f"\t\t\t{name}_value = None",
+				f"\t\tif {name}_value is not None:",
+				*[f"\t{line}" for line in lines],
+			]
+
 		return lines
 
 	def _reserved_check(self, struct: ResolvedStruct,

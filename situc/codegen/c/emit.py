@@ -5856,6 +5856,20 @@ class Emitter:
 		getter = ident(self.prefix, struct.name, local, "get")
 		env    = self.resolved.layout.env
 
+		# A versioned member's getter has a different shape -- an out-parameter
+		# and an error, because there is no value to return when the field is
+		# not there -- and the checks below were written against the ordinary
+		# one. `if (situ_s_magic_get(view) != 4660)` does not compile against
+		# `situ_err_t situ_s_magic_get(view, uint16_t *out)`, so any schema
+		# putting a constraint or an `error`-defaulting enum behind a `[since]`
+		# emitted C that no compiler would take. It read as a gap in the
+		# construct rather than in the checks, because nothing had ever
+		# constrained a versioned member: `edges.situ` has three of them and
+		# not an attribute between them.
+		versioned = placement.since is not None \
+		            and placement.version_field is not None
+		value     = f"{local}_value" if versioned else f"{getter}(view)"
+
 		# An enum with `default = error` admits its members and nothing else.
 		# The declaration said so all along; this is what makes it true.
 		enum = self.enums.get(placement.type_name or "")
@@ -5864,7 +5878,7 @@ class Emitter:
 			lines.extend([
 				f"\t/* {placement.path}: `{enum.name}` rejects unknown values"
 				f" (section 8.7) */",
-				f"\tif (!{ident(self.prefix, enum.name)}_is_known({getter}(view))) {{",
+				f"\tif (!{ident(self.prefix, enum.name)}_is_known({value})) {{",
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t}",
 			])
@@ -5890,12 +5904,55 @@ class Emitter:
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
 			lines.extend([
 				f"\t/* {placement.path} [{attr.name} = {expected}] */",
-				f"\tif ({getter}(view) {operator} {expected}) {{",
+				f"\tif ({value} {operator} {expected}) {{",
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t}",
 			])
 
+		if versioned and lines:
+			return self._behind_a_version(placement, getter, local, lines)
+
 		return lines
+
+	def _behind_a_version(self, placement: Placement, getter: str,
+			local: str, checks: list[str]) -> list[str]:
+		"""Constrain a versioned member only in the messages that carry it.
+
+		Two things at once, and the first is why this exists: a versioned
+		member's getter takes an out-parameter and returns an error, because
+		there is no value to return when the field is not there. The checks
+		were written against the ordinary getter, so `if (situ_s_magic_get
+		(view) != 4660)` did not compile at all.
+
+		The second is what the fixed code has to mean. `SITU_ERR_VERSION` says
+		the message is older than this field: not a malformed message, and not
+		a constraint to check -- there is nothing there to constrain. Any other
+		refusal is the frame failing to hold a member it claims, which is the
+		same two-questions-in-one-refusal as invariant 87.
+
+		Wrapped rather than returned from early. Append-only means everything
+		after a versioned member is versioned at least as high, so an early
+		`return SITU_OK` would happen to be correct today -- and would silently
+		stop checking the rest of the struct the moment that stopped being
+		true.
+		"""
+		ctype = self._field_ctype(placement)
+		return [
+			f"\t/* {placement.path} arrives in version {placement.since}. A",
+			"\t * message older than that does not carry it, and a field that",
+			"\t * is not there is not a field that is wrong. */",
+			"\t{",
+			f"\t\t{ctype} {local}_value;",
+			f"\t\tconst situ_err_t got = {getter}(view, &{local}_value);",
+			"",
+			"\t\tif (got != SITU_OK && got != SITU_ERR_VERSION) {",
+			"\t\t\treturn got;",
+			"\t\t}",
+			"\t\tif (got == SITU_OK) {",
+			*[f"\t{line}" for line in checks],
+			"\t\t}",
+			"\t}",
+		]
 
 	def _nul_length(self, struct: ResolvedStruct, placement: Placement,
 			local: str, taken: str, held: str, gated: bool) -> list[str]:

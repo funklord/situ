@@ -4672,13 +4672,23 @@ class Emitter:
 					])
 				continue
 
+			# Rust reads the bytes rather than calling the getter, so unlike C
+			# and C++ it compiled -- and checked a member the message does not
+			# carry. A `[must_eq]` behind a `[since = 2]` was enforced against
+			# whatever a v1 message has at that offset, which is the next
+			# message's bytes or none at all. Invariant 27: silence is worse
+			# than a crash, and this was the silent one of the four.
+			versioned = placement.since is not None \
+			            and placement.version_field is not None
+			read      = self._raw_load(placement, scalar, offset)
+			mine: list[str] = []
+
 			enum = self.enums.get(placement.type_name or "")
 			if enum is not None \
 					and enum.effective_default is ast.EnumDefault.ERROR:
-				checks.extend([
+				mine.extend([
 					f"\t\tif !{_pascal(enum.name)}::is_known("
-					f"{self._raw_load(placement, scalar, offset)} as"
-					f" {self._rust_type(scalar)}) {{",
+					f"{read} as {self._rust_type(scalar)}) {{",
 					"\t\t\treturn Err(Error::Constraint);",
 					"\t\t}",
 				])
@@ -4688,12 +4698,34 @@ class Emitter:
 					continue
 				expected = evaluate(attr.value, self.resolved.layout.env)
 				operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
-				checks.extend([
-					f"\t\tif {self._raw_load(placement, scalar, offset)}"
-					f" {operator} {expected} {{",
+				mine.extend([
+					f"\t\tif {read} {operator} {expected} {{",
 					"\t\t\treturn Err(Error::Constraint);",
 					"\t\t}",
 				])
+
+			if versioned and mine:
+				# The accessor answers whether the field is *there*; the raw
+				# load below answers what it holds, which is how every other
+				# check in this function reads a member. Binding the accessor's
+				# value instead would drag in its return shape -- an enum
+				# getter hands back `Option<Kind>`, which is not what
+				# `is_known` takes.
+				checks.extend([
+					f"\t\t// {placement.path} arrives in version"
+					f" {placement.since}. A message older",
+					"\t\t// than that does not carry it, and a field that is not",
+					"\t\t// there is not a field that is wrong.",
+					f"\t\tmatch self.{name}() {{",
+					"\t\t\tOk(_) => {",
+					*[f"\t\t{line}" for line in mine],
+					"\t\t\t}",
+					"\t\t\tErr(Error::Version) => {}",
+					"\t\t\tErr(other) => return Err(other),",
+					"\t\t}",
+				])
+			else:
+				checks.extend(mine)
 
 		return [
 			"",

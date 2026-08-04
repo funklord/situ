@@ -619,8 +619,9 @@ def _delimited_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		 "\t * field in it. */"])
 
 
-def _versioned_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
-		prefix: str, extent: int) -> None:
+def _versioned_checks(suite: Suite, resolved: ResolvedSchema,
+		struct: ResolvedStruct, entry: Resolved, prefix: str,
+		extent: int) -> None:
 	"""A member arrives at its version, and is refused before it.
 
 	Both halves. A getter that always returned the bytes would pass the first
@@ -637,7 +638,15 @@ def _versioned_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	local  = c_name(placement.path[len(struct.name) + 1:])
 	getter = ident(prefix, struct.name, local, "get")
 	setter = ident(prefix, struct.name, c_name(version), "set")
-	ctype  = _ctype(placement.scalar)
+
+	# The accessor's own type, not the backing scalar's width. An enum
+	# member's out-parameter is `situ_dialect_t *`, and `uint8_t *` is a
+	# different pointer type -- the third generator to make this mistake, all
+	# three of them reading `scalar.bits` where the header reads the type
+	# name. Nothing had ever put an enum behind a `[since]`.
+	ctype = (ident(prefix, placement.type_name or "") + "_t"
+	         if placement.type_name in resolved.layout.env.enums
+	         else _ctype(placement.scalar))
 
 	def body(at_version: int, expected: str) -> list[str]:
 		return [
@@ -778,7 +787,7 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 				# than a value -- the checks below assume both
 
 	if placement.since is not None:
-		_versioned_checks(suite, struct, entry, prefix, extent)
+		_versioned_checks(suite, resolved, struct, entry, prefix, extent)
 		return		# same: its getter takes an out-parameter, because there
 				# is no value to return when the field is not there
 
@@ -1806,13 +1815,53 @@ def _prelude(resolved: ResolvedSchema, struct: ResolvedStruct,
 	inside = found[1].member if found is not None else None
 	base   = _baseline(resolved, struct, extent, inside) or []
 
+	reach = _reach_version(struct, extent)
+	if reach is None:
+		return None
+
 	lines: list[str] = []
 	if base:
 		lines += ["\t/* Every constraint satisfied, so a refusal below is",
 		          "\t * about the field this check breaks and nothing else. */",
 		          *base, ""]
+	lines += reach
 	lines += select
 	return lines
+
+
+def _reach_version(struct: ResolvedStruct, extent: int) -> list[str] | None:
+	"""Put the version field where every versioned member is present.
+
+	The same job `_select_arm` does for an arm, and it was missing for the
+	same reason: a member behind `[since = 3]` is not in a message whose
+	version byte is zero, so a check that poked its bytes and asserted
+	`validate` would refuse them was asserting about a field the message does
+	not carry. `validate` accepted it, correctly.
+
+	The highest version in the struct rather than this member's own, so the
+	baseline above -- which satisfies every versioned member's constraints --
+	describes a message that actually exists.
+	"""
+	versioned = [held.placement.since for held in struct.entries
+	             if held.placement.since is not None]
+	if not versioned:
+		return []
+
+	name = next((held.placement.version_field for held in struct.entries
+	             if held.placement.version_field is not None), None)
+	held = next((held.placement for held in struct.entries
+	             if held.placement.name == name), None)
+	if held is None or held.offset_bits is None or held.scalar is None:
+		return None
+
+	placed = _placed_bytes(held.offset_bits, held.size_bits, max(versioned),
+	                       held.endian, held.bit_order, held.scalar.is_bit_packed)
+	if placed is None or max(placed) >= extent:
+		return None
+
+	return [f"\t/* Version {max(versioned)}, so every versioned member is here. */",
+	        *(f"\tbuf[{at}u] = {placed[at]:#04x}u;" for at in sorted(placed)),
+	        ""]
 
 
 def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,

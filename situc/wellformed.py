@@ -517,6 +517,59 @@ def check_versions(schema: ast.Schema) -> None:
 
 		_check_version_field(struct, version)
 		_check_append_only(struct, tagged)
+		_check_versioned_shape(tagged, {held.name for held in schema.enums()})
+
+
+def _check_versioned_shape(
+		tagged: Sequence[tuple[ast.Field | ast.Reserved, int | None]],
+		enums: set[str]) -> None:
+	"""What `[since]` is a claim about, and what no backend keeps it for.
+
+	19.4's whole promise is that the accessor *reports* rather than guesses:
+	a member the message is too old to carry has no value to return, so the
+	getter hands back an error in all four languages. That is written for a
+	single scalar and only for one -- a run's accessors are a length, a count
+	and an index, and not one of them consults the version field. `u16
+	data[n] [since = 2]` compiled in every backend and handed a version 1
+	message as many elements as `n` said, out of bytes that belong to
+	whatever follows.
+
+	So it is refused here rather than accepted and ignored. Invariant 5 --
+	never silently downgrade -- and an attribute that four backends drop on
+	the floor is the loudest possible case of it. Implementing it means
+	gating the length, the count, the index, the struct's extent and the
+	framing helper in four backends, which is a construct's worth of work and
+	not a patch.
+	"""
+	for member, since in tagged:
+		if since is None or not isinstance(member, ast.Field):
+			continue
+
+		# An enum is a scalar wearing a name: one number, one width, and the
+		# same out-parameter accessor the plain scalars get.
+		run = member.array is not None or member.until is not None
+		if not run and (member.type_ref.is_scalar
+		                or member.type_ref.name in enums):
+			continue
+
+		what = "a run" if run else f"a `{member.type_ref.name}`"
+		raise error(
+			f"`{member.name}` is {what}, and `[since]` is only kept for a "
+			f"single scalar",
+			member.span,
+			label = f"`since = {since}` here",
+			notes = [
+				"a versioned member reports its absence rather than guessing "
+				"(19.4), and this one answers with a length, a count and an "
+				"index, or with a sub-view -- none of which any backend gates "
+				"on the version",
+				"accepting it emits accessors a version 1 message does not "
+				"have the bytes for, which is the silent downgrade invariant "
+				"5 forbids",
+				"put it behind a variant, or keep the version gate on a "
+				"scalar beside it",
+			],
+		)
 
 
 def _check_version_field(struct: ast.StructDecl, version: str) -> None:

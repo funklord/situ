@@ -13,6 +13,8 @@ plain compiler -- a harness nobody can build is the other way this rots.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import Placement
@@ -235,7 +237,8 @@ def _reads(struct: ResolvedStruct, prefix: str,
 		# length, and those are the two the fuzzer most wants exercised --
 		# the length is attacker-controlled and the pointer is what it aims.
 		if placement.since is not None:
-			lines.extend(_versioned_read(struct, placement, local, prefix))
+			lines.extend(_versioned_read(struct, placement, local, prefix,
+			                             resolved.layout.env.enums))
 			continue
 
 		if placement.repeat_while is not None:
@@ -490,7 +493,7 @@ def _walk_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:
 
 
 def _versioned_read(struct: ResolvedStruct, placement: Placement, local: str,
-		prefix: str) -> list[str]:
+		prefix: str, enums: Mapping[str, object]) -> list[str]:
 	"""A member the version decides is there (section 19.4).
 
 	Its getter returns an error rather than a value, so the plain sink call
@@ -498,9 +501,16 @@ def _versioned_read(struct: ResolvedStruct, placement: Placement, local: str,
 	byte the fuzzer chose deciding whether four bytes at a fixed offset are
 	this message's.
 	"""
+	# The accessor's own type, not the backing scalar. An enum member's
+	# out-parameter is `situ_dialect_t *`, and `uint8_t *` is not that -- the
+	# harness declared the width and the header declared the type, which
+	# nothing noticed while no versioned member had ever been an enum.
+	held = (ident(prefix, placement.type_name or "") + "_t"
+	        if placement.type_name in enums else _ctype_of(placement))
+
 	return [
 		"\t{",
-		f"\t\t{_ctype_of(placement)} held = 0;",
+		f"\t\t{held} held = 0;",
 		f"\t\tif ({ident(prefix, struct.name, local, 'get')}(view, &held)"
 		" == SITU_OK) {",
 		"\t\t\tsitu_fuzz_sink((uint64_t)held);",

@@ -263,6 +263,18 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		# the same question: is this member in *this* message? The version
 		# field is the message's own, so a hostile one decides it.
 		if placement.since is not None:
+			# ...and exactly one value of it. Whether a member is in this
+			# message and whether it is one value or many are two questions,
+			# and only the first was being asked: a versioned `u16 data[n]`
+			# got the scalar probe, whose `get(view, &held)` is not the
+			# indexed `get(view, index)` the emitters wrote, and a versioned
+			# `[remaining]` got it for a member that has no value getter at
+			# all. Invariant 86 in the one place that reads the layout rather
+			# than emitting from it.
+			if placement.array_count is not None or data_sized(placement) \
+					or placement.sized_by is not None \
+					or placement.delimiter is not None:
+				continue
 			if scalar is not None and not scalar.is_bit_packed \
 					and not scalar.is_bcd \
 					and placement.type_name in _SCALAR_TYPES:
