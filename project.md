@@ -7924,6 +7924,76 @@ thing this section should be about.
 **Status:** 2949 unit tests, 7 skipped; `make lint` and `make check` clean;
 generated C compiled and run on the host and under aarch64 emulation.
 
+### 26.61 An oracle that is not us
+
+Every test of the generated code in this repository, until now, compared situ
+against situ. The four-backend comparison finds disagreement and cannot find
+shared error. `gen-checks` holds the accessors to the capability map, and both
+come from one solver. `gen-fuzz` finds crashes rather than wrong answers. Even
+the golden vectors -- the closest thing to an outside witness -- are authored
+beside the schema, by the person who read the specification.
+
+That last one is the failure worth naming, because it is invisible: **a
+hand-authored vector encodes what the author believed the format says.** Where
+the author misread it, the schema and the vector are wrong in the same
+direction and agree with each other forever, and nothing about a green suite
+distinguishes that from being right. An independent implementation is wrong in
+a *different* direction, so disagreement becomes visible.
+
+`examples/protobuf/user.proto` has been carrying the argument since it was
+written -- "a description that agrees only with its own compiler has
+demonstrated nothing" -- and the practice had not followed it anywhere else.
+
+**Three oracles, and neither end of any of them is authored here.** The
+suggestion asked for a corpus decoded twice; this goes one further and has the
+third-party tool *write* the corpus as well, so the input is not this
+project's opinion either:
+
+| | writes and reads | what it exercises |
+|---|---|---|
+| `cpio` | `cpio -o`, `cpio -tv` | thirteen ASCII hex numbers, the only text-number path any example has |
+| `protoc` | `--encode`, `--decode_raw` | a five-byte LEB128 varint with the continuation bit set in four of them |
+| ImageMagick | `convert`, `identify` | `height`, signed and bottom-up |
+
+All three agree. What is written here is only the *correspondence* -- that
+cpio's "size" and `cpio_header.filesize` are the same number -- which is a
+short list somebody can check rather than a table of values somebody had to be
+right about.
+
+Two details carry most of the value:
+
+**The varint is decoded by a second implementation.** `_leb128` in
+`oracles.py` is three lines written from the encoding, deliberately not
+`situc`'s. Decoding through situ to compare against protoc would have been
+comparing situ against itself with extra steps, and it would have looked
+exactly as convincing.
+
+**The oracle is required to be able to fail.**
+`test_the_oracle_notices_a_schema_that_lies` swaps `width` and `height` in a
+copy of the BMP schema, regenerates, and asserts the comparison goes red. A
+differential test that cannot fail is worth nothing and is precisely the kind
+that looks fine -- real corpus, real comparison, and it would keep passing if
+the situ side returned the oracle's own answer. The corpus is 7x5 so that the
+two fields are distinguishable at all. Beside it,
+`test_the_corpus_is_not_this_project_s_opinion` requires each corpus function
+to actually shell out, so it cannot quietly regress to hand-written bytes.
+
+**A skipped oracle is printed rather than folded into a green result.** There
+is no `tshark` on this machine, so eight network examples have no independent
+witness here and the run says so. Silence and success read identically
+otherwise, which is the whole subject of this fold one level up.
+
+**Where this came from.** `suggestions/apt-emerge.md`, written by a project
+that evaluated situ and said no. Its two most valuable suites are differential
+-- against `dpkg --compare-versions` and against `diff3` -- and both found
+bugs that hand-written expectations had not. A verdict of "not for us" that
+arrives with the single best testing idea this project has adopted is worth
+more than an adoption would have been.
+
+**Status:** 2955 unit tests, 7 skipped; `make check` clean over 109 files;
+three oracles ran, none skipped for absence except the network formats, which
+have no local decoder.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -8723,6 +8793,26 @@ generated C compiled and run on the host and under aarch64 emulation.
    its documentation goes with it; when documentation describes something
    that is not there, one of the two is a bug and it is worth finding out
    which.
+
+96. **A test written beside the thing it tests cannot find a misreading of
+   the specification.** A hand-authored vector encodes what the author
+   believed the format says; where the author was wrong, the schema and the
+   vector are wrong in the same direction and agree forever, and a green
+   suite says nothing about which case you are in. The only cure is a
+   witness that was not here when the schema was written -- another
+   implementation of the same format, ideally one that writes the bytes as
+   well as reads them. Comparing four backends is not this: they share a
+   solver, so they find disagreement and never shared error.
+
+97. **A comparison must be shown to be capable of disagreeing.** A
+   differential test with a real corpus and a real third-party tool still
+   proves nothing if the two sides are not actually independent -- decoding
+   through the code under test, or normalising one side until it matches,
+   both produce a green result that would survive the code being wrong. So
+   break the schema on purpose and require the comparison to go red, and
+   assert that the corpus really came from the other implementation. This is
+   the oracle version of "never conclude a test passes from a binary the
+   build did not rebuild".
 
 ---
 
