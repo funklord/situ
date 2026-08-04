@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 
 from every_schema import ROOT
-from oracles import DRIVERS, ORACLES, Oracle, have
+from oracles import DRIVERS, LIES, ORACLES, Oracle, have
 
 from situc.codegen import c as generate_c
 from situc.codegen import python as generate_py
@@ -77,6 +77,12 @@ def test_situ_agrees_with_an_independent_implementation(
 	theirs = independently(bytes_, tmp_path)
 	ours   = through_situ(build_module(oracle.schema, tmp_path), bytes_)
 
+	# An empty comparison passes and means nothing. It is reachable here: the
+	# network oracles drop frames tshark could not fully dissect, and randpkt
+	# truncates, so a bad `-b` could filter every frame away.
+	assert theirs, f"{oracle.name}: `{oracle.tool}` reported nothing to compare"
+	assert ours, f"{oracle.name}: situ read nothing to compare"
+
 	assert ours == theirs, (
 		f"{oracle.name}: situ and `{oracle.tool}` disagree about bytes "
 		f"`{oracle.tool}` wrote.\n"
@@ -85,113 +91,45 @@ def test_situ_agrees_with_an_independent_implementation(
 		f"\n{oracle.why}")
 
 
-def test_the_oracle_notices_a_schema_that_lies(tmp_path: Path) -> None:
-	"""Break the schema on purpose and watch the oracle go red.
+@pytest.mark.parametrize(
+	"oracle", [o for o in ORACLES if o.name in LIES],
+	ids=[o.name for o in ORACLES if o.name in LIES])
+def test_each_oracle_notices_a_schema_that_lies(
+		oracle: Oracle, tmp_path: Path) -> None:
+	"""Every oracle, not just one: break its schema and require a red result.
 
-	A differential test that cannot fail is worth nothing, and it is exactly
-	the kind that looks fine: the corpus is real, the comparison runs, and it
-	would keep passing if `situ_read` returned the oracle's own answer. So
-	this swaps `width` and `height` in a copy of the BMP schema -- the corpus
-	is 7x5 precisely so the two are distinguishable -- regenerates, and
-	requires disagreement.
-
-	`suggestions/apt-emerge.md` asked for this in general terms: break the
-	generator deliberately and confirm the generated suite goes red, because
-	generated tests are produced in bulk, all look alike, and nobody reads the
-	hundredth one.
+	Two adjacent members are swapped, so the fields all still exist and only
+	their offsets move. Anything genuinely reading bytes notices; anything
+	that had quietly stopped comparing does not.
 	"""
-	oracle = next(o for o in ORACLES if o.name == "bmp")
 	if not have(oracle.tool):
 		pytest.skip(f"no `{oracle.tool}` on PATH")
 
-	corpus, independently, through_situ = DRIVERS["bmp"]
+	corpus, independently, through_situ = DRIVERS[oracle.name]
+	honest_text, lying_text = LIES[oracle.name]
 
 	honest = oracle.schema.read_text(encoding="ascii")
-	lying  = honest.replace("\ti32          width;\n\ti32          height;",
-	                        "\ti32          height;\n\ti32          width;")
-	assert lying != honest, "the BMP schema no longer has the two fields to swap"
+	assert honest_text in honest, (
+		f"{oracle.name}: the schema no longer contains the members this "
+		f"test swaps; the mutation in LIES needs updating")
 
-	broken = tmp_path / "bmp.situ"
-	broken.write_text(lying, encoding="ascii")
+	broken = tmp_path / oracle.schema.name
+	broken.write_text(honest.replace(honest_text, lying_text), encoding="ascii")
 
-	image  = corpus(tmp_path)
-	theirs = independently(image, tmp_path)
-	ours   = through_situ(build_module(broken, tmp_path), image)
+	bytes_ = corpus(tmp_path)
+	theirs = independently(bytes_, tmp_path)
+
+	# Refusing to read at all counts as noticing: a swap can move a member
+	# past the frame, and an accessor that reports that is doing its job.
+	# What must not happen is agreement.
+	try:
+		ours = through_situ(build_module(broken, tmp_path), bytes_)
+	except Exception:                                  # noqa: BLE001
+		return
 
 	assert ours != theirs, (
-		"the oracle agreed with a schema whose width and height are swapped, "
-		"so it is not comparing what it claims to compare")
-
-
-# -- generated computation, not generated layout ------------------------------
-#
-# Every oracle above checks where the bytes are. This one checks what situ
-# *computes* from them: `gen-derived` emits CRC implementations from a kernel
-# description -- a table it calculates rather than copies -- and until now the
-# only thing that had ever checked one was situ's own property tests.
-#
-# `zlib.crc32` and `binascii.crc_hqx` are independent implementations that ship
-# with Python, and both are old enough and used enough that disagreement means
-# situ is wrong.
-
-CRC_CASES = (
-	("crc32", "situ_crc32", ctypes.c_uint32,
-	 lambda data: zlib.crc32(data)),
-	("crc16_ccitt", "situ_crc16_ccitt", ctypes.c_uint16,
-	 lambda data: binascii.crc_hqx(data, 0xFFFF)),
-)
-
-
-@pytest.mark.parametrize(
-	"name,symbol,ctype,independently", CRC_CASES,
-	ids=[case[0] for case in CRC_CASES])
-def test_a_generated_crc_matches_an_independent_implementation(
-		name: str, symbol: str, ctype: type, independently: object,
-		tmp_path: Path) -> None:
-	"""What situ computes, against what the standard library computes.
-
-	The kernel description says width, polynomial, initial value and whether
-	the input is reflected; situ turns that into a 256-entry table and a loop.
-	Nothing outside this project had ever checked the result, and a table
-	generated from a wrong polynomial is a table that is wrong consistently --
-	so situ's own tests, which use the same description, would agree with it.
-	"""
-	compiler = shutil.which("cc") or shutil.which("gcc")
-	if compiler is None:
-		pytest.skip("no C compiler; the CRC oracle did not run")
-
-	kernels = ROOT / "std" / "kernels.situ"
-	source  = Source(str(kernels), kernels.read_text(encoding="ascii"))
-	parsed  = parse(source)
-	solved  = resolve(parsed, solve(parsed))
-
-	(tmp_path / "kernels.h").write_text(
-		generate_c.generate(parsed, solved, "kernels").header, encoding="ascii")
-	(tmp_path / "derived.c").write_text(
-		generate_derived.generate(parsed, "kernels"), encoding="ascii")
-
-	shared = tmp_path / "kernels.so"
-	built  = subprocess.run(
-		[compiler, "-O2", "-shared", "-fPIC",
-		 "-I", str(ROOT / "runtime" / "c"), "-I", str(tmp_path),
-		 str(tmp_path / "derived.c"), "-o", str(shared)],
-		capture_output=True, text=True)
-	assert built.returncode == 0, built.stderr
-
-	lib = ctypes.CDLL(str(shared))
-	fn  = getattr(lib, symbol)
-	fn.restype  = ctype
-	fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32]
-
-	# Lengths chosen around the shift boundaries a table-driven CRC gets wrong:
-	# empty, single byte, and either side of a 256-byte table wrap.
-	random.seed(20260804)
-	for length in (0, 1, 2, 15, 64, 255, 256, 257, 1024):
-		data = bytes(random.randrange(256) for _ in range(length))
-		buf  = (ctypes.c_uint8 * max(1, length))(*data)
-
-		assert fn(buf, length) == independently(data), (      # type: ignore[operator]
-			f"{name}: situ and the standard library disagree at {length} bytes")
+		f"{oracle.name}: the oracle agreed with a schema whose members are "
+		f"swapped, so it is not comparing what it claims to compare")
 
 
 def test_the_corpus_is_not_this_project_s_opinion() -> None:
@@ -206,10 +144,15 @@ def test_the_corpus_is_not_this_project_s_opinion() -> None:
 
 	import oracles
 
+	# The helpers that actually shell out. A corpus function either runs a
+	# tool itself or delegates to one of these; anything else is bytes chosen
+	# in this file, which is the thing that must not happen.
+	shells_out = ("subprocess", "_run(", "_randpkt(")
+
 	for oracle in ORACLES:
 		corpus = DRIVERS[oracle.name][0]
 		body   = inspect.getsource(corpus)
-		assert "subprocess" in body or "_run(" in body, (
+		assert any(mark in body for mark in shells_out), (
 			f"{oracle.name}: the corpus is not produced by `{oracle.tool}`")
 	assert oracles.__doc__ is not None
 

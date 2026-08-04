@@ -32,6 +32,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -335,6 +336,164 @@ def sqlite_situ(module: object, database: bytes) -> dict[str, object]:
 	return {"cell_count": view.cell_count, "page_size": page_size}
 
 
+# -- the network formats ------------------------------------------------------
+#
+# The corpus problem these had until now: something has to *write* a packet,
+# and capturing one needs a network and root. `randpkt` solves it -- it ships
+# with Wireshark but is a separate program from the dissection engine, so the
+# bytes and the interpretation still come from different code.
+#
+# Its packets carry random field values, which is better here than a
+# well-known capture would be: a hand-picked packet exercises the values
+# somebody thought of. What both sides must agree on is whatever number is at
+# whatever offset.
+#
+# `validate()` is deliberately not called. A randpkt ARP frame is not a valid
+# ARP frame -- `arp_generic` requires `protocol_type == 0x0800` and randpkt
+# fills it with noise -- and situ is right to refuse it. What is under test is
+# whether the accessors *read the same bytes tshark read*, which is a
+# different question from whether the packet is well-formed.
+
+def _randpkt(tmp: Path, kind: str, count: int = 8) -> Path:
+	out = tmp / f"{kind}.pcap"
+	_run(["randpkt", "-b", "80", "-c", str(count), "-t", kind,
+	      "-F", "pcap", str(out)])
+	return out
+
+
+def _frames(capture: Path) -> list[dict[str, object]]:
+	"""Every frame, as tshark's own JSON, raw bytes included."""
+	import json
+
+	shown = _run(["tshark", "-r", str(capture), "-T", "json", "-x"])
+	return [frame["_source"]["layers"] for frame in json.loads(shown)]
+
+
+def _layer(frame: dict[str, object], name: str) -> tuple[bytes, int]:
+	"""One layer's bytes and where they start, as tshark reports them.
+
+	Taken from tshark rather than computed here on purpose: an offset this
+	file worked out for itself would be this project's opinion about the
+	framing, which is the thing being checked.
+	"""
+	raw = frame[f"{name}_raw"]
+	return bytes.fromhex(raw[0]), int(raw[1])      # type: ignore[index]
+
+
+def eth_corpus(tmp: Path) -> bytes:
+	"""The capture file itself is the corpus; the readers below open it."""
+	return _randpkt(tmp, "arp").read_bytes()
+
+
+def _capture(corpus: bytes, tmp: Path | None = None) -> Path:
+	"""The capture on disk, because tshark reads files rather than stdin."""
+	where = Path(tempfile.mkdtemp(prefix="oracle-")) if tmp is None else tmp
+	path  = where / "read.pcap"
+	path.write_bytes(corpus)
+	return path
+
+
+def eth_says(corpus: bytes, tmp: Path) -> list[dict[str, object]]:
+	found = []
+	for frame in _frames(_capture(corpus, tmp)):
+		eth = frame["eth"]
+		found.append({
+			"destination": str(eth["eth.dst"]).replace(":", ""),   # type: ignore[index]
+			"source":      str(eth["eth.src"]).replace(":", ""),   # type: ignore[index]
+			"ethertype":   int(str(eth["eth.type"]), 16),          # type: ignore[index]
+		})
+	return found
+
+
+def eth_situ(module: object, corpus: bytes) -> list[dict[str, object]]:
+	from situ_runtime import Message
+
+	found = []
+	for frame in _frames(_capture(corpus)):
+		raw, _ = _layer(frame, "eth")
+		view   = module.ethernet_header.at(Message(bytearray(raw)), 0)   # type: ignore[attr-defined]
+		found.append({
+			"destination": bytes(view.destination.octets).hex(),
+			"source":      bytes(view.source.octets).hex(),
+			"ethertype":   int(view.ethertype),
+		})
+	return found
+
+
+#: What tshark calls the five ARP header fields, against what situ calls them.
+ARP_FIELDS = (
+	("arp.hw.type",    "hardware_type",   10),
+	("arp.proto.type", "protocol_type",   16),
+	("arp.hw.size",    "hardware_length", 10),
+	("arp.proto.size", "protocol_length", 10),
+	("arp.opcode",     "operation",       10),
+)
+
+
+#: `arp_generic`'s own minimum: eight fixed bytes and four runs of at least
+#: one. Asserted against the generated module in `arp_situ` rather than trusted,
+#: so a schema change fails here instead of quietly filtering every frame away.
+ARP_MIN_BYTES = 12
+
+
+def _whole_arp(frame: dict[str, object]) -> bool:
+	"""Whether this frame is one both tools answer the same question about.
+
+	Two ways it is not, and `randpkt` produces both because it truncates:
+
+	  * tshark reached only some of the header, and reports the fields it got.
+	    Comparing against a field it never produced would be comparing against
+	    nothing.
+	  * the ARP layer is shorter than `arp_generic`'s minimum -- ten bytes,
+	    say. tshark dissects the eight-byte fixed header it can see; situ
+	    declines to acquire a view for a struct that does not fit, which is
+	    correct and is a different question rather than a different answer.
+
+	Both sides apply this same predicate, so neither chooses its own subset,
+	and the caller asserts the comparison was not left empty.
+	"""
+	arp = frame.get("arp")
+	if not isinstance(arp, dict) or not all(name in arp for name, _, _ in ARP_FIELDS):
+		return False
+
+	raw = frame.get("arp_raw")
+	return isinstance(raw, list) and len(bytes.fromhex(raw[0])) >= ARP_MIN_BYTES
+
+
+def arp_says(corpus: bytes, tmp: Path) -> list[dict[str, int]]:
+	found = []
+	for frame in _frames(_capture(corpus, tmp)):
+		if not _whole_arp(frame):
+			continue
+		arp = frame["arp"]
+		found.append({ours: int(str(arp[theirs]), base)             # type: ignore[index]
+		              for theirs, ours, base in ARP_FIELDS})
+	return found
+
+
+def arp_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
+	from situ_runtime import Message
+
+	assert module.arp_generic.SIZE_MIN == ARP_MIN_BYTES, (        # type: ignore[attr-defined]
+		"arp_generic's minimum moved; ARP_MIN_BYTES must follow it or this "
+		"oracle silently stops comparing frames")
+
+	found = []
+	for frame in _frames(_capture(corpus)):
+		if not _whole_arp(frame):
+			continue
+		raw, _ = _layer(frame, "arp")
+		view   = module.arp_generic.at(Message(bytearray(raw)), 0, len(raw))  # type: ignore[attr-defined]
+		found.append({
+			"hardware_type":   int(view.hardware_type),
+			"protocol_type":   int(view.protocol_type),
+			"hardware_length": int(view.hardware_length),
+			"protocol_length": int(view.protocol_length),
+			"operation":       int(view.operation),
+		})
+	return found
+
+
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
 		name   = "cpio",
@@ -352,6 +511,24 @@ ORACLES: tuple[Oracle, ...] = (
 		          "varint is the part worth testing: 4294967297 is five "
 		          "LEB128 bytes with the continuation bit set in four of "
 		          "them."),
+	),
+	Oracle(
+		name   = "ethernet",
+		schema = ROOT / "examples" / "ethernet" / "ethernet.situ",
+		tool   = "tshark",
+		why    = ("`randpkt` writes the frames and tshark dissects them; the "
+		          "two are separate programs. Fourteen fixed bytes, so any "
+		          "disagreement is about byte order or about the MAC "
+		          "sub-struct."),
+	),
+	Oracle(
+		name   = "arp",
+		schema = ROOT / "examples" / "arp" / "arp.situ",
+		tool   = "tshark",
+		why    = ("Random field values from `randpkt`, which is the point: a "
+		          "hand-picked packet exercises the values somebody thought "
+		          "of. `validate()` is not called -- randpkt's ARP is not "
+		          "valid ARP, and situ is right to say so."),
 	),
 	Oracle(
 		name   = "sqlite",
@@ -380,6 +557,28 @@ ORACLES: tuple[Oracle, ...] = (
 	),
 )
 
+#: A way to make each schema lie, for the test that requires the comparison to
+#: be capable of disagreeing (invariant 97). Each is a pair of adjacent members
+#: swapped: the fields stay, the offsets move, and any oracle actually reading
+#: bytes must notice. An oracle with no entry here is one nobody has shown can
+#: fail.
+LIES = {
+	"bmp": ("\ti32          width;\n\ti32          height;",
+	        "\ti32          height;\n\ti32          width;"),
+	"bmp-file": ("\ti32          width;\n\ti32          height;",
+	             "\ti32          height;\n\ti32          width;"),
+	"ethernet": ("\tmac_address  destination;\n\tmac_address  source;",
+	             "\tmac_address  source;\n\tmac_address  destination;"),
+	# Two u16s, so the layout keeps its size and only the values move -- the
+	# mutation has to be one the schema still compiles under, or the test
+	# would be proving the parser rejects nonsense rather than proving the
+	# oracle compares bytes.
+	"arp": ("\thardware_type  hardware_type    [must_eq = hardware_type.ethernet];\n"
+	        "\tu16           protocol_type    [must_eq = 0x0800];",
+	        "\tu16           protocol_type    [must_eq = 0x0800];\n"
+	        "\thardware_type  hardware_type    [must_eq = hardware_type.ethernet];"),
+}
+
 #: How to drive each oracle. Kept beside `ORACLES` rather than in it so the
 #: dataclass stays data.
 DRIVERS = {
@@ -388,4 +587,6 @@ DRIVERS = {
 	"protobuf": (proto_corpus, proto_says, proto_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
+	"ethernet": (eth_corpus, eth_says, eth_situ),
+	"arp":      (eth_corpus, arp_says, arp_situ),
 }
