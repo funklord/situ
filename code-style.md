@@ -318,10 +318,18 @@ rule. The gate checks every `.md` it can see for ASCII, which is
 how the first draft of this file -- carrying thirteen em dashes and four
 section signs -- failed `make lint` on arrival.
 
-## Line length
+## ASCII in source
 
-Soft 100 columns. Do not sacrifice clarity to it: a 104-column line that
-reads as one thought beats a wrapped one that does not.
+Source and comments are ASCII. Write `--` where prose would use an em dash,
+and "section" for a section sign.
+
+This governs the text the repository writes about itself, not the data the
+software handles. Documentation may use typographic punctuation; so may
+user-facing text in UI software, and anything that genuinely requires
+Unicode.
+
+Enabled here, including for Markdown -- see `ascii_only` and
+`ascii_exclude_markdown` in `.style-gate.toml`.
 
 ## See also
 

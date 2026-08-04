@@ -3929,7 +3929,6 @@ a numbered section 26 entry with its invariants -- and for nothing else.
   `docs/decisions/0003-source-formatting.md`.
 - Lowercase filenames unless there is a reason otherwise, and `snake_case` over
   `camelCase` in every language.
-- Line length: soft 100 columns; do not sacrifice clarity to it.
 - Every module has a docstring stating its single responsibility. If a module
   needs two sentences joined by "and", split the module.
 - **Identifier casing in a schema is the author's.** snake_case and PascalCase
