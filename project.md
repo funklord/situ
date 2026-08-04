@@ -7278,6 +7278,69 @@ about.
 host and under aarch64 emulation; 1350 cells enumerated, 24 of them run on
 every commit, 15 of those recorded as failing.
 
+### 26.51 Emptying the list the sweep produced
+
+26.50 ended with fifteen of twenty-four sampled cells failing in five classes,
+each named in `test_composed_schemas.KNOWN`. This fold empties it. Two draws
+of a hundred cells each, from seeds nothing had used, now come back with no
+failures at all -- 93 agreed and 7 refused, then 91 and 9 -- where the same
+draw had 38 failures the day the machinery landed.
+
+**Every one of the five was a question with two spellings**, which is the
+sentence 26.46 wrote and this fold kept finding in new places:
+
+  * an expression naming a *text number* read `<field>_get`, the fallible
+    parse, where the count form beside it had read `<field>_value` since
+    26.46. Four backends;
+  * `readable_names` demanded a constant offset for a struct's own fields as
+    well as a nested struct's, so a discriminant behind a delimited member was
+    not a name an expression could use -- and `over_fields` passed it through
+    verbatim. `over_fields` refuses an unknown name now, which is invariant 60
+    held where the four backends are rather than only in the dissector;
+  * `is_counted_run` asked about `sized_by` and not about arithmetic, so
+    `T x[n + 1]` fell through to the *nested struct* branch and named an
+    extent helper meant for one struct rather than a run of them;
+  * `_count_expression` had no answer for a count written as arithmetic and
+    returned a Python `None`, which C++ formatted into `return None;` and C
+    turned into a silent `0u` -- a run of records that read as empty;
+  * the arm dispatch in all four asked `array_count is None and sized_by is
+    None` and so read `i32 run[n + 1]` as a *scalar arm*, handing back the
+    first element.
+
+**And one that was not a spelling: a member inside a container.** A run inside
+a `sealed` region or a variant arm reached a parallel accessor family that
+emits none of the things a run needs -- so the enclosing struct's framing
+named `<run>_span` and nothing defined it. Three of them now emit the walk on
+the outer class, which is what C had always done and what places the members
+after the region; the arm case declines in all four, because no backend walks
+a run inside an arm and saying so once is better than four answers.
+
+**Two accessors were removed rather than fixed.** A field of an *element* of a
+run inside a sealed region got `<run>_<field>_get(gate)` in C, reading at the
+region's base -- element zero's field, under a name that reads as the run's.
+C++ and Rust spelled it differently, which is how it surfaced. The walk beside
+it is how a caller reaches an element, and then the element type's own
+accessors answer; the flattened pair was a name that said something false
+(invariants 25 and 74). The differ stopped asking for it in the same commit.
+
+**The dissector kept its own copy of two of these.** It measured a counted run
+of records as *n bytes*, and its walk started at the struct's base rather than
+at the run's -- which coincided for every run in this repository, all of which
+are their struct's first member. A composed schema put one at offset 3.
+
+**What the machinery cost and what it caught.** Four workers in parallel, one
+file each, over about an hour: the file boundary was the whole coordination
+protocol, and the two collisions that did happen were both *reports* rather
+than edits -- one worker finding the same defect one file over and saying so.
+The tightening of `c_name` in 26.50 broke the differ within the hour, and this
+fold's own fixes surfaced four defects behind the ones they fixed, each in the
+layer below. A sweep that reports classes rather than cells is what makes that
+sequence readable: six causes, then five, then none.
+
+**Status:** 2844 unit tests, 7 skipped; generated C compiled and run on the
+host and under aarch64 emulation; 200 composed cells across two unseeded draws
+with no failures; `KNOWN` empty.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -7916,7 +7979,26 @@ every commit, 15 of those recorded as failing.
    six causes. Classify the outcomes before running anything, or the run is
    noise with a total at the bottom.
 
-77. **Where the count comes from and how wide an element is are two
+77. **A parallel accessor family is a backend that has to be finished
+   twice.** A variant arm and a sealed region each grew their own emitters --
+   an arm's members are guarded by a discriminant, a region's are behind a
+   gate -- and each family then had to learn separately what a run is, what a
+   dynamic offset is, and which helpers a member's neighbours will name. Every
+   one of them learned it late: an arm named an offset function nobody
+   emitted, a gate rendered its body in the outer struct's vocabulary, and
+   both named a span for a run they had no walk for. Where a second family is
+   unavoidable, the question to ask of every fix in the first is whether the
+   second needs it too.
+
+78. **A fix reveals the layer below it.** Every defect in 26.51 was found
+   behind another: the text-number read was behind the arm dispatch, the arm
+   dispatch was behind the missing offset function, the missing offset
+   function was behind the walk order. A sweep that reports *classes* is what
+   makes that sequence tractable -- six causes, then five, then none -- and a
+   sweep that reported a hundred failing cells would have hidden it. Fix a
+   class, re-run, and expect the count to fall by less than you fixed.
+
+79. **Where the count comes from and how wide an element is are two
    questions, and every branch that asks one has to ask the other.** Three
    backends decide "bytes or values" by the element width for `u16 x[4]` and
    decided it by nothing at all for `u16 x[n]`, handing back a span the
