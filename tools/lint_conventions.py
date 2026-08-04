@@ -15,7 +15,14 @@ from pathlib import Path
 # Indentation is checked where we control the whole file. Markdown is excluded:
 # its list continuation and code-fence indentation is space-based by
 # specification, and fighting that would make the documents wrong.
-INDENT_SUFFIXES = frozenset({".py", ".c", ".h", ".situ", ".ebnf", ".lua"})
+#
+# C++ and Rust were missing from this set for as long as there have been C++
+# and Rust backends, so `runtime/cpp/situ.hpp` and `runtime/rust/situ_rt.rs`
+# were held to the convention by nothing but the habits of whoever edited
+# them. They happened to be clean, which is not the same as being checked.
+INDENT_SUFFIXES = frozenset({
+	".py", ".c", ".h", ".cpp", ".hpp", ".rs", ".situ", ".ebnf", ".lua",
+})
 # `bin/situc` is Python without the suffix, because it is a command rather
 # than a module. The conventions still apply to it.
 INDENT_NAMES = frozenset({"Makefile", "situc"})
@@ -97,6 +104,46 @@ def is_comment_continuation(line: str) -> bool:
 	return line.lstrip().startswith("*")
 
 
+def check_text(text: str, where: Path, indent: bool = True,
+		skip: frozenset[int] = frozenset()) -> list[Problem]:
+	"""The line rules, against text that need not be a file on disk.
+
+	Split out because the code this compiler *emits* was held to the
+	conventions by nobody. The tab rule reaches a file when the file has one
+	of the suffixes above; generated C, C++, Rust and Lua have those suffixes
+	only after they are written, and what is written lands in `build/`, which
+	the lint skips. So every emitted line in the four backends was governed by
+	the emitters' own string literals -- which `literal_lines` deliberately
+	excludes, that being where section 17's golden diagnostics live.
+
+	One rule, two callers: `check_file` for the sources, and the test beside
+	`every_schema.py` for what those sources produce.
+	"""
+	problems: list[Problem] = []
+
+	for number, line in enumerate(text.splitlines(), start=1):
+		if line != line.rstrip():
+			problems.append(Problem(where, number, len(line.rstrip()) + 1,
+			                        "trailing whitespace"))
+
+		if "\r" in line:
+			problems.append(Problem(where, number, line.index("\r") + 1, "carriage return"))
+
+		if not indent or number in skip or is_comment_continuation(line):
+			continue
+
+		lead = leading_whitespace(line)
+		# Tabs carry the indent level and spaces carry alignment within it, so a
+		# space may follow a tab but never precede one.
+		if " " in lead and "\t" in lead[lead.index(" ") :]:
+			problems.append(Problem(where, number, lead.index(" ") + 1,
+			                        "space before tab in indent"))
+		elif lead.startswith(" ") and line.strip():
+			problems.append(Problem(where, number, 1, "space-indented line; use tabs"))
+
+	return problems
+
+
 def check_file(path: Path, root: Path) -> list[Problem]:
 	rel                      = path.relative_to(root)
 	problems: list[Problem]  = []
@@ -114,29 +161,7 @@ def check_file(path: Path, root: Path) -> list[Problem]:
 	if raw and not raw.endswith(b"\n"):
 		problems.append(Problem(rel, raw.count(b"\n") + 1, 1, "no newline at end of file"))
 
-	indent_checked = wants_indent_check(path)
-	skip_indent    = literal_lines(path)
-
-	for number, line in enumerate(text.splitlines(), start=1):
-		if line != line.rstrip():
-			problems.append(Problem(rel, number, len(line.rstrip()) + 1,
-			                        "trailing whitespace"))
-
-		if "\r" in line:
-			problems.append(Problem(rel, number, line.index("\r") + 1, "carriage return"))
-
-		if not indent_checked or number in skip_indent or is_comment_continuation(line):
-			continue
-
-		lead = leading_whitespace(line)
-		# Tabs carry the indent level and spaces carry alignment within it, so a
-		# space may follow a tab but never precede one.
-		if " " in lead and "\t" in lead[lead.index(" ") :]:
-			problems.append(Problem(rel, number, lead.index(" ") + 1,
-			                        "space before tab in indent"))
-		elif lead.startswith(" ") and line.strip():
-			problems.append(Problem(rel, number, 1, "space-indented line; use tabs"))
-
+	problems.extend(check_text(text, rel, wants_indent_check(path), literal_lines(path)))
 	return problems
 
 
