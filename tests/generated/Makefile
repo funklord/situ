@@ -54,6 +54,7 @@ SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   examples/dns/dns.situ examples/dnsname/dnsname.situ examples/ethernet/ethernet.situ examples/http/http.situ \
 		   examples/icmp/icmp.situ examples/ipv6ext/ipv6ext.situ examples/ipv4/ipv4.situ \
 		   examples/message/message.situ examples/modbus/modbus.situ \
+		   examples/keystore/keystore.situ \
 		   examples/mqtt/mqtt.situ \
 		   examples/netlink/netlink.situ \
 		   examples/ntp/ntp.situ \
