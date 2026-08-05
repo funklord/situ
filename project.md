@@ -3472,6 +3472,8 @@ place where a reader will take it for the answer to the one they did.
 situc build   <schema>            generate code [--materialize] (26.30)
                                   [--owned] fixed-size C structs and a
                                   decode that copies into them (26.69)
+                                  [--single-file] python with the runtime
+                                  inlined, stdlib imports only (26.70)
 situc map     <schema>            emit capability map
 situc map --check <schema>        compare against committed map, fail on diff
 situc gen-checks <schema>         tests holding the accessors to the map

@@ -61,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                       help="backend; rust arrives in phase 11")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
+	build_cmd.add_argument("--single-file", action="store_true",
+	                       help="inline the parts of the Python runtime this "
+	                            "schema reaches, so the output is one module "
+	                            "importing only the standard library "
+	                            "(python only; 26.70)")
 	build_cmd.add_argument("--owned", action="store_true",
 	                       help="also emit a fixed-size C struct per layout "
 	                            "and a decode that copies into it, for callers "
@@ -396,6 +401,12 @@ def cmd_build(args: argparse.Namespace) -> int:
 	files: dict[str, str]
 	warnings: list[Diagnostic]
 
+	if args.single_file and args.target != "python":
+		raise SystemExit(
+			f"situc: --single-file inlines the Python runtime and --target is "
+			f"{args.target}. The C, C++ and Rust outputs already carry their "
+			f"runtime as a header or a module the build compiles in.")
+
 	if args.owned and args.target != "c":
 		raise SystemExit(
 			f"situc: --owned is a C construct and --target is {args.target}. "
@@ -419,6 +430,12 @@ def cmd_build(args: argparse.Namespace) -> int:
 							 materialize=args.materialize)
 		files    = emitted_py.files()
 		warnings = emitted_py.warnings
+
+		if args.single_file:
+			from situc.codegen.python import single
+
+			name        = f"{args.schema.stem}.py"
+			files[name] = single.inline(files[name], args.schema.stem)
 	elif args.target == "cpp":
 		cpp      = generate_cpp(parse(source), resolved, args.schema.stem,
 		                        args.prefix,

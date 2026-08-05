@@ -29,6 +29,9 @@ Generate accessors.
 additionally emits, for each fixed-size layout, a plain C struct and a
 decode that copies every field into it -- for callers that hold the value
 after the buffer is gone.
+.B \-\-single\-file
+inlines the parts of the Python runtime the schema reaches, so the output
+is one module importing only the standard library.
 .B \-\-target
 selects
 .IR c ", " cpp ", " rust " or " python ;
