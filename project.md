@@ -8452,6 +8452,54 @@ in that space is built with `--owned`, and the axes that would vary it do
 not exist. What holds the owned form is `test_owned.py`, and the two are not
 substitutes.
 
+### 26.70 One file, and only the part of it that is reached
+
+The last of the five evaluations' asks, and the one that reads smallest and
+is not. `apt-emerge` could not take the Python backend at all -- not because
+of a construct, but because its shipped artifact is **one file importing
+nothing outside the standard library**, and the backend emits a module plus
+`situ_runtime`. Two files fail that gate, and the second is a hard import
+rather than something a reader vendors by copy-paste without thought.
+
+That constraint is not tidiness where it appears. The project keeps a dpkg
+backend for embedded boxes with no `apt-get`, where the deploy story is one
+`scp` and the repair story is a text editor on the target. The evaluation
+made the general point better than a feature request would have:
+single-file-by-constraint is common in exactly situ's problem space --
+recovery tools, installers, initramfs helpers, embedded agents -- and those
+are the programs **least able to hand-write a correct binary parser and most
+damaged by getting one wrong**. They were excluded by packaging rather than
+by fit.
+
+`--single-file` inlines the runtime, and only the reachable part. Copying
+all 609 lines into a module that uses forty of them is a different way of
+being unusable, so the kept set is a closure over which top-level names each
+definition mentions, started from the names the generated module imports.
+The runtime is flat -- top-level classes, functions and constants, nothing
+conditional -- which is what makes that closure sound. In practice it keeps
+51% for a schema reading six fields and 69% for one scanning text.
+
+Definitions are copied **with the comments above them**. This runtime
+explains why each helper bounds what it bounds, and an inlined copy that
+dropped the reasoning would read worse than the import it replaced.
+
+**It refuses a name collision.** `struct View` is a legal schema and an
+illegal thing to inline beside `class View`; which one wins would depend on
+emission order, so it is refused rather than resolved.
+
+**Three properties, and the first is theirs rather than ours.** The output
+is walked for imports and checked against `sys.stdlib_module_names` -- the
+adopting project's own CI job, run here rather than approximated. The trim
+is required to trim. And both modules must give the same answers on the
+committed vectors, including the same refusals, because a closure one helper
+short imports cleanly and raises `NameError` the first time a caller reaches
+the missing path. A test that only executed the module would miss exactly
+that.
+
+**Status:** 3122 unit tests, 31 skipped; `mypy` clean over 115 files; a
+single-file `cpio` schema, alone in a directory with no runtime anywhere,
+read an archive GNU cpio had just written.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
