@@ -8443,7 +8443,12 @@ schemas must have an ownable struct, checked without compiling anything.
 
 **Status:** 3058 unit tests, 31 skipped; every ownable struct in the tree
 compiles under `-Werror -Wconversion -Wsign-conversion` and round-trips;
-`mypy` clean over 113 files.
+`mypy` clean over 113 files. The composed space was re-run afterwards --
+2700 cells over six shards, all agreed, nothing refused -- which says the
+view accessors are unchanged, and says nothing about the owned ones: no cell
+in that space is built with `--owned`, and the axes that would vary it do
+not exist. What holds the owned form is `test_owned.py`, and the two are not
+substitutes.
 
 ### Invariants to hold across all phases
 
