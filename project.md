@@ -8693,6 +8693,49 @@ it produced.
 `make style`, `make test-c` and `mypy` clean. A 150-cell sample confirmed
 the tree is as 26.73 left it after the revert.
 
+### 26.75 Asking the emitter
+
+26.74 established what the fix was not and named what it was: **ask the
+emitter, not the layout.** This is that, and it is smaller than the failed
+version.
+
+Each emitter records the versioned accessors it writes, as it writes them,
+and `validate` consults the record. The three ad-hoc checks go -- C asking
+what its own emitter can walk, C++ and Python whether an offset expression
+exists. None of them has to ask anything now, because whether *this backend
+declined* was never a property of the layout. It is a fact about what the
+emitter just did, and the object that did it is the one that knows.
+
+That is the whole of it, and the reason it works where a shared predicate
+could not: the layout question has three correct answers and the emitter
+question has one.
+
+**What it cost is an ordering assumption**, and that is the part worth
+recording. The record is populated as accessors are written, so it is only
+correct while accessors are emitted *before* the validator that names them
+-- `header()` before `source()` in C, accessors before `validate` within one
+class or module in the others. Every backend already builds in that order.
+Nothing enforced it.
+
+**And breaking it fails silently**, which is the failure mode this project
+keeps meeting. The set reads empty, every versioned check is skipped, and
+the generated code compiles perfectly while checking nothing -- strictly
+worse than the compile error the record replaced, because a compile error
+stops a build and an absent check does not. So the order has a test, and it
+looks for the *constant* in the emitted validator rather than for a call:
+what fails here is an absence, and a shorter validator is not something a
+compiler or a type checker objects to. A second test holds the record to
+being per-run rather than per-process, since a set that outlived one schema
+would answer for members of another.
+
+Both were run against a deliberately broken record before being trusted --
+the same discipline 26.61 applied to the differential oracles, and the
+reason to trust that this pair would notice.
+
+**Status:** 3126 unit tests, 31 skipped; 200 composed cells sampled clean
+across the widened space after the change; `make test-c`, `make style` and
+`mypy` clean.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
