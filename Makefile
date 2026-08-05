@@ -56,8 +56,10 @@ help:
 	@echo '  test       run the full test suite: python, mypy, generated C'
 	@echo '  test-py    run the compiler test suite only'
 	@echo '  test-c     build and run the C tests only'
-	@echo '  check      mypy strict over situc/'
-	@echo '  lint       source convention checks (indent, ASCII, whitespace)'
+	@echo '  check      everything: style, types, tests, cross'
+	@echo '  style      indentation, ASCII and whitespace, plus project.md'
+	@echo '  typecheck  mypy strict over situc, tools and tests'
+	@echo '  lint       alias for style-source'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  cross      compile-only build for aarch64'
@@ -89,8 +91,13 @@ typecheck:
 	$(PYTHON) -m mypy situc tools tests
 	$(PYTHON) -m mypy --strict runtime/python
 
-lint:
-	$(PYTHON) tools/lint_conventions.py
+# `style` replaced `lint_conventions.py`, and this target kept invoking the
+# deleted file -- so `make check`, which lists both, could not run at all.
+# Kept as an alias rather than removed: a target name is a surface other
+# people and scripts type, and withdrawing one is a convention change rather
+# than a repair. Whether `check` should list both is for whoever settles the
+# target vocabulary.
+lint: style-source
 
 # Not part of `test`, and not a threshold. A wall-clock number belongs to the
 # machine that took it (26.30), so this reports and asserts nothing.
