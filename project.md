@@ -8649,6 +8649,50 @@ which is why the cells exist at all.
 `make test-c`, `make style` and `mypy` clean. The space is 2.3x what 26.71
 described and the qualification in 26.71 is one axis shorter.
 
+### 26.74 The consolidation that was not one
+
+Invariant 111 says a lesson recorded in one backend is not a lesson
+generalised, and pointed at the obvious next step: three backends had each
+grown their own answer to "may `validate` name this member's accessor?", so
+put the question in `traverse` and have the three ask it once. Invariant 34
+is the same instruction in general form, and it is right often enough that
+trying it was the correct move.
+
+It does not work here, and the reason is worth more than the refactor would
+have been.
+
+**The three answers are not approximations of one question.** They are three
+different questions that agree most of the time. C's `_offset_blocker` asks
+what *C's emitter* can walk -- it emits offset functions, and knows which
+runs it can step over. C++ and Python ask whether an offset *expression*
+exists, which is a different capability with a different boundary. A shared
+predicate has to be the weakest of the three to be safe, and a weakest
+predicate is one every backend must then refine -- at which point it decides
+nothing and is dead weight that reads as load-bearing.
+
+Measured rather than reasoned: the shared version was written, all three
+backends were routed through it, and a 150-cell sample went from clean to
+one failure. Restoring C's own check moved the failure to C++. Restoring
+C++'s would have moved it to Python, and at that point every backend has its
+original check plus a predicate that never decides anything.
+
+**What is actually shared is the rule, not the test.** "A validator must not
+name an accessor its own backend declined to emit" is one sentence and it is
+true in four languages; *whether this backend declined* is not a layout fact
+and cannot be answered from the layout. Enforcing it structurally means the
+emitter recording what it emitted and the validator asking that record --
+which is a different design from a `traverse` helper, and a larger one than
+this fold is.
+
+So invariant 111 stands and its remedy does not. Left undone deliberately,
+with the shape of the real fix written down: **ask the emitter, not the
+layout.** The reverted attempt is not in the history; this paragraph is what
+it produced.
+
+**Status:** unchanged -- 6300 composed cells all agreed, 3122 unit tests,
+`make style`, `make test-c` and `mypy` clean. A 150-cell sample confirmed
+the tree is as 26.73 left it after the revert.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
