@@ -5617,7 +5617,17 @@ class Emitter:
 		early on the first left `[must_eq]` unchecked for every dynamically
 		placed field the moment the offset check landed.
 		"""
-		return [*self._fits_check(struct, entry.placement),
+		# A versioned member's fit is asked *inside* its version gate, not
+		# ahead of it. Asked ahead, a version 1 message was rejected as
+		# truncated for not carrying a member version 1 does not have -- which
+		# is the opposite of what 19.4 exists to say -- and, where the member
+		# was present but the frame short, C reported the constraint against
+		# the clamped zero while the other three reported bounds.
+		versioned = (entry.placement.since is not None
+		             and entry.placement.version_field is not None)
+
+		return [*([] if versioned
+		          else self._fits_check(struct, entry.placement)),
 		        *self._arm_fits_check(struct, entry.placement),
 		        *self._arm_validation(struct, entry.placement),
 		        *self._member_checks(struct, entry)]
@@ -5919,12 +5929,15 @@ class Emitter:
 			])
 
 		if versioned and lines:
-			return self._behind_a_version(placement, getter, local, lines)
+			return self._behind_a_version(
+				placement, getter, local, lines,
+				self._fits_check(struct, placement))
 
 		return lines
 
 	def _behind_a_version(self, placement: Placement, getter: str,
-			local: str, checks: list[str]) -> list[str]:
+			local: str, checks: list[str],
+			fits: list[str]) -> list[str]:
 		"""Constrain a versioned member only in the messages that carry it.
 
 		Two things at once, and the first is why this exists: a versioned
@@ -5958,6 +5971,7 @@ class Emitter:
 			"\t\t\treturn got;",
 			"\t\t}",
 			"\t\tif (got == SITU_OK) {",
+			*[f"\t{line}" for line in fits],
 			*[f"\t{line}" for line in checks],
 			"\t\t}",
 			"\t}",
