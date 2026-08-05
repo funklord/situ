@@ -4031,11 +4031,32 @@ class Emitter:
 		if parts is None:
 			return self._unresolvable_offset(placement, placement)
 
-		constant = sum(part for part in parts if isinstance(part, int))
+		# In declaration order, not constants-first. `running` is handed to
+		# each scan as the byte it starts at, so the accumulator has to *be*
+		# that byte when the scan is emitted -- and pre-summing every constant
+		# put the bytes that follow the variable part into the base as well.
+		# A delimited member then scanned from four bytes past its own start,
+		# and everything after it was placed on the wrong bytes while the
+		# arithmetic total still looked right.
+		#
+		# It needed a trailing fixed member after a variable one to show,
+		# which is a shape the composed space had no cell for until the
+		# versioning axis appended one.
+		leading  = 0
+		for part in parts:
+			if not isinstance(part, int):
+				break
+			leading += part
+
+		constant = leading
 		terms    = []
+		seen     = 0
 
 		for other in parts:
 			if isinstance(other, int):
+				seen += other
+				if seen > leading:
+					terms.append(str(other) + "u")
 				continue
 			if not self._has_length(struct, other):
 				return self._unresolvable_offset(placement, other)
