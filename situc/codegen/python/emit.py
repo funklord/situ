@@ -135,6 +135,13 @@ class Emitter:
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
+		#: Accessor paths this emitter actually wrote, recorded as it writes
+		#: them. `validate` consults it rather than re-deriving whether an
+		#: accessor exists: three backends each grew their own answer to that
+		#: and each was wrong once (26.74, invariant 111). Whether *this*
+		#: backend declined is not a layout fact, so it is asked of the
+		#: emitter, which knows, rather than of the layout, which cannot.
+		self._emitted: set[str] = set()
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 		self.markers  = {decl.name: decl for decl in schema.markers()}
@@ -2151,6 +2158,7 @@ class Emitter:
 		construct exists to prevent, so it is not available to write.
 		"""
 		version = c_name(placement.version_field or "")
+		self._emitted.add(placement.path)
 		return [
 			"",
 			"\t@property",
@@ -3934,13 +3942,9 @@ class Emitter:
 		versioned = placement.since is not None \
 		            and placement.version_field is not None
 
-		# ...and only where the property it reads exists. This backend emits
-		# no accessor for a member whose offset it cannot resolve, and
-		# `validate` reading one is an AttributeError at import -- the third
-		# backend to make 26.57's mistake, after C and C++, and the third to
-		# be given the same guard.
-		if versioned and placement.offset_bits is None \
-				and self._offset_expression(struct, placement) is None:
+		# ...and only where the property it reads exists, which this emitter
+		# recorded when it wrote it rather than working out again (26.74).
+		if versioned and placement.path not in self._emitted:
 			return []
 
 		read = f"{name}_value" if versioned else f"self.{name}"

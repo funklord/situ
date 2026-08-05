@@ -99,6 +99,13 @@ class Emitter:
 		self.resolved  = resolved
 		self.basename  = basename
 		self.namespace = namespace
+		#: Accessor paths this emitter actually wrote, recorded as it writes
+		#: them. `validate` consults it rather than re-deriving whether an
+		#: accessor exists: three backends each grew their own answer to that
+		#: and each was wrong once (26.74, invariant 111). Whether *this*
+		#: backend declined is not a layout fact, so it is asked of the
+		#: emitter, which knows, rather than of the layout, which cannot.
+		self._emitted: set[str] = set()
 		self.enums     = {decl.name: decl for decl in schema.enums()}
 		self.codecs    = {decl.name: decl for decl in schema.codecs()}
 		self.markers   = {decl.name: decl for decl in schema.markers()}
@@ -3683,6 +3690,7 @@ class Emitter:
 		the C version: ignoring the error is a diagnostic rather than a habit.
 		"""
 		version = c_name(placement.version_field or "")
+		self._emitted.add(placement.path)
 		return [
 			f"\t/// Present from version {placement.since}. Reading it from an",
 			"\t/// earlier message would return the bytes of whatever follows,",
@@ -5048,13 +5056,9 @@ class Emitter:
 		versioned = placement.since is not None \
 		            and placement.version_field is not None
 
-		# ...and only where the accessor it names exists. This backend
-		# declines one for a member whose start it cannot resolve -- after a
-		# region whose extent nothing computes -- and `validate` naming it is
-		# 26.57's lesson arriving as a compile error for the third time. C had
-		# the same hole; the sweep's versioning axis found both at once.
-		if versioned and placement.offset_bits is None \
-				and self._offset_expression(struct, placement) is None:
+		# ...and only where the accessor it names exists, which this emitter
+		# recorded when it wrote it rather than working out again (26.74).
+		if versioned and placement.path not in self._emitted:
 			return []
 
 		read = f"{name}_value" if versioned else f"{name}()"

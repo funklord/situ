@@ -101,6 +101,22 @@ class Emitter:
 		self.resolved = resolved
 		self.basename = basename
 		self.prefix   = prefix
+		#: Accessor paths this emitter actually wrote, recorded as it writes
+		#: them. `validate` consults it rather than re-deriving whether an
+		#: accessor exists: three backends each grew their own answer to that
+		#: and each was wrong once (26.74, invariant 111). Whether *this*
+		#: backend declined is not a layout fact, so it is not asked of the
+		#: layout -- it is asked of the emitter, which knows.
+		#:
+		#: Sound only because accessors are emitted before the validator that
+		#: names them, which is the order every backend here already builds
+		#: in -- `header()` before `source()` in C, and the accessors before
+		#: `validate` within one class or module in the others. A backend
+		#: that changed that would read an empty set and silently check
+		#: nothing, which is worse than the compile error this replaced. What
+		#: holds the order is
+		#: `test_a_versioned_constraint_is_actually_checked`.
+		self._emitted: set[str] = set()
 		#: Emit the second accessor family (decision 0022). The consumer's
 		#: choice rather than the schema's: an embedded receiver and a desktop
 		#: inspector read the same bytes and want opposite trade-offs, and a
@@ -5120,6 +5136,8 @@ class Emitter:
 		version = ident(self.prefix, struct.name,
 		                c_name(placement.version_field), "get")
 
+		self._emitted.add(placement.path)
+
 		return [
 			f"/* Present from version {placement.since}. Reading it from an "
 			f"earlier message",
@@ -5900,12 +5918,11 @@ class Emitter:
 		versioned = placement.since is not None \
 		            and placement.version_field is not None
 
-		# ...and only where the getter it names exists. A member the message
-		# places after a region whose extent nothing can compute gets no
-		# accessor, and `validate` naming one is 26.57's lesson arriving as a
-		# compile error a second time -- found by the sweep's versioning axis
-		# on its first sample, in four cells out of sixty.
-		if versioned and self._offset_blocker(struct, placement) is not None:
+		# ...and only where the getter it names exists. Asked of the emitter
+		# rather than worked out again here: this backend already decided
+		# when it wrote the header, and re-deriving the decision is how the
+		# same defect was found separately in three backends (26.74).
+		if versioned and placement.path not in self._emitted:
 			return []
 
 		value = f"{local}_value" if versioned else f"{getter}(view)"
