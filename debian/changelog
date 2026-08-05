@@ -1,0 +1,6 @@
+situ (1.0) unstable; urgency=medium
+
+  * Package with debhelper. The version comes from the VERSION file at the
+    root; `make version-check` fails the build when this disagrees with it.
+
+ -- situ maintainers <noreply@example.invalid>  Wed, 05 Aug 2026 16:00:00 +0000

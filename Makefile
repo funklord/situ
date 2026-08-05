@@ -24,6 +24,10 @@ CFLAGS		?= -std=c11 -O2 -g $(WARNFLAGS)
 LDFLAGS		?=
 
 BUILD_DIR	:= $(BUILD_ROOT)/$(ARCH)
+
+# The one place the version is stated; situc.__version__ reads the same
+# file and `make version-check` holds debian/changelog to it.
+VERSION		:= $(shell cat VERSION)
 RUNTIME_DIR	:= $(CURDIR)/runtime/c
 RUNTIME_INC	:= $(RUNTIME_DIR)
 RUNTIME_LIB	:= $(BUILD_DIR)/runtime/libsitu.a
@@ -145,6 +149,10 @@ install: runtime
 	install -m644 std/*.situ '$(DESTDIR)$(PREFIX)/share/situc/std'
 	install -Dm644 runtime/python/situ_runtime.py \
 		'$(DESTDIR)$(PREFIX)/lib/situc/_runtime/situ_runtime.py'
+	@# VERSION ships beside the module: situc.__version__ reads it, and
+	@# without it the installed package fails on import while the source
+	@# tree works fine.
+	install -Dm644 VERSION '$(DESTDIR)$(PREFIX)/lib/situc/VERSION'
 	install -Dm755 bin/situc '$(DESTDIR)$(PREFIX)/bin/situc'
 	install -Dm644 runtime/c/situ.h '$(DESTDIR)$(PREFIX)/include/situ.h'
 	install -Dm644 '$(RUNTIME_LIB)' '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
@@ -191,61 +199,32 @@ deb_discard = \
 		*) echo 'deb: $(1) is not under $(DEB_DIR); refusing'; exit 1 ;; \
 	esac
 
-deb: runtime
-	@$(call deb_discard,$(DEB_DIR))
-	@mkdir -p '$(DEB_DIR)'
-	@# Stage once, through the same install rule a user runs, then split the
-	@# tree between the two packages. A packaging bug and an install bug
-	@# cannot be different bugs this way.
-	@$(MAKE) --no-print-directory install PREFIX=/usr DESTDIR='$(DEB_STAGE)'
-	@mkdir -p '$(DEB_STAGE)-situc/usr' '$(DEB_STAGE)-libsitu-dev/usr'
-	@mv '$(DEB_STAGE)/usr/bin' '$(DEB_STAGE)-situc/usr/'
-	@mv '$(DEB_STAGE)/usr/share' '$(DEB_STAGE)-situc/usr/'
-	@mkdir -p '$(DEB_STAGE)-situc/usr/lib'
-	@mv '$(DEB_STAGE)/usr/lib/situc' '$(DEB_STAGE)-situc/usr/lib/'
-	@mkdir -p '$(DEB_STAGE)-libsitu-dev/usr/lib' \
-		'$(DEB_STAGE)-libsitu-dev/usr/include'
-	@mv '$(DEB_STAGE)/usr/include/situ.h' \
-		'$(DEB_STAGE)-libsitu-dev/usr/include/'
-	@mv '$(DEB_STAGE)/usr/lib/libsitu.a' '$(DEB_STAGE)-libsitu-dev/usr/lib/'
-	@# Anything left behind is something install writes and neither package
-	@# claims, which is a packaging bug and is reported as one rather than
-	@# shipped as a hole.
-	@find '$(DEB_STAGE)' -type f -printf 'unpackaged: %p\n' -quit | grep . \
-		&& { find '$(DEB_STAGE)' -type f -printf '  %P\n'; exit 1; } || true
-	@$(call deb_discard,$(DEB_STAGE))
-	@# The manual page belongs to the compiler package only.
-	@mkdir -p '$(DEB_STAGE)-situc/usr/share/man/man1'
-	@gzip -9nc 'packaging/situc.1' \
-		> '$(DEB_STAGE)-situc/usr/share/man/man1/situc.1.gz'
-	@for pkg in situc libsitu-dev; do \
-		mkdir -p "$(DEB_STAGE)-$$pkg/DEBIAN" \
-		         "$(DEB_STAGE)-$$pkg/usr/share/doc/$$pkg"; \
-		sed -e 's|@VERSION@|$(DEB_VERSION)|' \
-		    -e 's|@ARCH@|$(DEB_ARCH)|' \
-		    -e 's|@MAINTAINER@|$(DEB_MAINTAINER)|' \
-		    'packaging/'"$$pkg"'.control' \
-		    > "$(DEB_STAGE)-$$pkg/DEBIAN/control"; \
-		install -m644 'packaging/copyright' \
-		    "$(DEB_STAGE)-$$pkg/usr/share/doc/$$pkg/copyright"; \
-		printf '%s (%s) unstable; urgency=medium\n\n  * %s\n\n -- %s  %s\n' \
-		    "$$pkg" '$(DEB_VERSION)' 'Built from the situ source tree.' \
-		    '$(DEB_MAINTAINER)' '$(DEB_DATE)' \
-		    | gzip -9nc \
-		    > "$(DEB_STAGE)-$$pkg/usr/share/doc/$$pkg/changelog.gz"; \
-		find "$(DEB_STAGE)-$$pkg" -type d -exec chmod 755 {} +; \
-		find "$(DEB_STAGE)-$$pkg/usr/share" -type f -exec chmod 644 {} +; \
-		dpkg-deb --root-owner-group --build \
-		    "$(DEB_STAGE)-$$pkg" '$(DEB_DIR)' >/dev/null || exit 1; \
+# Native Debian packaging: debian/ holds the metadata, debhelper does the
+# work and splits the tree into situc and libsitu-dev.
+deb: version-check
+	@test -n "$(BUILD_DIR)" || { echo "deb: BUILD_DIR is empty, refusing" >&2; exit 1; }
+	dpkg-buildpackage -b -us -uc
+	@mkdir -p $(BUILD_DIR)/deb
+	@for f in ../situc_$(VERSION)_*.deb ../libsitu-dev_$(VERSION)_*.deb \
+	          ../situ_$(VERSION)_*.buildinfo ../situ_$(VERSION)_*.changes; do \
+		[ -e "$$f" ] && mv -f "$$f" $(BUILD_DIR)/deb/ || true; \
 	done
-	@$(call deb_discard,$(DEB_STAGE)-situc)
-	@$(call deb_discard,$(DEB_STAGE)-libsitu-dev)
-	@ls -1 '$(DEB_DIR)'/*.deb
+	@ls -1 $(BUILD_DIR)/deb/*.deb
 
-# The packages are only worth anything if what comes out of them runs. This
-# unpacks both into a scratch root and compiles a schema through the installed
-# compiler against the installed runtime -- no root, and nothing touching the
-# machine's own /usr.
+# The VERSION file is the source; debian/changelog is checked against it.
+version-check:
+	@file=$$(cat VERSION); \
+	changelog=$$(dpkg-parsechangelog -SVersion 2>/dev/null); \
+	if [ -z "$$changelog" ]; then \
+		echo "version-check: skipped (dpkg-parsechangelog unavailable)"; \
+	elif [ "$$file" != "$$changelog" ]; then \
+		echo "version-check: VERSION says $$file but"; \
+		echo "               debian/changelog says $$changelog"; \
+		exit 1; \
+	else \
+		echo "version-check: $$file, in step"; \
+	fi
+
 deb-check: deb
 	@$(call deb_discard,$(DEB_DIR)/root)
 	@mkdir -p '$(DEB_DIR)/root'

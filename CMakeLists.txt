@@ -37,6 +37,11 @@ install(PROGRAMS bin/situc DESTINATION bin)
 # needs it, and the Makefile installs it to the same place.
 install(FILES runtime/python/situ_runtime.py DESTINATION lib/situc/_runtime)
 install(DIRECTORY situc DESTINATION lib FILES_MATCHING PATTERN "*.py")
+
+# VERSION sits beside the module because situc.__version__ reads it there.
+# The Makefile installs it too, and test_cmake.py holds the two installers
+# to the same file list -- which is how this omission was caught.
+install(FILES VERSION DESTINATION lib/situc)
 install(DIRECTORY std/ DESTINATION share/situc/std FILES_MATCHING PATTERN "*.situ")
 
 # -- running the compiler from a consuming build ----------------------------

@@ -130,7 +130,10 @@ def test_the_copyright_file_does_not_invent_a_licence() -> None:
 
 
 def test_the_version_is_a_version() -> None:
-	assert re.fullmatch(r"\d+\.\d+\.\d+", situc.__version__)
+	# Two components or more: the version is whatever VERSION says, and
+	# "1.0" is a version. Requiring exactly three asserted a habit rather
+	# than a rule -- Debian is happy with either.
+	assert re.fullmatch(r"\d+(\.\d+)+", situc.__version__)
 
 
 def test_the_package_declares_the_python_floor_the_project_declares() -> None:

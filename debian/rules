@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+#
+# The version comes from the VERSION file at the root; `make version-check`
+# gates debian/changelog against it.
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr
+
+override_dh_auto_test:
+	# The suite is `make test`; it wants a build tree the packaging does
+	# not keep.

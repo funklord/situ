@@ -6,3 +6,13 @@ __pycache__/
 # A stray link output: a compile check that forgot `-o` once put one here,
 # and it was committed before anybody noticed.
 /a.out
+
+# debhelper's working state; debian/ holds packaging sources only.
+debian/.debhelper/
+debian/files
+debian/tmp/
+debian/situc/
+debian/libsitu-dev/
+debian/*.substvars
+debian/*.debhelper.log
+debian/debhelper-build-stamp

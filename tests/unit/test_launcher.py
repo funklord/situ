@@ -63,6 +63,11 @@ def test_it_runs_from_an_installed_prefix(tmp_path: Path) -> None:
 	shutil.copy2(LAUNCHER, prefix / "bin" / "situc")
 	shutil.copytree(ROOT / "situc", prefix / "lib" / "situc",
 	                ignore=shutil.ignore_patterns("__pycache__"))
+	# `make install` puts VERSION beside the module, and situc.__version__
+	# reads it there. Without this the fixture is not the layout it claims
+	# to be, and the launcher fails on import for a reason the real install
+	# does not have.
+	shutil.copy2(ROOT / "VERSION", prefix / "lib" / "situc" / "VERSION")
 
 	schema = tmp_path / "copy.situ"
 	schema.write_text(SCHEMA.read_text(encoding="ascii"), encoding="ascii")
