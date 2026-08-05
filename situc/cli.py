@@ -61,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                       help="backend; rust arrives in phase 11")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
+	build_cmd.add_argument("--owned", action="store_true",
+	                       help="also emit a fixed-size C struct per layout "
+	                            "and a decode that copies into it, for callers "
+	                            "that hold the value after the bytes are gone "
+	                            "(C only; 26.69)")
 	build_cmd.add_argument("--materialize", action="store_true",
 	                       help="also emit the second accessor family: an "
 	                            "index over each capped run, so reaching an "
@@ -391,6 +396,13 @@ def cmd_build(args: argparse.Namespace) -> int:
 	files: dict[str, str]
 	warnings: list[Diagnostic]
 
+	if args.owned and args.target != "c":
+		raise SystemExit(
+			f"situc: --owned is a C construct and --target is {args.target}. "
+			f"The other backends already hand back owned values: Rust and "
+			f"Python return them by value, and C++ has no view-only accessor "
+			f"a caller cannot copy.")
+
 	if args.target == "rust":
 		from situc.codegen.rust import generate as generate_rs
 
@@ -414,10 +426,23 @@ def cmd_build(args: argparse.Namespace) -> int:
 		files    = cpp.files()
 		warnings = cpp.warnings
 	else:
-		emitted  = generate(parse(source), resolved, args.schema.stem,
+		parsed   = parse(source)
+		emitted  = generate(parsed, resolved, args.schema.stem,
 		                    args.prefix, materialize=args.materialize)
 		files    = emitted.files()
 		warnings = emitted.warnings
+
+		if args.owned:
+			from situc.codegen.c import owned
+
+			files.update(owned.generate(parsed, resolved, args.schema.stem,
+			                            args.prefix))
+			# Refusals are printed rather than left as an absence: a caller
+			# who asked for this mode and found their struct missing would
+			# conclude the generator was broken.
+			for name, why in owned.refusals(resolved):
+				print(f"situc: no owned form for `{name}`: {why}",
+				      file=sys.stderr)
 
 	args.out.mkdir(parents=True, exist_ok=True)
 	for name, text in files.items():

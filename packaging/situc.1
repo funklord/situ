@@ -25,6 +25,10 @@ harness, and a test suite holding the generated code to the map.
 .TP
 .B build
 Generate accessors.
+.B \-\-owned
+additionally emits, for each fixed-size layout, a plain C struct and a
+decode that copies every field into it -- for callers that hold the value
+after the buffer is gone.
 .B \-\-target
 selects
 .IR c ", " cpp ", " rust " or " python ;
