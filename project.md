@@ -8261,6 +8261,65 @@ enough. This example is the beginning of an answer rather than the answer.
 example built, fuzzed and checked; four backends agree about it over random
 bytes; `make check` clean.
 
+### 26.67 The smaller bargain
+
+`fuzzypickles` evaluated situ and said no, for a reason no feature list
+answers: its 225 call sites decode into owned C structs that callers hold by
+value and that outlive the buffer. Zero-copy views are not a different codec
+for that codebase, they are a rewrite of the callers. The evaluation is worth
+reading in full -- it checked whether `--materialize` bridged the gap, found
+26.30 explicit that what materializes is the walk and not the data, and said
+so rather than guessing.
+
+Then it proposed something better than a feature request: **keep the
+hand-written codec and use the schema as a specification**, checked in CI.
+And volunteered as the first user.
+
+Most of that already worked. `wire --check` and `map --check` hold a schema
+to its own committed contracts, so an edit that moves a field fails the
+build. **What neither does is read a single real byte** -- so neither can
+catch a schema that disagreed with the implementation from the day it was
+written, which for a project keeping its own codec is the only failure that
+can happen.
+
+`situc verify <schema> <vectors>` is that check. Bytes the existing
+implementation produced, against the schema, with a report naming the vector
+and the line. A vector conforms when a view can be acquired over exactly its
+bytes and `validate` accepts them; the two halves fail differently, and
+saying which is most of the value -- wrong length is a layout that cannot
+cover the bytes, and a refused constraint is a layout that covers them and
+forbids what they say.
+
+**It generates nothing and compiles nothing.** The accessors are built and
+`exec`ed in memory rather than written to a temporary directory, and that is
+not fastidiousness: the command exists because a project declined to put a
+code generator in its build, and one that quietly wrote a `.py` into a tree
+would have given it one anyway.
+
+**The seven committed corpora conform**, which is worth more than it sounds.
+Those vectors were laid out by glibc's ARP definitions, by GNU cpio, and by
+bytes a netlink socket handed back -- so this is 26.61's differential
+argument in the form available to an adopter who generates nothing, and it
+now runs on every commit.
+
+**Installing it found the gap it would have shipped with.** `verify` executes
+the generated module, which imports `situ_runtime`, and nothing else in an
+installed situc needs that file -- so `make install` did not carry it, every
+test passed against the source tree, and the command failed the first time it
+ran from an unpacked package. `deb-check` runs `verify` now, which is the
+same lesson as 26.64's: a package that builds is not a package that works,
+and the only way to find out is to install it and use it.
+
+**What this mode is not.** It is much less than situ is for, and the
+evaluation said so first. There is no generated code, so no bounds are
+enforced at run time, no verify gate exists, and the hand-written codec can
+still be wrong in every way it was wrong before -- what changes is that it
+can no longer disagree with a written-down layout without CI saying so. The
+honest description is a wire contract with teeth, not a parser.
+
+**Status:** 3018 unit tests, 7 skipped; `make style`, `make test-c` and
+`make deb-check` clean; `mypy situc` clean.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9144,6 +9203,17 @@ bytes; `make check` clean.
    hand-written version is twenty lines and works, lets that reader reach
    **no** quickly and for the right reason, which is worth more than a
    trial they never run.
+
+104. **A verdict of "not for us" can be worth more than an adoption.** Five
+   sibling projects evaluated situ; three said no. Between them those three
+   produced the differential oracle, the missing floor-level example, the
+   stated floor, and this mode -- more change than the two adoptions did.
+   A project that has decided against a tool has no stake in flattering it
+   and has just spent real effort finding out exactly where it stops being
+   worth the cost, which is the most expensive information to obtain and
+   the least likely to be volunteered. Ask for the evaluation whatever the
+   answer is expected to be, and treat a no as a bug report about the tool
+   rather than about the project.
 
 ---
 
