@@ -8387,6 +8387,64 @@ hang and is not one. What distinguishes them is that `rustc` and `ld` are
 running under `/tmp/situ-sweep-*` the whole time. A sweep is the wrong thing
 to time on a shared machine and the right thing to check the exit codes of.
 
+### 26.69 The other bargain
+
+26.67 took the smaller bargain `fuzzypickles` proposed. This is the larger
+one it asked for first: **a fixed-size C struct per layout and a decode that
+copies into it**, which is what 225 of its call sites already do by hand.
+
+The obstacle was never expressiveness. A view is a base and a limit, and the
+codebase holds decoded values on the stack that outlive the buffer -- so
+adopting situ meant rewriting every caller rather than the codec, which is
+not a trade anybody takes. `--owned` emits the other model beside the usual
+one: a plain struct, a `decode(data, len, out)`, and the `encode` that puts
+it back.
+
+**Into its own header, deliberately.** Nothing in the owned form is
+zero-copy, nothing aliases the buffer, and mutating the struct changes no
+bytes until it is encoded again. Those are real costs and a caller should
+choose them rather than find the expensive accessor by autocomplete.
+
+**What it refuses is most of the design.** Only a fixed-size layout gets an
+owned form. A variable-length member has no honest fixed-size C field: a
+pointer reintroduces exactly the lifetime the caller was escaping, and an
+array of the worst case is a decision about memory nobody asked for.
+Reserved bits marked `preserve` or `unknown` are refused for the same reason
+-- an owned struct drops them by construction, so the round-trip cannot be
+promised. Every refusal names the struct on stderr, because a caller who
+asked for this mode and found their struct missing would conclude the
+generator was broken.
+
+Constraints are checked by acquiring a view and calling the existing
+`validate` rather than by restating them. Two checks of one schema is how
+they come to disagree.
+
+**The property is decode-then-encode returns the bytes you started with**,
+and it found both defects in this fold:
+
+- **Signed fields need a cast on the write path.** The runtime's writer takes
+  an unsigned width and the conversion is exact, but it is a conversion and
+  `-Wsign-conversion` is right to want it written. Four of the twenty-seven
+  examples have a signed field; the other twenty-three compiled clean and
+  said nothing.
+- **A reserved field narrower than a byte was never written.** `reserved u3
+  [must_be_zero]` has no whole byte to `memset`, so an early version skipped
+  it, the caller's buffer showed through, and the round-trip broke on the
+  eighth random draw. It had passed the compile test, which is the point of
+  having both.
+
+**And the test needed two corrections of its own**, each a familiar shape.
+Random bytes cannot exercise a schema whose fields carry `must_eq` -- ARP
+refused all 64 draws, correctly -- so the committed vectors are used where
+they exist, and where they do not the run *skips with the counts printed*
+rather than passing. That skip could then have swallowed the whole mode, so
+`test_the_mode_covers_something` puts a floor under it: at least fifteen
+schemas must have an ownable struct, checked without compiling anything.
+
+**Status:** 3058 unit tests, 31 skipped; every ownable struct in the tree
+compiles under `-Werror -Wconversion -Wsign-conversion` and round-trips;
+`mypy` clean over 113 files.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9305,6 +9363,16 @@ to time on a shared machine and the right thing to check the exit codes of.
    mechanical change from a confident one -- and it costs minutes. Then
    write the copies from the source rather than editing them, and verify
    each is exactly source plus its header.
+
+108. **Two generated artefacts are two chances to be wrong, and a compile
+   is not one of them.** The owned decoder compiled clean over every
+   example while never writing a reserved field narrower than a byte --
+   `-Werror -Wconversion -Wsign-conversion` has nothing to say about bytes
+   nobody assigned. What caught it was requiring decode and encode to be
+   inverses, which is the cheapest property a codec can be held to and the
+   only one that reads every field on both paths. Wherever a generator
+   emits a pair that should compose to the identity, test the composition
+   rather than each half.
 
 ---
 
