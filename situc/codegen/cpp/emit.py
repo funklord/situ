@@ -3675,7 +3675,7 @@ class Emitter:
 		return ["", f"\t/* {placement.path}: not in the static subset yet. */"]
 
 	def _versioned(self, placement: Placement, name: str, ctype: str,
-			load: str) -> list[str]:
+			load: str, fits: str | None) -> list[str]:
 		"""A member present only from a given version (section 19.4).
 
 		Out-parameter and `err`, because there is no value to return when the
@@ -3693,6 +3693,16 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::version;",
 			"\t\t}",
 			*self._versioned_bounds(placement),
+			*(["\t\tif (!(" + fits + ")) {",
+			   "\t\t\t/* Zero where the member does not fit: its offset is a",
+			   "\t\t\t * sum of lengths the message chose, and that is what",
+			   "\t\t\t * every other scalar the message places answers",
+			   "\t\t\t * (26.27). A version gate in front of a field does not",
+			   "\t\t\t * make it a second convention (26.73). */",
+			   f"\t\t\tout = ({ctype})0;",
+			   "\t\t\treturn ::situ::rt::err::ok;",
+			   "\t\t}"]
+			  if placement.offset_bits is None and fits is not None else []),
 			f"\t\tout = {load};",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
@@ -3876,7 +3886,8 @@ class Emitter:
 		                      // BITS_PER_BYTE))
 
 		if placement.since is not None and placement.version_field is not None:
-			lines.extend(self._versioned(placement, name, ctype, load))
+			lines.extend(self._versioned(placement, name, ctype, load,
+			                             fits))
 		elif fits is not None:
 			lines.extend([
 				"\t/* Zero where the member does not fit the view: its offset"
