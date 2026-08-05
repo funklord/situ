@@ -8532,6 +8532,59 @@ Whichever, later folds should point here rather than restate it, and a
 status line saying "2700 agreed" should be read as covering the five axes
 and nothing else.
 
+### 26.72 The axis, and the question it asked immediately
+
+26.71 recorded the composed sweep's coverage and left the choice open: add
+axes, or accept a defined slice. Versioning was the obvious first, because
+26.59's five defects had cost a day of hand-written probing while all 2700
+cells agreed throughout.
+
+**Three values, and `none` is byte-identical to what the space emitted
+before**, so a result from either side of the change compares with the other.
+`since` appends a plain versioned scalar and `constrained` appends one
+carrying a `[must_eq]` -- the shape 26.59 was found by. Cells whose form is
+`remaining` are dropped rather than emitted: nothing may follow such a member
+and a versioned member must be last, so they would refuse for the template's
+shape rather than the composition, which is 26.54's 780 wasted cells again.
+6300 cells rather than 8100.
+
+**It found three defects in its first sample of sixty**, which is the answer
+to whether the axis was worth adding.
+
+- **Python gave a versioned member at a dynamic offset no bounds check.**
+  `_versioned_bounds` returned nothing when `offset_bits` is None, so the
+  check that exists for a constant offset simply stopped at the case where
+  the message places the member. The other three kept theirs, and the four
+  disagreed about what a short frame holds. Both the getter and the setter
+  had it.
+- **C and C++ emitted `validate` calls to accessors neither had emitted**,
+  for a member after a region whose extent nothing computes. That is 26.57's
+  lesson for the third and fourth time -- a validator naming what its own
+  backend declined to emit -- and it is now guarded by the same question the
+  other validate paths ask.
+
+**And it asked a question that is not a bug.** Thirteen sample cells remain,
+and they are one question thirteen times: **a member that is both versioned
+and dynamically placed has two conventions and no ruling.** 26.27 says a
+scalar at an offset the message chose answers zero where it does not fit --
+the answer C gives. 19.4 says a versioned member reports its absence rather
+than guessing -- the answer Python now gives. Both are right about the rule
+they are following and there is no rule about which rule wins.
+
+Recorded in `KNOWN` with the symptom rather than resolved, because picking
+one silently is exactly what 17.0 forbids and because the two conventions
+were each argued for on their own merits. **The decision is: which does a
+caller need more** -- a value that is always readable, or the ability to tell
+"the frame stopped before it" from "the field is zero"? The versioned form
+exists to make absence reportable, which argues one way; every other
+dynamically-placed scalar in four backends clamps, which argues the other.
+
+**Status:** 3122 unit tests, 31 skipped; the composed sample green with
+thirteen cells recorded as one open question; `make style` and `mypy` clean.
+The full 6300-cell space has not been run -- the sample is what found these,
+and running the whole of it is worth doing once the question above is
+answered rather than before.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
