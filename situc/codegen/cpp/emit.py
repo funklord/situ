@@ -5036,7 +5036,17 @@ class Emitter:
 		# `err magic(std::uint16_t &out)` and would not compile.
 		versioned = placement.since is not None \
 		            and placement.version_field is not None
-		read      = f"{name}_value" if versioned else f"{name}()"
+
+		# ...and only where the accessor it names exists. This backend
+		# declines one for a member whose start it cannot resolve -- after a
+		# region whose extent nothing computes -- and `validate` naming it is
+		# 26.57's lesson arriving as a compile error for the third time. C had
+		# the same hole; the sweep's versioning axis found both at once.
+		if versioned and placement.offset_bits is None \
+				and self._offset_expression(struct, placement) is None:
+			return []
+
+		read = f"{name}_value" if versioned else f"{name}()"
 
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:

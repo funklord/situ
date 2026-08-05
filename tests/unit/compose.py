@@ -100,6 +100,29 @@ BEFORE: dict[str, str] = {
 #: addressed from its own frame.
 PLACES = ("frame", "nested", "authenticated", "sealed", "coded", "arm")
 
+#: The sixth axis: whether the struct carries a version, and what is behind
+#: it. Added after 26.59, where `[since]` turned out to be exercised by three
+#: unconstrained scalars in `edges.situ` and by nothing else -- and where the
+#: first attribute anybody put on a versioned member broke all four backends
+#: in four different ways while this sweep agreed about every cell.
+#:
+#: `none` emits exactly what the space emitted before, so the original 2700
+#: cells are unchanged and a result from either side of this commit compares
+#: with the other.
+#:
+#: The member is appended rather than inserted, and it has to be: append-only
+#: is what `[since]` means, and a versioned member ahead of an unversioned one
+#: is refused by the compiler rather than by this table (19.4).
+VERSIONS: dict[str, str] = {
+	"none":        "",
+	"since":       "\tu32  added [since = 2];\n",
+	# The shape 26.59 was found by. A constraint behind a version reaches the
+	# accessor whose signature the version changed, which is where C and C++
+	# emitted code that would not compile, Rust checked a field the message
+	# does not carry, and Python raised out of a message that is merely old.
+	"constrained": "\tu16  added [since = 2, must_eq = 4660];\n",
+}
+
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
 VARINT_DECL = (
@@ -159,11 +182,13 @@ class Case:
 	element: str
 	before:  str
 	place:   str
+	version: str = "none"
 
 	@property
 	def name(self) -> str:
+		versioned = "" if self.version == "none" else f"-{self.version}"
 		return (f"{self.driver}-{self.form}-{self.element}"
-		        f"-after-{self.before}-in-{self.place}")
+		        f"-after-{self.before}-in-{self.place}{versioned}")
 
 	def schema(self) -> str:
 		"""The whole schema, ready to hand to `situc`."""
@@ -244,7 +269,17 @@ class Case:
 			         "\t\tcase arm_kind.second: u8  other[2];\n"
 			         "\t}\n")
 
-		return "".join(head) + inner + f"\nstruct s {{\n{body}}}\n"
+		if self.version == "none":
+			return "".join(head) + inner + f"\nstruct s {{\n{body}}}\n"
+
+		# A version field, and the member that arrives after it. The field
+		# goes first because a reader has to know the version before it knows
+		# whether the last member's bytes are there, and `[version = f]` on
+		# the struct is what says which field carries it.
+		return ("".join(head) + inner
+		        + "\nstruct s [version = ver] {\n"
+		        + "\tu8   ver;\n"
+		        + body + VERSIONS[self.version] + "}\n")
 
 
 def cases() -> list[Case]:
@@ -253,7 +288,14 @@ def cases() -> list[Case]:
 	Fixed because a sample of it has to be reproducible from a seed, and
 	because a case that fails should have the same name tomorrow.
 	"""
-	return [Case(driver, form, element, before, place)
-	        for driver, form, element, before, place
-	        in product(sorted(DRIVERS), sorted(FORMS), sorted(ELEMENTS),
-	                   sorted(BEFORE), PLACES)]
+	found = [Case(driver, form, element, before, place, version)
+	         for driver, form, element, before, place, version
+	         in product(sorted(DRIVERS), sorted(FORMS), sorted(ELEMENTS),
+	                    sorted(BEFORE), PLACES, sorted(VERSIONS))]
+
+	# Nothing may follow a `[remaining]` member (8.5), and a versioned member
+	# has to be last, so the two cannot both be in one struct. Dropped rather
+	# than emitted: they would refuse for the template's shape rather than for
+	# the composition, which is the 780 wasted cells of 26.54 all over again.
+	return [case for case in found
+	        if case.version == "none" or case.form != "remaining"]

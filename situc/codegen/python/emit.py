@@ -2043,7 +2043,8 @@ class Emitter:
 		                      // BITS_PER_BYTE))
 
 		if placement.since is not None and placement.version_field is not None:
-			lines = self._versioned(placement, entry, name, hint, scalar, offset)
+			lines = self._versioned(placement, entry, name, hint, scalar,
+			                        offset, fits)
 		elif fits is not None:
 			lines = ["", "\t@property", f"\tdef {name}(self) -> {hint}:",
 			         *self._field_doc(entry),
@@ -2110,7 +2111,11 @@ class Emitter:
 				# The declared version is the message's claim, not a
 				# fact about the buffer: `ver = 2` in three bytes passed
 				# this and stored into a slice that stops before it.
-				*self._versioned_bounds(placement),
+				#
+				# `fits` carries the same check where the offset is one the
+				# message chose rather than a constant -- the case that had
+				# no check at all on either the read or the write.
+				*self._versioned_bounds(placement, fits),
 			]
 
 		# A write at an offset the message chose does nothing, which is what
@@ -2136,7 +2141,8 @@ class Emitter:
 		return lines
 
 	def _versioned(self, placement: Placement, entry: Resolved, name: str,
-			hint: str, scalar: ScalarType, offset: str | None) -> list[str]:
+			hint: str, scalar: ScalarType, offset: str | None,
+			fits: str | None) -> list[str]:
 		"""A member present only from a given version (section 19.4).
 
 		A property that raises, not one that returns a sentinel. There is no
@@ -2155,11 +2161,12 @@ class Emitter:
 			f'\t\t\t\tf"{placement.path} arrives in version '
 			f'{placement.since}; this message is version "',
 			f"\t\t\t\tf\"{{self.{version}}}\")",
-			*self._versioned_bounds(placement),
+			*self._versioned_bounds(placement, fits),
 			f"\t\treturn {self._load(placement, scalar, offset)}",
 		]
 
-	def _versioned_bounds(self, placement: Placement) -> list[str]:
+	def _versioned_bounds(self, placement: Placement,
+			fits: str | None) -> list[str]:
 		"""And the frame has to hold it, which the acquiring check did not say.
 
 		The one place 20.2's argument does not reach: a versioned struct's
@@ -2168,10 +2175,29 @@ class Emitter:
 		there. All four backends asked the version and stopped -- C read past
 		the view, Rust panicked, and this read a short slice as an integer,
 		which is a number nobody wrote.
+
+		That was fixed for a member at a constant offset and not for one the
+		message places, because `offset_bytes` is None there and this returned
+		nothing at all. So a versioned member behind a delimiter or a counted
+		run had no check in this backend while the other three kept theirs,
+		and the four disagreed about what a short frame holds -- which is the
+		composed sweep's versioning axis reporting on its first sample.
+		`fits` is the same expression the unversioned path guards with.
 		"""
 		scalar = placement.scalar
-		if scalar is None or placement.offset_bits is None:
+		if scalar is None:
 			return []
+
+		if placement.offset_bits is None:
+			if fits is None:
+				return []
+			return [
+				f"\t\tif not ({fits}):",
+				f'\t\t\traise BoundsError("{placement.path}: its offset is a'
+				' sum of lengths the message chose, and the frame stops before'
+				' it")',
+			]
+
 		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
 		return [
 			f"\t\tif self._len - {placement.offset_bytes} < {width}:",

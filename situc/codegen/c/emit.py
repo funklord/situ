@@ -5868,7 +5868,16 @@ class Emitter:
 		# not an attribute between them.
 		versioned = placement.since is not None \
 		            and placement.version_field is not None
-		value     = f"{local}_value" if versioned else f"{getter}(view)"
+
+		# ...and only where the getter it names exists. A member the message
+		# places after a region whose extent nothing can compute gets no
+		# accessor, and `validate` naming one is 26.57's lesson arriving as a
+		# compile error a second time -- found by the sweep's versioning axis
+		# on its first sample, in four cells out of sixty.
+		if versioned and self._offset_blocker(struct, placement) is not None:
+			return []
+
+		value = f"{local}_value" if versioned else f"{getter}(view)"
 
 		# An enum with `default = error` admits its members and nothing else.
 		# The declaration said so all along; this is what makes it true.
