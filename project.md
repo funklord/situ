@@ -8498,7 +8498,39 @@ that.
 
 **Status:** 3122 unit tests, 31 skipped; `mypy` clean over 115 files; a
 single-file `cpio` schema, alone in a directory with no runtime anywhere,
-read an archive GNU cpio had just written.
+read an archive GNU cpio had just written. The composed space was re-run
+afterwards: 2700 cells over six shards, all agreed, nothing refused.
+
+### 26.71 What the sweep covers, stated once
+
+Four consecutive clean sweeps, and each was recorded with a longer paragraph
+than the last about what it does not cover. That is a signal about the
+record rather than about the runs: the qualification is the same every time,
+it is growing because the surface is, and repeating it per fold is how it
+stops being read.
+
+So, once. **The composed sweep varies five axes** -- what drives a count,
+how the count is written, what is counted, what precedes it, and where it
+sits -- over 2700 cells, and runs each through the four backends' *view*
+accessors. Everything it says is about those.
+
+**What it does not touch**, as of this fold: versioning (`[since]`, whose
+five defects in 26.59 the sweep agreed about throughout), attribute
+placement, a stream of frames, `--owned`, `--single-file`, `verify`, and the
+fourteen differential oracles. None of those is an axis, and three of them
+are outputs the sweep has never built.
+
+That list has grown in every fold since 26.54, when the axes were last
+changed. **The sweep is not getting worse; it is covering a constant thing
+while the surface around it grows**, and a clean run means what it has
+always meant about the part it varies.
+
+Two ways forward, and this is a decision rather than a finding, so it is
+recorded open: add axes -- versioning is the obvious first, given what it
+cost to find by hand -- or accept a defined slice and stop re-qualifying it.
+Whichever, later folds should point here rather than restate it, and a
+status line saying "2700 agreed" should be read as covering the five axes
+and nothing else.
 
 ### Invariants to hold across all phases
 
