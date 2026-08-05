@@ -3478,6 +3478,7 @@ situc advise  <schema>            ranked design suggestions with costs
 situc explain <schema> <path>     one field's capability vector and blame chains
 situc diff    <old> <new>         capability regressions between revisions
 situc wire    <schema>            the byte-level contract [--check] (19.3)
+situc verify  <schema> <vectors>  do real bytes conform? generates nothing
 situc doc     <schema>            byte-layout diagrams and a field reference
                                   [--format=ascii|markdown] [--out DIR]
 situc gen-tests   <schema> <vectors>
@@ -3625,6 +3626,8 @@ situ/
                               an ordering -- `!=` before `!` -- and Python and
                               Lua would otherwise get it right separately
     wire.py                   the byte-level contract and its comparison; 19.3
+    verify.py                 do these bytes conform? the schema used as a
+                              specification, generating nothing; 26.67
     requirements.py           predicate evaluation and discharge
     namespaces.py             `::` qualification and `--prefix`; decision 0012
     capmap.py                 capability map construction

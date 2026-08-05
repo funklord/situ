@@ -136,6 +136,8 @@ install: runtime
 	find situc -name '*.py' -exec install -Dm644 '{}' '$(DESTDIR)$(PREFIX)/lib/{}' \;
 	install -d '$(DESTDIR)$(PREFIX)/share/situc/std'
 	install -m644 std/*.situ '$(DESTDIR)$(PREFIX)/share/situc/std'
+	install -Dm644 runtime/python/situ_runtime.py \
+		'$(DESTDIR)$(PREFIX)/lib/situc/_runtime/situ_runtime.py'
 	install -Dm755 bin/situc '$(DESTDIR)$(PREFIX)/bin/situc'
 	install -Dm644 runtime/c/situ.h '$(DESTDIR)$(PREFIX)/include/situ.h'
 	install -Dm644 '$(RUNTIME_LIB)' '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
@@ -246,6 +248,11 @@ deb-check: deb
 		'$(CURDIR)/examples/modbus/modbus.situ' --out . >/dev/null
 	@$(CC) -std=c11 $(WARNFLAGS) -c '$(DEB_DIR)/root/modbus.c' \
 		-I'$(DEB_DIR)/root/usr/include' -o '$(DEB_DIR)/root/modbus.o'
+	@# `verify` runs the accessors in memory, so it needs the Python runtime
+	@# the package installs beside the module. It was missing at first, and
+	@# nothing noticed until it was run from a scratch root.
+	@'$(DEB_DIR)/root/usr/bin/situc' verify \
+		'$(CURDIR)/examples/arp/arp.situ' '$(CURDIR)/examples/arp/arp.vectors'
 	@echo 'deb-check: the installed situc built a schema against the installed runtime'
 
 clean:

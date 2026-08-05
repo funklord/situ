@@ -146,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                     help="compare against the committed *.situ.map and fail "
 	                          "if it differs")
 
+	verify_cmd = sub.add_parser(
+		"verify", help="check that real bytes conform to the schema")
+	verify_cmd.add_argument("schema", type=Path)
+	verify_cmd.add_argument("vectors", type=Path)
+
 	explain_cmd = sub.add_parser(
 		"explain", help="one path's capability vector and its blame chains")
 	explain_cmd.add_argument("schema", type=Path)
@@ -229,6 +234,30 @@ def cmd_wire(args: argparse.Namespace) -> int:
 	print(f"situc: review the above, then run "
 	      f"`situc wire {args.schema} > {committed}`", file=sys.stderr)
 	return 1
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+	"""`situc verify schema.situ corpus.vectors` -- the schema as a
+	specification, checked against bytes somebody else's implementation
+	produced.
+
+	For a project that cannot take situ's usual bargain. `wire --check` and
+	`map --check` hold a schema to its own committed contracts and never look
+	at a real byte, so neither notices a schema that disagreed with the
+	implementation from the day it was written. This does, and it generates
+	nothing into the caller's tree.
+	"""
+	from situc import verify
+
+	source   = read_source(args.schema)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	found = verify.check(schema, resolved, args.schema.stem,
+	                     read_source(args.vectors))
+	sys.stdout.write(verify.render(found, str(args.schema), str(args.vectors)))
+
+	return 0 if found and all(one.ok for one in found) else 1
 
 
 def cmd_map(args: argparse.Namespace) -> int:
@@ -681,6 +710,7 @@ def main(argv: list[str] | None = None) -> int:
 		"diff":     cmd_diff,
 		"wire":     cmd_wire,
 		"map":      cmd_map,
+		"verify":   cmd_verify,
 		"build":    cmd_build,
 		"gen-fuzz": cmd_gen_fuzz,
 		"gen-checks": cmd_gen_checks,

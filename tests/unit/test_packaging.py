@@ -93,13 +93,14 @@ def test_every_installed_path_belongs_to_exactly_one_package() -> None:
 	rule     = rule[:rule.index("\nuninstall:")]
 
 	installed = {found.rstrip("/")
-	             for found in re.findall(r"\$\(PREFIX\)(/[a-z/.]+)", rule)
+	             for found in re.findall(r"\$\(PREFIX\)(/[a-z_/.]+)", rule)
 	             if found.rstrip("/")}
 	# `/lib` bare is the `find situc -exec install` line, whose destination
 	# ends in `{}` and so reads as `$(PREFIX)/lib/` to a regex. It puts the
 	# package under `/lib/situc`, which is named beside it.
 	assert installed == {
-		"/lib", "/lib/situc", "/share/situc/std", "/bin/situc",
+		"/lib", "/lib/situc", "/lib/situc/_runtime/situ_runtime.py",
+		"/share/situc/std", "/bin/situc",
 		"/include/situ.h", "/lib/libsitu.a",
 	}, "install writes somewhere the deb rule has not been told about"
 

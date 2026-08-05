@@ -198,6 +198,34 @@ expression grammar inside one field's *text*, which situ does not generate and
 should not. Check that the part situ would take is the part costing you
 something.
 
+### Using a schema as a specification, generating nothing
+
+Some projects cannot take the usual bargain. A codebase whose callers hold
+owned structs that outlive the buffer cannot swap in zero-copy views without
+rewriting the callers; a build that must not gain a code generator cannot run
+one. Both are real, and both were reported by projects that evaluated situ and
+said no.
+
+There is a smaller bargain available, and it is worth more than nothing:
+
+```sh
+situc wire --check   proto.situ                 # the layout contract
+situc map --check    proto.situ                 # the capability contract
+situc verify         proto.situ corpus.vectors  # do real bytes conform?
+```
+
+Keep the hand-written codec. Commit the schema, the `.situ.wire` and the
+`.situ.map` beside it, and run those three in CI. The first two fail when an
+edit moves a field or changes what a field costs to reach. The third is the
+one that matters most and the one the other two cannot do: it takes bytes
+your existing implementation produced and asks whether the schema actually
+describes them, which is the check that catches a schema that was wrong from
+the day it was written.
+
+`verify` generates nothing and compiles nothing -- the accessors are built and
+run in memory -- so the only thing that enters your tree is the schema and two
+text files a reviewer can read.
+
 ## What it will not do
 
 - No wire format of its own. Situ describes formats that already exist.

@@ -32,6 +32,10 @@ set(SITU_LAUNCHER "${CMAKE_CURRENT_SOURCE_DIR}/bin/situc" CACHE FILEPATH
 add_subdirectory(runtime/c)
 
 install(PROGRAMS bin/situc DESTINATION bin)
+# `situc verify` runs the generated accessors in memory, so the Python
+# runtime ships beside the package. Nothing else in an installed situc
+# needs it, and the Makefile installs it to the same place.
+install(FILES runtime/python/situ_runtime.py DESTINATION lib/situc/_runtime)
 install(DIRECTORY situc DESTINATION lib FILES_MATCHING PATTERN "*.py")
 install(DIRECTORY std/ DESTINATION share/situc/std FILES_MATCHING PATTERN "*.situ")
 
