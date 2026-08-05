@@ -8585,6 +8585,70 @@ The full 6300-cell space has not been run -- the sample is what found these,
 and running the whole of it is worth doing once the question above is
 answered rather than before.
 
+### 26.73 What the sixth axis was worth
+
+26.72 left the versioning axis with thirteen sample cells open and the full
+space unwalked. Both are settled: **6300 cells, 6300 agreed, nothing refused
+and nothing failed.** It is the first complete walk of the widened space, and
+getting there took five defects, three of which no sample had drawn.
+
+**The convention question first.** A member both versioned and dynamically
+placed had two rules and no ruling -- 26.27's clamp against 19.4's report.
+Settled on the clamp: a versioned member is not a second convention, it is
+the ordinary one with a gate in front, so the *gate* raises where the message
+is too old and the *read* clamps where the frame is too short. Applied to
+Python, then to C++, which had the identical hole on the identical line:
+`_versioned_bounds` returning nothing when `offset_bits` is None, so the
+check that exists for a constant offset stopped where the message places the
+member.
+
+**Then the one that was not about versioning at all.** C summed a dynamic
+offset by pre-summing every constant part and adding the variable terms on
+top. The total was right; the base each scan started from was not, because
+that same accumulator is handed to a delimited member's scan as *the byte it
+starts at*, and constants belonging to members after the variable part were
+already in it. A delimited member scanned from four bytes past its own start
+and everything after it landed on the wrong bytes -- while the generated
+source read as correct, since the terms summed to the right total.
+
+**That defect is as old as the offset chain**, and it needed a trailing fixed
+member after a variable one to show. Every existing cell ended at the
+variable part or had nothing constant behind it, so 2700 cells had agreed
+about it for as long as this sweep has existed. The axis appended a trailing
+member and it fell out on the first full run. That is the whole argument for
+widening a space rather than deepening a sample.
+
+**And two the full run found that the samples had not.** Every one of the 62
+build failures was a `constrained` cell and every one of the 149
+disagreements a `since` cell, which is a clean enough split to read as two
+causes before looking at either.
+
+- The disagreements were introduced by the fix two commits earlier. Moving
+  the fit check inside the version gate left it emitted only where the gate
+  was, and the gate exists to wrap constraint checks -- so a plain `[since]`
+  member with nothing to validate got no bounds check anywhere. **A fix that
+  trades a broad defect for a narrow one is still a regression**, and only
+  the full space showed it: the 60-cell sample had drawn no such cell.
+- The build failures were Python's `validate` reading a property that backend
+  declines to emit. C and C++ were given that guard earlier in this same
+  fold. **Three backends made 26.57's mistake and each was found separately**
+  -- which says the lesson was recorded and not generalised, and that a
+  validator naming what its own backend refused to emit deserves one check
+  the three share rather than three that agree.
+
+**What a clean 6300 does and does not say.** The differ probes a versioned
+member only at a constant offset: where a variable-length run precedes it, C
+and C++ may emit no accessor, and a probe naming one is a compile error
+rather than a comparison. Those cells are covered by the build and not by
+the value comparison, so this result is weaker for that subset than for the
+rest. 19.4 says the shape should not arise -- append-only means nothing
+before a versioned member moves -- and the composed space builds it anyway,
+which is why the cells exist at all.
+
+**Status:** 6300 composed cells, all agreed; 3122 unit tests, 31 skipped;
+`make test-c`, `make style` and `mypy` clean. The space is 2.3x what 26.71
+described and the qualification in 26.71 is one axis shorter.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
