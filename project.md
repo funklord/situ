@@ -8736,6 +8736,63 @@ reason to trust that this pair would notice.
 across the widened space after the change; `make test-c`, `make style` and
 `mypy` clean.
 
+### 26.76 The run that examined nothing, and read as clean
+
+A full sweep was launched across six shards and all six died. The tmpfs
+they built in reached zero bytes free, each shard took an `ENOSPC` on its
+next write, and every one exited having recorded no result at all.
+
+**The six logs were empty, and an empty log is what a perfect run produces
+too.** The sweep prints a line per failing cell and a tally at the end, so
+a run with nothing to complain about prints nothing until the tally -- and
+the tally is exactly what a process killed partway never reaches. Grepping
+those logs for failures found none. That was true, and it meant nothing.
+
+What saved it was incidental. The launcher appended `shard $i exit $?` to
+a done-file, so the six exit codes outlived the processes that produced
+them. Without that line -- written to track progress, not to validate
+anything -- the void run would have been indistinguishable from the clean
+one it was meant to replace, and this fold would have been written against
+a sweep that examined zero cells.
+
+**Both numbers were already there and nobody compared them.**
+`sum(tally.values())` is how many cells the loop actually finished;
+`len(chosen)` is how many it was asked to. The tool computed both and
+printed neither against the other, because the tally block prints only the
+kinds that are nonzero and says nothing about the total. The information
+existed; the question was never asked. That is 26.45's shape exactly --
+there, every cost rule supplied a basis saying what its number counted and
+the renderer dropped all eight; here, both counts were live in the summary
+and neither was put next to the other.
+
+So the sweep now states its coverage instead of implying it: a terminal
+`examined N/N` line, and exit 126 when the two disagree. **Clean is now a
+line that must be present**, where before it was a line that had to be
+absent, and absence is also what a corpse produces.
+
+The comparison would have been dead code on its own -- the loop tallies
+every iteration, so at the end the counts always match. It is live because
+interruption is now caught rather than allowed to propagate: a sweep
+stopped partway reaches the summary and reports `examined 2/8` with a
+non-zero status, where previously it left a traceback under `SIGINT` and
+nothing whatsoever under `SIGKILL`. Both paths were exercised before the
+change was trusted, the second by stubbing the third cell to raise --
+26.61's discipline, and the reason to believe the guard fires.
+
+26.71 settled what the sweep *covers*, and asked to be pointed at rather
+than restated. This settles whether it *ran*, which is the prior question
+and had never been asked at all. Every fold since 26.54 rests on a sweep.
+
+The cause was not situ's -- an unrelated process elsewhere on the machine
+held twelve gigabytes of an already-deleted log open, so the space could
+not be reclaimed while it lived. That detail is not the finding and will
+not recur in this shape. The finding is that when the instrument died, it
+died quietly, and the report it left behind looked like success.
+
+**Status:** 6300 cells, six shards, `examined 1050/1050` and `agreed 1050`
+from each; 3126 unit tests, 31 skipped; `make style` and `mypy` clean over
+116 files.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9664,6 +9721,15 @@ across the widened space after the change; `make test-c`, `make style` and
    only one that reads every field on both paths. Wherever a generator
    emits a pair that should compose to the identity, test the composition
    rather than each half.
+109. **An instrument that reports only failures cannot tell you it ran.**
+   Six sweep shards died of `ENOSPC` and left empty logs -- which is what
+   six clean shards also leave, right up until the tally they never
+   reached. "No failures in the logs" was a true statement about a run
+   that examined nothing, and only an incidental exit-code line kept it
+   from being folded as clean. The count finished and the count requested
+   were both already computed and never compared. Make a check assert its
+   coverage positively, so that passing is a claim the run has to make
+   rather than an absence anyone can mistake for one.
 
 ---
 
