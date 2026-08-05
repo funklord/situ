@@ -8375,6 +8375,16 @@ scripts type and withdrawing one is a convention change rather than a repair.
 first time since the rename -- 235 files conform, mypy clean over 111 files,
 C tests on the host and under aarch64, big-endian cross compile clean.
 
+The composed space was re-run afterwards: **2700 cells over six shards, 2700
+agreed, nothing refused and nothing failed** -- the same figures as 26.65's
+run, which is what a clean sweep is for. It took an hour rather than twenty
+minutes, on a machine three other builds were using, and that is worth a
+sentence for the next person to run it: the shards accumulated forty seconds
+of processor time each in the first fifty minutes, which looks exactly like a
+hang and is not one. What distinguishes them is that `rustc` and `ld` are
+running under `/tmp/situ-sweep-*` the whole time. A sweep is the wrong thing
+to time on a shared machine and the right thing to check the exit codes of.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
