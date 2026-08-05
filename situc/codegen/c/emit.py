@@ -5949,10 +5949,15 @@ class Emitter:
 				"\t}",
 			])
 
-		if versioned and lines:
-			return self._behind_a_version(
-				placement, getter, local, lines,
-				self._fits_check(struct, placement))
+		# The gate is emitted for its own sake where the member has no
+		# constraints at all: the fit check moved inside it, so a plain
+		# `[since]` member with nothing to validate would otherwise get no
+		# bounds check emitted anywhere -- which is how C came to accept a
+		# frame the other three called short, in 149 cells of the full run.
+		fits = self._fits_check(struct, placement)
+		if versioned and (lines or fits):
+			return self._behind_a_version(placement, getter, local, lines,
+			                              fits)
 
 		return lines
 

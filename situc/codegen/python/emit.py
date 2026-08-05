@@ -3933,7 +3933,17 @@ class Emitter:
 		# at all -- it is simply older than the constraint.
 		versioned = placement.since is not None \
 		            and placement.version_field is not None
-		read      = f"{name}_value" if versioned else f"self.{name}"
+
+		# ...and only where the property it reads exists. This backend emits
+		# no accessor for a member whose offset it cannot resolve, and
+		# `validate` reading one is an AttributeError at import -- the third
+		# backend to make 26.57's mistake, after C and C++, and the third to
+		# be given the same guard.
+		if versioned and placement.offset_bits is None \
+				and self._offset_expression(struct, placement) is None:
+			return []
+
+		read = f"{name}_value" if versioned else f"self.{name}"
 
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
