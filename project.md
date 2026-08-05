@@ -8320,6 +8320,61 @@ honest description is a wire contract with teeth, not a parser.
 **Status:** 3018 unit tests, 7 skipped; `make style`, `make test-c` and
 `make deb-check` clean; `mypy situc` clean.
 
+### 26.68 The gate that did not pass the gate
+
+`tools/lint_conventions.py` became `tools/style_gate.py`, one tool shared
+verbatim across the seven private projects instead of three that had grown
+apart. Two things were wrong with the arrival and neither was in the gate's
+own subject matter.
+
+**It failed this project's type checking.** `make typecheck` runs mypy strict
+over `tools/`, and the gate produced eighteen errors there -- a config dict
+with no type parameters, two untyped functions, an unannotated brace stack,
+and an optional import a checker read as always present. So the file that
+decides whether the tree conforms was the one file in the tree that did not.
+
+Not exempt by decision, either: nobody chose to exclude `tools/`, it simply
+had not been looked at. The fix is annotation rather than exclusion, and
+that is the whole of the position -- **a gate is not exempt from the tree it
+gates**, and excluding it would have been the cheaper repair and the wrong
+one.
+
+**Three of the fixes were more than annotation, which is the part worth
+keeping.** `reject_config` is `NoReturn` -- it always was, since every caller
+depends on it not returning -- and saying so is what makes the *"this Python
+has no tomllib"* branch reachable to a checker instead of dead. That branch
+is the one that refuses to run rather than silently checking the wrong file
+set with default settings, so a checker calling it unreachable was reporting
+something real. The optional import needed a name of its own for the same
+reason: an `import` statement cannot carry an annotation, and without one a
+checker decides the module is always present. And the brace stack turned out
+to hold two flags *and a paren depth*, so the first annotation written for it
+-- `list[bool]` -- was wrong, and mypy said so.
+
+**Changing a file seven projects share needs evidence, not care.** The gate
+was run in all three modes -- `check`, `docs` and `fix` -- over all seven
+trees before and after the change, and every verdict, every message and, for
+`fix`, every rewritten byte is identical. That is cheap to do and it is the
+only thing that distinguishes a safe mechanical change from a confident one.
+The copies were then written from the source and each verified to be exactly
+`source + header`, rather than diffed by eye.
+
+**And `make check` could not run at all.** `lint` still invoked the deleted
+`lint_conventions.py`, and the umbrella lists both `style` and `lint`, so it
+failed before reaching a single test. It had been that way since the rename.
+
+The reason nobody noticed is worth more than the repair: **an umbrella target
+is the one nobody runs.** `make style`, `make test-py` and `make test-c` are
+each faster and each answer a question somebody actually has, so a working
+day never invokes the target that runs all of them -- and a break there is
+invisible until CI, or until somebody asks for the whole gate. `lint` is an
+alias now rather than deleted, because a target name is a surface people and
+scripts type and withdrawing one is a convention change rather than a repair.
+
+**Status:** 3018 unit tests, 7 skipped; `make check` runs end to end for the
+first time since the rename -- 235 files conform, mypy clean over 111 files,
+C tests on the host and under aarch64, big-endian cross compile clean.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9214,6 +9269,30 @@ honest description is a wire contract with teeth, not a parser.
    the least likely to be volunteered. Ask for the evaluation whatever the
    answer is expected to be, and treat a no as a bug report about the tool
    rather than about the project.
+
+105. **A gate is not exempt from the tree it gates.** The style gate failed
+   this project's own type checking on the day it arrived -- eighteen errors
+   in the file that decides whether everything else conforms. It was not
+   excluded by decision; nobody had looked. The cheap repair is to exclude
+   the directory and the right one is to fix the file, because a checker
+   that cannot survive the standard it enforces is evidence about the
+   standard, the checker, or both, and finding out which is the point.
+
+106. **An umbrella target is the one nobody runs.** `make check` had been
+   unable to start since a rename left `lint` invoking a deleted file, and
+   nothing revealed it: the individual targets are each faster and each
+   answer a question somebody actually has, so a working day never invokes
+   the one that runs them all. Whatever aggregates the checks needs running
+   deliberately and periodically, precisely because habit will not.
+
+107. **Changing a file that several projects share needs evidence, not
+   care.** The gate is copied verbatim into seven repositories, so a
+   plausible-looking edit is a plausible-looking edit seven times. Running
+   it in every mode over every tree, before and after, and requiring the
+   verdicts and rewritten bytes to be identical is what separates a
+   mechanical change from a confident one -- and it costs minutes. Then
+   write the copies from the source rather than editing them, and verify
+   each is exactly source plus its header.
 
 ---
 
