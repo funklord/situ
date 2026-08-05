@@ -95,21 +95,28 @@ def main() -> int:
 	tally  = Counter[str]()
 	failed: list[Outcome] = []
 
-	for index, case in enumerate(chosen, start=1):
-		tmp = Path(tempfile.mkdtemp(prefix="situ-sweep-"))
-		try:
-			outcome = run(case, tmp, seed=args.seed)
-		finally:
-			shutil.rmtree(tmp, ignore_errors=True)
+	# Interruption is caught rather than allowed to propagate, so that a run
+	# stopped partway still reaches the summary and reports how far it got.
+	# A sweep that exits silently leaves a log indistinguishable from a clean
+	# one, which is the whole reason the count below is printed.
+	try:
+		for index, case in enumerate(chosen, start=1):
+			tmp = Path(tempfile.mkdtemp(prefix="situ-sweep-"))
+			try:
+				outcome = run(case, tmp, seed=args.seed)
+			finally:
+				shutil.rmtree(tmp, ignore_errors=True)
 
-		tally[outcome.kind] += 1
-		if not outcome.ok:
-			failed.append(outcome)
-			print(f"[{index}/{len(chosen)}] {outcome.kind.upper():9}"
-			      f" {case.name}")
-			print("    " + outcome.detail.replace("\n", "\n    ")[:1200])
-		elif args.verbose:
-			print(f"[{index}/{len(chosen)}] {outcome.kind:9} {case.name}")
+			tally[outcome.kind] += 1
+			if not outcome.ok:
+				failed.append(outcome)
+				print(f"[{index}/{len(chosen)}] {outcome.kind.upper():9}"
+				      f" {case.name}")
+				print("    " + outcome.detail.replace("\n", "\n    ")[:1200])
+			elif args.verbose:
+				print(f"[{index}/{len(chosen)}] {outcome.kind:9} {case.name}")
+	except KeyboardInterrupt:
+		print("\ninterrupted")
 
 	print()
 	for kind in ("agreed", "refused", "empty",
@@ -117,10 +124,21 @@ def main() -> int:
 		if tally[kind]:
 			print(f"  {kind:9} {tally[kind]}")
 
+	# Say how much was looked at, not just what was wrong with it. A run that
+	# dies partway prints no failures, and neither does a perfect one, so a
+	# log without complaints in it is evidence of nothing until the count
+	# that produced it is on the page. Both numbers were already here.
+	examined = sum(tally.values())
+	print(f"\nexamined {examined}/{len(chosen)}")
+
 	if failed:
 		print(f"\n{len(failed)} cell(s) to answer for:")
 		for outcome in failed:
 			print(f"  {outcome.kind:9} {outcome.case.name}")
+
+	if examined != len(chosen):
+		print("incomplete: this run did not finish every cell it chose")
+		return 126
 	return min(len(failed), 125)
 
 
