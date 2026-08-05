@@ -2162,6 +2162,15 @@ class Emitter:
 			f'{placement.since}; this message is version "',
 			f"\t\t\t\tf\"{{self.{version}}}\")",
 			*self._versioned_bounds(placement, fits),
+			*(["\t\tif not (" + fits + "):",
+			   "\t\t\t# Its offset is a sum of lengths the message chose,",
+			   "\t\t\t# and the frame does not reach it. Zero, because that",
+			   "\t\t\t# is what every other scalar the message places",
+			   "\t\t\t# answers (26.27) -- a versioned member is not a",
+			   "\t\t\t# second convention, it is the same one with a gate",
+			   "\t\t\t# in front (26.73).",
+			   "\t\t\treturn 0"]
+			  if placement.offset_bits is None and fits is not None else []),
 			f"\t\treturn {self._load(placement, scalar, offset)}",
 		]
 
@@ -2188,15 +2197,14 @@ class Emitter:
 		if scalar is None:
 			return []
 
+		# Only where the offset is a constant. A member the *message* places
+		# clamps instead, in the getter above and through the setter's own
+		# guard below -- 26.73 settled that a versioned member at a dynamic
+		# offset follows 26.27 like every other dynamically placed scalar,
+		# rather than being a second convention that four backends then have
+		# to agree about.
 		if placement.offset_bits is None:
-			if fits is None:
-				return []
-			return [
-				f"\t\tif not ({fits}):",
-				f'\t\t\traise BoundsError("{placement.path}: its offset is a'
-				' sum of lengths the message chose, and the frame stops before'
-				' it")',
-			]
+			return []
 
 		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
 		return [

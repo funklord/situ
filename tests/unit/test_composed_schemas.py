@@ -44,37 +44,12 @@ COUNT = 24
 #: cannot outlive its defect, and the day the last one is fixed this test
 #: says so by failing.
 #:
-#: These thirteen are one question, not thirteen defects, and the question is
-#: a design decision rather than a bug: see 26.72. They arrived with the
-#: versioning axis, which is what it was added to do.
-KNOWN: dict[str, str] = {
-	"nested-arith-rec-after-varint-in-sealed-since":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"nested-arith-u8-after-bytes-in-arm-since":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"nested-arith-vrec-after-records-in-authenticated-since":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"nested-count-rec-after-nothing-in-authenticated-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"nested-count-rec-after-nothing-in-frame-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"nested-count-u8-after-records-in-frame-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"nested-count-vrec-after-delim-in-authenticated-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"packed-arith-rec-after-nothing-in-nested-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"u8-arith-vrec-after-varint-in-arm-since":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"u8-count-i32-after-records-in-authenticated-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"varint-arith-rec-after-delim-in-arm-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"varint-arith-u8-after-delim-in-authenticated-constrained":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-	"varint-arith-u8-after-delim-in-frame-since":
-		"a versioned member the message also places has two conventions and no ruling: 26.27 says a scalar at a dynamic offset answers zero, and 19.4 says a versioned one reports its absence. C takes the first and Python the second. See 26.72.",
-}
+#: Empty again. The thirteen that arrived with the versioning axis were one
+#: question rather than thirteen defects, and 26.73 answered it: a versioned
+#: member the message places clamps like every other dynamically placed
+#: scalar. The day it was answered this test said so by failing on entries
+#: that had started passing, which is the mechanism working.
+KNOWN: dict[str, str] = {}
 
 
 def sample() -> list[Case]:

@@ -275,6 +275,17 @@ def asks(struct: ResolvedStruct, structs: set[str],
 					or placement.sized_by is not None \
 					or placement.delimiter is not None:
 				continue
+
+			# ...and only at a constant offset. 19.4 says a versioned member
+			# has one -- append-only means nothing before it moves -- and the
+			# composed space builds structs where that is false anyway, by
+			# putting a variable-length run in front. There C and C++ may
+			# emit no accessor at all, and a driver naming one is a compile
+			# error rather than a comparison. The build still covers those
+			# cells; only the value comparison is given up, and only for a
+			# shape the language says should not arise.
+			if placement.offset_bits is None:
+				continue
 			if scalar is not None and not scalar.is_bit_packed \
 					and not scalar.is_bcd \
 					and placement.type_name in _SCALAR_TYPES:
