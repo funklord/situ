@@ -102,6 +102,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 | `situc advise` | ranked, costed schema changes that would restore what was lost |
 | `situc diff` | capability regressions between two revisions of a schema |
 | `situc wire` | the byte-level contract, and `--check` against the committed one |
+| `situc verify` | whether real bytes conform to the schema, generating nothing -- the way to adopt one without taking the codegen |
 | `situc doc` | RFC-style byte-layout diagrams and a field reference |
 | `situc gen-checks` | tests holding the generated accessors to the map they were generated beside |
 | `situc gen-tests` | golden-vector tests from a schema and hex vectors |
@@ -113,8 +114,85 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 | `situc import-proto` | a `.proto` read as a description of its wire format, reporting what it could not represent |
 | `situc lsp` | a language server over stdio: diagnostics, hover, symbols, code actions |
 
-`situc --help` lists the rest. Section 21 of `project.md` is the authority, and
-a test holds it to the parser.
+`situc --help` lists the rest, and `man situc` is the full command reference --
+every subcommand, its flags and its exit behaviour. It installs with the rest
+of the tool, and reads from `packaging/situc.1` in a source tree. A test holds
+it to the parser, so a subcommand that exists and is undocumented fails the
+suite rather than going quiet. Section 21 of `project.md` is the authority
+above both.
+
+## The language
+
+`docs/grammar.ebnf` is the extracted grammar and section 7 of `project.md` is
+the authority; what follows is the working vocabulary.
+
+**Directives** set how the rest of the file is read:
+
+```situ
+target buffer;          // or `mmio`, for memory-mapped registers
+endian big;             // or `little`, `native`
+bit_order msb_first;    // or `lsb_first`
+strictness = strict;    // or `lenient`
+import "std/codecs.situ";
+```
+
+**Scalars** are spelled by width, and the width need not be a whole byte:
+
+| spelling | meaning |
+|---|---|
+| `u1` .. `u64`, `i8` .. `i64` | unsigned and signed integers; any width that is not a whole number of bytes is bit-packed |
+| `f16`, `f32`, `f64` | IEEE floats |
+| `bit`, `bool` | a single bit |
+| `byte` | eight bits with no numeric reading |
+| `q16_16`, `uq8_8` | fixed point, signed and unsigned; the width is the sum of the halves |
+| `bcd4` | packed binary-coded decimal, four bits per digit |
+
+**Structure.** `struct` is the ordinary case; the rest exist for shapes a
+struct cannot describe:
+
+| construct | for |
+|---|---|
+| `struct name { ... }` | members in declaration order |
+| `positional { ... }` | a group whose offsets are asserted rather than accumulated |
+| `variant v switch (e) { case 1: ... default: error }` | one of several layouts, chosen by a field already read |
+| `indexed (base = region) { ... }` | members reached through an offset table |
+| `tlv name (tag_decode = ..., value_size = ...)` | a run of tag-length-value items, with the item grammar declared |
+| `opaque name [ n ]` | bytes with no described interior |
+| `authenticated { ... }` | a region covered by a tag |
+| `sealed name (codec) { ... }` | a region nothing may read before the tag verifies |
+| `coded name (codec) { ... }` | a region transformed before it is read |
+| `register` / `register_block` | an MMIO register with its bus width and access rules |
+
+**Where a member ends** is the question the language spends most of itself on,
+because it is what decides the capability vector:
+
+```situ
+u8   fixed[4];                      // a count
+u8   rest[remaining];               // to the end of the frame
+u8   name[]    until ":";           // to a delimiter
+u8   method[]  until " " max 16;    // bounded, so it stays allocatable
+nlattr attrs[] while (nla_len >= 4);  // while a predicate over each element holds
+u8   pixels[n] at file.pixel_offset;  // placed where the data says
+u32  crc @ 0x1c;                    // assert the offset the solver computed
+```
+
+**Attributes** are a closed vocabulary in brackets: `[min = 8]`, `[max = N]`,
+`[since = 2]` for a member a later version added, `[encoding = ascii]`,
+`[case_insensitive]`, `[trim]`, `[self_as = 0]` for what a checksum's own bytes
+read as while it is computed.
+
+**The rest of the declarations:**
+
+```situ
+const header_bytes = 8;
+enum operation : u16 { request = 1, reply = 2, }
+checksum u8 header_checksum[2] covers(header) [self_as = 0];
+require absolute_static(arp_packet);         // fails the build if it does not hold
+invariant derived.total == size(derived.a) + size(derived.b);
+```
+
+`require` is a compile-time assertion about the capability vector; `invariant`
+names a field situ maintains rather than one it merely checks.
 
 ## Four backends, one layout
 
@@ -241,11 +319,20 @@ text files a reviewer can read.
 
 ```sh
 make            # the C runtime
-make test       # pytest, mypy strict, lint, generated C, aarch64 under qemu
+make test       # pytest and the generated C
+make check      # everything before a commit: style, types, test, aarch64
 make bench      # what the offset cache costs and saves, in all four backends
 make fuzz       # every generated harness, under libFuzzer and ASan
+make hooks      # install the commit-message hook from tools/hooks/
 make help       # everything else
 ```
+
+`test` and `check` are not the same target and the difference matters:
+`make test` is pytest plus the generated C, which is the fast one to run while
+working. `make check` is what has to pass before a commit -- it adds `style`
+(indentation, ASCII, and project.md's own claims), `typecheck` (mypy strict
+over `situc`, `tools` and `tests`) and `cross-test` (the generated accessors on
+aarch64 under emulation).
 
 CMake is the other entry point, not a wrapper around that one:
 
@@ -304,9 +391,13 @@ The latest fold is the place to look for what is open today; each entry there
 says why it is, and two of them say why they are deliberate rather than
 pending.
 
-It is not packaged. There is no release, no wheel and no version number:
-`situc` runs from the tree or from a directory copy, which is the only
-distribution the no-dependency policy needs.
+There is no wheel and no PyPI release: `situc` runs from the tree or from a
+directory copy, which is the distribution the no-dependency policy is for.
+There is a version -- `VERSION` at the root, which `situc --version` and the
+Debian packaging both read, so the three cannot disagree -- and `make deb`
+builds `situc` and `libsitu-dev` packages with debhelper. Treat those as
+evaluation output rather than a release: nothing is signed, uploaded, or
+carries a stable ABI promise yet.
 
 One feature is planned and deliberately late: a packed layout image (`situc
 pack`) and a separate project that walks one at run time, for a device whose
@@ -316,7 +407,8 @@ make an operation absent.
 
 ## Reading further
 
-`project.md` is long and is meant to be. Useful entry points:
+`man situc` is the command reference and `docs/grammar.ebnf` is the grammar.
+Beyond those, `project.md` is long and is meant to be. Useful entry points:
 
 - **Section 11**, the capability lattice: the core of the project. Every other
   part of the compiler exists to feed it or to report its results.

@@ -57,13 +57,14 @@ all: runtime
 help:
 	@echo 'situ build targets:'
 	@echo '  all        build the C runtime (default)'
-	@echo '  test       run the full test suite: python, mypy, generated C'
+	@echo '  test       run the test suite: python and generated C'
 	@echo '  test-py    run the compiler test suite only'
 	@echo '  test-c     build and run the C tests only'
 	@echo '  check      everything: style, types, tests, cross'
 	@echo '  style      indentation, ASCII and whitespace, plus project.md'
 	@echo '  typecheck  mypy strict over situc, tools and tests'
 	@echo '  lint       alias for style-source'
+	@echo '  hooks      install the commit-message hook from tools/hooks/'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  cross      compile-only build for aarch64'
@@ -156,12 +157,19 @@ install: runtime
 	install -Dm755 bin/situc '$(DESTDIR)$(PREFIX)/bin/situc'
 	install -Dm644 runtime/c/situ.h '$(DESTDIR)$(PREFIX)/include/situ.h'
 	install -Dm644 '$(RUNTIME_LIB)' '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
+	@# The manual page ships from here rather than from debhelper, so that a
+	@# source install gets `man situc` too. It was previously installed only
+	@# by the deb, which left the one complete command reference reachable
+	@# only to people who did not build from the tree.
+	install -Dm644 packaging/situc.1 \
+		'$(DESTDIR)$(PREFIX)/share/man/man1/situc.1'
 	@echo 'installed situc to $(DESTDIR)$(PREFIX)/bin/situc'
 
 uninstall:
 	rm -rf '$(DESTDIR)$(PREFIX)/lib/situc' '$(DESTDIR)$(PREFIX)/share/situc'
 	rm -f '$(DESTDIR)$(PREFIX)/bin/situc' '$(DESTDIR)$(PREFIX)/include/situ.h'
 	rm -f '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
+	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situc.1'
 
 # -- packaging ---------------------------------------------------------------
 #
@@ -201,15 +209,20 @@ deb_discard = \
 
 # Native Debian packaging: debian/ holds the metadata, debhelper does the
 # work and splits the tree into situc and libsitu-dev.
+# `$(DEB_DIR)` and not `$(BUILD_DIR)/deb`: the two are different directories
+# whenever ARCH is set, which is always, since BUILD_DIR is BUILD_ROOT/ARCH.
+# This rule wrote the packages to one and `deb-check`, `deb_discard` and the
+# clean targets all named the other, so the verification step could not find
+# what the build had just produced and every package survived `veryclean`.
 deb: version-check
-	@test -n "$(BUILD_DIR)" || { echo "deb: BUILD_DIR is empty, refusing" >&2; exit 1; }
+	@test -n "$(DEB_DIR)" || { echo "deb: DEB_DIR is empty, refusing" >&2; exit 1; }
 	dpkg-buildpackage -b -us -uc
-	@mkdir -p $(BUILD_DIR)/deb
+	@mkdir -p '$(DEB_DIR)'
 	@for f in ../situc_$(VERSION)_*.deb ../libsitu-dev_$(VERSION)_*.deb \
 	          ../situ_$(VERSION)_*.buildinfo ../situ_$(VERSION)_*.changes; do \
-		[ -e "$$f" ] && mv -f "$$f" $(BUILD_DIR)/deb/ || true; \
+		[ -e "$$f" ] && mv -f "$$f" '$(DEB_DIR)/' || true; \
 	done
-	@ls -1 $(BUILD_DIR)/deb/*.deb
+	@ls -1 '$(DEB_DIR)'/*.deb
 
 # The VERSION file is the source; debian/changelog is checked against it.
 version-check:

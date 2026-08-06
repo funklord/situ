@@ -44,6 +44,10 @@ install(DIRECTORY situc DESTINATION lib FILES_MATCHING PATTERN "*.py")
 install(FILES VERSION DESTINATION lib/situc)
 install(DIRECTORY std/ DESTINATION share/situc/std FILES_MATCHING PATTERN "*.situ")
 
+# The manual page, from the same source the Makefile and the deb use. One
+# copy, three installers -- the arrangement test_cmake.py exists to keep.
+install(FILES packaging/situc.1 DESTINATION share/man/man1)
+
 # -- running the compiler from a consuming build ----------------------------
 
 #: Generate accessors for one schema, as a target other targets can depend on.
