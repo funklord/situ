@@ -8832,6 +8832,18 @@ first, out loud, that a reboot would not help; the opposite was true, since
 process-held deletions are exactly what a reboot reclaims. Check before
 concluding which of the two is lying.
 
+**Afterwards, check the repository rather than the reasoning.** Work was
+committed minutes after a filesystem hit zero, and the question of whether
+anything had been written *during* that window has an evidence answer and a
+reconstruction answer. The reconstruction was right -- the one write
+attempted at zero bytes failed loudly with `ENOSPC`, which is what prompted
+looking at `df` at all -- and it was still the wrong thing to offer, because
+a commit written into a full filesystem can be corrupt in ways a plausible
+timeline cannot rule out. `git fsck` exits zero, and the fold is confirmed
+present in `git show HEAD:project.md` rather than in the working copy,
+which is the only version that survives a reboot. Dangling commits in the
+output were old `git stash` entries, dated days earlier, and not damage.
+
 **Status:** no situ change. Recorded as an operating condition of the
 sweep, with `TMPDIR` named as the way to meet it.
 
