@@ -231,9 +231,12 @@ def cmd_pack(args: argparse.Namespace) -> int:
 		print(f"placements   {coverage.placements}")
 		print(f"expressions  {coverage.expressions}")
 		print(f"image bytes  {len(image)}")
+		for family, count in sorted(coverage.carried.items()):
+			state = "dropped" if family in coverage.unencoded else "encoded"
+			print(f"  {family:<10} {count:4d}  {state}")
 		for path, why in sorted(coverage.unencodable.items()):
 			print(f"unencodable  {path}: {why}")
-		return 1 if coverage.unencodable else 0
+		return 1 if coverage.unencodable or coverage.unencoded else 0
 
 	if args.out is None:
 		if sys.stdout.isatty():

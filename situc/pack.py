@@ -35,18 +35,43 @@ from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 1
+FORMAT_VERSION	= 2
 NONE		= 0xFFFFFFFF
-HEADER_BYTES	= 40
+HEADER_BYTES	= 20
+SECTION_BYTES	= 16
 STRUCT_BYTES	= 12
-PLACEMENT_BYTES	= 32
+PLACEMENT_BYTES	= 44
+ARM_BYTES	= 24
+DELIMITER_BYTES	= 32
+REGION_BYTES	= 12
+CODEC_BYTES	= 4
+VARINT_BYTES	= 12
+TLV_BYTES	= 12
+INDEX_BYTES	= 16
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
+#: `image_section_kind` in std/image.situ. A walker keeps what it knows and
+#: skips the rest, which is what lets a section be added without a version.
+SECTION_STRUCTS		= 1
+SECTION_PLACEMENTS	= 2
+SECTION_CODE		= 3
+SECTION_STRINGS		= 4
+SECTION_ARMS		= 5
+SECTION_DELIMITERS	= 6
+SECTION_REGIONS		= 7
+SECTION_CODECS		= 8
+SECTION_VARINTS		= 9
+SECTION_TLVS		= 10
+SECTION_INDEXES		= 11
+SECTION_NAMES		= 12
+SECTION_VECTORS		= 13
+
 #: `image_placement.flags`
-OFFSET_KNOWN	= 1 << 0
-FRAME_RELATIVE	= 1 << 1
-SIZE_FIXED	= 1 << 2
+OFFSET_KNOWN		= 1 << 0
+FRAME_RELATIVE		= 1 << 1
+SIZE_FIXED		= 1 << 2
+FRAME_BASE_DYNAMIC	= 1 << 3
 
 #: `image_kind`, matching the enum in std/image.situ. A kind the walker does
 #: not know is an error there rather than a guess, which is why the schema
@@ -225,14 +250,47 @@ class Program:
 # The image
 # ---------------------------------------------------------------------------
 
+#: Every construct a placement can carry that a walk needs, and how to see
+#: it. One table, read by the encoders below and by the coverage report, so
+#: that a family cannot be encoded without being counted or counted without
+#: being encoded.
+#:
+#: The first version of this file reported only expressions, and said
+#: "nothing dropped" over an image that carried no delimiter, no variant arm
+#: and no index table. That is the vacuous pass this project keeps finding,
+#: written into the instrument meant to prevent it: a count is only evidence
+#: once you know what it counted.
+CONSTRUCTS: tuple[tuple[str, Callable[[Placement], bool]], ...] = (
+	("region",     lambda p: bool(p.regions)),
+	("delimiter",  lambda p: p.delimiter is not None),
+	("radix",      lambda p: p.radix is not None),
+	("variant",    lambda p: bool(p.arm_cases)),
+	("codec",      lambda p: p.codec is not None),
+	("repeat",     lambda p: p.repeat_while is not None),
+	("located",    lambda p: p.located is not None),
+	("varint",     lambda p: p.varint is not None),
+	("tlv",        lambda p: p.tlv_grammar is not None),
+	("indexed",    lambda p: p.index_table is not None),
+)
+
+#: Which of those the image actually encodes. Everything not named here is
+#: reported as missing rather than passed over, and moving a family into the
+#: image means moving its name in here -- which is what makes the report
+#: retire itself as the format grows.
+ENCODED: frozenset[str] = frozenset({
+	"region", "delimiter", "radix", "variant", "codec",
+	"repeat", "located", "varint", "tlv", "indexed",
+})
+
+
 @dataclass
 class Coverage:
 	"""What the image carries, said positively.
 
 	26.76's lesson, applied here before it can go wrong: a packer that
-	silently emits `none` for every expression it could not compile produces
-	an image that loads, walks, and is wrong. So the counts are reported and
-	the tests assert them rather than asserting that nothing raised.
+	silently emits `none` for every construct it could not encode produces an
+	image that loads, walks, and is wrong. So the counts are reported and the
+	tests assert them rather than asserting that nothing raised.
 	"""
 
 	structs: int			= 0
@@ -240,6 +298,11 @@ class Coverage:
 	expressions: int		= 0
 	#: path -> why, for every expression that could not be encoded.
 	unencodable: dict[str, str]	= field(default_factory=dict)
+	#: family -> how many placements carry it. Reported whether or not the
+	#: image encodes it, so the two numbers can be compared.
+	carried: dict[str, int]		= field(default_factory=dict)
+	#: family -> how many placements carry it and the image drops it.
+	unencoded: dict[str, int]	= field(default_factory=dict)
 
 
 def _ast_members(schema: ast.Schema) -> dict[str, ast.Field]:
@@ -278,6 +341,84 @@ def _kind_of(placement: Placement) -> int:
 
 def _u32(value: int | None) -> int:
 	return NONE if value is None else min(value, NONE - 1)
+
+
+class _Pool:
+	"""The core string pool: the strings a walk needs in order to function.
+
+	Codec and varint encoding names live here rather than in the metadata
+	tail, because a walker cannot dispatch a transform it cannot identify.
+	The tail carries the strings needed only to print.
+	"""
+
+	def __init__(self) -> None:
+		self.data: bytearray = bytearray()
+		self._at: dict[str, int] = {}
+
+	def intern(self, text: str) -> int:
+		if text not in self._at:
+			self._at[text] = len(self.data)
+			self.data.extend(text.encode("ascii", "replace") + b"\0")
+		return self._at[text]
+
+
+def _arm_fields(arm: object) -> tuple[int, str | None, int]:
+	"""One variant arm as (case value, selected path, kind bits).
+
+	`default:` carries no value, and `default: error` selects nothing. Both
+	are bits rather than sentinels so a walker never has to know which
+	integer means "no case".
+	"""
+	value    = getattr(arm, "value", None)
+	selected = getattr(arm, "path", None) or getattr(arm, "member", None)
+	kind     = 0
+	if value is None:
+		kind |= 1				# the default arm
+	if selected is None:
+		kind |= 2				# `default: error`
+	return (int(value) if value is not None else 0,
+	        selected if isinstance(selected, str) else None, kind)
+
+
+def _policy(name: str | None) -> int:
+	"""A tlv policy as a small integer, 0 meaning unstated."""
+	return {None: 0, "error": 1, "skip": 2, "keep": 3,
+	        "first": 4, "last": 5}.get(name, 0)
+
+
+def _index_base(placement: Placement) -> int:
+	"""Where an `indexed` region's offsets are measured from (decision 0024)."""
+	table = placement.index_table
+	base  = getattr(table, "base", None)
+	return {"region": 0, "message": 1}.get(str(base), 2)
+
+
+def _assemble(sections: list[tuple[int, bytes, int]], metadata: bool) -> bytes:
+	"""Header, directory, then the section bodies in directory order.
+
+	Two passes: the directory's size is known from the section count, so the
+	bodies' offsets are known before anything is written. Nothing is patched
+	afterwards except the total length, which cannot be known earlier.
+	"""
+	live = [(kind, blob, stride) for kind, blob, stride in sections]
+	body_at = HEADER_BYTES + len(live) * SECTION_BYTES
+
+	directory, bodies, at = bytearray(), bytearray(), body_at
+	for kind, blob, stride in live:
+		count = len(blob) // stride if stride else 0
+		directory += _struct.pack("<IIII", kind, at, count, stride)
+		bodies    += blob
+		at        += len(blob)
+
+	out = bytearray()
+	out += MAGIC
+	out += _struct.pack("<HH", FORMAT_VERSION, FLAG_METADATA if metadata else 0)
+	out += _struct.pack("<I", body_at + len(bodies))
+	out += _struct.pack("<II", len(live), HEADER_BYTES)
+	assert len(out) == HEADER_BYTES, len(out)
+	out += directory
+	out += bodies
+	return bytes(out)
 
 
 def pack(schema: ast.Schema, resolved: ResolvedSchema,
@@ -367,27 +508,120 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		code_at[placement.path] = start
 		coverage.expressions += 1
 
-	# -- section offsets --
-	struct_off    = HEADER_BYTES
-	placement_off = struct_off + len(order) * STRUCT_BYTES
-	code_off      = placement_off + len(rows) * PLACEMENT_BYTES
-	tail_off      = code_off + len(program.code)
-	meta_off      = tail_off if metadata else 0
+	# `at expr` and `while (cond)` are expressions too, and a walker needs
+	# both: one says where a member is, the other when a run stops.
+	located_at: dict[str, int] = {}
+	repeat_at:  dict[str, int] = {}
+	# A `while` predicate is asked about the element just parsed, so its
+	# names resolve in the *element's* struct rather than in the struct that
+	# holds the run: `while (nla_len >= 4)` is netlink's `nla_ok`, and
+	# `nla_len` is a field of the attribute, not of the message.
+	picker: tuple[tuple[dict[str, int], Callable[[ast.Field], ast.Expr | None],
+	                    bool], ...] = (
+		(located_at, lambda f: f.located, False),
+		(repeat_at, lambda f: f.repeat.predicate if f.repeat else None, True),
+	)
+	for target, pick, scope in picker:
+		for owner, placement in rows:
+			field = members.get(placement.path)
+			expr  = pick(field) if field is not None else None
+			if expr is None:
+				continue
+			where = placement.type_name if scope else owner
+			start = len(program.code)
+			try:
+				program.compile(expr, lambda p: resolve_path(p, where), consts)
+			except PackError as why:
+				del program.code[start:]
+				coverage.unencodable[placement.path] = str(why)
+				continue
+			program.emit(Op.END)
+			target[placement.path] = start
+			coverage.expressions += 1
 
-	out = bytearray()
-	out += MAGIC
-	out += _struct.pack("<HH", FORMAT_VERSION, FLAG_METADATA if metadata else 0)
-	out += _struct.pack("<III", len(order), len(rows), len(program.code))
-	out += _struct.pack("<IIII", struct_off, placement_off, code_off, meta_off)
-	image_bytes_at = len(out)
-	out += _struct.pack("<I", 0)			# patched once the tail is known
-	assert len(out) == HEADER_BYTES, len(out)
+	# -- the side tables, and the core strings a walk needs to function --
+	strings = _Pool()
+	sections: list[tuple[int, bytes, int]] = []
 
+	structs_blob = bytearray()
 	for (name, rstruct), (first, count) in zip(order, spans):
 		size = (rstruct.layout.size_bits
 		        if rstruct.layout.is_fixed_size else None)
-		out += _struct.pack("<III", first, count, _u32(size))
+		structs_blob += _struct.pack("<III", first, count, _u32(size))
 
+	# The codec table is built first: a region record points into it.
+	codec_index: dict[str, int] = {}
+	codecs_blob = bytearray()
+	for _, placement in rows:
+		for named in (placement.codec, *placement.tag_covers[:0]):
+			if named and named not in codec_index:
+				codec_index[named] = len(codec_index)
+				codecs_blob += _struct.pack("<I", strings.intern(named))
+
+	varint_index: dict[str, int] = {}
+	varints_blob = bytearray()
+	arms_blob    = bytearray()
+	delims_blob  = bytearray()
+	regions_blob = bytearray()
+	tlvs_blob    = bytearray()
+	index_blob   = bytearray()
+
+	for at, (owner, placement) in enumerate(rows):
+		if placement.varint is not None:
+			varint_index.setdefault(placement.varint, len(varint_index))
+			varints_blob += _struct.pack(
+				"<IIBBxx", at, strings.intern(placement.varint),
+				min(placement.size_max_bits or 64, 255),
+				1 if placement.varint_minimal else 0)
+		for arm in placement.arm_cases:
+			value, chosen, kind = _arm_fields(arm)
+			arms_blob += _struct.pack(
+				"<IIqB7x", at, _u32(placement_index.get(chosen or "")),
+				value, kind)
+		if placement.delimiter is not None:
+			raw = placement.delimiter[:15]
+			delims_blob += _struct.pack(
+				"<IIIIB15s", at,
+				_u32(placement.delimiter_quote),
+				_u32(placement.delimiter_escape),
+				_u32(placement.delimiter_cap),
+				len(raw), raw)
+		if placement.regions:
+			flags = (1 if placement.sealed_by else 0) \
+				| (2 if placement.unverified_ok else 0)
+			regions_blob += _struct.pack(
+				"<IIB3x", at,
+				_u32(codec_index.get(placement.codec or "")), flags)
+		if placement.tlv_grammar is not None:
+			regions = (1 if placement.tlv_ordered else 0)
+			tlvs_blob += _struct.pack(
+				"<IIBBBx", at,
+				_u32(varint_index.get(placement.tlv_tag_varint or "")),
+				regions,
+				_policy(placement.tlv_unknown),
+				_policy(placement.tlv_duplicates))
+		if placement.index_table is not None:
+			entry_bytes = traverse.index_entry_bytes(placement)
+			index_blob += _struct.pack(
+				"<IIIB3x", at,
+				_u32(None if entry_bytes is None else entry_bytes * 8),
+				NONE, _index_base(placement))
+
+	sections.append((SECTION_STRUCTS, bytes(structs_blob), STRUCT_BYTES))
+	sections.append((SECTION_PLACEMENTS, b"", PLACEMENT_BYTES))	# filled below
+	sections.append((SECTION_CODE, bytes(program.code), 1))
+	for kind, blob, stride in (
+			(SECTION_ARMS, arms_blob, ARM_BYTES),
+			(SECTION_DELIMITERS, delims_blob, DELIMITER_BYTES),
+			(SECTION_REGIONS, regions_blob, REGION_BYTES),
+			(SECTION_CODECS, codecs_blob, CODEC_BYTES),
+			(SECTION_VARINTS, varints_blob, VARINT_BYTES),
+			(SECTION_TLVS, tlvs_blob, TLV_BYTES),
+			(SECTION_INDEXES, index_blob, INDEX_BYTES)):
+		if blob:
+			sections.append((kind, bytes(blob), stride))
+
+	placements_blob = bytearray()
 	for owner, placement in rows:
 		flags = 0
 		if placement.offset_bits is not None:
@@ -396,15 +630,20 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags |= FRAME_RELATIVE
 		if placement.size_max_bits == placement.size_bits:
 			flags |= SIZE_FIXED
-		out += _struct.pack(
+		if placement.frame_base_dynamic:
+			flags |= FRAME_BASE_DYNAMIC
+		text = (1 if placement.radix_minimal else 0) \
+			| (2 if placement.trimmed else 0) \
+			| (4 if placement.case_insensitive else 0)
+		placements_blob += _struct.pack(
 			"<BBBB",
 			_kind_of(placement),
 			ENDIAN.get(placement.endian, 0),
 			BIT_ORDER.get(placement.bit_order, 0),
 			flags,
 		)
-		out += _struct.pack(
-			"<IIIIIII",
+		placements_blob += _struct.pack(
+			"<IIIIIIIIIBBH",
 			_u32(placement.offset_bits),
 			_u32(placement.size_bits),
 			_u32(placement.size_max_bits),
@@ -412,39 +651,51 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			_u32(placement.array_count),
 			_u32(code_at.get(placement.path)),
 			_u32(struct_index.get(placement.type_name)),
+			_u32(located_at.get(placement.path)),
+			_u32(repeat_at.get(placement.path)),
+			placement.radix or 0,
+			text,
+			min(placement.array_count or 0, 0xFFFF) if placement.radix else 0,
 		)
+	sections[1] = (SECTION_PLACEMENTS, bytes(placements_blob), PLACEMENT_BYTES)
 
-	out += bytes(program.code)
+	if strings.data:
+		sections.append((SECTION_STRINGS, bytes(strings.data), 1))
 	if metadata:
-		out += _metadata(order, rows, resolved, tail_off)
+		sections.extend(_metadata(order, rows, resolved))
 
-	out[image_bytes_at:image_bytes_at + 4] = _struct.pack("<I", len(out))
+	out = _assemble(sections, metadata)
 	coverage.structs    = len(order)
 	coverage.placements = len(rows)
+	for family, present in CONSTRUCTS:
+		count = sum(1 for _, placement in rows if present(placement))
+		if not count:
+			continue
+		coverage.carried[family] = count
+		if family not in ENCODED:
+			coverage.unencoded[family] = count
 	return bytes(out), coverage
 
 
 def _metadata(order: list[tuple[str, ResolvedStruct]],
               rows: list[tuple[str, Placement]],
-              resolved: ResolvedSchema, base: int) -> bytes:
-	"""The optional tail: a string pool, the names, and the vectors.
+              resolved: ResolvedSchema) -> list[tuple[int, bytes, int]]:
+	"""The optional tail, as sections: the names and the capability vectors.
 
-	Separate from the core because 26.33 recorded that the two consumers pull
-	opposite ways. A device that never prints a name does not carry one, and
-	the core's layout is identical either way -- which is what stops this
-	being two formats rather than one with a tail.
+	These are what a walk needs in order to be *read*, not in order to work,
+	which is the line the core/tail split is drawn on. A device omits them and
+	loses nothing it executes; a dissector asks for them and can print.
+
+	Returned as directory entries rather than one blob so that the tail is
+	made of ordinary sections: a walker that wants names and not vectors
+	takes one and skips the other, with no tail-specific parsing at all.
 	"""
-	pool  = bytearray()
-	index: dict[str, int] = {}
-
-	def intern(text: str) -> int:
-		if text not in index:
-			index[text] = len(pool)
-			pool.extend(text.encode("ascii", "replace") + b"\0")
-		return index[text]
-
-	struct_names    = [intern(name) for name, _ in order]
-	placement_names = [intern(p.path) for _, p in rows]
+	pool = _Pool()
+	names = bytearray()
+	for name, _ in order:
+		names += _struct.pack("<I", pool.intern(name))
+	for _, placement in rows:
+		names += _struct.pack("<I", pool.intern(placement.path))
 
 	vectors = bytearray()
 	for owner, placement in rows:
@@ -456,20 +707,10 @@ def _metadata(order: list[tuple[str, ResolvedStruct]],
 			vectors.append(domain.index(shown)
 			               if shown is not None and shown in domain else 0xFF)
 
-	head_bytes   = 20
-	strings_at   = base + head_bytes
-	names_at     = strings_at + len(pool)
-	placements_at = names_at + len(struct_names) * 4
-	vectors_at   = placements_at + len(placement_names) * 4
-
-	out = bytearray()
-	out += _struct.pack("<IIIII", len(pool), strings_at, names_at,
-	                    placements_at, vectors_at)
-	assert len(out) == head_bytes, len(out)
-	out += pool
-	for offset in struct_names:
-		out += _struct.pack("<I", offset)
-	for offset in placement_names:
-		out += _struct.pack("<I", offset)
-	out += vectors
-	return bytes(out)
+	out: list[tuple[int, bytes, int]] = [
+		(SECTION_NAMES, bytes(names), 4),
+		(SECTION_VECTORS, bytes(vectors), len(list(Axis))),
+	]
+	if pool.data:
+		out.append((SECTION_STRINGS, bytes(pool.data), 1))
+	return out

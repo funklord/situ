@@ -12,6 +12,9 @@
 endian little
 target buffer
 
+enum image_section_tag : u32 unknown=pass
+  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 names=12 vectors=13
+
 enum image_kind : u8 unknown=error
   field=0 reserved=1 marker=2 region=3 variant=4 tlv=5 indexed=6 opaque=7
 
@@ -21,26 +24,46 @@ enum image_endian : u8 unknown=error
 enum image_bit_order : u8 unknown=error
   bit_unset=0 msb_first=1 lsb_first=2
 
-struct image size=40
-  @0x0000   40        image_header head  little
-  ~         0..51539607540 image_struct structs  sized-by=head.struct_count
-  ~         0..137438953440 image_placement placements  sized-by=head.placement_count
-  ~         0..4294967295 u8         code  sized-by=head.code_bytes
+enum image_offset_base : u8 unknown=error
+  base_region=0 base_message=1 base_field=2
 
-struct image_header size=40
+struct image size=20
+  @0x0000   20        image_header head  little
+
+struct image_arm size=24
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        selected  little
+  @0x0008   8         i64        case_value  little
+  @0x0010   1         u8         arm_flags
+  @0x0011   7         u8         arm_pad  little
+
+struct image_codec size=4
+  @0x0000   4         u32        name  little
+
+struct image_delimiter size=32
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        quote  little
+  @0x0008   4         u32        escape  little
+  @0x000c   4         u32        cap  little
+  @0x0010   1         u8         length
+  @0x0011   15        u8         octets  little
+
+struct image_header size=20
   @0x0000   4         u8         magic  little
-  @0x0004   2         u16        format_version  little must_eq=1
+  @0x0004   2         u16        format_version  little must_eq=2
   @0x0006   2         u16        flags  little
-  @0x0008   4         u32        struct_count  little
-  @0x000c   4         u32        placement_count  little
-  @0x0010   4         u32        code_bytes  little
-  @0x0014   4         u32        struct_offset  little
-  @0x0018   4         u32        placement_offset  little
-  @0x001c   4         u32        code_offset  little
-  @0x0020   4         u32        metadata_offset  little
-  @0x0024   4         u32        image_bytes  little
+  @0x0008   4         u32        image_bytes  little
+  @0x000c   4         u32        section_count  little
+  @0x0010   4         u32        section_offset  little
 
-struct image_placement size=32
+struct image_index size=16
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        entry_bits  little
+  @0x0008   4         u32        count_code  little
+  @0x000c   1         image_offset_base measured_from
+  @0x000d   3         u8         index_pad  little
+
+struct image_placement size=44
   @0x0000   1         image_kind kind
   @0x0001   1         image_endian endian
   @0x0002   1         image_bit_order bit_order
@@ -52,8 +75,40 @@ struct image_placement size=32
   @0x0014   4         u32        array_count  little
   @0x0018   4         u32        size_code  little
   @0x001c   4         u32        type_struct  little
+  @0x0020   4         u32        located_code  little
+  @0x0024   4         u32        repeat_code  little
+  @0x0028   1         u8         radix
+  @0x0029   1         u8         text_flags
+  @0x002a   2         u16        radix_digits  little
+
+struct image_region size=12
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        codec  little
+  @0x0008   1         u8         region_flags
+  @0x0009   3         u8         region_pad  little
+
+struct image_section size=16
+  @0x0000   4         image_section_tag kind  little
+  @0x0004   4         u32        offset  little
+  @0x0008   4         u32        count  little
+  @0x000c   4         u32        stride  little
 
 struct image_struct size=12
   @0x0000   4         u32        first_placement  little
   @0x0004   4         u32        placement_count  little
   @0x0008   4         u32        size_bits  little
+
+struct image_tlv size=12
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        tag_varint  little
+  @0x0008   1         u8         tlv_flags
+  @0x0009   1         u8         unknown_policy
+  @0x000a   1         u8         duplicate_policy
+  @0x000b   1         u8         tlv_pad
+
+struct image_varint size=12
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        encoding  little
+  @0x0008   1         u8         max_bits
+  @0x0009   1         u8         varint_flags
+  @0x000a   2         u8         varint_pad  little

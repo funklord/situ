@@ -1160,7 +1160,8 @@ def _element_encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolve
 	local  = c_name(placement.path[len(struct.name) + 1:])
 	getter = f"{ident(prefix, struct.name, local, 'get')}(view, {index}u)"
 	if scalar.signed:
-		want, got = f"(int64_t){_signed_value(raw, scalar.bits)}", f"(int64_t){getter}"
+		want, got = (f"(int64_t){_c_signed(_signed_value(raw, scalar.bits))}",
+		             f"(int64_t){getter}")
 	else:
 		want, got = f"(uint64_t){raw:#x}u", f"(uint64_t){getter}"
 
@@ -1229,7 +1230,8 @@ def _run_element_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	local  = c_name(placement.path[len(struct.name) + 1:])
 	getter = f"{ident(prefix, struct.name, local, 'get')}(view, {index}u)"
 	if scalar.signed:
-		want, got = f"(int64_t){_signed_value(raw, scalar.bits)}", f"(int64_t){getter}"
+		want, got = (f"(int64_t){_c_signed(_signed_value(raw, scalar.bits))}",
+		             f"(int64_t){getter}")
 	else:
 		want, got = f"(uint64_t){raw:#x}u", f"(uint64_t){getter}"
 
@@ -1378,6 +1380,21 @@ def _signed_value(raw: int, bits: int) -> int:
 	return raw - (1 << bits) if raw >= 1 << (bits - 1) else raw
 
 
+def _c_signed(value: int) -> str:
+	"""A C literal for a signed value, including the one C cannot spell.
+
+	There is no negative integer literal for the 64-bit two's-complement
+	minimum: `-9223372036854775808` is unary minus applied to a magnitude
+	that does not fit a signed type, so a conforming compiler calls the
+	constant "so large that it is unsigned" and `-Werror` stops the build.
+	`-N - 1` is exact and portable. Found by `std/image.situ`, whose variant
+	arm carries the tree's first `i64` (26.79).
+	"""
+	if value == -(1 << 63):
+		return "(-9223372036854775807 - 1)"
+	return str(value)
+
+
 def _encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		prefix: str, extent: int) -> None:
 	"""A concrete byte pattern, against the value the map says it encodes.
@@ -1466,7 +1483,8 @@ def _boundary_values(scalar: object) -> list[str]:
 	if signed:
 		high = (1 << (bits - 1)) - 1
 		low  = -(1 << (bits - 1))
-		return [f"({ctype})0", f"({ctype}){high}", f"({ctype})({low})"]
+		return [f"({ctype})0", f"({ctype}){high}",
+		        f"({ctype})({_c_signed(low)})"]
 
 	return [f"({ctype})0", f"({ctype})0x{(1 << bits) - 1:X}u"]
 

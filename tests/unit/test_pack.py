@@ -77,43 +77,65 @@ def image_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 		sys.path.remove(str(tmp))
 
 
+def sections(module: ModuleType, blob: bytes) -> dict[int, tuple[int, int, int]]:
+	"""The section directory, read through the generated accessors.
+
+	kind -> (offset, count, stride). A walker does exactly this and then
+	keeps the kinds it knows, which is what makes the format extensible.
+	"""
+	msg  = module.Message(bytearray(blob))
+	head = module.image.at(msg).head
+	found = {}
+	for i in range(head.section_count):
+		at = module.image_section(
+			msg, head.section_offset + i * packer.SECTION_BYTES,
+			packer.SECTION_BYTES)
+		found[int(at.kind)] = (at.offset, at.count, at.stride)
+	return found
+
+
+def records(module: ModuleType, blob: bytes, view: type, kind: int,
+            found: dict[int, tuple[int, int, int]]) -> list[Any]:
+	"""Every record of one section, as generated views over the image."""
+	if kind not in found:
+		return []
+	offset, count, stride = found[kind]
+	msg = module.Message(bytearray(blob))
+	return [view(msg, offset + i * stride, stride) for i in range(count)]
+
+
 def read_back(module: ModuleType, blob: bytes) -> dict[str, Any]:
 	"""Reconstruct the layout from the image, through the accessors."""
 	msg   = module.Message(bytearray(blob))
-	view  = module.image.at(msg)
-	head  = view.head
-
-	structs, placements = [], []
-	raw = bytes(view.structs)
-	for i in range(head.struct_count):
-		at = module.image_struct(module.Message(bytearray(raw)),
-		                         i * packer.STRUCT_BYTES, packer.STRUCT_BYTES)
-		structs.append((at.first_placement, at.placement_count, at.size_bits))
-
-	raw = bytes(view.placements)
-	for i in range(head.placement_count):
-		at = module.image_placement(module.Message(bytearray(raw)),
-		                            i * packer.PLACEMENT_BYTES,
-		                            packer.PLACEMENT_BYTES)
-		placements.append({
-			"kind":          int(at.kind),
-			"endian":        int(at.endian),
-			"offset_bits":   at.offset_bits,
-			"size_bits":     at.size_bits,
-			"size_max_bits": at.size_max_bits,
-			"array_count":   at.array_count,
-			"size_code":     at.size_code,
-			"flags":         at.flags,
-		})
+	head  = module.image.at(msg).head
+	found = sections(module, blob)
 
 	return {
 		"magic":       bytes(head.magic),
 		"version":     head.format_version,
 		"flags":       head.flags,
-		"structs":     structs,
-		"placements":  placements,
-		"code":        bytes(view.code),
 		"image_bytes": head.image_bytes,
+		"sections":    found,
+		"structs": [
+			(r.first_placement, r.placement_count, r.size_bits)
+			for r in records(module, blob, module.image_struct,
+			                 packer.SECTION_STRUCTS, found)],
+		"placements": [
+			{
+				"kind":          int(r.kind),
+				"endian":        int(r.endian),
+				"offset_bits":   r.offset_bits,
+				"size_bits":     r.size_bits,
+				"size_max_bits": r.size_max_bits,
+				"array_count":   r.array_count,
+				"size_code":     r.size_code,
+				"located_code":  r.located_code,
+				"repeat_code":   r.repeat_code,
+				"radix":         r.radix,
+				"flags":         r.flags,
+			}
+			for r in records(module, blob, module.image_placement,
+			                 packer.SECTION_PLACEMENTS, found)],
 	}
 
 
@@ -230,16 +252,20 @@ def test_the_whole_tree_encodes_every_expression_it_carries() -> None:
 # ---------------------------------------------------------------------------
 
 def compile_one(source: str) -> bytes:
-	"""The bytecode for the one array size expression in `source`."""
-	schema, resolved = _resolved(source)
-	_, coverage = packer.pack(schema, resolved)
-	assert not coverage.unencodable, coverage.unencodable
-	blob, _ = packer.pack(schema, resolved)
-	head_end = packer.HEADER_BYTES
+	"""The bytecode section of the image for `source`, via the directory."""
 	import struct as _s
-	code_off, = _s.unpack_from("<I", blob, 28)
-	code_len, = _s.unpack_from("<I", blob, 16)
-	return blob[code_off:code_off + code_len]
+
+	schema, resolved = _resolved(source)
+	blob, coverage = packer.pack(schema, resolved)
+	assert not coverage.unencodable, coverage.unencodable
+
+	count, at = _s.unpack_from("<II", blob, 12)
+	for i in range(count):
+		kind, offset, records, stride = _s.unpack_from(
+			"<IIII", blob, at + i * packer.SECTION_BYTES)
+		if kind == packer.SECTION_CODE:
+			return blob[offset:offset + records * stride]
+	raise AssertionError("the image carries no code section")
 
 
 def test_the_bytecode_is_postfix_and_terminated() -> None:
@@ -274,24 +300,45 @@ def test_an_expression_outside_section_10_is_refused() -> None:
 			lambda path: 0)
 
 
-def test_the_metadata_tail_is_optional_and_additive() -> None:
-	"""`--metadata` appends; it does not move the core.
+def test_the_metadata_tail_is_optional_and_additive(
+		image_module: ModuleType) -> None:
+	"""`--metadata` adds sections; it does not change the core's content.
 
-	26.33 recorded that the two consumers pull opposite ways. The split is
-	only worth anything if the device's image is a prefix of the tooling
-	one -- otherwise it is two formats with one name.
+	26.33 recorded that the two consumers pull opposite ways, and the split
+	is only worth anything if the device's image says exactly what the
+	tooling one says about the layout. Under a section directory that is no
+	longer "the bare image is a prefix" -- adding directory entries shifts
+	every body -- so the invariant that carries the claim is that each core
+	section's *bytes* are identical, which is what a walker reads.
 	"""
 	schema, resolved = _resolved(IMAGE_SCHEMA.read_text(encoding="ascii"))
 	bare, _ = packer.pack(schema, resolved, metadata=False)
 	full, _ = packer.pack(schema, resolved, metadata=True)
 
 	assert len(full) > len(bare)
-	# Everything but the header's flags and length word is byte-identical.
-	assert bare[:4] == full[:4]
-	assert bare[8:32] == full[8:32]
-	assert bare[packer.HEADER_BYTES:] == full[packer.HEADER_BYTES:len(bare)]
 	assert not bare[6] & packer.FLAG_METADATA
 	assert full[6] & packer.FLAG_METADATA
+
+	bare_at = sections(image_module, bare)
+	full_at = sections(image_module, full)
+	core = {packer.SECTION_STRUCTS, packer.SECTION_PLACEMENTS,
+	        packer.SECTION_CODE, packer.SECTION_ARMS,
+	        packer.SECTION_DELIMITERS, packer.SECTION_REGIONS,
+	        packer.SECTION_CODECS, packer.SECTION_VARINTS,
+	        packer.SECTION_TLVS, packer.SECTION_INDEXES}
+
+	assert core & set(bare_at) == core & set(full_at), \
+		"the tail added or removed a core section"
+	for kind in sorted(core & set(bare_at)):
+		a_off, a_count, a_stride = bare_at[kind]
+		b_off, b_count, b_stride = full_at[kind]
+		assert (a_count, a_stride) == (b_count, b_stride), kind
+		assert bare[a_off:a_off + a_count * a_stride] == \
+			full[b_off:b_off + b_count * b_stride], \
+			f"core section {kind} differs between bare and --metadata"
+
+	assert packer.SECTION_NAMES not in bare_at
+	assert packer.SECTION_NAMES in full_at
 
 
 def test_the_metadata_tail_carries_the_names_and_the_vectors() -> None:
@@ -305,3 +352,94 @@ def test_the_metadata_tail_carries_the_names_and_the_vectors() -> None:
 
 	assert b"image_header\0" in full
 	assert b"image_header.magic\0" in full
+
+
+# ---------------------------------------------------------------------------
+# The side tables
+# ---------------------------------------------------------------------------
+
+def test_every_construct_the_tree_uses_is_encoded() -> None:
+	"""No family is carried by a schema and dropped by the image.
+
+	This is the check that caught the first version being far less complete
+	than its own coverage report implied: it reported expressions only, and
+	said nothing dropped over an image with no delimiter, no variant arm and
+	no index table in it.
+	"""
+	carried: dict[str, int] = {}
+	dropped: dict[str, dict[str, int]] = {}
+	for path in SCHEMAS:
+		schema, resolved = _resolved(path.read_text(encoding="ascii"))
+		_, coverage = packer.pack(schema, resolved)
+		for family, count in coverage.carried.items():
+			carried[family] = carried.get(family, 0) + count
+		if coverage.unencoded:
+			dropped[path.name] = coverage.unencoded
+
+	assert not dropped, f"constructs the image drops: {dropped}"
+	# Named rather than counted: a family vanishing from the tree would
+	# otherwise silently reduce what this asserts.
+	assert set(carried) == {
+		"region", "delimiter", "radix", "variant", "codec",
+		"repeat", "varint", "located", "tlv", "indexed",
+	}, sorted(carried)
+
+
+def test_a_variant_reaches_the_image_with_its_arms(
+		image_module: ModuleType) -> None:
+	"""MQTT selects on a fixed header's packet type, and the walker needs
+	every arm to pick one."""
+	schema, resolved = _resolved(
+		(ROOT / "examples/mqtt/mqtt.situ").read_text(encoding="ascii"))
+	blob, _ = packer.pack(schema, resolved)
+	arms = records(image_module, blob, image_module.image_arm,
+	               packer.SECTION_ARMS, sections(image_module, blob))
+
+	assert arms, "a schema with variants produced no arm records"
+	assert any(a.arm_flags == 0 for a in arms), "no ordinary case arm"
+	assert all(a.placement != packer.NONE for a in arms)
+
+
+def test_a_delimiter_reaches_the_image_with_its_bytes(
+		image_module: ModuleType) -> None:
+	"""HTTP ends a header name at `:` and a line at CRLF. A walker that
+	cannot see those two byte strings cannot parse the message at all."""
+	schema, resolved = _resolved(
+		(ROOT / "examples/http/http.situ").read_text(encoding="ascii"))
+	blob, _ = packer.pack(schema, resolved)
+	found = records(image_module, blob, image_module.image_delimiter,
+	                packer.SECTION_DELIMITERS, sections(image_module, blob))
+
+	assert found, "a text protocol produced no delimiter records"
+	seen = {bytes(d.octets)[:d.length] for d in found}
+	assert b"\r\n" in seen and b":" in seen, sorted(seen)
+
+
+def test_a_codec_is_named_in_the_core_not_the_tail(
+		image_module: ModuleType) -> None:
+	"""A walker cannot dispatch a transform it cannot identify, so codec
+	names are in the core string pool and survive without `--metadata`."""
+	schema, resolved = _resolved(
+		(ROOT / "examples/smtp/smtp.situ").read_text(encoding="ascii"))
+	bare, _ = packer.pack(schema, resolved, metadata=False)
+	found   = sections(image_module, bare)
+
+	assert packer.SECTION_CODECS in found
+	assert packer.SECTION_STRINGS in found
+	offset, count, stride = found[packer.SECTION_STRINGS]
+	assert b"dot_stuffing" in bare[offset:offset + count * stride]
+
+
+def test_an_unknown_section_kind_is_skippable() -> None:
+	"""The directory is what lets the format grow: a walker predating a
+	section reads the image and ignores it, rather than refusing to load.
+
+	Asserted on the schema rather than on a walker, since the walker is the
+	other project's: `image_section_kind` must be `default = pass`, because
+	`default = error` would make every future section a breaking change.
+	"""
+	text = IMAGE_SCHEMA.read_text(encoding="ascii")
+	block = text[text.index("enum image_section_tag"):]
+	block = block[:block.index("}")]
+	assert "default      = pass" in block, \
+		"a section kind must be skippable, or the directory buys nothing"

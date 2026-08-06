@@ -8,53 +8,49 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct image size=40 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
-  image.head                             offset=AbsoluteStatic(0x00) size=Fixed(40) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+struct image size=20 repr=ValueConverted atomic=NonAtomic
+  image.head                             offset=AbsoluteStatic(0x00) size=Fixed(20) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
   image.head.magic                       offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   image.head.format_version              offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image.head.flags                       offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  image.head.struct_count                offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.head.placement_count             offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.head.code_bytes                  offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.head.struct_offset               offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.head.placement_offset            offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.head.code_offset                 offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.head.metadata_offset             offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.head.image_bytes                 offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.structs                          offset=DataPlaced size=Bounded(0, 51539607540) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
-  image.structs[]                        offset=FrameStatic(0x00) size=Fixed(12) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  image.structs[].first_placement        offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.structs[].placement_count        offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.structs[].size_bits              offset=FrameStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.placements                       offset=DataPlaced size=Bounded(0, 137438953440) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
-  image.placements[]                     offset=FrameStatic(0x00) size=Fixed(32) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
-  image.placements[].kind                offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  image.placements[].endian              offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  image.placements[].bit_order           offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
-  image.placements[].flags               offset=FrameStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  image.placements[].offset_bits         offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.placements[].size_bits           offset=FrameStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.placements[].size_max_bits       offset=FrameStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.placements[].element_bits        offset=FrameStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.placements[].array_count         offset=FrameStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.placements[].size_code           offset=FrameStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image.placements[].type_struct         offset=FrameStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image.code                             offset=DataPlaced size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  image.head.image_bytes                 offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image.head.section_count               offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image.head.section_offset              offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
 
-struct image_header size=40 repr=ValueConverted atomic=NonAtomic
+struct image_arm size=24 repr=ValueConverted atomic=NonAtomic
+  image_arm.placement                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_arm.selected                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_arm.case_value                   offset=AbsoluteStatic(0x08) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_arm.arm_flags                    offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_arm.arm_pad                      offset=AbsoluteStatic(0x11) size=Fixed(7) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
+struct image_codec size=4 repr=ValueConverted
+  image_codec.name                       offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct image_delimiter size=32 repr=ValueConverted atomic=NonAtomic
+  image_delimiter.placement              offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_delimiter.quote                  offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_delimiter.escape                 offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_delimiter.cap                    offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_delimiter.length                 offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_delimiter.octets                 offset=AbsoluteStatic(0x11) size=Fixed(15) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
+struct image_header size=20 repr=ValueConverted atomic=NonAtomic
   image_header.magic                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   image_header.format_version            offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image_header.flags                     offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  image_header.struct_count              offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image_header.placement_count           offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image_header.code_bytes                offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image_header.struct_offset             offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image_header.placement_offset          offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image_header.code_offset               offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  image_header.metadata_offset           offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image_header.image_bytes               offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_header.image_bytes               offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_header.section_count             offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_header.section_offset            offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
 
-struct image_placement size=32 repr=ValueConverted
+struct image_index size=16 repr=ValueConverted atomic=NonAtomic
+  image_index.placement                  offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_index.entry_bits                 offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_index.count_code                 offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_index.measured_from              offset=AbsoluteStatic(0x0C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  image_index.index_pad                  offset=AbsoluteStatic(0x0D) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
+struct image_placement size=44 repr=ValueConverted
   image_placement.kind                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   image_placement.endian                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   image_placement.bit_order              offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
@@ -66,8 +62,40 @@ struct image_placement size=32 repr=ValueConverted
   image_placement.array_count            offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image_placement.size_code              offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_placement.type_struct            offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_placement.located_code           offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_placement.repeat_code            offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_placement.radix                  offset=AbsoluteStatic(0x28) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_placement.text_flags             offset=AbsoluteStatic(0x29) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  image_placement.radix_digits           offset=AbsoluteStatic(0x2A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct image_region size=12 repr=ValueConverted atomic=NonAtomic
+  image_region.placement                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_region.codec                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_region.region_flags              offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_region.region_pad                offset=AbsoluteStatic(0x09) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
+struct image_section size=16 repr=ValueConverted canonical=NonCanonical
+  image_section.kind                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord canonical=NonCanonical
+  image_section.offset                   offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_section.count                    offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_section.stride                   offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
 struct image_struct size=12 repr=ValueConverted
   image_struct.first_placement           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_struct.placement_count           offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image_struct.size_bits                 offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct image_tlv size=12 repr=ValueConverted
+  image_tlv.placement                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_tlv.tag_varint                   offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_tlv.tlv_flags                    offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_tlv.unknown_policy               offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  image_tlv.duplicate_policy             offset=AbsoluteStatic(0x0A) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  image_tlv.tlv_pad                      offset=AbsoluteStatic(0x0B) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct image_varint size=12 repr=ValueConverted atomic=NonAtomic
+  image_varint.placement                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_varint.encoding                  offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_varint.max_bits                  offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_varint.varint_flags              offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  image_varint.varint_pad                offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic

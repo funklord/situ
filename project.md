@@ -9028,13 +9028,66 @@ check refused. The member is `head` now. **A format that describes situ's own
 output is worth writing in situ for that reason alone** -- 104 tests arrived
 with the schema and none of them had to be written here.
 
+**The image carries the constructs, and the coverage report is why.** The
+first version encoded geometry -- offsets, sizes, arrays, size expressions --
+and its report said "nothing dropped", because it counted expressions and
+nothing else. Measured against what the tree's schemas actually use, it was
+carrying none of ten families: 32 placements inside a region, 24 delimiters,
+18 text numbers, 12 variant arms, 6 codecs, 5 `while` runs, 4 varints, and one
+each of `at`, a tlv item grammar and an index table. **A walker on that image
+could not have parsed HTTP.** That is the vacuous pass this project keeps
+finding, written into the instrument built to prevent it -- so `CONSTRUCTS` is
+now one table naming every family and how to see it, `ENCODED` names the ones
+the image carries, and a family cannot be encoded without being counted or
+counted without being encoded. All ten are encoded now, in side tables sorted
+by placement so that a walker meeting no variant never reads the arm table.
+
+**A section directory replaced the fixed header**, because the first version
+named each section in the header and so moved the format every time the image
+learned to carry something. The directory is (kind, offset, count, stride) per
+section, `image_section_tag` is `default = pass` rather than `error`, and a
+walker predating a section skips it instead of refusing to load. The cost is
+that the bare image is no longer a byte-prefix of the `--metadata` one -- the
+directory grows -- so the invariant the split rests on is now stated as what
+it always meant: **every core section's bytes are identical either way**, and
+the test compares them section by section.
+
+**Where a name resolves is not where it is written.** A `while` predicate is
+asked about the element just parsed, so `while (nla_len >= 4)` resolves in the
+*attribute's* struct and not in the message that holds the run. Compiling it
+in the writer's scope failed on netlink and nowhere else.
+
+**Three defects in situ itself, all found by adding one schema.** None was
+reachable from any schema the tree had before, which is 26.27's argument for
+`edges.situ` arriving from a direction nobody arranged:
+
+- **A member named `base` breaks the C++ backend silently.** A view already
+  defines `base()` for its own pointer, so the generated member accessor
+  shadows it and `base() + 0` becomes arithmetic on the member's enum type.
+  Decision 0025 covers a member colliding with its *class* name; nothing
+  covers a member colliding with the runtime's own method names, and nothing
+  checks it. The member is `measured_from`.
+- **A member named `bytes` breaks the Python backend the same way**, because
+  the generated module annotates with the builtin `bytes` and a property of
+  that name shadows it. The member is `octets`. Two instances of one defect
+  family: **a schema may name a member something the generated code needs**,
+  in whichever language, and only the C identifier collision is gated.
+- **`gen-checks` could not spell the 64-bit minimum.** `image_arm.case_value`
+  is the tree's first `i64`, and the round-trip check emitted
+  `(int64_t)(-9223372036854775808)`, which C reads as unary minus applied to a
+  magnitude no signed type holds -- "integer constant is so large that it is
+  unsigned", and `-Werror` stops the build. Fixed in the emitter as `-N - 1`,
+  which is exact at every width.
+
 **Status:** `situc pack`, `situc/pack.py`, `std/image.situ` with its committed
+
 map and wire signature, and 71 tests. What is not done is the walk: no
 interpreter exists, so nothing has yet answered 26.33's question of whether a
 table walk says the same thing as four compiled backends about hostile bytes.
 Until one does, the format is a claim rather than a proven design, and the
 `--coverage` numbers are the honest statement of what it carries: 32 schemas,
-127 structs, 543 placements, 93 expressions, nothing dropped.
+127 structs, 543 placements, 101 expressions, all ten construct families,
+nothing dropped.
 
 ### Invariants to hold across all phases
 
@@ -9992,7 +10045,13 @@ Until one does, the format is a claim rather than a proven design, and the
    project.md, while section 23's fenced listing -- the actual declared
    inventory, 74 entries -- was invisible to it and had gone stale. Before
    citing a document gate, ask how many items it saw, not whether it passed.
-113. **An artifact nothing here consumes needs its coverage reported, not its
+113. **A member may be named something the generated code needs, and only C
+   checks it.** `base` shadows the C++ view's own pointer method; `bytes`
+   shadows the builtin the generated Python annotates with. Both produce
+   code that does not compile, from a schema that is legal, and decision
+   0013's identifier gate sees neither because it asks only about flattened
+   C identifiers. Adding a schema found both on the same afternoon.
+114. **An artifact nothing here consumes needs its coverage reported, not its
    absence of errors.** The packed layout image is read by a program in
    another repository, so a size expression it silently failed to encode
    would surface as a wrong length somewhere nobody here can see. `pack`

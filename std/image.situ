@@ -15,27 +15,53 @@
 // "an offset is a constant" and "an operation is absent, not refused" true of
 // what `situc` generates.
 //
-// THE SHAPE, AND WHY IT SPLITS. 26.33 recorded that the format's consumers
-// pull opposite ways -- an embedded walker in a fixed arena wants a small
+// A SECTION DIRECTORY, NOT A FIXED HEADER. The first version named each
+// section in the header, which meant every construct the image learned to
+// carry moved the format. The directory is a list of (kind, offset, count,
+// stride), so a section added later appends an entry and moves nothing, and a
+// walker skips a kind it does not know instead of failing to load. That is
+// the property that lets this format grow without a version bump per feature.
+//
+// THE CORE AND THE TAIL. 26.33 recorded that the format's consumers pull
+// opposite ways -- an embedded walker in a fixed arena wants a small
 // byte-addressable table, a tooling walker wants names and capability
-// vectors. The split here is the answer: a core every walker needs, and an
-// optional metadata section appended after it, emitted by `pack --metadata`
-// and absent otherwise. A device that never prints a field name does not
-// carry one; a dissector asks for the tail and gets everything it needs to
-// print. Neither consumer pays for the other, and the core's layout does not
-// change between them -- which is what stops this being two formats.
+// vectors. The split is the answer, and the line between them is *function
+// versus print*: the core carries every string a walk needs to work, which is
+// codec and varint encoding names, because a walker cannot dispatch a
+// transform it cannot identify. The tail under `--metadata` carries the
+// strings a walk needs only to be read by a human -- field names, struct
+// names, capability vectors. A device omits the tail and loses nothing it
+// executes.
 
 target buffer;
 endian little;      // the image is produced and consumed by the same toolchain
 
-// Every count and offset in the header is a u32 measured from the start of
-// the image. A section that is absent has a zero offset, which is never a
-// valid one because the header occupies that byte.
-const absent = 0;
-
-// Sentinel for "this record has no such value". Chosen as the maximum rather
-// than zero because zero is a legitimate offset, size and string index.
+// Sentinel for "this record has no such value". The maximum rather than zero
+// because zero is a legitimate offset, size and string index.
 const none = 0xffffffff;
+
+// -- section kinds -----------------------------------------------------------
+
+// A walker reads the directory, keeps the sections it understands and skips
+// the rest. `default = pass` rather than `error`: an image from a later
+// `situc` carrying a section this walker predates is readable, not a refusal,
+// which is the whole point of a directory.
+enum image_section_tag : u32 {
+	structs      = 1,
+	placements   = 2,
+	code         = 3,
+	strings      = 4,      // core: the strings a walk needs to function
+	arms         = 5,
+	delimiters   = 6,
+	regions      = 7,
+	codecs       = 8,
+	varints      = 9,
+	tlvs         = 10,
+	indexes      = 11,
+	names        = 12,     // tail: struct and placement names, for printing
+	vectors      = 13,     // tail: capability vectors, for printing
+	default      = pass,
+}
 
 enum image_kind : u8 {
 	field       = 0,
@@ -64,20 +90,36 @@ enum image_bit_order : u8 {
 	default     = error,
 }
 
-// -- the header --------------------------------------------------------------
+// Where an `indexed` region's offsets are measured from; decision 0024.
+// The member is `measured_from` rather than `base` because a C++ view
+// already defines `base()` for its own pointer, and a member of that name
+// shadows it -- generating arithmetic on the enum. See 26.79.
+enum image_offset_base : u8 {
+	base_region  = 0,
+	base_message = 1,
+	base_field   = 2,
+	default      = error,
+}
+
+// -- the header and its directory --------------------------------------------
 
 struct image_header {
 	u8   magic[4];                    // "SITU"
-	u16  format_version [must_eq = 1];
-	u16  flags;                       // bit 0: the metadata section is present
-	u32  struct_count;
-	u32  placement_count;
-	u32  code_bytes;
-	u32  struct_offset;
-	u32  placement_offset;
-	u32  code_offset;
-	u32  metadata_offset;             // `absent` when there is no tail
+	u16  format_version [must_eq = 2];
+	u16  flags;                       // bit 0: the metadata sections are present
 	u32  image_bytes;                 // the whole image, header included
+	u32  section_count;
+	u32  section_offset;              // from the start of the image
+}
+
+// One entry per section. `stride` is carried rather than implied so that a
+// walker can skip a section whose records grew under it, which is what makes
+// a record extensible without a format version.
+struct image_section {
+	image_section_tag kind;
+	u32  offset;                      // from the start of the image
+	u32  count;                       // records, not bytes
+	u32  stride;                      // bytes per record
 }
 
 // -- the core ----------------------------------------------------------------
@@ -90,9 +132,10 @@ struct image_struct {
 	u32  size_bits;                   // `none` when the struct has no one size
 }
 
-// One placement. This is `situc/layout.py`'s Placement reduced to what a walk
-// needs: where the bytes are, how many there are, and how to compute either
-// when the answer is not a constant.
+// One placement: where the bytes are, how many there are, and how to compute
+// either when the answer is not a constant. Anything a walk needs that is not
+// geometry lives in a side table keyed by this record's index, so that a
+// walker which never meets a variant never reads the arm table.
 struct image_placement {
 	image_kind      kind;
 	image_endian    endian;
@@ -100,6 +143,7 @@ struct image_placement {
 	u8              flags;            // bit 0: offset_bits is known
 	                                  // bit 1: frame_relative
 	                                  // bit 2: the size is fixed
+	                                  // bit 3: the frame base is itself dynamic
 	u32  offset_bits;                 // valid when flags bit 0, else `none`
 	u32  size_bits;                   // the lower bound, exact when fixed
 	u32  size_max_bits;               // `none` when unbounded above
@@ -107,25 +151,116 @@ struct image_placement {
 	u32  array_count;                 // `none` when the count is not a constant
 	u32  size_code;                   // bytecode offset, or `none`
 	u32  type_struct;                 // index into the struct table, or `none`
+	u32  located_code;                // `at expr`: bytecode offset, or `none`
+	u32  repeat_code;                 // `while (cond)`: bytecode, or `none`
+	u8   radix;                       // 0, or 10 or 16 for a text number
+	u8   text_flags;                  // bit 0: minimal (no leading zeros)
+	                                  // bit 1: trimmed
+	                                  // bit 2: case_insensitive
+	u16  radix_digits;                // digits the field holds, or 0
+}
+
+// -- the side tables ---------------------------------------------------------
+
+// Every one of these is sorted by `placement`, so a walker binary-searches
+// rather than building a reverse map in an arena it may not have.
+
+// A variant's arms. `case_value` is the discriminant value this arm matches;
+// the default arm carries `is_default` and no value.
+struct image_arm {
+	u32  placement;                   // the variant this arm belongs to
+	u32  selected;                    // the placement it chooses, or `none`
+	i64  case_value;
+	u8   arm_flags;                   // bit 0: default   bit 1: error
+	u8   arm_pad[7];
+}
+
+// `until "D"`: where a member ends when no length says so. The bytes are
+// inline because every delimiter in the tree is one, two or five bytes, and
+// an offset into a pool would cost as much as the bytes for all of them.
+// The member is `octets` rather than `bytes` because the generated Python
+// annotates with the builtin `bytes`, which a member of that name shadows.
+// Same family as `measured_from` above, and 26.79 records both.
+struct image_delimiter {
+	u32  placement;
+	u32  quote;                       // the escaping form, or `none`
+	u32  escape;                      // the other escaping form, or `none`
+	u32  cap;                         // `until D max N`, or `none`
+	u8   length;
+	u8   octets[15];
+}
+
+// An `authenticated` or `sealed` region, and the member's membership of one.
+struct image_region {
+	u32  placement;
+	u32  codec;                       // index into the codec table, or `none`
+	u8   region_flags;                // bit 0: sealed  bit 1: read allowed
+	                                  // unverified
+	u8   region_pad[3];
+}
+
+// A codec, named because a walker cannot dispatch a transform it cannot
+// identify. The name is in the *core* string pool for that reason.
+struct image_codec {
+	u32  name;                        // offset into the core string pool
+}
+
+struct image_varint {
+	u32  placement;
+	u32  encoding;                    // core string pool offset
+	u8   max_bits;
+	u8   varint_flags;                // bit 0: minimal encodings demanded
+	u8   varint_pad[2];
+}
+
+struct image_tlv {
+	u32  placement;
+	u32  tag_varint;                  // index into the varint table, or `none`
+	u8   tlv_flags;                   // bit 0: ordered
+	u8   unknown_policy;
+	u8   duplicate_policy;
+	u8   tlv_pad;
+}
+
+struct image_index {
+	u32  placement;
+	u32  entry_bits;                  // one offset-table entry
+	u32  count_code;                  // bytecode for the entry count, or `none`
+	image_offset_base measured_from;
+	u8   index_pad[3];
 }
 
 // -- the whole image ---------------------------------------------------------
 
-// The sections are placed by the header rather than laid end to end, so that
-// a later format version may add one without moving the others.
+// Only the header is a member here. Everything else is reached through the
+// directory, which is what makes the format extensible -- and it is why the
+// record types above are structs in their own right: a walker acquires one at
+// a computed offset through the generated accessors, exactly as this
+// repository's own tests do.
 struct image {
-	image_header    head;
-	image_struct    structs[head.struct_count]
-	                    at head.struct_offset;
-	image_placement placements[head.placement_count]
-	                    at head.placement_offset;
-	u8              code[head.code_bytes]
-	                    at head.code_offset;
+	image_header  head;
 }
 
 require absolute_static(image_header);
+require absolute_static(image_section);
 require absolute_static(image_struct);
 require absolute_static(image_placement);
-require size(image_header) == 40;
+require absolute_static(image_arm);
+require absolute_static(image_delimiter);
+require absolute_static(image_region);
+require absolute_static(image_codec);
+require absolute_static(image_varint);
+require absolute_static(image_tlv);
+require absolute_static(image_index);
+
+require size(image_header) == 20;
+require size(image_section) == 16;
 require size(image_struct) == 12;
-require size(image_placement) == 32;
+require size(image_placement) == 44;
+require size(image_arm) == 24;
+require size(image_delimiter) == 32;
+require size(image_region) == 12;
+require size(image_codec) == 4;
+require size(image_varint) == 12;
+require size(image_tlv) == 12;
+require size(image_index) == 16;
