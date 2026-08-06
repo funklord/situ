@@ -8793,6 +8793,48 @@ died quietly, and the report it left behind looked like success.
 from each; 3126 unit tests, 31 skipped; `make style` and `mypy` clean over
 116 files.
 
+### 26.77 The instrument builds somewhere it does not own
+
+26.76 taught the sweep to say whether it ran. This is the other half, and
+it arrived immediately: three full runs were destroyed in one session, and
+**not one of them failed for a reason inside situ**. Each time an unrelated
+process on the same machine exhausted a filesystem the sweep happened to be
+building in, and each time the shards died mid-cell.
+
+situ was checked and cleared twice, by counting: a full sweep leaves exactly
+one `situ-sweep-*` directory per shard at a time, because each cell's tree
+is removed in a `finally`. At the worst moment there was one such directory
+totalling 128K. The tool does not leak. It simply has no claim on the space
+it needs, and no notice when the space goes.
+
+**The whole failure is a resource the tool depends on and does not own.**
+Every fold since 26.54 rests on a sweep, the sweep needs an hour of a
+filesystem staying available, and it shares that filesystem with everything
+else running. That is a dependency the record never stated, so it was never
+a thing anyone could decide about.
+
+**The remedy needed no code**, which is the part worth writing down.
+`tempfile.mkdtemp` resolves through `tempfile.gettempdir()`, which honours
+`TMPDIR`, so `TMPDIR=$HOME/.cache/situ-sweep python3 tools/sweep.py --all`
+already builds somewhere private and off the shared tmpfs. The knob was
+always there; what was missing was knowing the instrument had a shared,
+volatile floor at all. That is 26.45's shape a second time in two folds --
+the capability present, the question unasked -- and it is why this is
+recorded rather than fixed with a patch.
+
+**A diagnostic worth keeping, because the first reading was wrong.** `du`
+reported 165G on a filesystem `df` called 859G full, and the 694G gap was
+not an accounting quirk: it was two processes holding deleted files open,
+530.2G and 163.8G. **When `du` and `df` disagree, the difference is held by
+a process rather than by the filesystem** -- `lsof +L1` names it, and the
+space returns the moment the holder dies. The wrong inference was drawn
+first, out loud, that a reboot would not help; the opposite was true, since
+process-held deletions are exactly what a reboot reclaims. Check before
+concluding which of the two is lying.
+
+**Status:** no situ change. Recorded as an operating condition of the
+sweep, with `TMPDIR` named as the way to meet it.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9730,6 +9772,14 @@ from each; 3126 unit tests, 31 skipped; `make style` and `mypy` clean over
    were both already computed and never compared. Make a check assert its
    coverage positively, so that passing is a claim the run has to make
    rather than an absence anyone can mistake for one.
+110. **A long check depends on resources it does not own, and should say
+   which.** Three full sweeps were destroyed in one session by unrelated
+   processes exhausting a shared filesystem; situ was cleared each time by
+   counting its own scratch directories. An hour-long run needs an hour of
+   a filesystem staying available, and that requirement went unstated, so
+   nobody could act on it. State the floor a check stands on. Here it is
+   met by `TMPDIR`, which `tempfile` already honours -- the knob existed
+   before the need for it was noticed.
 
 ---
 
