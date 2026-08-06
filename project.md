@@ -4606,9 +4606,11 @@ the row they start in and continue in the slanted form RFCs use.
 
 ### 26.15 The built-in codec set
 
-**Status: partly done.** The checksums, base16 and text validation have
-landed. base32 and base64 have not, and the reason is a decision rather than
-effort -- see the end of this section.
+**Status: complete.** The checksums, base16, base32, base64 and text
+validation have all landed, and this line said "partly done, base32 and
+base64 have not" for a long time after the closing paragraph of this same
+section said "26.15 is complete". A status at the top of a section is read
+first and updated last.
 
 **Checksums are runtime primitives, not kernels.** A `checksum` field says
 which bytes are covered and when the value went stale; it does not compute
@@ -4687,10 +4689,13 @@ The line between what ships and what does not is not popularity but whether
 situ can produce it honestly:
 
 - **Built in** -- anything a kernel description derives, or that is a few
-  hundred lines of dependency-free C. The six kernel families are already here,
-  and Reed-Solomon with them. Still missing and worth adding: the internet
-  checksum (RFC 1071), Fletcher and Adler-32, base64/base32/hex, UTF-8
-  validation. All small, all common, none of them needing anybody's library.
+  hundred lines of dependency-free C. The six kernel families are here and
+  Reed-Solomon with them, and so is everything this paragraph used to list as
+  still missing: the internet checksum of RFC 1071, Fletcher-16 and -32 and
+  Adler-32 as `static inline` primitives in `situ.h`, UTF-8 validation as
+  `situ_utf8_valid`, and base16, base32 and base64 as derived table codes in
+  `std/kernels.situ`. All small, all common, none of them needing anybody's
+  library -- which is the argument for building them in, and it held.
 - **Optional** -- anything needing a real implementation behind it. AEAD
   ciphers, hashes, deflate, zstd, LZ4. These stay tier-1: declared by property
   signature, trusted, supplied by the user.
@@ -4920,10 +4925,15 @@ buried.
 
 ### 26.19 Language server
 
-**Status: diagnostics, hover and symbols work.** `situc lsp` speaks JSON-RPC
-over stdio, standard library only: the framing is a length header and a JSON
-body, and a dependency for that would be a poor trade against section 22's
-rule about vendoring.
+**Status: diagnostics, hover, symbols, code actions and go-to-definition all
+work**, which is everything this section describes. The first three were the
+whole list for as long as it took the last two to land and the paragraph
+below to be written; the status line went on naming three, the same way
+26.15's did.
+
+`situc lsp` speaks JSON-RPC over stdio, standard library only: the framing is
+a length header and a JSON body, and a dependency for that would be a poor
+trade against section 22's rule about vendoring.
 
 What it carries that an editor cannot get elsewhere is not syntax colouring:
 

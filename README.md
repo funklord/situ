@@ -112,7 +112,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 | `situc gen-codec-tests` | property tests that would falsify a lying codec signature, against the ABI an `impl` binds |
 | `situc dump-ast` | the parsed schema, for when a layout surprises you |
 | `situc import-proto` | a `.proto` read as a description of its wire format, reporting what it could not represent |
-| `situc lsp` | a language server over stdio: diagnostics, hover, symbols, code actions |
+| `situc lsp` | a language server over stdio: diagnostics with the blame chain intact, hover, symbols, code actions carrying the advisor's costs, and go-to-definition |
 
 `situc --help` lists the rest, and `man situc` is the full command reference --
 every subcommand, its flags and its exit behaviour. It installs with the rest
