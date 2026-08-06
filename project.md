@@ -3483,6 +3483,8 @@ situc explain <schema> <path>     one field's capability vector and blame chains
 situc diff    <old> <new>         capability regressions between revisions
 situc wire    <schema>            the byte-level contract [--check] (19.3)
 situc verify  <schema> <vectors>  do real bytes conform? generates nothing
+situc pack    <schema>            the packed layout image a walker reads
+                                  [-o FILE] [--metadata] [--coverage] (26.33)
 situc doc     <schema>            byte-layout diagrams and a field reference
                                   [--format=ascii|markdown] [--out DIR]
 situc gen-tests   <schema> <vectors>
@@ -3632,6 +3634,9 @@ situ/
     wire.py                   the byte-level contract and its comparison; 19.3
     verify.py                 do these bytes conform? the schema used as a
                               specification, generating nothing; 26.67
+    pack.py                   the packed layout image and its expression
+                              bytecode, for a walker in another project to
+                              read; emits only, never walks; 26.33
     requirements.py           predicate evaluation and discharge
     namespaces.py             `::` qualification and `--prefix`; decision 0012
     capmap.py                 capability map construction
@@ -6042,8 +6047,16 @@ and asked for two things the language did not have.
 
 ### 26.33 The runtime image, and why it is late
 
-**Status: not started, and deliberately late.** Decision 0026 is the shape;
-this is the plan and the reason for its place in the order.
+**Status: the emitter is done; nothing walks an image yet.** `situc pack`
+emits the format described by `std/image.situ`, with the section 10 bytecode,
+and `situc/pack.py` is the whole of it. What 26.33 called the first slice is
+half delivered: the image exists for every schema in the tree and is read
+back through generated accessors, but the walker that would make it a fifth
+column in the differential check lives in the other project and does not
+exist. So the image is proven to *carry* the layout and is not yet proven
+*sufficient* for a parse. 26.79 has what building it found.
+
+Decision 0026 is the shape; what follows is the plan and the reason it waited.
 
 The question came from a device rather than from the language: a radio whose
 framing has to change without a firmware rebuild. Ship a description of the new
@@ -8950,6 +8963,79 @@ shared tooling, copied verbatim from one source into every project, so
 widening it past table rows is a cross-project change and is raised rather
 than made here.
 
+### 26.79 The image, and what packing a schema into one found
+
+26.33 waited on two things. One had expired: the apparatus that would keep an
+interpreter honest was "days old" when that was written and is now the sweep,
+the oracles and the differential check. The other was live and was the user's
+to settle -- **which consumer is primary**, because an embedded walker in a
+fixed arena and a tooling walker want opposite images.
+
+**The split is the answer, and it cost nothing.** A core table every walker
+needs, and an optional metadata section appended after it under `--metadata`,
+carrying names and capability vectors. The core's bytes are identical either
+way, which is the property that makes this one format with a tail rather than
+two formats with one name, and `test_the_metadata_tail_is_optional_and_additive`
+asserts exactly that -- the bare image is a prefix of the full one.
+
+**Section 10 is about twenty opcodes, and that estimate held.** The bytecode
+is a postfix stack machine with no jumps, because the language has no control
+flow: 27 opcodes, fixed operand widths, and a program whose length is its own
+termination bound. That is the property that makes shipping an evaluator to a
+radio defensible, and it is a property of section 10 rather than of this
+encoding.
+
+**Three things the port found, none of them in the plan.**
+
+*Expressions had to come from the AST, not from the placement.*
+`Placement.size_expr` holds the expression as *source text*, for the consumers
+that render it. Compiling from that would have meant re-parsing our own
+output, which section 25 forbids -- and would have put a second parser in the
+one component 0026 wants checked. The packer takes the schema and the resolved
+layout, as `wire` already does.
+
+*A path in a schema is not a path in the placement table.*
+`u8 pixels[info.image_size]` names a field of a member, and the first version
+resolved it by matching text against placement paths, which found nothing for
+ten schemas out of thirty-two. The fix is to walk the type chain the way a
+walker will: the member `info`, then its struct, then `image_size` inside it.
+The coverage report is what caught it -- see below.
+
+*A `const` is a literal, not a load.* `telemetry.situ` sizes an array by
+`CHANNEL_COUNT`, and a walker carries no constant table and should not need
+one, so a const becomes `PUSH` at pack time.
+
+**The coverage report is the whole reason those were found.** An image is
+opaque: a packer that quietly emits "no expression" for what it could not
+compile produces a file that loads, walks, and computes a wrong length in a
+program nobody in this repository runs. So `pack` returns what went into the
+image -- structs, placements, expressions, and every expression it dropped
+with the reason -- `--coverage` prints it and exits non-zero if anything was
+dropped, and the suite asserts the totals rather than asserting that nothing
+raised. All three defects above arrived as a list of ten dropped expressions
+on a run that was otherwise green. That is 26.76's rule applied before it had
+a chance to bite: **make a check assert its coverage positively**.
+
+**Adding the schema to the tree was the real test.** `std/image.situ` is a
+schema like any other, so `SCHEMAS` picked it up and it immediately owed
+everything the tree demands: it compiles in four backends, its generated C is
+warning-clean under the full warning set, doxygen reads it, its dissector
+runs, the four backends agree about it under random bytes, `--owned`
+round-trips it, and every member the map calls writable has a setter. It
+failed on arrival for a reason worth keeping: `image.header` and the struct
+`image_header` flatten to one C identifier, which decision 0013's collision
+check refused. The member is `head` now. **A format that describes situ's own
+output is worth writing in situ for that reason alone** -- 104 tests arrived
+with the schema and none of them had to be written here.
+
+**Status:** `situc pack`, `situc/pack.py`, `std/image.situ` with its committed
+map and wire signature, and 71 tests. What is not done is the walk: no
+interpreter exists, so nothing has yet answered 26.33's question of whether a
+table walk says the same thing as four compiled backends about hostile bytes.
+Until one does, the format is a claim rather than a proven design, and the
+`--coverage` numbers are the honest statement of what it carries: 32 schemas,
+127 structs, 543 placements, 93 expressions, nothing dropped.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9906,6 +9992,13 @@ than made here.
    project.md, while section 23's fenced listing -- the actual declared
    inventory, 74 entries -- was invisible to it and had gone stale. Before
    citing a document gate, ask how many items it saw, not whether it passed.
+113. **An artifact nothing here consumes needs its coverage reported, not its
+   absence of errors.** The packed layout image is read by a program in
+   another repository, so a size expression it silently failed to encode
+   would surface as a wrong length somewhere nobody here can see. `pack`
+   returns what it encoded and what it dropped; three real defects arrived as
+   a list of dropped expressions on a run that raised nothing. Where the
+   consumer is out of reach, the producer states its coverage.
 
 ---
 

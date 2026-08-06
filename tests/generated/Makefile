@@ -63,7 +63,7 @@ SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   examples/sqlite/sqlite.situ \
 		   examples/tcp/tcp.situ \
 		   examples/telemetry/telemetry.situ examples/tiff/tiff.situ \
-		   examples/udp/udp.situ std/kernels.situ
+		   examples/udp/udp.situ std/kernels.situ std/image.situ
 GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))
 GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
 GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)

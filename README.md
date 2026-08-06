@@ -103,6 +103,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 | `situc diff` | capability regressions between two revisions of a schema |
 | `situc wire` | the byte-level contract, and `--check` against the committed one |
 | `situc verify` | whether real bytes conform to the schema, generating nothing -- the way to adopt one without taking the codegen |
+| `situc pack` | the packed layout image: placements, kinds, offsets, sizes, endianness and a bytecode for the expression language, for a walker to read a format it was not compiled against (`--metadata` adds names and capability vectors) |
 | `situc doc` | RFC-style byte-layout diagrams and a field reference |
 | `situc gen-checks` | tests holding the generated accessors to the map they were generated beside |
 | `situc gen-tests` | golden-vector tests from a schema and hex vectors |
@@ -399,11 +400,21 @@ builds `situc` and `libsitu-dev` packages with debhelper. Treat those as
 evaluation output rather than a release: nothing is signed, uploaded, or
 carries a stable ABI promise yet.
 
-One feature is planned and deliberately late: a packed layout image (`situc
-pack`) and a separate project that walks one at run time, for a device whose
-framing has to change without a firmware rebuild. Section 26.33 is the plan and
-decision 0026 is the shape -- including what an interpreter cannot do, which is
-make an operation absent.
+`situc pack` emits a packed layout image, for a device whose framing has to
+change without a firmware rebuild: ship a description of the new format, load
+it, parse. The format is itself a situ schema (`std/image.situ`), read through
+generated accessors, so everything this repository does to a schema it also
+does to the image.
+
+**The walker is not written.** Nothing here walks an image at run time, by
+decision 0026 -- that program is a separate project, and it is what would
+answer whether a table walk says the same thing as four compiled backends
+about hostile bytes. Until it exists the image is proven to carry the layout
+and is not proven sufficient for a parse. 26.79 says so plainly, and `situc
+pack --coverage` says what any given image contains. Note also what an
+interpreter cannot do, which is make an operation *absent*: under a walker the
+capability map stops being the shape of the interface and becomes data a
+caller may consult.
 
 ## Reading further
 

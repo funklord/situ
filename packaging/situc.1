@@ -55,6 +55,25 @@ the code: see
 .B situ
 project.md 26.67.
 .TP
+.B pack
+Emit the packed layout image: the placements with their kinds, offsets,
+sizes and endianness, plus a bytecode for the expression language of
+section 10. A walker in another project reads one to parse a format it was
+not compiled against; nothing in
+.B situc
+walks an image. The format is described by
+.I std/image.situ
+and read through generated accessors.
+.B \-o
+writes to a file rather than to standard output, which is binary.
+.B \-\-metadata
+appends names and capability vectors, which a tooling walker wants and a
+device does not.
+.B \-\-coverage
+reports what went into the image, and exits non-zero if anything could not
+be encoded, rather than emitting it. See project.md 26.33 and
+docs/decisions/0026-runtime-image-and-interpreter.md.
+.TP
 .B doc
 RFC-style byte-layout diagrams and a field reference.
 .TP

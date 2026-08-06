@@ -1,0 +1,131 @@
+// The packed layout image that `situc pack` emits (project.md 26.33,
+// docs/decisions/0026-runtime-image-and-interpreter.md).
+//
+// WHY THIS FILE IS A SCHEMA. Decision 0026 rejected a hand-rolled image with
+// a hand-rolled parser, on the grounds that it would be the only artifact in
+// the project nothing checks, in the component whose input is least trusted.
+// So the image is described here and read through generated accessors, which
+// means `gen-fuzz` fuzzes the image parser, `situc wire` pins the format,
+// `map --check` catches a layout change nobody meant, and the differential
+// check compares four backends reading one image.
+//
+// WHAT WALKS IT. Nothing in this repository, at run time. `situc pack` emits
+// an image; the interpreter that walks one over live bytes is a separate
+// project. That boundary is 0026's and it is load-bearing: it is what keeps
+// "an offset is a constant" and "an operation is absent, not refused" true of
+// what `situc` generates.
+//
+// THE SHAPE, AND WHY IT SPLITS. 26.33 recorded that the format's consumers
+// pull opposite ways -- an embedded walker in a fixed arena wants a small
+// byte-addressable table, a tooling walker wants names and capability
+// vectors. The split here is the answer: a core every walker needs, and an
+// optional metadata section appended after it, emitted by `pack --metadata`
+// and absent otherwise. A device that never prints a field name does not
+// carry one; a dissector asks for the tail and gets everything it needs to
+// print. Neither consumer pays for the other, and the core's layout does not
+// change between them -- which is what stops this being two formats.
+
+target buffer;
+endian little;      // the image is produced and consumed by the same toolchain
+
+// Every count and offset in the header is a u32 measured from the start of
+// the image. A section that is absent has a zero offset, which is never a
+// valid one because the header occupies that byte.
+const absent = 0;
+
+// Sentinel for "this record has no such value". Chosen as the maximum rather
+// than zero because zero is a legitimate offset, size and string index.
+const none = 0xffffffff;
+
+enum image_kind : u8 {
+	field       = 0,
+	reserved    = 1,
+	marker      = 2,
+	region      = 3,
+	variant     = 4,
+	tlv         = 5,
+	indexed     = 6,
+	opaque      = 7,
+	default     = error,      // an unknown kind is a refusal, not a guess
+}
+
+enum image_endian : u8 {
+	unset       = 0,
+	big         = 1,
+	little      = 2,
+	native      = 3,
+	default     = error,
+}
+
+enum image_bit_order : u8 {
+	bit_unset   = 0,
+	msb_first   = 1,
+	lsb_first   = 2,
+	default     = error,
+}
+
+// -- the header --------------------------------------------------------------
+
+struct image_header {
+	u8   magic[4];                    // "SITU"
+	u16  format_version [must_eq = 1];
+	u16  flags;                       // bit 0: the metadata section is present
+	u32  struct_count;
+	u32  placement_count;
+	u32  code_bytes;
+	u32  struct_offset;
+	u32  placement_offset;
+	u32  code_offset;
+	u32  metadata_offset;             // `absent` when there is no tail
+	u32  image_bytes;                 // the whole image, header included
+}
+
+// -- the core ----------------------------------------------------------------
+
+// One struct in the schema. Its members are a contiguous run of the placement
+// table, which is what lets a walker find them without an index.
+struct image_struct {
+	u32  first_placement;
+	u32  placement_count;
+	u32  size_bits;                   // `none` when the struct has no one size
+}
+
+// One placement. This is `situc/layout.py`'s Placement reduced to what a walk
+// needs: where the bytes are, how many there are, and how to compute either
+// when the answer is not a constant.
+struct image_placement {
+	image_kind      kind;
+	image_endian    endian;
+	image_bit_order bit_order;
+	u8              flags;            // bit 0: offset_bits is known
+	                                  // bit 1: frame_relative
+	                                  // bit 2: the size is fixed
+	u32  offset_bits;                 // valid when flags bit 0, else `none`
+	u32  size_bits;                   // the lower bound, exact when fixed
+	u32  size_max_bits;               // `none` when unbounded above
+	u32  element_bits;                // `none` when not an array
+	u32  array_count;                 // `none` when the count is not a constant
+	u32  size_code;                   // bytecode offset, or `none`
+	u32  type_struct;                 // index into the struct table, or `none`
+}
+
+// -- the whole image ---------------------------------------------------------
+
+// The sections are placed by the header rather than laid end to end, so that
+// a later format version may add one without moving the others.
+struct image {
+	image_header    head;
+	image_struct    structs[head.struct_count]
+	                    at head.struct_offset;
+	image_placement placements[head.placement_count]
+	                    at head.placement_offset;
+	u8              code[head.code_bytes]
+	                    at head.code_offset;
+}
+
+require absolute_static(image_header);
+require absolute_static(image_struct);
+require absolute_static(image_placement);
+require size(image_header) == 40;
+require size(image_struct) == 12;
+require size(image_placement) == 32;

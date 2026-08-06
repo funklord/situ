@@ -156,6 +156,19 @@ def build_parser() -> argparse.ArgumentParser:
 	                     help="compare against the committed *.situ.map and fail "
 	                          "if it differs")
 
+	pack_cmd = sub.add_parser(
+		"pack", help="emit the packed layout image a walker reads")
+	pack_cmd.add_argument("schema", type=Path)
+	pack_cmd.add_argument("-o", "--out", type=Path,
+	                      help="write here rather than to stdout, which is "
+	                           "binary and should not be piped by accident")
+	pack_cmd.add_argument("--metadata", action="store_true",
+	                      help="append names and capability vectors, which a "
+	                           "tooling walker wants and a device does not")
+	pack_cmd.add_argument("--coverage", action="store_true",
+	                      help="report what went into the image, and what "
+	                           "could not be encoded, rather than the image")
+
 	verify_cmd = sub.add_parser(
 		"verify", help="check that real bytes conform to the schema")
 	verify_cmd.add_argument("schema", type=Path)
@@ -195,6 +208,42 @@ def cmd_dump_ast(args: argparse.Namespace) -> int:
 	schema = parse(read_source(args.schema))
 	output = unparse(schema) if args.format == "source" else dump(schema)
 	sys.stdout.write(output)
+	return 0
+
+
+def cmd_pack(args: argparse.Namespace) -> int:
+	"""`situc pack schema.situ -o schema.situ.image` -- 26.33, decision 0026.
+
+	Emits the image; nothing here walks one. The `--coverage` report exists
+	because an image is opaque: a packer that quietly failed to encode a size
+	expression produces a file that loads and walks and computes the wrong
+	length, and the only honest way to ship that is to say what went in.
+	"""
+	from situc import pack as packer
+
+	source   = read_source(args.schema)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	image, coverage = packer.pack(schema, resolved, metadata=args.metadata)
+
+	if args.coverage:
+		print(f"structs      {coverage.structs}")
+		print(f"placements   {coverage.placements}")
+		print(f"expressions  {coverage.expressions}")
+		print(f"image bytes  {len(image)}")
+		for path, why in sorted(coverage.unencodable.items()):
+			print(f"unencodable  {path}: {why}")
+		return 1 if coverage.unencodable else 0
+
+	if args.out is None:
+		if sys.stdout.isatty():
+			print("situc: the image is binary; use -o or redirect it",
+			      file=sys.stderr)
+			return 2
+		sys.stdout.buffer.write(image)
+	else:
+		args.out.write_bytes(image)
+		print(f"situc: wrote {args.out} ({len(image)} bytes)", file=sys.stderr)
 	return 0
 
 
@@ -751,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
 		"advise":   cmd_advise,
 		"diff":     cmd_diff,
 		"wire":     cmd_wire,
+		"pack":     cmd_pack,
 		"map":      cmd_map,
 		"verify":   cmd_verify,
 		"build":    cmd_build,
