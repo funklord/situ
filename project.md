@@ -3687,7 +3687,15 @@ situ/
     kernels.situ              the same codes as kernel descriptions, so the
                               derivation can be checked against the declaration
   tools/
-    lint_conventions.py       the formatting enforcer; `make lint`
+    style_gate.py             the formatting enforcer; `make style`, and
+                              `make lint` as an alias. Copied verbatim from
+                              the shared source, so a fix belongs there
+                              rather than here. Superseded
+                              `lint_conventions.py` (26.68)
+    hooks/
+      commit-msg              the message check, installed by `make hooks`.
+                              In the tree so it is reviewable and survives a
+                              clone; the copy that runs is untracked
     bench.py                  what the offset cache costs and saves, in all
                               four backends. Not a test and not in the suite:
                               a wall-clock number is the machine's, so 26.30
@@ -3926,13 +3934,13 @@ a numbered section 26 entry with its invariants -- and for nothing else.
   that is checked rather than assumed. `make lint` cannot see emitted code: it
   lands in `build/`, which is skipped, and before that in string literals,
   which are excluded so section 17's golden texts keep their gutter. So
-  `lint_conventions.check_text` takes text rather than a path, and
+  `style_gate.check_text` takes text rather than a path, and
   `tests/unit/test_generated_sources_follow_the_conventions.py` runs it over
   what every schema generates in all four languages plus the checks, the fuzz
   harness and the dissector (26.58).
 - **No autoformatter.** `black` and `ruff format` rewrite tabs to spaces
-  unconditionally and cannot be configured out of it, so `tools/lint_conventions.py`
-  under `make lint` is the enforcement instead. See
+  unconditionally and cannot be configured out of it, so `tools/style_gate.py`
+  under `make style` is the enforcement instead. See
   `docs/decisions/0003-source-formatting.md`.
 - Lowercase filenames unless there is a reason otherwise, and `snake_case` over
   `camelCase` in every language.
@@ -3951,6 +3959,50 @@ a numbered section 26 entry with its invariants -- and for nothing else.
 - Single source of truth: the AST is built once from the source text and all
   passes read it. Never re-parse generated output. Never mutate a file
   in a second pass without full knowledge of the first pass's state.
+
+### 25.1 The subject names a subsystem, from a settled list
+
+A subject is `subsystem: summary`, imperative, no trailing period, under 75
+columns. The body is plain prose wrapped at 75, and only prose: an aligned
+two-column table or a C declaration keeps the shape somebody gave it. That
+much is the standing rule and is not this project's to change.
+
+What *is* this project's is which names go before the colon. They are settled
+because the whole history now uses them, and inventing a synonym for one is
+the drift the rule exists to prevent:
+
+| prefix | what it covers |
+|---|---|
+| `situc:` | the compiler and its four backends -- the bulk of the log |
+| `fold:` | a section 26 entry and the invariants it produced (25.0) |
+| `tests:` | the suite, the oracles, the differential probes |
+| `tools:` | the style gate, the sweep, the benchmark, the hooks |
+| `std:` | the standard codec and kernel schemas |
+| `build:` | the Makefile and the CMake entry point |
+| `packaging:` | the Debian packaging |
+| `examples/<name>:` | one worked protocol, named: `examples/mqtt:` |
+| `examples:` | more than one of them in the same change |
+| `runtime:` | a runtime, where it is the point rather than a backend |
+| `README:` | the front page |
+| `doc:` | this document, where the change is not a fold |
+| `docs:` | the decision records |
+| `suggestions:` | the evaluations, one file per evaluating project |
+
+**A change that genuinely spans the tree takes no prefix.** That is the
+standing rule rather than an oversight, and two commits in the history
+qualify: phase 0, and the adoption of the shared style gate.
+
+Where a verb from the standing set -- feature, fix, rework, remove, build,
+test -- fits without displacing the finding the subject carries, it goes in.
+Where the finding is the whole subject, the finding wins. These subjects are
+the table of contents for section 26, and a uniform register would cost more
+than the filterability it bought.
+
+The history was reformatted to this on 2026-08-06: 313 commits to 311, the
+two squashes being a README that landed beside the CMake entry point and a
+pair of corrections to the same evaluation file. No content changed -- every
+commit reused its original tree object. What the reformat measured on the way
+is 26.78.
 
 ---
 
@@ -8847,6 +8899,47 @@ output were old `git stash` entries, dated days earlier, and not damage.
 **Status:** no situ change. Recorded as an operating condition of the
 sweep, with `TMPDIR` named as the way to meet it.
 
+### 26.78 The conventions the log did not follow, and the gate that agreed
+
+The history was reformatted to 25.1 in one pass, 313 commits to 311. The
+reformat is not what is worth an entry; what measuring first turned up is.
+
+**The written convention and the enforced convention were different sizes.**
+`tools/hooks/commit-msg` checks two things -- generator attribution, and a
+subject over 75 columns -- and the standing rule has at least six. So the
+four nobody mechanised drifted for the entire history without one complaint
+from the tooling: 237 of 313 subjects carried no subsystem at all, 2330 body
+lines were wrapped at 80 rather than 75, and the hook accepted 301 of the 313
+messages. Nothing was broken. The mechanised part of the rule was simply a
+small part of it, and a green hook was read for years as the message being
+right.
+
+**The documented-path check reads five paths in a ten-thousand-line
+document.** `make style` reports "project.md says nothing twice and names no
+missing file" while section 23 declared `tools/lint_conventions.py`, renamed
+to `style_gate.py` back in 26.68 and gone from the tree since. The gate is
+not wrong: `doc_paths` deliberately reads backticked paths in *table rows*,
+which is exactly what took its false-positive rate to zero across every
+project that carries it. But section 23 is a fenced indentation listing, so
+**the one place this document declares the whole tree is the one place the
+check cannot look.** Of its 74 checkable entries 73 were accurate, one named
+a deleted file, and `tools/style_gate.py` and `tools/hooks/commit-msg` were
+missing from it altogether -- a listing that had drifted precisely where
+nothing read it.
+
+Both are the same shape as 26.76, one level up. There the sweep passed while
+examining nothing; here the gates pass while examining a fraction, and in
+both cases the number that would have said so was available and never
+asserted.
+
+**Status:** section 23, section 25 and the README corrected; 25.1 added.
+Section 23 is left as a listing rather than converted to tables to satisfy
+the gate -- that would be bending the document to fit the checker, which is
+the fault the checker's own narrowness was written to avoid. The gate is
+shared tooling, copied verbatim from one source into every project, so
+widening it past table rows is a cross-project change and is raised rather
+than made here.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -9792,6 +9885,17 @@ sweep, with `TMPDIR` named as the way to meet it.
    nobody could act on it. State the floor a check stands on. Here it is
    met by `TMPDIR`, which `tempfile` already honours -- the knob existed
    before the need for it was noticed.
+111. **A convention holds to the width of its check, not the width of its
+   text.** The commit-msg hook enforced two of the standing commit rules and
+   the rest drifted for 313 commits with every run green -- 237 subjects with
+   no subsystem, 2330 body lines at the wrong width. Where a rule is written
+   down and only partly mechanised, say which part is mechanised, so that a
+   passing check is not read as the whole rule holding.
+112. **A gate that reads one shape of a document does not read the document.**
+   `doc_paths` checks backticked paths in table rows and found five in
+   project.md, while section 23's fenced listing -- the actual declared
+   inventory, 74 entries -- was invisible to it and had gone stale. Before
+   citing a document gate, ask how many items it saw, not whether it passed.
 
 ---
 

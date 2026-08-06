@@ -277,8 +277,8 @@ skipping: they build and run the generated C directly.
 
 There is no autoformatter. Tabs carry indent level and spaces carry alignment,
 which `black` and `ruff format` cannot be configured to leave alone, so
-`tools/lint_conventions.py` under `make lint` is the enforcement instead
-(decision 0003).
+`tools/style_gate.py` under `make style` is the enforcement instead
+(decision 0003). `make lint` is kept as an alias for it.
 
 ## Layout
 
@@ -291,7 +291,7 @@ runtime/          one runtime per backend, each thin; the arithmetic lives in C
 examples/         one directory per protocol, each with at least one `require`
 tests/            unit, generated-C, cross-architecture, golden diagnostics,
                   a Wireshark stub, and the schemas written to be awkward
-tools/            the convention linter and the benchmark
+tools/            the style gate, the commit-msg hook, the benchmark, the sweep
 ```
 
 ## Status
