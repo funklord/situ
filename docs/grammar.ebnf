@@ -7,8 +7,12 @@
  * width is prescribed in this project and column alignment would not survive
  * one (docs/decisions/0003-source-formatting.md).
  *
- * A production marked PHASE n is not accepted by the parser yet; the front end
- * rejects it with a "not yet implemented" diagnostic naming that phase.
+ * Every production below parses. Some used to carry a PHASE n marker, meaning
+ * the front end would refuse them with a "not yet implemented" diagnostic
+ * naming that phase; phases 0 through 14 are complete and the parser's table
+ * of refused constructs is empty, so the markers named nothing and are gone.
+ * Two restrictions survive, and both are noted where they apply: a nested
+ * `namespace`, and a nested qualified name.
  *)
 
 schema		= { directive | decl } ;
@@ -41,7 +45,7 @@ decl		= namespace_decl
 	| enum_decl
 	| struct_decl
 	| endian_marker_decl
-	| codec_decl			(* PHASE 7 *)
+	| codec_decl
 	| register_decl
 	| register_block_decl
 	| requirement
@@ -80,11 +84,11 @@ block		= "positional" "{" { member } "}"
 	| "authenticated" [ ident ] [ attrs ] "{" { member } "}"
 	| "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
 	| "coded" ident "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
-	| "indexed" "(" index_args ")" "{" { member } "}"		(* PHASE 6 *)
-	| "opaque" ident "[" size_expr "]" [ attrs ] ";"		(* PHASE 6 *)
-	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;			(* PHASE 6 *)
+	| "indexed" "(" index_args ")" "{" { member } "}"
+	| "opaque" ident "[" size_expr "]" [ attrs ] ";"
+	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
 
-variant		= "variant" ident "switch" "(" expr ")" "{"		(* PHASE 6 *)
+variant		= "variant" ident "switch" "(" expr ")" "{"
 		{ "case" expr ":" member }
 		[ "default" ":" ( member | "error" | "opaque" ) ]
 	"}" ;
@@ -116,7 +120,7 @@ sint		= "i" digits ;
 float		= "f16" | "f32" | "f64" ;
 bitfield	= "bit" ;		(* single bit; uN < 8 also bit-packed *)
 
-codec_decl	= "codec" ident "{" { codec_prop ";" } "}" ;		(* PHASE 7 *)
+codec_decl	= "codec" ident "{" { codec_prop ";" } "}" ;
 codec_prop	= "length_preserving"
 	| "expansion" "=" ( "+" digits | "unbounded" | ratio )
 	| "granularity" "=" ( "byte" | "block" "(" digits ")" | "stream" )
@@ -144,13 +148,24 @@ path		= ident { "." ident } ;
 
 
 (* --------------------------------------------------------------------------
- * Productions described elsewhere in project.md but absent from section 7.
- * Listed here so the gap is visible rather than discovered during the phase
- * that needs them. Surface syntax below is taken from the worked examples and
- * is not yet normative; each needs a decision record before its phase.
+ * Helper and item-grammar productions.
+ *
+ * This section was written to make a gap visible: productions project.md
+ * described somewhere other than section 7, carrying surface syntax taken
+ * from the worked examples and "not yet normative; each needs a decision
+ * record before its phase". The phases came and went. Twelve of these are in
+ * section 7 now and are normative -- the `tlv` item grammar and the `indexed`
+ * arguments, both with the decision records they were waiting for -- and a
+ * thirteenth, `register_decl`, was a pre-phase-10 sketch that contradicted
+ * the one section 7 carries and is deleted rather than reconciled.
+ *
+ * What is left is of two kinds: declarations section 7 has still not absorbed
+ * (`varint_decl`, `endian_marker_decl`, `impl_decl`), and the small
+ * productions section 7 uses without ever defining (`ident`, `digits`,
+ * `ratio`, `ref_list`). Neither kind is pending on anything.
  * -------------------------------------------------------------------------- *)
 
-(* Section 8.1.1, PHASE 6 *)
+(* Section 8.1.1 *)
 varint_decl	= "varint_type" ident "{" { varint_prop ";" } "}" ;
 varint_prop	= "encoding" "=" ident
 	| "transform" "=" ident
@@ -171,17 +186,9 @@ endian_marker_decl = "endian_marker" ident ":" scalar_type "{"
 marker_field	= "endian_marker" ident [ attrs ] ";" ;
 endian_from	= "endian" "=" "from" "(" ident ")" ;
 
-(* Section 13.1, PHASE 7. The signature and its implementation are separate
+(* Section 13.1. The signature and its implementation are separate
  * declarations, which is what makes a built-in algorithm replaceable. *)
 impl_decl	= "impl" ident ( "derived" | "extern" string ) ";" ;
-
-(* Section 15.2, PHASE 10 *)
-register_decl	= "register" ident [ pin ] "{" { register_member } "}" ;
-register_member	= ( "width" | "access_width" ) "=" digits ";"
-	| "volatile" ";"
-	| "no_rmw" ";"
-	| field
-	| reserved ;
 
 (* A tlv region's item grammar (section 9.5). *)
 tlv_args	= tlv_arg { "," tlv_arg } ;
