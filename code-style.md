@@ -115,6 +115,15 @@ need no discussion:
 - **YAML** -- the spec forbids tabs for indentation outright. Use spaces.
 - **Markdown** -- list continuation and code fences are space-indented by
   specification. Exempt.
+- **Debian packaging files** -- exempt, and the two halves are exempt for
+  different reasons. `debian/changelog` has a fixed layout that a tab is
+  not part of: `dpkg-parsechangelog` calls a tab-indented change line
+  "unrecognized" and loses the trailer outright if a tab precedes `--`. A
+  deb822 continuation in `control` or `copyright` is the opposite case --
+  `deb822(5)` allows a leading SPACE *or* TAB and dpkg round-trips either,
+  but that leading whitespace is field syntax rather than indentation, so
+  the rule has nothing to say about it and everything past it is
+  alignment. Both measured against dpkg rather than read off the manual.
 - **Go** -- `gofmt` emits tabs natively. Compliant already.
 - **Vendored, generated and attic sources** -- exempt, per the header.
 
