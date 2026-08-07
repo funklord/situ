@@ -92,11 +92,13 @@ def test_every_installed_path_belongs_to_exactly_one_package() -> None:
 	rule     = makefile[makefile.index("install: runtime"):]
 	rule     = rule[:rule.index("\nuninstall:")]
 
-	# Digits are in the class because a manual page lives in `man1`, and a
-	# character class without them silently truncated the path to
-	# `/share/man/man` -- a check reporting a directory the rule never names.
+	# Digits and hyphens are in the class because a manual page lives in
+	# `man1` and the walker is `situ-walk`. Each was missing once and each
+	# silently truncated a path -- `/share/man/man`, then `/bin/situ` -- so
+	# the check reported a directory the rule never names rather than
+	# failing. A character class is a claim about what a path may contain.
 	installed = {found.rstrip("/")
-	             for found in re.findall(r"\$\(PREFIX\)(/[a-z0-9_/.]+)", rule)
+	             for found in re.findall(r"\$\(PREFIX\)(/[a-z0-9_/.-]+)", rule)
 	             if found.rstrip("/")}
 	# `/lib` bare is the `find situc -exec install` line, whose destination
 	# ends in `{}` and so reads as `$(PREFIX)/lib/` to a regex. It puts the
@@ -106,6 +108,7 @@ def test_every_installed_path_belongs_to_exactly_one_package() -> None:
 		"/share/situc/std", "/bin/situc",
 		"/include/situ.h", "/lib/libsitu.a",
 		"/share/man/man1/situc.1",
+		"/bin/situ-walk",
 	}, "install writes somewhere the deb rule has not been told about"
 
 

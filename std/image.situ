@@ -144,6 +144,11 @@ struct image_placement {
 	                                  // bit 1: frame_relative
 	                                  // bit 2: the size is fixed
 	                                  // bit 3: the frame base is itself dynamic
+	                                  // bit 4: the value is signed, so a
+	                                  //        reader sign-extends it
+	                                  // bit 5: the byte order is decided by
+	                                  //        an endian marker in the
+	                                  //        message, not by this record
 	u32  offset_bits;                 // valid when flags bit 0, else `none`
 	u32  size_bits;                   // the lower bound, exact when fixed
 	u32  size_max_bits;               // `none` when unbounded above
@@ -158,6 +163,8 @@ struct image_placement {
 	                                  // bit 1: trimmed
 	                                  // bit 2: case_insensitive
 	u16  radix_digits;                // digits the field holds, or 0
+	u16  since;                       // `[since = N]`, or 0 for always
+	u16  placement_pad;
 }
 
 // -- the side tables ---------------------------------------------------------
@@ -256,7 +263,7 @@ require absolute_static(image_index);
 require size(image_header) == 20;
 require size(image_section) == 16;
 require size(image_struct) == 12;
-require size(image_placement) == 44;
+require size(image_placement) == 48;
 require size(image_arm) == 24;
 require size(image_delimiter) == 32;
 require size(image_region) == 12;

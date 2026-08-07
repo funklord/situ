@@ -3691,6 +3691,13 @@ situ/
     codecs.situ               signatures for the standard codecs, hand written
     kernels.situ              the same codes as kernel descriptions, so the
                               derivation can be checked against the declaration
+  walker/                     the interpreter: a packed image, walked over
+                              bytes. A second program, never imported by
+                              `situc` -- decision 0026, amended (26.81)
+    image.py                  the sections, read back
+    vm.py                     the section 10 bytecode, evaluated
+    walk.py                   offsets, sizes and reads over a buffer
+    report.py                 the differ's listing, for the fifth column
   tools/
     style_gate.py             the formatting enforcer; `make style`, and
                               `make lint` as an alias. Copied verbatim from
@@ -9154,6 +9161,66 @@ is not in the struct above and not fixed here.
 assertions in the C++ suite and one in the Python moved to the new spellings,
 which is the cost of a change like this being visible.
 
+### 26.81 The walker, and the three things it disagreed about
+
+26.33 said the first slice "answers the only question that decides the
+design: can a table walk say the same thing as four compiled backends about
+hostile bytes? If it agrees over every schema in the tree the rest is
+engineering. If it disagrees, the disagreement is the design review."
+
+It disagreed three times, and every one was a fact the image did not carry.
+
+**Signedness was not in the format at all.** The walker read `bmp`'s
+`i32 width` as 3136328947 where C said -1158638349: one set of bits under two
+readings, and nothing in the image said which. That is not something a walk
+can infer -- the bytes are identical either way -- so it is a fact the
+producer has to state. `image_placement.flags` gained a bit.
+
+**`endian native` is the host's order, not a synonym for big.** netlink is the
+format whose byte order is the sending machine's, and the walker read
+`nlmsg_len` big-endian. This one was the walker's bug rather than the image's,
+and it is the more interesting of the two for that: a walk on a big-endian
+machine would have seen the mirror of it and agreed with C by accident. The
+schema's `endian_marker` construct exists precisely because `native` is a
+promise about the reader rather than about the bytes.
+
+**A `[since]` member is asked a different question.** The differ probes a
+versioned member for *presence* rather than for value, and the walker had no
+way to know it was one, so it answered `flags 3723728112` where C answered
+`flags ok=1 value=3723728112`. The values agreed; the question did not. The
+image now carries `since`, and the walker leaves those members to a probe
+shape it does not yet render.
+
+**Two of the three were invisible to everything else in the tree.** The
+image round-tripped through its own generated accessors, every schema packed
+with nothing dropped, and the four backends agreed with each other -- all
+green, over a format that could not say whether a number was negative. It
+took a *sixth* reading of the layout to find it, which is the argument 26.32
+makes for the differential check generally, one level up.
+
+**What the walker is.** `walker/`, a package of three modules and about four
+hundred lines: `image.py` reads the sections, `vm.py` evaluates the section 10
+bytecode, `walk.py` resolves offsets and sizes over a buffer. `bin/situ-walk`
+is the entry point, and it is a second program rather than a mode of the
+first -- nothing under `situc/` imports it, which
+`test_the_compiler_does_not_import_the_walker` holds. The opcode table is
+written twice, on purpose, for the same reason: a walker importing the
+compiler would be a fifth column comparing a backend against itself, and
+`test_the_opcodes_match_the_packer` reads both files rather than sharing one.
+
+**What it renders is a subset, and the subset is stated.** Plain scalars at
+constant offsets, outside a region, not delimited, not versioned, not
+marker-governed -- 334 members across 26 of the 32 schemas. The comparison is
+over members *both* the walker and the C driver probe, because the differ
+asks about a subset of its own and a member only one of them mentions is a
+difference in the question rather than in the answer. `http` and `smtp` are
+delimited throughout and contribute nothing, which is why the floor is
+asserted across the corpus rather than per schema.
+
+**Status:** `make check` green with the walker in it. The subset is the thing
+to grow, and the order to grow it in is written by what it cannot yet say:
+a run, a variant's arm, a gate's interior, a text number's value.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -10118,7 +10185,13 @@ which is the cost of a change like this being visible.
    identifiers. Emit an unshadowable spelling rather than reserving the word
    (0025), and keep the case in `edges.situ` -- a member named for a
    *keyword* is still open (26.80).
-114. **An artifact nothing here consumes needs its coverage reported, not its
+114. **A format that cannot say whether a number is negative is not a
+   description of a layout.** The image carried offsets, sizes, endianness
+   and expressions, round-tripped through its own accessors, and passed
+   every check for a day -- and did not record signedness, because nothing
+   that read it had ever needed to. The consumer is what finds the fields
+   the producer never had to think about, so write the consumer.
+115. **An artifact nothing here consumes needs its coverage reported, not its
    absence of errors.** The packed layout image is read by a program in
    a different binary, so a size expression it silently failed to encode
    would surface as a wrong length somewhere nobody here can see. `pack`

@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""situ-walk: answer questions about bytes, using a packed layout image.
+
+    situ-walk <image> <hex>        every struct, every member it can read
+
+The entry point is deliberately small. What this program is for is being a
+fifth column: the same questions the four backends answer, from a table
+rather than from compiled code, so that a disagreement is a finding rather
+than a matter of opinion (26.33, decision 0026 as amended).
+"""
+
+import sys
+from pathlib import Path
+
+_here = Path(__file__).resolve().parent
+if (_here.parent / "walker" / "__init__.py").exists():
+	sys.path.insert(0, str(_here.parent))
+
+from walker.image import ImageError, load          # noqa: E402
+from walker.report import listing                  # noqa: E402
+
+
+def main(argv: list[str]) -> int:
+	if len(argv) != 3:
+		print(__doc__, file=sys.stderr)
+		return 2
+	try:
+		image = load(Path(argv[1]).read_bytes())
+	except (ImageError, OSError) as why:
+		print(f"situ-walk: {why}", file=sys.stderr)
+		return 1
+	sys.stdout.write(listing(image, bytes.fromhex(argv[2])))
+	return 0
+
+
+if __name__ == "__main__":
+	sys.exit(main(sys.argv))

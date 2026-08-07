@@ -41,7 +41,7 @@ NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
 STRUCT_BYTES	= 12
-PLACEMENT_BYTES	= 44
+PLACEMENT_BYTES	= 48
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 32
 REGION_BYTES	= 12
@@ -73,6 +73,16 @@ OFFSET_KNOWN		= 1 << 0
 FRAME_RELATIVE		= 1 << 1
 SIZE_FIXED		= 1 << 2
 FRAME_BASE_DYNAMIC	= 1 << 3
+#: Whether the value is signed. Absent from the first version of the format,
+#: and the walker found it the first time it read a BMP: `i32 width` came
+#: back as 3136328947 where C said -1158638349, the same bits under two
+#: readings. An image that cannot say which is not a description of a
+#: layout (26.81).
+SIGNED			= 1 << 4
+#: The byte order is an endian marker's, read from the message. netlink is
+#: the format whose byte order is the sending machine's, and a walker reading
+#: this record's static endian disagreed with C about `nlmsg_seq` (26.81).
+MARKER_GOVERNED		= 1 << 5
 
 #: `image_kind`, matching the enum in std/image.situ. A kind the walker does
 #: not know is an error there rather than a guess, which is why the schema
@@ -633,6 +643,10 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags |= SIZE_FIXED
 		if placement.frame_base_dynamic:
 			flags |= FRAME_BASE_DYNAMIC
+		if placement.scalar is not None and placement.scalar.signed:
+			flags |= SIGNED
+		if placement.marker is not None:
+			flags |= MARKER_GOVERNED
 		text = (1 if placement.radix_minimal else 0) \
 			| (2 if placement.trimmed else 0) \
 			| (4 if placement.case_insensitive else 0)
@@ -644,7 +658,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags,
 		)
 		placements_blob += _struct.pack(
-			"<IIIIIIIIIBBH",
+			"<IIIIIIIIIBBHHH",
 			_u32(placement.offset_bits),
 			_u32(placement.size_bits),
 			_u32(placement.size_max_bits),
@@ -657,6 +671,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			placement.radix or 0,
 			text,
 			min(placement.array_count or 0, 0xFFFF) if placement.radix else 0,
+			min(placement.since or 0, 0xFFFF),
+			0,
 		)
 	sections[1] = (SECTION_PLACEMENTS, bytes(placements_blob), PLACEMENT_BYTES)
 

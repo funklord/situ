@@ -38,6 +38,11 @@ install(PROGRAMS bin/situc DESTINATION bin)
 install(FILES runtime/python/situ_runtime.py DESTINATION lib/situc/_runtime)
 install(DIRECTORY situc DESTINATION lib FILES_MATCHING PATTERN "*.py")
 
+# The walker is a second program, not a mode of the compiler (decision 0026).
+# It installs beside `situc` and shares nothing with it but the image format.
+install(PROGRAMS bin/situ-walk DESTINATION bin)
+install(DIRECTORY walker DESTINATION lib FILES_MATCHING PATTERN "*.py")
+
 # VERSION sits beside the module because situc.__version__ reads it there.
 # The Makefile installs it too, and test_cmake.py holds the two installers
 # to the same file list -- which is how this omission was caught.

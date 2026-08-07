@@ -65,6 +65,7 @@ help:
 	@echo '  typecheck  mypy strict over situc, tools and tests'
 	@echo '  lint       alias for style-source'
 	@echo '  hooks      install the commit-message hook from tools/hooks/'
+	@echo '  walk       the walker over an image: bin/situ-walk'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  cross      compile-only build for aarch64'
@@ -92,8 +93,12 @@ test-py:
 # tests` reads the compiler and its suite, and `runtime/python` is neither --
 # so the module every generated module imports was the one nothing checked. It
 # had four dead `type: ignore` comments, which strict mode calls errors.
+#
+# `walker` is named for the same reason. It arrived checked only because the
+# suite imports it, which is a coverage that disappears the moment a module
+# has no test importing it -- the exact shape of the gap above.
 typecheck:
-	$(PYTHON) -m mypy situc tools tests
+	$(PYTHON) -m mypy situc walker tools tests
 	$(PYTHON) -m mypy --strict runtime/python
 
 # `style` replaced `lint_conventions.py`, and this target kept invoking the
@@ -155,6 +160,12 @@ install: runtime
 	@# tree works fine.
 	install -Dm644 VERSION '$(DESTDIR)$(PREFIX)/lib/situc/VERSION'
 	install -Dm755 bin/situc '$(DESTDIR)$(PREFIX)/bin/situc'
+	@# The walker is a second program, not a mode of the first: decision
+	@# 0026 keeps the compiler and the interpreter apart, and installing
+	@# them from one rule is as close as they get.
+	find walker -name '*.py' -exec install -Dm644 '{}' \
+		'$(DESTDIR)$(PREFIX)/lib/{}' \;
+	install -Dm755 bin/situ-walk '$(DESTDIR)$(PREFIX)/bin/situ-walk'
 	install -Dm644 runtime/c/situ.h '$(DESTDIR)$(PREFIX)/include/situ.h'
 	install -Dm644 '$(RUNTIME_LIB)' '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
 	@# The manual page ships from here rather than from debhelper, so that a
@@ -167,7 +178,9 @@ install: runtime
 
 uninstall:
 	rm -rf '$(DESTDIR)$(PREFIX)/lib/situc' '$(DESTDIR)$(PREFIX)/share/situc'
-	rm -f '$(DESTDIR)$(PREFIX)/bin/situc' '$(DESTDIR)$(PREFIX)/include/situ.h'
+	rm -rf '$(DESTDIR)$(PREFIX)/lib/walker'
+	rm -f '$(DESTDIR)$(PREFIX)/bin/situc' '$(DESTDIR)$(PREFIX)/bin/situ-walk'
+	rm -f '$(DESTDIR)$(PREFIX)/include/situ.h'
 	rm -f '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
 	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situc.1'
 

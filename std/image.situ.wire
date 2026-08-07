@@ -63,7 +63,7 @@ struct image_index size=16
   @0x000c   1         image_offset_base measured_from
   @0x000d   3         u8         index_pad  little
 
-struct image_placement size=44
+struct image_placement size=48
   @0x0000   1         image_kind kind
   @0x0001   1         image_endian endian
   @0x0002   1         image_bit_order bit_order
@@ -80,6 +80,8 @@ struct image_placement size=44
   @0x0028   1         u8         radix
   @0x0029   1         u8         text_flags
   @0x002a   2         u16        radix_digits  little
+  @0x002c   2         u16        since  little
+  @0x002e   2         u16        placement_pad  little
 
 struct image_region size=12
   @0x0000   4         u32        placement  little
