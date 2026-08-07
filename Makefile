@@ -86,7 +86,14 @@ check: style typecheck lint test cross-test
 
 test: test-py test-c
 
-test-py:
+# `runtime` is a prerequisite because the Python suite compiles and links C:
+# a dozen tests build a generated module against `libsitu.a`, and nothing
+# here made the archive before using it. `test-c` had the edge and `test-py`
+# did not, and `test` runs the second one first -- so on any tree where the
+# archive did not already exist, ten tests failed at the linker. It never
+# happened on a machine that had built once, which is every machine this ran
+# on until there was CI (26.87).
+test-py: runtime
 	$(PYTHON) -m pytest tests -q
 
 # The shipped Python runtime is checked too, and was not: `mypy situc tools

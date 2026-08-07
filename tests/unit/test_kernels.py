@@ -420,13 +420,19 @@ def test_the_generated_crcs_match_the_published_check_values(tmp_path: Path) -> 
 		"\treturn 0;\n"
 		"}\n", encoding="ascii")
 
-	subprocess.run(
+	compiled = subprocess.run(
 		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
 		 str(tmp_path / "probe.c"), str(tmp_path / "unit_derived.c"),
 		 str(tmp_path / "unit.c"),
 		 str(ROOT / "build" / "host" / "runtime" / "libsitu.a"),
 		 "-o", str(tmp_path / "run")],
-		check=True, capture_output=True, text=True)
+		capture_output=True, text=True)
+		# `check=True` raised a CalledProcessError whose message is the
+		# command and not the compiler's reason, so a CI failure said
+		# "exit status 1" and nothing else -- which is what three runs of
+		# diagnosing this from a distance cost. The compiler's own words
+		# are the whole value of a compile gate (26.87).
+	assert compiled.returncode == 0, compiled.stderr
 
 	result = subprocess.run([str(tmp_path / "run")], capture_output=True)
 	assert result.returncode == 0, f"check {result.returncode} failed"

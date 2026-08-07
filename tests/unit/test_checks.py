@@ -72,12 +72,18 @@ def build(tmp_path: Path, body: str, preamble: str = PREAMBLE,
 	(tmp_path / "unit_checks.c").write_text(
 		checks.generate(schema, resolved, "unit"), encoding="ascii")
 
-	subprocess.run(
+	built = subprocess.run(
 		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
 		 str(tmp_path / "unit.c"), str(tmp_path / "unit_checks.c"),
 		 str(ROOT / "build" / "host" / "runtime" / "libsitu.a"),
 		 "-lcmocka", "-o", str(tmp_path / "run")],
-		check=True, capture_output=True, text=True, cwd=tmp_path)
+		capture_output=True, text=True, cwd=tmp_path)
+		# `check=True` raised a CalledProcessError whose message is the
+		# command and not the compiler's reason, so a CI failure said
+		# "exit status 1" and nothing else -- which is what three runs of
+		# diagnosing this from a distance cost. The compiler's own words
+		# are the whole value of a compile gate (26.87).
+	assert built.returncode == 0, built.stderr
 
 	return subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
 

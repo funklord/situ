@@ -9470,6 +9470,40 @@ and the case is a real test again rather than either.
 
 **Status:** `make check` green, ASan clean on the reproduction 26.85 records.
 
+### 26.87 The archive nothing built, and the compiler nobody heard
+
+The third CI run failed ten times, every one a `gcc` invocation returning 1,
+and the report said nothing else. Two defects, and the second is why the
+first took three runs to find.
+
+**`test-py` links `libsitu.a` and nothing built it.** A dozen tests in the
+Python suite compile a generated module and link the C runtime archive.
+`test-c` has `runtime` as a prerequisite; `test-py` did not, and `test` runs
+`test-py` first -- so on any tree where the archive did not already exist,
+ten tests failed at the linker. It never happened here, because it cannot
+happen on a machine that has built once, and every machine this had ever run
+on had. `build-and-commit.md` calls this class "a rule that quietly does not
+run", and this is the fourth member of it recorded here.
+
+Reproduced without CI, in the end, by `git worktree add` to a clean checkout:
+ten failures there, none after the edge was added, `3273 passed`.
+
+**And the compile gates threw the compiler's reason away.** Each ran
+`subprocess.run(..., check=True, capture_output=True)`, so a failure raised a
+`CalledProcessError` whose message is the *command* -- the compiler's stderr
+sat in an attribute nothing printed. Three CI runs reported "returned
+non-zero exit status 1" over `ld: libsitu.a: No such file or directory`,
+which is a sentence that names the whole defect. `test_owned.py` had it right
+all along: `assert built.returncode == 0, built.stderr`.
+
+The order matters. Surfacing the diagnostic came first, and the diagnosis was
+immediate afterwards; before it, three runs of guessing. **A gate that hides
+what the tool said is a gate that can only report that something is wrong**,
+and that is worth less than it looks, because knowing something is wrong is
+the cheap half.
+
+**Status:** `make check` green here and on a clean worktree.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -10440,12 +10474,18 @@ and the case is a real test again rather than either.
    every check for a day -- and did not record signedness, because nothing
    that read it had ever needed to. The consumer is what finds the fields
    the producer never had to think about, so write the consumer.
-115. **A test that passes on the machine that wrote it has been run once.**
+115. **A gate that discards the tool's output can only say that something
+   failed.** Ten CI failures reported `gcc ... returned non-zero exit status
+   1` for three runs while the linker's own sentence -- `libsitu.a: No such
+   file or directory` -- sat unprinted in an exception attribute. Capture a
+   subprocess and assert on its status *with its stderr as the message*;
+   `check=True` throws the reason away.
+116. **A test that passes on the machine that wrote it has been run once.**
    The owned decoder read twenty-four bytes past a struct for as long as the
    test existed, and passed here every time: the overrun was real on both
    machines and only one compiler's stack layout tripped the protector. A
    second machine is not redundancy, it is the first observation.
-116. **An artifact nothing here consumes needs its coverage reported, not its
+117. **An artifact nothing here consumes needs its coverage reported, not its
    absence of errors.** The packed layout image is read by a program in
    a different binary, so a size expression it silently failed to encode
    would surface as a wrong length somewhere nobody here can see. `pack`
