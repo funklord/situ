@@ -32,7 +32,7 @@ NAMES, VECTORS                     = 12, 13
 
 #: `image_placement.flags`
 OFFSET_KNOWN, FRAME_RELATIVE, SIZE_FIXED, FRAME_BASE_DYNAMIC = 1, 2, 4, 8
-SIGNED, MARKER_GOVERNED = 16, 32
+SIGNED, MARKER_GOVERNED, IS_TAG = 16, 32, 64
 
 BIG, LITTLE, NATIVE = 1, 2, 3
 
@@ -79,6 +79,10 @@ class Placement:
 	def marker_governed(self) -> bool:
 		return bool(self.flags & MARKER_GOVERNED)
 
+	@property
+	def is_tag(self) -> bool:
+		return bool(self.flags & IS_TAG)
+
 
 @dataclass
 class Struct:
@@ -104,8 +108,16 @@ class Image:
 	#: Placements inside an `authenticated` or `sealed` region. A walk reads
 	#: those through a gate, which this walker does not render.
 	regions: set[int]			= field(default_factory=set)
-	#: variant placement index -> [(case value, selected, flags)]
-	arms: dict[int, list[tuple[int, int, int]]] = field(default_factory=dict)
+	#: placement index -> the region's flags: bit 0 sealed, bit 1 the schema
+	#: waived the gate with `[allow_unverified_read]`.
+	region_flags: dict[int, int]		= field(default_factory=dict)
+	#: Placements whose width is decoded rather than declared. A varint's
+	#: length is in its own bytes, so nothing after one has a computable
+	#: offset until the walk can decode it.
+	varints: set[int]			= field(default_factory=set)
+	#: variant placement index -> (discriminant, [(case, selected, flags)])
+	arms: dict[int, tuple[int, list[tuple[int, int, int]]]] = \
+		field(default_factory=dict)
 	#: struct index -> name, and placement index -> path. Empty without the
 	#: metadata tail, which a device does not carry.
 	struct_names: list[str]			= field(default_factory=list)
@@ -189,15 +201,24 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if REGIONS in found:
 		at, records, stride = found[REGIONS]
 		for i in range(records):
-			where, = _struct.unpack_from("<I", blob, at + i * stride)
+			where, _codec, rflags = _struct.unpack_from(
+				"<IIB", blob, at + i * stride)
 			image.regions.add(where)
+			image.region_flags[where] = rflags
+
+	if VARINTS in found:
+		at, records, stride = found[VARINTS]
+		for i in range(records):
+			where, = _struct.unpack_from("<I", blob, at + i * stride)
+			image.varints.add(where)
 
 	if ARMS in found:
 		at, records, stride = found[ARMS]
 		for i in range(records):
-			where, selected, value, aflags = _struct.unpack_from(
-				"<IIqB", blob, at + i * stride)
-			image.arms.setdefault(where, []).append((value, selected, aflags))
+			where, selected, value, selects, aflags = _struct.unpack_from(
+				"<IIqIB", blob, at + i * stride)
+			found_arm = image.arms.setdefault(where, (selects, []))
+			found_arm[1].append((value, selected, aflags))
 
 	if NAMES in found and STRINGS in found:
 		at, records, stride = found[NAMES]

@@ -178,9 +178,14 @@ def test_every_schema_packs_and_reads_back(path: Path,
 	assert seen["image_bytes"] == len(blob)
 	assert len(seen["structs"]) == len(resolved.structs)
 
+	# Own members first, in declaration order, and then the members a
+	# variant's arms name -- which are not any struct's own entries and had
+	# no index at all until arms were rendered. A walker iterating a struct
+	# reads only the span the struct record gives, so the tail is invisible
+	# to it and an arm record has something to point at.
 	rows = [p for _, st in resolved.structs.items()
 	        for p in (e.placement for e in traverse.own_entries(st))]
-	assert len(seen["placements"]) == len(rows)
+	assert len(seen["placements"]) >= len(rows)
 
 	for placement, got in zip(rows, seen["placements"]):
 		where = f"{path.name}:{placement.path}"

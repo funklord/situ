@@ -34,8 +34,9 @@ struct image_arm size=24
   @0x0000   4         u32        placement  little
   @0x0004   4         u32        selected  little
   @0x0008   8         i64        case_value  little
-  @0x0010   1         u8         arm_flags
-  @0x0011   7         u8         arm_pad  little
+  @0x0010   4         u32        discriminant  little
+  @0x0014   1         u8         arm_flags
+  @0x0015   3         u8         arm_pad  little
 
 struct image_codec size=4
   @0x0000   4         u32        name  little

@@ -9221,6 +9221,63 @@ asserted across the corpus rather than per schema.
 to grow, and the order to grow it in is written by what it cannot yet say:
 a run, a variant's arm, a gate's interior, a text number's value.
 
+### 26.82 Growing the walk: runs, arms, gates
+
+26.81 left the walker rendering plain scalars and named what it could not
+say. Growing it to runs, a variant's arms and a sealed region's gate took
+439 members from 334 across 27 of the 32 schemas, and cost four findings --
+three about the image, one about a rule the walker had wrong.
+
+**`remaining` is measured from the member, not from the frame.** The word
+means "to the end of the enclosing frame" *from here*, and evaluating it as
+the frame's whole length made every `[remaining]` run as long as the buffer
+rather than as long as what is left of it. sqlite said 44 where C said 37,
+ipv6ext 38 where C said 46. One number, wrong in both directions, which is
+what a relative quantity read as an absolute one does.
+
+**The two run shapes refuse differently, and that is not an accident.** A
+count the *schema* gives is a promise about the message, so a frame that
+cannot hold it is malformed: the pointer accessor hands back NULL and the
+length is zero. A count the *message* gives is a claim by whoever sent the
+bytes, so it is clamped to what the frame holds -- 26.35's fix after an
+accessor handed a caller fifty-five bytes out of a five-byte frame. The
+walker refused both and disagreed with C about arp, ipv6ext and edges until
+it learned the difference.
+
+**A tag is a different question.** keystore's `tag` came back as a sixteen-byte
+run where C said `present=0`: the differ asks a tag whether it is there, not
+what it holds, and nothing in the image said which members were tags. A flag
+now does.
+
+**A variant's arms were not in the placement table at all.** `label.body.text`
+sits *under* the variant rather than beside it, so it is not one of the
+struct's own entries and had no index for an arm record to point at -- the
+arms table named the cases and could not name what they selected. Arm members
+go after every struct's own members now, outside any struct's span, so a
+walker iterating members sees what it saw before. The discriminant went in
+too: without it the cases are a list with no way to say which one *this*
+message chose, which is the whole question the probe asks.
+
+**What the gate can answer without running anybody's cipher.** A sealed
+region's probe is `refused=1 opened=1` -- it refuses a failed verification and
+admits a passed one -- and that does not depend on the bytes. situ guards the
+bytes and the caller runs the transform (14.1), so the claim 14.3 makes is
+exactly the part a walker can check. The waived form is skipped, as the differ
+skips it: `[allow_unverified_read]` gives up the guarantee and there is no
+gate to open.
+
+**Still not rendered, and each for a reason rather than for want of writing
+it.** A gate's *interior* scalars, which sit under the region the way an arm's
+members sat under the variant and want the same treatment. A member whose
+offset follows a varint, a `while` run or a delimiter, none of which the walk
+can measure yet -- `_offset_computable` refuses those rather than reading at
+the wrong place, which is how sqlite's `payload` was caught. And a text
+number's value, a coded region's contents, and an enum-typed field, which the
+differ does not ask about either.
+
+**Status:** `make check` green. 329 scalars, 63 runs, 45 arms and 3 gates,
+compared against the C driver line for line over 12 buffers per schema.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

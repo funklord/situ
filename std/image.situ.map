@@ -21,8 +21,9 @@ struct image_arm size=24 repr=ValueConverted atomic=NonAtomic
   image_arm.placement                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_arm.selected                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image_arm.case_value                   offset=AbsoluteStatic(0x08) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  image_arm.arm_flags                    offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  image_arm.arm_pad                      offset=AbsoluteStatic(0x11) size=Fixed(7) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  image_arm.discriminant                 offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_arm.arm_flags                    offset=AbsoluteStatic(0x14) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  image_arm.arm_pad                      offset=AbsoluteStatic(0x15) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
 struct image_codec size=4 repr=ValueConverted
   image_codec.name                       offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

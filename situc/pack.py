@@ -83,6 +83,10 @@ SIGNED			= 1 << 4
 #: the format whose byte order is the sending machine's, and a walker reading
 #: this record's static endian disagreed with C about `nlmsg_seq` (26.81).
 MARKER_GOVERNED		= 1 << 5
+#: A `tag` or `checksum`. The differ asks it `present=<0|1>` rather than for
+#: bytes or a value, and a walker with no way to tell rendered keystore's
+#: `tag` as a sixteen-byte run (26.82).
+IS_TAG			= 1 << 6
 
 #: `image_kind`, matching the enum in std/image.situ. A kind the walker does
 #: not know is an error there rather than a guess, which is why the schema
@@ -457,6 +461,22 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			rows.append((name, entry.placement))
 		spans.append((first, len(rows) - first))
 
+	# A variant's arms name members that are *not* the struct's own entries --
+	# `label.body.text` sits under the variant, not beside it -- so they have
+	# no index until they are put in the table. They go after every struct's
+	# own members and are not counted in any struct's span, so a walker
+	# iterating members sees exactly what it did before and an arm record has
+	# something to point at. Found by rendering arms: the table simply did
+	# not contain them (26.82).
+	own_count = len(rows)
+	for name, rstruct in order:
+		for entry in rstruct.entries:
+			placement = entry.placement
+			if not any(placement.path == held.path for _, held in rows):
+				if any(arm.member == placement.path
+				       for _, other in rows for arm in other.arm_cases):
+					rows.append((name, placement))
+
 	placement_index = {p.path: i for i, (_, p) in enumerate(rows)}
 
 	# `member.field` inside a struct means the `field` of whatever struct
@@ -584,11 +604,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				"<IIBBxx", at, strings.intern(placement.varint),
 				min(placement.size_max_bits or 64, 255),
 				1 if placement.varint_minimal else 0)
+		# The discriminant is what makes an arm answerable: without it a
+		# walker has the cases and no way to say which one this message
+		# selected, which is the whole question the probe asks.
+		selects = resolve_path(placement.discriminant, owner) \
+			if placement.discriminant else None
 		for arm in placement.arm_cases:
 			value, chosen, kind = _arm_fields(arm)
 			arms_blob += _struct.pack(
-				"<IIqB7x", at, _u32(placement_index.get(chosen or "")),
-				value, kind)
+				"<IIqIB3x", at, _u32(placement_index.get(chosen or "")),
+				value, _u32(selects), kind)
 		if placement.delimiter is not None:
 			raw = placement.delimiter[:15]
 			delims_blob += _struct.pack(
@@ -647,6 +672,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags |= SIGNED
 		if placement.marker is not None:
 			flags |= MARKER_GOVERNED
+		if placement.tag_covers:
+			flags |= IS_TAG
 		text = (1 if placement.radix_minimal else 0) \
 			| (2 if placement.trimmed else 0) \
 			| (4 if placement.case_insensitive else 0)

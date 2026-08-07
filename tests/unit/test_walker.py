@@ -241,9 +241,12 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 		blob, _  = packer.pack(parsed, resolved, metadata=True)
 		image    = load(blob)
 		found = sum(len(report._scalars(image, i))
+		            + len(report._runs(image, i))
+		            + len(report._arm_values(image, i))
+		            + len(report._gates(image, i))
 		            for i in range(len(image.structs)))
 		scalars += found
 		reached += 1 if found else 0
 
 	assert reached >= 20, f"the walker renders for only {reached} schemas"
-	assert scalars >= 300, f"only {scalars} members in the rendered subset"
+	assert scalars >= 400, f"only {scalars} members in the rendered subset"

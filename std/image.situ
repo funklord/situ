@@ -178,8 +178,9 @@ struct image_arm {
 	u32  placement;                   // the variant this arm belongs to
 	u32  selected;                    // the placement it chooses, or `none`
 	i64  case_value;
+	u32  discriminant;                // the placement whose value selects
 	u8   arm_flags;                   // bit 0: default   bit 1: error
-	u8   arm_pad[7];
+	u8   arm_pad[3];
 }
 
 // `until "D"`: where a member ends when no length says so. The bytes are

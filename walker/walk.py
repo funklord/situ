@@ -93,7 +93,8 @@ def size_bits(view: View, index: int) -> int:
 	"""How many bits a member occupies."""
 	placement = view.image.placements[index]
 	if placement.size_code != NONE:
-		count = _evaluate(view, placement.size_code)
+		count = _evaluate(view, placement.size_code,
+		                  offset_bits(view, index) // BITS_PER_BYTE)
 		if count < 0:
 			raise Refused("a computed size is negative")
 		element = (placement.element_bits
@@ -104,14 +105,23 @@ def size_bits(view: View, index: int) -> int:
 	return placement.size_bits
 
 
-def _evaluate(view: View, code_at: int) -> int:
+def _evaluate(view: View, code_at: int, from_byte: int = 0) -> int:
+	"""Run one program, with `remaining` measured from `from_byte`.
+
+	`remaining` is "to the end of the enclosing frame" *from here*, not the
+	frame's whole length. Evaluating it as the latter made every
+	`[remaining]` run as long as the buffer rather than as long as what is
+	left of it, which sqlite and ipv6ext both caught: 44 against C's 37, and
+	38 against 46. The member's own offset is the thing the word is relative
+	to, so it has to be passed in.
+	"""
 	return vm.run(
 		view.image.code, code_at,
 		load_field = lambda i: read_scalar(view, i),
 		size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
 		offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 		count_of   = lambda i: _count(view, i),
-		remaining  = max(0, view.limit - view.at),
+		remaining  = max(0, view.limit - view.at - from_byte),
 	)
 
 
@@ -120,7 +130,8 @@ def _count(view: View, index: int) -> int:
 	if placement.array_count != NONE:
 		return placement.array_count
 	if placement.size_code != NONE:
-		return _evaluate(view, placement.size_code)
+		return _evaluate(view, placement.size_code,
+		                 offset_bits(view, index) // BITS_PER_BYTE)
 	raise Refused(f"placement {index} has no count this image carries")
 
 
@@ -140,15 +151,29 @@ def read_scalar(view: View, index: int) -> int:
 	end = start + width
 	if view.at * BITS_PER_BYTE + end > view.limit * BITS_PER_BYTE:
 		raise Refused("the frame does not reach this member")
+	return _read_at(view, index, start, width)
+
+
+def _read_at(view: View, index: int, start: int, width: int) -> int:
+	"""One value of `width` bits at `start`, in the member's own terms.
+
+	Split out of `read_scalar` because an element of a run is the same read
+	at a different offset, and two spellings of "how do these bits become a
+	number" is how a backend and its own run accessor once disagreed.
+	"""
+	placement = view.image.placements[index]
+	end = start + width
+	if view.at * BITS_PER_BYTE + end > view.limit * BITS_PER_BYTE:
+		raise Refused("the frame does not reach this value")
 
 	if start % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
 		first = view.at + start // BITS_PER_BYTE
 		raw   = view.buffer[first:first + width // BITS_PER_BYTE]
-		order = _order(placement)
-		return _signed(int.from_bytes(raw, order), width, placement.signed)
+		return _signed(int.from_bytes(raw, _order(placement)), width,
+		               placement.signed)
 
-	# Bit-packed: gather the bytes the field touches and shift it out. The
-	# block covers whole bytes, so the field sits `after` bits from its end.
+	# Bit-packed: gather the bytes the value touches and shift it out. The
+	# block covers whole bytes, so the value sits `after` bits from its end.
 	first = start // BITS_PER_BYTE
 	last  = (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 	block = int.from_bytes(view.buffer[view.at + first:view.at + last], "big")
