@@ -20,16 +20,28 @@ other, and `situc` needs nothing but `python3`.
 
 ## How it is built
 
-`dpkg-deb --build` over a tree staged by `make install DESTDIR=...`, rather
-than `debian/` and `dpkg-buildpackage`. Two reasons:
+`dpkg-buildpackage` driving `debian/rules`, which is three lines of `dh`.
 
-- **The install rule stays the one thing being tested.** The packages contain
-  exactly what `make install` produces, so a packaging bug and an install bug
-  cannot be different bugs.
-- **It needs only `dpkg-deb`.** Section 24 asks the toolchain to vendor into
-  an embedded build environment where `pip install` is not on the table; a
-  packaging step that needs `debhelper` and a network is the same problem
-  wearing a different hat.
+**It was `dpkg-deb --build` over a tree staged by
+`make install DESTDIR=...`**, and this section described that until the two
+were read against each other. The debhelper packaging replaced it in
+`d943802`, which made both packages byte-identical in content; the two
+`.control` files this directory carried for the old build went with it, and
+are in the history at `85535fb` if that shape is ever wanted again.
 
-The version comes from `situc/__init__.py` -- the same string `situc
---version` prints -- so there is no second place to forget.
+One of the two reasons for the old approach survives the change.
+`dh_auto_install` calls `make install DESTDIR=...`, so the packages still
+contain exactly what the install rule produces, and a packaging bug and an
+install bug still cannot be different bugs.
+
+**The other was never answered, and is left here rather than dropped.** The
+old build needed only `dpkg-deb`, because section 24 asks the toolchain to
+vendor into an embedded build environment where `pip install` is not on the
+table, and a packaging step wanting `debhelper` is the same problem wearing
+a different hat. The migration did not say what becomes of that constraint.
+Whether it still binds is a real question and not one to answer by noticing
+it.
+
+The version comes from `VERSION` at the root -- the same string `situc
+--version` prints -- so there is no second place to forget. It was
+`situc/__init__.py`, which now reads that file.
