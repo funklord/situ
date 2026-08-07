@@ -22,12 +22,14 @@ from __future__ import annotations
 
 from walker.image import NONE, Image
 from walker.walk import (Refused, View, acquire, read_bytes, read_scalar,
-                         _read_at, offset_bits, scan, size_bits)
+                         _read_at, offset_bits, scan, size_bits,
+                         varint, while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
 SUPPORTED = ("no-view", "scalar", "bytes", "element", "run_element",
-             "arm_value", "sealed", "gated", "delimited")
+             "arm_value", "sealed", "gated", "delimited", "varint",
+             "while_count")
 
 #: `image_kind`: which placements are plain scalars a walk can read.
 FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3
@@ -155,11 +157,17 @@ def _offset_computable(image: Image, struct_index: int, index: int) -> bool:
 		if before == index:
 			return True
 		earlier = image.placements[before]
-		if before in image.varints or before in image.delimiters:
-			return False
+		# A varint and a delimiter used to make everything after them
+		# unplaceable. The walk decodes both now, so an offset behind one is
+		# computable -- which is what took sqlite's `payload` and the two
+		# text protocols from unrenderable to compared.
 		if earlier.repeat_code != NONE:
 			return False
-		if not earlier.fixed and earlier.size_code == NONE:
+		delimited_member = (before in image.delimiters
+		                    and earlier.type_struct == NONE)
+		if (not earlier.fixed and earlier.size_code == NONE
+				and before not in image.varints
+				and not delimited_member):
 			return False
 	return True
 
@@ -204,6 +212,25 @@ def _trimmed(view: View, index: int, content: int) -> int:
 	while tail > head and data[tail - 1] in OWS:
 		tail -= 1
 	return tail - head
+
+
+def _while_runs(image: Image, struct_index: int) -> list[int]:
+	"""Runs that end after the element failing a predicate (8.6.6)."""
+	return [index for index in image.members(image.structs[struct_index])
+	        if image.placements[index].repeat_code != NONE
+	        and image.placements[index].type_struct != NONE]
+
+
+def _varints(image: Image, struct_index: int) -> list[int]:
+	"""Members whose width is in their own bytes.
+
+	Both numbers come off the wire and both are asked at once, because a
+	varint that consumed a different number of bytes than it should have is
+	a different message from one that decoded to a different value, and a
+	probe reporting only the value cannot tell them apart.
+	"""
+	return [index for index in image.members(image.structs[struct_index])
+	        if index in image.varints]
 
 
 def _delimited(image: Image, struct_index: int) -> list[int]:
@@ -340,6 +367,21 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			# says so in its own way; what is comparable is that the line
 			# is absent rather than wrong, so nothing is printed.
 			continue
+
+	for index in _while_runs(image, struct_index):
+		local = _local(image, index)
+		try:
+			lines.append(f"{local} count={while_count(view, index)}")
+		except Refused:
+			continue
+
+	for index in _varints(image, struct_index):
+		local = _local(image, index)
+		try:
+			consumed, value = varint(view, index)
+		except Refused:
+			continue
+		lines.append(f"{local} len={consumed} value={value}")
 
 	for index in _delimited(image, struct_index):
 		local = _local(image, index)

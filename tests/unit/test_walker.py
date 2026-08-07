@@ -245,9 +245,11 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 		            + len(report._arm_values(image, i))
 		            + len(report._gates(image, i))
 		            + len(report._delimited(image, i))
+		            + len(report._varints(image, i))
+		            + len(report._while_runs(image, i))
 		            for i in range(len(image.structs)))
 		scalars += found
 		reached += 1 if found else 0
 
 	assert reached >= 20, f"the walker renders for only {reached} schemas"
-	assert scalars >= 450, f"only {scalars} members in the rendered subset"
+	assert scalars >= 465, f"only {scalars} members in the rendered subset"

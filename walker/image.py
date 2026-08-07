@@ -61,7 +61,7 @@ class Placement:
 	text_flags: int
 	radix_digits: int
 	since: int
-	placement_pad: int
+	repeat_cap: int
 
 	@property
 	def offset_known(self) -> bool:
@@ -122,6 +122,11 @@ class Image:
 	#: length is in its own bytes, so nothing after one has a computable
 	#: offset until the walk can decode it.
 	varints: set[int]			= field(default_factory=set)
+	#: placement index -> (max_bytes, terminal_bits, big_endian). The
+	#: decoder's parameters, carried rather than rederived from `max_bits`:
+	#: the arithmetic is the compiler's and a second copy of it here would
+	#: be a second implementation to keep in step.
+	varint_rules: dict[int, tuple[int, int, bool]] = field(default_factory=dict)
 	#: variant placement index -> (discriminant, [(case, selected, flags)])
 	arms: dict[int, tuple[int, list[tuple[int, int, int]]]] = \
 		field(default_factory=dict)
@@ -218,8 +223,11 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if VARINTS in found:
 		at, records, stride = found[VARINTS]
 		for i in range(records):
-			where, = _struct.unpack_from("<I", blob, at + i * stride)
+			where, _enc, max_bytes, terminal, vflags = _struct.unpack_from(
+				"<IIBBB", blob, at + i * stride)
 			image.varints.add(where)
+			image.varint_rules[where] = (max_bytes, terminal,
+			                             bool(vflags & 2))
 
 	if ARMS in found:
 		at, records, stride = found[ARMS]

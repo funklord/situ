@@ -9336,6 +9336,57 @@ follows a *varint* or a `while` run, both of which are widths decoded rather
 than declared, and both of which the walk now has the shape to learn: a
 delimiter was the first of the three and the other two are the same problem.
 
+### 26.84 The last two decoded widths, and a variant's extent
+
+A varint and a `while` run were the two shapes left whose width is decoded
+rather than declared. Both are in now -- 474 members across 28 of the 32
+schemas -- and between them they found four things, of which only the first
+was the one being looked for.
+
+**A decoder's parameters are the compiler's arithmetic, not the walker's.**
+The image carried `max_bits`; a decoder needs `max_bytes` and
+`terminal_bits`, and those fall out of arithmetic `situc/ast.py` already
+does. Carrying `max_bits` and rederiving them here would have been a second
+implementation of a rule with a genuinely surprising case in it: where the
+terminal byte carries all eight bits there is no spare bit for a
+continuation flag, so it is read whole -- SQLite's ninth byte, and why nine
+bytes hold sixty-four bits where seven-bit groups need ten. The image
+carries both numbers now and they match the generated C call exactly.
+
+**A text number is digits, not bits.** `edges`' `texty` sizes a run by
+`decimal u16 count until "\r\n"`, and reading those bytes as an integer made
+the run 38 bytes long over a buffer with no digits in it at all. Every
+backend said zero. The value is parsed, a non-digit fails the whole parse,
+and the field's scalar type gives the value's *domain* rather than its width
+in the buffer.
+
+**`until` means two different things and only one of them scans.** A member
+ends at the first occurrence of its delimiter, anywhere. A *run of records*
+ends where the terminator stands in for a record, checked at each element
+boundary -- and `edges` says it is the only construct in the tree where the
+delimiter is not looked for anywhere. Scanning for it made `kv_block.payload`
+935 bytes long where every backend said nothing. `type_struct` is what tells
+them apart.
+
+**A variant's extent is a switch, and an unmatched arm is zero.** Walking a
+run of `label` needs each label's extent, which is one byte plus whichever
+arm the discriminant names -- invariant 37's "it cannot be computed" is often
+"it is not a constant". The case worth recording is the miss: a discriminant
+naming no arm contributes *zero*, not a refusal, because saying the message
+is malformed is `validate`'s job and not the extent's. C's generated extent
+ends in `: 0u` for exactly that reason, and refusing instead counted zero
+dnsname labels where every backend counted one.
+
+**And one bug in the packer that only a walk could reach.** `_ast_members`
+read one level deep, so a field nested inside a variant arm or a region
+never had its size expression compiled: `label.body.text` is `u8 text[rest]`
+and was packed with no size program at all. Nothing noticed, because nothing
+had ever asked the image how long an arm's member was.
+
+**Status:** 332 scalars, 67 runs, 42 arms, 3 gates with 2 interiors, 19
+delimited members, 4 varints and 5 `while` runs. Every shape whose width is
+decoded rather than declared is now walked.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

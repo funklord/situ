@@ -100,7 +100,23 @@ def size_bits(view: View, index: int) -> int:
 	than merely short.
 	"""
 	placement = view.image.placements[index]
-	if index in view.image.delimiters:
+	if index in view.image.arms:
+		return _variant_bits(view, index)
+	if index in view.image.varints:
+		# A varint's width is in its own bytes. The record's `size_bits` is
+		# the minimum -- one byte -- so summing that placed everything after
+		# a varint at the wrong offset, which is what kept sqlite's
+		# `payload` unrenderable.
+		consumed, _ = varint(view, index)
+		return consumed * BITS_PER_BYTE
+	# `type_struct` is what separates the two uses of `until`. A member ends
+	# at the first occurrence of its delimiter, anywhere; a *run of records*
+	# ends where the terminator stands in for a record, checked at each
+	# element boundary and nowhere else -- 8.6.3, and `edges` says it is the
+	# one construct in the tree where the delimiter is not looked for
+	# anywhere. Scanning for it made `kv_block.payload` 935 bytes long where
+	# every backend said nothing.
+	if index in view.image.delimiters and placement.type_struct == NONE:
 		content, terminated = scan(view, index)
 		# The delimiter is part of the member only when it is there. An
 		# unterminated one reached as far as the cap or the buffer allowed,
@@ -123,6 +139,40 @@ def size_bits(view: View, index: int) -> int:
 	if placement.size_bits == NONE:
 		raise Refused(f"placement {index} has no size this image carries")
 	return placement.size_bits
+
+
+def _variant_bits(view: View, index: int) -> int:
+	"""A variant's extent: the arm the discriminant selects, not the worst
+	case and not the minimum.
+
+	"It cannot be computed" is often "it is not a constant" (invariant 37).
+	A variant's extent is a switch: read the discriminant this message
+	carries, take the arm it names, and the answer is that arm's size. Using
+	the minimum instead made a dnsname label one byte long and walked
+	thirty-nine of them through a thirty-eight byte buffer.
+	"""
+	selects, arms = view.image.arms[index]
+	if selects == NONE:
+		raise Refused(f"variant {index} has no discriminant in this image")
+
+	value = read_scalar(view, selects)
+	fallback = None
+	for case, chosen, flags in arms:
+		if flags & 2:				# `default: error` selects nothing
+			continue
+		if flags & 1:				# the default arm
+			fallback = chosen
+			continue
+		if case == value:
+			return 0 if chosen == NONE else size_bits(view, chosen)
+	if fallback is not None and fallback != NONE:
+		return size_bits(view, fallback)
+	# No arm matches and the default selects nothing. The extent is zero
+	# rather than a refusal: a discriminant naming no arm is a malformed
+	# message, and saying so is `validate`'s job, not the extent's. C's
+	# generated extent has the same `: 0u`, and refusing here counted zero
+	# dnsname labels where every backend counted one.
+	return 0
 
 
 def _evaluate(view: View, code_at: int, from_byte: int = 0) -> int:
@@ -163,6 +213,8 @@ def read_scalar(view: View, index: int) -> int:
 	walker has to know something an offset table cannot say on its own.
 	"""
 	placement = view.image.placements[index]
+	if placement.radix:
+		return parse_digits(view, index)
 	start = offset_bits(view, index)
 	width = size_bits(view, index)
 	if width <= 0 or width > 64:
@@ -284,3 +336,146 @@ def scan(view: View, index: int) -> tuple[int, bool]:
 			return at, True
 		at += 1
 	return limit, False
+
+
+def varint(view: View, index: int) -> tuple[int, int]:
+	"""Decode one varint: the bytes it consumed and the value it holds.
+
+	Two encodings, and the difference is which end the groups come from.
+	`leb128` puts the low group first; `be128` the high one, which is ASN.1's
+	identifier octets, MIDI's delta times and SQLite's record varints.
+
+	`terminal_bits` of eight is the case worth naming: the last permitted
+	byte has no spare bit for a continuation flag, so it is read whole and
+	ends the value whatever its high bit says. That is SQLite's ninth byte,
+	and it is why a nine-byte varint holds sixty-four bits where seven-bit
+	groups would need ten.
+
+	Consuming zero bytes means the buffer ended mid-value, which every
+	backend reports as a refusal rather than as a short read.
+	"""
+	rules = view.image.varint_rules.get(index)
+	if rules is None:
+		raise Refused(f"placement {index} has no varint rules in this image")
+	max_bytes, terminal_bits, big = rules
+
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	avail = max(0, view.limit - start)
+	data  = view.buffer[start:start + min(avail, max_bytes)]
+
+	acc = 0
+	for i, byte in enumerate(data):
+		if big:
+			if terminal_bits == 8 and i + 1 == max_bytes:
+				return i + 1, (acc << 8) | byte
+			acc = (acc << 7) | (byte & 0x7F)
+		else:
+			if i * 7 < 64:
+				acc |= (byte & 0x7F) << (i * 7)
+		if not byte & 0x80:
+			return i + 1, acc
+	raise Refused("the buffer ends mid-varint")
+
+
+def parse_digits(view: View, index: int) -> int:
+	"""A text number's value: digits, not bits (section 8.6.2).
+
+	The scalar type beside it gives the value's domain rather than its width
+	in the buffer, which for a text number depends on the number. Reading the
+	bytes as an integer instead is what made `edges`' `texty.body` 38 bytes
+	long over a buffer with no digits in it at all, where every backend said
+	zero.
+
+	A byte that is not a digit of this radix fails the whole parse, as the
+	runtime does: a field that is meant to be a number and is not is a
+	malformed message, not a number with some of it ignored.
+	"""
+	placement = view.image.placements[index]
+	radix = placement.radix
+	if radix < 2 or radix > 16:
+		raise Refused(f"radix {radix} is not one to parse")
+
+	if index in view.image.delimiters:
+		content, _ = scan(view, index)
+	else:
+		content = size_bits(view, index) // BITS_PER_BYTE
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	data  = view.buffer[start:start + content]
+	if not data:
+		raise Refused("a text number with no digits")
+
+	value = 0
+	for byte in data:
+		if 0x30 <= byte <= 0x39:
+			digit = byte - 0x30
+		elif 0x61 <= byte <= 0x66:
+			digit = byte - 0x61 + 10
+		elif 0x41 <= byte <= 0x46:
+			digit = byte - 0x41 + 10
+		else:
+			raise Refused("a byte that is not a digit of this radix")
+		if digit >= radix:
+			raise Refused("a digit outside this radix")
+		value = value * radix + digit
+	return value
+
+
+def while_count(view: View, index: int) -> int:
+	"""How many elements a `while` run holds.
+
+	The predicate is asked about the element *just parsed*, which is the
+	whole difference from `until`: `until` asks about the position before
+	each element -- is the terminator standing where one would start -- and
+	`while` asks about the one behind it. So a `while` run is never empty:
+	the first element is parsed before anything is asked.
+
+	The predicate's names resolve in the *element's* struct rather than in
+	the struct holding the run, which is netlink's `nla_ok`: `nla_len`
+	belongs to the attribute and not to the message.
+	"""
+	placement = view.image.placements[index]
+	if placement.repeat_code == NONE or placement.type_struct == NONE:
+		raise Refused(f"placement {index} is not a `while` run")
+
+	element = placement.type_struct
+	cap     = placement.repeat_cap or 0xFFFF
+	at      = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	count   = 0
+
+	while count < cap and at < view.limit:
+		sub = View(view.image, view.buffer, element, at, view.limit)
+		try:
+			extent = struct_extent(sub)
+		except Refused:
+			break
+		# The element has to *be there* before it counts. netlink's first
+		# attribute declares a length past the end of the buffer, and every
+		# backend answers zero: an element whose bytes the frame does not
+		# hold is not a short element, it is not an element.
+		if extent <= 0 or at + extent > view.limit:
+			break
+		count += 1
+		at    += extent
+		if not _evaluate(sub, placement.repeat_code):
+			break
+	return count
+
+
+def struct_extent(view: View) -> int:
+	"""How many bytes one instance of a struct occupies, from its own bytes.
+
+	A fixed struct answers from the image. Anything else is the sum of what
+	its members turn out to be, which is what makes a run of them walkable
+	rather than indexable -- and is the cost `access = Sequential` records.
+	"""
+	shape = view.shape
+	if shape.fixed:
+		return (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+	total = 0
+	for member in view.image.members(shape):
+		if view.image.placements[member].located_code != NONE:
+			continue
+		total += size_bits(view, member)
+	if total <= 0:
+		raise Refused("a struct with no extent this image can compute")
+	return (total + BITS_PER_BYTE - 1) // BITS_PER_BYTE

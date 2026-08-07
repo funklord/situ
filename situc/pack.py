@@ -27,7 +27,7 @@ put a second parser in the one component decision 0026 wants checked.
 from __future__ import annotations
 
 import struct as _struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from situc import ast, traverse
@@ -323,16 +323,33 @@ class Coverage:
 def _ast_members(schema: ast.Schema) -> dict[str, ast.Field]:
 	"""`struct.member` -> the AST field, for the expressions it carries.
 
-	Only one level deep, which is where an array size is written. A nested
-	struct's own members are found under that struct's own name.
+	Nested as well as top level. A variant's arm and a region's interior hold
+	fields with size expressions of their own, and reading only one level
+	deep left them without one: `label.body.text` is `u8 text[rest]`, and
+	packing it with no size program made a dnsname label one byte long and
+	a walk of them run off the end of the buffer (26.84).
 	"""
 	found: dict[str, ast.Field] = {}
-	for decl in schema.decls:
-		if not isinstance(decl, ast.StructDecl):
-			continue
-		for member in decl.members:
+
+	def walk(prefix: str, members: Sequence[object]) -> None:
+		for member in members:
+			name = getattr(member, "name", None)
+			path = f"{prefix}.{name}" if name else prefix
 			if isinstance(member, ast.Field):
-				found[f"{decl.name}.{member.name}"] = member
+				found[path] = member
+			# A variant holds its arms; a region and a positional block hold
+			# their members. Both are reached by the same walk rather than
+			# by naming every construct that can contain a field.
+			for arm in getattr(member, "arms", ()):
+				held = getattr(arm, "member", None)
+				if held is not None:
+					walk(path, (held,))
+			walk(path, getattr(member, "members", ()))
+
+
+	for decl in schema.decls:
+		if isinstance(decl, ast.StructDecl):
+			walk(decl.name, decl.members)
 	return found
 
 
@@ -523,6 +540,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 	# A `const` is a compile-time constant, so it becomes a literal in the
 	# bytecode. A walker carries no constant table and should not need one.
+	varint_decls = {decl.name: decl for decl in schema.decls
+	                if isinstance(decl, ast.VarintDecl)}
+
 	consts = {decl.name: decl.value.value
 	          for decl in schema.decls
 	          if isinstance(decl, ast.ConstDecl)
@@ -608,10 +628,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	for at, (owner, placement) in enumerate(rows):
 		if placement.varint is not None:
 			varint_index.setdefault(placement.varint, len(varint_index))
+			decl = varint_decls.get(placement.varint)
+			big  = decl is not None and decl.encoding is ast.VarintEncoding.BE128
 			varints_blob += _struct.pack(
-				"<IIBBxx", at, strings.intern(placement.varint),
-				min(placement.size_max_bits or 64, 255),
-				1 if placement.varint_minimal else 0)
+				"<IIBBBx", at, strings.intern(placement.varint),
+				min(decl.max_bytes if decl else 10, 255),
+				min(decl.terminal_bits if decl else 7, 255),
+				(1 if placement.varint_minimal else 0) | (2 if big else 0))
 		# The discriminant is what makes an arm answerable: without it a
 		# walker has the cases and no way to say which one this message
 		# selected, which is the whole question the probe asks.
@@ -717,7 +740,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			text,
 			min(placement.array_count or 0, 0xFFFF) if placement.radix else 0,
 			min(placement.since or 0, 0xFFFF),
-			0,
+			min(placement.repeat_cap or 0, 0xFFFF),
 		)
 	sections[1] = (SECTION_PLACEMENTS, bytes(placements_blob), PLACEMENT_BYTES)
 

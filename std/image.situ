@@ -164,7 +164,7 @@ struct image_placement {
 	                                  // bit 2: case_insensitive
 	u16  radix_digits;                // digits the field holds, or 0
 	u16  since;                       // `[since = N]`, or 0 for always
-	u16  placement_pad;
+	u16  repeat_cap;                  // `while (...) max N`, or 0 for none
 }
 
 // -- the side tables ---------------------------------------------------------
@@ -217,12 +217,21 @@ struct image_codec {
 	u32  name;                        // offset into the core string pool
 }
 
+// A varint's width is decoded rather than declared, so a walk needs the
+// decoder's own parameters and not the schema's `max_bits`: `max_bytes` is
+// where the encoding stops and `terminal_bits` is what the last permitted
+// byte carries. Where that is eight there is no spare bit for a continuation
+// flag and the byte is read whole -- SQLite's ninth. Both fall out of
+// arithmetic the compiler already does, and rederiving them here would be a
+// second implementation of it.
 struct image_varint {
 	u32  placement;
 	u32  encoding;                    // core string pool offset
-	u8   max_bits;
+	u8   max_bytes;
+	u8   terminal_bits;
 	u8   varint_flags;                // bit 0: minimal encodings demanded
-	u8   varint_pad[2];
+	                                  // bit 1: big-endian groups (be128)
+	u8   varint_pad;
 }
 
 struct image_tlv {
