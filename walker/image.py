@@ -111,6 +111,9 @@ class Image:
 	#: placement index -> the region's flags: bit 0 sealed, bit 1 the schema
 	#: waived the gate with `[allow_unverified_read]`.
 	region_flags: dict[int, int]		= field(default_factory=dict)
+	#: placement index -> the region it sits inside. A region names itself,
+	#: so a gate's interior is everything whose owner is the gate.
+	region_owner: dict[int, int]		= field(default_factory=dict)
 	#: Placements whose width is decoded rather than declared. A varint's
 	#: length is in its own bytes, so nothing after one has a computable
 	#: offset until the walk can decode it.
@@ -201,10 +204,11 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if REGIONS in found:
 		at, records, stride = found[REGIONS]
 		for i in range(records):
-			where, _codec, rflags = _struct.unpack_from(
-				"<IIB", blob, at + i * stride)
+			where, owner, _codec, rflags = _struct.unpack_from(
+				"<IIIB", blob, at + i * stride)
 			image.regions.add(where)
 			image.region_flags[where] = rflags
+			image.region_owner[where] = owner
 
 	if VARINTS in found:
 		at, records, stride = found[VARINTS]

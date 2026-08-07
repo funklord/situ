@@ -27,13 +27,27 @@ from walker.walk import (Refused, View, acquire, read_bytes, read_scalar,
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
 SUPPORTED = ("no-view", "scalar", "bytes", "element", "run_element",
-             "arm_value", "sealed")
+             "arm_value", "sealed", "gated")
 
 #: `image_kind`: which placements are plain scalars a walk can read.
 FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3
 
 #: `image_region.region_flags`
 SEALED, UNVERIFIED_OK = 1, 2
+
+
+def _local(image: Image, index: int) -> str:
+	"""The name a driver prints for a member: its path after the struct,
+	with the dots turned into underscores.
+
+	`packet.sealed.inner_kind` is `sealed_inner_kind`, and an arm's
+	`label.body.text` is `body_text`. Getting this wrong does not produce a
+	disagreement -- it produces two lines that never meet, so the comparison
+	skips them and passes. That is the quieter half of the vacuous pass:
+	not a check that examined nothing, but a check whose two sides were
+	talking about different names.
+	"""
+	return image.name_of(index).split(".", 1)[-1].replace(".", "_")
 
 
 def _scalars(image: Image, struct_index: int) -> list[int]:
@@ -179,6 +193,30 @@ def _gates(image: Image, struct_index: int) -> list[int]:
 	return found
 
 
+def _gated(image: Image, gate: int) -> list[int]:
+	"""Plain scalars inside one sealed region, in declaration order.
+
+	Only the scalars. A `[secret]` member has no debug accessor at all by
+	design (14.6), and a byte run inside a gate is spelled four ways that
+	have not been compared -- so the differ asks about neither and this
+	renders neither.
+	"""
+	found = []
+	for index, placement in enumerate(image.placements):
+		if index == gate or image.region_owner.get(index) != gate:
+			continue
+		if placement.kind != FIELD or placement.is_tag:
+			continue
+		if placement.array_count != NONE or placement.size_code != NONE:
+			continue			# a run inside a gate, not a scalar
+		if index in image.delimiters or placement.radix:
+			continue
+		if placement.element_bits == NONE or placement.element_bits > 64:
+			continue
+		found.append(index)
+	return found
+
+
 def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 	"""A variant's scalar arms, as (arm placement, discriminant, case).
 
@@ -203,6 +241,14 @@ def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 				continue
 			if arm.array_count != NONE or arm.size_code != NONE:
 				continue		# a byte run or an indexed run, not a value
+			# A run of values wider than a byte carries neither a count nor
+			# a size program in its own record -- `edges`' `body.wide` is
+			# `size 0, max 48, element 16` -- so "is this one value" has to
+			# be asked directly. The differ probes that shape `ok= count=
+			# [0]=`, and answering it `ok= value=` is a line that looks like
+			# an answer to a question nobody asked.
+			if not arm.fixed or arm.size_bits != arm.element_bits:
+				continue
 			if chosen in image.delimiters or arm.is_tag:
 				continue
 			found.append((chosen, selects, case))
@@ -227,7 +273,7 @@ def listing(image: Image, buffer: bytes) -> str:
 def _members(image: Image, view: View, struct_index: int) -> list[str]:
 	lines = []
 	for index in _scalars(image, struct_index):
-		local = image.name_of(index).split(".", 1)[-1]
+		local = _local(image, index)
 		try:
 			lines.append(f"{local} {read_scalar(view, index)}")
 		except Refused:
@@ -237,16 +283,32 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			continue
 
 	for index in _gates(image, struct_index):
-		local = image.name_of(index).split(".", 1)[-1]
+		local = _local(image, index)
 		# The gate's whole claim, and the one every backend can answer: it
 		# refuses a failed verification and admits a passed one (14.3). The
 		# answer does not depend on the bytes, which is why it is comparable
 		# without the walker running anybody's cipher -- situ guards the
 		# bytes and the caller runs the transform.
 		lines.append(f"{local} refused=1 opened=1")
+		# The interior, read through the gate the line above opened. This is
+		# the half a tag exists to protect, so it is the half worth
+		# comparing -- and it is why the gate probe carries its scalars
+		# rather than standing alone.
+		for inside in _gated(image, index):
+			# The name *inside* the gate: the member's local name with the
+			# region's stripped, which is what three backends call it. C
+			# spells it `sealed_inner_kind` for want of a scope to put it
+			# in, and the driver strips the same prefix.
+			held = _local(image, inside)
+			if held.startswith(local + "_"):
+				held = held[len(local) + 1:]
+			try:
+				lines.append(f"{held} {read_scalar(view, inside)}")
+			except Refused:
+				continue
 
 	for arm, selects, case in _arm_values(image, struct_index):
-		local = image.name_of(arm).split(".", 1)[-1]
+		local = _local(image, arm)
 		try:
 			chosen = read_scalar(view, selects) == case
 			value  = read_scalar(view, arm) if chosen else 0
@@ -255,7 +317,7 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 		lines.append(f"{local} ok={1 if chosen else 0} value={value}")
 
 	for index, shape in _runs(image, struct_index):
-		local = image.name_of(index).split(".", 1)[-1]
+		local = _local(image, index)
 		try:
 			lines.append(_run_line(view, index, local, shape))
 		except Refused:

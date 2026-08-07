@@ -44,7 +44,7 @@ STRUCT_BYTES	= 12
 PLACEMENT_BYTES	= 48
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 32
-REGION_BYTES	= 12
+REGION_BYTES	= 16
 CODEC_BYTES	= 4
 VARINT_BYTES	= 12
 TLV_BYTES	= 12
@@ -472,10 +472,18 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	for name, rstruct in order:
 		for entry in rstruct.entries:
 			placement = entry.placement
-			if not any(placement.path == held.path for _, held in rows):
-				if any(arm.member == placement.path
-				       for _, other in rows for arm in other.arm_cases):
-					rows.append((name, placement))
+			if any(placement.path == held.path for _, held in rows):
+				continue
+			wanted = any(arm.member == placement.path
+			             for _, other in rows for arm in other.arm_cases)
+			# A sealed region's interior is nested under the region for the
+			# same reason an arm's member is nested under the variant, and
+			# needs the same treatment: the gate exists to hand out those
+			# members, so an image that cannot name them describes a gate
+			# with nothing behind it.
+			wanted = wanted or placement.sealed_by is not None
+			if wanted:
+				rows.append((name, placement))
 
 	placement_index = {p.path: i for i, (_, p) in enumerate(rows)}
 
@@ -625,8 +633,18 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if placement.regions:
 			flags = (1 if placement.sealed_by else 0) \
 				| (2 if placement.unverified_ok else 0)
+			# `region_at`, not `owner`: this loop already binds `owner` to
+			# the struct's name, and the shadow made the index a string to
+			# every reader including mypy.
+			region_at = next(
+				(i for i, (_, held) in enumerate(rows)
+				 if held.path.endswith("." + placement.regions[-1])
+				 and held.regions
+				 and held.regions[-1] == placement.regions[-1]
+				 and held.path.count(".") <= placement.path.count(".")),
+				None)
 			regions_blob += _struct.pack(
-				"<IIB3x", at,
+				"<IIIB3x", at, _u32(region_at),
 				_u32(codec_index.get(placement.codec or "")), flags)
 		if placement.tlv_grammar is not None:
 			regions = (1 if placement.tlv_ordered else 0)

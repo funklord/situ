@@ -201,6 +201,10 @@ struct image_delimiter {
 // An `authenticated` or `sealed` region, and the member's membership of one.
 struct image_region {
 	u32  placement;
+	u32  owner;                       // the region this member is inside; a
+	                                  // region names itself, which is what
+	                                  // lets a walker group an interior
+	                                  // under the gate that guards it
 	u32  codec;                       // index into the codec table, or `none`
 	u8   region_flags;                // bit 0: sealed  bit 1: read allowed
 	                                  // unverified
@@ -267,7 +271,7 @@ require size(image_struct) == 12;
 require size(image_placement) == 48;
 require size(image_arm) == 24;
 require size(image_delimiter) == 32;
-require size(image_region) == 12;
+require size(image_region) == 16;
 require size(image_codec) == 4;
 require size(image_varint) == 12;
 require size(image_tlv) == 12;

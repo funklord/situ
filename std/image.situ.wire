@@ -84,11 +84,12 @@ struct image_placement size=48
   @0x002c   2         u16        since  little
   @0x002e   2         u16        placement_pad  little
 
-struct image_region size=12
+struct image_region size=16
   @0x0000   4         u32        placement  little
-  @0x0004   4         u32        codec  little
-  @0x0008   1         u8         region_flags
-  @0x0009   3         u8         region_pad  little
+  @0x0004   4         u32        owner  little
+  @0x0008   4         u32        codec  little
+  @0x000c   1         u8         region_flags
+  @0x000d   3         u8         region_pad  little
 
 struct image_section size=16
   @0x0000   4         image_section_tag kind  little

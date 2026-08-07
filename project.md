@@ -9266,17 +9266,31 @@ exactly the part a walker can check. The waived form is skipped, as the differ
 skips it: `[allow_unverified_read]` gives up the guarantee and there is no
 gate to open.
 
+**The gate's interior, and the quieter vacuous pass.** The interiors sit
+under the region exactly as an arm's members sit under the variant, so they
+went into the table the same way and the region record gained the gate each
+one is inside. What that found is worth more than the members: the first
+version rendered them as `sealed.inner_kind` where the driver says
+`inner_kind`, and **the suite passed** -- the comparison is over members both
+sides name, and two spellings of one member are not both sides naming it.
+Not a check that examined nothing, which 26.76 is about, but a check whose
+two halves were talking about different things and therefore never met. The
+naming is the driver's now: the path after the struct with its dots turned to
+underscores, and the region's prefix stripped off an interior, which is what
+three backends call it and what C spells `sealed_inner_kind` for want of a
+scope to put it in.
+
 **Still not rendered, and each for a reason rather than for want of writing
-it.** A gate's *interior* scalars, which sit under the region the way an arm's
-members sat under the variant and want the same treatment. A member whose
+it.** A member whose
 offset follows a varint, a `while` run or a delimiter, none of which the walk
 can measure yet -- `_offset_computable` refuses those rather than reading at
 the wrong place, which is how sqlite's `payload` was caught. And a text
 number's value, a coded region's contents, and an enum-typed field, which the
 differ does not ask about either.
 
-**Status:** `make check` green. 329 scalars, 63 runs, 45 arms and 3 gates,
-compared against the C driver line for line over 12 buffers per schema.
+**Status:** `make check` green. 330 scalars, 63 runs, 42 arms, 3 gates and
+their 4 interiors -- 442 members across 27 of the 32 schemas, compared
+against the C driver line for line over 12 buffers each.
 
 ### Invariants to hold across all phases
 
