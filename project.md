@@ -774,10 +774,20 @@ just a `u8[]` with a size expression. This avoids inventing string semantics
 the underlying protocol may not have.
 
 **Both attributes are implemented.** `[encoding = ascii | utf8]` is validated
-on parse, strictly in the sense RFC 3629 requires -- an overlong form or a
-surrogate half is refused, because either is a second spelling of a character
-that already has one. An encoding situ cannot check is an error rather than a
-silent nod.
+by `validate`, strictly in the sense RFC 3629 requires -- an overlong form or
+a surrogate half is refused, because either is a second spelling of a
+character that already has one. An encoding situ cannot check is an error
+rather than a silent nod, and the compiler refuses an encoding it does not
+know by name.
+
+**It is checked wherever the member has a span, which is everywhere.** A
+fixed-width field is scanned from its offset for its declared count; a
+delimited one is scanned over the content the scan found, not including the
+delimiter. The second case was accepted and never checked for a long time,
+because the gate asked whether situ can validate this *encoding* -- and
+`ascii` always answers yes -- while what decided whether a check was emitted
+was the *placement* (26.94). A rule enforced on one axis is silent on every
+other, and the silence looks exactly like compliance.
 
 **`[nul_terminated]` reads the declared size as the capacity.** The field is
 its declared width whatever it holds, so nothing after it moves and `size(X)`
@@ -3216,6 +3226,14 @@ is a value in the data, so nothing can reach them before the version field has
 been read -- which is the same shape as the stage gate of 14.3, one axis
 weaker.
 
+**A field that is not there is not a field that is wrong.** `validate` reads
+the version first and skips a `[since]` member the message does not carry,
+rather than checking it and finding zeros. That is a check about *presence*
+gating a check about *value*, and it needs the struct's version member to be
+nameable at runtime -- which is why the packed image carries a table of them
+(26.91) and not merely each member's `since`. Because offsets are static the
+rest costs nothing: nothing moves, only the count of members present varies.
+
 **The accessor reports rather than guesses, in both directions.** There is no
 value to return when the field is not there, and one that handed back whatever
 follows would return another member's bytes or another message's. Writing is
@@ -3314,6 +3332,26 @@ facts is to state them. A backend that cannot enforce an axis says so in the
 generated code and in the capability map -- it does not quietly emit an
 accessor that looks like the C one and guarantees less. This is invariant 5
 applied to backends rather than to requirements: never silently downgrade.
+
+**Two readers per field, and the difference is not stylistic.** A field whose
+bytes may not decode -- a text number, a varint -- gets a *lax* reader that
+cannot fail and a *strict* one that returns an error. The lax one answers zero
+for bytes it cannot decode; the strict one refuses them. Which is called is
+decided by what the caller is doing rather than by taste:
+
+- **Size and offset expressions call the lax one.** A length is needed to
+  place the next member whether or not the field parsed, and a chain that
+  refuses mid-way places nothing after it.
+- **`validate` calls the strict one.** A field that is meant to be a number
+  and is not is a malformed message, and that is exactly what `validate` is
+  for.
+
+Stated here because it is easy to build only one and not notice: the walker
+had only the strict reader and called messages malformed that every backend
+reads to the end -- once for text numbers, once for varints, and once more for
+a truncated varint's *length* (26.92, 26.94). Three instances of one omission
+in two sections. A backend that emits `_get` should ask itself what its
+`_value` does.
 
 ### 20.2 Generated C API shape
 
@@ -3975,6 +4013,15 @@ a numbered section 26 entry with its invariants -- and for nothing else.
   called, which `struct option { u8 option; }` reaches without trying -- and
   that backend renames the class and aliases the schema's name to it rather
   than refusing the schema (`docs/decisions/0025-cpp-class-and-member-names.md`).
+- **A member named for a target language's keyword keeps its name; the
+  emitter moves.** `int`, `class`, `type` and `lambda` are all words some
+  backend cannot spell, and all four are what specifications actually call
+  their fields -- DNS has a CLASS. Most generated identifiers carry the whole
+  path in front of them and are safe; what needs mangling is the few emitted
+  *bare*, which is the owned struct's field and every C++ accessor. One
+  trailing underscore in C, C++ and Python, `r#` in Rust, and decision 0013's
+  gate already refuses the collision the underscore could create, because
+  `int` and `int_` reach one C identifier (26.90).
 - Single source of truth: the AST is built once from the source text and all
   passes read it. Never re-parse generated output. Never mutate a file
   in a second pass without full knowledge of the first pass's state.
@@ -6061,17 +6108,20 @@ and asked for two things the language did not have.
 
 ### 26.33 The runtime image, and why it is late
 
-**Status: the emitter is done; nothing walks an image yet.** `situc pack`
-emits the format described by `std/image.situ`, with the section 10 bytecode,
-and `situc/pack.py` is the whole of it. What 26.33 called the first slice is
-half delivered: the image exists for every schema in the tree and is read
-back through generated accessors, but the walker that would make it a fifth
-column in the differential check is not written. So the image is proven to
-*carry* the layout and is not yet proven *sufficient* for a parse. 26.79 has
-what building it found; 0026 was amended on 2026-08-07 so that the walker,
-when it is written, is a separate binary in this repository rather than a
-separate project -- which is what puts the fifth column within reach of the
-test that needs it.
+**Status: both halves are done.** `situc pack` emits the format described by
+`std/image.situ`, with the section 10 bytecode, and `situc/pack.py` is the
+whole of it. `bin/situ-walk` reads one back: a separate binary that shares
+nothing with the compiler but the format (0026, amended 2026-08-07), and the
+fifth column of the differential check. The image is proven to *carry* the
+layout by its own accessors and proven *sufficient for a parse* by agreeing
+with four compiled backends over hostile bytes, for every schema in the tree.
+
+What the walk answers is a named subset -- `walker.report.SUPPORTED` -- and
+`validate` is the one probe that cannot be rendered by halves, so the image
+carries a bit per struct saying whether every check it makes is one the image
+holds. Every struct in the corpus sets it (26.92). What sets it *false* is a
+construct nothing in the tree writes, which 26.89 through 26.94 record; a
+test writes one so the false path keeps its coverage.
 
 Decision 0026 is the shape; what follows is the plan and the reason it waited.
 
@@ -11029,6 +11079,43 @@ CONSTRAINT, in C, C++, Rust, Python and the walk.
    returns what it encoded and what it dropped; three real defects arrived as
    a list of dropped expressions on a run that raised nothing. Where the
    consumer is out of reach, the producer states its coverage.
+118. **A rule enforced on one axis is silent on every other, and the silence
+   looks like compliance.** The compiler refuses an encoding it cannot
+   validate *by name*, saying the schema would otherwise claim something the
+   code never tests -- and then accepted `[encoding = ascii]` on a delimited
+   member, where nothing tested it, for five of the seven declarations in the
+   tree. The gate asked about the encoding; what decided whether a check was
+   emitted was the placement. When a rule exists, ask what else its subject
+   varies by.
+119. **A field that may not decode needs two readers, and building one is
+   the bug.** The lax reader answers zero and lets the offset chain carry on;
+   the strict one refuses and is what `validate` calls. Size and offset
+   expressions need the first, because a length is needed to place the next
+   member whether or not the field parsed. Three instances of this in two
+   sections -- text numbers, varints, and a truncated varint's length -- each
+   found as a walker calling malformed what four backends read to the end.
+120. **An unstated default is a decision, not an absence.** Section 8.7 makes
+   an enum reject an unknown value and 14.5 makes a variant reject an unknown
+   discriminant, so a construct that writes no `default:` clause has chosen
+   the refusal. Reading the absence as permission dropped the check for every
+   enum in the tree that does not spell one out, and later for every variant
+   that simply lists its cases. The same mistake twice, one construct apart.
+121. **A test is a reader like any other.** The search that establishes a file
+   is dead feels complete once it has covered the build -- and a product
+   dependency lives where the build looks, while a test dependency does not.
+   Two control files were removed as unreferenced and eight tests started
+   failing on the files they had been reading since they were written.
+122. **A check narrowed to get past somebody else's failure is a check whose
+   scope you no longer know.** `make typecheck` was failing on an unrelated
+   file, so the run meant to clear a change was narrowed to two directories --
+   which excluded the one the fault was in. Narrowing is fine; treating the
+   narrowed result as the broad one is not.
+123. **When the last case that exercised a negative path is fixed, the
+   negative path has lost its coverage.** Every struct in the corpus answers
+   `validate` now, so nothing was left to check that the bit meaning "this
+   image cannot say" still worked -- and that bit is the whole of what keeps a
+   partial `validate` from reporting OK where the schema refuses. Write the
+   case that used to exist.
 
 ---
 

@@ -122,6 +122,19 @@ it to the parser, so a subcommand that exists and is undocumented fails the
 suite rather than going quiet. Section 21 of `project.md` is the authority
 above both.
 
+**The second binary is `situ-walk`**, which is not a `situc` subcommand and is
+not meant to be: decision 0026 keeps the compiler and the interpreter apart,
+and the separation is the point rather than a packaging detail. It takes a
+packed image and a buffer of hex, and prints what it can read of every struct
+in it.
+
+```
+situ-walk <image> <hex>
+```
+
+It has no manual page yet, which is a gap and is named here rather than left
+for somebody to notice: `situc` has one and this ships beside it.
+
 ## The language
 
 `docs/grammar.ebnf` is the extracted grammar and section 7 of `project.md` is
@@ -406,14 +419,15 @@ it, parse. The format is itself a situ schema (`std/image.situ`), read through
 generated accessors, so everything this repository does to a schema it also
 does to the image.
 
-**The walker is not written.** `situc` never walks an image -- decision 0026
-keeps the compiler and the interpreter apart, so that an offset stays a
-constant and an operation stays *absent* rather than refused. The walker will
-be a separate binary in this repository (0026, amended 2026-08-07), which is
-what lets it join the differential check as a fifth column and answer whether
-a table walk says the same thing as four compiled backends about hostile
-bytes. Until it exists the image is proven to carry the layout and is not
-proven sufficient for a parse. 26.79 says so plainly, and `situc
+**The walker is `situ-walk`, a separate binary.** `situc` never walks an
+image -- decision 0026 keeps the compiler and the interpreter apart, so that
+an offset stays a constant and an operation stays *absent* rather than
+refused -- and `bin/situ-walk` shares nothing with it but the format (0026,
+amended 2026-08-07). That is what lets it join the differential check as a
+fifth column, answering whether a table walk says the same thing as four
+compiled backends about hostile bytes. It does, for every schema here.
+
+What it renders is a named subset, `walker.report.SUPPORTED`, and `situc
 pack --coverage` says what any given image contains. Note also what an
 interpreter cannot do, which is make an operation *absent*: under a walker the
 capability map stops being the shape of the interface and becomes data a
