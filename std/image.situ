@@ -61,6 +61,7 @@ enum image_section_tag : u32 {
 	markers      = 14,
 	constraints  = 15,
 	enum_values  = 16,
+	versions     = 17,
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -149,6 +150,25 @@ struct image_struct {
 	                                  //        a length it carries, which
 	                                  //        is why nothing descends into
 	                                  //        `publish_body`
+}
+
+// Which member carries a struct's version number, where `[version = ...]`
+// names one. A `[since]` member is present only in a message whose own
+// version reaches it, so a walk cannot ask whether such a field is *wrong*
+// until it knows whether the field is *there* -- and that answer is a scalar
+// somewhere else in the same struct.
+//
+// A side table rather than a field on `image_struct`, because most structs
+// have no version member and the record is 16 bytes for four u32s with none
+// spare. Widening it would move every stride in the format for a fact that
+// applies to two structs in the corpus.
+//
+// The offsets do not move. A `[since]` member is appended, so everything
+// after it sits where it would have sat anyway and only its *presence*
+// varies -- which is why this needs no expression, only a field to read.
+struct image_version {
+	u32  shape;                       // index into the struct table
+	u32  placement;                   // the member holding the version
 }
 
 // One placement: where the bytes are, how many there are, and how to compute
@@ -343,6 +363,7 @@ require absolute_static(image_varint);
 require absolute_static(image_tlv);
 require absolute_static(image_constraint);
 require absolute_static(image_enum_value);
+require absolute_static(image_version);
 require absolute_static(image_marker);
 require absolute_static(image_index);
 

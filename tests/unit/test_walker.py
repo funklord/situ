@@ -182,8 +182,17 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	rng     = random.Random(20260807)
 	checked = 0
 
-	for _ in range(12):
-		packet   = draw(rng)
+	# Random bytes reach a version field's low values about once in 256, so
+	# the `[since]` gate -- whose whole behaviour is "is this member even
+	# here" -- was answered for v1 twice in four hundred draws and never
+	# deliberately. These six open with 1, 2 and 3 so a schema carrying
+	# `[version = ...]` is asked each of its versions, and they cost six
+	# driver runs rather than a hand-written expectation: C is still the
+	# thing being compared against, at the moment of comparison.
+	versioned = [bytes([which]) + draw(rng)
+	             for which in (1, 2, 3) for _ in range(2)]
+
+	for packet in [draw(rng) for _ in range(12)] + versioned:
 		compiled = _by_member(answers(command["c"], packet, tmp_path))
 		walked   = _by_member(report.listing(image, packet))
 
@@ -256,12 +265,14 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 		                  if image.structs[i].validatable)
 
 	assert reached >= 20, f"the walker renders for only {reached} schemas"
-	assert scalars >= 495, f"only {scalars} members in the rendered subset"
+	assert scalars >= 520, f"only {scalars} members in the rendered subset"
 	# `validate` is one line per struct rather than one per member, so the
 	# member floor above says nothing about it: a change that made every
 	# struct unvalidatable would leave that number untouched and the whole
-	# probe would go quiet. 110 of 139 carry it; the rest defer for a reason
-	# the image records -- a `[since]` gate, a coded region, or an arm whose
-	# type cannot be measured.
-	assert answerable >= 110, \
+	# probe would go quiet. 120 of 141 carry it; the rest defer for a reason
+	# the image records -- an arm whose type cannot be measured, a delimited
+	# member carrying an encoding, or a constraint whose bound is not a
+	# literal. `[since]` gates and coded regions used to be on that list and
+	# are not any more.
+	assert answerable >= 120, \
 		f"only {answerable} structs the walker can answer `validate` for"

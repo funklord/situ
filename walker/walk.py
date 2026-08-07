@@ -34,6 +34,20 @@ class Refused(Exception):
 	"""
 
 
+class Unplaceable(Refused):
+	"""...and this one is not about the buffer at all.
+
+	A member nothing can place, whatever bytes it is given: something before
+	it has no length in closed form, so no backend emits an offset for it
+	and none checks it either. That is a different answer from a frame too
+	short to hold it -- one is BOUNDS and the other is silence -- and
+	folding the two together made a struct whose members ran off the end
+	report OK, because the walk stopped where it should have refused.
+
+	A subclass, so a caller that does not care still catches `Refused`.
+	"""
+
+
 @dataclass
 class View:
 	"""A struct over a buffer: a base, a limit, and the image behind them."""
@@ -139,6 +153,23 @@ def size_bits(view: View, index: int) -> int:
 		                  offset_bits(view, index) // BITS_PER_BYTE)
 		if count < 0:
 			raise Refused("a computed size is negative")
+		# A counted run of *variable-length* elements. The count says how
+		# many, each element says how long it is, and there is no stride to
+		# multiply -- so the fallback below is wrong by exactly the factor
+		# the elements vary by. C shipped this once and placed whatever
+		# followed such a run `count` bytes past its start, "a plausible
+		# number, which is the failure this repository rates worst"
+		# (`edges`' own comment on `segments`).
+		#
+		# Refused rather than walked. The walk could add the elements up,
+		# and then it would be the only implementation that could: no
+		# backend emits a span for one, so nothing after such a run is
+		# placed by anybody, and a walk that placed it would disagree with
+		# all four about where the next member is.
+		if placement.type_struct != NONE and placement.element_bits == NONE:
+			raise Unplaceable(
+				f"placement {index} is a counted run of variable-length "
+				"elements, which has no stride")
 		element = (placement.element_bits
 		           if placement.element_bits != NONE else BITS_PER_BYTE)
 		return count * element

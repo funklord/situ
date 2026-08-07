@@ -52,6 +52,7 @@ INDEX_BYTES	= 16
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
+VERSION_BYTES		= 8
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
@@ -71,6 +72,7 @@ SECTION_INDEXES		= 11
 SECTION_MARKERS		= 14
 SECTION_CONSTRAINTS	= 15
 SECTION_ENUM_VALUES	= 16
+SECTION_VERSIONS	= 17
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
 
@@ -326,7 +328,7 @@ class Coverage:
 	unencoded: dict[str, int]	= field(default_factory=dict)
 
 
-def _ast_members(schema: ast.Schema) -> dict[str, ast.Field]:
+def _ast_members(schema: ast.Schema) -> dict[str, ast.Field | ast.Opaque]:
 	"""`struct.member` -> the AST field, for the expressions it carries.
 
 	Nested as well as top level. A variant's arm and a region's interior hold
@@ -335,13 +337,20 @@ def _ast_members(schema: ast.Schema) -> dict[str, ast.Field]:
 	packing it with no size program made a dnsname label one byte long and
 	a walk of them run off the end of the buffer (26.84).
 	"""
-	found: dict[str, ast.Field] = {}
+	found: dict[str, ast.Field | ast.Opaque] = {}
 
 	def walk(prefix: str, members: Sequence[object]) -> None:
 		for member in members:
 			name = getattr(member, "name", None)
 			path = f"{prefix}.{name}" if name else prefix
-			if isinstance(member, ast.Field):
+			# `default: opaque rest[nlmsg_len - 16]` is an `Opaque`, not a
+			# `Field`, and carries its size expression directly rather than
+			# through an array. Recording only fields left netlink's default
+			# arm with no size program, so a message whose type names no arm
+			# measured the variant as zero and put the attributes on top of
+			# the body -- one attribute where C, placing them past a
+			# 900-megabyte `rest`, counted none.
+			if isinstance(member, (ast.Field, ast.Opaque)):
 				found[path] = member
 			# A variant holds its arms; a region and a positional block hold
 			# their members. Both are reached by the same walk rather than
@@ -520,6 +529,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# members, so an image that cannot name them describes a gate
 			# with nothing behind it.
 			wanted = wanted or placement.sealed_by is not None
+			# A *coded* region's interior needs it for a different reason.
+			# Nothing hands those members out -- they are the transform's
+			# input, not bytes on the wire -- but the region's extent is
+			# their extent through the expansion, and a size expression can
+			# only name a member the table contains. Without them the region
+			# measured zero and everything after it was placed on top of it.
+			wanted = wanted or any(
+				placement.path.startswith(held.path + ".")
+				and held.codec is not None
+				for _, held in rows)
 			if wanted:
 				rows.append((name, placement))
 
@@ -566,6 +585,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	varint_decls = {decl.name: decl for decl in schema.decls
 	                if isinstance(decl, ast.VarintDecl)}
 
+	codec_decls = {decl.name: decl for decl in schema.decls
+	               if isinstance(decl, ast.CodecDecl)}
+
 	consts = {decl.name: decl.value.value
 	          for decl in schema.decls
 	          if isinstance(decl, ast.ConstDecl)
@@ -576,7 +598,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	code_at: dict[str, int] = {}
 	for owner, placement in rows:
 		field = members.get(placement.path)
-		expr  = field.array.size if field is not None and field.array else None
+		expr: ast.Expr | None
+		if isinstance(field, ast.Opaque):
+			expr = field.size
+		elif field is not None and field.array:
+			expr = field.array.size
+		else:
+			expr = None
 		if expr is None:
 			continue
 		start = len(program.code)
@@ -590,6 +618,83 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		code_at[placement.path] = start
 		coverage.expressions += 1
 
+	# A coded or sealed region's extent is its interior's extent put through
+	# the codec's expansion (13.5), and nothing in the region's own bytes can
+	# say how many there are -- they are the transform's output. The rule is
+	# `traverse.region_extent`, which the C backend already asks, so this
+	# renders the same arithmetic into bytecode rather than forming a second
+	# opinion about `ratio_padded`'s rounding.
+	#
+	# Without it a walk gave the region a length of zero and placed
+	# everything after it on top of it: `coded_run.trailer` came out at byte
+	# 1 where C puts it at byte 7, and the struct had to defer `validate`
+	# entirely rather than answer wrongly.
+	#
+	# None where the expansion has no closed form -- a bounded ratio, an
+	# unbounded one, or a run inside the region, whose elements would have to
+	# be read out of ciphertext to be measured. Those still defer, and so
+	# does every backend.
+	for owner, placement in rows:
+		# The region itself, not its interior. A member inside one carries
+		# the same `codec`, so asking that alone measured `content`'s own
+		# (empty) interior through the expansion and recorded the answer
+		# under the interior's name -- a program that returned zero for a
+		# member whose length is `n`.
+		if placement.kind not in ("coded", "sealed"):
+			continue
+		# A region that ends at a delimiter is measured by the scan, not by
+		# the expansion, and the delimiter table already carries it. smtp's
+		# DATA body is both at once -- stuffed *and* terminated -- and the
+		# scan runs on the encoded bytes precisely because the stuffing is
+		# what protects the terminator. Asking the expansion there reported
+		# an expression the image had failed to carry, when the length was
+		# never going to come from arithmetic.
+		if placement.delimiter is not None:
+			continue
+		rule = traverse.region_extent(resolved.structs[owner], placement,
+		                              codec_decls.get(placement.codec or ""),
+		                              resolved.structs)
+		if rule is None:
+			coverage.unencodable[placement.path] = \
+				"the codec's expansion has no closed form"
+			continue
+		start = len(program.code)
+		program.emit(Op.PUSH, rule.constant, "<q")
+		missing = next((inside.path for inside in rule.variable
+		                if inside.path not in placement_index), None)
+		if missing is not None:
+			# Said out loud rather than skipped. The first version of this
+			# dropped the program and recorded nothing, so the region kept
+			# measuring zero and the coverage report called it encoded.
+			del program.code[start:]
+			coverage.unencodable[placement.path] = \
+				f"the interior member `{missing}` is not in the table"
+			continue
+		for inside in rule.variable:
+			program.emit(Op.SIZE, placement_index[inside.path])
+			program.emit(Op.ADD)
+		if True:
+			if rule.kind == "add":
+				program.emit(Op.PUSH, rule.add, "<q")
+				program.emit(Op.ADD)
+			elif rule.kind == "ratio":
+				program.emit(Op.PUSH, rule.out, "<q")
+				program.emit(Op.MUL)
+				program.emit(Op.PUSH, rule.into, "<q")
+				program.emit(Op.DIV)
+			elif rule.kind == "padded":
+				# A partial group still costs a whole one, so this is a
+				# ceiling division and not a division: `(x + g - 1) / g * go`.
+				program.emit(Op.PUSH, rule.group_in - 1, "<q")
+				program.emit(Op.ADD)
+				program.emit(Op.PUSH, rule.group_in, "<q")
+				program.emit(Op.DIV)
+				program.emit(Op.PUSH, rule.group_out, "<q")
+				program.emit(Op.MUL)
+			program.emit(Op.END)
+			code_at[placement.path] = start
+			coverage.expressions += 1
+
 	# `at expr` and `while (cond)` are expressions too, and a walker needs
 	# both: one says where a member is, the other when a run stops.
 	located_at: dict[str, int] = {}
@@ -598,10 +703,15 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# names resolve in the *element's* struct rather than in the struct that
 	# holds the run: `while (nla_len >= 4)` is netlink's `nla_ok`, and
 	# `nla_len` is a field of the attribute, not of the message.
-	picker: tuple[tuple[dict[str, int], Callable[[ast.Field], ast.Expr | None],
+	picker: tuple[tuple[dict[str, int],
+	                    Callable[[ast.Field | ast.Opaque], ast.Expr | None],
 	                    bool], ...] = (
-		(located_at, lambda f: f.located, False),
-		(repeat_at, lambda f: f.repeat.predicate if f.repeat else None, True),
+		# Both are `Field` properties; an `Opaque` has neither, so it is
+		# asked for neither.
+		(located_at, lambda f: getattr(f, "located", None), False),
+		(repeat_at, lambda f: (f.repeat.predicate
+		                       if isinstance(f, ast.Field) and f.repeat
+		                       else None), True),
 	)
 	for target, pick, scope in picker:
 		for owner, placement in rows:
@@ -638,6 +748,17 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# pass: a struct three deep settles only after the one below it does, so
 	# iterate until nothing changes. Bounded by the number of structs, since
 	# each round can only ever turn a flag off.
+	# Which member names each struct's version, by struct *name*, so the
+	# loop below can ask before the version table is built by index.
+	version_of: dict[str, int | None] = {}
+	for name, rstruct in order:
+		version_member = next((entry.placement.version_field
+		                       for entry in traverse.own_entries(rstruct)
+		                       if entry.placement.version_field), None)
+		version_of[name] = (
+			None if version_member is None
+			else placement_index.get(f"{name}.{version_member}"))
+
 	validatable: dict[str, bool] = {name: True for name, _ in order}
 	nests: dict[str, set[str]] = {}
 	for name, rstruct in order:
@@ -647,20 +768,26 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			at = placement_index.get(placement.path)
 			kind = traverse.classify_check(rstruct, placement, set(resolved.structs))
 			# A coded region's extent is its interior through the codec's
-			# expansion, and the image carries no expansion -- so a walk
-			# places what follows one optimistically where C's accessor
-			# refuses, and answers OK where every backend answers BOUNDS.
-			# `classify_check` calls it nothing to check, which is true of
-			# the region and not of the struct holding it.
-			if placement.codec is not None:
+			# expansion. The image carries that now, as a size program on
+			# the region -- but only where the expansion has a closed form.
+			# A bounded ratio, an unbounded one, or a run inside the region
+			# leaves the length genuinely unknowable without decoding, so a
+			# walk would place what follows optimistically where C's
+			# accessor refuses. Those still defer, and so does every
+			# backend.
+			if placement.kind in ("coded", "sealed") \
+					and placement.path not in code_at \
+					and placement.delimiter is None:
 				whole = False
 				continue
 			# A `[since]` member is checked only where the message's own
-			# version admits it, and the image does not carry which member
-			# the struct's `[version = ...]` names. Checking unconditionally
-			# said CONSTRAINT for a v1 message carrying none of the fields
-			# a v3 one would. Carrying the version field is the next slice.
-			if placement.since is not None:
+			# version admits it, and the image now names the member that
+			# says so. Without one there is nothing to ask -- checking
+			# unconditionally said CONSTRAINT for a v1 message carrying
+			# none of the fields a v3 one would -- so a `[since]` member
+			# in a struct with no version field still defers.
+			if placement.since is not None \
+					and version_of.get(name) is None:
 				whole = False
 				continue
 			if kind is traverse.Check.NOTHING or at is None:
@@ -674,8 +801,21 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				policies = {a.name for a in placement.attrs}
 				if policies & {"preserve", "unknown"}:
 					continue
-				constraints_blob += _struct.pack(
-					"<IqBxxx", at, 0, 4 if "must_be_one" in policies else 3)
+				# `must_be_one` means every bit, not the number one: C
+				# compares a reserved `u4` against 0xF. The width is the
+				# packer's to know, so the expected value is carried rather
+				# than derived -- a walk that read the check kind and
+				# assumed 1 passed exactly the messages the schema refuses,
+				# and only for a field narrower than eight bits.
+				if "must_be_one" in policies:
+					if placement.size_bits is None \
+							or not 0 < placement.size_bits <= 63:
+						whole = False
+						continue
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, (1 << placement.size_bits) - 1, 4)
+					continue
+				constraints_blob += _struct.pack("<IqBxxx", at, 0, 3)
 				continue
 			if kind is traverse.Check.CONSTRAINED:
 				for attr in placement.attrs:
@@ -744,9 +884,10 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# a length the message declares whatever arithmetic is
 				# wrapped round it, and reading `sized_by` missed it.
 				field = members.get(placement.path)
-				sized = field.array.size if field is not None and field.array \
-					else None
-				if sized is not None and field is not None \
+				sized = (field.array.size
+				         if isinstance(field, ast.Field) and field.array
+				         else None)
+				if sized is not None and isinstance(field, ast.Field) \
 						and not isinstance(sized, ast.Remaining) \
 						and field.repeat is None:
 					constraints_blob += _struct.pack("<IqBxxx", at, 0, 6)
@@ -907,6 +1048,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				_u32(None if entry_bytes is None else entry_bytes * 8),
 				NONE, _index_base(placement))
 
+	# Which member carries each struct's version. `Placement.version_field`
+	# already names it -- the layout resolves `[version = ver]` onto every
+	# member of the struct -- so this is the name turned into an index, not a
+	# second reading of the attribute.
+	versions_blob = bytearray()
+	for shape, (name, _rstruct) in enumerate(order):
+		carries = version_of.get(name)
+		if carries is not None:
+			versions_blob += _struct.pack("<II", shape, carries)
+
 	sections.append((SECTION_STRUCTS, bytes(structs_blob), STRUCT_BYTES))
 	sections.append((SECTION_PLACEMENTS, b"", PLACEMENT_BYTES))	# filled below
 	sections.append((SECTION_CODE, bytes(program.code), 1))
@@ -920,7 +1071,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_INDEXES, index_blob, INDEX_BYTES),
 			(SECTION_MARKERS, markers_blob, MARKER_BYTES),
 			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),
-			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES)):
+			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES),
+			(SECTION_VERSIONS, versions_blob, VERSION_BYTES)):
 		if blob:
 			sections.append((section, bytes(blob), stride))
 

@@ -29,7 +29,7 @@ STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 VARINTS, TLVS, INDEXES             = 9, 10, 11
 NAMES, VECTORS, MARKERS            = 12, 13, 14
-CONSTRAINTS, ENUM_VALUES           = 15, 16
+CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
 
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
@@ -156,6 +156,11 @@ class Image:
 	constraints: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
 	#: enum id -> the values it names.
 	enum_values: dict[int, set[int]]	= field(default_factory=dict)
+	#: struct index -> the placement holding its version number. A `[since]`
+	#: member is present only in a message whose own version reaches it, so
+	#: whether such a field is *wrong* cannot be asked until this says
+	#: whether it is *there*.
+	versions: dict[int, int]		= field(default_factory=dict)
 	#: variant placement index -> (discriminant, [(case, selected, flags)])
 	arms: dict[int, tuple[int, list[tuple[int, int, int]]]] = \
 		field(default_factory=dict)
@@ -271,6 +276,12 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			enum_id, value, _pad = _struct.unpack_from(
 				"<IqI", blob, at + i * stride)
 			image.enum_values.setdefault(enum_id, set()).add(value)
+
+	if VERSIONS in found:
+		at, records, stride = found[VERSIONS]
+		for i in range(records):
+			shape, where = _struct.unpack_from("<II", blob, at + i * stride)
+			image.versions[shape] = where
 
 	if MARKERS in found:
 		at, records, stride = found[MARKERS]

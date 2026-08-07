@@ -9742,6 +9742,90 @@ in the emitted text rather than inferred from a passing build -- `uint32_t
 int_;` in the owned header, `int_()` in C++, `def class_` in Python,
 `pub fn r#type` in Rust.
 
+### 26.91 The two things `validate` deferred, and the six bugs behind them
+
+26.89 left two classes of struct unable to answer: one holding a `[since]`
+member, and one holding a coded region. Both are closed. Neither was the
+work; what the work turned out to be is the six defects that were sitting
+behind them, four of which had nothing to do with either.
+
+**The version field was simply absent from the image.** `Placement.since`
+had been packed since the format was written -- what was missing is the
+member that `[version = ver]` names, without which "is this field present"
+has no answer. A side table rather than a field on `image_struct`, because
+that record is 16 bytes for four u32s with none spare and widening it would
+move every stride in the format for a fact that applies to two structs. The
+offsets do not move: `[since]` is append-only by construction, so a member
+keeps the offset it would have had and only its presence varies -- which is
+why this needed a scalar to read and not a second offset chain.
+
+**A coded region's extent is arithmetic the compiler already does.**
+`traverse.region_extent` is the rule both the C backend and the solver ask,
+so the packer renders it into the existing bytecode rather than forming a
+second opinion about `ratio_padded`'s rounding. Two things had to happen
+first. The interior members were not in the placement table at all -- an
+arm's members and a *sealed* region's interior were admitted, a *coded*
+one's were not -- and a size expression can only name a member the table
+contains. And smtp's DATA body is stuffed *and* terminated, so its length
+comes from the scan and never from the expansion; asking the expansion
+there reported an expression the image had failed to carry.
+
+**The first version of that loop dropped a program and said nothing**,
+which is this repository's own recurring shape: the region kept measuring
+zero and the coverage report called it encoded. It says which interior
+member it could not name now.
+
+Four more, and every one of them was found rather than expected.
+
+**A member of fixed size at a dynamic offset was never bounds-checked.**
+The check that acquired the view answered for the struct, not for a member
+whose offset is a sum of lengths the message chose -- `examples/packet`'s
+tag is sixteen fixed bytes and was 65 kilobytes past a 62-byte view. C
+emits exactly this from exactly this pair of facts, and both are flags the
+image already carried, so it is the walk's own arithmetic rather than a
+constraint the packer emits.
+
+**"Nobody can place this" and "the frame is too short" are different
+answers**, and folding them together made a struct whose members ran off
+the end report OK. `Unplaceable` is a subclass of `Refused` now: the walk
+*stops* on the first, because `_offset_blocker` scans every earlier member
+so once one blocks all of them do, and *returns BOUNDS* on the second.
+
+**A counted run of variable-length elements has no stride, and the walk was
+multiplying by one byte.** That is the defect C shipped once and `edges`
+records in its own comment -- "a plausible number, which is the failure this
+repository rates worst". Refused rather than walked: the walk *could* add
+the elements up, and then it would be the only implementation that could, so
+it would disagree with all four about where the next member is.
+
+**`must_be_one` means every bit, not the number one.** C compares a reserved
+`u4` against `0xF`; the walk compared against 1, which passed exactly the
+messages the schema refuses and only for a field narrower than a byte. The
+width is the packer's to know, so the expected value is carried in the
+constraint record rather than derived from the check kind.
+
+**And a `default: opaque rest[nlmsg_len - 16]` arm carried no size
+expression**, because `_ast_members` recorded `ast.Field` and an `Opaque` is
+not one -- it holds its size directly rather than through an array. So
+netlink's default arm measured zero, the attributes were placed on top of
+the body, and the walk counted one where C, placing them past a
+900-megabyte `rest`, counted none.
+
+**Three of those six were found by six buffers.** Random bytes reach a
+version field's low values about once in 256, so the `[since]` gate -- whose
+whole behaviour is "is this member even here" -- was answered for v1 twice
+in four hundred draws and never deliberately. Six buffers opening with 1, 2
+and 3 found the `must_be_one` width, the opaque arm and an arm-fit check
+that was measuring an arm no backend can measure. They cost six driver runs
+rather than a written-down expectation: C is still the thing compared
+against, at the moment of comparison.
+
+**Status:** 120 of 141 structs answer `validate`, up from 110, and every
+step of `make check` green. The 21 that defer are a different list now:
+an arm whose type cannot be measured, a delimited member carrying an
+encoding, a constraint whose bound is not a literal. `[since]` gates and
+coded regions are not on it.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

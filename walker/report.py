@@ -21,7 +21,8 @@ while rendering nothing is the failure mode that has to be impossible.
 from __future__ import annotations
 
 from walker.image import NONE, Image
-from walker.walk import (Refused, View, acquire, read_bytes, read_scalar,
+from walker.walk import (Refused, Unplaceable, View, acquire, read_bytes,
+                         read_scalar,
                          _read_at, offset_bits, scan, size_bits,
                          struct_extent, varint, while_count)
 
@@ -434,6 +435,28 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		return None
 
 	for index in image.members(image.structs[struct_index]):
+		# A `[since]` member is there only in a message whose own version
+		# reaches it, and a field that is not there is not a field that is
+		# wrong. So the version is read first and the member skipped
+		# entirely -- not merely left unchecked, because placing it would
+		# ask the frame for bytes the message never claimed to carry and
+		# answer BOUNDS where C answers OK.
+		#
+		# Nothing after it moves: `[since]` is append-only by construction,
+		# so every member keeps the offset it would have had and only its
+		# presence varies. That is why this needs a scalar read and not a
+		# second offset chain.
+		since = image.placements[index].since
+		if since:
+			carries = image.versions.get(struct_index)
+			if carries is None:
+				return None		# the packer should not have said yes
+			try:
+				if read_scalar(view, carries) < since:
+					continue
+			except Refused:
+				return ERR_BOUNDS
+
 		# Every member is *placed*, not only the constrained ones: a struct
 		# whose members after a coded region cannot be reached fails with
 		# BOUNDS before any constraint is asked, and checking only the
@@ -442,8 +465,37 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		try:
 			at   = offset_bits(view, index)
 			wide = size_bits(view, index)
+		except Unplaceable:
+			# Not BOUNDS, and the distinction is the whole of this branch.
+			# A member nothing can place -- something before it has no
+			# length in closed form -- is one no backend emits an offset
+			# for and none checks. `segments.after` sits behind a counted
+			# run of variable-length elements and C emits a comment where
+			# its offset would be.
+			#
+			# Nothing after it can be placed either, so the walk stops
+			# rather than skipping one member and carrying on:
+			# `_offset_blocker` scans every earlier member, so once one
+			# blocks, all of them do.
+			break
 		except Refused:
+			# The ordinary case: the frame does not reach it.
 			return ERR_BOUNDS
+
+		# A member of *fixed* size at a *dynamic* offset. Its offset is a
+		# sum of lengths the message chose, so the bounds check that
+		# acquired the view never answered for it: `examples/packet`'s tag
+		# is sixteen fixed bytes and was 65 kilobytes past a 62-byte view.
+		# Both facts are flags the image already carries, so this is the
+		# walk's own arithmetic rather than a constraint the packer emits
+		# -- which is what the C backend does too, from the same pair.
+		#
+		# A member that declares its own length is the case below and is
+		# never fixed-size, so the two do not overlap.
+		placed = image.placements[index]
+		if placed.fixed and not placed.offset_known:
+			if view.at * 8 + at + wide > view.limit * 8:
+				return ERR_BOUNDS
 
 		# A run whose length the message declares has to fit the frame.
 		# The accessor clamps; `validate` is where a message that does not
@@ -512,7 +564,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 				return ERR_CONSTRAINT
 			if check == MUST_BE_ZERO and value != 0:
 				return ERR_CONSTRAINT
-			if check == MUST_BE_ONE and value != 1:
+			if check == MUST_BE_ONE and value != against:
 				return ERR_CONSTRAINT
 			if check == ENUM_KNOWN \
 					and value not in image.enum_values.get(against, set()):
@@ -548,6 +600,16 @@ def _arm_selects(image: Image, view: View, index: int) -> int:
 		# discriminant was fine and the bytes behind it were not.
 		if chosen == NONE:
 			return OK
+
+		# An arm whose type cannot be measured from its own bytes has no
+		# sub-view, so nothing asks whether it fits the frame either --
+		# there is nothing to compare against. `packet.body.publish` is
+		# that arm, and measuring it anyway called a three-byte MQTT
+		# publish malformed where C called it fine.
+		arm_type = image.placements[chosen].type_struct
+		if arm_type != NONE and not image.structs[arm_type].measurable:
+			return OK
+
 		# Measured through the variant *member*, not the arm. An arm is
 		# not in the struct's member chain, so asking `offset_bits` for
 		# one refuses -- which made every mqtt packet BOUNDS where C said
@@ -560,11 +622,11 @@ def _arm_selects(image: Image, view: View, index: int) -> int:
 			return ERR_BOUNDS
 		if view.at * 8 + at + wide > view.limit * 8:
 			return ERR_BOUNDS
+
 		# A struct-typed arm carries its own constraints and its own
 		# validator is what knows them. A different arm is nothing to
 		# check, which is why this asks only the one selected.
-		arm_type = image.placements[chosen].type_struct
-		if arm_type != NONE and image.structs[arm_type].measurable:
+		if arm_type != NONE:
 			inner = View(image, view.buffer, arm_type,
 			             view.at + at // 8, view.limit)
 			return _validate(image, inner, arm_type) or OK
