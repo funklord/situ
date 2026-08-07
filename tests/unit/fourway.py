@@ -55,6 +55,14 @@ ALPHABETS = (
 	bytes(range(0x20, 0x7f)) + b"\r\n\t",	# printable text and its framing
 	b"0123456789 \r\n:.-",			# digits and the delimiters
 	b"\x00\x01\x7f\x80\xff 0123456789",	# edge bytes among text
+	# Text that is *terminated* and not ASCII, which no other alphabet
+	# reaches often enough to matter. `validate` returns on the first thing
+	# wrong with a member, so an encoding check on a delimited member is
+	# only reachable through a buffer whose delimiter is present -- and the
+	# alphabets above put a high byte and a delimiter in the same buffer
+	# rarely enough that five unchecked `[encoding = ascii]` declarations
+	# sat in `http` and `smtp` without a single draw noticing.
+	b"GET / HTTP1.\r\n:\xc3\xa9\x80\xff",
 )
 
 

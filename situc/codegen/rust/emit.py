@@ -3021,6 +3021,20 @@ class Emitter:
 			"\t\t\treturn Err(Error::Constraint);",
 			"\t\t}",
 		]
+		# The encoding, over the span the scan found. See the C backend for
+		# why it lives here rather than with the fixed-width check, which
+		# needs a static offset and a declared count.
+		named = next((attr for attr in placement.attrs
+		              if attr.name == "encoding"), None)
+		spelling = getattr(named.value, "name", None) if named else None
+		if spelling in ("ascii", "utf8"):
+			lines.extend([
+				f"\t\tif !situ_rt::{spelling}_valid("
+				f"self.{_ident(f'{base}_raw')}()) {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			])
+
 		if placement.radix_minimal:
 			value = (f"situ_rt::trim(self.{_ident(f'{base}_raw')}())"
 			         if placement.trimmed

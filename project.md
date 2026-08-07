@@ -9982,6 +9982,63 @@ restored and re-run to confirm the tree came back. A test that reads a file
 in a directory that has just been reorganised is one to check has not
 quietly stopped reading anything.
 
+### 26.94 The attribute that was parsed, accepted and never checked
+
+26.92 recorded that a delimited member's `[encoding = ascii]` "adds no check
+in any backend" and filed it under checks that do not exist. It was the wrong
+heading. The compiler refuses `[encoding = latin1]` with a diagnostic that
+says exactly why -- *"an encoding nobody checks is worse than none declared:
+the schema would claim something the code never tests"* -- and then accepted
+`[encoding = ascii]` on a member that nothing tested. Five of the seven
+encoding declarations in the tree were in that state: every one in `http` and
+`smtp`, and none in `edges`.
+
+**The gate existed on the wrong axis.** It asked whether situ can validate
+this *encoding*, and `ascii` always answers yes. What decides whether the
+check is actually emitted is the *placement*: `_encoding_check` needs a
+static offset and a declared count to name the bytes it would scan, and a
+member running to a delimiter has neither. So the rule was enforced against
+the encoding name and silent about everything else.
+
+A delimited member has a span, and every backend already emits it -- `_ptr`
+and `_len`, content without the delimiter. The check is that span through the
+validator each runtime already carries. Four backends and the walker, and the
+walker had a wrinkle of its own: its span is content *plus* delimiter,
+because that is where the next member starts, so it had to ask the scan for
+the content rather than reuse the member's width.
+
+**The differential check could not reach it, which is why it survived.**
+`validate` returns on the first thing wrong with a member, and for random
+bytes the delimiter is usually absent -- so `terminated` fails and the walk
+never reaches the encoding. Reaching it needs a buffer that is *terminated*
+and *not ASCII* at once, and the four alphabets produced one rarely enough
+that five unchecked declarations sat in the corpus. A fifth alphabet was
+added for it.
+
+**Adding it found two more, and neither is about encodings.** A fifth
+alphabet reshuffles every draw, so the whole corpus of buffers moved:
+
+- **A nested struct with no single size was measured as its minimum.**
+  dnsname's `question.qname` is a `name`, whose minimum is one byte -- a root
+  label and nothing else -- so `qtype` was placed at byte 1 where it belongs
+  at 55, comfortably inside a frame it does not reach. `struct_extent` is
+  what measures one and the walk was not calling it. The guard that came with
+  the fix is the interesting half: an *arm* is not a member of its struct, so
+  asking for its offset walks the struct summing every member, including the
+  variant whose extent is that arm's -- and the two recur until the stack
+  ends. The membership test has to come before the measurement, not after it.
+- **A truncated varint is zero bytes wide, not a refusal.** C's `_len`
+  answers zero where the encoding runs off the end and goes on placing what
+  follows; only the getter refuses. That is the third instance of the same
+  distinction in two sections -- the lax reader and the strict one -- after
+  text numbers in 26.92. sqlite's `02 c3 a9` is a one-byte payload size and a
+  rowid that never terminates, and the walk called it BOUNDS where C reads
+  the cell to the end.
+
+**Status:** every step of `make check` green, and all five implementations
+agree on both verdicts for the new check -- `GET` passes, `G\xc3\xa9T` is
+CONSTRAINT, in C, C++, Rust, Python and the walk.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

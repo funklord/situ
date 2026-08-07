@@ -592,8 +592,19 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN)]
 		if span:
 			start = view.at + at // BITS_PER_BYTE
-			data  = bytes(view.buffer[start:start + wide // BITS_PER_BYTE])
-			if len(data) * BITS_PER_BYTE != wide:
+			# A delimited member's `wide` is content *plus* its delimiter,
+			# because that is where the next member starts. What the schema
+			# called text is the content, and that is what every backend
+			# passes to the check -- `_len`, not `_span`.
+			if index in image.delimiters:
+				try:
+					content = scan(view, index)[0]
+				except Refused:
+					return ERR_BOUNDS
+			else:
+				content = wide // BITS_PER_BYTE
+			data = bytes(view.buffer[start:start + content])
+			if len(data) != content:
 				return ERR_BOUNDS
 			for check, against in span:
 				if check == NUL_TERMINATED and 0 not in data:

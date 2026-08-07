@@ -1004,6 +1004,20 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					continue
 				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
 
+				# The encoding, over the content the scan found. All four
+				# backends check this now; until they did, `[encoding =
+				# ascii]` on a delimited member was a claim the schema made
+				# and nothing tested.
+				spelled = next((a for a in placement.attrs
+				                if a.name == "encoding"), None)
+				if spelled is not None:
+					how = getattr(spelled.value, "name", None)
+					if how not in ("ascii", "utf8"):
+						whole = False
+						continue
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, 0 if how == "ascii" else 1, 12)
+
 				# In C's order, which is the answer and not just the
 				# verdict: the terminator first, then the spelling, then
 				# the parse. A field of non-digits that also runs off the

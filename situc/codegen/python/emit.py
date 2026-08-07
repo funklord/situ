@@ -3834,6 +3834,19 @@ class Emitter:
 			f'{repr(delim).replace(chr(92), chr(92) * 2)}: '
 			'the frame stops first")',
 		]
+		# The encoding, over the span the scan found. See the C backend for
+		# why it lives here rather than with the fixed-width check, which
+		# needs a static offset and a declared count.
+		named = next((attr for attr in placement.attrs
+		              if attr.name == "encoding"), None)
+		spelling = getattr(named.value, "name", None) if named else None
+		if spelling in ("ascii", "utf8"):
+			lines.extend([
+				f"\t\tif not {spelling}_valid(self.{name}_raw):",
+				"\t\t\traise ConstraintError(",
+				f'\t\t\t\t"{placement.path} is not {spelling}")',
+			])
+
 		if placement.radix_minimal:
 			# The *digits*, which is what the predicate reads. This passed
 			# `self.{name}` -- the parsed number -- and `bytes(6)` in Python is

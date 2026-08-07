@@ -4832,6 +4832,22 @@ class Emitter:
 			"\t\t}",
 		]
 
+		# The encoding, over the span the scan found. See the C backend for
+		# why this lives here: the fixed-width check needs a static offset
+		# and a declared count, and a delimited member has neither, so
+		# `[encoding = ascii]` on one was accepted and never checked.
+		named = next((attr for attr in placement.attrs
+		              if attr.name == "encoding"), None)
+		spelling = getattr(named.value, "name", None) if named else None
+		if spelling in ("ascii", "utf8"):
+			lines.extend([
+				f"\t\t/* {placement.path} [encoding = {spelling}] */",
+				f"\t\tif (!situ_{spelling}_valid(raw_.base + {name}_offset(),"
+				f" {name}_len())) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			])
+
 		if placement.radix_minimal:
 			# The trimmed bytes, not `{name}()` -- for a text number that is
 			# the fallible getter and takes an out-parameter, so calling it

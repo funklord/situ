@@ -5568,6 +5568,31 @@ class Emitter:
 			"\t}",
 		]
 
+		# The encoding, over the span the scan found. `_encoding_check`
+		# below cannot reach a delimited member -- it needs a static offset
+		# and a declared count to name the bytes, and a member running to a
+		# delimiter has neither -- so `[encoding = ascii]` on one was parsed,
+		# accepted and never checked. The compiler refuses an encoding it
+		# cannot validate by *name*, saying "the schema would claim something
+		# the code never tests", and this was that same claim going untested
+		# on the placement axis instead.
+		#
+		# `_len` is the content, not the content plus its delimiter, so this
+		# checks what the schema called text and not the byte that ends it.
+		named = next((attr for attr in placement.attrs
+		              if attr.name == "encoding"), None)
+		spelling = getattr(named.value, "name", None) if named else None
+		if spelling in ("ascii", "utf8"):
+			lines.extend([
+				"",
+				f"\t/* {placement.path} [encoding = {spelling}] */",
+				f"\tif (!situ_{spelling}_valid("
+				f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
+				f"\t\t\t{ident(self.prefix, struct.name, local, 'len')}(view))) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			])
+
 		if placement.radix is not None:
 			# A text number's digits are a constraint like any other, so parse
 			# refuses them here rather than leaving every caller of the getter

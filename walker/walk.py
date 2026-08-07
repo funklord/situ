@@ -127,7 +127,17 @@ def size_bits(view: View, index: int) -> int:
 		# the minimum -- one byte -- so summing that placed everything after
 		# a varint at the wrong offset, which is what kept sqlite's
 		# `payload` unrenderable.
-		consumed, _ = varint(view, index)
+		#
+		# A *truncated* one is zero bytes wide, not a refusal. This is the
+		# lax reader again: C's `_len` returns 0 where the encoding runs off
+		# the end and goes on placing what follows, and only the getter
+		# refuses. Refusing here made `02 c3 a9` -- a one-byte payload size
+		# and a rowid that never terminates -- come back BOUNDS from a
+		# struct C reads to the end.
+		try:
+			consumed, _ = varint(view, index)
+		except Refused:
+			return 0
 		return consumed * BITS_PER_BYTE
 	# `type_struct` is what separates the two uses of `until`. A member ends
 	# at the first occurrence of its delimiter, anywhere; a *run of records*
@@ -182,6 +192,39 @@ def size_bits(view: View, index: int) -> int:
 		element = (placement.element_bits
 		           if placement.element_bits != NONE else BITS_PER_BYTE)
 		return count * element
+	# A nested struct with no single size is as long as its own bytes turn
+	# out to be, and `placement.size_bits` is the *minimum* -- which for
+	# dnsname's `question.qname` is one byte, the length of a name holding
+	# nothing but its root label. Everything after such a member was then
+	# placed inside it: `qtype` at byte 1 instead of 55, comfortably within
+	# a frame it does not actually reach, so `validate` said OK where C
+	# said BOUNDS.
+	#
+	# Only where the struct can be measured from its own bytes. Where it
+	# cannot, no backend places what follows either, and the minimum is not
+	# a better guess than refusing.
+	#
+	# A member of *this* struct, and the test has to come first. An arm is
+	# not one, and asking `offset_bits` for one walks the struct summing
+	# every member -- including the variant this arm belongs to, whose
+	# extent is the arm's. `_variant_bits` calls straight back into here and
+	# the two recur until the stack ends. The arm's extent is the variant
+	# member's and `_variant_bits` already knows it, so there is nothing to
+	# measure here.
+	shape = view.image.structs[view.shape] if isinstance(view.shape, int) \
+		else view.shape
+	if placement.type_struct != NONE \
+			and index in view.image.members(shape) \
+			and not view.image.structs[placement.type_struct].fixed:
+		if not view.image.structs[placement.type_struct].measurable:
+			raise Unplaceable(
+				f"placement {index} is a struct that cannot be measured "
+				"from its own bytes")
+		inner = View(view.image, view.buffer, placement.type_struct,
+		             view.at + offset_bits(view, index) // BITS_PER_BYTE,
+		             view.limit)
+		return struct_extent(inner) * BITS_PER_BYTE
+
 	if placement.size_bits == NONE:
 		raise Refused(f"placement {index} has no size this image carries")
 	return placement.size_bits
@@ -420,8 +463,10 @@ def varint(view: View, index: int) -> tuple[int, int]:
 	and it is why a nine-byte varint holds sixty-four bits where seven-bit
 	groups would need ten.
 
-	Consuming zero bytes means the buffer ended mid-value, which every
-	backend reports as a refusal rather than as a short read.
+	Raises where the buffer ends mid-value, which is what the *getter*
+	does in every backend. The length accessor does not: it answers zero and
+	lets the offset chain carry on, so `size_bits` catches this rather than
+	propagating it. Two readers again, as for a text number.
 	"""
 	rules = view.image.varint_rules.get(index)
 	if rules is None:
