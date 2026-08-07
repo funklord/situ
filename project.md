@@ -9900,6 +9900,55 @@ clear and that the walk answers `None` rather than `OK`.
 fifth column's last unfinished piece and it is finished; what remains
 deferred is a construct nothing in the tree writes.
 
+### 26.93 The file nothing referenced, except the tests
+
+`packaging/situc.control` and `packaging/libsitu-dev.control` were the
+hand-rolled dpkg-deb build's inputs. Debhelper replaced that build the day
+after it was written and the two files sat unread for months, so removing
+them was right. The removal commit says "nothing has referenced either
+since", and the search behind that sentence did not include `tests/`, where
+`test_packaging.py` had been reading both since they were written. Eight
+tests started failing with `FileNotFoundError`, and master was red until
+somebody looked.
+
+**A test is a reader like any other.** That is the whole finding, and it is
+worth writing down because the search that establishes a file is dead is
+exactly the search that feels complete when it has covered the build. The
+build is where a *product* dependency lives; a test dependency lives
+somewhere the build never looks, and it is the one that turns red.
+
+The tests read `debian/` now, which is where the packaging actually is, and
+in moving them three of the six claims changed shape rather than location:
+
+- **The version is not substituted any more, it is in `debian/changelog`,**
+  so what the test holds is the changelog against `situc.__version__`.
+  `make version-check` asks the same question and *skips* where
+  `dpkg-parsechangelog` is absent -- a check reporting success over nothing,
+  on precisely the machines least likely to have the tool. This one parses
+  the line itself and cannot skip.
+- **`Depends` is a list now**, because debhelper adds `${misc:Depends}` to
+  every binary package. "No comma" was the old way of saying "nothing but
+  python3" and stopped meaning that; the test splits the field and ignores
+  the substitution instead, which says what was meant in the first place.
+- **`Architecture: any`, not `@ARCH@`.** The old build substituted the
+  string; debhelper resolves it. The claim -- compiler architecture-
+  independent, runtime not -- is unchanged and is the reason the packages
+  are split at all.
+
+**One claim was added rather than moved.** `Build-Depends` carries a Python
+floor too, and nothing checked it against `pyproject.toml` while the two
+lived in different files. A source package that builds under an interpreter
+older than the code's floor fails inside `dh_auto_build`, a long way from
+anything that names a version.
+
+**Six mutations, six caught.** Turning `situc` into `Architecture: any`,
+giving `libsitu-dev` a dependency on `situc`, dropping either floor to 3.9,
+disagreeing the changelog with `VERSION`, and deleting `Maintainer` -- each
+was applied to the real files and each failed the suite, and the files were
+restored and re-run to confirm the tree came back. A test that reads a file
+in a directory that has just been reorganised is one to check has not
+quietly stopped reading anything.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

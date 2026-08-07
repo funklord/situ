@@ -1,13 +1,20 @@
 """The Debian packaging, checked without building a package.
 
-`make deb` is not in the suite: it wants `dpkg-deb`, and a packaging step that
-runs on every commit is a packaging step people stop reading. What is checked
-here is the part that rots silently -- the claims the control files make about
-a tree that keeps changing, and the split between the two packages.
+`make deb` is not in the suite: it wants `dpkg-buildpackage`, and a packaging
+step that runs on every commit is a packaging step people stop reading. What
+is checked here is the part that rots silently -- the claims `debian/control`
+makes about a tree that keeps changing, and the split between the two
+packages.
 
 Building and installing them is `make deb-check`, which unpacks both into a
 scratch root and compiles a schema through the installed compiler against the
 installed runtime. That needs the tools; this does not.
+
+**These read `debian/`, and used to read `packaging/*.control`.** Those were
+the hand-rolled dpkg-deb build's inputs; debhelper replaced that build and
+0678bf9 removed them as unreferenced. They were referenced -- by this file --
+and the eight failures that produced are the reason the search that declares
+a file dead has to include the tests. A test is a reader like any other.
 """
 
 from __future__ import annotations
@@ -22,37 +29,87 @@ import situc
 
 ROOT      = Path(__file__).resolve().parents[2]
 PACKAGING = ROOT / "packaging"
+DEBIAN    = ROOT / "debian"
 PACKAGES  = ("situc", "libsitu-dev")
 
+#: What debhelper expands, and what it expands to is not this file's business.
+#: `${misc:Depends}` is the one every binary package carries; a test that
+#: refused it would be a test against debhelper rather than against the
+#: packaging.
+SUBSTITUTED = "${misc:Depends}"
 
-def control(name: str) -> dict[str, str]:
-	"""The control file's fields, with continuation lines dropped."""
-	fields: dict[str, str] = {}
-	for line in (PACKAGING / f"{name}.control").read_text(encoding="ascii").splitlines():
-		if line.startswith(" "):
+
+def stanzas() -> list[dict[str, str]]:
+	"""`debian/control`, as deb822 paragraphs.
+
+	Continuation lines are dropped: every field this file asks about is a
+	single line, and a `Description` body is prose rather than a claim.
+	"""
+	found: list[dict[str, str]] = []
+	current: dict[str, str] = {}
+	for line in (DEBIAN / "control").read_text(encoding="ascii").splitlines():
+		if not line.strip():
+			if current:
+				found.append(current)
+				current = {}
+			continue
+		if line.startswith((" ", "\t")):
 			continue
 		key, _, value = line.partition(":")
-		fields[key] = value.strip()
-	return fields
+		current[key] = value.strip()
+	if current:
+		found.append(current)
+	return found
+
+
+def source() -> dict[str, str]:
+	"""The source paragraph: the one that carries `Source`."""
+	found = next((one for one in stanzas() if "Source" in one), None)
+	assert found is not None, "debian/control has no source paragraph"
+	return found
+
+
+def binary(name: str) -> dict[str, str]:
+	found = next((one for one in stanzas() if one.get("Package") == name), None)
+	assert found is not None, f"debian/control has no `{name}` paragraph"
+	return found
+
+
+def depends(name: str) -> list[str]:
+	"""One package's dependencies, split and stripped."""
+	held = binary(name).get("Depends", "")
+	return [one.strip() for one in held.split(",") if one.strip()]
+
+
+def test_the_source_paragraph_has_what_dpkg_requires() -> None:
+	fields = source()
+	for required in ("Source", "Maintainer", "Build-Depends"):
+		assert required in fields, f"debian/control's source has no {required}"
 
 
 @pytest.mark.parametrize("name", PACKAGES)
-def test_the_control_file_has_what_dpkg_requires(name: str) -> None:
-	fields = control(name)
-	for required in ("Package", "Version", "Architecture", "Maintainer",
-	                 "Description"):
-		assert required in fields, f"{name}.control has no {required}"
+def test_each_binary_paragraph_has_what_dpkg_requires(name: str) -> None:
+	fields = binary(name)
+	for required in ("Package", "Architecture", "Description"):
+		assert required in fields, f"`{name}` has no {required}"
 	assert fields["Package"] == name
 
 
-@pytest.mark.parametrize("name", PACKAGES)
-def test_the_version_is_substituted_rather_than_written(name: str) -> None:
-	"""One version, in `situc/__init__.py`.
+def test_the_version_is_not_written_into_the_packaging_twice() -> None:
+	"""One version, in the `VERSION` file, and `debian/changelog` reads it.
 
-	A number typed into a control file is a number that disagrees with
-	`situc --version` the first time either is bumped alone.
+	A number typed in two places is two numbers the first time either is
+	bumped alone. `make version-check` asks this too and *skips* where
+	`dpkg-parsechangelog` is absent, which is a check that reports success
+	over nothing on exactly the machines least likely to have the tool. This
+	needs no tool, so it does not skip.
 	"""
-	assert control(name)["Version"] == "@VERSION@"
+	first  = (DEBIAN / "changelog").read_text(encoding="ascii").splitlines()[0]
+	found  = re.match(r"\S+ \(([^)]+)\)", first)
+	assert found is not None, f"debian/changelog's first line is {first!r}"
+	assert found.group(1) == situc.__version__, (
+		f"debian/changelog says {found.group(1)}, "
+		f"situc.__version__ says {situc.__version__}")
 
 
 def test_the_compiler_package_is_architecture_independent() -> None:
@@ -63,22 +120,27 @@ def test_the_compiler_package_is_architecture_independent() -> None:
 	on -- for a tool whose purpose is generating code for targets other than
 	the build host, the wrong way round.
 	"""
-	assert control("situc")["Architecture"] == "all"
-	assert control("libsitu-dev")["Architecture"] == "@ARCH@"
+	assert binary("situc")["Architecture"] == "all"
+	assert binary("libsitu-dev")["Architecture"] == "any"
 
 
 def test_the_compiler_needs_nothing_but_python() -> None:
 	"""Section 24: the toolchain has to vendor into a build environment where
-	`pip install` is not on the table."""
-	depends = control("situc").get("Depends", "")
-	assert depends.startswith("python3")
-	assert "," not in depends
+	`pip install` is not on the table.
+
+	`${misc:Depends}` is debhelper's and is allowed; anything else named here
+	is a second thing that environment would have to be given.
+	"""
+	held = [one for one in depends("situc") if one != SUBSTITUTED]
+	assert len(held) == 1, f"situc depends on more than python3: {held}"
+	assert held[0].startswith("python3")
 
 
 def test_the_runtime_package_depends_on_nothing() -> None:
 	"""A header and a static library. Depending on the compiler would make a
 	target machine install a schema compiler it has no use for."""
-	assert "Depends" not in control("libsitu-dev")
+	held = [one for one in depends("libsitu-dev") if one != SUBSTITUTED]
+	assert not held, f"libsitu-dev depends on {held}"
 
 
 def test_every_installed_path_belongs_to_exactly_one_package() -> None:
@@ -162,4 +224,13 @@ def test_the_package_declares_the_python_floor_the_project_declares() -> None:
 	found     = re.search(r'^python_version\s*=\s*"(\d+\.\d+)"', pyproject, re.M)
 	assert found is not None
 
-	assert control("situc")["Depends"] == f"python3 (>= {found.group(1)})"
+	held = [one for one in depends("situc") if one != SUBSTITUTED]
+	assert held == [f"python3 (>= {found.group(1)})"]
+
+	# And `Build-Depends`, which is the floor the *build* runs at. A source
+	# package that builds under an interpreter older than the code's floor
+	# fails at the point `situc` is first invoked, which under debhelper is
+	# somewhere inside `dh_auto_build` rather than anywhere that names a
+	# version. Nothing checked this while the two floors lived in separate
+	# files.
+	assert f"python3 (>= {found.group(1)})" in source()["Build-Depends"]
