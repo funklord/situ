@@ -31,7 +31,7 @@ from fourway import COMPLETE, answers, build, draw
 sys.path.insert(0, str(ROOT))
 from walker import report, vm                      # noqa: E402
 from walker.image import load                      # noqa: E402
-from walker.walk import Refused, acquire, read_scalar  # noqa: E402
+from walker.walk import Refused, View, acquire, read_scalar  # noqa: E402
 
 
 def packed(text: str) -> bytes:
@@ -281,7 +281,7 @@ def test_a_struct_the_image_cannot_answer_for_says_so() -> None:
 
 	# And the walk declines rather than guessing, which is what the bit is
 	# for: `None` is "this image cannot say", not `OK`.
-	view = report.View(image, bytes(16), 0, 0, 16)
+	view = View(image, bytes(16), 0, 0, 16)
 	assert report._validate(image, view, 0) is None
 
 
