@@ -686,6 +686,57 @@ static inline uint32_t situ_trim_len(const uint8_t *data, uint32_t len)
 	return end - start;
 }
 
+/* Write a value as fixed-width digits, which is `situ_parse_uint` backwards.
+ *
+ * Fixed width, so the leading zeros are mandatory rather than optional: a
+ * field declared `hex u32 x[8]` is eight digits whatever the value, and that
+ * is what makes one value one byte sequence. The only spelling freedom left
+ * is case, and this writes upper -- cpio's `newc` header, ASN.1's and
+ * SMTP's numbers are all upper, and a lower-case digit is refused on the way
+ * in rather than tolerated here (26.86).
+ *
+ * Returns 0, or -1 where the value needs more digits than the field has.
+ */
+static inline int situ_format_uint(uint8_t *data, uint32_t len, uint32_t radix,
+	    uint64_t value)
+{
+	uint32_t i;
+
+	if (len == 0u || radix < 2u || radix > 16u) {
+		return -1;
+	}
+
+	for (i = len; i > 0u; i--) {
+		const uint32_t digit = (uint32_t)(value % radix);
+
+		data[i - 1u] = (uint8_t)(digit < 10u
+			? (uint32_t)'0' + digit
+			: (uint32_t)'A' + digit - 10u);
+		value /= radix;
+	}
+	return value == 0u ? 0 : -1;
+}
+
+/* Whether these digits are the spelling `situ_format_uint` would write.
+ *
+ * The owned form stores a *value*, so it can only give back the one spelling
+ * of it. A field carrying another -- a lower-case hex digit -- is a second
+ * encoding of the same number, which is what `canonical` exists to report,
+ * and the honest answer is to refuse the decode rather than to round-trip it
+ * into something else.
+ */
+static inline int situ_digits_canonical(const uint8_t *data, uint32_t len)
+{
+	uint32_t i;
+
+	for (i = 0u; i < len; i++) {
+		if (data[i] >= (uint8_t)'a' && data[i] <= (uint8_t)'f') {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 /* ASCII case folding, and only ASCII.
  *
  * `tolower` is locale dependent: in a Turkish locale it maps `I` to a dotless

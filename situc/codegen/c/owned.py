@@ -207,11 +207,60 @@ def _fields(struct: ResolvedStruct, prefix: str,
 			inner = resolved.structs.get(placement.type_name or "")
 			assert inner is not None
 			lines.append(f"\t{ident(prefix, inner.name)}_t {name};")
+		elif placement.radix is not None:
+			# A text number is `array_count` *digits* holding one value, not
+			# an array of values. Declaring it an array made the decoder read
+			# four bytes per digit and run off the end of the struct -- 24
+			# bytes past a cpio header, and the same misreading the walk had
+			# (26.84, 26.85).
+			lines.append(f"\t{_ctype(placement, prefix, enums)} {name};")
 		elif placement.array_count is not None:
 			held = _ctype(placement, prefix, enums)
 			lines.append(f"\t{held} {name}[{placement.array_count}u];")
 		else:
 			lines.append(f"\t{_ctype(placement, prefix, enums)} {name};")
+	return lines
+
+
+def _decode_digits(placement: Placement, name: str, prefix: str,
+		enums: Mapping[str, object]) -> list[str]:
+	"""Parse a text number into the one value it holds (section 8.6.2).
+
+	The same call the view accessor makes, and for the same reason: the
+	scalar type gives the value's *domain* rather than its width in the
+	buffer, which for a text number depends on the number.
+
+	A spelling this cannot give back is refused rather than accepted. The
+	owned form stores a value, fixed width makes the leading zeros
+	mandatory, and the only freedom left is case -- so a lower-case hex
+	digit is a second encoding of one number, and `encode` would hand back
+	the other one. Refusing keeps `decode` then `encode` byte-exact, which
+	is what the round-trip test asserts and what `canonical` already claims
+	of these fields.
+	"""
+	assert placement.offset_bits is not None and placement.array_count
+	assert placement.radix is not None
+	radix  = placement.radix
+	offset = placement.offset_bits // BITS_PER_BYTE
+	digits = placement.array_count
+	held   = _ctype(placement, prefix, enums)
+	most   = placement.radix_max
+
+	lines = ["\t{", "\t\tuint64_t held;", ""]
+	if radix > 10:
+		lines.extend([
+			f"\t\tif (situ_digits_canonical(data + {offset}u, {digits}u) == 0) {{",
+			"\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t}",
+		])
+	lines.extend([
+		f"\t\tif (situ_parse_uint(data + {offset}u, {digits}u, "
+		f"{radix}u, {most}u, &held) != 0) {{",
+		"\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t}",
+		f"\t\tout->{name} = ({held})held;",
+		"\t}",
+	])
 	return lines
 
 
@@ -255,6 +304,10 @@ def _decode_body(struct: ResolvedStruct, prefix: str,
 			lines.append("\t\t\treturn err;")
 			lines.append("\t\t}")
 			lines.append("\t}")
+			continue
+
+		if placement.radix is not None:
+			lines.extend(_decode_digits(placement, name, prefix, enums))
 			continue
 
 		if placement.array_count is not None:
@@ -341,6 +394,17 @@ def _encode_body(struct: ResolvedStruct, prefix: str,
 			lines.append("\t\t\treturn err;")
 			lines.append("\t\t}")
 			lines.append("\t}")
+			continue
+
+		if placement.radix is not None:
+			offset = placement.offset_bits // BITS_PER_BYTE
+			lines.extend([
+				f"\tif (situ_format_uint(data + {offset}u, "
+				f"{placement.array_count}u, {placement.radix}u, "
+				f"(uint64_t)in->{name}) != 0) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			])
 			continue
 
 		if placement.array_count is not None:

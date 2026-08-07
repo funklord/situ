@@ -42,3 +42,15 @@ cpio_entry trailer 30 37 30 37 30 31 30 30 30 30 30 30 30 30 30 30 30 30 30 30 3
 	header.namesize = 11
 	header.filesize = 0
 	header.nlink    = 1
+
+# The same archive's first header on its own, which is what the *owned* form
+# covers: `situc build --owned` emits a struct per fixed-size struct, and
+# `cpio_header` is the fixed one. Without this the owned round-trip had no
+# input it could validate -- random bytes are not hex digits -- so it skipped,
+# and before 26.86 it "passed" over a decoder reading past the struct.
+cpio_header header 30 37 30 37 30 31 30 30 31 42 31 31 32 39 30 30 30 30 38 31 42 34 30 30 30 30 30 33 45 38 30 30 30 30 30 33 45 38 30 30 30 30 30 30 30 31 36 41 37 30 42 41 42 42 30 30 30 30 30 30 30 36 30 30 30 30 30 30 30 30 30 30 30 30 30 30 32 42 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 44 30 30 30 30 30 30 30 30
+	magic    = 70701
+	namesize = 13
+	filesize = 6
+	mode     = 33204
+	nlink    = 1

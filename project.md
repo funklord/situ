@@ -9428,14 +9428,47 @@ into a caller's struct. Reproduced here with:
     gcc -fsanitize=address -I<gen> -I runtime/c rt.c cpio.c \
         cpio_owned.c runtime/c/situ.c -o rt && ./rt
 
-**Left open rather than patched.** The fix is not one line: a text number's
-owned representation should be the parsed value, which makes the field a
-scalar rather than an array and makes the *encode* side write digits back --
-zero-padded, in a radix, in a case the format chooses. There is no digit
-formatter in the runtime and no setter for a text number in the view form
-either, so what the owned form should promise for one is a decision rather
-than an omission. Recorded so it is not lost, with a reproduction that does
-not depend on which compiler laid the stack out.
+**Fixed in 26.86**, which had the decision in it that this section said it
+would.
+
+### 26.86 What the owned form can promise for a text number
+
+26.85 left the overrun open because the fix carries a decision: the owned
+form stores a *value*, and a text number's bytes are digits, so encoding one
+back means choosing a spelling.
+
+**Fixed width settles most of it and the lattice settles the rest.** A field
+declared `hex u32 x[8]` is eight digits whatever the value, so the leading
+zeros are mandatory and there is exactly one spelling per value -- except for
+case. And the capability map already calls these fields `Canonical`, which is
+the claim that one value has one byte sequence. The code was not keeping that
+claim; the map was right and the backend was wrong.
+
+So: `situ_format_uint` writes fixed-width upper-case digits, and the decode
+refuses a lower-case hex digit rather than accepting a second encoding it
+cannot give back. That keeps `decode` then `encode` byte-exact by
+construction, which is what the round-trip test asserts, and it makes the
+generated code agree with what the map has been saying all along. Decimal is
+unaffected -- ten digits have one case.
+
+**The field is a scalar now, not an array**, which is what removes the
+overrun: eight digits are one value, and declaring `uint32_t x[8]` is what
+made the decoder read thirty-two bytes into eight.
+
+**Proven on somebody else's bytes.** GNU cpio's own header, the first 110 of
+the archive `cpio.vectors` already carried, decodes to `magic=70701`,
+`namesize=13`, `filesize=6` and re-encodes byte-exact, under
+AddressSanitizer, clean.
+
+**And the round trip was not being tested at all.** cpio's vectors are keyed
+to `cpio_entry`; the owned form covers `cpio_header`, the fixed-size struct,
+so no vector applied and the driver fell back to random bytes -- which are
+not hex digits, so every draw was refused. Before this fix that read as a
+pass, because the out-of-bounds decoder accepted garbage; after it, honestly,
+as a skip. `cpio.vectors` gains the header on its own, from the same archive,
+and the case is a real test again rather than either.
+
+**Status:** `make check` green, ASan clean on the reproduction 26.85 records.
 
 ### Invariants to hold across all phases
 
