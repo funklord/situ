@@ -3691,6 +3691,13 @@ situ/
     codecs.situ               signatures for the standard codecs, hand written
     kernels.situ              the same codes as kernel descriptions, so the
                               derivation can be checked against the declaration
+  .github/
+    workflows/
+      check.yml               `make check` on a machine nobody configured.
+                              Installs every toolchain the suite would
+                              otherwise skip, and asserts the skip count --
+                              a runner with none of them reports green over
+                              a fraction of the tests (26.83)
   walker/                     the interpreter: a packed image, walked over
                               bytes. A second program, never imported by
                               `situc` -- decision 0026, amended (26.81)

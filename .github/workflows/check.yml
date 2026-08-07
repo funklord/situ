@@ -1,0 +1,81 @@
+# What `make check` checks, on a machine nobody configured by hand.
+#
+# The point of running it here is not that it runs. Everything this suite
+# drives a toolchain for *skips* when the toolchain is absent -- gcc, g++,
+# rustc, lua, doxygen, the aarch64 cross compiler and qemu -- so a runner with
+# none of them installed reports a green tick over a fraction of the tests.
+# That is this repository's recurring finding wearing a CI badge, and it is
+# why the install step below is long and why the skip count is asserted rather
+# than printed.
+#
+# Python is 3.11 because 3.11 is the floor the project declares, and a floor
+# nothing runs at is a claim rather than a fact: `situc` claimed 3.11 for six
+# phases while a PEP 701 f-string made it 3.12, and the machine that found it
+# was the one that did not have 3.13.
+
+name: check
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Named one per line with a reason, because a toolchain that quietly
+      # falls out of this list takes a group of tests with it and says so
+      # only in a skip count nobody reads.
+      - name: Install the toolchains the suite would otherwise skip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ \
+            rustc \
+            lua5.4 \
+            doxygen \
+            cmake \
+            libcmocka-dev \
+            gcc-aarch64-linux-gnu \
+            qemu-user
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: python -m pip install --disable-pip-version-check pytest mypy
+
+      - name: Report what is actually installed
+        run: |
+          gcc --version | head -1
+          g++ --version | head -1
+          rustc --version
+          lua5.4 -v 2>&1 | head -1
+          doxygen --version
+          aarch64-linux-gnu-gcc --version | head -1
+          qemu-aarch64 --version | head -1
+          python --version
+
+      - run: make check
+
+      # `make check` passing is not the same as `make check` having run over
+      # everything. A skip is invisible in an exit status, so the number is
+      # compared against what this tree skips with every toolchain present.
+      # Raise the ceiling deliberately when a new skip is added, and say why.
+      - name: Refuse a run that skipped more than it should have
+        run: |
+          python -m pytest tests -q -rs 2>&1 | tee /tmp/pytest.log | tail -20
+          skipped=$(sed -n 's/.*[^0-9]\([0-9]\+\) skipped.*/\1/p' /tmp/pytest.log | tail -1)
+          skipped=${skipped:-0}
+          echo "skipped: $skipped"
+          if [ "$skipped" -gt 40 ]; then
+            echo "check: $skipped tests skipped; a toolchain is missing" >&2
+            exit 1
+          fi
