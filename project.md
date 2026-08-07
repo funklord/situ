@@ -10737,8 +10737,8 @@ coded regions are not on it.
    deliberately and periodically, precisely because habit will not.
 
 107. **Changing a file that several projects share needs evidence, not
-   care.** The gate is copied verbatim into seven repositories, so a
-   plausible-looking edit is a plausible-looking edit seven times. Running
+   care.** The gate is copied verbatim into every project that carries one,
+   so a plausible-looking edit is plausible-looking in all of them. Running
    it in every mode over every tree, before and after, and requiring the
    verdicts and rewritten bytes to be identical is what separates a
    mechanical change from a confident one -- and it costs minutes. Then

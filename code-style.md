@@ -247,7 +247,8 @@ tooling commands.
 signs, no arrows -- so that a copy can be byte-verbatim in every project,
 including one whose own rules restrict the characters its files may
 contain. Keep it that way when editing: a typographic character introduced
-here becomes a transliteration problem in seven repositories.
+here becomes a transliteration problem in every repository that carries a
+copy.
 
 Where a copy must still be adapted, **"do not diverge" means semantically
 identical, not byte-identical**: a project transliterating to satisfy its
