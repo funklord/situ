@@ -406,11 +406,14 @@ it, parse. The format is itself a situ schema (`std/image.situ`), read through
 generated accessors, so everything this repository does to a schema it also
 does to the image.
 
-**The walker is not written.** Nothing here walks an image at run time, by
-decision 0026 -- that program is a separate project, and it is what would
-answer whether a table walk says the same thing as four compiled backends
-about hostile bytes. Until it exists the image is proven to carry the layout
-and is not proven sufficient for a parse. 26.79 says so plainly, and `situc
+**The walker is not written.** `situc` never walks an image -- decision 0026
+keeps the compiler and the interpreter apart, so that an offset stays a
+constant and an operation stays *absent* rather than refused. The walker will
+be a separate binary in this repository (0026, amended 2026-08-07), which is
+what lets it join the differential check as a fifth column and answer whether
+a table walk says the same thing as four compiled backends about hostile
+bytes. Until it exists the image is proven to carry the layout and is not
+proven sufficient for a parse. 26.79 says so plainly, and `situc
 pack --coverage` says what any given image contains. Note also what an
 interpreter cannot do, which is make an operation *absent*: under a walker the
 capability map stops being the shape of the interface and becomes data a

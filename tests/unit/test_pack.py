@@ -1,8 +1,7 @@
 """`situc pack`: the packed layout image (26.33, decision 0026).
 
-The image is the one artifact here whose consumer lives in another
-repository, which makes it the one artifact that could ship wrong and nobody
-here would know. 0026 rejected a hand-rolled format on exactly that ground:
+The image is the one artifact here with no consumer yet, which makes it the
+one that could ship wrong and nobody would know. 0026 rejected a hand-rolled format on exactly that ground:
 it would be "the only artifact in the project that nothing checks, in the
 component whose input is least trusted".
 
@@ -14,9 +13,10 @@ schema and the packer disagree, one of them is wrong and the accessors are
 where that surfaces.
 
 What this does not do is walk bytes. A walker that answers the same
-questions as the four backends is 26.33's next slice and lives in the other
-repository; until it exists the image is proven to carry the layout, not to
-be sufficient for a parse.
+questions as the four backends is 26.33's next slice, and 0026's amendment
+puts it in this repository as its own binary so that it can join the
+differential check; until it exists the image is proven to carry the layout,
+not to be sufficient for a parse.
 """
 
 from __future__ import annotations
@@ -272,8 +272,9 @@ def test_the_bytecode_is_postfix_and_terminated() -> None:
 	"""`n * 2 + 1` is push, push, mul, push, add -- and then END.
 
 	Checked as bytes rather than by evaluating, because nothing in this
-	repository evaluates one: the walker is the other project's, and a test
-	that wrote its own evaluator would be checking the evaluator.
+	repository evaluates one yet -- the walker is a separate binary and is
+	not written -- and a test that wrote its own evaluator would be checking
+	the evaluator.
 	"""
 	code = compile_one("target buffer;\nendian big;\n"
 	                   "struct s { u8 n; u8 data[n * 2 + 1]; }\n")
@@ -434,8 +435,8 @@ def test_an_unknown_section_kind_is_skippable() -> None:
 	"""The directory is what lets the format grow: a walker predating a
 	section reads the image and ignores it, rather than refusing to load.
 
-	Asserted on the schema rather than on a walker, since the walker is the
-	other project's: `image_section_kind` must be `default = pass`, because
+	Asserted on the schema rather than on a walker, there being no walker
+	yet: `image_section_tag` must be `default = pass`, because
 	`default = error` would make every future section a breaking change.
 	"""
 	text = IMAGE_SCHEMA.read_text(encoding="ascii")

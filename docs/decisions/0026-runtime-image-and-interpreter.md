@@ -1,6 +1,8 @@
 # 0026: a packed layout image, read by a separate interpreter, late
 
-Status: accepted, and scheduled late (26.33)
+Status: accepted, and scheduled late (26.33); amended 2026-08-07 -- the
+walker is a separate binary in this repository rather than a separate
+project. See *Amendment* at the end; everything above it is as first written.
 Date: 2026-08-02
 Phase: after 26.32
 
@@ -92,3 +94,57 @@ twice.
 `situc` gains one subcommand when the work starts, and section 2's non-goal
 gains a sentence naming the boundary rather than being contradicted by a
 project that reads its output.
+
+## Amendment, 2026-08-07: the boundary is a binary, not a repository
+
+**The walker lives in this repository, as a program of its own.** `situc`
+still never walks an image. Everything above stands except the words
+"separate project", and the reasoning above is why the change is small.
+
+**What the original decision protects is untouched by the move.** The
+alternative it rejected was *a runtime mode inside `situc`*, on the grounds
+that "the invariants would have two masters" -- and that argument is about one
+program claiming both to compile a layout and to interpret one. A second
+binary makes no such claim: `situc` compiles and emits, the walker only ever
+consumes, and no build of `situc` gains a table-walking path. "Generated code
+never allocates" and "a table walk in a fixed arena" stay different promises
+made by different programs, which is all the original separation was buying.
+
+**What the repository boundary was costing is what forced the change.** This
+record requires the interpreter to be "a fifth column in the differential
+check", and 26.33 names the test: `test_backends_agree_under_random_bytes`,
+which lives here. Across a repository boundary it cannot be that. The check
+that decides whether a table walk says the same thing as four compiled
+backends about hostile bytes would have to run somewhere neither repository
+owns, against a walker one of them cannot see -- so the format's only real
+validation sat on the far side of a line drawn to protect something the line
+was not protecting. The consequence was not hypothetical: 26.79 shipped
+`situc pack` and an image format that nothing had ever walked, and said so,
+because there was nowhere in reach to walk it.
+
+**Which boundary now does the work.** A build fact rather than a directory
+one, and it has to be checked rather than assumed:
+
+- the walker is its own binary with its own entry point, built by the test
+  target and not by the default one, in keeping with section 24's rule that a
+  plain build produces the library and the binaries;
+- nothing under `situc/` imports it, and that wants a test of its own once it
+  exists -- the separation is only as good as what refuses to link them;
+- it reads `std/image.situ` through generated accessors like any other
+  consumer, which is the self-hosting this record already required;
+- it joins `make check` as the fifth column, which is the whole point.
+
+**What is unchanged, and still belongs in the walker's own documentation.** An
+interpreter cannot make an operation *absent*. A field that is `mutate =
+Shifting` has a general write entry point that refuses at run time, where the
+generated API simply has no setter, so under a walker the capability map stops
+being the shape of the interface and becomes data a caller may consult. That
+is a genuine weakening of the central claim and moving the walker closer does
+not soften it -- if anything it makes saying so more urgent, since the two now
+ship from one tree.
+
+**Why this is an amendment rather than a new record.** The decision that
+mattered -- image emitted by `situc`, walked by something that is not `situc`,
+format described by a schema and checked like one -- is unchanged. Only the
+distance was wrong, and a second record would leave two documents disagreeing
+about a boundary rather than one saying where it moved and why.

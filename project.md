@@ -3635,8 +3635,8 @@ situ/
     verify.py                 do these bytes conform? the schema used as a
                               specification, generating nothing; 26.67
     pack.py                   the packed layout image and its expression
-                              bytecode, for a walker in another project to
-                              read; emits only, never walks; 26.33
+                              bytecode, for a walker to read; emits only,
+                              never walks; 26.33
     requirements.py           predicate evaluation and discharge
     namespaces.py             `::` qualification and `--prefix`; decision 0012
     capmap.py                 capability map construction
@@ -6052,9 +6052,12 @@ emits the format described by `std/image.situ`, with the section 10 bytecode,
 and `situc/pack.py` is the whole of it. What 26.33 called the first slice is
 half delivered: the image exists for every schema in the tree and is read
 back through generated accessors, but the walker that would make it a fifth
-column in the differential check lives in the other project and does not
-exist. So the image is proven to *carry* the layout and is not yet proven
-*sufficient* for a parse. 26.79 has what building it found.
+column in the differential check is not written. So the image is proven to
+*carry* the layout and is not yet proven *sufficient* for a parse. 26.79 has
+what building it found; 0026 was amended on 2026-08-07 so that the walker,
+when it is written, is a separate binary in this repository rather than a
+separate project -- which is what puts the fifth column within reach of the
+test that needs it.
 
 Decision 0026 is the shape; what follows is the plan and the reason it waited.
 
@@ -6067,8 +6070,10 @@ not compiled against.
 **What it is.** `situc pack` emits a packed layout image: the placements, their
 kinds, offsets, sizes, endianness, delimiters and codecs, plus a bytecode for
 the expression language of section 10, which is total and about twenty opcodes
-wide. A separate project walks that image over bytes. Nothing in this
-repository walks one at run time.
+wide. A separate binary walks that image over bytes; `situc` never does.
+That boundary was a repository until 0026's amendment of 2026-08-07 and is a
+binary now, for the reason the amendment gives: the fifth column this section
+asks for is a test in this tree, and it cannot reach a walker in another.
 
 **Why it is more port than design.** `traverse.py` already answers every
 question a walker asks, and the four backends plus `gen-dissector` are five
@@ -9084,6 +9089,8 @@ reachable from any schema the tree had before, which is 26.27's argument for
 map and wire signature, and 71 tests. What is not done is the walk: no
 interpreter exists, so nothing has yet answered 26.33's question of whether a
 table walk says the same thing as four compiled backends about hostile bytes.
+0026 has since been amended to put that walker in this repository as its own
+binary, which is what makes the question answerable here at all.
 Until one does, the format is a claim rather than a proven design, and the
 `--coverage` numbers are the honest statement of what it carries: 32 schemas,
 127 structs, 543 placements, 101 expressions, all ten construct families,
@@ -10113,7 +10120,7 @@ which is the cost of a change like this being visible.
    *keyword* is still open (26.80).
 114. **An artifact nothing here consumes needs its coverage reported, not its
    absence of errors.** The packed layout image is read by a program in
-   another repository, so a size expression it silently failed to encode
+   a different binary, so a size expression it silently failed to encode
    would surface as a wrong length somewhere nobody here can see. `pack`
    returns what it encoded and what it dropped; three real defects arrived as
    a list of dropped expressions on a run that raised nothing. Where the

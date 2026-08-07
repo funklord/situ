@@ -1,14 +1,15 @@
 """The packed layout image `situc pack` emits (26.33, decision 0026).
 
 One responsibility: turn a resolved schema into the byte image described by
-`std/image.situ`, so that a walker in another project can read a format it
-was not compiled against.
+`std/image.situ`, so that a walker can read a format it was not compiled
+against.
 
 Nothing here walks an image. That boundary is decision 0026's and it is what
 keeps `situc`'s own promises true: an offset is a constant, an operation is
 absent rather than refused, generated code never allocates. An interpreter
-can make none of those three claims, so it lives somewhere else and this
-module only ever writes.
+can make none of those three claims, so it is a separate binary -- in this
+repository since 0026's amendment, so that it can join the differential
+check, but never linked into `situc`. This module only ever writes.
 
 The expression bytecode is section 10's language and nothing more. That
 language is total -- no calls, no recursion, no iteration, no floating point
@@ -51,7 +52,7 @@ INDEX_BYTES	= 16
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
-#: `image_section_kind` in std/image.situ. A walker keeps what it knows and
+#: `image_section_tag` in std/image.situ. A walker keeps what it knows and
 #: skips the rest, which is what lets a section be added without a version.
 SECTION_STRUCTS		= 1
 SECTION_PLACEMENTS	= 2
