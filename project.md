@@ -9089,6 +9089,64 @@ Until one does, the format is a claim rather than a proven design, and the
 127 structs, 543 placements, 101 expressions, all ten construct families,
 nothing dropped.
 
+### 26.80 The names the generated code needed and the schema could take
+
+26.79 recorded two defects as worked around by renaming and left them open.
+Both are closed here, and closing them said something the workaround did not.
+
+**The gap was never about `base` or `bytes`.** It is that a backend emits code
+into a namespace the schema can also write into, and only one of the four
+checks for it. Decision 0013 gates the *flattened C identifier*, which is why
+`image.header` against struct `image_header` was caught the day it was
+written. Nothing asks whether a member has taken a name the emitted C++ or
+Python needs, so `base` and `bytes` produced code that did not compile from a
+schema the front end accepted -- three backends fine, the fourth broken, which
+is the disagreement 26.31 spends its page on.
+
+**C++: the spelling moved, not the schema's name.** `base()` and `limit()` are
+public methods of `::situ::rt::view`, and an accessor for a member of that
+name hides one, so `situ_get_le32(base() + 0)` became arithmetic on the
+member's own value. Every emitted site now writes `raw_.base`, which is the
+protected member and cannot be hidden -- and which the gate rewriting already
+used, having met this exact shape and hedged against it in a comment without
+generalising it. Cross-object reads cannot use `raw_` at all, since protected
+reaches only `this`, so `element.::situ::rt::view::base()` is the qualified
+call there. That distinction is the one thing the fix needed that reading the
+first failure did not show: `ipv6ext` compiles a run's predicate against
+another view and nothing else in the tree does.
+
+**Python: the alias mechanism this backend already had.** A member named
+`bytes` binds `bytes` in class scope, so every annotation after it -- `data:
+bytes | bytearray | memoryview` -- stops naming a type; and the runtime `View`
+owns a `bytes` property, so the member overrode it and the six generated sites
+reading `self.bytes` would have read the member. The backend already emitted
+`_situ_{name} = {name}` for an enum a member had named, so the same alias now
+covers the builtins the annotations use, and the runtime grew `_span` beside
+`bytes` for generated code to read. Nothing generated from a schema begins
+with an underscore, which is what makes that spelling safe.
+
+**Neither is a style rule, and that was the decision.** 0025 settled the
+principle for the C++ class name -- rename what the backend emits, never
+refuse the schema -- on the grounds that refusing "would make `framed`,
+`validate`, `extent` and `at` reserved words in one backend of four, and
+outlaw `struct option { u8 option; }` for a reason that has nothing to do with
+its bytes". `base` and `bytes` are ordinary field names and the same argument
+holds, so the schema keeps them and the emitters moved.
+
+**`tests/schemas/edges.situ` carries the case now**, which is where it belongs
+by 26.27's argument: the worked examples do not have these names and were
+never going to. Adding one schema found both, and a schema written to be
+awkward is cheaper than a schema written to be useful.
+
+**Still open, and named rather than half-fixed.** A member called `int` or
+`float` is a C and C++ *keyword*, not merely a name in use. That needs
+mangling in every backend rather than an unshadowable spelling in two, so it
+is not in the struct above and not fixed here.
+
+**Status:** `make check` green with the collision struct in the tree; six
+assertions in the C++ suite and one in the Python moved to the new spellings,
+which is the cost of a change like this being visible.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -10045,12 +10103,14 @@ nothing dropped.
    project.md, while section 23's fenced listing -- the actual declared
    inventory, 74 entries -- was invisible to it and had gone stale. Before
    citing a document gate, ask how many items it saw, not whether it passed.
-113. **A member may be named something the generated code needs, and only C
-   checks it.** `base` shadows the C++ view's own pointer method; `bytes`
-   shadows the builtin the generated Python annotates with. Both produce
-   code that does not compile, from a schema that is legal, and decision
-   0013's identifier gate sees neither because it asks only about flattened
-   C identifiers. Adding a schema found both on the same afternoon.
+113. **A backend emits into a namespace the schema can write into.** `base`
+   hid the C++ view's own pointer method; `bytes` hid the builtin the
+   generated Python annotates with and the runtime property beside it. Both
+   produced code that does not compile from a legal schema, and decision
+   0013's gate saw neither, because it asks only about flattened C
+   identifiers. Emit an unshadowable spelling rather than reserving the word
+   (0025), and keep the case in `edges.situ` -- a member named for a
+   *keyword* is still open (26.80).
 114. **An artifact nothing here consumes needs its coverage reported, not its
    absence of errors.** The packed layout image is read by a program in
    another repository, so a size expression it silently failed to encode

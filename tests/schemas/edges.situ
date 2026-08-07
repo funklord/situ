@@ -586,3 +586,23 @@ struct sealed_run {
 	}
 	tag u8  seal_mac[16] covers(body);
 }
+
+// Members named what the generated code needs (26.80). `base`, `limit` and
+// `raw` are methods on the C++ view; `bytes` is a property on the Python one
+// and the builtin its annotations use. Each produced code that would not
+// compile, from a schema three other backends accepted, and decision 0013's
+// identifier gate saw none of them because it asks only about flattened C
+// identifiers. Here so that the next such name is caught by a build rather
+// than by somebody adding a schema.
+struct shadowing {
+	u32  base;
+	u32  limit;
+	u32  raw;
+	u8   bytes[4];
+	u32  str;
+}
+
+// Not here, and deliberately: a member named `int` or `float` is a C and C++
+// *keyword*, which is a different gap and one nothing yet closes. It needs
+// mangling in every backend rather than an unshadowable spelling in two, so
+// it is recorded in 26.80 as open rather than half-fixed here.

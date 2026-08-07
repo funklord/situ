@@ -1368,7 +1368,7 @@ def test_an_indexed_region_gets_its_table_walked() -> None:
 def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
 	module = emit(INDEXED)
 
-	assert 'int.from_bytes(self.bytes[at:at + 2], "big")' in module
+	assert 'int.from_bytes(self._span[at:at + 2], "big")' in module
 
 
 def test_the_index_reaches_elements_in_any_order(tmp_path: Path) -> None:

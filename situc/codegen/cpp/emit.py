@@ -754,14 +754,17 @@ class Emitter:
 		stems = {c_name(local_name(struct, held))
 		         for held in own_members(struct)}
 		if not stems:
-			return text.replace("base()", "raw_.base") \
-			           .replace("limit()", "raw_.limit")
+			return text
 
 		pattern = "|".join(re.escape(stem)
 		                   for stem in sorted(stems, key=len, reverse=True))
-		# The view's own two first, or the alternation below would leave them
-		# for a member that happens to be called `base`.
-		text = text.replace("base()", "raw_.base").replace("limit()", "raw_.limit")
+		# The view's `base()` and `limit()` were rewritten to `raw_` here, and
+		# are not any more, because every site emits `raw_.base` directly now.
+		# The reason is the one this comment used to hedge against: a member
+		# named `base` hides the inherited method in *every* accessor body and
+		# not only inside a gate, so the arithmetic silently became a call on
+		# the member. `raw_` is protected and no accessor is named for it, so
+		# the spelling cannot be hidden at all (26.80).
 		return re.sub(
 			rf"\b(?:{pattern})(?:_span|_value|_len|_offset|_count|_extent)?\(\)",
 			lambda hit: f"{owner}.{hit.group(0)}", text)
@@ -907,7 +910,7 @@ class Emitter:
 		# `where` and then embedding it in the load rewrote what the first
 		# pass had written, and produced `s(raw_).s(raw_).label_span()`.
 		load  = self._in_gate(
-			struct, self._raw_load(scalar, placement, f"base() + ({where})"))
+			struct, self._raw_load(scalar, placement, f"raw_.base + ({where})"))
 		where = self._in_gate(struct, where)
 		if placement.type_name in self.enums:
 			load = f"static_cast<{ctype}>({load})"
@@ -968,7 +971,7 @@ class Emitter:
 		# function rather than a second one that agrees today.
 		folded = str(constant)
 		for term in terms:
-			folded = f"situ_advance_u32({folded}, {term}, limit())"
+			folded = f"situ_advance_u32({folded}, {term}, raw_.limit)"
 		return folded
 
 	def _offset_body(self, struct: ResolvedStruct,
@@ -1001,7 +1004,7 @@ class Emitter:
 			# in `std::uint32_t` wraps to an offset that is inside the frame
 			# and points at the wrong bytes. C's runtime is this one's too, so
 			# the arithmetic is the same function (26.27).
-			lines.append(f"\t\tat = situ_advance_u32(at, {length}, limit());")
+			lines.append(f"\t\tat = situ_advance_u32(at, {length}, raw_.limit);")
 		return [*lines, "\t\treturn at;"]
 
 	# -- delimited members (section 8.6) --------------------------------
@@ -1059,7 +1062,7 @@ class Emitter:
 		# Measured as an AddressSanitizer SEGV before this line changed; the
 		# C backend has been saturating here since the `[remaining]` fix and
 		# these three were not.
-		room  = f"situ_remaining_u32(limit(), {start})"
+		room  = f"situ_remaining_u32(raw_.limit, {start})"
 		limit = (room if placement.delimiter_cap is None
 		         else f"situ_min_u32({placement.delimiter_cap}u, {room})")
 
@@ -1069,7 +1072,7 @@ class Emitter:
 		# so a sum over M members cost far more than the M scans it added up.
 		# Measured on an eight-member record: 620ms, against 45ms in C once C
 		# had this.
-		room_at  = "situ_remaining_u32(limit(), at)"
+		room_at  = "situ_remaining_u32(raw_.limit, at)"
 		limit_at = (room_at if placement.delimiter_cap is None
 		            else f"situ_min_u32({placement.delimiter_cap}u, {room_at})")
 
@@ -1089,7 +1092,7 @@ class Emitter:
 			f"\t[[nodiscard]] std::uint32_t {scan}_from(std::uint32_t at)"
 			" const noexcept",
 			"\t{",
-			f"\t\treturn {self._scan_expression(placement, 'base() + at', limit_at)};",
+			f"\t\treturn {self._scan_expression(placement, 'raw_.base + at', limit_at)};",
 			"\t}",
 			f"\t[[nodiscard]] std::uint32_t {scan}() const noexcept",
 			"\t{",
@@ -1122,13 +1125,13 @@ class Emitter:
 				"\t * than value, so the span above is unchanged. */",
 				f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
 				"\t{",
-				f"\t\treturn situ_trim_len(base() + {name}_offset(), {scan}());",
+				f"\t\treturn situ_trim_len(raw_.base + {name}_offset(), {scan}());",
 				"\t}",
 			])
 
-		value_at = (f"base() + {name}_offset()" if not placement.trimmed else
-		            f"base() + {name}_offset() + situ_trim_start("
-		            f"base() + {name}_offset(), {scan}())")
+		value_at = (f"raw_.base + {name}_offset()" if not placement.trimmed else
+		            f"raw_.base + {name}_offset() + situ_trim_start("
+		            f"raw_.base + {name}_offset(), {scan}())")
 
 		if placement.radix is None:
 			lines.extend([
@@ -1311,15 +1314,15 @@ class Emitter:
 			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
 			"",
-			f"\t\twhile (at < limit(){cap}) {{",
+			f"\t\twhile (at < raw_.limit{cap}) {{",
 			"\t\t\tsitu_view_t raw;",
-			"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)"
+			"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)"
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
 			"\t\t\tconst std::uint32_t size = element.extent();",
-			"\t\t\tif (size == 0u || at + size > limit()) {",
+			"\t\t\tif (size == 0u || at + size > raw_.limit) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			]
@@ -1437,20 +1440,20 @@ class Emitter:
 			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
 			"",
-			f"\t\twhile (at + {len(delim)}u <= limit()) {{",
-			f"\t\t\tif (situ_scan(base() + at, {len(delim)}u, {array},"
+			f"\t\twhile (at + {len(delim)}u <= raw_.limit) {{",
+			f"\t\t\tif (situ_scan(raw_.base + at, {len(delim)}u, {array},"
 			f" {len(delim)}u) == 0u) {{",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			"",
 			"\t\t\tsitu_view_t raw;",
-			"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)"
+			"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)"
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			f"\t\t\tconst std::uint32_t size = "
 			f"::{self.namespace}::{inner}(raw).extent();",
-			"\t\t\tif (size == 0u || at + size > limit()) {",
+			"\t\t\tif (size == 0u || at + size > raw_.limit) {",
 			"\t\t\t\t/* A zero-extent element would walk here forever, and",
 			"\t\t\t\t * one running past the limit was never in this frame. */",
 			"\t\t\t\tbreak;",
@@ -1510,7 +1513,7 @@ class Emitter:
 			"",
 			"\t\t/* The terminator belongs to this member. Where the run ran",
 			"\t\t * out of buffer instead there is none to count. */",
-			f"\t\tif (at + {len(delim)}u <= limit()) {{",
+			f"\t\tif (at + {len(delim)}u <= raw_.limit) {{",
 			f"\t\t\tat += {len(delim)}u;",
 			"\t\t}",
 			"\t\treturn at - start;",
@@ -1552,7 +1555,7 @@ class Emitter:
 			"\t[[nodiscard]] ::situ::rt::err framed(std::uint32_t &need)"
 			" const noexcept",
 			"\t{",
-			"\t\tconst std::uint32_t have = limit();",
+			"\t\tconst std::uint32_t have = raw_.limit;",
 		]
 		tail = [
 			"",
@@ -1667,7 +1670,7 @@ class Emitter:
 		call  = (f"\t\t\tconst ::situ::rt::err e = ::{self.namespace}::{inner}"
 		         "::required(")
 		read  = [
-			call + "base() + at,",
+			call + "raw_.base + at,",
 			"\t\t\t\thave - at, part);",
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\t\tneed = at + part;",
@@ -1718,7 +1721,7 @@ class Emitter:
 				"\t\t\t/* The terminator only terminates where an element"
 				" would start.",
 				"\t\t\t * It belongs to this member, as a delimiter does. */",
-				f"\t\t\tif (situ_scan(base() + at, {len(delim)}u, {array},"
+				f"\t\t\tif (situ_scan(raw_.base + at, {len(delim)}u, {array},"
 				f" {len(delim)}u) == 0u) {{",
 				f"\t\t\t\tat += {len(delim)}u;",
 				"\t\t\t\tbreak;",
@@ -1935,7 +1938,7 @@ class Emitter:
 				"\t{",
 				"\t\tstd::uint64_t value = 0;",
 				"",
-				f"\t\t(void)situ_parse_uint(base() + {at},"
+				f"\t\t(void)situ_parse_uint(raw_.base + {at},"
 				f" {placement.array_count}, {placement.radix}, {limit},"
 				" &value);",
 				f"\t\treturn static_cast<{ctype}>(value);",
@@ -1999,7 +2002,7 @@ class Emitter:
 		return [
 			f"\t\t/* {placement.path}: the length the message declares has to",
 			"\t\t * fit the frame it is in. */",
-			f"\t\tif (situ_remaining_u32(limit(), {start}) < ({declared})) {{",
+			f"\t\tif (situ_remaining_u32(raw_.limit, {start}) < ({declared})) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 		]
@@ -2171,7 +2174,7 @@ class Emitter:
 
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
-			return None if start is None else f"(limit() - ({start}))"
+			return None if start is None else f"(raw_.limit - ({start}))"
 		if placement.sized_by is None:
 			return None
 
@@ -2248,7 +2251,7 @@ class Emitter:
 		# The address as a separate name rather than a nested f-string: an
 		# expression split across lines inside `{...}` is PEP 701, which is
 		# Python 3.12, and this project's floor is 3.11 (section 22).
-		address = f"base() + {driver.placement.offset_bytes}"
+		address = f"raw_.base + {driver.placement.offset_bytes}"
 		load    = self._raw_load(driver.placement.scalar, driver.placement,
 		                         address)
 		return f"static_cast<std::uint32_t>({load})"
@@ -2309,9 +2312,9 @@ class Emitter:
 			lines.extend([
 				f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 				"\t{",
-				f"\t\treturn ::situ::rt::bytes(base() + {name}_offset(),",
+				f"\t\treturn ::situ::rt::bytes(raw_.base + {name}_offset(),",
 				f"\t\t\tsitu_min_u32({length},",
-				f"\t\t\t\tsitu_remaining_u32(limit(), {name}_offset())));",
+				f"\t\t\t\tsitu_remaining_u32(raw_.limit, {name}_offset())));",
 				"\t}",
 			])
 			return lines
@@ -2354,10 +2357,10 @@ class Emitter:
 				f"\t\tstd::uint32_t at = {name}_offset();",
 				"\t\tstd::uint32_t n  = 0;",
 				"",
-				"\t\twhile (at < limit()) {",
+				"\t\twhile (at < raw_.limit) {",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)",
+				"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -2365,7 +2368,7 @@ class Emitter:
 				f"\t\t\tconst {inner} element(raw);",
 				"\t\t\tconst std::uint32_t size = element.extent();",
 				"",
-				"\t\t\tif (size == 0 || at + size > limit()) {",
+				"\t\t\tif (size == 0 || at + size > raw_.limit) {",
 				"\t\t\t\t/* A zero-extent element would walk here forever,",
 				"\t\t\t\t * and one past the limit was never in this frame. */",
 				"\t\t\t\tbreak;",
@@ -2411,10 +2414,10 @@ class Emitter:
 					"\t\t}",
 					"",
 				]),
-				"\t\twhile (at < limit()) {",
+				"\t\twhile (at < raw_.limit) {",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)",
+				"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -2422,7 +2425,7 @@ class Emitter:
 				f"\t\t\tconst {inner} element(raw);",
 				"\t\t\tconst std::uint32_t size = element.extent();",
 				"",
-				"\t\t\tif (size == 0 || at + size > limit()) {",
+				"\t\t\tif (size == 0 || at + size > raw_.limit) {",
 				"\t\t\t\t/* A zero-extent element would walk here forever,",
 				"\t\t\t\t * and one past the limit was never in this frame. */",
 				"\t\t\t\tbreak;",
@@ -2454,10 +2457,10 @@ class Emitter:
 				"\t\tstd::uint32_t at = start;",
 				"\t\tstd::uint32_t n  = 0;",
 				"",
-				f"\t\twhile ({bound}at < limit()) {{",
+				f"\t\twhile ({bound}at < raw_.limit) {{",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, limit() - at, &raw)",
+				"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -2465,7 +2468,7 @@ class Emitter:
 				f"\t\t\tconst {inner} element(raw);",
 				"\t\t\tconst std::uint32_t size = element.extent();",
 				"",
-				"\t\t\tif (size == 0 || at + size > limit()) {",
+				"\t\t\tif (size == 0 || at + size > raw_.limit) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"\t\t\tat += size;",
@@ -2634,10 +2637,10 @@ class Emitter:
 	def _index_entry_read(self, placement: Placement, width: int) -> str:
 		"""One table entry, in the region's byte order."""
 		if width == 1:
-			return "static_cast<std::uint32_t>(base()[at])"
+			return "static_cast<std::uint32_t>(raw_.base[at])"
 		order = _order_suffix(placement.endian)
 		return (f"static_cast<std::uint32_t>"
-		        f"(situ_get_{order}{width * 8}(base() + at))")
+		        f"(situ_get_{order}{width * 8}(raw_.base + at))")
 
 	def _index_base_noun(self, table: IndexTable) -> str:
 		if table.base == "message":
@@ -2746,10 +2749,10 @@ class Emitter:
 			"\t\t * read and a view is what it decides. Measure over the rest"
 			" of the",
 			"\t\t * region, then narrow. */",
-			"\t\tif (start > limit()) {",
+			"\t\tif (start > raw_.limit) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			"\t\tif (situ_view_sub(this->raw(), start, limit() - start, &raw)",
+			"\t\tif (situ_view_sub(this->raw(), start, raw_.limit - start, &raw)",
 			"\t\t\t\t!= SITU_OK) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
@@ -2850,11 +2853,11 @@ class Emitter:
 			"\t\tstd::uint32_t used = 0;",
 			"\t\tstd::uint32_t size = 0;",
 			"",
-			"\t\tif (at >= limit()) {",
+			"\t\tif (at >= raw_.limit) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
-			f"\t\tused = situ_varint_get(base() + at, limit() - at,"
+			f"\t\tused = situ_varint_get(raw_.base + at, raw_.limit - at,"
 			f" {max_tag}u, &tag);",
 			"\t\tif (used == 0u) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
@@ -2868,7 +2871,7 @@ class Emitter:
 		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
 		lines.extend([
 			"",
-			"\t\tif (size > limit() - at) {",
+			"\t\tif (size > raw_.limit - at) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
@@ -2918,7 +2921,7 @@ class Emitter:
 			return [
 				"\t\t\t{",
 				"\t\t\t\tstd::uint64_t carried = 0;",
-				f"\t\t\t\tused = situ_varint_get(base() + at, limit() - at,"
+				f"\t\t\t\tused = situ_varint_get(raw_.base + at, raw_.limit - at,"
 				f" {max_tag}u, &carried);",
 				"\t\t\t\tif (used == 0u) {",
 				"\t\t\t\t\treturn ::situ::rt::err::bounds;",
@@ -2942,14 +2945,14 @@ class Emitter:
 			return [
 				f"{indent}{{",
 				f"{indent}\tstd::uint64_t length = 0;",
-				f"{indent}\tused = situ_varint_get(base() + at, limit() - at,"
+				f"{indent}\tused = situ_varint_get(raw_.base + at, raw_.limit - at,"
 				f" {width}u, &length);",
 				f"{indent}\tif (used == 0u) {{",
 				f"{indent}\t\treturn ::situ::rt::err::bounds;",
 				f"{indent}\t}}",
 				f"{indent}\tat += used;",
 				f"{indent}\tif (length > static_cast<std::uint64_t>"
-				f"(limit() - at)) {{",
+				f"(raw_.limit - at)) {{",
 				f"{indent}\t\treturn ::situ::rt::err::bounds;",
 				f"{indent}\t}}",
 				f"{indent}\tsize = static_cast<std::uint32_t>(length);",
@@ -2960,12 +2963,12 @@ class Emitter:
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
 		order  = _order_suffix(endian)
-		read   = ("static_cast<std::uint32_t>(base()[at])" if suffix is None
+		read   = ("static_cast<std::uint32_t>(raw_.base[at])" if suffix is None
 		          else f"static_cast<std::uint32_t>"
-		               f"(situ_get_{order}{suffix}(base() + at))")
+		               f"(situ_get_{order}{suffix}(raw_.base + at))")
 		return [
 			f"{indent}{{",
-			f"{indent}\tif (limit() - at < {width}u) {{",
+			f"{indent}\tif (raw_.limit - at < {width}u) {{",
 			f"{indent}\t\treturn ::situ::rt::err::bounds;",
 			f"{indent}\t}}",
 			f"{indent}\tsize = {read};",
@@ -3094,9 +3097,9 @@ class Emitter:
 			# Clamped like every other length the message decides: the
 			# interior is sized by fields an attacker fills in, and a span is
 			# a pointer that carries one.
-			f"\t\treturn ::situ::rt::bytes(base() + ({start}),",
+			f"\t\treturn ::situ::rt::bytes(raw_.base + ({start}),",
 			f"\t\t\tsitu_min_u32({size},"
-			f" situ_remaining_u32(limit(), {start})));",
+			f" situ_remaining_u32(raw_.limit, {start})));",
 			"\t}",
 		]
 
@@ -3454,9 +3457,9 @@ class Emitter:
 				# message's, and a span is a pointer that carries one. A DNS
 				# label declaring 55 bytes in a five-byte frame handed the
 				# caller a 55-byte span.
-				f"\t\tout = ::situ::rt::bytes(base() + ({start}),",
+				f"\t\tout = ::situ::rt::bytes(raw_.base + ({start}),",
 				f"\t\t\tsitu_min_u32({length},"
-				f" situ_remaining_u32(limit(), {start})));",
+				f" situ_remaining_u32(raw_.limit, {start})));",
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",
 			]
@@ -3479,7 +3482,7 @@ class Emitter:
 					"\t{",
 					*refuse,
 					f"\t\tout = situ_min_u32({length},",
-					f"\t\t\tsitu_remaining_u32(limit(), {start})) / {width}u;",
+					f"\t\t\tsitu_remaining_u32(raw_.limit, {start})) / {width}u;",
 					"\t\treturn ::situ::rt::err::ok;",
 					"\t}",
 					f"\t[[nodiscard]] ::situ::rt::err {name}"
@@ -3522,7 +3525,7 @@ class Emitter:
 				"\t\tsitu_view_t whole;",
 				"",
 				f"\t\tif (situ_view_sub(this->raw(), {start},",
-				f"\t\t\t\tsitu_remaining_u32(limit(), {start}), &whole)"
+				f"\t\t\t\tsitu_remaining_u32(raw_.limit, {start}), &whole)"
 				" != SITU_OK) {",
 				"\t\t\treturn 0;",
 				"\t\t}",
@@ -3534,7 +3537,7 @@ class Emitter:
 				*refuse,
 				"\t\tsitu_view_t whole;",
 				f"\t\tsitu_err_t e = situ_view_sub(this->raw(), {start},",
-				f"\t\t\tsitu_remaining_u32(limit(), {start}), &whole);",
+				f"\t\t\tsitu_remaining_u32(raw_.limit, {start}), &whole);",
 				"",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\treturn static_cast<::situ::rt::err>(e);",
@@ -3778,9 +3781,9 @@ class Emitter:
 
 		# The two encodings differ in which end the groups come from, and the
 		# big-endian one in what its last permitted byte carries.
-		read = (f"situ_varint_be_get(base() + at, limit() - at, {width}u,"
+		read = (f"situ_varint_be_get(raw_.base + at, raw_.limit - at, {width}u,"
 		        f" {declared.terminal_bits}u, &raw)" if big else
-		        f"situ_varint_get(base() + at, limit() - at, {width}u, &raw)")
+		        f"situ_varint_get(raw_.base + at, raw_.limit - at, {width}u, &raw)")
 		encoded = (f"situ_varint_be_len(raw, {width}u,"
 		           f" {declared.terminal_bits}u)" if big else
 		           "situ_varint_len(raw)")
@@ -3812,7 +3815,7 @@ class Emitter:
 			"\t\tstd::uint64_t raw = 0;",
 			*(["\t\tstd::uint32_t used = 0;"] if declared.minimal else []),
 			"",
-			"\t\tif (at >= limit()) {",
+			"\t\tif (at >= raw_.limit) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
@@ -3836,7 +3839,7 @@ class Emitter:
 			f"\t\tconst std::uint32_t at = {start};",
 			"\t\tstd::uint64_t raw = 0;",
 			"",
-			"\t\tif (at >= limit()) {",
+			"\t\tif (at >= raw_.limit) {",
 			"\t\t\treturn 0u;",
 			"\t\t}",
 			f"\t\treturn {read};",
@@ -4018,11 +4021,21 @@ class Emitter:
 	def _load(self, scalar: ScalarType, placement: Placement,
 			offset: str | None = None, on: str = "") -> str:
 		"""`on` names another view to read through -- `element` inside a run's
-		walk, where `base()` alone would be this struct's rather than the
-		element's."""
-		prefix = f"{on}." if on else ""
-		base   = (f"{prefix}base() + "
-		          f"{offset if offset is not None else placement.offset_bytes}")
+		walk, where `raw_.base` alone would be this struct's rather than the
+		element's.
+
+		`raw_` is protected, so it reaches only `this`: on another object the
+		spelling has to be a call, and a plain `base()` is what a member named
+		`base` hides. `element.view::base()` is the qualified form, which
+		names the method on the base class and so cannot be hidden by anything
+		the schema declares (26.80).
+		"""
+		if on:
+			base = (f"{on}.::situ::rt::view::base() + "
+			        f"{offset if offset is not None else placement.offset_bytes}")
+		else:
+			base = (f"raw_.base + "
+			        f"{offset if offset is not None else placement.offset_bytes}")
 		ctype  = self._ctype(scalar)
 
 		if scalar.is_bcd:
@@ -4037,7 +4050,7 @@ class Emitter:
 
 		if scalar.is_bit_packed:
 			order = "lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST else "msb"
-			raw   = (f"situ_bits_get_{order}(base(), {placement.offset_bits},"
+			raw   = (f"situ_bits_get_{order}(raw_.base, {placement.offset_bits},"
 			         f" {scalar.bits})")
 			if scalar.signed:
 				return (f"static_cast<{ctype}>(situ_sign_extend({raw},"
@@ -4062,12 +4075,12 @@ class Emitter:
 			return f"static_cast<{ctype}>(situ_get_{suffix}{scalar.bits}({base}))"
 
 		assembly = _bit_assembly(placement.endian)
-		return (f"static_cast<{ctype}>(situ_bits_get_{assembly}(base(),"
+		return (f"static_cast<{ctype}>(situ_bits_get_{assembly}(raw_.base,"
 		        f" {placement.offset_bits}, {scalar.bits}))")
 
 	def _store(self, scalar: ScalarType, placement: Placement,
 			value: str, offset: str | None = None) -> str:
-		base = f"base() + {offset if offset is not None else placement.offset_bytes}"
+		base = f"raw_.base + {offset if offset is not None else placement.offset_bytes}"
 
 		if scalar.is_bcd:
 			value = (f"situ_bcd_encode(static_cast<std::uint64_t>({value}),"
@@ -4075,7 +4088,7 @@ class Emitter:
 
 		if scalar.is_bit_packed:
 			order = "lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST else "msb"
-			return (f"situ_bits_set_{order}(base(), {placement.offset_bits},"
+			return (f"situ_bits_set_{order}(raw_.base, {placement.offset_bits},"
 			        f" {scalar.bits}, static_cast<std::uint64_t>({value}));")
 
 		if scalar.bits == BITS_PER_BYTE:
@@ -4099,7 +4112,7 @@ class Emitter:
 			        f" static_cast<std::uint{scalar.bits}_t>({value}));")
 
 		assembly = _bit_assembly(placement.endian)
-		return (f"situ_bits_set_{assembly}(base(), {placement.offset_bits},"
+		return (f"situ_bits_set_{assembly}(raw_.base, {placement.offset_bits},"
 		        f" {scalar.bits}, static_cast<std::uint64_t>({value}));")
 
 	# -- aggregates ----------------------------------------------------
@@ -4176,8 +4189,8 @@ class Emitter:
 				"\t * the bytes -- and so is where the member after it starts. */",
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
 				"\t{",
-				f"\t\treturn {nested}(situ_view_t{{ base() + ({start}),",
-				f"\t\t\tlimit() - ({start}), raw().generation }}).extent();",
+				f"\t\treturn {nested}(situ_view_t{{ raw_.base + ({start}),",
+				f"\t\t\traw_.limit - ({start}), raw().generation }}).extent();",
 				"\t}",
 				*self._nested_accessor(name, nested, f"({start})",
 				                       f"{name}_extent()"),
@@ -4282,7 +4295,7 @@ class Emitter:
 			"",
 			f"\t[[nodiscard]] bool {name}_is_little() const noexcept",
 			"\t{",
-			f"\t\treturn situ_get_be{width}(base() + {placement.offset_bytes})"
+			f"\t\treturn situ_get_be{width}(raw_.base + {placement.offset_bytes})"
 			f" == {name}_little;",
 			"\t}",
 			f"\t[[nodiscard]] static constexpr std::uint{width}_t"
@@ -4292,7 +4305,7 @@ class Emitter:
 			"\t}",
 			f"\tvoid set_{name}_host() noexcept",
 			"\t{",
-			f"\t\tsitu_put_be{width}(base() + {placement.offset_bytes},"
+			f"\t\tsitu_put_be{width}(raw_.base + {placement.offset_bytes},"
 			f" {name}_host);",
 			"\t}",
 		]
@@ -4340,7 +4353,7 @@ class Emitter:
 			f"\t[[nodiscard]] ::situ::rt::const_bytes {name}_digits()"
 			" const noexcept",
 			"\t{",
-			f"\t\treturn ::situ::rt::const_bytes(base() + ({start}),"
+			f"\t\treturn ::situ::rt::const_bytes(raw_.base + ({start}),"
 			f" {width});",
 			"\t}",
 			"",
@@ -4351,7 +4364,7 @@ class Emitter:
 			"",
 			f"\t\t/* Zero is success, which is C's convention here and not",
 			"\t\t * this backend's. */",
-			f"\t\tif (situ_parse_uint(base() + ({start}), {width}u,"
+			f"\t\tif (situ_parse_uint(raw_.base + ({start}), {width}u,"
 			f" {placement.radix}u, {limit}u, &value) != 0) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
@@ -4400,10 +4413,10 @@ class Emitter:
 			"\t */",
 			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t{",
-			(f"\t\treturn ::situ::rt::bytes(base() + ({start}), {count});"
+			(f"\t\treturn ::situ::rt::bytes(raw_.base + ({start}), {count});"
 			 if fits is None else
 			 f"\t\treturn {fits}\n"
-			 f"\t\t\t? ::situ::rt::bytes(base() + ({start}), {count})\n"
+			 f"\t\t\t? ::situ::rt::bytes(raw_.base + ({start}), {count})\n"
 			 "\t\t\t: ::situ::rt::bytes();"),
 			"\t}",
 		]
@@ -4511,8 +4524,8 @@ class Emitter:
 		index   = next((i for i, held in enumerate(members)
 		                if held.path == region.path), None)
 		if index is not None and index + 1 < len(members):
-			return self._offset_expression(struct, members[index + 1]) or "limit()"
-		return "limit()"
+			return self._offset_expression(struct, members[index + 1]) or "raw_.limit"
+		return "raw_.limit"
 
 	def _offsets(self, struct: ResolvedStruct) -> list[str]:
 		"""Every dynamic offset in this struct, resolved in one pass.
@@ -4607,7 +4620,7 @@ class Emitter:
 			"\t * carrying anything at all (9.4). */",
 			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t{",
-			f"\t\treturn ::situ::rt::bytes(base() + ({start}), {length});",
+			f"\t\treturn ::situ::rt::bytes(raw_.base + ({start}), {length});",
 			"\t}",
 		]
 
@@ -4643,7 +4656,7 @@ class Emitter:
 			"\t * pointer and the length travel together. */",
 			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t{",
-			f"\t\treturn ::situ::rt::bytes(base() + {placement.offset_bytes},"
+			f"\t\treturn ::situ::rt::bytes(raw_.base + {placement.offset_bytes},"
 			f" {count});",
 			"\t}",
 		]
@@ -4654,7 +4667,7 @@ class Emitter:
 				f"\t/* Content length: to the first zero byte, or {count}. */",
 				f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
 				"\t{",
-				f"\t\treturn situ_nul_len(base() + {placement.offset_bytes},"
+				f"\t\treturn situ_nul_len(raw_.base + {placement.offset_bytes},"
 				f" {count});",
 				"\t}",
 			])
@@ -4683,7 +4696,7 @@ class Emitter:
 			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
 			"\t{",
 			f"\t\treturn situ_min_u32({length},",
-			f"\t\t\tsitu_remaining_u32(limit(), {name}_offset())) / {width}u;",
+			f"\t\t\tsitu_remaining_u32(raw_.limit, {name}_offset())) / {width}u;",
 			"\t}",
 			f"\t/* Zero past the count: the element is ValueConverted, so a",
 			"\t * span of the bytes would not be the values, and the count is",
@@ -4824,9 +4837,9 @@ class Emitter:
 			# the fallible getter and takes an out-parameter, so calling it
 			# here did not compile. The digits to check are the value's, which
 			# with `[trim]` start past the whitespace.
-			at = (f"base() + {name}_offset()" if not placement.trimmed else
-			      f"base() + {name}_offset() + situ_trim_start("
-			      f"base() + {name}_offset(), {name}_raw_len())")
+			at = (f"raw_.base + {name}_offset()" if not placement.trimmed else
+			      f"raw_.base + {name}_offset() + situ_trim_start("
+			      f"raw_.base + {name}_offset(), {name}_raw_len())")
 			lines.extend([
 				"\t\t/* `[minimal]`: one spelling per value. */",
 				f"\t\tif (!situ_digits_minimal({at}, {name}_len(),"
@@ -5039,7 +5052,7 @@ class Emitter:
 					else f"0x{(1 << scalar.bits) - 1:X}"
 				lines.extend([
 					f"\t\t/* reserved {placement.type_name} [{policy}] */",
-					f"\t\tif ({self._raw_load(scalar, placement, f'base() + {placement.offset_bytes}')}"
+					f"\t\tif ({self._raw_load(scalar, placement, f'raw_.base + {placement.offset_bytes}')}"
 					f" != {want}) {{",
 					"\t\t\treturn ::situ::rt::err::constraint;",
 					"\t\t}",
@@ -5164,7 +5177,7 @@ class Emitter:
 			f"\t\t\tconst std::uint32_t at = {start};",
 			f"\t\t\tconst std::uint32_t n  = {count};",
 			"\t\t\tfor (std::uint32_t i = 0; i < n; i++) {",
-			f"\t\t\t\tif (*(base() + at + i) != {want}) {{",
+			f"\t\t\t\tif (*(raw_.base + at + i) != {want}) {{",
 			"\t\t\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t\t\t}",
 			"\t\t\t}",

@@ -180,6 +180,13 @@ struct segments size=3 access=Sequential mutate=Shifting address=Unstable repr=V
   segments.parts[].body                  offset=FrameStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   segments.after                         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct shadowing size=20 repr=ValueConverted atomic=NonAtomic
+  shadowing.base                         offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  shadowing.limit                        offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  shadowing.raw                          offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  shadowing.bytes                        offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  shadowing.str                          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
 struct text_driver size=6 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
   text_driver.n                          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=TextConverted atomic=NonAtomic
   text_driver.d                          offset=AbsoluteStatic(0x04) size=Bounded(0, 8) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting

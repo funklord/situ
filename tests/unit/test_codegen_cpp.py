@@ -129,7 +129,7 @@ def test_a_byte_array_carries_its_length() -> None:
 	header = emit("struct s { u8 octets[4]; }")
 
 	assert "::situ::rt::bytes octets() const noexcept" in header
-	assert "::situ::rt::bytes(base() + 0, 4)" in header
+	assert "::situ::rt::bytes(raw_.base + 0, 4)" in header
 
 
 def test_errors_cannot_be_ignored() -> None:
@@ -171,6 +171,7 @@ def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	# Through the gate's view, not the struct's.
 	body = header[header.index("bytes body()"):]
 	assert "base()" not in body[:body.index("}")]
+	assert "raw_.base" in body[:body.index("}")]
 
 
 # -- what it compiles to ----------------------------------------------------
@@ -373,7 +374,7 @@ def test_an_element_is_bounded_by_the_count_not_just_the_view() -> None:
 def test_remaining_runs_to_the_limit() -> None:
 	header = emit("struct s { u8 head; u8 rest[remaining]; }")
 
-	assert "(limit() - (1))" in header
+	assert "(raw_.limit - (1))" in header
 
 
 # -- the stage gate ---------------------------------------------------------
@@ -1484,7 +1485,7 @@ def test_an_indexed_region_gets_its_table_walked() -> None:
 def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
 	header = emit(INDEXED)
 
-	assert "situ_get_be16(base() + at)" in header
+	assert "situ_get_be16(raw_.base + at)" in header
 
 
 def test_an_index_over_variable_elements_measures_one() -> None:
@@ -1585,7 +1586,7 @@ def test_a_member_after_a_varint_is_placed_past_it() -> None:
 	varint's own bytes."""
 	header = emit(VARINT + "struct S { u8 kind; v n; u16 after; }")
 
-	assert "situ_advance_u32(1, n_len(), limit())" in header
+	assert "situ_advance_u32(1, n_len(), raw_.limit)" in header
 	assert "s.after: its offset cannot be resolved" not in header
 
 
@@ -1666,7 +1667,7 @@ def test_a_be128_field_uses_the_big_endian_reader() -> None:
 	refusal one commit ago -- invariant 11, and the shelf life was a day."""
 	header = emit(BE128 + "struct S { sq n; u16 after; }")
 
-	assert "situ_varint_be_get(base() + at, limit() - at, 9u, 8u, &raw)" in header
+	assert "situ_varint_be_get(raw_.base + at, raw_.limit - at, 9u, 8u, &raw)" in header
 	assert "is not an encoding this" not in header
 
 
@@ -1985,7 +1986,7 @@ def test_a_fixed_width_text_number_parses() -> None:
 
 	assert "code(std::uint16_t &out) const noexcept" in header
 	assert "code_digits() const noexcept" in header
-	assert "situ_parse_uint(base() + (0), 3u, 10u, 999u, &value)" in header
+	assert "situ_parse_uint(raw_.base + (0), 3u, 10u, 999u, &value)" in header
 
 
 def test_the_range_is_the_fields_not_the_types() -> None:
@@ -2109,7 +2110,7 @@ def test_a_member_after_a_run_uses_the_runs_from_helper() -> None:
 	the rescan."""
 	header = emit(KV)
 
-	assert "at = situ_advance_u32(at, entries_span_from(at), limit());" in header
+	assert "at = situ_advance_u32(at, entries_span_from(at), raw_.limit);" in header
 	assert "std::uint32_t entries_span_from(std::uint32_t start)" in header
 
 

@@ -207,7 +207,7 @@ class Emitter:
 		for name in self._order():
 			lines.extend(self._struct(self.resolved.structs[name]))
 
-		return "\n".join(lines) + "\n"
+		return self._unshadow("\n".join(lines) + "\n")
 
 	def _tlv_items(self) -> list[tuple[ResolvedStruct, Placement]]:
 		"""Every walkable tlv region, with the struct that holds it."""
@@ -277,6 +277,45 @@ class Emitter:
 				"",
 			])
 		return lines
+
+	#: Builtins the generated annotations name. A member may be called any of
+	#: these -- `bytes` is an ordinary field name -- and a property of that
+	#: name is a class-scope binding that hides the builtin for every
+	#: annotation after it, so `data: bytes | bytearray | memoryview` stops
+	#: being a type. The runtime `View` also owns `bytes`, so such a member
+	#: overrode it and the generated `self._span` read the member instead.
+	#: Found by `std/image.situ` (26.80).
+	SHADOWABLE = ("bytes", "bytearray", "memoryview", "int", "str", "bool",
+	              "float")
+
+	def _shadowed_builtins(self) -> list[str]:
+		"""Builtins some struct also uses as a member name."""
+		members = {c_name(entry.placement.name)
+		           for struct in self.resolved.structs.values()
+		           for entry in struct.entries}
+		return [name for name in self.SHADOWABLE if name in members]
+
+	def _unshadow(self, text: str) -> str:
+		"""Point the annotations at an alias no member can hide.
+
+		The same mechanism this backend already uses for an enum a member has
+		named, extended to the builtins. Applied once over the module this
+		emitter has just produced, which is a second pass with complete
+		knowledge of the first rather than the re-reading section 25 forbids:
+		the names substituted are computed from the AST, and only where a
+		member actually took one.
+		"""
+		shadowed = self._shadowed_builtins()
+		if not shadowed:
+			return text
+
+		import re as _re
+		alias = "".join(f"_situ_{name} = {name}\n" for name in shadowed)
+		text  = text.replace("\nfrom situ_runtime import",
+		                     f"\n{alias}\nfrom situ_runtime import", 1)
+		for name in shadowed:
+			text = _re.sub(rf"(:|->) {name}\b", rf"\1 _situ_{name}", text)
+		return text
 
 	def _shadowed_enums(self) -> set[str]:
 		"""Enum names some struct also uses as a member name."""
@@ -763,7 +802,7 @@ class Emitter:
 			f"\t\tif at + {width} > self._len:",
 			f'\t\t\traise BoundsError(f"entry {{index}} runs past the region")',
 			"",
-			f"\t\treturn int.from_bytes(self.bytes[at:at + {width}],"
+			f"\t\treturn int.from_bytes(self._span[at:at + {width}],"
 			f" {order})",
 		]
 		lines.extend(self._index_element(struct, placement, table, name,
@@ -944,7 +983,7 @@ class Emitter:
 			"\t\tRaises BoundsError where the region ends or an item runs past",
 			"\t\tit, and ConstraintError for a wire type this schema does not",
 			'\t\tdescribe."""',
-			"\t\tdata = self.bytes",
+			"\t\tdata = self._span",
 			"\t\tif at >= len(data):",
 			f'\t\t\traise BoundsError(f"no item at {{at}}: the region ends at'
 			f' {{len(data)}}")',
@@ -1085,7 +1124,7 @@ class Emitter:
 			f"\tdef {name}_value(self, item: {item}) -> memoryview:",
 			f'\t\t"""This item\'s value. Zero copy, like every other read'
 			f' here."""',
-			"\t\treturn self.bytes[item.value_at:item.value_at + item.value_len]",
+			"\t\treturn self._span[item.value_at:item.value_at + item.value_len]",
 			"",
 			f"\tdef {name}(self) -> Iterator[{item}]:",
 			f'\t\t"""Every item, in order.',
@@ -1497,7 +1536,7 @@ class Emitter:
 			+ '"""',
 			"\t\tself._check()",
 			f"\t\tat   = {start}",
-			"\t\tdata = self.bytes",
+			"\t\tdata = self._span",
 			"",
 			"\t\tif at >= len(data):",
 			f'\t\t\traise BoundsError(f"{placement.path} starts at {{at}},'
@@ -1518,7 +1557,7 @@ class Emitter:
 			'\t\tit inside the frame."""',
 			"\t\tself._check()",
 			f"\t\tat   = {start}",
-			"\t\tdata = self.bytes",
+			"\t\tdata = self._span",
 			"",
 			"\t\tif at >= len(data):",
 			"\t\t\treturn 0",

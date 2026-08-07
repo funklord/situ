@@ -184,6 +184,20 @@ class View:
 		self._check()
 		return self._msg.buffer[self._at:self._at + self._len]
 
+	@property
+	def _span(self) -> memoryview:
+		"""The same bytes, under a name a schema member cannot take.
+
+		`bytes` is an ordinary field name, and a member called that emits a
+		property which *overrides* the one above -- so generated code reading
+		`self.bytes` would get the member's few bytes rather than the view's.
+		Nothing generated from a schema starts with an underscore, so this
+		spelling cannot be captured. Generated code uses it; a caller reads
+		`bytes` and gets what they asked for either way (26.80).
+		"""
+		self._check()
+		return self._msg.buffer[self._at:self._at + self._len]
+
 	def _check(self) -> None:
 		if self._gen != self._msg.generation:
 			raise StaleViewError(
