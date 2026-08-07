@@ -9387,6 +9387,56 @@ had ever asked the image how long an arm's member was.
 delimited members, 4 varints and 5 `while` runs. Every shape whose width is
 decoded rather than declared is now walked.
 
+### 26.85 What the first CI run found, including a buffer overrun
+
+There was no CI until 26.83. The first three runs found four things, and only
+two of them were about the runner.
+
+**`make typecheck` needs the differential oracles installed.** The tests that
+use `pymodbus` and `paho-mqtt` skip without them, which is the pattern
+everything toolchain-dependent here follows -- and `mypy --strict` does not
+skip. It reads `tests/unit/oracles.py` whether or not those tests run,
+`disallow_any_unimported` is on, and an unresolvable import is an error. So
+`make check` depends on two protocol libraries nothing documented, and the
+machine it was written on had them.
+
+**A generated Python module hands a `memoryview` to a reader annotated
+`bytes`.** True since the first varint landed, and invisible because
+`memoryview` was not generic and mypy could not tell the two apart. A newer
+one can. The annotation was wrong, not the code, and the readers say
+`Buffer` now.
+
+**And the one that matters: the owned C decoder reads past the struct.**
+`situ_cpio_header_decode` reads 32 bytes into an eight-byte field and runs
+24 bytes off the end of a 110-byte header. The runner's older gcc laid the
+stack out so that the stack protector caught it; this machine's gcc 14 did
+not, and the test had been passing here for as long as it has existed.
+
+The cause is that the owned backend does not know what a text number is.
+`hex u32 rdevminor[8]` is *eight hex digits* holding one value, and the view
+accessor reads it correctly -- `situ_parse_uint(ptr, 8u, 16u, ...)`. The
+owned form declares `uint32_t rdevminor[8]` and decodes eight big-endian
+u32s, so it reads thirty-two bytes where eight exist. `radix` appears
+nowhere in `situc/codegen/c/owned.py`. Every one of `cpio_header`'s fourteen
+fields is wrong the same way.
+
+**It is the walker's finding, one layer down.** 26.84 fixed exactly this
+misreading in the walk -- "a text number is digits, not bits" -- and the
+same misreading was already shipping in a C backend, in the form that writes
+into a caller's struct. Reproduced here with:
+
+    gcc -fsanitize=address -I<gen> -I runtime/c rt.c cpio.c \
+        cpio_owned.c runtime/c/situ.c -o rt && ./rt
+
+**Left open rather than patched.** The fix is not one line: a text number's
+owned representation should be the parsed value, which makes the field a
+scalar rather than an array and makes the *encode* side write digits back --
+zero-padded, in a radix, in a case the format chooses. There is no digit
+formatter in the runtime and no setter for a text number in the view form
+either, so what the owned form should promise for one is a decision rather
+than an omission. Recorded so it is not lost, with a reproduction that does
+not depend on which compiler laid the stack out.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -10357,7 +10407,12 @@ decoded rather than declared is now walked.
    every check for a day -- and did not record signedness, because nothing
    that read it had ever needed to. The consumer is what finds the fields
    the producer never had to think about, so write the consumer.
-115. **An artifact nothing here consumes needs its coverage reported, not its
+115. **A test that passes on the machine that wrote it has been run once.**
+   The owned decoder read twenty-four bytes past a struct for as long as the
+   test existed, and passed here every time: the overrun was real on both
+   machines and only one compiler's stack layout tripped the protector. A
+   second machine is not redundancy, it is the first observation.
+116. **An artifact nothing here consumes needs its coverage reported, not its
    absence of errors.** The packed layout image is read by a program in
    a different binary, so a size expression it silently failed to encode
    would surface as a wrong length somewhere nobody here can see. `pack`

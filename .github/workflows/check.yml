@@ -36,6 +36,11 @@ jobs:
       - name: Install the toolchains the suite would otherwise skip
         run: |
           sudo apt-get update
+          # `--no-install-recommends` keeps the image small and costs two
+          # packages that have to be named: the cross libc headers, without
+          # which `aarch64-linux-gnu-gcc` cannot find `bits/libc-header-
+          # start.h`, and ImageMagick, whose `convert` writes the BMP the
+          # differential oracle reads back.
           sudo apt-get install -y --no-install-recommends \
             gcc g++ \
             rustc \
@@ -44,12 +49,20 @@ jobs:
             cmake \
             libcmocka-dev \
             gcc-aarch64-linux-gnu \
-            qemu-user
+            libc6-dev-arm64-cross \
+            qemu-user \
+            imagemagick
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # `pymodbus` is pinned to the 3.8 series: 3.9 renamed
+      # `FramerSocket.processIncomingFrame`, and an oracle is only an oracle
+      # while it is the implementation the schema was checked against. A
+      # floating version turns "situ disagrees with pymodbus" into "pymodbus
+      # changed", which is the one thing a differential check must not say.
+      #
       # `pymodbus` and `paho-mqtt` are the differential oracles -- somebody
       # else's implementation of two protocols this tree describes -- and
       # they are not optional to `make check` even though the tests that use
@@ -60,7 +73,7 @@ jobs:
       # without them tried it: that is what the first CI run found.
       - run: |
           python -m pip install --disable-pip-version-check \
-            pytest mypy pymodbus paho-mqtt
+            pytest mypy 'pymodbus>=3.8,<3.9' paho-mqtt
 
       - name: Report what is actually installed
         run: |

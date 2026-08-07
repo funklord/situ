@@ -38,6 +38,12 @@ nothing installed.
 
 from __future__ import annotations
 
+#: What the readers accept. Generated code passes a `memoryview` over the
+#: message and never a `bytes`, so annotating these `bytes` was wrong from
+#: the first one -- it went unnoticed because `memoryview` was not generic
+#: until recently and mypy could not tell the two apart.
+Buffer = bytes | bytearray | memoryview
+
 import enum
 import sys
 from typing import Final, TypeVar
@@ -537,7 +543,7 @@ def bcd_valid(packed: int, digits: int) -> bool:
 	return all(((packed >> (4 * i)) & 0xF) <= 9 for i in range(digits))
 
 
-def varint_get(data: bytes, at: int, max_bytes: int) -> tuple[int, int] | None:
+def varint_get(data: Buffer, at: int, max_bytes: int) -> tuple[int, int] | None:
 	"""Decode one varint at `at`: the value, and the bytes it occupied.
 
 	None where the buffer ends mid-value or the value needs more than
@@ -585,7 +591,7 @@ def zigzag_encode(value: int) -> int:
 	return (value << 1) ^ (value >> 63) if value < 0 else value << 1
 
 
-def varint_be_get(data: bytes, at: int, max_bytes: int,
+def varint_be_get(data: Buffer, at: int, max_bytes: int,
 		terminal_bits: int) -> tuple[int, int] | None:
 	"""Decode one big-endian base-128 varint: the high group first.
 
