@@ -50,7 +50,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: python -m pip install --disable-pip-version-check pytest mypy
+      # `pymodbus` and `paho-mqtt` are the differential oracles -- somebody
+      # else's implementation of two protocols this tree describes -- and
+      # they are not optional to `make check` even though the tests that use
+      # them skip without them. `mypy --strict` with
+      # `disallow_any_unimported` reads `tests/unit/oracles.py` whether or
+      # not those tests run, and an import it cannot resolve is an error. So
+      # the typecheck depends on them, which was invisible until a machine
+      # without them tried it: that is what the first CI run found.
+      - run: |
+          python -m pip install --disable-pip-version-check \
+            pytest mypy pymodbus paho-mqtt
 
       - name: Report what is actually installed
         run: |
@@ -62,6 +72,7 @@ jobs:
           aarch64-linux-gnu-gcc --version | head -1
           qemu-aarch64 --version | head -1
           python --version
+          python -c 'import pymodbus, paho.mqtt; print("oracles present")'
 
       - run: make check
 
