@@ -152,6 +152,33 @@ Settled exceptions:
 - **Package-system spellings** -- kebab-case where Cargo or Debian require
   it.
 
+## ASCII in source
+
+Source and comments are ASCII. Write `--` where prose would use an em dash,
+and "section" for a section sign.
+
+This governs **the text the repository writes about itself**, not the data
+the software handles. Three exceptions, and they are the rule's shape
+rather than holes in it:
+
+- **Documentation.** Markdown may use typographic punctuation.
+- **User-facing text in UI software.** A tick a program prints is output,
+  not prose -- `GREEN('gpg ')` is correct as it stands.
+- **Anything that genuinely requires Unicode**: a fixture for a UTF-8
+  parser, a terminal emulator's character tables, a font tool.
+
+Where a project needs the rule enforced, `ascii_only` in `.style-gate.toml`
+turns it on. In Python it enforces exactly the shape above -- ASCII outside
+string literals, Unicode allowed inside them -- because the gate reads the
+file with `tokenize`. Other languages get a whole-file byte check, having
+no tokenizer here, and so does a Python file that will not tokenise: a file
+nobody can parse is not a file that has been cleared.
+
+It was the whole file for everyone until a project that prints two status
+ticks had to switch the check off to keep them, which switched it off for
+its comments as well, and an em dash arrived in one. **An exception wider
+than its reason is how a rule stops being enforced.**
+
 ## Formatters
 
 A formatter is allowed **only if it can be configured to honour the three
@@ -200,8 +227,12 @@ not belong in a `project.md`.
 
 ## Keeping the copies in sync
 
-Each private project keeps a copy of this file at its repo root, opening
-with a header that names the source:
+Each private project keeps a copy of this file at its repo root -- except
+the one this file lives in. `claude-guidelines` holds the source at
+`guidelines/code-style.md`, and a copy beside it would be the same document
+twice in one repository with nothing to keep the two honest; its root
+`code-style.md` says so and points here. Every other private project carries
+a copy, opening with a header that names the source:
 
 ```markdown
 <!-- Copied from ~/.claude/guidelines/code-style.md -- the source. Keep in
@@ -238,7 +269,6 @@ fixed.
 
 The project's `project.md` may state the three rules in brief and point
 here for the detail. It does not restate the precedence rule.
-
 ---
 
 # Additions specific to situ
@@ -312,34 +342,46 @@ guessed at.
 the reasoning, including the verification that Python accepts tabs-then-spaces
 at every tab width.
 
-## ASCII only
+## ASCII, and the two things this project adds to it
 
-Source, comments, docstrings, test fixtures and commit messages are ASCII.
-Write `--` where prose would use an em dash.
+The rule itself is above, in the copied portion, and is not restated here.
+This file carried two paraphrases of it for a while, which is how a copy
+stops matching its source without anyone editing the source: what a project
+adds belongs under this heading, and what the source says belongs in the
+source's words.
 
-This is a rule about the text this project writes, not about the data it
-handles: a schema describes arbitrary octets and the compiler must not assume
-otherwise. The two do not conflict -- one governs the repository, the other
-governs the wire.
+`ascii_only = true` in `.style-gate.toml`. Two additions:
 
-**Markdown is not exempt from this**, although it is exempt from the indent
-rule. The gate checks every `.md` it can see for ASCII, which is
-how the first draft of this file -- carrying thirteen em dashes and four
-section signs -- failed `make lint` on arrival.
+- **Markdown is not exempt here.** The source's documentation exception
+  takes Markdown out of the *global* rule's scope; it does not stop a
+  project holding its own documents to ASCII, and this one does --
+  `ascii_exclude_markdown = false`. Earned: the first draft of this file
+  carried thirteen em dashes and four section signs, and failed `make lint`
+  on arrival. Markdown stays exempt from the *indent* rule, which is the
+  source's exception and is untouched.
+- **Commit messages too**, which the source says nothing about because no
+  gate outside a repository can check one. `tools/hooks/commit-msg` does.
 
-## ASCII in source
+**The rule governs the repository, not the wire**, and in this project the
+distinction is load-bearing rather than pedantic: a schema describes
+arbitrary octets and the compiler must not assume otherwise. A `.situ` file
+naming a UTF-8 encoding, a test fixture holding a byte nobody can print, a
+parser's own tables -- those are data. The two never conflict, because one
+is about what this repository writes and the other is about what the
+software reads.
 
-Source and comments are ASCII. Write `--` where prose would use an em dash,
-and "section" for a section sign.
+**One consequence to know, and it is the source's rather than this
+project's: docstrings.** A whole-file byte check covers them; the
+tokenizer does not, because a docstring *is* a string literal and nothing
+distinguishes it from one a program prints. This file used to name
+docstrings among what it holds to ASCII, and that is why it no longer can.
+Every docstring in this tree is ASCII and none of them needs not to be, so
+nothing is broken -- but the gate would not notice if one changed, and a
+rule that quietly stops being enforced is worth a sentence rather than a
+silence. Whether the source should draw that line differently is the
+source's question, not situ's.
 
-This governs the text the repository writes about itself, not the data the
-software handles. Documentation may use typographic punctuation; so may
-user-facing text in UI software, and anything that genuinely requires
-Unicode.
-
-Enabled here, including for Markdown -- see `ascii_only` and
-`ascii_exclude_markdown` in `.style-gate.toml`.
-
+## The commit-msg hook
 
 The commit-msg hook is `tools/hooks/commit-msg`, installed with `make hooks`.
 It rejects generator attribution and a subject over 75 columns. It lives in
