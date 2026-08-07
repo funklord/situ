@@ -302,9 +302,24 @@ style-docs:
 veryclean: clean
 	rm -rf packaging/out dist
 
+# **`distclean` no longer sweeps the tree for editor droppings.** `*~`,
+# `*.swp` and `*.orig` are not build output: they belong to somebody's
+# editor, and a `.orig` belongs to a merge they may be in the middle of.
+# The sweep was also unbounded -- `find .` walks `.git`, and it was measured
+# deleting files in there. `git clean -xdn` lists that class and is the
+# person's call rather than the build system's.
+#
+# What is left is what the tooling here really wrote. The two names are
+# grouped so that both are reached: `-a` binds tighter than `-o`, so
+# `-name a -o -name b -type d -prune -exec rm` runs the action on b alone
+# and silently leaves every a in place. A sibling had exactly that and
+# removed no `__pycache__` at all. Both caches are named exactly and are
+# disposable by construction; `.git` is pruned and every removal is
+# printed, because a clean target that deletes silently cannot be checked.
 distclean: veryclean
-	find . -name '*~' -o -name '*.swp' -o -name '*.orig' | xargs -r rm -f
-	find . -name .pytest_cache -type d -prune -exec rm -rf {} +
+	@find . -name .git -prune -o \
+	        \( -name __pycache__ -o -name .pytest_cache \) \
+	        -type d -prune -print -exec rm -rf {} +
 
 # The commit-msg hook lives in the tree so it is reviewable, survives a
 # clone, and can be kept in sync. .git/hooks is untracked, so a hook that
