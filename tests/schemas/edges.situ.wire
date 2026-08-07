@@ -107,6 +107,14 @@ struct framed_tail size=6..10
   ~         3         beacon     head  big
   ~         2         u16        tail  big
 
+struct keywords size=10
+  @0x0000   4         u32        int  big
+  @0x0004   2         u16        short  big
+  @0x0006   1         u8         class
+  @0x0007   1         u8         type
+  @0x0008   1         u8         match
+  @0x0009   1         u8         lambda
+
 struct kv size=4..
   @0x0000   until:3a20 u8         key  big
   ~         until:0d0a u8         value  big

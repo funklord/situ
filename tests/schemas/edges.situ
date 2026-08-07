@@ -602,7 +602,28 @@ struct shadowing {
 	u32  str;
 }
 
-// Not here, and deliberately: a member named `int` or `float` is a C and C++
-// *keyword*, which is a different gap and one nothing yet closes. It needs
-// mangling in every backend rather than an unshadowable spelling in two, so
-// it is recorded in 26.80 as open rather than half-fixed here.
+// Members named for a keyword, which is the other half of the same gap.
+// `base` and `bytes` above are names in use and were fixed by spelling the
+// emitted code differently; these cannot be spelled at all -- `std::uint32_t
+// int() const` is not C++ and `uint32_t int;` is not C -- so the *name*
+// moves, one trailing underscore, and the schema keeps its own.
+//
+// Six words across four languages, because no one language has them all:
+// `int` and `short` are C and C++, `class` is C++ and Python both, `type`
+// and `match` are Rust, and `lambda` is Python. Rust needs no mangling for
+// any of it -- `r#type` is what raw identifiers are for -- which is why the
+// struct has to carry words from more than one list to exercise more than
+// one answer.
+//
+// These are not contrived names. DNS calls a field CLASS and half the
+// protocols in this tree have a `type`; a rule against them would be situ
+// declining to describe a format for a reason that has nothing to do with
+// its bytes.
+struct keywords {
+	u32  int;
+	u16  short;
+	u8   class;
+	u8   type;
+	u8   match;
+	u8   lambda;
+}

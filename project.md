@@ -9159,10 +9159,10 @@ by 26.27's argument: the worked examples do not have these names and were
 never going to. Adding one schema found both, and a schema written to be
 awkward is cheaper than a schema written to be useful.
 
-**Still open, and named rather than half-fixed.** A member called `int` or
+**Left open here, and named rather than half-fixed.** A member called `int` or
 `float` is a C and C++ *keyword*, not merely a name in use. That needs
 mangling in every backend rather than an unshadowable spelling in two, so it
-is not in the struct above and not fixed here.
+is not in the struct above and not fixed here. Closed in 26.90.
 
 **Status:** `make check` green with the collision struct in the tree; six
 assertions in the C++ suite and one in the Python moved to the new spellings,
@@ -9673,6 +9673,74 @@ and 26.89's whole method is to read the taxonomy rather than form one.
 is a line per struct rather than per member, so the member count says nothing
 about it and a change that made every struct defer would leave that number
 untouched.
+
+### 26.90 A member named for a keyword, in four languages
+
+26.80 closed `base` and `bytes` and left this beside them: a member called
+`int` is not a name in use, it is a word the language will not let an
+identifier be. `std::uint32_t int() const` is not C++, `uint32_t int;` is not
+C, and `def class(self)` is not Python.
+
+**Most generated identifiers were never at risk, and seeing that is the whole
+fix.** C names an accessor `situ_keywords_int_get`, which is a perfectly good
+identifier -- the path in front of it is what saves it. Two places emit a
+member's name *by itself*: the owned struct's field and every C++ accessor.
+So the mangling belongs to those, under a name that says which case it is --
+`bare_name`, beside `c_name` -- rather than to `c_name`, which is handed
+whole paths as often as fragments and would have produced
+`situ_keywords_int__get` at one call site and `situ_keywords_int_get` at the
+next.
+
+**One trailing underscore, and none of it is new.** `class_name` already does
+exactly this to a class a member has named; the Lua dissector already does it
+to a field called `function`; PEP 8 recommends it by name. Rust needs none of
+it, because `r#type` is what raw identifiers are for. What the four have in
+common is decision 0025's rule -- the schema keeps its name and the emitter
+moves -- and it matters more here than it did for `base`: DNS calls a field
+CLASS and half the protocols in this tree have a `type`, so a rule against
+them would be situ declining to describe a format for a reason that has
+nothing to do with its bytes.
+
+**The hazard the underscore introduces needed nothing.** A schema holding
+both `int` and `int_` reaches one C identifier, and decision 0013's gate has
+refused two constructs that collide there since the day it was written. The
+mangling runs before the gate rather than after it, which is what makes that
+true.
+
+**Then the fifth emitter, which is the part worth recording.** The
+differential check writes its own driver in each of the four languages, and
+it is a code generator with the same problem -- `view.int()` in the C++
+driver, `view.class` in the Python one. Rust's driver had been escaping all
+along, which is why nothing had noticed. It was also escaping *wrongly*:
+`set_{rust_ident(local)}` puts the escape on the fragment and emitted
+`view.set_r#type(239)`, where the backend escapes the whole identifier and
+`set_type` is not a keyword at all. That had never fired because no schema in
+the tree had a member named `type` until this one did.
+
+**And a test that restated a rule rather than asking for it.** The
+writable-member check carried `set_r#{local}` among the spellings it looks
+for -- a spelling no backend has ever emitted, written to match the bug
+above. It asks the emitters now. A second copy of a naming rule is a copy
+that disagrees, and the disagreement surfaces as a member the test says has
+no setter.
+
+**The proof for the sweep.** 137 call sites moved across four files, so the
+invariant was stated before any of it: the generated output for every schema
+in the tree, across all five emitters, must be byte-identical, because no
+schema had a keyword member yet. 330 files, one sha256, unchanged. That is
+what makes it safe to say the change is confined to the case it was written
+for -- reading a sample of the diff would not have.
+
+`edges.situ` carries the struct, with six words across four languages
+because no single language has them all: `int` and `short` are C and C++,
+`class` is C++ and Python both, `type` and `match` are Rust, `lambda` is
+Python. It is compiled by the C suite, owned by the owned-form suite, and
+built and run in all four languages by the differential check.
+
+**Status:** every step of `make check` green, and the four spellings verified
+in the emitted text rather than inferred from a passing build -- `uint32_t
+int_;` in the owned header, `int_()` in C++, `def class_` in Python,
+`pub fn r#type` in Rust.
 
 ### Invariants to hold across all phases
 
@@ -10636,8 +10704,10 @@ untouched.
    produced code that does not compile from a legal schema, and decision
    0013's gate saw neither, because it asks only about flattened C
    identifiers. Emit an unshadowable spelling rather than reserving the word
-   (0025), and keep the case in `edges.situ` -- a member named for a
-   *keyword* is still open (26.80).
+   (0025), and keep the case in `edges.situ`. A member named for a *keyword*
+   is the same hazard one step further on and is mangled rather than refused
+   (26.90): most generated identifiers carry the whole path in front of them
+   and are safe, so what needs mangling is the few emitted *bare*.
 114. **A format that cannot say whether a number is negative is not a
    description of a layout.** The image carried offsets, sizes, endianness
    and expressions, round-tripped through its own accessors, and passed

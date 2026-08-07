@@ -36,7 +36,7 @@ emitter so a phase that adds an accessor shape cannot leave them behind.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.c.names import c_name
+from situc.codegen.c.names import bare_name, c_name
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, Span
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import local_name
@@ -81,7 +81,7 @@ def member_names(struct: ResolvedStruct) -> set[str]:
 	found: set[str] = set()
 
 	for entry in struct.entries:
-		name = c_name(local_name(struct, entry.placement))
+		name = bare_name(local_name(struct, entry.placement))
 		if not name:
 			continue
 		found.add(name)

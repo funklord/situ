@@ -39,7 +39,7 @@ from collections.abc import Mapping
 
 from situc import ast
 from situc.types import ScalarKind
-from situc.codegen.c.names import c_name, ident, macro
+from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import own_entries
@@ -202,7 +202,7 @@ def _fields(struct: ResolvedStruct, prefix: str,
 		if placement.kind == "reserved":
 			continue
 
-		name = c_name(placement.name)
+		name = bare_name(placement.name)
 		if placement.scalar is None:
 			inner = resolved.structs.get(placement.type_name or "")
 			assert inner is not None
@@ -284,7 +284,7 @@ def _decode_body(struct: ResolvedStruct, prefix: str,
 	lines = []
 	for entry in own_entries(struct):
 		placement = entry.placement
-		name      = c_name(placement.name)
+		name      = bare_name(placement.name)
 
 		if placement.kind == "reserved":
 			continue
@@ -363,7 +363,7 @@ def _encode_body(struct: ResolvedStruct, prefix: str,
 	lines = []
 	for entry in own_entries(struct):
 		placement = entry.placement
-		name      = c_name(placement.name)
+		name      = bare_name(placement.name)
 		assert placement.offset_bits is not None
 		offset = placement.offset_bits // BITS_PER_BYTE
 

@@ -38,7 +38,9 @@ from situc import ast
 from situc.capability import Axis
 from situc.cli import analyse
 from situc.codegen.c import generate as generate_c
-from situc.codegen.c.names import c_name
+from situc.codegen.c.names import bare_name, c_name
+from situc.codegen.python.emit import py_name
+from situc.codegen.rust.emit import _ident as rust_ident
 from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.python import generate as generate_py
 from situc.codegen.rust import generate as generate_rs
@@ -70,12 +72,19 @@ def spellings(backend: str, struct: str, local: str) -> list[str]:
 	Python's is a property assignment rather than a method, which is the
 	backend's own convention (decision 0022) -- and the reason this asks for
 	spellings rather than one name.
+
+	The mangling each backend applies to a member named for one of its own
+	keywords is asked for rather than restated. Restating it is how this test
+	came to carry `set_r#{local}`, which no backend has ever emitted: Rust
+	escapes the whole identifier, and `set_type` is not a keyword. A second
+	copy of a naming rule is a copy that disagrees with the emitter, and the
+	disagreement shows up as a member the test says has no setter.
 	"""
 	return {
 		"c":      [f"situ_{c_name(struct)}_{local}_set("],
-		"cpp":    [f"set_{local}("],
-		"rust":   [f"set_{local}(", f"set_r#{local}("],
-		"python": [f"@{local}.setter", f"def set_{local}("],
+		"cpp":    [f"set_{bare_name(local)}("],
+		"rust":   [f"{rust_ident('set_' + local)}("],
+		"python": [f"@{py_name(local)}.setter", f"def set_{py_name(local)}("],
 	}[backend]
 
 

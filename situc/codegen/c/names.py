@@ -18,6 +18,18 @@ from dataclasses import dataclass
 
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, Span
 from situc.resolve import ResolvedSchema
+from situc.wellformed import CPP_KEYWORDS
+
+#: Words a *bare* generated identifier may not be.
+#:
+#: The C++ set, which is where the hazard mostly lives, plus the C spellings
+#: it does not contain. Taken from `wellformed` rather than restated, because
+#: two lists of keywords are one list that has drifted -- and the same set has
+#: to decide both what an enum member may be called and how a struct member is
+#: spelled, or a schema passes the front end and fails the compiler.
+KEYWORDS = CPP_KEYWORDS | frozenset({
+	"restrict", "typeof", "_Atomic", "_Bool", "_Generic",
+})
 
 
 def ident(*parts: str) -> str:
@@ -55,6 +67,36 @@ def c_name(path: str) -> str:
 	                 .replace("[]", "").replace("<", "").replace(">", ""))
 	return "".join(character if character.isalnum() or character == "_" else "_"
 	               for character in flattened)
+
+
+def bare_name(path: str) -> str:
+	"""`c_name`, for a name that is emitted on its own.
+
+	Most generated C identifiers carry the whole path in front of them, so a
+	member called `int` reaches `situ_keywords_int_get` and nothing is wrong
+	with it. Two places emit the name by itself and are not so lucky: the
+	owned struct's field, which is `uint32_t int;` and not C, and every C++
+	accessor, which is `std::uint32_t int() const` and not C++.
+
+	One trailing underscore, which is what `class_name` already does to a
+	class a member has named, what the Lua dissector already does to a field
+	named `function`, and what PEP 8 recommends by name. Rust needs none of
+	it: `r#type` is what raw identifiers are for.
+
+	Mangling rather than refusing, and that is decision 0025's argument
+	rather than a new one -- the schema keeps its name and the emitter moves.
+	It matters more here than it did for `base` and `bytes`: `type` and
+	`class` are what specifications actually call their fields, DNS having
+	both, so a rule against them would be situ refusing to describe formats
+	for a reason that has nothing to do with their bytes.
+
+	The hazard the underscore introduces -- a schema holding both `int` and
+	`int_` -- needs nothing new. Both flatten to one stem, and decision
+	0013's gate has refused two constructs that reach one C identifier since
+	the day it was written.
+	"""
+	name = c_name(path)
+	return f"{name}_" if name in KEYWORDS else name
 
 
 @dataclass(frozen=True)

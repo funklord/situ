@@ -18,6 +18,8 @@ than an exception they have to catch.
 
 from __future__ import annotations
 
+import keyword
+
 import re
 from dataclasses import dataclass, field
 
@@ -122,6 +124,28 @@ class Generated:
 		return {f"{self.basename}.py": self.module}
 
 
+def py_name(path: str) -> str:
+	"""`c_name`, mangled where Python could not parse the result.
+
+	The same job `bare_name` does for C and C++ and a different word list:
+	`int` is a builtin here rather than a keyword and needs no help, while
+	`class`, `def` and `lambda` cannot be a method, a class or an attribute.
+	`keyword.iskeyword` is asked rather than a list restated, because the
+	interpreter that will read this file is the authority on what it can
+	parse.
+
+	Applied to every identifier this backend emits rather than to member
+	names alone: a *struct* named `class` is `class class:`, which fails in
+	the same place for the same reason.
+
+	Soft keywords are deliberately left alone. `match` and `type` parse fine
+	as ordinary names -- that is what makes them soft -- and mangling them
+	would rename a member for nothing.
+	"""
+	name = c_name(path)
+	return f"{name}_" if keyword.iskeyword(name) else name
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ", materialize: bool = False) -> Generated:
 	return Generated(module=Emitter(schema, resolved, basename,
@@ -188,8 +212,8 @@ class Emitter:
 			# which `std/codecs.situ`, all signatures and no structs, is.
 			"__all__: list[str] = [",
 		]
-		exported = [c_name(decl.name) for decl in self.schema.enums()]
-		exported += [c_name(name) for name in sorted(self.structs)]
+		exported = [py_name(decl.name) for decl in self.schema.enums()]
+		exported += [py_name(name) for name in sorted(self.structs)]
 		lines.extend(f'\t"{name}",' for name in exported)
 		lines.extend(["]", ""])
 
@@ -253,12 +277,12 @@ class Emitter:
 		values = self.resolved.layout.env.enums[decl.name]
 		lines  = [
 			"",
-			f"class {c_name(decl.name)}(enum.IntEnum):",
+			f"class {py_name(decl.name)}(enum.IntEnum):",
 			f'\t"""enum {decl.name} : {decl.backing.name} --'
 			f' unknown values are {decl.effective_default.value}."""',
 			"",
 		]
-		lines.extend(f"\t{c_name(member.name)} = {values[member.name]}"
+		lines.extend(f"\t{py_name(member.name)} = {values[member.name]}"
 		             for member in decl.members)
 		lines.append("")
 
@@ -269,11 +293,11 @@ class Emitter:
 		# where `protocol` is both the enum and the field. Decision 0025 makes
 		# the same move in C++ for the same reason: rename the reference, not
 		# the name the schema chose.
-		if c_name(decl.name) in self._shadowed_enums():
+		if py_name(decl.name) in self._shadowed_enums():
 			lines.extend([
 				f"#: `{decl.name}` again, for annotations inside a class that",
 				"#: has a member of that name and so shadows it.",
-				f"_situ_{c_name(decl.name)} = {c_name(decl.name)}",
+				f"_situ_{py_name(decl.name)} = {py_name(decl.name)}",
 				"",
 			])
 		return lines
@@ -290,7 +314,7 @@ class Emitter:
 
 	def _shadowed_builtins(self) -> list[str]:
 		"""Builtins some struct also uses as a member name."""
-		members = {c_name(entry.placement.name)
+		members = {py_name(entry.placement.name)
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries}
 		return [name for name in self.SHADOWABLE if name in members]
@@ -319,16 +343,16 @@ class Emitter:
 
 	def _shadowed_enums(self) -> set[str]:
 		"""Enum names some struct also uses as a member name."""
-		members = {c_name(entry.placement.name)
+		members = {py_name(entry.placement.name)
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries}
-		return {c_name(name) for name in self.enums} & members
+		return {py_name(name) for name in self.enums} & members
 
 	# -- structs -------------------------------------------------------
 
 	def _struct(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
-		name   = c_name(struct.name)
+		name   = py_name(struct.name)
 
 		if layout.register is not None:
 			return self._register(struct)
@@ -428,7 +452,7 @@ class Emitter:
 			if placement.sealed_by is not None:
 				continue
 
-			name = c_name(local_name(struct, placement))
+			name = py_name(local_name(struct, placement))
 			tags = ", ".join(placement.covered_by)
 			hint = "int"
 			# The offset may be the message's: a nested struct behind a
@@ -499,7 +523,7 @@ class Emitter:
 			if entry is None or entry.placement.scalar is None:
 				continue
 
-			name  = c_name(field)
+			name  = py_name(field)
 			value = invariant_expression(struct, decl.expr, self)
 			if value is None:
 				lines.extend([
@@ -514,7 +538,7 @@ class Emitter:
 			held = obligation(self.schema, struct, f"invariant {field}")
 			assert held is not None, "the layout solver recorded this"
 			# Named, like the other three. It was the literal here.
-			bit = f"self.DIRTY_{c_name(held.name).upper()}"
+			bit = f"self.DIRTY_{py_name(held.name).upper()}"
 
 			lines.extend([
 				"",
@@ -572,7 +596,7 @@ class Emitter:
 		info = struct.layout.register
 		assert info is not None
 
-		name  = c_name(struct.name)
+		name  = py_name(struct.name)
 		lines = [
 			"",
 			f"class {name}:",
@@ -618,7 +642,7 @@ class Emitter:
 		if scalar is None:
 			return []
 
-		name  = c_name(placement.path.rsplit(".", 1)[-1])
+		name  = py_name(placement.path.rsplit(".", 1)[-1])
 		mode  = placement.access_mode or ast.AccessMode.RW
 		shift = placement.offset_bits or 0
 		mask  = (1 << scalar.bits) - 1
@@ -638,7 +662,7 @@ class Emitter:
 		if mode.writable and mode.is_assignment:
 			lines.extend([
 				f"\t\tdef with_{name}(self, value: int) -> \"{{}}\":".format(
-					c_name(entry.placement.path.split(".")[0]) + ".word"),
+					py_name(entry.placement.path.split(".")[0]) + ".word"),
 				f'\t\t\t"""A new word with {name} set; the rest untouched."""',
 				f"\t\t\treturn type(self)(compose(self.raw, int(value),"
 				f" {shift}, {mask:#x}))",
@@ -664,7 +688,7 @@ class Emitter:
 				f"\tSIZE_BYTES = {layout.size_bytes}",
 				"",
 				"\t@classmethod",
-				f"\tdef at(cls, msg: Message, offset: int = 0) -> \"{c_name(struct.name)}\":",
+				f"\tdef at(cls, msg: Message, offset: int = 0) -> \"{py_name(struct.name)}\":",
 				'\t\t"""The one bounds check. Everything after it trusts the extent."""',
 				"\t\treturn acquire(cls, msg, offset, cls.SIZE_BYTES)"
 				f"  # type: ignore[return-value]",
@@ -675,7 +699,7 @@ class Emitter:
 			"",
 			"\t@classmethod",
 			f"\tdef at(cls, msg: Message, offset: int, length: int)"
-			f" -> \"{c_name(struct.name)}\":",
+			f" -> \"{py_name(struct.name)}\":",
 			'\t\t"""Nothing in the bytes says where the frame ends, so the',
 			"\t\tcaller supplies it. That is the one bounds check, and the",
 			"\t\tminimum is part of it: every constant-offset accessor below",
@@ -758,7 +782,7 @@ class Emitter:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
 			        " where the region starts."]
 
-		name    = c_name(local_name(struct, placement))
+		name    = py_name(local_name(struct, placement))
 		width   = table.entry_bits // BITS_PER_BYTE
 		element = self.resolved.structs.get(table.element or "")
 		order   = _byte_order(placement.endian)
@@ -829,7 +853,7 @@ class Emitter:
 			        " The offsets",
 			        "\t# are still readable above."]
 
-		inner  = c_name(element.name)
+		inner  = py_name(element.name)
 		origin = (self._index_member_base(struct, table)
 		          if table.base == "member" else
 		          "0" if table.base == "message" else start)
@@ -907,7 +931,7 @@ class Emitter:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
 			        " where the region starts."]
 
-		name = c_name(local_name(struct, placement))
+		name = py_name(local_name(struct, placement))
 
 		item  = self._tlv_item_name(placement)
 		lines = self._tlv_read(placement, grammar, name)
@@ -965,7 +989,7 @@ class Emitter:
 
 	def _tlv_item_name(self, placement: Placement) -> str:
 		holder = placement.path.partition(".")[0]
-		return f"{c_name(holder)}_{c_name(placement.name)}_item"
+		return f"{py_name(holder)}_{py_name(placement.name)}_item"
 
 	def _tlv_read(self, placement: Placement, grammar: TlvGrammar,
 			name: str) -> list[str]:
@@ -1185,7 +1209,7 @@ class Emitter:
 				described += "[]" if known.repeated else ""
 			lines.extend([
 				"",
-				f"\tdef {c_name(known.name)}(self) -> {item}:",
+				f"\tdef {py_name(known.name)}(self) -> {item}:",
 				f'\t\t"""`{known.name}`: {described}."""',
 				f"\t\treturn self.{name}_find({known.tag})",
 			])
@@ -1221,7 +1245,7 @@ class Emitter:
 		         "\t# Dirty bits. A covered write sets one; the message is not",
 		         "\t# transmittable until it is cleared -- a tag by being",
 		         "\t# recomputed and finalized, a derived field by its recompute."]
-		lines.extend(f"\tDIRTY_{c_name(one.name).upper()} = {hex(1 << one.bit)}"
+		lines.extend(f"\tDIRTY_{py_name(one.name).upper()} = {hex(1 << one.bit)}"
 		             for one in held)
 		lines.append(f"\tDIRTY_MASK = {hex((1 << len(held)) - 1)}")
 		return lines
@@ -1232,7 +1256,7 @@ class Emitter:
 		It reached the fallthrough note, which claims the language does not
 		support the construct.
 		"""
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		start  = self._offset_expression(struct, placement)
 		length = self._length_expression(struct, placement)
 		if start is None or length is None:
@@ -1260,7 +1284,7 @@ class Emitter:
 		told a write left the tag stale and had no way to reach the tag, ask
 		whether it was stale, or say it no longer was.
 		"""
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		count = placement.array_count or 0
 		start = self._offset_expression(struct, placement)
 		if start is None:
@@ -1321,12 +1345,12 @@ class Emitter:
 			# (14.2); substituting them is the caller's loop.
 			lines.extend([
 				"",
-				f"	SELF_AS_{c_name(placement.name).upper()} = {filler:#04x}",
+				f"	SELF_AS_{py_name(placement.name).upper()} = {filler:#04x}",
 				"",
 				f"	def {name}_self_span(self) -> tuple[int, int]:",
 				f'		"""Where {placement.name}\'s own bytes sit inside what it',
 				"		covers. Sum the covered span, substituting",
-				f"		SELF_AS_{c_name(placement.name).upper()} for these bytes.",
+				f"		SELF_AS_{py_name(placement.name).upper()} for these bytes.",
 				'		RFC 1071 is the case this exists for."""',
 				"		self._check()",
 				f"		at = {self._offset_expression(struct, placement) or '0'}",
@@ -1339,7 +1363,7 @@ class Emitter:
 
 		held = obligation(self.schema, struct, placement.name)
 		if held is not None:
-			bit = f"self.DIRTY_{c_name(placement.name).upper()}"
+			bit = f"self.DIRTY_{py_name(placement.name).upper()}"
 			lines.extend([
 				"",
 				f"\tdef {name}_is_dirty(self) -> bool:",
@@ -1403,7 +1427,7 @@ class Emitter:
 		for step in plan:
 			if step.kind == "record":
 				assert step.placement is not None
-				name = c_name(local_name(struct, step.placement))
+				name = py_name(local_name(struct, step.placement))
 				steps.append(f'\t\tfound["{name}"] = at')
 			elif step.placement is None:
 				steps.append(f"\t\tat += {step.size}")
@@ -1412,7 +1436,7 @@ class Emitter:
 				                                 running="at")
 				steps.append(f"\t\tat += {length}")
 
-		listed = ", ".join(f"`{c_name(local_name(struct, held))}`"
+		listed = ", ".join(f"`{py_name(local_name(struct, held))}`"
 		                   for held in dynamic)
 
 		return [
@@ -1445,7 +1469,7 @@ class Emitter:
 		if scalar is None:
 			return []
 
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		width = placement.array_count or 0
 		limit = placement.radix_max or 0
 		start = self._offset_expression(struct, placement)
@@ -1496,7 +1520,7 @@ class Emitter:
 		if declared is None:
 			return []
 
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
@@ -1593,7 +1617,7 @@ class Emitter:
 		for. Inventing one here would be a policy decision made in a code
 		generator, so the accessor says what to do instead.
 		"""
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		start = self._offset_expression(struct, placement)
 		if start is None or placement.size_max_bits is None \
 				or placement.size_bits % BITS_PER_BYTE:
@@ -1662,7 +1686,7 @@ class Emitter:
 		if codec is None:
 			return []
 
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		bound  = decode_bound(codec, placement)
 		sized  = (f"{bound} bytes is what it needs" if bound is not None
 		          else f"it needs the encoded length scaled by the codec's"
@@ -1691,7 +1715,7 @@ class Emitter:
 			f"\t# No `{name}_decode`: the codec is C's (decision 0017), and",
 			"\t# calling it from here means loading a shared object from a",
 			"\t# path this generator would have to invent. Build the C",
-			f"\t# runtime and call `situ_{c_name(placement.codec or '')}_decode`",
+			f"\t# runtime and call `situ_{py_name(placement.codec or '')}_decode`",
 			f"\t# through ctypes; {sized}.",
 		]
 
@@ -1718,7 +1742,7 @@ class Emitter:
 			return "int"
 		if scalar is not None:
 			return "memoryview"
-		return c_name(placement.type_name or "object")
+		return py_name(placement.type_name or "object")
 
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
@@ -1738,7 +1762,7 @@ class Emitter:
 		else:
 			test = f"{held} != {arm.value}"
 
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		scalar = placement.scalar
 		start  = self._offset_expression(struct, placement)
 		if start is None:
@@ -1840,8 +1864,8 @@ class Emitter:
 		# something the data sizes (26.55).
 		if nested is not None and not nested.layout.is_fixed_size \
 				and has_computable_extent(self.resolved.structs, nested):
-			inner = c_name(nested.name)
-			base  = c_name(local_name(struct, placement))
+			inner = py_name(nested.name)
+			base  = py_name(local_name(struct, placement))
 			return [
 				# How many bytes this arm occupies, for the switch that places
 				# whatever follows the variant. The length chain names it and
@@ -1865,7 +1889,7 @@ class Emitter:
 			]
 
 		if nested is not None and nested.layout.is_fixed_size:
-			inner = c_name(nested.name)
+			inner = py_name(nested.name)
 			return [
 				*head,
 				# The same bounds question a nested member asks (26.31): an arm
@@ -1904,7 +1928,7 @@ class Emitter:
 			if scalar is None or placement.array_count is None:
 				continue
 
-			name  = c_name(local_name(struct, placement))
+			name  = py_name(local_name(struct, placement))
 			limit = (1 << scalar.bits) - 1
 			at    = placement.offset_bits // BITS_PER_BYTE
 			lines.extend([
@@ -1941,7 +1965,7 @@ class Emitter:
 		if not any("memoryview" in line for line in lines):
 			return lines
 
-		name = c_name(local_name(struct, entry.placement))
+		name = py_name(local_name(struct, entry.placement))
 		return lines + [
 			"",
 			f"\t# No {name} setter: mutate is {mutate.render()}. The bytes",
@@ -2036,7 +2060,7 @@ class Emitter:
 		little = evaluate(marker.little, env)
 		big    = evaluate(marker.big, env)
 		width  = scalar.bits
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		digits = width // 4
 		size   = width // BITS_PER_BYTE
 
@@ -2060,14 +2084,14 @@ class Emitter:
 		]
 
 	def _marker_predicate(self, placement: Placement) -> str:
-		return f"self.{c_name(placement.marker or '')}_is_little"
+		return f"self.{py_name(placement.marker or '')}_is_little"
 
 	def _scalar(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
 		assert scalar is not None
 
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		hint   = self._hint(placement)
 		offset = (None if placement.offset_bits is not None
 		          else self._offset_expression(struct, placement))
@@ -2148,7 +2172,7 @@ class Emitter:
 			# Writing it to an earlier message puts these bytes past that
 			# message's end. The getter refused this from the start and the
 			# setter did not, in every backend, until one of them was checked.
-			version = c_name(placement.version_field)
+			version = py_name(placement.version_field)
 			gate = [
 				f"\t\tif self.{version} < {placement.since}:",
 				"\t\t\traise VersionError(",
@@ -2196,7 +2220,7 @@ class Emitter:
 		bytes that follow would give another member's -- which is the bug the
 		construct exists to prevent, so it is not available to write.
 		"""
-		version = c_name(placement.version_field or "")
+		version = py_name(placement.version_field or "")
 		self._emitted.add(placement.path)
 		return [
 			"",
@@ -2277,7 +2301,7 @@ class Emitter:
 		# and the other three backends name theirs; this wrote the literal, so
 		# a reader comparing `mark_dirty(1)` here against `DIRTY_MAC` there had
 		# to work out that they were the same bit.
-		named = [f"self.DIRTY_{c_name(one.name).upper()}"
+		named = [f"self.DIRTY_{py_name(one.name).upper()}"
 		         for label in placement.covered_by
 		         if (one := obligation(self.schema, struct, label)) is not None]
 		return " | ".join(named) if named else "0x1"
@@ -2297,7 +2321,7 @@ class Emitter:
 		if scalar.is_bcd:
 			raw = f"bcd_decode({raw}, {scalar.digits})"
 		if placement.type_name in self.enums:
-			return f"as_enum({c_name(placement.type_name)}, {raw})"
+			return f"as_enum({py_name(placement.type_name)}, {raw})"
 		return raw
 
 	def _raw_load(self, placement: Placement, scalar: ScalarType,
@@ -2357,7 +2381,7 @@ class Emitter:
 		admits it outright. So the hint is honest about both.
 		"""
 		if placement.type_name in self.enums:
-			name = c_name(placement.type_name)
+			name = py_name(placement.type_name)
 			if name in self._shadowed_enums():
 				name = f"_situ_{name}"
 			return f"{name} | int"
@@ -2371,7 +2395,7 @@ class Emitter:
 		is is something it can already answer. The asymmetry is worth naming
 		rather than hiding -- the other three carry a frame and nothing else.
 		"""
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		offset = self._over_fields(struct, placement.located or "", "self")
 		length = self._length_expression(struct, placement)
 		if length is None and placement.is_fixed_size \
@@ -2402,8 +2426,8 @@ class Emitter:
 		]
 
 	def _nested(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
-		name   = c_name(local_name(struct, placement))
-		nested = c_name(placement.type_name or "")
+		name   = py_name(local_name(struct, placement))
+		nested = py_name(placement.type_name or "")
 		inner  = self.resolved.structs.get(placement.type_name or "")
 		start  = self._offset_expression(struct, placement)
 
@@ -2482,7 +2506,7 @@ class Emitter:
 		would not be the values. Index them individually, which is C's rule and
 		the reason it gives.
 		"""
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		count = placement.array_count or 0
 		width = scalar.bits // BITS_PER_BYTE
 		start = self._offset_expression(struct, placement)
@@ -2509,7 +2533,7 @@ class Emitter:
 		]
 
 	def _array(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		scalar = placement.scalar
 		count  = placement.array_count or 0
 
@@ -2522,7 +2546,7 @@ class Emitter:
 			return self._scalar_array(struct, placement, scalar)
 
 		if scalar is None or scalar.bits != BITS_PER_BYTE:
-			nested = c_name(placement.type_name or "")
+			nested = py_name(placement.type_name or "")
 			if placement.type_name not in self.structs:
 				return ["", f"\t# {placement.path}: element type"
 				        f" {placement.type_name} is not emitted yet."]
@@ -2555,7 +2579,7 @@ class Emitter:
 		return lines
 
 	def _variable(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		start  = self._offset_expression(struct, placement)
 		length = self._length_expression(struct, placement)
 
@@ -2601,7 +2625,7 @@ class Emitter:
 			return lines
 
 		count = self._count_expression(struct, placement)
-		inner = c_name(placement.type_name or "")
+		inner = py_name(placement.type_name or "")
 
 		# `x[remaining]` over elements with no single size: the bytes left are
 		# known and how many elements are in them is not, so the count is the
@@ -2663,7 +2687,7 @@ class Emitter:
 		looping to the declared count would otherwise read past the end of the
 		message on a length the message chose (invariant 41).
 		"""
-		name   = c_name(local_name(struct, placement))
+		name   = py_name(local_name(struct, placement))
 		scalar = placement.scalar
 		assert scalar is not None
 		width  = scalar.bits // BITS_PER_BYTE
@@ -2699,8 +2723,8 @@ class Emitter:
 		declined those members and said their offsets could not be resolved,
 		which was true only because the walk that resolves them was missing.
 		"""
-		name  = c_name(local_name(struct, placement))
-		inner = c_name(placement.type_name or "")
+		name  = py_name(local_name(struct, placement))
+		inner = py_name(placement.type_name or "")
 
 		# `None` where the run is `[remaining]`: there is no count to stop at,
 		# the frame is the bound, and the walk is what *produces* the count.
@@ -2761,7 +2785,7 @@ class Emitter:
 		by hand instead, and a backend nobody uses enforces nothing.
 		"""
 		assert placement.delimiter is not None
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		delim = placement.delimiter
 		start = self._offset_expression(struct, placement)
 		if start is None:
@@ -2884,7 +2908,7 @@ class Emitter:
 		scalar = placement.scalar
 		assert scalar is not None
 
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		limit = (1 << scalar.bits) - 1
 		raw   = value
 
@@ -2943,13 +2967,13 @@ class Emitter:
 				suffix = ("_value"
 				          if placement.varint is not None
 				          or placement.radix is not None else "")
-				return f"{held}.{c_name(local)}{suffix}"
+				return f"{held}.{py_name(local)}{suffix}"
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
 			# -- a plausible number nobody wrote, which is the shape 26.32
 			# rates worst. The value helper parses them.
 			if placement.radix is not None:
-				return f"{held}.{c_name(local)}_value"
+				return f"{held}.{py_name(local)}_value"
 			# A nested member has no attribute of this struct's own, and its
 			# offset is a constant here, so it is read where it sits.
 			assert placement.scalar is not None
@@ -2968,8 +2992,8 @@ class Emitter:
 			        f" `{placement.type_name}` has no extent",
 			        "\t# this backend can compute."]
 
-		name  = c_name(local_name(struct, placement))
-		inner = c_name(placement.type_name or "")
+		name  = py_name(local_name(struct, placement))
+		inner = py_name(placement.type_name or "")
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
@@ -3053,7 +3077,7 @@ class Emitter:
 		if not self.materialize:
 			return []
 
-		name = c_name(local_name(struct, placement))
+		name = py_name(local_name(struct, placement))
 		return [
 			"",
 			f"\tdef {name}_all(self) -> list[{inner}]:",
@@ -3078,9 +3102,9 @@ class Emitter:
 			        f" `{placement.type_name}` has no extent",
 			        "\t# this backend can compute, so the run cannot be walked."]
 
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		delim = placement.delimiter
-		inner = c_name(placement.type_name or "")
+		inner = py_name(placement.type_name or "")
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
@@ -3162,7 +3186,7 @@ class Emitter:
 		if struct.layout.register is not None:
 			return []
 
-		name = c_name(struct.name)
+		name = py_name(struct.name)
 		head = [
 			"", "\t@classmethod",
 			"\tdef required(cls, data: bytes | bytearray | memoryview) -> int:",
@@ -3210,7 +3234,7 @@ class Emitter:
 			if length is None:
 				return self._unframeable(struct)
 
-			local = c_name(local_name(struct, placement))
+			local = py_name(local_name(struct, placement))
 			steps.extend([
 				"",
 				f"\t\t# {placement.path}: reading its length means reading",
@@ -3265,7 +3289,7 @@ class Emitter:
 		if element is None or not frameable(self.resolved.structs, element):
 			return None
 
-		inner = c_name(element.name)
+		inner = py_name(element.name)
 		read  = [
 			"\t\t\ttry:",
 			f"\t\t\t\tpart = {inner}.required(data[at:])",
@@ -3642,7 +3666,7 @@ class Emitter:
 		# this member reaches", whether it is a byte run or a run of records.
 		if (placement.delimiter is not None or placement.repeat_while is not None
 				or is_counted_run(self.resolved.structs, placement)):
-			name = c_name(local_name(struct, placement))
+			name = py_name(local_name(struct, placement))
 			# Every kind that reaches here has the `_from` form: a byte array's
 			# scan, a record run's walk and a `while` run's. The runs were the
 			# exception, and it cost a rescan of everything before the run on
@@ -3668,7 +3692,7 @@ class Emitter:
 				and placement.sized_by is None):
 			if not has_computable_extent(self.resolved.structs, inner):
 				return None		# and so nothing after it can be placed
-			return f"self.{c_name(local_name(struct, placement))}_extent"
+			return f"self.{py_name(local_name(struct, placement))}_extent"
 
 		if placement.kind in ("coded", "sealed"):
 			return self._region_length(struct, placement)
@@ -3676,7 +3700,7 @@ class Emitter:
 		if placement.varint is not None:
 			if not self._reads_varint(placement):
 				return None
-			return f"self.{c_name(local_name(struct, placement))}_len"
+			return f"self.{py_name(local_name(struct, placement))}_len"
 
 		# An opaque region's size expression is already a byte count: there are
 		# no elements to multiply by, and asking for an element width finds no
@@ -3732,7 +3756,7 @@ class Emitter:
 		if driver.placement.varint is not None:
 			if not self._reads_varint(driver.placement):
 				return None
-			return f"self.{c_name(local_name(struct, driver.placement))}_value"
+			return f"self.{py_name(local_name(struct, driver.placement))}_value"
 
 		if driver.placement.scalar is None:
 			return None
@@ -3741,7 +3765,7 @@ class Emitter:
 		# everything before it -- so neither the offset check below nor the
 		# raw load after it applies.
 		if driver.placement.radix is not None:
-			return f"self.{c_name(local_name(struct, driver.placement))}_value"
+			return f"self.{py_name(local_name(struct, driver.placement))}_value"
 
 		if driver.placement.offset_bits is None:
 			# The driver is itself behind a variable-length member, so there
@@ -3750,7 +3774,7 @@ class Emitter:
 			# static offset was the only thing tried, so the member it sizes
 			# was dropped with a note, which is the whole of what "cannot
 			# resolve" meant. All three backends had it; C did not.
-			name = c_name(local_name(struct, driver.placement))
+			name = py_name(local_name(struct, driver.placement))
 			return f"self.{name}"
 		return self._raw_load(driver.placement, driver.placement.scalar)
 
@@ -3794,7 +3818,7 @@ class Emitter:
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []		# checked under the element's own struct
 
-		name  = c_name(local_name(struct, placement))
+		name  = py_name(local_name(struct, placement))
 		delim = placement.delimiter
 		assert delim is not None
 
@@ -3879,7 +3903,7 @@ class Emitter:
 		# A name per arm, not one `arm` reused: the arms have different
 		# types, and mypy --strict reads a second assignment to the same
 		# local as a type error rather than as a new variable.
-		name = c_name(local_name(struct, placement)).replace(".", "_")
+		name = py_name(local_name(struct, placement)).replace(".", "_")
 		return [
 			f"\t\t# {placement.path}: the arm the discriminant selects",
 			"\t\t# carries its own constraints, and its own validator knows",
@@ -3913,7 +3937,7 @@ class Emitter:
 		if declared is None:
 			return []
 
-		name = c_name(local_name(struct, placement))
+		name = py_name(local_name(struct, placement))
 		return [
 			f"\t\t# {placement.path}: the arm the discriminant selects has to",
 			"\t\t# fit the frame. The accessor clamps; this is where a message",
@@ -3932,7 +3956,7 @@ class Emitter:
 
 		placement = entry.placement
 		scalar    = placement.scalar
-		name      = c_name(local_name(struct, placement))
+		name      = py_name(local_name(struct, placement))
 
 		check = classify_check(struct, placement, self.structs)
 
@@ -3991,7 +4015,7 @@ class Emitter:
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
 			lines.extend([
-				f"\t\tif not known_enum({c_name(enum.name)}, int({read})):",
+				f"\t\tif not known_enum({py_name(enum.name)}, int({read})):",
 				f"\t\t\traise ConstraintError("
 				f"f\"{placement.path} is {{int({read})}}, not a"
 				f" {enum.name}\")",
@@ -4108,7 +4132,7 @@ class Emitter:
 		return lines
 
 	def _gate(self, struct: ResolvedStruct, region: Placement) -> list[str]:
-		name   = c_name(local_name(struct, region))
+		name   = py_name(local_name(struct, region))
 		holder = f"_{name}_gate"
 		sealed = [entry.placement for entry in struct.entries
 		          if entry.placement.sealed_by == region.name
@@ -4148,7 +4172,7 @@ class Emitter:
 			placement = entry.placement
 			scalar    = placement.scalar
 			assert scalar is not None
-			field_name = c_name(placement.path.rsplit(".", 1)[-1])
+			field_name = py_name(placement.path.rsplit(".", 1)[-1])
 
 			if any(attr.name == "secret" for attr in placement.attrs):
 				lines.extend(["",
@@ -4214,7 +4238,7 @@ class Emitter:
 
 		lines.extend([
 			"",
-			f"\tdef open_{name}(self, verified: bool) -> \"{c_name(struct.name)}"
+			f"\tdef open_{name}(self, verified: bool) -> \"{py_name(struct.name)}"
 			f".{holder}\":",
 			f'\t\t"""Hand out the sealed interior, and only if `verified`."""',
 			f"\t\treturn open_gate(type(self).{holder}, self, verified)"

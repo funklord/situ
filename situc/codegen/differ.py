@@ -91,8 +91,9 @@ from dataclasses import dataclass
 from enum import Enum
 
 from situc import ast
-from situc.codegen.c.names import c_name, ident, macro
+from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.codegen.rust.emit import _ident as rust_ident
+from situc.codegen.python.emit import py_name
 from situc.codegen.rust.emit import _pascal
 from situc.capability import Axis
 from situc.layout import BITS_PER_BYTE, Placement
@@ -980,21 +981,23 @@ def _cpp_writes(resolved: ResolvedSchema) -> list[str]:
 			f" 0{'' if fixed else ', n'}, view) == ::situ::rt::err::ok) {{",
 		])
 		for ask in asked:
+			call = bare_name(ask.local)
 			if ask.probe is Probe.COVERED:
 				name = c_name(struct.name)
 				lines.extend([
-					f"\t\t\tview.set_{ask.local}(msg, {ask.count});",
+					f"\t\t\tview.set_{call}(msg, {ask.count});",
 					f'\t\t\tstd::printf("{ask.local} <- {ask.count}'
 					' dirty=%d\\n",',
-					f"\t\t\t\t::situ::{name}::{ask.inside[0]}_is_dirty(msg)"
+					f"\t\t\t\t::situ::{name}::"
+					f"{bare_name(ask.inside[0])}_is_dirty(msg)"
 					" ? 1 : 0);",
 				])
 				continue
 			lines.extend([
-				f"\t\t\tview.set_{ask.local}({ask.count});",
+				f"\t\t\tview.set_{call}({ask.count});",
 				f'\t\t\tstd::printf("{ask.local} <- %llu\\n",',
 				f"\t\t\t\tstatic_cast<unsigned long long>"
-				f"(view.{ask.local}()));",
+				f"(view.{call}()));",
 			])
 		lines.extend(["\t\t}", "\t}"])
 
@@ -1013,34 +1016,40 @@ def _cpp_writes(resolved: ResolvedSchema) -> list[str]:
 
 
 def _cpp_ask(ask: Ask) -> list[str]:
+	# The accessor's name, which is the schema's unless C++ could not spell
+	# it. The printed label stays the schema's either way -- four drivers
+	# whose labels disagree are four outputs that cannot be compared, and
+	# comparing them is the whole point of this file.
+	call = bare_name(ask.local)
+
 	if ask.probe is Probe.SCALAR:
 		return [f'\t\t\tstd::printf("{ask.local} %lld\\n",'
-		        f" static_cast<long long>(view.{ask.local}()));"]
+		        f" static_cast<long long>(view.{call}()));"]
 	if ask.probe is Probe.DELIMITED:
 		return [f'\t\t\tstd::printf("{ask.local} len=%u term=%d\\n",'
-		        f" view.{ask.local}_len(),"
-		        f" view.{ask.local}_terminated() ? 1 : 0);"]
+		        f" view.{call}_len(),"
+		        f" view.{call}_terminated() ? 1 : 0);"]
 	if ask.probe is Probe.COUNT:
 		return [f'\t\t\tstd::printf("{ask.local} count=%u\\n",'
-		        f" view.{ask.local}_count());"]
+		        f" view.{call}_count());"]
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\tstd::printf("{ask.local} present=%d\\n",'
-		        f" view.{ask.local}().empty() ? 0 : 1);"]
+		        f" view.{call}().empty() ? 0 : 1);"]
 	if ask.probe is Probe.ELEMENT:
 		return [f'\t\t\tstd::printf("{ask.local}[0] %lld\\n",'
-		        f" static_cast<long long>(view.{ask.local}(0)));"]
+		        f" static_cast<long long>(view.{call}(0)));"]
 	if ask.probe is Probe.RUN_ELEMENT:
 		return ["\t\t\t{",
-		        f"\t\t\t\tconst std::uint32_t n = view.{ask.local}_count();",
+		        f"\t\t\t\tconst std::uint32_t n = view.{call}_count();",
 		        "",
 		        f'\t\t\t\tstd::printf("{ask.local} count=%u [0]=%lld\\n", n,',
 		        "\t\t\t\t\tn == 0 ? 0LL : static_cast<long long>"
-		        f"(view.{ask.local}(0)));",
+		        f"(view.{call}(0)));",
 		        "\t\t\t}"]
 	if ask.probe is Probe.NESTED:
 		return ["\t\t\t{",
 		        f"\t\t\t\t::situ::{ask.inner} held;",
-		        f"\t\t\t\tconst auto e = view.{ask.local}(held);",
+		        f"\t\t\t\tconst auto e = view.{call}(held);",
 		        "",
 		        f'\t\t\t\tstd::printf("{ask.local} ok=%d extent=%u\\n",',
 		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
@@ -1048,7 +1057,7 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t}"]
 	if ask.probe is Probe.MARKER:
 		return [f'\t\t\tstd::printf("{ask.local} little=%d\\n",'
-		        f" view.{ask.local}_is_little() ? 1 : 0);"]
+		        f" view.{call}_is_little() ? 1 : 0);"]
 	if ask.probe is Probe.SEALED:
 		# A callback rather than a returned gate, which is the whole of what
 		# C++ adds here: there is no expression that names one outside the
@@ -1058,13 +1067,14 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		# ahead of the summary line the other three print first. Same answers,
 		# different order, and the diff sees an order.
 		return ["\t\t\t{",
-		        *[f"\t\t\t\tlong long {one} = 0;" for one in ask.inside],
-		        f"\t\t\t\tconst auto refused = view.with_{ask.local}("
+		        *[f"\t\t\t\tlong long {bare_name(one)} = 0;"
+		          for one in ask.inside],
+		        f"\t\t\t\tconst auto refused = view.with_{call}("
 		        "false, [](auto) {});",
-		        f"\t\t\t\tconst auto opened = view.with_{ask.local}("
+		        f"\t\t\t\tconst auto opened = view.with_{call}("
 		        "true, [&](auto gate) {",
-		        *[f"\t\t\t\t\t{one} ="
-		          f" static_cast<long long>(gate.{one}());"
+		        *[f"\t\t\t\t\t{bare_name(one)} ="
+		          f" static_cast<long long>(gate.{bare_name(one)}());"
 		          for one in ask.inside],
 		        "\t\t\t\t\t(void)gate;",
 		        "\t\t\t\t});",
@@ -1073,18 +1083,19 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\trefused == ::situ::rt::err::ok ? 0 : 1,",
 		        "\t\t\t\t\topened == ::situ::rt::err::ok ? 1 : 0);",
 		        "\t\t\t\tif (opened == ::situ::rt::err::ok) {",
-		        *[f'\t\t\t\t\tstd::printf("{one} %lld\\n", {one});'
+		        *[f'\t\t\t\t\tstd::printf("{one} %lld\\n",'
+		          f" {bare_name(one)});"
 		          for one in ask.inside],
 		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
 		return [f'\t\t\tstd::printf("{ask.local} len=%u value=%llu\\n",'
-		        f" view.{ask.local}_len(),"
-		        f" static_cast<unsigned long long>(view.{ask.local}_value()));"]
+		        f" view.{call}_len(),"
+		        f" static_cast<unsigned long long>(view.{call}_value()));"]
 	if ask.probe is Probe.ARM_BYTES:
 		return ["\t\t\t{",
 		        "\t\t\t\t::situ::rt::bytes held;",
-		        f"\t\t\t\tconst auto e = view.{ask.local}(held);",
+		        f"\t\t\t\tconst auto e = view.{call}(held);",
 		        "",
 		        f'\t\t\t\tstd::printf("{ask.local} ok=%d len=%u\\n",',
 		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
@@ -1096,10 +1107,10 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
 		        f"{ask.bits}_t held = 0;",
 		        "\t\t\t\tstd::uint32_t n = 0;",
-		        f"\t\t\t\tconst auto e = view.{ask.local}_count(n);",
+		        f"\t\t\t\tconst auto e = view.{call}_count(n);",
 		        "",
 		        "\t\t\t\tif (e == ::situ::rt::err::ok && n > 0) {",
-		        f"\t\t\t\t\t(void)view.{ask.local}(0, held);",
+		        f"\t\t\t\t\t(void)view.{call}(0, held);",
 		        "\t\t\t\t}",
 		        f'\t\t\t\tstd::printf("{ask.local} ok=%d count=%u'
 		        ' [0]=%lld\\n",',
@@ -1112,7 +1123,7 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		return ["\t\t\t{",
 		        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
 		        f"{ask.bits}_t held = 0;",
-		        f"\t\t\t\tconst auto e = view.{ask.local}(held);",
+		        f"\t\t\t\tconst auto e = view.{call}(held);",
 		        "",
 		        f'\t\t\t\tstd::printf("{ask.local} ok=%d value=%llu\\n",',
 		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
@@ -1121,7 +1132,7 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t}"]
 
 	return ["\t\t\t{",
-	        f"\t\t\t\tconst auto held = view.{ask.local}();",
+	        f"\t\t\t\tconst auto held = view.{call}();",
 	        "",
 	        f'\t\t\t\tstd::printf("{ask.local} len=%u first=%d\\n",',
 	        "\t\t\t\t\tstatic_cast<std::uint32_t>(held.size()),",
@@ -1205,7 +1216,7 @@ def _rust_writes(resolved: ResolvedSchema) -> list[str]:
 		for ask in asked:
 			if ask.probe is Probe.COVERED:
 				lines.extend([
-					f"\t\t\tview.set_{rust_ident(ask.local)}"
+					f"\t\t\tview.{rust_ident('set_' + ask.local)}"
 					f"(&mut dirty, {ask.count});",
 					f'\t\t\tprintln!("{ask.local} <- {ask.count}'
 					' dirty={}",',
@@ -1215,7 +1226,7 @@ def _rust_writes(resolved: ResolvedSchema) -> list[str]:
 				])
 				continue
 			lines.extend([
-				f"\t\t\tview.set_{rust_ident(ask.local)}({ask.count});",
+				f"\t\t\tview.{rust_ident('set_' + ask.local)}({ask.count});",
 				f'\t\t\tprintln!("{ask.local} <- {{}}",'
 				f" view.as_ref().{rust_ident(ask.local)}());",
 			])
@@ -1397,9 +1408,10 @@ def _python_writes(resolved: ResolvedSchema) -> list[str]:
 			"else:",
 		])
 		for ask in asked:
+			call = py_name(ask.local)
 			if ask.probe is Probe.COVERED:
 				lines.extend([
-					f"\tview.set_{ask.local}(msg, {ask.count})",
+					f"\tview.set_{call}(msg, {ask.count})",
 					f'\tprint("{ask.local} <- {ask.count}",',
 					# Called, because this backend spells it as a method and
 					# the bound method is truthy: this printed `dirty=1`
@@ -1412,8 +1424,8 @@ def _python_writes(resolved: ResolvedSchema) -> list[str]:
 				])
 				continue
 			lines.extend([
-				f"\tview.{ask.local} = {ask.count}",
-				f'\tprint("{ask.local} <-", view.{ask.local})',
+				f"\tview.{call} = {ask.count}",
+				f'\tprint("{ask.local} <-", view.{call})',
 			])
 		lines.append("")
 
@@ -1424,77 +1436,82 @@ def _python_writes(resolved: ResolvedSchema) -> list[str]:
 
 
 def _python_ask(ask: Ask) -> list[str]:
+	# As in `_cpp_ask`: the attribute is spelled the way this language can
+	# spell it, and the label is the schema's so that four outputs compare.
+	call = py_name(ask.local)
+
 	if ask.probe is Probe.SCALAR:
-		return [f'print("{ask.local} %d" % view.{ask.local})']
+		return [f'print("{ask.local} %d" % view.{call})']
 	if ask.probe is Probe.DELIMITED:
 		return [f'print("{ask.local} len=%d term=%d"'
-		        f" % (view.{ask.local}_len,"
-		        f" 1 if view.{ask.local}_terminated else 0))"]
+		        f" % (view.{call}_len,"
+		        f" 1 if view.{call}_terminated else 0))"]
 	if ask.probe is Probe.COUNT:
-		return [f'print("{ask.local} count=%d" % view.{ask.local}_count)']
+		return [f'print("{ask.local} count=%d" % view.{call}_count)']
 	if ask.probe is Probe.TAG:
 		return [f'print("{ask.local} present=%d"'
-		        f" % (0 if len(view.{ask.local}) == 0 else 1))"]
+		        f" % (0 if len(view.{call}) == 0 else 1))"]
 	if ask.probe is Probe.ELEMENT:
-		return [f'print("{ask.local}[0] %d" % view.{ask.local}(0))']
+		return [f'print("{ask.local}[0] %d" % view.{call}(0))']
 	if ask.probe is Probe.RUN_ELEMENT:
-		return [f"n = view.{ask.local}_count",
+		return [f"n = view.{call}_count",
 		        f'print("{ask.local} count=%d [0]=%d"'
-		        f" % (n, 0 if n == 0 else view.{ask.local}(0)))"]
+		        f" % (n, 0 if n == 0 else view.{call}(0)))"]
 	if ask.probe is Probe.NESTED:
 		return ["try:",
-		        f"\theld = view.{ask.local}",
+		        f"\theld = view.{call}",
 		        "except situ_runtime.SituError:",
 		        f'\tprint("{ask.local} ok=0 extent=0")',
 		        "else:",
 		        f'\tprint("{ask.local} ok=1 extent=%d" % held._len)']
 	if ask.probe is Probe.MARKER:
 		return [f'print("{ask.local} little=%d"'
-		        f" % (1 if view.{ask.local}_is_little else 0))"]
+		        f" % (1 if view.{call}_is_little else 0))"]
 	if ask.probe is Probe.SEALED:
 		return ["refused = 0",
 		        "try:",
-		        f"\tview.open_{ask.local}(False)",
+		        f"\tview.open_{call}(False)",
 		        "except situ_runtime.SituError:",
 		        "\trefused = 1",
 		        "opened = 0",
 		        "gate = None",
 		        "try:",
-		        f"\tgate = view.open_{ask.local}(True)",
+		        f"\tgate = view.open_{call}(True)",
 		        "\topened = 1",
 		        "except situ_runtime.SituError:",
 		        "\tpass",
 		        f'print("{ask.local} refused=%d opened=%d" % (refused, opened))',
 		        "if gate is not None:",
-		        *[f'\tprint("{one} %d" % gate.{one})' for one in ask.inside],
+		        *[f'\tprint("{one} %d" % gate.{py_name(one)})'
+		          for one in ask.inside],
 		        "\tpass"]
 	if ask.probe is Probe.VARINT:
 		return [f'print("{ask.local} len=%d value=%d"'
-		        f" % (view.{ask.local}_len, view.{ask.local}_value))"]
+		        f" % (view.{call}_len, view.{call}_value))"]
 	if ask.probe is Probe.ARM_BYTES:
 		return ["try:",
-		        f"\theld = view.{ask.local}",
+		        f"\theld = view.{call}",
 		        "except situ_runtime.SituError:",
 		        f'\tprint("{ask.local} ok=0 len=0")',
 		        "else:",
 		        f'\tprint("{ask.local} ok=1 len=%d" % len(held))']
 	if ask.probe is Probe.ARM_ELEMENT:
 		return ["try:",
-		        f"\tn = view.{ask.local}_count",
+		        f"\tn = view.{call}_count",
 		        "except situ_runtime.SituError:",
 		        f'\tprint("{ask.local} ok=0 count=0 [0]=0")',
 		        "else:",
 		        f'\tprint("{ask.local} ok=1 count=%d [0]=%d"'
-		        f" % (n, 0 if n == 0 else view.{ask.local}(0)))"]
+		        f" % (n, 0 if n == 0 else view.{call}(0)))"]
 
 	if ask.probe is Probe.ARM_VALUE:
 		return ["try:",
-		        f"\theld = view.{ask.local}",
+		        f"\theld = view.{call}",
 		        "except situ_runtime.SituError:",
 		        f'\tprint("{ask.local} ok=0 value=0")',
 		        "else:",
 		        f'\tprint("{ask.local} ok=1 value=%d" % held)']
 
-	return [f"held = view.{ask.local}",
+	return [f"held = view.{call}",
 	        f'print("{ask.local} len=%d first=%d"'
 	        " % (len(held), -1 if len(held) == 0 else held[0]))"]
