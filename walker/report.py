@@ -29,7 +29,7 @@ from walker.walk import (Refused, View, acquire, read_bytes, read_scalar,
 #: kind quietly dropping out cannot look like agreement.
 SUPPORTED = ("no-view", "scalar", "bytes", "element", "run_element",
              "arm_value", "sealed", "gated", "delimited", "varint",
-             "while_count", "nested", "tag")
+             "while_count", "nested", "tag", "marker", "validate")
 
 #: `image_kind`: which placements are plain scalars a walk can read.
 FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3
@@ -399,7 +399,69 @@ def listing(image: Image, buffer: bytes) -> str:
 			lines.append("no-view")
 			continue
 		lines.extend(_members(image, view, struct_index))
+		verdict = _validate(image, view, struct_index)
+		if verdict is not None:
+			lines.append(f"validate {verdict}")
 	return "\n".join(lines) + "\n"
+
+
+#: `situ_err_t`, which the driver prints as an integer.
+OK, ERR_BOUNDS, ERR_CONSTRAINT = 0, 1, 2
+
+#: `image_check`
+MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
+
+
+def _validate(image: Image, view: View, struct_index: int) -> int | None:
+	"""What `validate` returns, or None where this image cannot say.
+
+	The whole answer or nothing. Every other probe can be rendered for the
+	members the image describes and skipped for the rest, because each is a
+	separate line -- `validate` is one line about the whole struct, so a
+	partial one reports OK where the schema refuses. The packer sets a bit
+	per struct saying every check is carried, and this declines otherwise.
+
+	Order matters because the first failure is the answer: a member the
+	frame does not reach is `BOUNDS` and a constraint that fails is
+	`CONSTRAINT`, and which comes first decides which is returned.
+	"""
+	if not image.structs[struct_index].validatable:
+		return None
+
+	for index in image.members(image.structs[struct_index]):
+		# Every member is *placed*, not only the constrained ones: a struct
+		# whose members after a coded region cannot be reached fails with
+		# BOUNDS before any constraint is asked, and checking only the
+		# constrained ones answered OK for `edges`' `coded_run` where every
+		# backend answered 1.
+		try:
+			offset_bits(view, index)
+			size_bits(view, index)
+		except Refused:
+			return ERR_BOUNDS
+
+		held = image.constraints.get(index)
+		if not held:
+			continue
+		try:
+			value = read_scalar(view, index)
+		except Refused:
+			return ERR_BOUNDS
+		for check, against in held:
+			if check == MUST_EQ and value != against:
+				return ERR_CONSTRAINT
+			if check == MINIMUM and value < against:
+				return ERR_CONSTRAINT
+			if check == MAXIMUM and value > against:
+				return ERR_CONSTRAINT
+			if check == MUST_BE_ZERO and value != 0:
+				return ERR_CONSTRAINT
+			if check == MUST_BE_ONE and value != 1:
+				return ERR_CONSTRAINT
+			if check == ENUM_KNOWN \
+					and value not in image.enum_values.get(against, set()):
+				return ERR_CONSTRAINT
+	return OK
 
 
 def _members(image: Image, view: View, struct_index: int) -> list[str]:
@@ -413,6 +475,24 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			# says so in its own way; what is comparable is that the line
 			# is absent rather than wrong, so nothing is printed.
 			continue
+
+	for index in image.markers:
+		if index not in image.members(image.structs[struct_index]):
+			continue
+		local = _local(image, index)
+		try:
+			# Read big-endian whatever the marker turns out to say: the
+			# marker is what decides byte order, so it cannot be read in
+			# the order it is about. The generated C reads `be` here too.
+			start = view.at + offset_bits(view, index) // 8
+			width = size_bits(view, index) // 8
+			if start + width > view.limit:
+				raise Refused("the frame does not reach the marker")
+			held = int.from_bytes(view.buffer[start:start + width], "big")
+		except Refused:
+			continue
+		little = 1 if held == image.markers[index] else 0
+		lines.append(f"{local} little={little}")
 
 	for index in _nested(image, struct_index):
 		local = _local(image, index)
@@ -477,11 +557,11 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			# region's stripped, which is what three backends call it. C
 			# spells it `sealed_inner_kind` for want of a scope to put it
 			# in, and the driver strips the same prefix.
-			held = _local(image, inside)
-			if held.startswith(local + "_"):
-				held = held[len(local) + 1:]
+			inside_name = _local(image, inside)
+			if inside_name.startswith(local + "_"):
+				inside_name = inside_name[len(local) + 1:]
 			try:
-				lines.append(f"{held} {read_scalar(view, inside)}")
+				lines.append(f"{inside_name} {read_scalar(view, inside)}")
 			except Refused:
 				continue
 

@@ -40,7 +40,7 @@ FORMAT_VERSION	= 2
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
-STRUCT_BYTES	= 12
+STRUCT_BYTES	= 16
 PLACEMENT_BYTES	= 48
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 32
@@ -49,6 +49,9 @@ CODEC_BYTES	= 4
 VARINT_BYTES	= 12
 TLV_BYTES	= 12
 INDEX_BYTES	= 16
+MARKER_BYTES	= 16
+CONSTRAINT_BYTES = 16
+ENUM_VALUE_BYTES = 16
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
@@ -65,6 +68,9 @@ SECTION_CODECS		= 8
 SECTION_VARINTS		= 9
 SECTION_TLVS		= 10
 SECTION_INDEXES		= 11
+SECTION_MARKERS		= 14
+SECTION_CONSTRAINTS	= 15
+SECTION_ENUM_VALUES	= 16
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
 
@@ -540,6 +546,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 	# A `const` is a compile-time constant, so it becomes a literal in the
 	# bytecode. A walker carries no constant table and should not need one.
+	schema_enums = {decl.name: decl for decl in schema.enums()}
+
 	varint_decls = {decl.name: decl for decl in schema.decls
 	                if isinstance(decl, ast.VarintDecl)}
 
@@ -602,11 +610,95 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	strings = _Pool()
 	sections: list[tuple[int, bytes, int]] = []
 
+	# `validate` is the one probe that cannot be rendered by halves: a
+	# partial one answers OK where the schema says no. So the constraints go
+	# in, and a struct is flagged only where *every* check `traverse` says
+	# it makes is one this image carries -- the same taxonomy the C backend
+	# emits from, rather than a second opinion about what a check is.
+	constraints_blob = bytearray()
+	enum_blob        = bytearray()
+	enum_ids: dict[str, int] = {}
+	validatable: dict[str, bool] = {}
+	for name, rstruct in order:
+		whole = True
+		for entry in traverse.own_entries(rstruct):
+			placement = entry.placement
+			at = placement_index.get(placement.path)
+			kind = traverse.classify_check(rstruct, placement, set(resolved.structs))
+			# A coded region's extent is its interior through the codec's
+			# expansion, and the image carries no expansion -- so a walk
+			# places what follows one optimistically where C's accessor
+			# refuses, and answers OK where every backend answers BOUNDS.
+			# `classify_check` calls it nothing to check, which is true of
+			# the region and not of the struct holding it.
+			if placement.codec is not None:
+				whole = False
+				continue
+			# A `[since]` member is checked only where the message's own
+			# version admits it, and the image does not carry which member
+			# the struct's `[version = ...]` names. Checking unconditionally
+			# said CONSTRAINT for a v1 message carrying none of the fields
+			# a v3 one would. Carrying the version field is the next slice.
+			if placement.since is not None:
+				whole = False
+				continue
+			if kind is traverse.Check.NOTHING or at is None:
+				continue
+			if kind is traverse.Check.RESERVED:
+				# Four policies (8.8), and only two are checks.
+				# `preserve` says copy the bits, `unknown` says they mean
+				# nothing this schema knows -- so nothing is checked and
+				# nothing is promised. Emitting `must_be_zero` for those
+				# said CONSTRAINT where every backend said OK.
+				policies = {a.name for a in placement.attrs}
+				if policies & {"preserve", "unknown"}:
+					continue
+				constraints_blob += _struct.pack(
+					"<IqBxxx", at, 0, 4 if "must_be_one" in policies else 3)
+				continue
+			if kind is traverse.Check.CONSTRAINED:
+				for attr in placement.attrs:
+					code = {"must_eq": 0, "min": 1, "max": 2}.get(attr.name)
+					if code is None or attr.value is None:
+						continue
+					held = getattr(attr.value, "value", None)
+					if held is None:
+						whole = False
+						continue
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, int(held), code)
+				held_enum = schema_enums.get(placement.type_name or "")
+				# Only where the enum *rejects* an unknown value.
+				# `default = pass` admits one by design (section 8.7), so
+				# `validate` emits no membership check and a walker that
+				# made one said CONSTRAINT where every backend said OK --
+				# `image_section_tag` is exactly that, and it is `pass` so
+				# that a walker can read an image from a later situc.
+				if held_enum is not None \
+						and held_enum.default is not ast.EnumDefault.ERROR:
+					held_enum = None
+				if held_enum is not None:
+					if held_enum.name not in enum_ids:
+						enum_ids[held_enum.name] = len(enum_ids)
+						for member in held_enum.members:
+							held = getattr(member.value, "value", None)
+							if held is None:
+								whole = False
+								continue
+							enum_blob += _struct.pack(
+								"<IqI", enum_ids[held_enum.name], int(held), 0)
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, enum_ids[held_enum.name], 5)
+				continue
+			whole = False		# a check this image does not carry yet
+		validatable[name] = whole
+
 	structs_blob = bytearray()
 	for (name, rstruct), (first, count) in zip(order, spans):
 		size = (rstruct.layout.size_bits
 		        if rstruct.layout.is_fixed_size else None)
-		structs_blob += _struct.pack("<III", first, count, _u32(size))
+		structs_blob += _struct.pack("<IIII", first, count, _u32(size),
+		                             1 if validatable.get(name) else 0)
 
 	# The codec table is built first: a region record points into it.
 	codec_index: dict[str, int] = {}
@@ -624,16 +716,29 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	regions_blob = bytearray()
 	tlvs_blob    = bytearray()
 	index_blob   = bytearray()
+	markers_blob = bytearray()
+
+	# The `little` constant a marker is compared against. A walker reads the
+	# field big-endian and asks whether it equals this; without it the marker
+	# is a number with no question attached.
+	marker_decls = {decl.name: decl for decl in schema.decls
+	                if isinstance(decl, ast.EndianMarkerDecl)}
 
 	for at, (owner, placement) in enumerate(rows):
+		if placement.kind == "marker":
+			marker_decl = marker_decls.get(placement.type_name or "")
+			little = getattr(getattr(marker_decl, "little", None), "value", None)
+			if little is not None:
+				markers_blob += _struct.pack("<IqI", at, int(little), 0)
 		if placement.varint is not None:
 			varint_index.setdefault(placement.varint, len(varint_index))
-			decl = varint_decls.get(placement.varint)
-			big  = decl is not None and decl.encoding is ast.VarintEncoding.BE128
+			varint_decl = varint_decls.get(placement.varint)
+			big  = (varint_decl is not None
+			        and varint_decl.encoding is ast.VarintEncoding.BE128)
 			varints_blob += _struct.pack(
 				"<IIBBBx", at, strings.intern(placement.varint),
-				min(decl.max_bytes if decl else 10, 255),
-				min(decl.terminal_bits if decl else 7, 255),
+				min(varint_decl.max_bytes if varint_decl else 10, 255),
+				min(varint_decl.terminal_bits if varint_decl else 7, 255),
 				(1 if placement.varint_minimal else 0) | (2 if big else 0))
 		# The discriminant is what makes an arm answerable: without it a
 		# walker has the cases and no way to say which one this message
@@ -641,10 +746,10 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		selects = resolve_path(placement.discriminant, owner) \
 			if placement.discriminant else None
 		for arm in placement.arm_cases:
-			value, chosen, kind = _arm_fields(arm)
+			value, chosen, arm_kind = _arm_fields(arm)
 			arms_blob += _struct.pack(
 				"<IIqIB3x", at, _u32(placement_index.get(chosen or "")),
-				value, _u32(selects), kind)
+				value, _u32(selects), arm_kind)
 		if placement.delimiter is not None:
 			raw = placement.delimiter[:15]
 			delims_blob += _struct.pack(
@@ -687,16 +792,19 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	sections.append((SECTION_STRUCTS, bytes(structs_blob), STRUCT_BYTES))
 	sections.append((SECTION_PLACEMENTS, b"", PLACEMENT_BYTES))	# filled below
 	sections.append((SECTION_CODE, bytes(program.code), 1))
-	for kind, blob, stride in (
+	for section, blob, stride in (
 			(SECTION_ARMS, arms_blob, ARM_BYTES),
 			(SECTION_DELIMITERS, delims_blob, DELIMITER_BYTES),
 			(SECTION_REGIONS, regions_blob, REGION_BYTES),
 			(SECTION_CODECS, codecs_blob, CODEC_BYTES),
 			(SECTION_VARINTS, varints_blob, VARINT_BYTES),
 			(SECTION_TLVS, tlvs_blob, TLV_BYTES),
-			(SECTION_INDEXES, index_blob, INDEX_BYTES)):
+			(SECTION_INDEXES, index_blob, INDEX_BYTES),
+			(SECTION_MARKERS, markers_blob, MARKER_BYTES),
+			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),
+			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES)):
 		if blob:
-			sections.append((kind, bytes(blob), stride))
+			sections.append((section, bytes(blob), stride))
 
 	placements_blob = bytearray()
 	for owner, placement in rows:

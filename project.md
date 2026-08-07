@@ -9558,6 +9558,50 @@ a check that a value is legal.**
 delimited, 4 varints, 5 `while` runs, 23 nested sub-views and 7 tags. Every
 step of `make check` green, each run separately.
 
+### 26.89 `validate`, which cannot be rendered by halves
+
+Every other probe is one line about one member, so the walk renders what the
+image describes and skips the rest. `validate` is one line about a whole
+struct, and a partial one says OK where the schema refuses -- which is worse
+than no line, because it is an answer.
+
+So the packer marks a struct only where **every** check it makes is one the
+image carries, and it asks `traverse.classify_check` -- the taxonomy the C
+backend emits from -- rather than forming a second opinion about what a check
+is. 51 of 139 structs qualify. The rest print nothing and say so through the
+bit rather than through a guess.
+
+**Four things the image had to learn, and each was a policy rather than a
+value.** An enum with `default = pass` admits an unknown value by design, so
+`validate` emits no membership check -- and `image_section_tag` is exactly
+that, deliberately, so a walker can read an image from a later `situc`. A
+`reserved` field has four policies and only two are checks: `preserve` says
+copy the bits and `unknown` says they mean nothing this schema knows. A
+`[since]` member is checked only where the message's own version admits it,
+and the image does not carry which member the struct's `[version = ...]`
+names -- so those defer. And a coded region's extent is its interior through
+the codec's expansion, which the image has no way to state, so a struct
+holding one defers too.
+
+Every one of those said `CONSTRAINT` where the four backends said `OK`, and
+every one is the same mistake: **reading a construct's presence as its
+policy.** A reserved field is not a zero check; an enum is not a membership
+check; they each carry which they are.
+
+**Order is the answer, not just the verdict.** The first failure is what
+`validate` returns, and a member the frame cannot reach is `BOUNDS` where a
+constraint that fails is `CONSTRAINT` -- so every member is *placed* before
+any constraint is asked. Checking only the constrained ones answered OK for
+`coded_run`, where the members after the region cannot be reached at all.
+
+**`marker` came with it**, and is small: a walk reads the field big-endian --
+it cannot read the thing that decides byte order in the order it is about --
+and compares against the schema's `little` constant, which the image now
+carries. `0x4949` is TIFF's `II`.
+
+**Status:** 51 structs answer `validate`, 2 markers, and every step of `make
+check` green.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

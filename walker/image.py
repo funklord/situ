@@ -28,7 +28,11 @@ SECTION_BYTES	= 16
 STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 VARINTS, TLVS, INDEXES             = 9, 10, 11
-NAMES, VECTORS                     = 12, 13
+NAMES, VECTORS, MARKERS            = 12, 13, 14
+CONSTRAINTS, ENUM_VALUES           = 15, 16
+
+#: `image_check`
+MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 
 #: `image_placement.flags`
 OFFSET_KNOWN, FRAME_RELATIVE, SIZE_FIXED, FRAME_BASE_DYNAMIC = 1, 2, 4, 8
@@ -89,6 +93,12 @@ class Struct:
 	first_placement: int
 	placement_count: int
 	size_bits: int
+	struct_flags: int = 0
+
+	@property
+	def validatable(self) -> bool:
+		"""Whether the image carries every check `validate` makes here."""
+		return bool(self.struct_flags & 1)
 
 	@property
 	def fixed(self) -> bool:
@@ -127,6 +137,13 @@ class Image:
 	#: the arithmetic is the compiler's and a second copy of it here would
 	#: be a second implementation to keep in step.
 	varint_rules: dict[int, tuple[int, int, bool]] = field(default_factory=dict)
+	#: placement index -> the value that means little-endian.
+	markers: dict[int, int]			= field(default_factory=dict)
+	#: placement index -> [(check, value)], in declaration order. The order
+	#: is the answer: the first failure is what `validate` returns.
+	constraints: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
+	#: enum id -> the values it names.
+	enum_values: dict[int, set[int]]	= field(default_factory=dict)
 	#: variant placement index -> (discriminant, [(case, selected, flags)])
 	arms: dict[int, tuple[int, list[tuple[int, int, int]]]] = \
 		field(default_factory=dict)
@@ -186,7 +203,7 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	for at, records, stride in [found.get(STRUCTS, (0, 0, 0))]:
 		for i in range(records):
 			image.structs.append(Struct(*_struct.unpack_from(
-				"<III", blob, at + i * stride)))
+				"<IIII", blob, at + i * stride)))
 	for at, records, stride in [found.get(PLACEMENTS, (0, 0, 0))]:
 		for i in range(records):
 			base = at + i * stride
@@ -228,6 +245,27 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			image.varints.add(where)
 			image.varint_rules[where] = (max_bytes, terminal,
 			                             bool(vflags & 2))
+
+	if CONSTRAINTS in found:
+		at, records, stride = found[CONSTRAINTS]
+		for i in range(records):
+			where, value, check = _struct.unpack_from(
+				"<IqB", blob, at + i * stride)
+			image.constraints.setdefault(where, []).append((check, value))
+
+	if ENUM_VALUES in found:
+		at, records, stride = found[ENUM_VALUES]
+		for i in range(records):
+			enum_id, value, _pad = _struct.unpack_from(
+				"<IqI", blob, at + i * stride)
+			image.enum_values.setdefault(enum_id, set()).add(value)
+
+	if MARKERS in found:
+		at, records, stride = found[MARKERS]
+		for i in range(records):
+			where, little, _pad = _struct.unpack_from(
+				"<IqI", blob, at + i * stride)
+			image.markers[where] = little
 
 	if ARMS in found:
 		at, records, stride = found[ARMS]

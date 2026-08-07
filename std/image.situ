@@ -58,6 +58,9 @@ enum image_section_tag : u32 {
 	varints      = 9,
 	tlvs         = 10,
 	indexes      = 11,
+	markers      = 14,
+	constraints  = 15,
+	enum_values  = 16,
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -130,6 +133,14 @@ struct image_struct {
 	u32  first_placement;
 	u32  placement_count;
 	u32  size_bits;                   // `none` when the struct has no one size
+	u32  struct_flags;                // bit 0: every check `validate` makes
+	                                  //        is one this image carries, so
+	                                  //        a walk may answer it. Clear
+	                                  //        where it is not, because a
+	                                  //        partial `validate` says OK
+	                                  //        where the schema says no --
+	                                  //        the one probe that cannot be
+	                                  //        rendered by halves
 }
 
 // One placement: where the bytes are, how many there are, and how to compute
@@ -243,6 +254,42 @@ struct image_tlv {
 	u8   tlv_pad;
 }
 
+// One thing `validate` checks. In placement order, because the first failure
+// is the answer and the code depends on which came first.
+enum image_check : u8 {
+	must_eq      = 0,
+	minimum      = 1,
+	maximum      = 2,
+	must_be_zero = 3,
+	must_be_one  = 4,
+	enum_known   = 5,     // `value` is the enum's id in the value table
+	default      = error,
+}
+
+struct image_constraint {
+	u32  placement;
+	i64  value;
+	image_check  check;
+	u8   constraint_pad[3];
+}
+
+// The values an enum names, so membership is a question a walk can answer.
+struct image_enum_value {
+	u32  enum_id;
+	i64  value;
+	u32  enum_pad;
+}
+
+// A byte-order marker: the TIFF `II`/`MM` pattern (section 8.3). A walker
+// reads the field big-endian and compares: matching `little_value` means the
+// fields this marker governs are little-endian. The value is the schema's, so
+// carrying it is what lets a walk answer the question at all.
+struct image_marker {
+	u32  placement;
+	i64  little_value;
+	u32  marker_pad;
+}
+
 struct image_index {
 	u32  placement;
 	u32  entry_bits;                  // one offset-table entry
@@ -272,11 +319,14 @@ require absolute_static(image_region);
 require absolute_static(image_codec);
 require absolute_static(image_varint);
 require absolute_static(image_tlv);
+require absolute_static(image_constraint);
+require absolute_static(image_enum_value);
+require absolute_static(image_marker);
 require absolute_static(image_index);
 
 require size(image_header) == 20;
 require size(image_section) == 16;
-require size(image_struct) == 12;
+require size(image_struct) == 16;
 require size(image_placement) == 48;
 require size(image_arm) == 24;
 require size(image_delimiter) == 32;
@@ -284,4 +334,7 @@ require size(image_region) == 16;
 require size(image_codec) == 4;
 require size(image_varint) == 12;
 require size(image_tlv) == 12;
+require size(image_constraint) == 16;
+require size(image_enum_value) == 16;
+require size(image_marker) == 16;
 require size(image_index) == 16;
