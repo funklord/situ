@@ -388,14 +388,22 @@ It rejects generator attribution and a subject over 75 columns. It lives in
 the tree rather than only in `.git/hooks` so that it is reviewable and
 survives a clone; the copy that runs is installed from it.
 
-Two things it deliberately does not reject. The directory `.claude` and the
-file `CLAUDE.md` are names, so a message may say where the shared tooling
-comes from -- the ban is on crediting a generator, and neither spelling is
-one. And it ignores what git is about to discard: comment lines, and the
-diff that `git commit -v` puts below the scissors line. Reading those
-refused commits over text that never reaches the message -- the hook's own
-diff contains its own pattern list, so it rejected every commit that
-edited it.
+Two things it deliberately does not reject. Three *names* are spared, so a
+message may say where the shared tooling comes from: the directory
+`.claude`, the file `CLAUDE.md`, and `claude-guidelines`, the repository
+the guidelines live in. The ban is on crediting a generator and none of the
+three is a spelling of that. Only the names are neutralised, never the
+token around them -- a vendor word at the end of a path under the tree is
+still refused, which was measured rather than assumed. And it ignores what
+git is about to discard: comment lines, and the diff that `git commit -v`
+puts below the scissors line. Reading those refused commits over text that
+never reaches the message -- the hook's own diff contains its own pattern
+list, so it rejected every commit that edited it.
+
+The third name was added because this file's own reconciliation commit
+could not name the repository its source is in, and had to write "the
+repository holding it" instead. A rule that makes the log vaguer exactly
+where it is trying to be exact is the rule misfiring.
 
 ## See also
 
