@@ -410,6 +410,7 @@ OK, ERR_BOUNDS, ERR_CONSTRAINT = 0, 1, 2
 
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
+FITS_FRAME = 6
 
 
 def _validate(image: Image, view: View, struct_index: int) -> int | None:
@@ -435,18 +436,34 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		# constrained ones answered OK for `edges`' `coded_run` where every
 		# backend answered 1.
 		try:
-			offset_bits(view, index)
-			size_bits(view, index)
+			at   = offset_bits(view, index)
+			wide = size_bits(view, index)
 		except Refused:
 			return ERR_BOUNDS
+
+		# A run whose length the message declares has to fit the frame.
+		# The accessor clamps; `validate` is where a message that does not
+		# fit is called malformed, and it answers BOUNDS rather than
+		# CONSTRAINT. udp's `payload[length - 8]` is the shape. Which runs
+		# carry this is the packer's to say -- `remaining` and a `while`
+		# run do not.
+		if any(check == FITS_FRAME
+		       for check, _ in image.constraints.get(index, ())):
+			if view.at * 8 + at + wide > view.limit * 8:
+				return ERR_BOUNDS
 
 		# A nested member is `validate` called through, and its error is
 		# returned as it stands: C propagates the inner code rather than
 		# folding it into CONSTRAINT.
 		placement = image.placements[index]
+		# One nested member, not a run of them. `nl_message.attrs` is a
+		# `while` run of `nlattr` and gets the repeated check, not the
+		# nested one -- recursing into it validated element zero as though
+		# it were the member and answered BOUNDS where C answered OK.
 		if placement.type_struct != NONE and placement.kind == FIELD \
 				and placement.array_count == NONE \
-				and placement.size_code == NONE:
+				and placement.size_code == NONE \
+				and placement.repeat_code == NONE:
 			inner = View(image, view.buffer, placement.type_struct,
 			             view.at + offset_bits(view, index) // 8, view.limit)
 			verdict = _validate(image, inner, placement.type_struct)
@@ -456,11 +473,18 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		held = image.constraints.get(index)
 		if not held:
 			continue
+
+		# `fits_frame` is about a run and the rest are about a value, so
+		# reading one out of the other is how this asked a byte array for
+		# a scalar and called the refusal BOUNDS.
+		value_checks = [pair for pair in held if pair[0] != FITS_FRAME]
+		if not value_checks:
+			continue
 		try:
 			value = read_scalar(view, index)
 		except Refused:
 			return ERR_BOUNDS
-		for check, against in held:
+		for check, against in value_checks:
 			if check == MUST_EQ and value != against:
 				return ERR_CONSTRAINT
 			if check == MINIMUM and value < against:
@@ -474,6 +498,8 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 			if check == ENUM_KNOWN \
 					and value not in image.enum_values.get(against, set()):
 				return ERR_CONSTRAINT
+			if check == FITS_FRAME:
+				continue		# handled above, before the value is read
 	return OK
 
 

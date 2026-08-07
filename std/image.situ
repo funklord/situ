@@ -263,6 +263,11 @@ enum image_check : u8 {
 	must_be_zero = 3,
 	must_be_one  = 4,
 	enum_known   = 5,     // `value` is the enum's id in the value table
+	fits_frame   = 6,     // a run whose length the *message* declares has to
+	                      // fit the frame it is in. Not `remaining`, which is
+	                      // what is left by definition, and not a `while`
+	                      // run, which stops at the frame -- only a length a
+	                      // sender chose, which is the one an attacker picks
 	default      = error,
 }
 

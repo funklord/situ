@@ -680,8 +680,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# made one said CONSTRAINT where every backend said OK --
 				# `image_section_tag` is exactly that, and it is `pass` so
 				# that a walker can read an image from a later situc.
+				# An unstated default *is* `error`: section 8.7 makes
+				# rejecting an unknown value "the default default, and
+				# deliberately so". Reading `None` as `pass` emitted no
+				# membership check for every enum in the tree that does not
+				# spell one out -- which is most of them -- and answered OK
+				# where four backends answered CONSTRAINT.
 				if held_enum is not None \
-						and held_enum.default is not ast.EnumDefault.ERROR:
+						and held_enum.default is ast.EnumDefault.PASS:
 					held_enum = None
 				if held_enum is not None:
 					if held_enum.name not in enum_ids:
@@ -695,6 +701,40 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 								"<IqI", enum_ids[held_enum.name], int(held), 0)
 					constraints_blob += _struct.pack(
 						"<IqBxxx", at, enum_ids[held_enum.name], 5)
+				continue
+			if kind is traverse.Check.REPEATED:
+				# A run is only a *check* where it carries one. 87 of the
+				# 106 in this tree carry none -- `ipv4_address`'s octets
+				# validate to `return SITU_OK;` and nothing else -- so
+				# deferring every struct holding an array gave up sixty of
+				# them for a check that mostly is not there. What does
+				# check is an encoding, a nul terminator, or digits.
+				# A run the *message* sizes carries one check -- that the
+				# declared length fits the frame -- and the walk derives
+				# that from the layout it already has. What it cannot
+				# derive is an encoding, a nul terminator, or digits.
+				checked = {a.name for a in placement.attrs} \
+					& {"encoding", "nul_terminated"}
+				if checked or placement.radix is not None:
+					whole = False
+					continue
+				# A length the message declares has to fit the frame, and
+				# that is the only check a plain run carries. `remaining`
+				# is what is left by definition and a `while` run stops at
+				# the frame, so neither is checked -- asking anyway said
+				# BOUNDS for netlink and ipv6ext where C said OK.
+				#
+				# Asked of the AST rather than of `sized_by`, which holds a
+				# path and holds nothing for `payload[length - 8]`: that is
+				# a length the message declares whatever arithmetic is
+				# wrapped round it, and reading `sized_by` missed it.
+				field = members.get(placement.path)
+				sized = field.array.size if field is not None and field.array \
+					else None
+				if sized is not None and field is not None \
+						and not isinstance(sized, ast.Remaining) \
+						and field.repeat is None:
+					constraints_blob += _struct.pack("<IqBxxx", at, 0, 6)
 				continue
 			if kind is traverse.Check.NESTED and placement.type_name:
 				nests.setdefault(name, set()).add(placement.type_name)

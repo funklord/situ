@@ -9609,8 +9609,30 @@ recursion is exercised rather than notional: twelve nesting relationships
 across seven schemas, and on `rtc` alone 98 `validate` lines agree with C
 across 40 buffers, with both verdicts occurring.
 
-**Status:** 56 structs answer `validate`, 2 markers, and every step of `make
-check` green.
+**A run is only a check where it carries one, and 87 of 106 carry none.**
+Deferring every struct that held an array gave up sixty of them for something
+that mostly is not there: `ipv4_address`'s six octets validate to
+`return SITU_OK;` and nothing else. What a run does check is an encoding, a
+nul terminator, digits -- or, once, that its declared length fits.
+
+**That last one is the whole of what a plain run checks, and it took three
+tries to say correctly.** `remaining` is what is left by definition and a
+`while` run stops at the frame, so neither is checked; asking anyway said
+BOUNDS where C said OK. And `sized_by` is the wrong question, because it
+holds a path and holds nothing for `payload[length - 8]` -- which is a length
+the message declares whatever arithmetic is wrapped round it. The size
+*expression* is what decides: anything but `remaining`, on a member with no
+`while`. It is a constraint the packer emits rather than a rule the walk
+infers, because which runs carry it is the producer's knowledge.
+
+**And an unstated enum default rejects.** Section 8.7 makes `default = error`
+"the default default, and deliberately so", and reading an absent one as
+`pass` emitted no membership check for every enum in the tree that does not
+spell one out -- which is most of them, including `ether_type`. Four backends
+said CONSTRAINT and the walk said OK.
+
+**Status:** 100 of 139 structs answer `validate`, 2 markers, and every step of
+`make check` green.
 
 ### Invariants to hold across all phases
 
