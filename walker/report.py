@@ -440,6 +440,19 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		except Refused:
 			return ERR_BOUNDS
 
+		# A nested member is `validate` called through, and its error is
+		# returned as it stands: C propagates the inner code rather than
+		# folding it into CONSTRAINT.
+		placement = image.placements[index]
+		if placement.type_struct != NONE and placement.kind == FIELD \
+				and placement.array_count == NONE \
+				and placement.size_code == NONE:
+			inner = View(image, view.buffer, placement.type_struct,
+			             view.at + offset_bits(view, index) // 8, view.limit)
+			verdict = _validate(image, inner, placement.type_struct)
+			if verdict:
+				return verdict
+
 		held = image.constraints.get(index)
 		if not held:
 			continue

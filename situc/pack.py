@@ -618,7 +618,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	constraints_blob = bytearray()
 	enum_blob        = bytearray()
 	enum_ids: dict[str, int] = {}
-	validatable: dict[str, bool] = {}
+	# A nested member is `validate` called through, so the parent can answer
+	# exactly when the child can. That is a fixed point rather than one
+	# pass: a struct three deep settles only after the one below it does, so
+	# iterate until nothing changes. Bounded by the number of structs, since
+	# each round can only ever turn a flag off.
+	validatable: dict[str, bool] = {name: True for name, _ in order}
+	nests: dict[str, set[str]] = {}
 	for name, rstruct in order:
 		whole = True
 		for entry in traverse.own_entries(rstruct):
@@ -690,8 +696,24 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					constraints_blob += _struct.pack(
 						"<IqBxxx", at, enum_ids[held_enum.name], 5)
 				continue
+			if kind is traverse.Check.NESTED and placement.type_name:
+				nests.setdefault(name, set()).add(placement.type_name)
+				continue
 			whole = False		# a check this image does not carry yet
 		validatable[name] = whole
+
+	for _ in range(len(order) + 1):
+		changed = False
+		for name, _rstruct in order:
+			if not validatable[name]:
+				continue
+			for inner in nests.get(name, ()):
+				if not validatable.get(inner, False):
+					validatable[name] = False
+					changed = True
+					break
+		if not changed:
+			break
 
 	structs_blob = bytearray()
 	for (name, rstruct), (first, count) in zip(order, spans):

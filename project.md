@@ -9599,7 +9599,17 @@ it cannot read the thing that decides byte order in the order it is about --
 and compares against the schema's `little` constant, which the image now
 carries. `0x4949` is TIFF's `II`.
 
-**Status:** 51 structs answer `validate`, 2 markers, and every step of `make
+**Nested `validate` is a fixed point, not a pass.** A nested member is
+`validate` called through, so a parent can answer exactly when its child can
+-- and a struct three deep settles only after the one below it does. One pass
+over the structs gets that wrong in whichever order it happens to visit them,
+so the flag is iterated until nothing changes, bounded by the struct count
+since a round can only ever turn a flag off. 56 structs answer now, and the
+recursion is exercised rather than notional: twelve nesting relationships
+across seven schemas, and on `rtc` alone 98 `validate` lines agree with C
+across 40 buffers, with both verdicts occurring.
+
+**Status:** 56 structs answer `validate`, 2 markers, and every step of `make
 check` green.
 
 ### Invariants to hold across all phases
