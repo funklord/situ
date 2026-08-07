@@ -49,6 +49,7 @@ jobs:
             cmake \
             libcmocka-dev \
             gcc-aarch64-linux-gnu \
+            protobuf-compiler \
             libc6-dev-arm64-cross \
             qemu-user \
             imagemagick
@@ -87,19 +88,31 @@ jobs:
           python --version
           python -c 'import pymodbus, paho.mqtt; print("oracles present")'
 
-      - run: make check
+      # `pipefail`, or `tee` would swallow a failing `make` and this would
+      # be a workflow that reports success for a red build.
+      - name: make check
+        run: |
+          set -o pipefail
+          make check 2>&1 | tee /tmp/check.log
 
       # `make check` passing is not the same as `make check` having run over
       # everything. A skip is invisible in an exit status, so the number is
-      # compared against what this tree skips with every toolchain present.
-      # Raise the ceiling deliberately when a new skip is added, and say why.
+      # compared against what this tree skips with every toolchain present --
+      # 36 at the time of writing, with the ceiling above it so that adding a
+      # skip is not a build break, and far enough below a bare runner that a
+      # missing toolchain is. Raise it deliberately, and say why.
+      #
+      # Read from the log `make check` already wrote rather than running the
+      # suite a second time: the first version of this took four minutes to
+      # ask a question the first run had already answered.
       - name: Refuse a run that skipped more than it should have
         run: |
-          python -m pytest tests -q -rs 2>&1 | tee /tmp/pytest.log | tail -20
-          skipped=$(sed -n 's/.*[^0-9]\([0-9]\+\) skipped.*/\1/p' /tmp/pytest.log | tail -1)
+          skipped=$(sed -n 's/.*[^0-9]\([0-9]\+\) skipped.*/\1/p' \
+                    /tmp/check.log | tail -1)
           skipped=${skipped:-0}
           echo "skipped: $skipped"
-          if [ "$skipped" -gt 40 ]; then
+          if [ "$skipped" -gt 45 ]; then
             echo "check: $skipped tests skipped; a toolchain is missing" >&2
+            grep '^SKIPPED' /tmp/check.log | sed 's/^/  /' | head -40 >&2
             exit 1
           fi

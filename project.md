@@ -9502,7 +9502,25 @@ what the tool said is a gate that can only report that something is wrong**,
 and that is worth less than it looks, because knowing something is wrong is
 the cheap half.
 
-**Status:** `make check` green here and on a clean worktree.
+**And the guard that has never run.** The workflow's skip ceiling is the one
+step three failing runs never reached, so it had never executed once -- a
+check about vacuous passes that was itself unverified. Run against a real
+`make test-py` log it parses 36 against a ceiling of 45 and can name 32 skip
+reasons, which is the whole of what it claims.
+
+Two things were wrong with it, both found by running it rather than reading
+it. It ran the suite a *second time* to count skips the first run had already
+counted, four minutes to re-ask an answered question; it reads the log
+`make check` writes now, with `pipefail` so that `tee` cannot swallow a red
+build. And `pytest -q` prints no reasons, so a ceiling breach would have said
+only that too much was skipped -- `test-py` passes `-rs` now, because a skip
+nobody can see is the thing this section keeps being about.
+
+`protobuf-compiler` joins the install list for the same reason: two tests
+skip without it, and they were skipping silently.
+
+**Status:** `make check` green here and on a clean worktree; the skip guard
+exercised against a real log.
 
 ### Invariants to hold across all phases
 

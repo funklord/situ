@@ -94,7 +94,7 @@ test: test-py test-c
 # happened on a machine that had built once, which is every machine this ran
 # on until there was CI (26.87).
 test-py: runtime
-	$(PYTHON) -m pytest tests -q
+	$(PYTHON) -m pytest tests -q -rs
 
 # The shipped Python runtime is checked too, and was not: `mypy situc tools
 # tests` reads the compiler and its suite, and `runtime/python` is neither --
