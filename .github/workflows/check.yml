@@ -36,12 +36,20 @@ jobs:
       - name: Install the toolchains the suite would otherwise skip
         run: |
           sudo apt-get update
+          # `tshark` asks debconf whether non-superusers may capture, and an
+          # unanswered question is an install that hangs rather than one that
+          # fails. Answered here rather than left to `noninteractive`, which
+          # would take the default silently -- and the answer is no, because
+          # nothing here captures anything: the oracle reads a file.
+          echo 'wireshark-common wireshark-common/install-setuid boolean false' \
+            | sudo debconf-set-selections
           # `--no-install-recommends` keeps the image small and costs two
           # packages that have to be named: the cross libc headers, without
           # which `aarch64-linux-gnu-gcc` cannot find `bits/libc-header-
           # start.h`, and ImageMagick, whose `convert` writes the BMP the
           # differential oracle reads back.
-          sudo apt-get install -y --no-install-recommends \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends \
             gcc g++ \
             rustc \
             lua5.4 \
@@ -52,7 +60,8 @@ jobs:
             protobuf-compiler \
             libc6-dev-arm64-cross \
             qemu-user \
-            imagemagick
+            imagemagick \
+            tshark
 
       - uses: actions/setup-python@v5
         with:
@@ -85,6 +94,7 @@ jobs:
           doxygen --version
           aarch64-linux-gnu-gcc --version | head -1
           qemu-aarch64 --version | head -1
+          tshark --version | head -1
           python --version
           python -c 'import pymodbus, paho.mqtt; print("oracles present")'
 
@@ -98,9 +108,15 @@ jobs:
       # `make check` passing is not the same as `make check` having run over
       # everything. A skip is invisible in an exit status, so the number is
       # compared against what this tree skips with every toolchain present --
-      # 36 at the time of writing, with the ceiling above it so that adding a
+      # 34 at the time of writing, with the ceiling above it so that adding a
       # skip is not a build break, and far enough below a bare runner that a
       # missing toolchain is. Raise it deliberately, and say why.
+      #
+      # This is what the guard is for, and its first real run earned it: 50
+      # skips against 34 locally, the whole difference being sixteen
+      # differential-oracle tests that wanted `tshark` -- somebody else's
+      # dissector for seven of the protocols this tree describes, quietly
+      # absent while `make check` reported success.
       #
       # Read from the log `make check` already wrote rather than running the
       # suite a second time: the first version of this took four minutes to
