@@ -410,7 +410,11 @@ OK, ERR_BOUNDS, ERR_CONSTRAINT = 0, 1, 2
 
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
-FITS_FRAME = 6
+FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
+
+#: `situ_err_t` again: an unknown discriminant is a message this build
+#: cannot read rather than one that breaks a rule.
+ERR_VERSION = 3
 
 
 def _validate(image: Image, view: View, struct_index: int) -> int | None:
@@ -463,7 +467,8 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		if placement.type_struct != NONE and placement.kind == FIELD \
 				and placement.array_count == NONE \
 				and placement.size_code == NONE \
-				and placement.repeat_code == NONE:
+				and placement.repeat_code == NONE \
+				and index not in image.delimiters:
 			inner = View(image, view.buffer, placement.type_struct,
 			             view.at + offset_bits(view, index) // 8, view.limit)
 			verdict = _validate(image, inner, placement.type_struct)
@@ -477,7 +482,21 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		# `fits_frame` is about a run and the rest are about a value, so
 		# reading one out of the other is how this asked a byte array for
 		# a scalar and called the refusal BOUNDS.
-		value_checks = [pair for pair in held if pair[0] != FITS_FRAME]
+		if any(check == TERMINATED for check, _ in held):
+			try:
+				if not scan(view, index)[1]:
+					return ERR_CONSTRAINT
+			except Refused:
+				return ERR_BOUNDS
+
+		if any(check == ARM_SELECTED for check, _ in held):
+			verdict = _arm_selects(image, view, index)
+			if verdict:
+				return verdict
+
+		value_checks = [pair for pair in held
+		                if pair[0] not in (FITS_FRAME, TERMINATED,
+		                                   ARM_SELECTED)]
 		if not value_checks:
 			continue
 		try:
@@ -501,6 +520,56 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 			if check == FITS_FRAME:
 				continue		# handled above, before the value is read
 	return OK
+
+
+def _arm_selects(image: Image, view: View, index: int) -> int:
+	"""Whether the discriminant names an arm that exists.
+
+	`default: error` is the refusal this asks about: a value naming no arm is
+	a message this build cannot read, which is `VERSION` and not
+	`CONSTRAINT`. The distinction is the schema's -- 14.5 makes refusing an
+	unknown discriminant the default rather than a choice.
+	"""
+	selects, arms = image.arms.get(index, (NONE, []))
+	if selects == NONE:
+		return OK
+	try:
+		value = read_scalar(view, selects)
+	except Refused:
+		return ERR_BOUNDS
+	for case, chosen, flags in arms:
+		if flags & 1:
+			continue		# the default arm names no case
+		if case != value:
+			continue
+		# The arm the discriminant selects has to fit the frame. The
+		# accessor clamps; this is where a message that does not fit is
+		# called malformed, and it is BOUNDS rather than VERSION -- the
+		# discriminant was fine and the bytes behind it were not.
+		if chosen == NONE:
+			return OK
+		# Measured through the variant *member*, not the arm. An arm is
+		# not in the struct's member chain, so asking `offset_bits` for
+		# one refuses -- which made every mqtt packet BOUNDS where C said
+		# OK. `size_bits` on the member routes to `_variant_bits`, which
+		# resolves the same arm this loop just chose.
+		try:
+			at   = offset_bits(view, index)
+			wide = size_bits(view, index)
+		except Refused:
+			return ERR_BOUNDS
+		if view.at * 8 + at + wide > view.limit * 8:
+			return ERR_BOUNDS
+		# A struct-typed arm carries its own constraints and its own
+		# validator is what knows them. A different arm is nothing to
+		# check, which is why this asks only the one selected.
+		arm_type = image.placements[chosen].type_struct
+		if arm_type != NONE and image.structs[arm_type].measurable:
+			inner = View(image, view.buffer, arm_type,
+			             view.at + at // 8, view.limit)
+			return _validate(image, inner, arm_type) or OK
+		return OK
+	return ERR_VERSION
 
 
 def _members(image: Image, view: View, struct_index: int) -> list[str]:

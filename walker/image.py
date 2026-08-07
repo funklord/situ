@@ -101,6 +101,18 @@ class Struct:
 		return bool(self.struct_flags & 1)
 
 	@property
+	def measurable(self) -> bool:
+		"""Whether one instance can be measured from its own bytes.
+
+		What decides whether anything may descend into it. A struct that
+		ends in its frame rather than at a length it carries has no extent
+		of its own, so no backend hands back a sub-view over one -- and a
+		walk that measured one anyway would be reading the frame and
+		calling it the struct.
+		"""
+		return bool(self.struct_flags & 2)
+
+	@property
 	def fixed(self) -> bool:
 		return self.size_bits != NONE
 

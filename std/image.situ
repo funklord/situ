@@ -141,6 +141,14 @@ struct image_struct {
 	                                  //        where the schema says no --
 	                                  //        the one probe that cannot be
 	                                  //        rendered by halves
+	                                  // bit 1: one instance can be measured
+	                                  //        from its own bytes, so a
+	                                  //        sub-view over it exists.
+	                                  //        Clear where the struct ends
+	                                  //        in its frame rather than at
+	                                  //        a length it carries, which
+	                                  //        is why nothing descends into
+	                                  //        `publish_body`
 }
 
 // One placement: where the bytes are, how many there are, and how to compute
@@ -268,6 +276,15 @@ enum image_check : u8 {
 	                      // what is left by definition, and not a `while`
 	                      // run, which stops at the frame -- only a length a
 	                      // sender chose, which is the one an attacker picks
+	terminated   = 7,     // a delimited member's delimiter has to be there:
+	                      // a frame that does not contain it cut the member
+	                      // short, so it ran to the end of the buffer rather
+	                      // than to its own end
+	arm_selected = 8,     // the discriminant has to name an arm that exists,
+	                      // where the variant's default is `error`. Answers
+	                      // `VERSION` rather than `CONSTRAINT` -- an unknown
+	                      // discriminant is a message this build cannot read
+	                      // rather than one that breaks a rule
 	default      = error,
 }
 

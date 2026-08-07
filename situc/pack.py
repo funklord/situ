@@ -431,6 +431,21 @@ def _index_base(placement: Placement) -> int:
 	return {"region": 0, "message": 1}.get(str(base), 2)
 
 
+def _measurable(resolved: ResolvedSchema, struct: ResolvedStruct) -> bool:
+	"""Whether a sub-view over one instance of `struct` exists.
+
+	The same question `situ_packet_body_connect_view` answers and
+	`situ_packet_body_publish_view` does not: a struct that ends in its
+	frame carries no length of its own, so nothing can hand back a view
+	bounded by it. Recorded in the image rather than re-derived by each
+	reader, because a walker deciding this for itself would be deciding it
+	differently -- which is what made every `publish` packet BOUNDS where C
+	said OK.
+	"""
+	return struct.layout.is_fixed_size \
+		or traverse.has_computable_extent(resolved.structs, struct)
+
+
 def _assemble(sections: list[tuple[int, bytes, int]], metadata: bool) -> bytes:
 	"""Header, directory, then the section bodies in directory order.
 
@@ -736,6 +751,44 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						and field.repeat is None:
 					constraints_blob += _struct.pack("<IqBxxx", at, 0, 6)
 				continue
+			if kind is traverse.Check.DELIMITED:
+				# The plain case: the delimiter has to be there. A
+				# `nul_terminated` field or one with a declared encoding
+				# checks something else as well, and those still defer.
+				attr_names = {a.name for a in placement.attrs}
+				if attr_names & {"encoding", "nul_terminated"} \
+						or placement.radix is not None:
+					whole = False
+					continue
+				# 8.6.3 again: a run of records ends where the terminator
+				# stands in for a record, and is not a member that ends at
+				# a delimiter. Asking a run whether it was terminated said
+				# CONSTRAINT for `kv_block` where C said OK.
+				if placement.type_name in resolved.structs:
+					continue
+				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
+				continue
+			if kind is traverse.Check.DISCRIMINANT:
+				# Only where the variant refuses an unknown discriminant.
+				# A `default:` arm that selects a member accepts anything.
+				if any(arm.member is None and arm.value is None
+				       for arm in placement.arm_cases):
+					constraints_blob += _struct.pack("<IqBxxx", at, 0, 8)
+					# A struct-typed arm runs its own `validate` when it is
+					# the one selected, so this struct can answer only when
+					# each of those can. They join the fixed point below.
+					for arm in placement.arm_cases:
+						held_at = placement_index.get(arm.member or "")
+						if held_at is None:
+							continue
+						typed = rows[held_at][1].type_name
+						if typed and typed in resolved.structs \
+								and _measurable(resolved,
+								                resolved.structs[typed]):
+							nests.setdefault(name, set()).add(typed)
+				else:
+					whole = False
+				continue
 			if kind is traverse.Check.NESTED and placement.type_name:
 				nests.setdefault(name, set()).add(placement.type_name)
 				continue
@@ -759,8 +812,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	for (name, rstruct), (first, count) in zip(order, spans):
 		size = (rstruct.layout.size_bits
 		        if rstruct.layout.is_fixed_size else None)
+		flags = 1 if validatable.get(name) else 0
+		if _measurable(resolved, rstruct):
+			flags |= 2
 		structs_blob += _struct.pack("<IIII", first, count, _u32(size),
-		                             1 if validatable.get(name) else 0)
+		                             flags)
 
 	# The codec table is built first: a region record points into it.
 	codec_index: dict[str, int] = {}

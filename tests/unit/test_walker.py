@@ -234,7 +234,7 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 	per-schema comparison skips where the subset is empty, so this is what
 	stops every schema skipping and the suite reporting green.
 	"""
-	reached, scalars = 0, 0
+	reached, scalars, answerable = 0, 0, 0
 	for path in SCHEMAS:
 		parsed   = parse_text(path.read_text(encoding="ascii"))
 		resolved = resolve(parsed, solve(parsed))
@@ -252,6 +252,16 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 		            for i in range(len(image.structs)))
 		scalars += found
 		reached += 1 if found else 0
+		answerable += sum(1 for i in range(len(image.structs))
+		                  if image.structs[i].validatable)
 
 	assert reached >= 20, f"the walker renders for only {reached} schemas"
 	assert scalars >= 495, f"only {scalars} members in the rendered subset"
+	# `validate` is one line per struct rather than one per member, so the
+	# member floor above says nothing about it: a change that made every
+	# struct unvalidatable would leave that number untouched and the whole
+	# probe would go quiet. 110 of 139 carry it; the rest defer for a reason
+	# the image records -- a `[since]` gate, a coded region, or an arm whose
+	# type cannot be measured.
+	assert answerable >= 110, \
+		f"only {answerable} structs the walker can answer `validate` for"

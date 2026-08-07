@@ -9631,8 +9631,48 @@ infers, because which runs carry it is the producer's knowledge.
 spell one out -- which is most of them, including `ether_type`. Four backends
 said CONSTRAINT and the walk said OK.
 
-**Status:** 100 of 139 structs answer `validate`, 2 markers, and every step of
-`make check` green.
+**A delimited member is checked for its delimiter; a run of records is not.**
+8.6.3 draws that line already -- a member ends at the first occurrence of its
+delimiter anywhere, while a run of records ends where the terminator stands in
+for a record, checked at each element boundary and nowhere else -- and the
+check has to draw it too. `edges`'s `kv_block` holds `kv entries[] until
+"\r\n"`, and asking the *run* whether it was terminated said CONSTRAINT where
+C's `situ_kv_block_validate` is a comment and `return SITU_OK`. The same
+distinction, twice: the walk's own recursion descended into `entries` as
+though it were one nested `kv`, and every `kv` it landed on failed its own
+terminator check. Both are `type_struct` telling the two `until`s apart, which
+is the third construct in this tree to need that test.
+
+**An unknown discriminant is `VERSION`, and only where the variant says so.**
+14.5 makes refusing the default, so a variant whose `default:` selects a
+member accepts anything and carries no check at all. Where `default: error`
+does stand, the value naming no arm is a message this build cannot read rather
+than one that breaks a rule -- which is a different code, and the only probe
+in this subset that returns one.
+
+**The arm the discriminant selects is measured through the member, not the
+arm.** An arm is not in its struct's member chain, so `offset_bits` refuses
+one outright; `size_bits` on the variant *member* routes through
+`_variant_bits`, which resolves the same arm the check just chose. Asking the
+arm directly made every mqtt packet `BOUNDS` where C said `OK`.
+
+**And the image had to learn what a sub-view is, because the walk was deciding
+it differently.** C descends into `connect_body` and not into `publish_body`,
+and the generated comment says why -- "one `publish_body` cannot be measured,
+so there is no sub-view to hand back". That is `traverse.has_computable_extent`,
+a fact about the layout that both backends already share, and the walk had no
+way to reach it: it descended into every struct-typed arm and read the *frame*
+where `publish_body` ends. So `image_struct.struct_flags` gains bit 1,
+`measurable`, set from the same predicate the C backend asks. 124 of 139
+structs carry it. The alternative -- teaching the walker to re-derive it --
+would have been a second opinion about a question that already has an answer,
+and 26.89's whole method is to read the taxonomy rather than form one.
+
+**Status:** 110 of 139 structs answer `validate`, 2 markers, and every step of
+`make check` green. The corpus floor is two numbers now, not one: `validate`
+is a line per struct rather than per member, so the member count says nothing
+about it and a change that made every struct defer would leave that number
+untouched.
 
 ### Invariants to hold across all phases
 
