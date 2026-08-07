@@ -9941,6 +9941,39 @@ lived in different files. A source package that builds under an interpreter
 older than the code's floor fails inside `dh_auto_build`, a long way from
 anything that names a version.
 
+**And the same rule's own gate, which skipped.** `make version-check`
+asked `dpkg-parsechangelog` and printed "skipped" when it was absent --
+success reported over nothing, on exactly the machine least likely to have
+`dpkg-dev` installed. The topmost changelog entry *is* the current version
+by the format's own definition, so `sed` reads it and there is no machine
+where the rule has to give up. `dpkg-parsechangelog` is still asked where it
+exists and the two are compared with each other rather than one being
+preferred, which is what keeps the fallback honest: a path that only ever
+runs where nothing can check it is a path that is wrong the first time it
+matters.
+
+Six invocations to establish that, and one of them is worth naming. With
+`dpkg-dev` unreachable -- a scratch `PATH` holding symlinks to `cat`, `sed`,
+`sh` and `make` and nothing else -- the rule reads line 1 and passes. With
+`VERSION` bumped it refuses either way. With line 1 malformed it refuses
+*closed*, saying the changelog names no version rather than falling through
+to a silent success, and a double space before the parenthesis is enough to
+trigger that -- `dpkg-parsechangelog` calls the same line badly formatted,
+so both readers agree it is broken.
+
+**The disagreement branch is a guard rather than a tested path, and is
+recorded as such.** No changelog both readers accept can make them differ:
+where the line is well-formed they read the same token, and where it is not
+`dpkg-parsechangelog` returns nothing and the rule fails on the missing
+version instead. It costs one comparison, it runs on every machine with
+`dpkg-dev`, and it is there for the day the fallback is edited.
+
+`version-check` guards `deb` and is not part of `make check`, so none of
+this runs in CI -- which is why the invariant is *also* a test, reading the
+changelog with no tools at all. Two routes to one fact, deliberately: the
+rule stops a bad package being built, and the test stops the disagreement
+being committed.
+
 **Six mutations, six caught.** Turning `situc` into `Architecture: any`,
 giving `libsitu-dev` a dependency on `situc`, dropping either floor to 3.9,
 disagreeing the changelog with `VERSION`, and deleting `Maintainer` -- each

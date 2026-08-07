@@ -245,17 +245,42 @@ deb: version-check
 	@ls -1 '$(DEB_DIR)'/*.deb
 
 # The VERSION file is the source; debian/changelog is checked against it.
+#
+# Two readers, and the second one is the point. This used to call
+# `dpkg-parsechangelog` alone and print "skipped" when it was absent -- a
+# check reporting success over nothing, on exactly the machine least likely
+# to have dpkg-dev installed. The topmost changelog entry *is* the current
+# version, by the format's own definition, so `sed` can read it and there is
+# no machine where this has to give up.
+#
+# `dpkg-parsechangelog` is still asked where it exists, and the two are
+# compared with each other rather than one being preferred. That is what
+# keeps the fallback honest: a path that only ever runs where nothing can
+# check it is a path that is wrong the first time it matters.
 version-check:
 	@file=$$(cat VERSION); \
-	changelog=$$(dpkg-parsechangelog -SVersion 2>/dev/null); \
-	if [ -z "$$changelog" ]; then \
-		echo "version-check: skipped (dpkg-parsechangelog unavailable)"; \
-	elif [ "$$file" != "$$changelog" ]; then \
-		echo "version-check: VERSION says $$file but"; \
-		echo "               debian/changelog says $$changelog"; \
+	line=$$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog); \
+	if [ -z "$$line" ]; then \
+		echo "version-check: debian/changelog line 1 names no version" >&2; \
+		sed -n '1p' debian/changelog >&2; \
 		exit 1; \
+	fi; \
+	tool=$$(dpkg-parsechangelog -SVersion 2>/dev/null); \
+	if [ -n "$$tool" ] && [ "$$tool" != "$$line" ]; then \
+		echo "version-check: dpkg-parsechangelog reads $$tool where" >&2; \
+		echo "               line 1 reads $$line -- this rule's own" >&2; \
+		echo "               fallback is wrong, not the changelog" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$file" != "$$line" ]; then \
+		echo "version-check: VERSION says $$file but" >&2; \
+		echo "               debian/changelog says $$line" >&2; \
+		exit 1; \
+	fi; \
+	if [ -n "$$tool" ]; then \
+		echo "version-check: $$file, in step (both readers agree)"; \
 	else \
-		echo "version-check: $$file, in step"; \
+		echo "version-check: $$file, in step (no dpkg-dev; read line 1)"; \
 	fi
 
 deb-check: deb
