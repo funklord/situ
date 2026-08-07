@@ -90,8 +90,28 @@ def offset_bits(view: View, index: int) -> int:
 
 
 def size_bits(view: View, index: int) -> int:
-	"""How many bits a member occupies."""
+	"""How many bits a member occupies.
+
+	A delimited member's is the scan's answer plus the delimiter itself: the
+	content stops where the delimiter starts, and the *member* ends where the
+	delimiter does, or the member after it would begin on the terminator.
+	Where the delimiter is absent the member is truncated and reaches as far
+	as it got, which is what makes everything after it unplaceable rather
+	than merely short.
+	"""
 	placement = view.image.placements[index]
+	if index in view.image.delimiters:
+		content, terminated = scan(view, index)
+		# The delimiter is part of the member only when it is there. An
+		# unterminated one reached as far as the cap or the buffer allowed,
+		# and the member after it starts at that point rather than being
+		# unplaceable: `verb[] until " " max 16` over bytes with no space in
+		# them is sixteen bytes long, and smtp's `argument` begins at
+		# sixteen. Refusing instead dropped every member after a truncated
+		# one, which is not what any backend does.
+		width = content + (len(view.image.delimiters[index]) if terminated
+		                   else 0)
+		return width * BITS_PER_BYTE
 	if placement.size_code != NONE:
 		count = _evaluate(view, placement.size_code,
 		                  offset_bits(view, index) // BITS_PER_BYTE)
@@ -225,3 +245,42 @@ def read_bytes(view: View, index: int) -> bytes:
 	if last > view.limit:
 		raise Refused("the frame does not reach this run")
 	return view.buffer[first:last]
+
+
+def scan(view: View, index: int) -> tuple[int, bool]:
+	"""How far a delimited member reaches, and whether it was terminated.
+
+	The two answers are separate on purpose, and the C runtime says why: a
+	member whose delimiter is absent is *truncated*, not empty, and a getter
+	is not the place to decide what to do about that. So this returns the
+	content length and the fact, and the caller reports both.
+
+	Naive matching, as the runtime does it: a delimiter is one or two bytes
+	in every format this targets, and the generated code stays something a
+	reader can check against the spec they are implementing.
+	"""
+	delim = view.image.delimiters.get(index)
+	if not delim:
+		raise Refused(f"placement {index} has no delimiter in this image")
+	quote, escape, cap = view.image.delimiter_rules.get(index, (NONE, NONE, NONE))
+
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	limit = max(0, view.limit - start)
+	if cap != NONE:
+		limit = min(limit, cap)
+
+	data = view.buffer[start:start + limit]
+	quoted, at = False, 0
+	while at + len(delim) <= len(data):
+		byte = data[at]
+		if escape != NONE and byte == escape:
+			at += 2			# the next byte is content, whatever it is
+			continue
+		if quote != NONE and byte == quote:
+			quoted = not quoted
+			at += 1
+			continue
+		if not quoted and data[at:at + len(delim)] == delim:
+			return at, True
+		at += 1
+	return limit, False

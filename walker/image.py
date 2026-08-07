@@ -105,6 +105,10 @@ class Image:
 	strings: bytes				= b""
 	#: placement index -> the bytes it ends at, from the delimiter table.
 	delimiters: dict[int, bytes]		= field(default_factory=dict)
+	#: placement index -> (quote, escape, cap), each `none` where the format
+	#: has none. `quote` toggles: inside a quoted run the delimiter is
+	#: content. `escape` applies to the byte after it, itself included.
+	delimiter_rules: dict[int, tuple[int, int, int]] = field(default_factory=dict)
 	#: Placements inside an `authenticated` or `sealed` region. A walk reads
 	#: those through a gate, which this walker does not render.
 	regions: set[int]			= field(default_factory=set)
@@ -196,10 +200,11 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if DELIMITERS in found:
 		at, records, stride = found[DELIMITERS]
 		for i in range(records):
-			where, _quote, _escape, _cap, length = _struct.unpack_from(
+			where, quote, escape, cap, length = _struct.unpack_from(
 				"<IIIIB", blob, at + i * stride)
 			start = at + i * stride + 17
 			image.delimiters[where] = blob[start:start + length]
+			image.delimiter_rules[where] = (quote, escape, cap)
 
 	if REGIONS in found:
 		at, records, stride = found[REGIONS]

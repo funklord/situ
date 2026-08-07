@@ -9299,6 +9299,43 @@ differ does not ask about either.
 their 4 interiors -- 442 members across 27 of the 32 schemas, compared
 against the C driver line for line over 12 buffers each.
 
+### 26.83 The delimited members, and where a truncated one ends
+
+`http` and `smtp` rendered nothing at all: delimited throughout, and a
+delimiter is a scan rather than a length. Teaching the walk to scan took the
+subset to 461 members across 28 of the 32 schemas and found three rules, none
+of which is in the layout -- all three are in what the backends *do*.
+
+**A truncated member still ends somewhere.** The first version refused a
+delimited member whose delimiter was absent, on the grounds that nothing
+after it can be placed. Every backend disagrees: `verb[] until " " max 16`
+over bytes with no space in them is sixteen bytes long, and smtp's `argument`
+begins at sixteen. The delimiter is part of the member only when it is there,
+and a cap is where a scan stops rather than where a member fails.
+
+**A terminator on a run is not a delimiter on a member.** `header_field
+fields[] until "\r\n"` ends a *run of records* and is asked `count=`, while
+`u8 name[] until ":"` ends a member and is asked `len= term=`. They share a
+keyword and nothing else -- 8.6.3's distinction, and rendering the first as
+the second answered a question nobody asked.
+
+**`[trim]` shortens the answer and not the span.** smtp's `argument` reported
+33 where C said 32, over a buffer whose first byte after the verb is a space.
+The bytes are still there and still partition the struct; what shrinks is the
+length handed to a caller. Applying it to the extent instead would have moved
+every member after it.
+
+The trimming set is HTTP's OWS -- space and tab -- and deliberately not
+`isspace`, which is locale dependent and includes CR, LF, VT and FF, three of
+which are delimiters in the protocols this is for. Trimming those would eat
+the framing.
+
+**Status:** 330 scalars, 63 runs, 42 arms, 3 gates with their 4 interiors and
+19 delimited members. What is still unrendered is a member whose offset
+follows a *varint* or a `while` run, both of which are widths decoded rather
+than declared, and both of which the walk now has the shape to learn: a
+delimiter was the first of the three and the other two are the same problem.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

@@ -22,12 +22,12 @@ from __future__ import annotations
 
 from walker.image import NONE, Image
 from walker.walk import (Refused, View, acquire, read_bytes, read_scalar,
-                         _read_at, offset_bits, size_bits)
+                         _read_at, offset_bits, scan, size_bits)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
 SUPPORTED = ("no-view", "scalar", "bytes", "element", "run_element",
-             "arm_value", "sealed", "gated")
+             "arm_value", "sealed", "gated", "delimited")
 
 #: `image_kind`: which placements are plain scalars a walk can read.
 FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3
@@ -174,6 +174,65 @@ def _element(view: View, index: int, at: int) -> int:
 	return _read_at(view, index, start, width)
 
 
+#: `image_placement.text_flags`
+MINIMAL, TRIMMED, CASE_INSENSITIVE = 1, 2, 4
+
+#: What `[trim]` removes. HTTP's OWS and SIP's LWS, and deliberately not
+#: `isspace`, which is locale dependent and includes CR, LF, VT and FF --
+#: three of which are delimiters in the protocols this is for, so trimming
+#: them would eat the framing.
+OWS = (0x20, 0x09)
+
+
+def _trimmed(view: View, index: int, content: int) -> int:
+	"""The reported length, with `[trim]` applied.
+
+	`[trim]` says whitespace at either end is framing rather than value. The
+	member's *span* is unchanged -- the bytes are still there and still
+	partition the struct -- and only the length handed to a caller shrinks,
+	which is why this is applied to the answer and not to the extent.
+	"""
+	placement = view.image.placements[index]
+	if not placement.text_flags & TRIMMED:
+		return content
+	start = view.at + offset_bits(view, index) // 8
+	data  = view.buffer[start:start + content]
+	head  = 0
+	while head < len(data) and data[head] in OWS:
+		head += 1
+	tail = len(data)
+	while tail > head and data[tail - 1] in OWS:
+		tail -= 1
+	return tail - head
+
+
+def _delimited(image: Image, struct_index: int) -> list[int]:
+	"""Members that end at a delimiter rather than at a length.
+
+	The probe asks two things at once -- how far it reached and whether it
+	was terminated -- because a member whose delimiter is absent is truncated
+	rather than empty, and the difference is the whole of what a hostile
+	message does to a text protocol.
+	"""
+	found = []
+	for index in image.members(image.structs[struct_index]):
+		if index not in image.delimiters:
+			continue
+		placement = image.placements[index]
+		if placement.is_tag or index in image.regions:
+			continue
+		if placement.radix:
+			continue		# a delimited text *number*: value, not bytes
+		if placement.type_struct != NONE:
+			# `header_field fields[] until "\r\n"` is a run of records that
+			# *ends* at a terminator, not a member that ends at a delimiter
+			# -- 8.6.3's distinction, and the differ asks it `count=`. The
+			# two spellings share a keyword and nothing else.
+			continue
+		found.append(index)
+	return found
+
+
 def _gates(image: Image, struct_index: int) -> list[int]:
 	"""Sealed regions whose gate this walker can answer for.
 
@@ -281,6 +340,15 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			# says so in its own way; what is comparable is that the line
 			# is absent rather than wrong, so nothing is printed.
 			continue
+
+	for index in _delimited(image, struct_index):
+		local = _local(image, index)
+		try:
+			content, terminated = scan(view, index)
+			content = _trimmed(view, index, content)
+		except Refused:
+			continue
+		lines.append(f"{local} len={content} term={1 if terminated else 0}")
 
 	for index in _gates(image, struct_index):
 		local = _local(image, index)
