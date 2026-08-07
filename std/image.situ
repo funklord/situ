@@ -305,6 +305,25 @@ enum image_check : u8 {
 	                      // `VERSION` rather than `CONSTRAINT` -- an unknown
 	                      // discriminant is a message this build cannot read
 	                      // rather than one that breaks a rule
+	digits_valid = 9,     // a text number's bytes have to parse in its radix
+	                      // and fit its scalar's domain. `value` carries the
+	                      // largest that domain admits: a walk cannot read a
+	                      // width off a field whose width is however many
+	                      // digits somebody wrote
+	digits_minimal = 10,  // `[minimal]`: one spelling per value, so a leading
+	                      // zero is a second way to write a number that
+	                      // already has one -- and above radix 10, so is an
+	                      // upper-case digit
+	nul_terminated = 11,  // the terminator has to be inside the field. The
+	                      // declared size is the capacity, so a field with no
+	                      // zero byte in it is not a short string -- it is one
+	                      // whose content runs off the end
+	encoded_as   = 12,    // the bytes have to be in the encoding the schema
+	                      // names. `value` is which: 0 ascii, 1 utf8
+	zero_run     = 13,    // every byte of a reserved *run* is zero. The
+	                      // scalar form is `must_be_zero`; this is the one
+	                      // whose length the message computes, which is why
+	                      // it cannot be a value comparison
 	default      = error,
 }
 

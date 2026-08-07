@@ -9826,6 +9826,80 @@ an arm whose type cannot be measured, a delimited member carrying an
 encoding, a constraint whose bound is not a literal. `[since]` gates and
 coded regions are not on it.
 
+### 26.92 The last twenty-one, and what they were really deferring over
+
+26.91 left 21 structs unable to answer `validate`, filed under three
+headings. All three were wrong about why, and none of the four families
+underneath them was what the headings said.
+
+**A bound that is not a literal is still a bound.** `[must_eq =
+hardware_type.ethernet]` and `[must_eq = PROTOCOL_VERSION]` are an enum
+member and a const, and the packer read `.value` off the AST node, got
+`None`, and deferred. The compiler had folded both before it ever reached
+here -- C emits `!= 1` and `!= 2048` -- so this is `situc.expr.evaluate`
+against `resolved.layout.env`, which is the environment the C backend folds
+with. Six structs, and not one of them was deferring over a construct.
+
+**An unstated variant default rejects, exactly as an unstated enum default
+does.** 26.89 records the enum half; this is the same mistake one construct
+along. A variant that simply lists its cases has no `default:` clause at
+all, and the packer read the absence as "accepts anything" where 14.5 makes
+`error` the default default. The only permissive shape is a default that
+*selects a member* -- netlink's `default: opaque rest[...]`, which hands
+back the bytes and refuses nothing. Three structs, and all three of C's
+validators emit the check the packer thought nobody made.
+
+**Two families that check nothing at all, which is the finding.** A
+delimited member's `[encoding = ascii]` adds no check in any backend: the
+check names the bytes it scans, and a member running to a delimiter has
+neither a static offset nor a declared count. Nor does a *fixed-width* text
+number -- cpio's entire header is ASCII octal with `[min]` and `[max]` on
+two fields, and `situ_cpio_header_validate` is `return SITU_OK;`. Between
+them that was nine structs given up for checks that do not exist, and the
+way to find out was to read what the backends emit rather than what the
+schema says.
+
+**Then five that are real, and the image now carries them.** A text
+number's digits have to parse in its radix and fit its scalar's domain, and
+`[minimal]` forbids a leading zero -- and, above radix ten, an upper-case
+digit, which is the same value spelled twice. A `nul_terminated` field must
+contain its terminator. Text declared as an encoding must be in it. And a
+reserved *run* must be all zero, which cannot be a value comparison because
+its length is arithmetic over fields the message chose.
+
+**Three bugs surfaced underneath, each older than this work.**
+
+`decimal u32 n[4]` is four bytes holding one number, and the walk read `[4]`
+as four 32-bit elements -- sixteen. Everything after such a field was twelve
+bytes out, which nothing had noticed because no struct holding one had ever
+answered `validate`.
+
+Every backend emits *two* readers for a text number and this walker had one.
+`_value` cannot fail and yields zero where the bytes are not digits; `_get`
+returns an error. Expressions call the first -- a length is needed to place
+the next member whether or not the field parsed -- and `validate` calls the
+second. Reading both through the strict one called a message malformed
+where C sized the run at zero and said it was fine.
+
+And `ast.Reserved` was missing from the AST map the same way `ast.Opaque`
+was in 26.91, so cpio's two padding runs measured zero bytes and were never
+checked for being zero. The reserved member is named by the compiler rather
+than the schema, and `layout.reserved_count` numbers them per struct in
+declaration order -- so the lookup reconstructs `struct.<reservedN>`, and
+that all 24 in the tree take that form is checked rather than assumed.
+
+**141 of 141 structs answer `validate`, and the deferral list is empty.**
+Which creates a hole where the work landed: the bit's *false* path is what
+keeps a partial `validate` from reporting OK where the schema refuses, and
+no corpus schema exercises it any more. So a schema is written for it -- a
+codec with a bounded ratio, whose region extent is data-dependent and whose
+`trailer` no backend places -- and the test requires both that the bit is
+clear and that the walk answers `None` rather than `OK`.
+
+**Status:** every step of `make check` green. The `validate` probe is the
+fifth column's last unfinished piece and it is finished; what remains
+deferred is a construct nothing in the tree writes.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

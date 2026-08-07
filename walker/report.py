@@ -21,8 +21,9 @@ while rendering nothing is the failure mode that has to be impossible.
 from __future__ import annotations
 
 from walker.image import NONE, Image
-from walker.walk import (Refused, Unplaceable, View, acquire, read_bytes,
-                         read_scalar,
+from walker.walk import (BITS_PER_BYTE, Refused, Unplaceable, View,
+                         acquire, digits_of,
+                         parse_digits, read_bytes, read_scalar,
                          _read_at, offset_bits, scan, size_bits,
                          struct_extent, varint, while_count)
 
@@ -412,6 +413,8 @@ OK, ERR_BOUNDS, ERR_CONSTRAINT = 0, 1, 2
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
+DIGITS_VALID, DIGITS_MINIMAL = 9, 10
+NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
 
 #: `situ_err_t` again: an unknown discriminant is a message this build
 #: cannot read rather than one that breaks a rule.
@@ -546,9 +549,79 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 			if verdict:
 				return verdict
 
+		# A text number, in the runtime's own order: the spelling before
+		# the value. `situ_digits_minimal` is what this mirrors, including
+		# the part that is easy to miss -- above radix ten an upper-case
+		# digit is the second spelling too, and `A` and `a` are one number
+		# written two ways.
+		for check, against in held:
+			if check != DIGITS_MINIMAL:
+				continue
+			try:
+				digits = digits_of(view, index)
+			except Refused:
+				return ERR_CONSTRAINT
+			if not digits:
+				return ERR_CONSTRAINT
+			if len(digits) > 1 and digits[0:1] == b"0":
+				return ERR_CONSTRAINT
+			if against > 10 and any(0x41 <= one <= 0x46 for one in digits):
+				return ERR_CONSTRAINT
+
+		for check, against in held:
+			if check != DIGITS_VALID:
+				continue
+			# CONSTRAINT and not BOUNDS, even where the frame is what ran
+			# out: C reaches this through the getter, whose `_ptr` and
+			# `_len` clamp, so a text number nobody can read is a field
+			# that is not a number rather than a field that is not there.
+			try:
+				value = parse_digits(view, index)
+			except Refused:
+				return ERR_CONSTRAINT
+			if value > against:
+				return ERR_CONSTRAINT
+
+		# The byte-run checks: a terminator inside the field, an
+		# encoding the bytes are actually in, and a reserved run that is
+		# all zero. Each reads the member's whole span rather than a
+		# value, which is what separates them from the comparisons below
+		# -- and why the capacity is the member's own size and not
+		# something the constraint has to carry.
+		span = [pair for pair in held
+		        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN)]
+		if span:
+			start = view.at + at // BITS_PER_BYTE
+			data  = bytes(view.buffer[start:start + wide // BITS_PER_BYTE])
+			if len(data) * BITS_PER_BYTE != wide:
+				return ERR_BOUNDS
+			for check, against in span:
+				if check == NUL_TERMINATED and 0 not in data:
+					return ERR_CONSTRAINT
+				if check == ZERO_RUN and any(data):
+					return ERR_CONSTRAINT
+				if check != ENCODED_AS:
+					continue
+				if against == 0:
+					if any(one > 0x7F for one in data):
+						return ERR_CONSTRAINT
+					continue
+				# Decoded rather than re-implemented. `situ_utf8_valid`
+				# refuses an overlong form, a surrogate half, anything
+				# past U+10FFFF, a truncated sequence and a bad
+				# continuation byte -- which is exactly the set Python's
+				# strict decoder refuses, so restating the state machine
+				# here would be a second chance to get it wrong.
+				try:
+					data.decode("utf-8")
+				except UnicodeDecodeError:
+					return ERR_CONSTRAINT
+
 		value_checks = [pair for pair in held
 		                if pair[0] not in (FITS_FRAME, TERMINATED,
-		                                   ARM_SELECTED)]
+		                                   ARM_SELECTED, DIGITS_VALID,
+		                                   DIGITS_MINIMAL, NUL_TERMINATED,
+		                                   ENCODED_AS, ZERO_RUN)]
 		if not value_checks:
 			continue
 		try:

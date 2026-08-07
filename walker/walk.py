@@ -136,6 +136,15 @@ def size_bits(view: View, index: int) -> int:
 	# one construct in the tree where the delimiter is not looked for
 	# anywhere. Scanning for it made `kv_block.payload` 935 bytes long where
 	# every backend said nothing.
+	# A text number's width is its digits, not its value's. `decimal u32
+	# n[4]` is four bytes holding one number, and reading `[4]` as four
+	# 32-bit elements made it sixteen -- which put `edges`' `text_driver`
+	# tail twelve bytes past where every backend places it. The delimited
+	# form is measured by its scan below; this is the fixed-width one,
+	# whose digit count the image carries beside the radix.
+	if placement.radix and placement.radix_digits \
+			and index not in view.image.delimiters:
+		return placement.radix_digits * BITS_PER_BYTE
 	if index in view.image.delimiters and placement.type_struct == NONE:
 		content, terminated = scan(view, index)
 		# The delimiter is part of the member only when it is there. An
@@ -212,6 +221,29 @@ def _variant_bits(view: View, index: int) -> int:
 	return 0
 
 
+def _value_of(view: View, index: int) -> int:
+	"""A member's value as a size or offset expression reads it.
+
+	The lax half of a distinction every backend makes and this walker did
+	not. C emits two readers for a text number: `_get`, which returns an
+	error when the bytes are not digits, and `_value`, which cannot fail and
+	yields zero when they are not. Expressions call `_value` -- a length is
+	needed to place the next member whether or not the field parsed -- and
+	`validate` calls `_get`, which is where a field that is not a number is
+	called malformed.
+
+	Reading both through the strict one made `edges`' `text_driver` answer
+	BOUNDS over a buffer whose four digit bytes were `" 1\n4"`, where C
+	sized `d[n]` at zero and said the message was fine.
+	"""
+	if view.image.placements[index].radix:
+		try:
+			return parse_digits(view, index)
+		except Refused:
+			return 0
+	return read_scalar(view, index)
+
+
 def _evaluate(view: View, code_at: int, from_byte: int = 0) -> int:
 	"""Run one program, with `remaining` measured from `from_byte`.
 
@@ -224,7 +256,7 @@ def _evaluate(view: View, code_at: int, from_byte: int = 0) -> int:
 	"""
 	return vm.run(
 		view.image.code, code_at,
-		load_field = lambda i: read_scalar(view, i),
+		load_field = lambda i: _value_of(view, i),
 		size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
 		offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 		count_of   = lambda i: _count(view, i),
@@ -414,6 +446,25 @@ def varint(view: View, index: int) -> tuple[int, int]:
 	raise Refused("the buffer ends mid-varint")
 
 
+def digits_of(view: View, index: int) -> bytes:
+	"""The bytes a text number is written in.
+
+	Split out of `parse_digits` because `[minimal]` is a question about the
+	spelling rather than the value -- a leading zero and an upper-case digit
+	are both numbers that parse perfectly well -- and the two checks must
+	read exactly the same bytes or they are checking different fields.
+	"""
+	if index in view.image.delimiters:
+		content, _ = scan(view, index)
+	else:
+		content = size_bits(view, index) // BITS_PER_BYTE
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	data  = bytes(view.buffer[start:start + content])
+	if not data:
+		raise Refused("a text number with no digits")
+	return data
+
+
 def parse_digits(view: View, index: int) -> int:
 	"""A text number's value: digits, not bits (section 8.6.2).
 
@@ -432,14 +483,7 @@ def parse_digits(view: View, index: int) -> int:
 	if radix < 2 or radix > 16:
 		raise Refused(f"radix {radix} is not one to parse")
 
-	if index in view.image.delimiters:
-		content, _ = scan(view, index)
-	else:
-		content = size_bits(view, index) // BITS_PER_BYTE
-	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
-	data  = view.buffer[start:start + content]
-	if not data:
-		raise Refused("a text number with no digits")
+	data = digits_of(view, index)
 
 	value = 0
 	for byte in data:

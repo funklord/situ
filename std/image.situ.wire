@@ -28,7 +28,7 @@ enum image_offset_base : u8 unknown=error
   base_region=0 base_message=1 base_field=2
 
 enum image_check : u8 unknown=error
-  must_eq=0 minimum=1 maximum=2 must_be_zero=3 must_be_one=4 enum_known=5 fits_frame=6 terminated=7 arm_selected=8
+  must_eq=0 minimum=1 maximum=2 must_be_zero=3 must_be_one=4 enum_known=5 fits_frame=6 terminated=7 arm_selected=8 digits_valid=9 digits_minimal=10 nul_terminated=11 encoded_as=12 zero_run=13
 
 struct image size=20
   @0x0000   20        image_header head  little

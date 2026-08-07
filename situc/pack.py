@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 
 from situc import ast, traverse
 from situc.capability import DOMAINS, Axis
+from situc.diagnostics import SituError
+from situc.expr import evaluate
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
@@ -328,7 +330,8 @@ class Coverage:
 	unencoded: dict[str, int]	= field(default_factory=dict)
 
 
-def _ast_members(schema: ast.Schema) -> dict[str, ast.Field | ast.Opaque]:
+def _ast_members(
+		schema: ast.Schema) -> dict[str, ast.Field | ast.Opaque | ast.Reserved]:
 	"""`struct.member` -> the AST field, for the expressions it carries.
 
 	Nested as well as top level. A variant's arm and a region's interior hold
@@ -337,9 +340,16 @@ def _ast_members(schema: ast.Schema) -> dict[str, ast.Field | ast.Opaque]:
 	packing it with no size program made a dnsname label one byte long and
 	a walk of them run off the end of the buffer (26.84).
 	"""
-	found: dict[str, ast.Field | ast.Opaque] = {}
+	found: dict[str, ast.Field | ast.Opaque | ast.Reserved] = {}
 
-	def walk(prefix: str, members: Sequence[object]) -> None:
+	# A reserved member is named by the compiler rather than by the schema,
+	# and `layout.reserved_count` numbers them per *struct* in declaration
+	# order -- flattened, so one inside a region is still the struct's Nth.
+	# Reconstructing the name is what lets a reserved run be looked up at
+	# all: every one of the 24 in this tree is `struct.<reservedN>`, checked
+	# rather than assumed.
+	def walk(prefix: str, members: Sequence[object], owner: str,
+			counter: list[int]) -> None:
 		for member in members:
 			name = getattr(member, "name", None)
 			path = f"{prefix}.{name}" if name else prefix
@@ -350,7 +360,16 @@ def _ast_members(schema: ast.Schema) -> dict[str, ast.Field | ast.Opaque]:
 			# measured the variant as zero and put the attributes on top of
 			# the body -- one attribute where C, placing them past a
 			# 900-megabyte `rest`, counted none.
-			if isinstance(member, (ast.Field, ast.Opaque)):
+			# A reserved run is named by the compiler rather than by the
+			# schema -- `<reserved0>`, `<reserved1>` -- and carries its
+			# length the same way a field does. Missing it left cpio's
+			# padding measuring zero, so the two runs it pads with were
+			# never checked for being zero and `cpio_entry` said OK where
+			# every backend said CONSTRAINT.
+			if isinstance(member, ast.Reserved):
+				path = f"{owner}.<reserved{counter[0]}>"
+				counter[0] += 1
+			if isinstance(member, (ast.Field, ast.Opaque, ast.Reserved)):
 				found[path] = member
 			# A variant holds its arms; a region and a positional block hold
 			# their members. Both are reached by the same walk rather than
@@ -358,13 +377,13 @@ def _ast_members(schema: ast.Schema) -> dict[str, ast.Field | ast.Opaque]:
 			for arm in getattr(member, "arms", ()):
 				held = getattr(arm, "member", None)
 				if held is not None:
-					walk(path, (held,))
-			walk(path, getattr(member, "members", ()))
+					walk(path, (held,), owner, counter)
+			walk(path, getattr(member, "members", ()), owner, counter)
 
 
 	for decl in schema.decls:
 		if isinstance(decl, ast.StructDecl):
-			walk(decl.name, decl.members)
+			walk(decl.name, decl.members, decl.name, [0])
 	return found
 
 
@@ -601,7 +620,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		expr: ast.Expr | None
 		if isinstance(field, ast.Opaque):
 			expr = field.size
-		elif field is not None and field.array:
+		elif isinstance(field, (ast.Field, ast.Reserved)) and field.array:
 			expr = field.array.size
 		else:
 			expr = None
@@ -704,7 +723,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# holds the run: `while (nla_len >= 4)` is netlink's `nla_ok`, and
 	# `nla_len` is a field of the attribute, not of the message.
 	picker: tuple[tuple[dict[str, int],
-	                    Callable[[ast.Field | ast.Opaque], ast.Expr | None],
+	                    Callable[[ast.Field | ast.Opaque | ast.Reserved],
+	                             ast.Expr | None],
 	                    bool], ...] = (
 		# Both are `Field` properties; an `Opaque` has neither, so it is
 		# asked for neither.
@@ -822,8 +842,18 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					code = {"must_eq": 0, "min": 1, "max": 2}.get(attr.name)
 					if code is None or attr.value is None:
 						continue
-					held = getattr(attr.value, "value", None)
-					if held is None:
+					# Folded rather than read off the literal.
+					# `[must_eq = hardware_type.ethernet]` and
+					# `[must_eq = PROTOCOL_VERSION]` are an enum member and
+					# a const, and reading `.value` off either gives None --
+					# so arp and telemetry deferred `validate` over a bound
+					# the compiler had already resolved. `situc.expr` is
+					# what the C backend folds it with, and
+					# `resolved.layout.env` is the environment it uses, so
+					# this is the same answer rather than a second one.
+					try:
+						held = evaluate(attr.value, resolved.layout.env)
+					except SituError:
 						whole = False
 						continue
 					constraints_blob += _struct.pack(
@@ -848,12 +878,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					if held_enum.name not in enum_ids:
 						enum_ids[held_enum.name] = len(enum_ids)
 						for member in held_enum.members:
-							held = getattr(member.value, "value", None)
-							if held is None:
+							named_value = getattr(member.value, "value", None)
+							if named_value is None:
 								whole = False
 								continue
 							enum_blob += _struct.pack(
-								"<IqI", enum_ids[held_enum.name], int(held), 0)
+								"<IqI", enum_ids[held_enum.name],
+								int(named_value), 0)
 					constraints_blob += _struct.pack(
 						"<IqBxxx", at, enum_ids[held_enum.name], 5)
 				continue
@@ -868,10 +899,60 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# declared length fits the frame -- and the walk derives
 				# that from the layout it already has. What it cannot
 				# derive is an encoding, a nul terminator, or digits.
-				checked = {a.name for a in placement.attrs} \
-					& {"encoding", "nul_terminated"}
-				if checked or placement.radix is not None:
-					whole = False
+				# A fixed-width text number carries no check at all, which
+				# is worth stating because it looks like it should carry
+				# the same two a delimited one does. cpio's whole header is
+				# ASCII octal with `[min]` and `[max]` on two of its
+				# fields, and `situ_cpio_header_validate` is `return
+				# SITU_OK;` -- the digits are parsed where they are read and
+				# nowhere else. Deferring over the radix gave up cpio
+				# entirely for a check no backend makes.
+				#
+				# `nul_terminated` and `encoding` do carry one, but only
+				# where the member has a static offset and a declared
+				# count: the check names the bytes it scans, and a run the
+				# message sizes has neither. That is C's own condition, so
+				# cpio's `name[header.namesize] [nul_terminated]` is
+				# unchecked and `edges`' `name[16]` is not.
+				# A reserved *run*: every byte zero, over a length the
+				# message computes. The scalar form is `must_be_zero` and
+				# is a value comparison; this one cannot be, which is why
+				# it is a kind of its own. `preserve` and `unknown` say
+				# nothing is checked, as they do for a scalar.
+				if placement.kind == "reserved":
+					policies = {a.name for a in placement.attrs}
+					if policies & {"preserve", "unknown"}:
+						continue
+					if "must_be_one" in policies:
+						whole = False	# no run of ones in the tree yet
+						continue
+					constraints_blob += _struct.pack("<IqBxxx", at, 0, 13)
+					continue
+
+				# `nul_terminated` and `encoding` carry a check only where
+				# the member has a static offset and a declared count: the
+				# check names the bytes it scans, and a run the message
+				# sizes has neither. That is C's own condition, so cpio's
+				# `name[header.namesize] [nul_terminated]` is unchecked and
+				# `edges`' `name[16]` is not.
+				text_attrs = {a.name for a in placement.attrs}
+				if text_attrs & {"encoding", "nul_terminated"} \
+						and placement.offset_bits is not None \
+						and placement.array_count:
+					if "nul_terminated" in text_attrs:
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, 0, 11)
+					encoding = next(
+						(a for a in placement.attrs
+						 if a.name == "encoding"), None)
+					if encoding is not None:
+						spelling = getattr(encoding.value, "name", None)
+						if spelling not in ("ascii", "utf8"):
+							whole = False
+							continue
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at,
+							0 if spelling == "ascii" else 1, 12)
 					continue
 				# A length the message declares has to fit the frame, and
 				# that is the only check a plain run carries. `remaining`
@@ -893,14 +974,28 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					constraints_blob += _struct.pack("<IqBxxx", at, 0, 6)
 				continue
 			if kind is traverse.Check.DELIMITED:
-				# The plain case: the delimiter has to be there. A
-				# `nul_terminated` field or one with a declared encoding
-				# checks something else as well, and those still defer.
-				attr_names = {a.name for a in placement.attrs}
-				if attr_names & {"encoding", "nul_terminated"} \
-						or placement.radix is not None:
+				# The delimiter has to be there, and for a plain delimited
+				# member that is the whole of it.
+				#
+				# `[encoding = ascii]` adds nothing here, which is worth
+				# saying because it looks like it should. The check needs a
+				# static offset and a declared count to name the bytes it
+				# would scan, and a member that runs to a delimiter has
+				# neither -- so no backend emits one, and `http`'s
+				# `method[] until " " [encoding = ascii]` is checked for its
+				# terminator and not for its characters. Deferring over it
+				# gave up six structs for a check nothing makes.
+				#
+				# A text number carries two more. Its bytes have to parse
+				# in its radix and fit the scalar's domain -- C calls the
+				# getter and returns whatever it returns, which for a byte
+				# that is not a digit, or a value too large, is
+				# CONSTRAINT -- and `[minimal]` forbids a second spelling
+				# of a number that already has one.
+				if placement.radix is not None and placement.scalar is None:
 					whole = False
 					continue
+
 				# 8.6.3 again: a run of records ends where the terminator
 				# stands in for a record, and is not a member that ends at
 				# a delimiter. Asking a run whether it was terminated said
@@ -908,27 +1003,56 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				if placement.type_name in resolved.structs:
 					continue
 				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
+
+				# In C's order, which is the answer and not just the
+				# verdict: the terminator first, then the spelling, then
+				# the parse. A field of non-digits that also runs off the
+				# end is CONSTRAINT for the terminator, and reordering
+				# these would answer for a different reason.
+				if placement.radix is not None \
+						and placement.scalar is not None:
+					if placement.radix_minimal:
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, placement.radix, 10)
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at,
+						(1 << placement.scalar.bits) - 1, 9)
 				continue
 			if kind is traverse.Check.DISCRIMINANT:
-				# Only where the variant refuses an unknown discriminant.
-				# A `default:` arm that selects a member accepts anything.
-				if any(arm.member is None and arm.value is None
+				# The only permissive shape is a `default:` arm that
+				# *selects a member*: netlink's `default: opaque rest[...]`
+				# takes any discriminant and hands back the bytes, so there
+				# is nothing to refuse.
+				#
+				# Everything else refuses, including a variant that writes
+				# no default clause at all. 14.5 makes `error` the default
+				# default, so its absence is a rejection rather than a
+				# permission -- and reading the absence the other way
+				# deferred `validate` for every variant in the tree that
+				# simply listed its cases. `edges`' `equalized` and
+				# `arm_run` and icmp's `icmp_message` are all that shape,
+				# and all three of C's validators emit the check.
+				#
+				# This is the same mistake 26.89 records for an *enum*
+				# whose default is unstated, one construct along, and it
+				# was found the same way: by asking what the four backends
+				# emit rather than what the AST happens to contain.
+				if any(arm.value is None and arm.member is not None
 				       for arm in placement.arm_cases):
-					constraints_blob += _struct.pack("<IqBxxx", at, 0, 8)
-					# A struct-typed arm runs its own `validate` when it is
-					# the one selected, so this struct can answer only when
-					# each of those can. They join the fixed point below.
-					for arm in placement.arm_cases:
-						held_at = placement_index.get(arm.member or "")
-						if held_at is None:
-							continue
-						typed = rows[held_at][1].type_name
-						if typed and typed in resolved.structs \
-								and _measurable(resolved,
-								                resolved.structs[typed]):
-							nests.setdefault(name, set()).add(typed)
-				else:
-					whole = False
+					continue
+				constraints_blob += _struct.pack("<IqBxxx", at, 0, 8)
+				# A struct-typed arm runs its own `validate` when it is
+				# the one selected, so this struct can answer only when
+				# each of those can. They join the fixed point below.
+				for arm in placement.arm_cases:
+					held_at = placement_index.get(arm.member or "")
+					if held_at is None:
+						continue
+					typed = rows[held_at][1].type_name
+					if typed and typed in resolved.structs \
+							and _measurable(resolved,
+							                resolved.structs[typed]):
+						nests.setdefault(name, set()).add(typed)
 				continue
 			if kind is traverse.Check.NESTED and placement.type_name:
 				nests.setdefault(name, set()).add(placement.type_name)

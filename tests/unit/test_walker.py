@@ -236,6 +236,55 @@ def _by_member(text: str) -> dict[tuple[str, str], str]:
 	return found
 
 
+def test_a_struct_the_image_cannot_answer_for_says_so() -> None:
+	"""The other half of the `validate` bit, which the corpus stopped
+	exercising the moment it stopped needing to.
+
+	Every struct in the tree answers now, which is the good outcome and a
+	hole: the bit's false path is the one that keeps a *partial* `validate`
+	from reporting OK where the schema refuses, and nothing was left to
+	check that it still worked. A schema is written here rather than found,
+	because the point is a construct the image genuinely cannot carry.
+
+	A bounded ratio is that construct. The region's extent is data-dependent
+	-- worst case known, actual not -- so nothing after it can be placed
+	without decoding, no backend emits an offset for `trailer`, and a walk
+	that answered anyway would be the only implementation with an opinion.
+	"""
+	source = (
+		"endian big;\n"
+		"\n"
+		"codec squishy {\n"
+		"\texpansion = ratio_bounded(3, 1);\n"
+		"\tgranularity = byte;\n"
+		"\tinvertible;\n"
+		"\tdeterministic;\n"
+		"}\n"
+		"\n"
+		"impl squishy extern \"my_squishy\";\n"
+		"\n"
+		"struct undecidable {\n"
+		"\tu8  n;\n"
+		"\tcoded body(squishy) {\n"
+		"\t\tu8 content[n];\n"
+		"\t}\n"
+		"\tu8  trailer;\n"
+		"}\n")
+	parsed   = parse_text(source)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	assert len(image.structs) == 1
+	assert not image.structs[0].validatable, \
+		"a region with no closed-form extent must not claim `validate`"
+
+	# And the walk declines rather than guessing, which is what the bit is
+	# for: `None` is "this image cannot say", not `OK`.
+	view = report.View(image, bytes(16), 0, 0, 16)
+	assert report._validate(image, view, 0) is None
+
+
 def test_the_subset_reaches_most_of_the_corpus() -> None:
 	"""The fifth column's coverage, stated as a number rather than implied.
 
@@ -269,10 +318,13 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 	# `validate` is one line per struct rather than one per member, so the
 	# member floor above says nothing about it: a change that made every
 	# struct unvalidatable would leave that number untouched and the whole
-	# probe would go quiet. 120 of 141 carry it; the rest defer for a reason
-	# the image records -- an arm whose type cannot be measured, a delimited
-	# member carrying an encoding, or a constraint whose bound is not a
-	# literal. `[since]` gates and coded regions used to be on that list and
-	# are not any more.
-	assert answerable >= 120, \
+	# probe would go quiet. Every struct in the corpus carries it now --
+	# 141 of 141 -- so this is a floor against losing them rather than a
+	# record of how far the work got. `[since]` gates, coded regions, text
+	# numbers, reserved runs and unstated variant defaults were all on the
+	# deferred list and none of them is.
+	#
+	# The bit's *false* path has no corpus schema left to exercise it, which
+	# is what `test_a_struct_the_image_cannot_answer_for_says_so` is for.
+	assert answerable >= 141, \
 		f"only {answerable} structs the walker can answer `validate` for"
