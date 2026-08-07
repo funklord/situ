@@ -100,6 +100,12 @@ def size_bits(view: View, index: int) -> int:
 	than merely short.
 	"""
 	placement = view.image.placements[index]
+	if placement.repeat_code != NONE and placement.type_struct != NONE:
+		# A `while` run's extent is however far the walk got. Falling
+		# through to the record's `size_bits` gave the *minimum* -- one
+		# element -- so a struct holding one measured a byte where it held
+		# two, and dnsname's `qname` sub-view came back the wrong length.
+		return _while_walk(view, index)[1] * BITS_PER_BYTE
 	if index in view.image.arms:
 		return _variant_bits(view, index)
 	if index in view.image.varints:
@@ -421,6 +427,11 @@ def parse_digits(view: View, index: int) -> int:
 
 
 def while_count(view: View, index: int) -> int:
+	"""How many elements a `while` run holds."""
+	return _while_walk(view, index)[0]
+
+
+def _while_walk(view: View, index: int) -> tuple[int, int]:
 	"""How many elements a `while` run holds.
 
 	The predicate is asked about the element *just parsed*, which is the
@@ -442,6 +453,7 @@ def while_count(view: View, index: int) -> int:
 	at      = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	count   = 0
 
+	start = at
 	while count < cap and at < view.limit:
 		sub = View(view.image, view.buffer, element, at, view.limit)
 		try:
@@ -458,7 +470,7 @@ def while_count(view: View, index: int) -> int:
 		at    += extent
 		if not _evaluate(sub, placement.repeat_code):
 			break
-	return count
+	return count, at - start
 
 
 def struct_extent(view: View) -> int:
@@ -476,6 +488,9 @@ def struct_extent(view: View) -> int:
 		if view.image.placements[member].located_code != NONE:
 			continue
 		total += size_bits(view, member)
-	if total <= 0:
-		raise Refused("a struct with no extent this image can compute")
+	# Zero is an answer, not a refusal. A `name` whose first label does not
+	# fit holds no labels and is zero bytes long, and C makes a zero-length
+	# sub-view of it -- `ok=1 extent=0`. The guard against a zero extent
+	# belongs where it stops something: the run walk below, which would
+	# otherwise never advance.
 	return (total + BITS_PER_BYTE - 1) // BITS_PER_BYTE

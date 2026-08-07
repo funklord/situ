@@ -9522,6 +9522,42 @@ skip without it, and they were skipping silently.
 **Status:** `make check` green here and on a clean worktree; the skip guard
 exercised against a real log.
 
+### 26.88 A nested sub-view, a tag, and the extent that was zero
+
+`nested` and `tag` take the walk to 504 members across 28 of the 32 schemas.
+Neither is a hard probe -- `ok= extent=` and `present=` are the two simplest
+answers in the differ -- and both were wrong for reasons about what a
+*question* is rather than about bytes.
+
+**A run of records is not a nested member.** sqlite's `cells` is an `indexed`
+region of `table_leaf_cell`, so it has a struct type and is asked `count=`.
+Answering `ok= extent=` is a line about a different question, and the
+comparison only caught it because the names matched. `kind` tells them apart.
+
+**A tag whose offset nobody can compute is absent.** keystore's tag sits
+after a sealed region whose extent is the codec's, so C's pointer accessor
+hands back NULL and the answer is `present=0`. A walker that summed its way
+to an offset anyway said `present=1` about bytes nothing can find, which is
+worse than not answering.
+
+**A `while` run's extent was still the minimum.** `size_bits` had learned
+varints, delimiters and variants and not this, so a struct whose only member
+is a `while` run measured one element where it held two -- dnsname's `qname`
+sub-view, off by a label. The run's extent is however far the walk got, which
+the walk already computed and threw away.
+
+**And zero is an answer.** A `name` whose first label does not fit holds no
+labels and is zero bytes long; C makes a zero-length sub-view of it and says
+`ok=1 extent=0`. `struct_extent` refused instead, on a guard that belonged
+somewhere else entirely -- the run walk, where a zero-extent element would
+mean never advancing. The guard was right and its position was wrong, which
+is a distinction worth keeping: **a check that stops an infinite loop is not
+a check that a value is legal.**
+
+**Status:** 332 scalars, 67 runs, 42 arms, 3 gates with 2 interiors, 19
+delimited, 4 varints, 5 `while` runs, 23 nested sub-views and 7 tags. Every
+step of `make check` green, each run separately.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

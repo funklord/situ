@@ -23,13 +23,13 @@ from __future__ import annotations
 from walker.image import NONE, Image
 from walker.walk import (Refused, View, acquire, read_bytes, read_scalar,
                          _read_at, offset_bits, scan, size_bits,
-                         varint, while_count)
+                         struct_extent, varint, while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
 SUPPORTED = ("no-view", "scalar", "bytes", "element", "run_element",
              "arm_value", "sealed", "gated", "delimited", "varint",
-             "while_count")
+             "while_count", "nested", "tag")
 
 #: `image_kind`: which placements are plain scalars a walk can read.
 FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3
@@ -214,6 +214,52 @@ def _trimmed(view: View, index: int, content: int) -> int:
 	return tail - head
 
 
+def _nested(image: Image, struct_index: int) -> list[int]:
+	"""Members that are another struct, asked whether they are there.
+
+	The probe is `ok= extent=` rather than a value: what a caller gets is a
+	sub-view, and what every backend can now answer is whether one can be
+	made and how many bytes it covers.
+	"""
+	found = []
+	for index in image.members(image.structs[struct_index]):
+		placement = image.placements[index]
+		if placement.type_struct == NONE or placement.type_struct is None:
+			continue
+		# A nested *member*, not a region that happens to hold a type.
+		# sqlite's `cells` is an `indexed` region of `table_leaf_cell` and
+		# the differ asks it `count=`; answering `ok= extent=` is a line
+		# about a different question.
+		if placement.kind != FIELD:
+			continue
+		if not _offset_computable(image, struct_index, index):
+			continue
+		if placement.array_count != NONE or placement.size_code != NONE:
+			continue			# a run of them, not one
+		if placement.repeat_code != NONE or index in image.delimiters:
+			continue
+		if index in image.regions or placement.is_tag:
+			continue
+		found.append(index)
+	return found
+
+
+def _tags(image: Image, struct_index: int) -> list[int]:
+	"""Tags and checksums, asked only whether their bytes are there.
+
+	Not what they hold and not whether they verify: situ guards the bytes and
+	the caller runs the algorithm (14.1), so `present=` is the whole of what
+	a backend answers without one.
+	"""
+	# Only where the walk can place it. keystore's tag sits after a sealed
+	# region whose extent is the codec's, so C's pointer accessor hands back
+	# NULL and answers `present=0`; a walker that summed its way to an
+	# offset anyway would answer `present=1` about bytes nobody can find.
+	return [index for index in image.members(image.structs[struct_index])
+	        if image.placements[index].is_tag
+	        and _offset_computable(image, struct_index, index)]
+
+
 def _while_runs(image: Image, struct_index: int) -> list[int]:
 	"""Runs that end after the element failing a predicate (8.6.6)."""
 	return [index for index in image.members(image.structs[struct_index])
@@ -367,6 +413,28 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			# says so in its own way; what is comparable is that the line
 			# is absent rather than wrong, so nothing is printed.
 			continue
+
+	for index in _nested(image, struct_index):
+		local = _local(image, index)
+		try:
+			sub = View(image, view.buffer, image.placements[index].type_struct,
+			           view.at + offset_bits(view, index) // 8, view.limit)
+			extent = struct_extent(sub)
+			if extent < 0 or sub.at + extent > view.limit:
+				raise Refused("the frame does not hold the nested struct")
+			lines.append(f"{local} ok=1 extent={extent}")
+		except Refused:
+			# Every backend can refuse a sub-view now, and says so the same
+			# way: the answer is `ok=0`, not an absent line.
+			lines.append(f"{local} ok=0 extent=0")
+
+	for index in _tags(image, struct_index):
+		local = _local(image, index)
+		try:
+			read_bytes(view, index)
+			lines.append(f"{local} present=1")
+		except Refused:
+			lines.append(f"{local} present=0")
 
 	for index in _while_runs(image, struct_index):
 		local = _local(image, index)
