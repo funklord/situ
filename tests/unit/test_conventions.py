@@ -70,6 +70,61 @@ def test_linter_flags_non_ascii(tmp_path: Path) -> None:
 	assert problems[0].message.startswith("non-ASCII byte")
 
 
+def test_linter_allows_non_ascii_inside_a_python_literal(tmp_path: Path) -> None:
+	"""A tick a program prints is output, not prose.
+
+	The ASCII rule governs the text the repository writes about itself, and a
+	whole-file byte check cannot tell that from what a program emits. The one
+	project that prints status ticks switched the check off to keep them,
+	which switched it off for its comments too, and an em dash arrived in
+	one. Spelled with escapes so this file stays ASCII bytes throughout.
+	"""
+	source = tmp_path / "sample.py"
+	source.write_text('TICK = "\u2713 ok"\n', encoding="utf-8")
+
+	assert style_gate.check_file(source, tmp_path, CFG) == []
+
+
+def test_linter_allows_non_ascii_inside_a_python_fstring(tmp_path: Path) -> None:
+	"""3.12 splits an f-string into START/MIDDLE/END; 3.11 emits one STRING.
+
+	Both spellings have to allow it, which is why the literal set is built by
+	name lookup rather than by naming a token type that 3.11 does not have.
+	"""
+	source = tmp_path / "sample.py"
+	source.write_text('def f(n):\n\treturn f"\u2713 {n}"\n', encoding="utf-8")
+
+	assert style_gate.check_file(source, tmp_path, CFG) == []
+
+
+def test_linter_flags_non_ascii_in_a_python_comment(tmp_path: Path) -> None:
+	source = tmp_path / "sample.py"
+	source.write_text("# an em dash \u2014 here\n", encoding="utf-8")
+
+	problems = style_gate.check_file(source, tmp_path, CFG)
+
+	assert len(problems) == 1
+	assert "outside a string literal" in problems[0].message
+	assert (problems[0].line, problems[0].col) == (1, 14)
+
+
+def test_linter_falls_back_to_bytes_when_python_will_not_tokenise(
+		tmp_path: Path) -> None:
+	"""A file nobody can parse is not a file that has been cleared.
+
+	The Python path returns None rather than an empty list when tokenize
+	gives up, so the caller reaches the stricter whole-file check instead of
+	reading the failure as a pass.
+	"""
+	source = tmp_path / "sample.py"
+	source.write_text("X = (\u2014,\n", encoding="utf-8")
+
+	problems = style_gate.check_file(source, tmp_path, CFG)
+
+	assert len(problems) == 1
+	assert problems[0].message.startswith("non-ASCII byte")
+
+
 def test_linter_flags_trailing_whitespace(tmp_path: Path) -> None:
 	source = tmp_path / "sample.c"
 	source.write_text("int x;\t\n", encoding="ascii")
