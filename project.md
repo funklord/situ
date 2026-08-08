@@ -10225,7 +10225,8 @@ doing its job, and it is a different job from writing the walk.
 
 ### 26.96 Rung 4: `frame`
 
-**Status: not started.**
+**Status: the C reader and the additivity test are done; the other three
+backends and the walker are not.**
 
 Extent discovery already exists and is generated for every struct --
 `situ_X_required(data, have, &need)`, which answers "how many bytes does this

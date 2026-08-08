@@ -20,7 +20,7 @@ import pytest
 from every_schema import ROOT
 from situc import (ast, capmap, dissector, dump, namespaces, relation,
                    unparse, wellformed)
-from situc.codegen.c import fuzz
+from situc.codegen.c import frame, fuzz
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
@@ -783,3 +783,160 @@ def test_the_fuzz_entry_point_reaches_the_relation() -> None:
 	harness = fuzz.generate(schema, resolved, "t")
 
 	assert "fuzz_rel_response_to(data + 1, size - 1u);" in harness
+
+
+# -- rung 4: stream framing, and the additivity invariant it owns (26.96) ----
+
+
+def test_the_reader_holds_bytes_and_allocates_nothing() -> None:
+	"""Rung 4's new permission is holding bytes between calls. The buffer is
+	the caller's, so the rung above `view` in that respect is still not
+	rung 2."""
+	schema, resolved = analysed(GOOD)
+
+	header = frame.generate(schema, resolved, "t")["t_frame.h"]
+
+	assert "situ_frame_reader_init(situ_frame_reader_t *reader, uint8_t *buf," in header
+	assert "malloc" not in header
+	# It stands on the primitive that already existed for exactly this.
+	assert "situ_frame_required(reader->buf, reader->have, &need)" in header
+
+
+def test_next_does_not_consume_and_says_when_the_view_dies() -> None:
+	"""A reader that consumed as it returned would hand out a view and
+	invalidate it on the next call."""
+	schema, resolved = analysed(GOOD)
+
+	header = frame.generate(schema, resolved, "t")["t_frame.h"]
+
+	assert "situ_frame_reader_advance" in header
+	assert "IS DEAD FROM HERE ON" in header
+
+
+def test_a_message_larger_than_the_buffer_is_reported_not_awaited() -> None:
+	"""Waiting never makes it fit, so spinning on the stream is the wrong
+	answer and BOUNDS is the right one."""
+	schema, resolved = analysed(GOOD)
+
+	header = frame.generate(schema, resolved, "t")["t_frame.h"]
+
+	assert "if (need > reader->cap) {" in header
+
+
+def test_every_adjacent_rung_adds_files_and_changes_none() -> None:
+	"""The additivity invariant of 0032, over every rung that exists.
+
+	Two rules it enforces, both of which fail silently otherwise: includes
+	point down the ladder and never up, and no rung's file carries
+	conditional compilation for a rung above it. The assertion is that the
+	set *grows* -- a generator emitting nothing would satisfy a weaker one.
+	"""
+	schema, resolved = analysed(GOOD)
+
+	view   = generate_c(schema, resolved, "t").files()
+	relate_files = dict(view)
+	relate_files.update(relate.generate(schema, resolved, "t"))
+	frame_files  = dict(relate_files)
+	frame_files.update(frame.generate(schema, resolved, "t"))
+
+	for lower, higher in ((view, relate_files), (relate_files, frame_files)):
+		assert set(lower) < set(higher), "a rung must add files, not merely keep them"
+		for name, text in lower.items():
+			assert higher[name] == text, f"{name} changed between rungs"
+
+
+def test_no_rung_includes_a_rung_above_it() -> None:
+	"""Includes point down the ladder. An include pointing up is additivity
+	lost while the file list still looks right."""
+	schema, resolved = analysed(GOOD)
+
+	lower = generate_c(schema, resolved, "t").files()
+	lower.update(relate.generate(schema, resolved, "t"))
+
+	for name, text in lower.items():
+		assert "_frame.h" not in text, f"{name} reaches up the ladder"
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		assert "_relate.h" not in text, f"{name} reaches up the ladder"
+
+
+def test_no_rung_carries_conditional_compilation_for_a_higher_one() -> None:
+	schema, resolved = analysed(GOOD)
+
+	every = generate_c(schema, resolved, "t").files()
+	every.update(relate.generate(schema, resolved, "t"))
+	every.update(frame.generate(schema, resolved, "t"))
+
+	for name, text in every.items():
+		assert "SITU_LAYER" not in text, f"{name} switches on a layer"
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_reader_reassembles_across_every_chunk_boundary(
+		tmp_path: Path) -> None:
+	"""A framing reader that only works when a message arrives whole is one
+	that works on a loopback and nowhere else."""
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in frame.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "drive.c").write_text(_CHUNK_DRIVER, encoding="ascii")
+
+	assert COMPILER is not None
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{tmp_path}", f"-I{RUNTIME}",
+		 str(tmp_path / "drive.c"), str(tmp_path / "t.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "drive")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "drive")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_CHUNK_DRIVER = """#include <assert.h>
+#include <string.h>
+#include "t_frame.h"
+
+int main(void)
+{
+	uint8_t stream[3 * 17];
+	for (unsigned m = 0; m < 3; m++) {
+		uint8_t *f = stream + m * 17;
+		memset(f, 0, 17);
+		f[0] = 0x12; f[1] = (uint8_t)(0x30 + m);
+		f[2] = (uint8_t)m; f[3] = 4;
+	}
+
+	for (uint32_t chunk = 1; chunk <= sizeof stream; chunk++) {
+		uint8_t back[128];
+		situ_frame_reader_t r;
+		situ_frame_reader_init(&r, back, sizeof back);
+
+		unsigned seen = 0;
+		for (uint32_t at = 0; at < sizeof stream; at += chunk) {
+			uint32_t n = chunk;
+			if (at + n > sizeof stream) {
+				n = (uint32_t)(sizeof stream) - at;
+			}
+			assert(situ_frame_reader_push(&r, stream + at, n) == SITU_OK);
+
+			situ_msg_t msg;
+			situ_view_t v;
+			while (situ_frame_reader_next(&r, &msg, &v) == SITU_OK) {
+				situ_view_t hdr;
+				assert(situ_frame_hdr_view(v, &hdr) == SITU_OK);
+				assert(situ_head_index_get(hdr) == seen);
+				seen++;
+				situ_frame_reader_advance(&r);
+			}
+		}
+		if (seen != 3) {
+			return 1;
+		}
+	}
+	return 0;
+}
+"""

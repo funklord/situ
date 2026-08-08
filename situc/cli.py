@@ -40,7 +40,6 @@ LAYERS = ("view", "edit", "relate", "frame", "converse", "drive")
 #: that it has not arrived -- the same reasoning as FUTURE_COMMANDS above.
 FUTURE_LAYERS: dict[str, str] = {
 	"edit":     "26.99",
-	"frame":    "26.96",
 	"converse": "26.97",
 	"drive":    "26.98",
 }
@@ -489,6 +488,12 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
 
+	if args.layer == "frame" and args.target != "c":
+		raise SystemExit(
+			f"situc: --layer frame emits C today and --target is "
+			f"{args.target}. Nothing about the reader is C-specific; the "
+			f"other backends are the rest of phase 26.96.")
+
 	if args.layer in FUTURE_LAYERS:
 		raise SystemExit(
 			f"situc: --layer {args.layer} is decided and not built; phase "
@@ -543,8 +548,14 @@ def cmd_build(args: argparse.Namespace) -> int:
 				print(f"situc: no owned form for `{name}`: {why}",
 				      file=sys.stderr)
 
-	if args.layer == "relate":
+	if args.layer in ("relate", "frame"):
 		files.update(_relate(parse(source), resolved, args))
+
+	if args.layer == "frame":
+		from situc.codegen.c import frame
+
+		files.update(frame.generate(parse(source), resolved, args.schema.stem,
+		                            args.prefix))
 
 	args.out.mkdir(parents=True, exist_ok=True)
 	for name, text in files.items():
