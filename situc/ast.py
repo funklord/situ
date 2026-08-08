@@ -1146,6 +1146,52 @@ class Invariant(Decl):
 	expr: Expr			# what it equals
 
 
+@dataclass(frozen=True)
+class Must(Node):
+	"""One run-time constraint in a relation body (26.95, decision 0030).
+
+	`must` rather than `require`, and the distinction is load-bearing. Section
+	16 fixes `require` as a *build-time* capability gate whose failure is a
+	compile error; this is a check over two values at run time. Reusing the
+	word would give it two meanings in a language whose stated rule is one
+	word per concept, and the run-time vocabulary already has a root:
+	`must_eq` and `must_be_zero`, whose failures are `SITU_ERR_CONSTRAINT`
+	exactly as this one's is.
+	"""
+
+	span: Span
+	expr: Expr
+
+
+@dataclass(frozen=True)
+class RelationParam(Node):
+	"""One message a relation is stated over: `request: fzn_frame`."""
+
+	span: Span
+	name: str			# the name the body refers to it by
+	type_name: str			# the struct, possibly `outer::Header`
+
+
+@dataclass(frozen=True)
+class Relation(Decl):
+	"""`relation response_to(request: frame, response: frame) { ... }`
+
+	A pure predicate over two views. It holds no state, allocates nothing, and
+	does not know which messages exist -- the caller owns the pairing, and this
+	answers only whether a pairing is well formed.
+
+	**Parameter order is temporal**: the first is the message seen first. A
+	dissector needs to say "response to frame N" and a fuzz harness needs to
+	know which message to copy bytes *from*, so making order carry it means
+	neither needs a second declaration and no relation can omit the fact.
+	"""
+
+	span: Span
+	name: str
+	params: tuple[RelationParam, ...]
+	body: tuple[Must, ...]
+
+
 @dataclass
 class Schema(Node):
 	"""One parsed source file."""
@@ -1164,6 +1210,9 @@ class Schema(Node):
 
 	def invariants(self) -> list[Invariant]:
 		return [decl for decl in self.decls if isinstance(decl, Invariant)]
+
+	def relations(self) -> list[Relation]:
+		return [decl for decl in self.decls if isinstance(decl, Relation)]
 
 	def requirements(self) -> list[Requirement]:
 		return [decl for decl in self.decls if isinstance(decl, Requirement)]

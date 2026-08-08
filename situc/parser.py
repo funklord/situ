@@ -300,6 +300,7 @@ class Parser:
 			"require":	self.parse_requirement,
 			"assert":	self.parse_requirement,
 			"invariant":	self.parse_invariant,
+			"relation":	self.parse_relation,
 		}
 
 		handler = handlers.get(token.text)
@@ -309,7 +310,8 @@ class Parser:
 				token.span,
 				label = "not a declaration keyword",
 				notes = ["expected `target`, `endian`, `bit_order`, `import`, `const`, "
-				         "`enum`, `struct`, `require`, `assert` or `invariant`"],
+				         "`enum`, `struct`, `require`, `assert`, `invariant` or "
+				         "`relation`"],
 			)
 
 		return handler()
@@ -2000,6 +2002,88 @@ class Parser:
 		expr = self.parse_expr()
 		self.expect_symbol(";", "after the invariant")
 		return ast.Invariant(self.span_from(start), derived, expr)
+
+	def parse_relation(self) -> ast.Relation:
+		"""`relation response_to(request: frame, response: frame) { ... }`
+
+		Two parameters, in temporal order: the first is the message seen
+		first. Decision 0030 for what the construct is, 0032 for why it sits
+		at rung 3 of the layer ladder.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a relation name")
+		self.expect_symbol("(", "after the relation's name")
+
+		params = [self.parse_relation_param()]
+		while self.accept_symbol(","):
+			params.append(self.parse_relation_param())
+		close = self.expect_symbol(")", "after the relation's parameters")
+
+		self._check_relation_arity(params, name, close)
+
+		self.expect_symbol("{", "before the relation's body")
+		body = []
+		while not self.current.is_symbol("}"):
+			body.append(self.parse_must())
+		self.expect_symbol("}", "after the relation's body")
+
+		return ast.Relation(self.span_from(start), name.text,
+		                    tuple(params), tuple(body))
+
+	def _check_relation_arity(self, params: list[ast.RelationParam],
+			name: Token, close: Token) -> None:
+		"""Exactly two, and each count is wrong for its own reason."""
+		if len(params) == 2:
+			return
+
+		if len(params) < 2:
+			raise error(
+				f"`{name.text}` states a relation over one message",
+				self.span_from(name),
+				label = "expected a second parameter",
+				notes = [
+					"a constraint within one message is a `require`, or a "
+					"`[must_eq]` on the member -- both of which already exist",
+					"a relation exists to say what two messages must agree "
+					"about: `relation r(request: a, response: b) { ... }`",
+				],
+			)
+
+		raise error(
+			f"`{name.text}` states a relation over {len(params)} messages",
+			close.span,
+			label = "expected exactly two",
+			notes = [
+				"a relation is a pure predicate the caller evaluates over two "
+				"views it already holds, and takes no other state",
+				"a rule over three or more messages is nearly always "
+				"quantification over the set of messages seen -- which needs a "
+				"store, and belongs in what `--layer converse` generates "
+				"rather than in a schema construct (decisions 0030, 0032)",
+			],
+		)
+
+	def parse_relation_param(self) -> ast.RelationParam:
+		"""`request: fzn_frame`, or `request: outer::Header`."""
+		name = self.expect_ident("a parameter name")
+		self.expect_symbol(":", "after a relation parameter's name")
+		type_token = self.expect_ident("the struct the parameter is a view of")
+
+		type_name = (self.parse_qualification(type_token)
+		             if self.current.is_symbol("::") else type_token.text)
+
+		return ast.RelationParam(self.span_from(name), name.text, type_name)
+
+	def parse_must(self) -> ast.Must:
+		"""`must response.head.msg == request.head.msg;`
+
+		`must` and not `require`: section 16 gives `require` to the
+		build-time gate, and this is checked at run time against two views.
+		"""
+		start = self.expect_keyword("must", "to open a relation's constraint")
+		expr  = self.parse_expr()
+		self.expect_symbol(";", "after the constraint")
+		return ast.Must(self.span_from(start), expr)
 
 	def parse_path(self, context: str) -> str:
 		"""A dotted field path, as text."""

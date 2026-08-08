@@ -64,6 +64,7 @@ def check(schema: ast.Schema) -> None:
 	check_repeats(schema)
 	check_versions(schema)
 	check_invariants(schema)
+	check_relations(schema)
 
 
 #: Attributes that only mean anything on a delimited member.
@@ -728,6 +729,136 @@ def check_invariants(schema: ast.Schema) -> None:
 		_check_invariant_calls(invariant)
 
 
+def check_relations(schema: ast.Schema) -> None:
+	"""A relation is two named views and what must hold between them (26.95).
+
+	Everything asked here is decidable from names and structure, which is what
+	keeps it in phase 1: both parameters name real structs, every path is
+	rooted at one of them, and every component of a path names a member the
+	struct at that point actually has. Whether the two sides of a comparison
+	are *comparable* is a resolved-layout question and is asked later.
+	"""
+	structs  = {decl.name: decl for decl in schema.structs()}
+	imported = any(isinstance(decl, ast.ImportDirective) for decl in schema.decls)
+
+	for relation in schema.relations():
+		params: dict[str, ast.RelationParam] = {}
+		for param in relation.params:
+			if param.name in params:
+				raise error(
+					f"`{param.name}` is already a parameter of this relation",
+					param.span,
+					label = "duplicate parameter name",
+					notes = ["the body tells the two messages apart by name, so "
+					         "they need different ones -- `request` and "
+					         "`response` rather than two of either"],
+				)
+			params[param.name] = param
+
+			if not imported and param.type_name not in structs:
+				raise error(
+					f"unknown struct `{param.type_name}`",
+					param.span,
+					label = "no such struct",
+					notes = ["a relation parameter is a view of a struct "
+					         "declared in this schema"],
+				)
+
+		if not relation.body:
+			raise error(
+				f"`{relation.name}` states nothing about its two messages",
+				relation.span,
+				label = "empty relation body",
+				notes = ["a relation with no `must` generates a predicate that "
+				         "is true of every pair, which is the same as not "
+				         "having written it"],
+			)
+
+		for must in relation.body:
+			_check_must(relation, must, params, structs, imported)
+
+
+def _check_must(relation: ast.Relation, must: ast.Must,
+		params: dict[str, ast.RelationParam], structs: Structs,
+		imported: bool) -> None:
+	"""One constraint: rooted at the parameters, and naming members they have."""
+	offered = ", ".join(f"`{name}`" for name in params)
+	named: set[str] = set()
+
+	for path in paths_in(must.expr):
+		root, _, rest = path.partition(".")
+		param = params.get(root)
+
+		if param is None:
+			raise error(
+				f"`{root}` is not a message this relation was given",
+				must.span,
+				label = "unknown parameter",
+				notes = [
+					f"the parameters are {offered}",
+					"a relation reads only the two views it is handed: it holds "
+					"no state and cannot reach a message it was not passed",
+				],
+			)
+
+		named.add(root)
+
+		if not rest:
+			raise error(
+				f"`{root}` is a whole message, not a value",
+				must.span,
+				label = "expected a field of it",
+				notes = [f"name a member: `{root}.some_field`"],
+			)
+
+		if not imported:
+			_check_path_members(root, rest, param, must, structs)
+
+	if len(named) < 2:
+		raise error(
+			"this `must` reads one message, so it is not a relation",
+			must.span,
+			label = "names only one of the two",
+			notes = [
+				"a constraint within a single message belongs on the member as "
+				"`[must_eq]`, or beside the schema as a `require`",
+				"put there it is checked whenever that message is validated; "
+				"put here it is checked only when somebody happens to evaluate "
+				"a pair, which is strictly less often",
+			],
+		)
+
+
+def _check_path_members(root: str, rest: str, param: ast.RelationParam,
+		must: ast.Must, structs: Structs) -> None:
+	"""Walk `head.msg` through the struct types, refusing the first name absent.
+
+	Resolution stops without complaint wherever the table runs out -- a scalar,
+	or a type this file does not declare -- because a name that cannot be
+	looked up is not a name that has been shown wrong.
+	"""
+	struct: ast.StructDecl | None = structs.get(param.type_name)
+	walked = root
+
+	for component in rest.split("."):
+		if struct is None:
+			return
+
+		member = _find_member(struct, component)
+		if member is None:
+			raise error(
+				f"`{struct.name}` has no member `{component}`",
+				must.span,
+				label = f"in `{walked}.{component}`",
+				notes = [f"`{param.name}` is a view of `{param.type_name}`"],
+			)
+
+		walked = f"{walked}.{component}"
+		type_ref = getattr(member, "type_ref", None)
+		struct = (None if type_ref is None or type_ref.is_scalar
+		          else structs.get(type_ref.name))
+
+
 def _check_invariant_calls(invariant: ast.Invariant) -> None:
 	"""Every call on the right side names something an invariant may ask.
 
@@ -819,6 +950,12 @@ def _named_declarations(schema: ast.Schema) -> list[tuple[str, str, ast.Decl]]:
 			named.append(("endian marker", decl.name, decl))
 		elif isinstance(decl, ast.CodecDecl):
 			named.append(("codec", decl.name, decl))
+		elif isinstance(decl, ast.Relation):
+			# Not because an expression could confuse the two -- a relation
+			# name is never referenced from one -- but because it becomes
+			# `situ_rel_<name>` in four languages, and because one word
+			# meaning two things in a schema is what the naming rule is for.
+			named.append(("relation", decl.name, decl))
 	return named
 
 

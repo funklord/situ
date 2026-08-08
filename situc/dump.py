@@ -82,6 +82,13 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 		return [_indent(depth,
 		                f"invariant {decl.derived} == {expr_to_source(decl.expr)}")]
 
+	if isinstance(decl, ast.Relation):
+		params = ", ".join(f"{param.name}: {param.type_name}"
+		                   for param in decl.params)
+		return [_indent(depth, f"relation {decl.name}({params})"),
+		        *[_indent(depth + 1, f"must {expr_to_source(must.expr)}")
+		          for must in decl.body]]
+
 	# Every kind the parser can produce has a case above. This is not one, so
 	# it is a construct that arrived without its dump -- which is a compiler
 	# bug rather than a schema error, and says so.

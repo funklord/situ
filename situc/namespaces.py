@@ -92,7 +92,8 @@ def _declared_names(decls: list[ast.Decl]) -> list[str]:
 	found = []
 	for decl in decls:
 		if isinstance(decl, (ast.StructDecl, ast.EnumDecl, ast.VarintDecl,
-		                     ast.EndianMarkerDecl, ast.CodecDecl, ast.ConstDecl)):
+		                     ast.EndianMarkerDecl, ast.CodecDecl, ast.ConstDecl,
+		                     ast.Relation)):
 			found.append(decl.name)
 	return found
 
@@ -130,6 +131,21 @@ def rewrite(decl: ast.Decl, name_of: Callable[[str], str]) -> ast.Decl:
 		expr = expr_of(decl.expr)
 		assert expr is not None
 		return replace(decl, expr = expr)
+
+	if isinstance(decl, ast.Relation):
+		# The name and the parameter *types* are namespace-scoped. The body is
+		# deliberately not rewritten: its paths are rooted at parameter names,
+		# which are local to the relation and mean nothing outside it. Passing
+		# them through `name_of` would qualify `request` into
+		# `outer::request` and produce a relation whose body referred to
+		# nothing -- the one case where leaving an expression alone is the
+		# correct rewrite.
+		return replace(
+			decl,
+			name   = name_of(decl.name),
+			params = tuple(replace(param, type_name = name_of(param.type_name))
+			               for param in decl.params),
+		)
 
 	# A directive inside a namespace refers to nothing and scopes nothing; it
 	# keeps its file-wide meaning, which is the one it already had.

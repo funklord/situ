@@ -163,6 +163,13 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.Requirement):
 		return [f"{decl.kind.value} {expr_to_source(decl.expr)};"]
 
+	if isinstance(decl, ast.Relation):
+		params = ", ".join(f"{param.name}: {param.type_name}"
+		                   for param in decl.params)
+		return [f"relation {decl.name}({params}) {{",
+		        *[f"\tmust {expr_to_source(must.expr)};" for must in decl.body],
+		        "}"]
+
 	raise TypeError(f"cannot unparse {type(decl).__name__}")
 
 
