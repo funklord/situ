@@ -251,6 +251,8 @@ def cmd_pack(args: argparse.Namespace) -> int:
 		print(f"structs      {coverage.structs}")
 		print(f"placements   {coverage.placements}")
 		print(f"expressions  {coverage.expressions}")
+		if coverage.relations:
+			print(f"relations    {coverage.relations}")
 		print(f"image bytes  {len(image)}")
 		for family, count in sorted(coverage.carried.items()):
 			state = "dropped" if family in coverage.unencoded else "encoded"

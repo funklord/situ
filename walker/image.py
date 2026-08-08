@@ -30,6 +30,7 @@ ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 VARINTS, TLVS, INDEXES             = 9, 10, 11
 NAMES, VECTORS, MARKERS            = 12, 13, 14
 CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
+RELATIONS, RELATION_MUSTS = 18, 19
 
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
@@ -117,6 +118,21 @@ class Struct:
 		return self.size_bits != NONE
 
 
+@dataclass(frozen=True)
+class Relation:
+	"""A cross-message relation the image carries (26.95).
+
+	`request` and `response` are struct indices, in that order, because the
+	order is temporal: the first is the message seen first. `musts` are
+	offsets into the code section, each a program leaving one value.
+	"""
+
+	name: int
+	request: int
+	response: int
+	musts: tuple[int, ...]
+
+
 @dataclass
 class Image:
 	"""One loaded image: the tables, and the names where they were kept."""
@@ -124,6 +140,10 @@ class Image:
 	structs: list[Struct]			= field(default_factory=list)
 	placements: list[Placement]		= field(default_factory=list)
 	code: bytes				= b""
+	#: Cross-message relations, in declaration order (26.95). Absent from
+	#: an image packed before the section existed, which is a section a
+	#: walker skips rather than a load that fails.
+	relations: list[Relation]		= field(default_factory=list)
 	strings: bytes				= b""
 	#: placement index -> the bytes it ends at, from the delimiter table.
 	delimiters: dict[int, bytes]		= field(default_factory=dict)
@@ -235,6 +255,20 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if STRINGS in found:
 		at, records, stride = found[STRINGS]
 		image.strings = blob[at:at + records * stride]
+
+	if RELATIONS in found:
+		musts_at, musts_n, musts_stride = found.get(RELATION_MUSTS, (0, 0, 0))
+		at, records, stride = found[RELATIONS]
+		for i in range(records):
+			name, request, response, first, count, _pad = _struct.unpack_from(
+				"<IIIIII", blob, at + i * stride)
+			if first + count > musts_n:
+				raise ImageError(f"relation {i} names musts the image lacks")
+			musts = tuple(
+				_struct.unpack_from("<I", blob,
+				                    musts_at + (first + j) * musts_stride)[0]
+				for j in range(count))
+			image.relations.append(Relation(name, request, response, musts))
 
 	if DELIMITERS in found:
 		at, records, stride = found[DELIMITERS]

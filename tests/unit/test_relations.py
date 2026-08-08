@@ -30,7 +30,12 @@ from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
+from situc.pack import pack
 from situc.resolve import ResolvedSchema, resolve
+from walker import report, vm
+from walker.image import Image, load
+from walker.report import ERR_CONSTRAINT, OK
+from walker.walk import View, acquire
 
 RUNTIME  = ROOT / "runtime" / "c"
 COMPILER = shutil.which("cc") or shutil.which("gcc")
@@ -572,3 +577,68 @@ def test_a_rung_adds_files_in_every_backend(tmp_path: Path) -> None:
 	for view, extra in pairs:
 		assert extra, "every backend emits something for this schema"
 		assert not set(view) & set(extra), "a rung adds files, it never edits"
+
+
+# -- the walker, as a fifth column (26.95) -----------------------------------
+
+
+def packed(body: str) -> tuple[Image, ast.Schema]:
+	"""The schema packed to an image, loaded back."""
+	schema, resolved = analysed(body)
+	blob, _ = pack(schema, resolved, metadata=True)
+	return load(blob), schema
+
+
+def test_the_image_carries_a_relation_and_its_programs() -> None:
+	image, _ = packed(GOOD)
+
+	assert len(image.relations) == 1
+	assert len(image.relations[0].musts) == 2
+	# Both parameters are `frame`, which is the case that made a placement
+	# index insufficient on its own and `arg_field` necessary.
+	assert image.relations[0].request == image.relations[0].response
+
+
+def test_the_walk_answers_a_relation_the_way_the_backends_do() -> None:
+	"""The fifth column: a table walk and four compiled backends answering
+	the same question about the same pair."""
+	image, _ = packed(GOOD)
+	shape    = image.relations[0].request
+
+	def view(msg: int, index: int, chunks: int) -> View:
+		raw = bytes(msg.to_bytes(2, "big") + bytes([index, chunks]) + bytes(13))
+		return acquire(image, raw, shape)
+
+	request = view(0x1234, 0, 4)
+
+	assert report.relate(image, 0, request, view(0x1234, 2, 4)) == OK
+	assert report.relate(image, 0, request, view(0x9999, 2, 4)) == ERR_CONSTRAINT
+	assert report.relate(image, 0, request, view(0x1234, 9, 4)) == ERR_CONSTRAINT
+
+
+def test_argument_order_is_temporal_in_the_walk_too() -> None:
+	image, _ = packed(GOOD)
+	shape    = image.relations[0].request
+
+	def view(msg: int, index: int, chunks: int) -> View:
+		raw = bytes(msg.to_bytes(2, "big") + bytes([index, chunks]) + bytes(13))
+		return acquire(image, raw, shape)
+
+	first, second = view(0x1234, 0, 4), view(0x1234, 2, 0)
+
+	assert report.relate(image, 0, first, second) == OK
+	assert report.relate(image, 0, second, first) == ERR_CONSTRAINT
+
+
+def test_arg_field_is_refused_outside_a_relation() -> None:
+	"""A relation program reaching a caller that passes no `load_arg` would
+	otherwise read the wrong message, answering the question asked about a
+	different pair."""
+	code = bytes([vm.ARG_FIELD, 0]) + b"\x00\x00\x00\x00" + bytes([vm.END])
+
+	with pytest.raises(vm.VmError, match="outside a relation"):
+		vm.run(code, 0, lambda i: 0, lambda i: 0, lambda i: 0, lambda i: 0, 0)
+
+
+def test_the_walker_renders_relations_as_a_supported_probe() -> None:
+	assert "relation" in report.SUPPORTED

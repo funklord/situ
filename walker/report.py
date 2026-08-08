@@ -20,6 +20,7 @@ while rendering nothing is the failure mode that has to be impossible.
 
 from __future__ import annotations
 
+from walker import vm
 from walker.image import NONE, Image
 from walker.walk import (BITS_PER_BYTE, Refused, Unplaceable, View,
                          acquire, digits_of,
@@ -31,7 +32,8 @@ from walker.walk import (BITS_PER_BYTE, Refused, Unplaceable, View,
 #: kind quietly dropping out cannot look like agreement.
 SUPPORTED = ("no-view", "scalar", "bytes", "element", "run_element",
              "arm_value", "sealed", "gated", "delimited", "varint",
-             "while_count", "nested", "tag", "marker", "validate")
+             "while_count", "nested", "tag", "marker", "validate",
+             "relation")
 
 #: `image_kind`: which placements are plain scalars a walk can read.
 FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3
@@ -419,6 +421,49 @@ NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
 #: `situ_err_t` again: an unknown discriminant is a message this build
 #: cannot read rather than one that breaks a rule.
 ERR_VERSION = 3
+
+
+def relate(image: Image, which: int, request: View, response: View) -> int:
+	"""Whether a pair satisfies relation `which` (26.95).
+
+	`OK` or `ERR_CONSTRAINT`, which is the same answer the four compiled
+	backends give and deliberately no richer: a relation is a predicate, and
+	a walker that reported *which* constraint failed would be answering a
+	question the generated code cannot.
+
+	The two views are the caller's, in temporal order. Nothing here decides
+	which messages are a pair -- that is the caller's at every rung, and a
+	walker has no more standing to invent it than a generated predicate does.
+	"""
+	relation = image.relations[which]
+	views    = (request, response)
+
+	def load_arg(arg: int, index: int) -> int:
+		if arg >= len(views):
+			raise Refused(f"relation names parameter {arg}, and has two")
+		return _read_for_relation(views[arg], index)
+
+	for code_at in relation.musts:
+		if vm.run(image.code, code_at,
+		          load_field = lambda i: _read_for_relation(request, i),
+		          size_of    = lambda i: size_bits(request, i) // BITS_PER_BYTE,
+		          offset_of  = lambda i: offset_bits(request, i) // BITS_PER_BYTE,
+		          count_of   = lambda i: 0,
+		          remaining  = 0,
+		          load_arg   = load_arg) == 0:
+			return ERR_CONSTRAINT
+	return OK
+
+
+def _read_for_relation(view: View, index: int) -> int:
+	"""One placement's value, out of the view the parameter named.
+
+	`read_scalar` is the walk's own reader and is reused rather than
+	reimplemented: a relation compares *values*, so whatever byte swapping,
+	scaling or digit parsing that member needs is the same work it needs
+	anywhere else.
+	"""
+	return read_scalar(view, index)
 
 
 def _validate(image: Image, view: View, struct_index: int) -> int | None:

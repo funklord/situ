@@ -23,6 +23,11 @@ from collections.abc import Callable
 #: here on purpose and `test_the_opcodes_match_the_packer` reads both files
 #: and fails when they drift.
 END, PUSH, FIELD, REMAINING, SIZE, OFFSET, COUNT = range(7)
+#: Only relation programs carry this (26.95). A relation's two
+#: parameters are usually the same struct, so a placement index alone
+#: does not say which message to read it out of; the operand is a
+#: parameter byte and then the index.
+ARG_FIELD = 7
 ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, SHL, SHR, NEG, NOT = range(0x10, 0x1C)
 EQ, NE, LT, LE, GT, GE, LAND, LOR = range(0x20, 0x28)
 MIN, MAX, ALIGN_UP = range(0x30, 0x33)
@@ -82,7 +87,8 @@ BINARY: dict[int, Callable[[int, int], int]] = {
 
 def run(code: bytes, at: int, load_field: Callable[[int], int],
         size_of: Callable[[int], int], offset_of: Callable[[int], int],
-        count_of: Callable[[int], int], remaining: int) -> int:
+        count_of: Callable[[int], int], remaining: int,
+        load_arg: Callable[[int, int], int] | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -112,6 +118,14 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 			pc += 4
 			stack.append({FIELD: load_field, SIZE: size_of,
 			              OFFSET: offset_of, COUNT: count_of}[op](index))
+			continue
+		if op == ARG_FIELD:
+			if load_arg is None:
+				raise VmError("arg_field outside a relation")
+			arg   = code[pc]
+			index = _struct.unpack_from("<I", code, pc + 1)[0]
+			pc += 5
+			stack.append(load_arg(arg, index))
 			continue
 		if op == REMAINING:
 			stack.append(remaining)

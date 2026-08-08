@@ -94,6 +94,18 @@ struct image_region size=16 repr=ValueConverted atomic=NonAtomic
   image_region.region_flags              offset=AbsoluteStatic(0x0C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
   image_region.region_pad                offset=AbsoluteStatic(0x0D) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
+struct image_relation size=24 repr=ValueConverted
+  image_relation.name                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_relation.request_struct          offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_relation.response_struct         offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_relation.first_must              offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_relation.must_count              offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_relation.relation_pad            offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct image_relation_must size=8 repr=ValueConverted
+  image_relation_must.code               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_relation_must.must_pad           offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
 struct image_section size=16 repr=ValueConverted canonical=NonCanonical
   image_section.kind                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord canonical=NonCanonical
   image_section.offset                   offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord

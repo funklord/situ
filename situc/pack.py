@@ -55,6 +55,8 @@ MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
 VERSION_BYTES		= 8
+RELATION_BYTES		= 24
+RELATION_MUST_BYTES	= 8
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
@@ -75,6 +77,8 @@ SECTION_MARKERS		= 14
 SECTION_CONSTRAINTS	= 15
 SECTION_ENUM_VALUES	= 16
 SECTION_VERSIONS	= 17
+SECTION_RELATIONS	= 18
+SECTION_RELATION_MUSTS	= 19
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
 
@@ -134,6 +138,10 @@ class Op:
 	SIZE		= 0x04		# + u32 placement index
 	OFFSET		= 0x05		# + u32 placement index
 	COUNT		= 0x06		# + u32 placement index
+	# A relation's two parameters are usually the same struct, so a
+	# placement index alone does not say which message to read it out
+	# of. Only relation programs emit this (26.95).
+	ARG_FIELD	= 0x07		# + u8 parameter, u32 placement index
 	ADD		= 0x10
 	SUB		= 0x11
 	MUL		= 0x12
@@ -188,6 +196,9 @@ def _path_of(expr: ast.Expr) -> str | None:
 
 #: A path to a placement index, or None where the image does not name it.
 Resolver = Callable[[str | None], int | None]
+#: A relation path resolves to the parameter it names and the placement
+#: within that parameter's struct.
+RelationResolver = Callable[[str], "tuple[int, int] | None"]
 
 
 class Program:
@@ -249,6 +260,50 @@ class Program:
 			self._call(expr, resolve_path, known)
 			return
 		raise PackError(f"{type(expr).__name__} is not in section 10")
+
+	def compile_relation(self, expr: ast.Expr,
+	                     resolve_arg: "RelationResolver") -> None:
+		"""Append a program for one `must`, over two parameters (26.95).
+
+		Separate from `compile` rather than a flag on it, because the two
+		resolve a path differently and share only the operator table. Here a
+		path names a parameter and a member of it, so `resolve_arg` answers
+		with both and the program says which message each load reads.
+
+		`situc.relation` has already refused everything this cannot emit --
+		calls, unknown operators, a bare parameter -- so a node reaching the
+		fallthrough is a compiler bug rather than a schema error.
+		"""
+		if isinstance(expr, ast.IntLiteral):
+			self.emit(Op.PUSH, expr.value, "<q")
+			return
+		if isinstance(expr, (ast.NameRef, ast.Access)):
+			path = _path_of(expr)
+			found = resolve_arg(path) if path else None
+			if found is None:
+				raise PackError(f"no placement for `{path or expr}`")
+			arg, index = found
+			self.code.append(Op.ARG_FIELD)
+			self.code.append(arg)
+			self.code += _struct.pack("<I", index)
+			return
+		if isinstance(expr, ast.Unary):
+			self.compile_relation(expr.operand, resolve_arg)
+			op = UNARY.get(expr.op, ...)
+			if op is ...:
+				raise PackError(f"unary `{expr.op}` in a relation")
+			if op is not None:
+				self.emit(op)
+			return
+		if isinstance(expr, ast.Binary):
+			op = BINARY.get(expr.op)
+			if op is None:
+				raise PackError(f"`{expr.op}` in a relation")
+			self.compile_relation(expr.left, resolve_arg)
+			self.compile_relation(expr.right, resolve_arg)
+			self.emit(op)
+			return
+		raise PackError(f"a relation cannot hold {type(expr).__name__}")
 
 	def _call(self, expr: ast.Call, resolve_path: Resolver,
 	          consts: dict[str, int]) -> None:
@@ -321,6 +376,7 @@ class Coverage:
 	structs: int			= 0
 	placements: int			= 0
 	expressions: int		= 0
+	relations: int			= 0
 	#: path -> why, for every expression that could not be encoded.
 	unencodable: dict[str, str]	= field(default_factory=dict)
 	#: family -> how many placements carry it. Reported whether or not the
@@ -1196,6 +1252,53 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if carries is not None:
 			versions_blob += _struct.pack("<II", shape, carries)
 
+	# -- cross-message relations (26.95) --------------------------------
+	#
+	# Emitted after every other program so that appending to `program.code`
+	# here cannot move an offset another section already recorded. The
+	# struct ids are positions in `order`, which is what every other
+	# reference into the struct table already means.
+	shape_of  = {name: index for index, (name, _) in enumerate(order)}
+	relations_blob  = bytearray()
+	musts_blob      = bytearray()
+
+	for decl in schema.relations():
+		params = {param.name: param for param in decl.params}
+		shapes = [shape_of.get(param.type_name) for param in decl.params]
+		if any(shape is None for shape in shapes):
+			coverage.unencodable[f"relation {decl.name}"] = \
+				"a parameter has no struct in this image"
+			continue
+
+		def resolve_arg(path: str,
+		                params: dict[str, ast.RelationParam] = params
+		                ) -> tuple[int, int] | None:
+			head, _, rest = path.partition(".")
+			param = params.get(head)
+			if param is None or not rest:
+				return None
+			index = resolve_in(param.type_name, rest.split("."))
+			if index is None:
+				return None
+			return (list(params).index(head), index)
+
+		first = len(musts_blob) // RELATION_MUST_BYTES
+		try:
+			for must in decl.body:
+				at = len(program.code)
+				program.compile_relation(must.expr, resolve_arg)
+				program.emit(Op.END)
+				musts_blob += _struct.pack("<II", at, 0)
+		except PackError as why:
+			coverage.unencodable[f"relation {decl.name}"] = str(why)
+			del musts_blob[first * RELATION_MUST_BYTES:]
+			continue
+
+		relations_blob += _struct.pack(
+			"<IIIIII", strings.intern(decl.name), shapes[0] or 0,
+			shapes[1] or 0, first, len(decl.body), 0)
+		coverage.relations += 1
+
 	sections.append((SECTION_STRUCTS, bytes(structs_blob), STRUCT_BYTES))
 	sections.append((SECTION_PLACEMENTS, b"", PLACEMENT_BYTES))	# filled below
 	sections.append((SECTION_CODE, bytes(program.code), 1))
@@ -1210,7 +1313,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_MARKERS, markers_blob, MARKER_BYTES),
 			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),
 			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES),
-			(SECTION_VERSIONS, versions_blob, VERSION_BYTES)):
+			(SECTION_VERSIONS, versions_blob, VERSION_BYTES),
+			(SECTION_RELATIONS, relations_blob, RELATION_BYTES),
+			(SECTION_RELATION_MUSTS, musts_blob, RELATION_MUST_BYTES)):
 		if blob:
 			sections.append((section, bytes(blob), stride))
 
