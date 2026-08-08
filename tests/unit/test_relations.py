@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from every_schema import ROOT
-from situc import ast, dump, namespaces, relation, unparse, wellformed
+from situc import ast, capmap, dump, namespaces, relation, unparse, wellformed
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
@@ -642,3 +642,58 @@ def test_arg_field_is_refused_outside_a_relation() -> None:
 
 def test_the_walker_renders_relations_as_a_supported_probe() -> None:
 	assert "relation" in report.SUPPORTED
+
+
+# -- the layer scalars in the capability map (26.95, decision 0032) ----------
+
+
+def mapped(body: str) -> str:
+	schema, resolved = analysed(body)
+	return capmap.render(schema, resolved, "t.situ")
+
+
+def test_a_relation_raises_the_schemas_reach() -> None:
+	assert "# layers: floor=view reach=relate" in mapped(GOOD)
+
+
+def test_a_schema_without_relations_says_nothing_about_layers() -> None:
+	"""Silent at the default, which is this map's rule for every axis.
+
+	It is also what keeps a map committed before the ladder existed
+	byte-identical to one generated after it -- the three in `std/` are the
+	proof, and they are checked by the suite already.
+	"""
+	assert "layers:" not in mapped("struct only { u8 a; }\n")
+
+
+def test_deleting_a_relation_is_a_visible_regression() -> None:
+	"""The acceptance criterion the scalars exist for.
+
+	A consumer building at `--layer view` emits nothing for a relation, so
+	removing one changes none of their generated output. The map is where it
+	shows, which is why the fact belongs there rather than in a new artifact
+	nothing checks.
+	"""
+	before = mapped(GOOD)
+	after  = mapped("struct only { u8 a; }\n")
+
+	assert before != after
+	assert "reach=relate" in before and "reach=relate" not in after
+
+
+def test_an_unbounded_expansion_codec_raises_the_floor() -> None:
+	"""Case E of 0031: the one case no measure-then-allocate pass serves.
+
+	The floor is a property of constructs, so it is the same at every
+	invocation -- which is what lets one committed map serve every rung.
+	"""
+	schema = parse_text(
+		"target buffer;\nendian big;\n\n"
+		"codec squeeze {\n\texpansion = unbounded;\n\tgranularity = byte;\n"
+		"\tseekable;\n\tdeterministic;\n}\n"
+		"impl squeeze extern \"squeeze_go\";\n\n"
+		"struct packed_up {\n\tu16 len;\n"
+		"\tcoded body(squeeze) { u8 raw[4]; }\n}\n")
+	resolved = resolve(schema, solve(schema))
+
+	assert "floor=edit" in capmap.render(schema, resolved, "t.situ")

@@ -34,6 +34,58 @@ CORE_AXES = (Axis.OFFSET, Axis.SIZE, Axis.ALIGN, Axis.REPR, Axis.ATOMIC)
 PATH_WIDTH = 38
 
 
+def _layer_floor(schema: ast.Schema) -> str:
+	"""The lowest rung of 0032's ladder that can emit this schema.
+
+	`edit` where a `coded` region's codec expands without a bound: its output
+	extent cannot be reported without performing the transform, so no
+	measure-then-allocate pass serves it and rung 1 has nowhere to put the
+	result. That is case E of
+	`docs/decisions/0031-where-allocation-is-unavoidable.md`, and the only one
+	of the five that leaves no choice.
+	"""
+	unbounded = {codec.name for codec in schema.codecs()
+	             if codec.expansion is ast.Expansion.UNBOUNDED}
+	if not unbounded:
+		return "view"
+
+	for struct in schema.structs():
+		for member in _walk(struct.members):
+			if (isinstance(member, (ast.Coded, ast.Sealed))
+					and member.codec in unbounded):
+				return "edit"
+	return "view"
+
+
+def _walk(members: tuple[ast.Member, ...]) -> list[ast.Member]:
+	found: list[ast.Member] = []
+	for member in members:
+		found.append(member)
+		found.extend(_walk(getattr(member, "members", ())))
+	return found
+
+
+def _layer_lines(schema: ast.Schema) -> list[str]:
+	"""The two layer scalars, and only where they rise above `view` (0032).
+
+	Silent at the default, which is this file's own rule for every axis: a
+	value at its strongest says nothing, so a map committed before the ladder
+	existed is byte-identical to one generated after it.
+
+	They are here rather than per struct because they are facts about the
+	whole schema, and they are in the map rather than a new artifact because
+	the map is what `--check` already holds to its committed copy. That is
+	what makes deleting a relation a visible regression to a consumer who
+	never built the rung that would emit one.
+	"""
+	floor = _layer_floor(schema)
+	reach = "relate" if schema.relations() else "view"
+	if floor == "view" and reach == "view":
+		return []
+	return ["#",
+	        f"# layers: floor={floor} reach={reach}"]
+
+
 def _codec_lines(schema: ast.Schema) -> list[str]:
 	"""Record every codec, and which of them are trusted rather than proven.
 
@@ -108,6 +160,7 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 		"# a byte boundary. Sizes are bytes unless suffixed with `bit`.",
 	]
 
+	lines.extend(_layer_lines(schema))
 	lines.extend(_codec_lines(schema))
 
 	for name in sorted(resolved.structs):
