@@ -44,7 +44,9 @@ below it:
 is accessors over bytes the caller owns and is the default, and
 .I relate
 adds one predicate per declared relation, over two views the caller already
-holds. The remaining rungs --
+holds, in whichever backend
+.B \-\-target
+names. The remaining rungs --
 .IR edit ", " frame ", " converse " and " drive
 -- are decided and not built, and asking for one says which phase adds it.
 .TP

@@ -3700,6 +3700,11 @@ situ/
     capability.py             axes, lattice, meet
     propagate.py              the 11.3 table, data-driven
     resolve.py                the seam joining layout to the table
+    relation.py               what a cross-message relation means, once: the
+                              walk from a path to the getter that reads it,
+                              and which comparisons are expressible at all.
+                              Shared so the four backends cannot disagree
+                              about whether a schema compiles (26.95)
     traverse.py               the struct walk every backend and artifact shares:
                               which entries are a struct's own members, which
                               bytes a placement occupies, and -- the part that

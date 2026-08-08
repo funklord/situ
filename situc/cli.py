@@ -494,13 +494,6 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"ladder and what each one may assume; `--layer view` is what "
 			f"ships and is the default.")
 
-	if args.layer == "relate" and args.target != "c":
-		raise SystemExit(
-			f"situc: --layer relate emits C today and --target is "
-			f"{args.target}. The predicate is the same in every backend and "
-			f"the other three are part of the same phase, 26.95; nothing "
-			f"about the construct is C-specific.")
-
 	if args.target == "rust":
 		from situc.codegen.rust import generate as generate_rs
 
@@ -548,19 +541,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 				print(f"situc: no owned form for `{name}`: {why}",
 				      file=sys.stderr)
 
-		if args.layer == "relate":
-			from situc.codegen.c import relate
-
-			files.update(relate.generate(parsed, resolved, args.schema.stem,
-			                             args.prefix))
-			# Same reasoning as the owned refusals above: a relation that
-			# generates nothing is reported, because a caller who asked for
-			# the rung and found their predicate absent would conclude the
-			# generator was broken rather than that the comparison has no
-			# correct spelling.
-			for name, why in relate.refusals(parsed, resolved, args.prefix):
-				print(f"situc: no predicate for relation `{name}`: {why}",
-				      file=sys.stderr)
+	if args.layer == "relate":
+		files.update(_relate(parse(source), resolved, args))
 
 	args.out.mkdir(parents=True, exist_ok=True)
 	for name, text in files.items():
@@ -822,6 +804,36 @@ def cmd_explain(args: argparse.Namespace) -> int:
 				print(f"    remedy: {weakening.rule.remedy}")
 
 	return 0
+
+
+def _relate(schema: ast.Schema, resolved: ResolvedSchema,
+		args: argparse.Namespace) -> dict[str, str]:
+	"""Rung 3's output for whichever backend was asked for.
+
+	The four differ only in spelling: `situc.relation` decides which relations
+	are expressible, so the refusal list is the same list in every backend and
+	is printed once here. Reported rather than left as an absence, for the
+	reason `owned` gives -- a caller who asked for the rung and found their
+	predicate missing would conclude the generator was broken rather than that
+	the comparison has no correct spelling.
+	"""
+	from situc import relation
+	from situc.codegen.c import relate as relate_c
+	from situc.codegen.cpp import relate as relate_cpp
+	from situc.codegen.python import relate as relate_py
+	from situc.codegen.rust import relate as relate_rs
+
+	for name, why in relation.refusals(schema, resolved):
+		print(f"situc: no predicate for relation `{name}`: {why}",
+		      file=sys.stderr)
+
+	if args.target == "cpp":
+		return relate_cpp.generate(schema, resolved, args.schema.stem)
+	if args.target == "rust":
+		return relate_rs.generate(schema, resolved, args.schema.stem)
+	if args.target == "python":
+		return relate_py.generate(schema, resolved, args.schema.stem)
+	return relate_c.generate(schema, resolved, args.schema.stem, args.prefix)
 
 
 def _report(args: argparse.Namespace, diagnostics: list[Diagnostic]) -> None:

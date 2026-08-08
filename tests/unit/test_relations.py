@@ -18,9 +18,15 @@ from pathlib import Path
 import pytest
 
 from every_schema import ROOT
-from situc import ast, dump, namespaces, unparse, wellformed
+from situc import ast, dump, namespaces, relation, unparse, wellformed
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
+from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.cpp import relate as relate_cpp
+from situc.codegen.python import generate as generate_py
+from situc.codegen.python import relate as relate_py
+from situc.codegen.rust import generate as generate_rs
+from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
@@ -28,6 +34,8 @@ from situc.resolve import ResolvedSchema, resolve
 
 RUNTIME  = ROOT / "runtime" / "c"
 COMPILER = shutil.which("cc") or shutil.which("gcc")
+HOST_CXX = shutil.which("g++") or shutil.which("clang++")
+RUSTC    = shutil.which("rustc")
 
 #: What `make test-c` builds generated code with. A predicate is code somebody
 #: ships, so it is held to the same bar -- and these flags are the reason
@@ -312,8 +320,8 @@ def test_a_failed_constraint_is_a_constraint_error() -> None:
 def test_unsigned_operands_widen_to_uint64() -> None:
 	source = emitted(GOOD)["t_relate.c"]
 
-	assert "uint64_t situ_val" in source
-	assert "int64_t situ_val" not in source.replace("uint64_t situ_val", "")
+	assert "uint64_t situ_v_" in source
+	assert "int64_t situ_v_" not in source.replace("uint64_t situ_v_", "")
 
 
 def test_a_signed_operand_widens_everything_to_int64() -> None:
@@ -323,7 +331,7 @@ def test_a_signed_operand_widens_everything_to_int64() -> None:
 		"relation r(a: frame, b: frame) {\n"
 		"\tmust b.hdr.tweak == a.hdr.msg;\n}\n")["t_relate.c"]
 
-	assert "int64_t situ_val" in source
+	assert "int64_t situ_v_" in source
 
 
 def test_a_u64_against_a_signed_value_is_refused() -> None:
@@ -339,7 +347,7 @@ def test_a_u64_against_a_signed_value_is_refused() -> None:
 	names = dict(relate.refusals(schema, resolved))
 
 	assert "r" in names
-	assert "no 64-bit C type holds both ranges" in names["r"]
+	assert "no 64-bit type holds both ranges" in names["r"]
 	assert relate.generate(schema, resolved, "t") == {}
 
 
@@ -389,3 +397,178 @@ def test_the_predicate_compiles_under_the_same_warnings(
 		capture_output=True, text=True)
 
 	assert built.returncode == 0, built.stderr
+
+
+# -- the other three backends (26.95) ----------------------------------------
+#
+# One walk, four spellings. What each test below really checks is that the
+# spelling is right; that the relation is *expressible at all* is decided once
+# in `situc.relation`, which is why the refusal tests above are not repeated
+# per backend.
+
+
+def test_every_backend_agrees_on_what_it_refuses() -> None:
+	"""A relation is refused everywhere or nowhere.
+
+	Python's integers are arbitrary precision and would compare a `u64`
+	against an `i8` happily. It is refused there too, because a schema one
+	backend accepts and another does not is a schema that means two things --
+	the failure the four-way agreement tests exist to catch.
+	"""
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.wide == a.hdr.tweak;\n}\n")
+
+	assert relation.refusals(schema, resolved)
+	assert relate.generate(schema, resolved, "t") == {}
+	assert relate_cpp.generate(schema, resolved, "t") == {}
+	assert relate_rs.generate(schema, resolved, "t") == {}
+	assert relate_py.generate(schema, resolved, "t") == {}
+
+
+def test_cpp_takes_the_struct_class_rather_than_a_bare_view() -> None:
+	"""C++ can type the parameter, so the predicate cannot be handed the
+	wrong message by accident. C cannot: every view there is a
+	`situ_view_t`."""
+	schema, resolved = analysed(GOOD)
+
+	header = relate_cpp.generate(schema, resolved, "t")["t_relate.hpp"]
+
+	assert ("rel_response_to(const ::situ::frame &request, "
+	        "const ::situ::frame &response)") in header
+	assert "return ::situ::rt::err::constraint;" in header
+
+
+def test_cpp_names_the_sub_view_class_it_acquires_not_the_parent() -> None:
+	"""`response.hdr` is a `head`, and the local that holds it has to say so.
+
+	C never needed the distinction because every view is one type there, so
+	the plan carried only the struct whose accessor reaches the member. C++
+	declares the local outright and named the parent class, which does not
+	compile.
+	"""
+	schema, resolved = analysed(GOOD)
+
+	header = relate_cpp.generate(schema, resolved, "t")["t_relate.hpp"]
+
+	assert "::situ::head v_0_held;" in header
+	assert "::situ::frame v_0_held;" not in header
+
+
+def test_rust_carries_failure_with_the_question_mark() -> None:
+	"""A sub-view is `Result<Head>` there, so there is no error local to
+	thread and `?` does the work C spells out."""
+	schema, resolved = analysed(GOOD)
+
+	module = relate_rs.generate(schema, resolved, "t")["t_relate.rs"]
+
+	assert "pub fn rel_response_to(request: &Frame, response: &Frame)" in module
+	assert "let v_0 = response.hdr()?;" in module
+	assert "return Err(Error::Constraint);" in module
+
+
+def test_python_raises_rather_than_returning() -> None:
+	"""The convention `validate` already follows in this runtime."""
+	schema, resolved = analysed(GOOD)
+
+	module = relate_py.generate(schema, resolved, "t")["t_relate.py"]
+
+	assert "def rel_response_to(request: frame, response: frame) -> None:" in module
+	assert "raise ConstraintError(" in module
+
+
+def test_python_reports_the_constraint_in_the_schemas_words() -> None:
+	"""The message names paths the author wrote, not the generated locals.
+
+	A reader who sees `v_1 == v_3` has to go and find the generator; one who
+	sees the constraint knows what failed.
+	"""
+	schema, resolved = analysed(GOOD)
+
+	module = relate_py.generate(schema, resolved, "t")["t_relate.py"]
+
+	assert "'(response.hdr.msg == request.hdr.msg)'" in module
+	assert "v_1 == v_3'" not in module
+
+
+def test_python_needs_no_widening_and_says_so_by_not_doing_it() -> None:
+	"""Arbitrary precision means the cast the other three need is absent."""
+	schema, resolved = analysed(GOOD)
+
+	module = relate_py.generate(schema, resolved, "t")["t_relate.py"]
+
+	assert "uint64" not in module and "int64" not in module
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_predicate_compiles_under_the_same_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in relate_cpp.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "tu.cpp").write_text(
+		'#include "t_relate.hpp"\nint main() { return 0; }\n', encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
+		 "-Wsign-conversion", "-Werror", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 "-fsyntax-only", str(tmp_path / "tu.cpp")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_predicate_compiles_under_denied_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed(GOOD)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	# The runtime is `no_std` alone; as a module of a larger crate that
+	# attribute belongs to the crate root, which is what the Rust backend's
+	# own tests do too.
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for name, text in relate_rs.generate(schema, resolved, "t").items():
+		(src / name).write_text(text, encoding="ascii")
+	(src / "lib.rs").write_text(
+		"pub mod situ_rt;\npub mod t;\npub mod t_relate;\n", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type", "lib",
+		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_rung_adds_files_in_every_backend(tmp_path: Path) -> None:
+	"""Additivity is a property of the ladder, not of one backend."""
+	schema, resolved = analysed(GOOD)
+
+	pairs = (
+		(generate_c(schema, resolved, "t").files(),
+		 relate.generate(schema, resolved, "t")),
+		(generate_cpp(schema, resolved, "t").files(),
+		 relate_cpp.generate(schema, resolved, "t")),
+		({"t.rs": generate_rs(schema, resolved, "t").module},
+		 relate_rs.generate(schema, resolved, "t")),
+		(generate_py(schema, resolved, "t").files(),
+		 relate_py.generate(schema, resolved, "t")),
+	)
+
+	for view, extra in pairs:
+		assert extra, "every backend emits something for this schema"
+		assert not set(view) & set(extra), "a rung adds files, it never edits"

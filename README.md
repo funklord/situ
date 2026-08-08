@@ -152,7 +152,7 @@ one stands:
 |---|---|---|---|
 | `view` | accessors over bytes you own | *(baseline)* | **ships** |
 | `edit` | build or resize a message whose extent is not fixed | may it allocate? | partly |
-| `relate` | predicates over two messages | may it look at two messages? | **C only** |
+| `relate` | predicates over two messages | may it look at two messages? | **ships** |
 | `frame` | a byte stream in, whole messages out | may it hold bytes between calls? | decided |
 | `converse` | match a reply to its request | may it hold messages between calls? | decided |
 | `drive` | send, receive, retransmit, time out | may it own I/O? | decided |
@@ -161,22 +161,31 @@ one stands:
 down before the rungs exist is the point: "should situ do X" stops being asked
 once per adopter and becomes "at which rung does X live". Rung 2 exists in
 pieces -- `--owned` emits a fixed-size decode today and refuses
-variable-length members, which is that refusal seen from below. Rung 3 emits C
-today and the other three backends are the rest of the same phase; nothing
-about the construct is C-specific.
+variable-length members, which is that refusal seen from below.
 
 A relation is a pure predicate over two views, so `--layer relate` adds one
-function per relation and nothing else:
+function per relation and nothing else, in whichever backend you asked for:
 
 ```c
 situ_err_t situ_rel_response_to(situ_view_t request, situ_view_t response);
+```
+```rust
+pub fn rel_response_to(request: &Frame, response: &Frame) -> Result<()>
 ```
 
 It reads through the generated getters rather than the bytes, which is what
 makes the comparison one of *values* -- a big-endian `u16` against a
 little-endian `u32` compares correctly without the author thinking about it.
 A failed constraint is `SITU_ERR_CONSTRAINT`, which already meant exactly
-that, so no new failure class had to reach four runtimes.
+that, so no new failure class had to reach four runtimes; Python raises
+`ConstraintError` instead, as `validate` already does there.
+
+**What a relation may say is decided once, not four times.** Python's
+integers are arbitrary precision and would compare a `u64` against an `i8`
+happily; C, C++ and Rust cannot, no 64-bit type holding both ranges. It is
+refused in all four, because a schema one backend accepts and another does
+not is a schema that means two things. The walker does not read relations
+yet -- that needs a section in the packed image, which is the rest of 26.95.
 
 Each rung answers one more question yes, and the rung you pick is the
 invariant you get: `--layer view` guarantees the allocation-free property
