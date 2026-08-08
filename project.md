@@ -4142,10 +4142,18 @@ independent of the rest.
 **26.15 through 26.23 are complete too**: the built-in codec set, the three
 non-C backends, the language server, cross-field invariants, text protocols,
 schema evolution, and the constructs the worked examples asked for.
-**Nothing on the roadmap is outstanding.** What situ deliberately does not
-cover is named where the construct that would cover it would go -- 8.6.6 for
-a grammar, 8.6.2 for signed text -- rather than in a list of absences, which
-goes stale the moment one of them lands.
+**Everything describing a single message is done.** What situ deliberately
+does not cover *within* one is named where the construct that would cover it
+would go -- 8.6.6 for a grammar, 8.6.2 for signed text -- rather than in a
+list of absences, which goes stale the moment one of them lands.
+
+**What is outstanding is the layer ladder, and only above the bottom rung.**
+Decision 0032 puts six rungs on one axis chosen at `situc build --layer`;
+`view` is what ships and is the default, rung 2 (`edit`) exists in pieces --
+`--owned` emits a fixed-size decode and refuses variable-length members --
+and 26.95 through 26.98 schedule rungs 3 to 6. Finishing rung 2 has no phase
+yet, and the enumeration it has to serve is
+`docs/decisions/0031-where-allocation-is-unavoidable.md`.
 
 **Four backends over one layout**, and the claim that matters is that they
 agree. Each is tested against the C output on the same buffer, field by field,
@@ -10137,6 +10145,111 @@ alphabet reshuffles every draw, so the whole corpus of buffers moved:
 **Status:** every step of `make check` green, and all five implementations
 agree on both verdicts for the new check -- `GET` passes, `G\xc3\xa9T` is
 CONSTRAINT, in C, C++, Rust, Python and the walk.
+
+### 26.95 Rung 3: `relate`
+
+**Status: not started.** Decision 0032 puts six rungs on one axis and decides
+none of their schedules; this and the three after it are those schedules.
+
+**Order on the ladder is permissions granted, not build order.** `--layer
+relate` *emits* everything rung 2 emits, but building the relate emitter needs
+nothing rung 2 provides: a relation is a pure predicate over two views that
+allocates nothing (0030). So this goes first, ahead of finishing rung 2, and
+it is the cheapest rung with the largest return.
+
+What it takes:
+
+- Section 7 gains `relation_decl` and the `must` statement; Section 16 gains
+  the note that `must` is the run-time sibling of build-time `require`.
+- Resolution over two parameter structs, comparing **values** through `repr`
+  rather than bytes, so a big-endian `u16` against a little-endian `u32` is
+  correct without the author thinking about it.
+- `situ_rel_<name>(situ_view_t, situ_view_t)` in its own header, four
+  backends and the walker. No new failure class: `SITU_ERR_CONSTRAINT`
+  already means what this returns.
+- The capability map gains `layer_floor` and `layer_reach` (0032). This is
+  the phase that makes `layer_reach` non-trivial, so the scalars land here.
+- `gen-dissector` reads the equality constraints as the conversation key --
+  no second declaration -- and `gen-fuzz` reads the same ones as "copy these
+  bytes from A into B".
+
+Acceptance: a relation over `fuzznet`'s frame compiles and refuses a mismatched
+pair in all five implementations; a dissector follows one exchange out of a
+capture; `situc map --check` fails when a relation is deleted; and the
+additivity test of 26.96 passes for `view` against `relate`.
+
+### 26.96 Rung 4: `frame`
+
+**Status: not started.**
+
+Extent discovery already exists and is generated for every struct --
+`situ_X_required(data, have, &need)`, which answers "how many bytes does this
+need" from the bytes. What is missing is the reader above it: feed a byte
+stream in arbitrary chunks, get whole messages out, holding the partial
+message in caller-supplied storage across calls.
+
+For a datagram schema this rung degenerates to a passthrough, and that is
+correct rather than waste: 0022 measured that an unused `static inline` in a
+header is never emitted at all, 40 of 44 functions in one schema.
+
+**The additivity test belongs to this phase**, being the first with two rungs
+above `view` to compare. For every schema and every adjacent pair, generate at
+both and assert the file set grows while every file in both is byte-identical.
+Two rules it enforces, each of which fails silently otherwise: includes point
+down the ladder and never up, and no rung's file carries conditional
+compilation for a rung above it.
+
+Acceptance: a length-prefixed schema reassembles across every chunk boundary a
+property test can produce; a datagram schema's `frame` output adds no symbol
+to a linked binary; the additivity test passes for all adjacent pairs.
+
+### 26.97 Rung 5: `converse`
+
+**Status: not started.** Depends on 26.95, whose relation is the key.
+
+The schema states which relation pairs a request with its reply and what
+identifies the exchange. The generated code holds the pending table, in
+caller-supplied storage sized by the caller -- **the schema describes, the
+generated code holds**, which is the distinction 0030's amendment turned on.
+
+This is where the acknowledgement case becomes expressible. 0030 wrote it off
+-- "an acknowledgement names a sequence number that was actually sent" -- on
+the grounds that no pure predicate could take a parameter answering it. That
+was right about the predicate and wrong about the tool: the set lives here.
+
+Acceptance: a reply matched to its request through the relation alone; a late
+or duplicate reply refused rather than matched; the table bounded by a caller
+size with a named failure when it fills; and no allocation beyond what the
+caller supplied.
+
+### 26.98 Rung 6: `drive`
+
+**Status: not started.** Depends on 26.96 and 26.97. The largest surface on
+the ladder and the last.
+
+The schema states the retransmission and timing contract: on expiry
+retransmit, at most N times, giving up how. Shape in the schema, default value
+optional in the schema, value overridable at `situc` invocation, shape never
+introducible from outside it.
+
+**It owns I/O and never owns the clock.** Time enters as a parameter. A step
+function taking `now_ms` keeps every retransmission deterministic, so ten
+simulated minutes run in a loop with no sleep in it and a timeout bug
+reproduces every run; a wall clock inside the state machine makes every test
+of it a race, which this family has already paid for once. I/O is a
+caller-supplied vtable for the same reason -- a test substitutes a transcript,
+never opens a socket, and injects loss, reorder and duplication without a
+network. A convenience wrapper may read the clock and call the injectable path
+underneath, and is not the state machine.
+
+**Invariant 8 is the one to re-read before starting.** This is the first rung
+whose output depends on libc, and the machine running `situc` must not be
+where that dependency is decided.
+
+Acceptance: a scenario of loss, reorder and duplication over ten simulated
+minutes reproduces byte-for-byte on every run and completes without sleeping;
+the shipped path and the tested path are the same program; a schema declaring
+no policy generates no scheduler rather than a defaulted one.
 
 ### Invariants to hold across all phases
 

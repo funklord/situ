@@ -2,7 +2,9 @@
 
 Status: accepted
 Date: 2026-08-08
-Phase: unscheduled -- rungs 1 and 2 already exist in part
+Phase: 26.95 through 26.98 schedule rungs 3 to 6. Rung 1 ships and is the
+default; rung 2 exists in part (`--owned`) and its completion has no phase
+yet.
 
 ## Context
 
