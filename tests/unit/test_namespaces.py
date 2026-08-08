@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import pytest
 
+from situc import ast
 from situc.codegen.c import generate
 from situc.diagnostics import SituError
 from situc.dump import dump
 from situc.layout import solve
-from situc.namespaces import namespace_of, qualify
+from situc.invariant import paths_in
+from situc.namespaces import namespace_of, qualify, unqualify
 from situc.parser import parse_text
 from situc.resolve import resolve
 from situc.unparse import unparse
@@ -251,3 +253,71 @@ def test_a_schema_mixing_conventions_is_accepted() -> None:
 	assert generated.warnings == []
 	assert "situ_wire_header_a_get" in generated.header
 	assert "situ_PayloadRecord_b_get" in generated.header
+
+
+# -- an invariant inside a namespace -----------------------------------------
+
+
+NAMESPACED_INVARIANT = """namespace wire {
+	struct s {
+		u16 total;
+		u8  body[4];
+	}
+
+	invariant s.total == size(s.body);
+}
+"""
+
+
+def test_an_invariant_inside_a_namespace_is_qualified() -> None:
+	"""It was not, and the construct could not be written at all.
+
+	`rewrite` had no case for an invariant, so it fell through to the
+	directive case and came out untouched: flattening renamed the struct to
+	`wire::s` and left the invariant naming `s`, which `check_invariants`
+	then refused with "unknown struct". A hard error on a valid schema rather
+	than a wrong answer, which is the better half of the bug.
+	"""
+	schema = parse_text(PREAMBLE + NAMESPACED_INVARIANT)
+	invariant = schema.invariants()[0]
+
+	assert schema.structs()[0].name == "wire::s"
+	assert invariant.derived == "wire::s.total"
+	assert paths_in(invariant.expr) == ["wire::s.body"]
+
+
+def test_only_the_head_of_the_path_is_qualified() -> None:
+	"""`s` is the name being scoped; `total` is a field of what it resolves
+	to, and a namespace has nothing to say about it."""
+	invariant = parse_text(PREAMBLE + NAMESPACED_INVARIANT).invariants()[0]
+
+	assert invariant.derived.endswith(".total")
+	assert "wire::total" not in invariant.derived
+
+
+def test_a_namespaced_invariant_reaches_the_backend() -> None:
+	"""Qualifying is not the point; being maintained is.
+
+	`invariant.derived` matches the struct by name, so an unqualified
+	invariant beside a qualified struct would have selected nothing even if
+	the front end had let it through -- the field would have kept its setter
+	and nothing would have recomputed.
+	"""
+	schema    = parse_text(PREAMBLE + NAMESPACED_INVARIANT)
+	resolved  = resolve(schema, solve(schema))
+	generated = generate(schema, resolved, "unit")
+
+	assert "situ_wire_s_total_recompute" in generated.header
+	assert "wire::s.total == size(wire::s.body)" in generated.header
+
+
+def test_unqualifying_an_invariant_is_the_same_walk_backwards() -> None:
+	"""The unparser reverses `rewrite` with a different `name_of`, so a case
+	added for one direction arrives in the other by construction."""
+	invariant = parse_text(PREAMBLE + NAMESPACED_INVARIANT).invariants()[0]
+
+	back = unqualify(invariant, "wire")
+
+	assert isinstance(back, ast.Invariant)
+	assert back.derived == "s.total"
+	assert paths_in(back.expr) == ["s.body"]

@@ -132,6 +132,25 @@ def rewrite(decl: ast.Decl, name_of: Callable[[str], str]) -> ast.Decl:
 		assert expr is not None
 		return replace(decl, expr = expr)
 
+	if isinstance(decl, ast.Invariant):
+		# `derived` is a path rather than an expression -- an invariant names
+		# the one field it maintains -- so the head is qualified here while
+		# the right-hand side goes through the expression rewriter like every
+		# other. Only the head, for the reason `_rewrite_expr` gives: `s` is
+		# the name being scoped and `total` is a field of whatever it
+		# resolves to.
+		#
+		# Falling through to the directive case below left an invariant
+		# inside a namespace naming a struct that flattening had renamed, so
+		# `check_invariants` refused it with "unknown struct" -- a construct
+		# that could not be written at all rather than one that read wrong.
+		head, dot, rest = decl.derived.partition(".")
+		expr = expr_of(decl.expr)
+		assert expr is not None
+		return replace(decl,
+		               derived = name_of(head) + dot + rest,
+		               expr    = expr)
+
 	if isinstance(decl, ast.Relation):
 		# The name and the parameter *types* are namespace-scoped. The body is
 		# deliberately not rewritten: its paths are rooted at parameter names,
