@@ -85,12 +85,20 @@ formats, on-disk records, and memory-mapped hardware registers.
 
 From a `.situ` schema, `situc` generates:
 
-- accessor code (C first, Rust later) for reading and writing fields
+- accessor code for reading and writing fields, in C, C++, Rust and Python
 - a **capability map**: for every field and region, which operations are
   possible and, when an operation is not possible, precisely why
 - design advice: concrete, costed schema changes that would restore lost
   capabilities
 - test scaffolding: golden-vector tests and a fuzz harness per schema
+
+How much of a schema becomes code is the consumer's choice, made at
+invocation: `situc build --layer` runs from `view` -- zero-copy accessors over
+a buffer the caller owns, and the default -- up to `drive`, a send and receive
+loop carrying the schema's own correlation and timing contract. A schema may
+describe more of a protocol than a given consumer wants generated, and none of
+the upper rungs is emitted unless asked for. See
+`docs/decisions/0032-the-layer-ladder.md`.
 
 Three properties distinguish it from everything in Section 3:
 
@@ -121,8 +129,26 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
 - **No automatic schema evolution.** Compatibility across versions is explicit
   (Section 19), not implicit. Situ will never silently preserve unknown fields;
   see Section 14.5 for why that is a security position, not an oversight.
-- **No dynamic allocation in generated code.** Ever. No `malloc`, no hidden
-  arena, no growable buffers. Callers supply memory.
+- **No dynamic allocation in the freestanding backends.** C, C++ and Rust
+  generated code does not allocate: no `malloc`, no hidden arena, no growable
+  buffers, callers supply memory. This is invariant 4, and it is what makes an
+  offset a constant and an operation *absent* rather than refused.
+
+  **Python is the exception, and it is stated rather than tacit.** Its data
+  model has no non-allocating spelling -- a list is the language's, not
+  situ's. It is bounded rather than free: the materialized walk stops at the
+  schema's `max` where one is declared, and at the buffer otherwise, which is
+  the same quantity C's index array holds. What C requires and Python does not
+  is that the quantity be a *compile-time constant*, which is why
+  `--materialize` needs `max` in three backends and not the fourth (26.30).
+  This paragraph exists because "ever" was written before that backend did,
+  and was read as covering it.
+
+  Open, and enumerated in
+  `docs/decisions/0031-where-allocation-is-unavoidable.md`: a `coded` region
+  whose `expansion = unbounded` cannot report its output extent without
+  decompressing, so it is the one case no measure-then-allocate pass can
+  serve. Whether it earns a caller-supplied allocator is undecided.
 - **No recursive types in v0.** Recursive schema types make size and capability
   computation non-terminating. Rejected at parse time with a clear error.
 - **Not a parser combinator library.** The schema is declarative and the layout
@@ -132,6 +158,29 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   (26.33), decided in `docs/decisions/0026-runtime-image-and-interpreter.md`
   and kept out of this compiler for the reason recorded there -- these
   invariants keep exactly one master.
+- **No behaviour the schema did not state.** A `.situ` file describes the
+  protocol, and that includes its conversation: which message answers which
+  (0030), and at the upper rungs of the layer ladder the retransmission and
+  timing contract too. Both endpoints must agree on those, which is why they
+  are wire contract rather than deployment settings, and why they live in the
+  one file `situc diff` already holds to its predecessor.
+
+  What situ never does is supply a fact nobody declared. There is no default
+  timeout, no implicit retransmission, no inferred correlation. Where a schema
+  states no policy the generated code has none -- absent, not guessed, exactly
+  as a missing setter is absent rather than silently unsafe. A deployment may
+  override a declared **value** at `situc` invocation; it can never introduce
+  a **shape**. See `docs/decisions/0032-the-layer-ladder.md`.
+
+  How much of that description becomes code is the consumer's, not the
+  schema's: `situc build --layer` defaults to `view`, which emits none of the
+  conversation machinery even where a schema states it.
+
+  This bullet exists because the position had to be established by grep
+  before it was written down, and a reader who tried got it wrong -- claiming
+  situ "does not run a protocol" -- and propagated the error into two other
+  projects. It has since been wrong in the other direction here, reading the
+  layer choice's absence from the schema as behaviour's absence from it.
 - **Not a replacement for protobuf semantics.** Situ can *describe* the
   protobuf wire format (Section 9.7) and can import `.proto` files to produce
   such a description (Section 19.2). It does not adopt protobuf's identity model,
@@ -10099,7 +10148,11 @@ CONSTRAINT, in C, C++, Rust, Python and the walk.
 2. No capability may be strengthened by any construct. If an implementation
    seems to need that, the axis definition is wrong -- stop and ask.
 3. Every diagnostic has a blame chain. A diagnostic without one is a bug.
-4. Generated code never allocates, never recurses, never uses VLAs.
+4. Generated code never allocates, never recurses, never uses VLAs. The
+   allocation half holds for C, C++ and Rust; Python's data model has no
+   non-allocating spelling and is the stated exception, bounded by the
+   schema's `max` and by the buffer (Section 2, 26.30). Recursion and VLAs
+   have no exception.
 5. Requirements discharged at runtime rather than compile time must be reported
    as such. Never silently downgrade.
 6. The expression language stays total. No construct may make it possible to
