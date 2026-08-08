@@ -145,9 +145,42 @@ that has been designed wrong.
 currently records it as one of four predicates the compiler "names and cannot
 decide", because "generated code never allocates, so it always holds; the
 predicate would be a lint, not a requirement". The layer decides it, with no
-schema keyword. The capability map gains a layer row, so `situc diff` catches
-a schema edit that pushes a consumer up a rung, which is the trap that makes a
-wrongly-written schema visible rather than merely refused.
+schema keyword.
+
+**The capability map has no layer dimension, and the trap is two scalars.** A
+first draft of this record said the map "gains a layer row", which would have
+made a committed map valid for one rung only and broken the additivity
+invariant below. It was also wrong on its own terms: the map describes the
+*schema*, the solver never learns layers exist, and `situc map` is a different
+subcommand from `situc build`.
+
+What varies with the rung is which operations an emitter *exposes*, never what
+the lattice says is *possible*. A field with `mutate = Shifting` is described
+identically at every rung; rung 1 simply has nowhere to put the shifted bytes,
+so it emits no shifting setter, and rung 2 does. That is 0022's distinction --
+the accessor family is the consumer's choice -- and the map has always sat on
+the schema side of it.
+
+So the map gains two facts, both derived from constructs and both therefore
+identical at every invocation:
+
+- **`layer_floor`** -- the lowest rung at which every construct in this schema
+  can be emitted at all. A `coded` region whose expansion is unbounded puts
+  the floor at `edit` (0031).
+- **`layer_reach`** -- the highest rung this schema has content for. A
+  `relation` gives it `relate`; a declared retry policy gives it `drive`.
+
+Building *below* the reach is ordinary: a schema may describe more of a
+protocol than a given consumer wants generated, which is the whole point of
+the ladder. Building below the *floor* is refused, naming the construct.
+
+This is a stronger trap than the layer row would have been. A schema edit that
+raises either scalar is a diff in the committed map and fails
+`situc map --check` -- and it fires whichever rung the consumer builds at,
+rather than only the one whose map they happen to hold. `layer_reach` also
+catches the regression that would otherwise be invisible: deleting a
+`relation` or a retry policy from a schema is a wire-contract change that a
+rung-1 consumer would never see in their generated output.
 
 **It reinterprets an existing refusal rather than adding one.** `--materialize`
 refuses an uncapped run in C today. Under the ladder that is not a special
@@ -183,15 +216,17 @@ byte-identical. That is cheap over the schemas already in the tree, and it is
 the difference between a property and a claim -- the same reason
 `test_the_generated_build_lists_every_schema` exists.
 
-Two honest exceptions, named so they are not discovered as bugs:
+One exception, named so it is not discovered as a bug:
 
-- **The capability map.** If it grows a layer row, it changes between rungs
-  rather than being added to. Either the layer facts go in their own artifact
-  or the map stays layer-independent; unresolved, and small.
 - **Shape flags are outside this invariant.** `--single-file` inlines the
   runtime by construction (26.70), so it cannot be additive and is not
   claimed to be. Additivity is a property of the *layer* axis with the shape
   held fixed.
+
+The capability map is not a second exception. It is layer-independent by
+construction, per *the layer is the invariant statement* above -- which is
+what a `layer_floor` and `layer_reach` that depend only on constructs buy,
+and the reason they are scalars rather than a per-rung row.
 
 ## Where the ladder forks, and why it is kept straight anyway
 

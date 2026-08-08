@@ -159,6 +159,12 @@ like every other axis. That is what makes an incorrectly-written schema
 none becomes a diff in the committed capability map, which is the mechanism
 `situc diff` already provides for every other axis.
 
+That axis survives 0032 and is the per-member form of what 0032 calls
+`layer_floor`: a member whose `alloc` is above `None` is a member that cannot
+be emitted at rung 1, and the schema's floor is the highest such value in it.
+Both are properties of constructs rather than of an invocation, which is why
+the capability map carrying them stays identical at every rung.
+
 ## What this does not decide
 
 - Whether Section 2 changes, and how it states the Python exception it
