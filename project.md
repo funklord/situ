@@ -10245,14 +10245,37 @@ never opens a socket, and injects loss, reorder and duplication without a
 network. A convenience wrapper may read the clock and call the injectable path
 underneath, and is not the state machine.
 
+**The step function returns the next deadline, and the vtable is
+completion-shaped.** Both are decided in
+`docs/decisions/0033-drivers-are-a-third-axis.md` and both belong to this
+phase rather than to any driver. Every multiplexing facility takes a timeout
+and only the state machine knows when it next needs waking, so without the
+deadline each driver invents a polling interval and the timing contract stops
+being the schema's. And a readiness-shaped vtable would exclude `io_uring`
+and IOCP permanently, there being no moment at which either reports a
+descriptor *ready* -- while a readiness loop implements completion trivially,
+by doing the syscall once the descriptor is.
+
+What pumps the state machine is a third axis, `--driver`, additive over this
+rung and unknown to it. The transcript driver is the first one written,
+because it is how this phase is tested.
+
 **Invariant 8 is the one to re-read before starting.** This is the first rung
 whose output depends on libc, and the machine running `situc` must not be
 where that dependency is decided.
 
 Acceptance: a scenario of loss, reorder and duplication over ten simulated
 minutes reproduces byte-for-byte on every run and completes without sleeping;
-the shipped path and the tested path are the same program; a schema declaring
-no policy generates no scheduler rather than a defaulted one.
+the shipped path and the tested path are the same program, differing only in
+which driver they link; a schema declaring no policy generates no scheduler
+rather than a defaulted one.
+
+One question this phase inherits and does not get to ignore: a completion
+vtable means something other than the caller owns a buffer while an operation
+is in flight, and a view is a base, a limit and a generation counter over
+memory the caller owns. A kernel writing into that buffer is a mutation no
+setter was called for, so 12.3 has nothing to invalidate on. 0033 records the
+candidates and declines to pick one without a real driver in hand.
 
 ### 26.99 Rung 2: finishing `edit`
 
