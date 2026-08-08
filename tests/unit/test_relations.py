@@ -1077,3 +1077,74 @@ int main(void)
 	return 0;
 }
 """
+
+
+# -- rung 6's contract, in the schema (26.98) --------------------------------
+
+
+def _policy(relation: ast.Relation) -> list[tuple[str, int]]:
+	"""The stated policy, narrowed: an attribute's value is optional in the
+	AST because a bare flag has none, and these never are."""
+	found = []
+	for attr in relation.attrs:
+		assert isinstance(attr.value, ast.IntLiteral)
+		found.append((attr.name, attr.value.value))
+	return found
+
+
+POLICY = """relation response_to(request: frame, response: frame)
+		[timeout_ms = 800, retries = 3] {
+	must response.hdr.msg == request.hdr.msg;
+}
+"""
+
+
+def test_an_exchange_states_its_own_timing() -> None:
+	"""On the relation, because the relation already identifies the exchange
+	-- its equality constraints are the conversation key -- and because both
+	endpoints must agree on the policy, which is what makes it schema rather
+	than a command-line flag (0032)."""
+	relation = checked(POLICY).relations()[0]
+
+	assert _policy(relation) == [("timeout_ms", 800), ("retries", 3)]
+
+
+def test_stating_no_policy_is_fine() -> None:
+	"""A schema that says nothing gets no scheduler, which is the non-goal
+	working rather than a gap."""
+	assert checked(GOOD).relations()[0].attrs == ()
+
+
+def test_half_a_policy_is_refused() -> None:
+	"""The dangerous shape. `retries = 3` with no timeout says retransmit
+	three times and never says when, so a generator would have to invent an
+	interval -- and a timeout situ chose rather than the protocol is
+	behaviour the schema did not state."""
+	rendered = refused(
+		"relation r(a: frame, b: frame) [retries = 3] {\n"
+		"\tmust b.hdr.msg == a.hdr.msg;\n}\n")
+
+	assert "half a retransmission policy" in rendered
+	assert "situ supplies no default here" in rendered
+
+
+def test_a_zero_in_the_policy_is_refused() -> None:
+	rendered = refused(
+		"relation r(a: frame, b: frame) [timeout_ms = 0, retries = 3] {\n"
+		"\tmust b.hdr.msg == a.hdr.msg;\n}\n")
+
+	assert "expected a positive number" in rendered
+
+
+def test_the_policy_survives_a_round_trip() -> None:
+	"""Both `dump` and `unparse` dropped it at first, so the round-trip
+	compared two schemas that had each lost the same thing and passed. A
+	check that cannot fail is worse than none -- this asserts the policy is
+	*there* afterwards, not merely that the two halves agree.
+	"""
+	schema = checked(POLICY)
+
+	again = parse_text(unparse.unparse(schema))
+
+	assert _policy(again.relations()[0]) == [("timeout_ms", 800), ("retries", 3)]
+	assert "[timeout_ms = 800, retries = 3]" in unparse.unparse(schema)

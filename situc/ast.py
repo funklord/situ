@@ -1190,6 +1190,12 @@ class Relation(Decl):
 	name: str
 	params: tuple[RelationParam, ...]
 	body: tuple[Must, ...]
+	#: The exchange's retransmission and timing contract, where it states one
+	#: (26.98). On the relation because the relation already identifies the
+	#: exchange -- its equality constraints are the conversation key -- and
+	#: both endpoints must agree on the policy, which is what makes it schema
+	#: rather than a flag (0032).
+	attrs: tuple[Attr, ...] = ()
 
 
 @dataclass

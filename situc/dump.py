@@ -86,6 +86,7 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 		params = ", ".join(f"{param.name}: {param.type_name}"
 		                   for param in decl.params)
 		return [_indent(depth, f"relation {decl.name}({params})"),
+		        *_attrs(decl.attrs, depth + 1),
 		        *[_indent(depth + 1, f"must {expr_to_source(must.expr)}")
 		          for must in decl.body]]
 

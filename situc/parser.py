@@ -125,6 +125,11 @@ ATTRIBUTE_NAMES = frozenset({
 	"must_eq", "max", "min",
 	# section 17.0: variant arm padding
 	"equalize",
+	# 26.98: the retransmission and timing contract of an exchange, on the
+	# relation that already identifies one. Both endpoints must agree on
+	# these, which is why they are schema rather than a command-line flag
+	# (decision 0032).
+	"timeout_ms", "retries",
 	# section 14: cryptographic model
 	"secret", "nonce", "covers", "allow_unverified_read", "trusted",
 	# section 14.2: a checksum that covers its own bytes, taken as this
@@ -2021,6 +2026,7 @@ class Parser:
 
 		self._check_relation_arity(params, name, close)
 
+		attrs = self.parse_attrs()
 		self.expect_symbol("{", "before the relation's body")
 		body = []
 		while not self.current.is_symbol("}"):
@@ -2028,7 +2034,7 @@ class Parser:
 		self.expect_symbol("}", "after the relation's body")
 
 		return ast.Relation(self.span_from(start), name.text,
-		                    tuple(params), tuple(body))
+		                    tuple(params), tuple(body), attrs)
 
 	def _check_relation_arity(self, params: list[ast.RelationParam],
 			name: Token, close: Token) -> None:

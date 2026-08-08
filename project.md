@@ -402,7 +402,7 @@ bitorder      = "msb_first" | "lsb_first" ;
 strictness    = "strict" | "lenient" ;
 
 decl          = const_decl | enum_decl | struct_decl | codec_decl
-              | register_decl | requirement | invariant ;
+              | register_decl | requirement | invariant | relation_decl ;
 
 (* One level; nesting is rejected naming its phase. A declaration inside is
    named `outer::header`, and an unqualified reference within the same
@@ -535,6 +535,19 @@ requirement   = ( "require" | "assert" ) capability_expr ";" ;
    an equality nobody maintains is what `require` already is. *)
 invariant     = "invariant" path "==" expr ";" ;
 path          = ident { "." ident } ;
+(* Section N, 26.95. A pure predicate over two messages, in temporal order --
+   the first parameter is the message seen first, which is what lets a
+   dissector say "response to frame N" without a second declaration. `must`
+   and not `require`: section 16 gives `require` to the build-time gate and
+   this is checked at run time against two views.
+   The attribute list is the exchange's retransmission and timing contract
+   (26.98), on the relation because the relation already identifies the
+   exchange. Stated whole or not at all.
+   docs/decisions/0030-cross-message-relations.md *)
+relation_decl = "relation" ident "(" param "," param ")" [ attrs ]
+                "{" { must } "}" ;
+param         = ident ":" qualified ;
+must          = "must" expr ";" ;
 ```
 
 `register_decl` is defined in Section 15.
@@ -10272,8 +10285,9 @@ caller supplied.
 
 ### 26.98 Rung 6: `drive`
 
-**Status: not started.** Depends on 26.96 and 26.97. The largest surface on
-the ladder and the last.
+**Status: the schema half is done -- an exchange states its own timing, and
+half a policy is refused. No emitter yet, and no driver.** Depends on 26.96
+and 26.97. The largest surface on the ladder and the last.
 
 The schema states the retransmission and timing contract: on expiry
 retransmit, at most N times, giving up how. Shape in the schema, default value

@@ -166,7 +166,8 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.Relation):
 		params = ", ".join(f"{param.name}: {param.type_name}"
 		                   for param in decl.params)
-		return [f"relation {decl.name}({params}) {{",
+		return [f"relation {decl.name}({params})"
+		        f"{_attrs_to_source(decl.attrs)} {{",
 		        *[f"\tmust {expr_to_source(must.expr)};" for must in decl.body],
 		        "}"]
 

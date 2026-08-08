@@ -777,6 +777,64 @@ def check_relations(schema: ast.Schema) -> None:
 		for must in relation.body:
 			_check_must(relation, must, params, structs, imported)
 
+		_check_exchange_policy(relation)
+
+
+#: What an exchange may state about its own timing (26.98). Shape in the
+#: schema and the value overridable at invocation, per decision 0032: both
+#: endpoints must agree on the shape, and only the number is a deployment's.
+POLICY_ATTRS = {"timeout_ms", "retries"}
+
+
+def _check_exchange_policy(relation: ast.Relation) -> None:
+	"""A retransmission policy is stated whole or not at all.
+
+	Half of one is the dangerous shape. `retries = 3` with no timeout says
+	retransmit three times and never says when, so a generator would have to
+	invent an interval -- and a timeout situ chose rather than the protocol
+	is exactly the "no behaviour the schema did not state" non-goal.
+	"""
+	stated = {attr.name: attr for attr in relation.attrs
+	          if attr.name in POLICY_ATTRS}
+	if not stated:
+		return
+
+	missing = POLICY_ATTRS - set(stated)
+	if missing:
+		name = next(iter(missing))
+		raise error(
+			f"`{relation.name}` states half a retransmission policy",
+			relation.span,
+			label = f"`{name}` is missing",
+			notes = [
+				"an exchange that retries without saying when, or waits "
+				"without saying how often, leaves the other half for the "
+				"generator to invent",
+				"situ supplies no default here: a timeout it chose rather "
+				"than the protocol is behaviour the schema did not state",
+			],
+		)
+
+	for name, attr in stated.items():
+		value = getattr(attr.value, "value", None)
+		if not isinstance(value, int):
+			raise error(
+				f"`{name}` needs a number",
+				attr.span,
+				label = "expected an integer",
+				notes = ["a deployment may override the value at `situc` "
+				         "invocation; the schema states the default"],
+			)
+		if value <= 0:
+			raise error(
+				f"`{name}` is {value}",
+				attr.span,
+				label = "expected a positive number",
+				notes = ["a zero timeout retransmits without waiting and a "
+				         "zero retry count is an exchange with no policy, "
+				         "which is what stating none already says"],
+			)
+
 
 def _check_must(relation: ast.Relation, must: ast.Must,
 		params: dict[str, ast.RelationParam], structs: Structs,

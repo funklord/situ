@@ -49,7 +49,8 @@ decl		= namespace_decl
 	| register_decl
 	| register_block_decl
 	| requirement
-	| invariant ;
+	| invariant
+	| relation_decl ;
 
 const_decl	= "const" ident "=" expr ";" ;
 
@@ -145,6 +146,22 @@ requirement	= ( "require" | "assert" ) capability_expr ";" ;
  * nobody maintains is what `require` already is. See section 16.1. *)
 invariant	= "invariant" path "==" expr ";" ;
 path		= ident { "." ident } ;
+
+(* A pure predicate over two messages, in temporal order -- the first
+ * parameter is the message seen first, which is what lets a dissector say
+ * "response to frame N" without a second declaration. `must` and not
+ * `require`: section 16 gives `require` to the build-time gate and this is
+ * checked at run time against two views.
+ *
+ * The attribute list is the exchange's retransmission and timing contract
+ * (26.98), on the relation because the relation already identifies the
+ * exchange. Stated whole or not at all.
+ *
+ * See docs/decisions/0030-cross-message-relations.md. *)
+relation_decl	= "relation" ident "(" param "," param ")" [ attrs ]
+		  "{" { must } "}" ;
+param		= ident ":" qualified ;
+must		= "must" expr ";" ;
 
 
 (* --------------------------------------------------------------------------
