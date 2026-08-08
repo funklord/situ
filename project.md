@@ -10251,7 +10251,9 @@ to a linked binary; the additivity test passes for all adjacent pairs.
 
 ### 26.97 Rung 5: `converse`
 
-**Status: not started.** Depends on 26.95, whose relation is the key.
+**Status: the C table is done; the other three backends and the walker are
+not.** The key is packed into one word and refused above 64 bits, because a
+truncated key matches two exchanges to each other with no symptom.
 
 The schema states which relation pairs a request with its reply and what
 identifies the exchange. The generated code holds the pending table, in

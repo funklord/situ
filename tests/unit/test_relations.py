@@ -20,7 +20,7 @@ import pytest
 from every_schema import ROOT
 from situc import (ast, capmap, dissector, dump, namespaces, relation,
                    unparse, wellformed)
-from situc.codegen.c import frame, fuzz
+from situc.codegen.c import converse, frame, fuzz
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
@@ -937,6 +937,143 @@ int main(void)
 			return 1;
 		}
 	}
+	return 0;
+}
+"""
+
+
+# -- rung 5: matching a reply to its request (26.97) -------------------------
+
+
+def test_the_table_is_the_callers_and_allocates_nothing() -> None:
+	"""The schema states the pairing; the generated code holds the set."""
+	schema, resolved = analysed(GOOD)
+
+	header = converse.generate(schema, resolved, "t")["t_converse.h"]
+
+	assert "situ_conv_response_to_slot_t *slots, uint32_t cap)" in header
+	assert "malloc" not in header
+
+
+def test_a_full_table_refuses_rather_than_evicting() -> None:
+	"""Evicting would drop an exchange the caller still wanted, silently."""
+	schema, resolved = analysed(GOOD)
+
+	header = converse.generate(schema, resolved, "t")["t_converse.h"]
+
+	assert "return SITU_ERR_BOUNDS;" in header
+
+
+def test_matching_forgets_so_a_duplicate_reply_is_refused() -> None:
+	schema, resolved = analysed(GOOD)
+
+	header = converse.generate(schema, resolved, "t")["t_converse.h"]
+
+	assert "table->slots[i].live = 0u;" in header
+	assert "return SITU_ERR_CONSTRAINT;" in header
+
+
+def test_a_key_wider_than_a_packed_word_is_refused() -> None:
+	"""The case with a wrong answer and no symptom.
+
+	Two exchanges whose keys collided after truncation would be matched to
+	each other, and nothing at run time would say so. Refused with the sum,
+	as `relate` refuses a comparison that has no correct spelling.
+	"""
+	schema = parse_text(
+		"target buffer;\nendian big;\n\n"
+		"struct wf {\n\tu64 a;\n\tu64 b;\n\tu16 small;\n}\n\n"
+		"relation too_wide(p: wf, q: wf) {\n\tmust q.a == p.a;\n"
+		"\tmust q.b == p.b;\n}\n\n"
+		"relation fits(p: wf, q: wf) {\n\tmust q.small == p.small;\n}\n")
+	resolved = resolve(schema, solve(schema))
+
+	names = dict(converse.refusals(schema, resolved))
+
+	assert "128 bits" in names["too_wide"]
+	assert "matched to each other" in names["too_wide"]
+	# And one bad relation does not take the others with it.
+	assert "fits" not in names
+	assert "situ_conv_fits_record" in converse.generate(schema, resolved, "t")[
+		"t_converse.h"]
+
+
+def test_a_relation_with_no_equality_gets_no_table() -> None:
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.index < a.hdr.chunks;\n}\n")
+
+	names = dict(converse.refusals(schema, resolved))
+
+	assert "nothing identifies an exchange" in names["r"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_table_matches_refuses_and_fills(tmp_path: Path) -> None:
+	"""Every acceptance criterion of 26.97, run rather than read."""
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in converse.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "drive.c").write_text(_CONVERSE_DRIVER, encoding="ascii")
+
+	assert COMPILER is not None
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{tmp_path}", f"-I{RUNTIME}",
+		 str(tmp_path / "drive.c"), str(tmp_path / "t.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "drive")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "drive")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_CONVERSE_DRIVER = """#include <assert.h>
+#include <string.h>
+#include "t_converse.h"
+
+static situ_view_t frame_of(uint8_t *buf, situ_msg_t *m, uint16_t msg)
+{
+	situ_view_t v;
+	memset(buf, 0, 17);
+	buf[0] = (uint8_t)(msg >> 8);
+	buf[1] = (uint8_t)(msg & 0xffu);
+	buf[3] = 4;
+	situ_msg_init(m, buf, 17);
+	assert(situ_frame_view(m, 0u, &v) == SITU_OK);
+	return v;
+}
+
+int main(void)
+{
+	uint8_t a[17], b[17], c[17];
+	situ_msg_t ma, mb, mc;
+	situ_conv_response_to_slot_t slots[2];
+	situ_conv_response_to_t table;
+	uint32_t id = 0;
+
+	situ_conv_response_to_init(&table, slots, 2u);
+
+	situ_view_t req = frame_of(a, &ma, 0x1234u);
+	assert(situ_conv_response_to_record(&table, req, 77u) == SITU_OK);
+
+	situ_view_t rep = frame_of(b, &mb, 0x1234u);
+	assert(situ_conv_response_to_match(&table, rep, &id) == SITU_OK);
+	assert(id == 77u);
+
+	/* A second reply names an exchange that is over. */
+	assert(situ_conv_response_to_match(&table, rep, &id) == SITU_ERR_CONSTRAINT);
+
+	situ_view_t other = frame_of(c, &mc, 0x9999u);
+	assert(situ_conv_response_to_match(&table, other, &id) == SITU_ERR_CONSTRAINT);
+
+	assert(situ_conv_response_to_record(&table, req, 1u) == SITU_OK);
+	assert(situ_conv_response_to_record(&table, other, 2u) == SITU_OK);
+	assert(situ_conv_response_to_record(&table, req, 3u) == SITU_ERR_BOUNDS);
 	return 0;
 }
 """
