@@ -312,3 +312,54 @@ the two can evolve separately and the byte contract stays what it is.
 I have no vote and a weak view -- companion file -- but the choice shapes what
 I would be testing, so it is worth being explicit about before there is code to
 change.
+
+## Follow-up, same day: 0032 answers the open question, better
+
+The question above -- schema or companion file -- is answered by decision
+0032, and the answer is neither, which is better than the weak view offered
+here. The layer is chosen at `situc build --layer`, not in the file: "a schema
+describes bytes. What a consumer wants generated from it is not a property of
+the bytes." That is the right cut, it explains three existing flags that were
+layer choices in boolean clothing, and it retires the whole shape of question
+this file was asking -- "should situ do X" becomes "at which layer does X
+live", which is answerable once instead of once per adopter.
+
+**One thing to separate before layer 6 is built**, and it is the single most
+useful sentence this tester can offer:
+
+> Rung 6 `drive` is described as "may it own I/O **and the clock**".
+
+Those are two permissions and they should not travel together. Owning I/O --
+calling `sendto`, holding a socket -- is what makes `drive` worth having.
+Owning *the clock* is what makes it untestable, and the two are separable at
+no cost:
+
+- **"may be given a clock"** -- `situ_drive_step(state, now_ms, io)` -- keeps
+  every retransmission and timeout deterministic. A test drives ten simulated
+  minutes in a loop with no `sleep` in it, and a timeout bug reproduces on
+  every run rather than on a loaded machine every third Tuesday.
+- **"may call `clock_gettime`"** puts a wall clock inside the state machine,
+  and every test of it becomes a race. This family has already paid for that
+  once: a `fuzzypickles` scenario failed in a full run and passed on the same
+  commit when idle, because the test raced a twenty-second deadline nobody had
+  written down. That was one deadline in a UI. Rung 6 is *made of* deadlines.
+
+The same split serves I/O: if the caller passes an io vtable, a test
+substitutes a transcript and never opens a socket -- which is also how loss,
+reorder and duplication get injected without a network. So the rung's question
+might be read as **"may it own I/O and be driven by a clock?"**, with both
+supplied by the caller, and nothing about that weakens what the rung does.
+
+If a default is wanted for ordinary use, a `situ_drive_step_now()` that reads
+the clock and calls the injectable one underneath costs a line and keeps the
+testable path the real path rather than a special case for tests -- which is
+the property that matters, because a test path that differs from the shipping
+path tests the wrong program.
+
+**Also noted, since it lands on this library's plans:** 0031 records that
+`fuzzypickles` cannot adopt situ today because 225 call sites hold decoded
+structs outliving the buffer, which makes it a `--owned` consumer at rung 2
+rather than a `view` consumer. `fuzznet`'s own migration order has fuzzypickles
+adopting this library last, so the two constraints meet there and neither is
+urgent -- but a rung-2 requirement discovered at that point would be expensive,
+and it is known now.
