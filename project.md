@@ -10186,6 +10186,43 @@ pair in all five implementations; a dissector follows one exchange out of a
 capture; `situc map --check` fails when a relation is deleted; and the
 additivity test of 26.96 passes for `view` against `relate`.
 
+**Done: the four compiled backends.** The walk is `situc/relation.py` and each
+backend supplies only spelling, so the refusal set is shared -- Python's
+arbitrary-precision integers would compare a `u64` against an `i8` happily and
+are refused anyway, a schema meaning two things being the failure the
+agreement tests exist to catch.
+
+**Outstanding: the walker, the map scalars, the dissector and the fuzz
+harness.** The walker is the large one and its shape is settled, so it is
+written down here rather than rediscovered:
+
+- **Two sections**, `relations = 18` and `relation_musts = 19`, appended to
+  the directory. An `image_relation` is `(name, request_struct,
+  response_struct, first_must, must_count)` and an `image_relation_must` is
+  an offset into the code section -- the `(first, count)` shape the arm and
+  placement tables already use. Both sizes were checked against the schema's
+  own `require size(...)`: 24 and 8 bytes.
+- **One new opcode, `arg_field`.** `Program.compile` already takes a
+  `resolve_path` callback returning a placement index, and a nested path
+  already *has* a placement in its parent's table, so a relation needs no new
+  resolution. What it needs is the parameter: both sides of
+  `response_to(request: frame, response: frame)` are the same struct, so a
+  placement id alone does not say which message to read. `arg_field` carries
+  a parameter byte before the index and is the only thing the expression
+  language has to grow.
+- **The VM needs nothing else.** `walker/vm.py`'s `run` takes `load_field` as
+  a *callback*, so a relation supplies one that reads from whichever of the
+  two views the parameter names. No jumps, no state, and the termination
+  argument is unchanged.
+- **`walker.report.SUPPORTED` gains `relation`**, and the differential check
+  gets a fifth column for it: a walk and four compiled backends answering the
+  same question about the same pair.
+
+What makes this its own piece of work rather than a tail end: `std/image.situ`
+is a schema, so changing it moves `std/image.situ.map` and
+`std/image.situ.wire`, both committed and both checked. That is the format
+doing its job, and it is a different job from writing the walk.
+
 ### 26.96 Rung 4: `frame`
 
 **Status: not started.**
