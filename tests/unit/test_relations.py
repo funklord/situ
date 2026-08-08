@@ -18,7 +18,9 @@ from pathlib import Path
 import pytest
 
 from every_schema import ROOT
-from situc import ast, capmap, dump, namespaces, relation, unparse, wellformed
+from situc import (ast, capmap, dissector, dump, namespaces, relation,
+                   unparse, wellformed)
+from situc.codegen.c import fuzz
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
@@ -697,3 +699,87 @@ def test_an_unbounded_expansion_codec_raises_the_floor() -> None:
 	resolved = resolve(schema, solve(schema))
 
 	assert "floor=edit" in capmap.render(schema, resolved, "t.situ")
+
+
+# -- the two artifacts a relation was worth building for (0030) --------------
+
+
+def test_the_equality_constraints_are_the_conversation_key() -> None:
+	"""No second declaration: `must b.msg == a.msg` says what identifies an
+	exchange, and both consumers read it back out of the same place."""
+	schema = checked(GOOD)
+
+	assert relation.conversation_key(schema.relations()[0]) == [
+		("request.hdr.msg", "response.hdr.msg")]
+
+
+def test_an_inequality_is_a_rule_and_not_a_key() -> None:
+	"""`b.index < a.chunks` constrains a pair without identifying one."""
+	schema = checked(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.index < a.hdr.chunks;\n}\n")
+
+	assert relation.conversation_key(schema.relations()[0]) == []
+
+
+def test_the_dissector_tracks_the_conversation() -> None:
+	schema, resolved = analysed(GOOD)
+
+	lua = dissector.generate(schema, resolved, "t")
+
+	assert "local situ_conv_response_to = {}" in lua
+	assert "situ_conv_response_to_record(tvb, pinfo)" in lua
+	assert "frame_f.response_to_request = ProtoField.framenum(" in lua
+
+
+def test_the_dissector_looks_up_before_it_records() -> None:
+	"""Both parameters usually name one struct, so one dissector does both.
+	Recording first would make every frame its own request."""
+	schema, resolved = analysed(GOOD)
+
+	lua    = dissector.generate(schema, resolved, "t")
+	lookup = lua.index("situ_conv_response_to_lookup(tvb")
+	record = lua.index("situ_conv_response_to_record(tvb, pinfo)\n",
+	                   lua.index("function frame.dissector"))
+
+	assert lookup < record
+
+
+def test_a_relation_with_no_equality_gets_no_conversation() -> None:
+	"""Said in the output rather than left as an absence."""
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.index < a.hdr.chunks;\n}\n")
+
+	lua = dissector.generate(schema, resolved, "t")
+
+	assert "no conversation key" in lua
+	assert "situ_conv_r = {}" not in lua
+
+
+def test_the_fuzz_harness_copies_the_key_across() -> None:
+	"""The copy is the whole point.
+
+	A `u16` match is one draw in 65536 and a varint is worse, so a fuzzer
+	rediscovering the correlation by luck reaches nothing -- and a target
+	that reaches nothing looks exactly like a clean run.
+	"""
+	schema, resolved = analysed(GOOD)
+
+	harness = fuzz.generate(schema, resolved, "t")
+
+	assert "static void fuzz_rel_response_to(" in harness
+	assert "memcpy(b + 0u, a + 0u, 2u);" in harness
+	assert "situ_rel_response_to(va, vb)" in harness
+	# It needs rung 3's header, and says so rather than failing at the first
+	# build with a missing include.
+	assert '#include "t_relate.h"' in harness
+
+
+def test_the_fuzz_entry_point_reaches_the_relation() -> None:
+	"""A harness nothing dispatches to is a harness that never runs."""
+	schema, resolved = analysed(GOOD)
+
+	harness = fuzz.generate(schema, resolved, "t")
+
+	assert "fuzz_rel_response_to(data + 1, size - 1u);" in harness

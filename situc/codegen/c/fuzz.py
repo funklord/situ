@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from situc import ast
+from situc import ast, relation
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -76,7 +76,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"",
 	]
 
-	if any("situ_fuzz_sink(" in line for line in bodies):
+	relation_lines, relation_names = _relation_harnesses(schema, resolved, prefix)
+
+	if any("situ_fuzz_sink(" in line
+	       for line in bodies + relation_lines):
 		lines.extend([
 			"/* Keeps the reads below from being optimised away. Declared before",
 			" * the harnesses that call it, since C is a one-pass language. */",
@@ -89,8 +92,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 			"",
 		])
 
+	if relation_names:
+		# Stated here rather than discovered at the first build: the predicate
+		# is rung 3's output, so this file needs what `--layer relate` emits.
+		lines.insert(lines.index(f'#include "{basename}.h"') + 1,
+		             f'#include "{basename}_relate.h"\t/* situc build --layer relate */')
+
 	lines.extend(bodies)
-	lines.extend(_entry_point(structs, basename, prefix))
+	lines.extend(relation_lines)
+	lines.extend(_entry_point(structs, basename, prefix, relation_names))
 	lines.extend(_standalone(basename))
 	return "\n".join(lines) + "\n"
 
@@ -612,8 +622,110 @@ def _ctype_of(placement: Placement) -> str:
 	return f"uint{max(8, scalar.bits)}_t"
 
 
+def _key_bytes(resolved: ResolvedSchema, struct_name: str,
+		path: str) -> tuple[int, int] | None:
+	"""(offset, width) of one key field, or None where it is not a constant."""
+	struct = resolved.structs.get(struct_name)
+	if struct is None:
+		return None
+	member = path.partition(".")[2]
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.path != f"{struct_name}.{member}":
+			continue
+		if (placement.offset_bits is None or placement.size_bits is None
+				or placement.offset_bits % 8 or placement.size_bits % 8):
+			return None
+		return (placement.offset_bits // 8, placement.size_bits // 8)
+	return None
+
+
+def _relation_harnesses(schema: ast.Schema, resolved: ResolvedSchema,
+		prefix: str) -> tuple[list[str], list[str]]:
+	"""A harness per relation, and the names of the ones emitted.
+
+	**The copy is the whole point.** A relation says a reply echoes an
+	identifier, and a fuzzer that has to rediscover that by luck never gets
+	past the first check -- a `u16` match is one draw in 65536, and a varint
+	is worse. So the harness splits its input in two and *copies* the key
+	bytes from the first message into the second before calling the
+	predicate, which is the same equality constraint the dissector reads as a
+	conversation key. Without it the target reaches nothing, and a target
+	that reaches nothing looks exactly like a clean run.
+
+	It needs the `--layer relate` header, which is stated in the file rather
+	than discovered at the first build.
+	"""
+	lines: list[str] = []
+	names: list[str] = []
+
+	for decl in schema.relations():
+		try:
+			relation.plan(decl, resolved)
+		except relation.Refused:
+			continue
+
+		pairs  = relation.conversation_key(decl)
+		first, second = (param.type_name for param in decl.params)
+		copies = [(_key_bytes(resolved, first, a), _key_bytes(resolved, second, b))
+		          for a, b in pairs]
+		usable = [(x, y) for x, y in copies if x is not None and y is not None]
+		if not pairs or len(usable) != len(copies):
+			lines += ["", f"/* No harness for relation {decl.name}: a key field "
+			              "has no",
+			          " * constant offset, so there is no byte range to copy. */"]
+			continue
+
+		name = c_name(decl.name)
+		names.append(name)
+		half = f"situ_rel_{name}_half"
+		lines += [
+			"",
+			f"static void fuzz_rel_{name}(const uint8_t *data, size_t size)",
+			"{",
+			f"\tconst size_t {half} = size / 2u;",
+			f"\tif ({half} == 0u) {{",
+			"\t\treturn;",
+			"\t}",
+			"",
+			"\tuint8_t a[512], b[512];",
+			f"\tconst size_t n = {half} < sizeof(a) ? {half} : sizeof(a);",
+			"",
+			"\tmemset(a, 0, sizeof(a));",
+			"\tmemset(b, 0, sizeof(b));",
+			"\tmemcpy(a, data, n);",
+			f"\tmemcpy(b, data + {half}, n);",
+			"",
+			"\t/* The copy the relation asks for, so the predicate can get",
+			"\t * past its own equality and exercise what follows. */",
+		]
+		for (src, _w1), (dst, width) in usable:
+			lines.append(f"\tif ({dst}u + {width}u <= n) {{")
+			lines.append(f"\t\tmemcpy(b + {dst}u, a + {src}u, {width}u);")
+			lines.append("\t}")
+
+		lines += [
+			"",
+			"\tsitu_msg_t ma, mb;",
+			"\tsitu_view_t va, vb;",
+			"\tsitu_msg_init(&ma, a, (uint32_t)n);",
+			"\tsitu_msg_init(&mb, b, (uint32_t)n);",
+			f"\tif ({ident(prefix, first, 'view')}(&ma, 0u, &va) != SITU_OK) {{",
+			"\t\treturn;",
+			"\t}",
+			f"\tif ({ident(prefix, second, 'view')}(&mb, 0u, &vb) != SITU_OK) {{",
+			"\t\treturn;",
+			"\t}",
+			"",
+			f"\tsitu_fuzz_sink((uint64_t){ident(prefix, 'rel', name)}(va, vb));",
+			"}",
+		]
+
+	return lines, names
+
+
 def _entry_point(structs: list[ResolvedStruct], basename: str,
-		prefix: str) -> list[str]:
+		prefix: str, relations: list[str] | None = None) -> list[str]:
 	lines = [
 		"int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);",
 		"",
@@ -621,21 +733,27 @@ def _entry_point(structs: list[ResolvedStruct], basename: str,
 		"{",
 	]
 
-	if not structs:
+	targets = list(relations or [])
+
+	if not structs and not targets:
 		lines.extend(["\t(void)data;", "\t(void)size;"])
 	else:
 		# The first byte selects a struct, so one corpus drives every parser in
 		# the schema rather than needing a binary each.
+		calls = [f"fuzz_{c_name(struct.name)}(data + 1, size - 1u)"
+		         for struct in structs]
+		calls += [f"fuzz_rel_{name}(data + 1, size - 1u)" for name in targets]
+
 		lines.extend([
 			"\tif (size < 1u) {",
 			"\t\treturn 0;",
 			"\t}",
 			"",
-			f"\tswitch (data[0] % {len(structs)}u) {{",
+			f"\tswitch (data[0] % {len(calls)}u) {{",
 		])
-		for index, struct in enumerate(structs):
+		for index, call in enumerate(calls):
 			lines.append(f"\tcase {index}u:")
-			lines.append(f"\t\tfuzz_{c_name(struct.name)}(data + 1, size - 1u);")
+			lines.append(f"\t\t{call};")
 			lines.append("\t\tbreak;")
 		lines.extend(["\tdefault:", "\t\tbreak;", "\t}"])
 

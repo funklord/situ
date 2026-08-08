@@ -315,3 +315,39 @@ def plans(schema: ast.Schema,
 		except Refused:
 			continue
 	return ready
+
+
+def conversation_key(relation: ast.Relation) -> list[tuple[str, str]]:
+	"""The paths a relation says must be equal, as (request, response) pairs.
+
+	**The equality constraints are the conversation key**, and that is the
+	whole reason a relation buys more than the comparison it spells. A
+	dissector needs to know what to hash a conversation on and a fuzz harness
+	needs to know which bytes to copy from one message into the other; both
+	are this list, and neither needs a second declaration in the schema.
+
+	Only a top-level `==` between the two parameters counts. `b.index <
+	a.chunks` is a rule about a pair and not a thing that identifies one, and
+	`b.x == b.y` names one message -- which `wellformed` already refuses, but
+	the filter here is what makes this function's answer true rather than
+	true-by-luck.
+	"""
+	first, second = (param.name for param in relation.params)
+	pairs: list[tuple[str, str]] = []
+
+	for must in relation.body:
+		expr = must.expr
+		if not isinstance(expr, ast.Binary) or expr.op != "==":
+			continue
+		left  = paths_in(expr.left)
+		right = paths_in(expr.right)
+		if len(left) != 1 or len(right) != 1:
+			continue
+
+		roots = (left[0].split(".")[0], right[0].split(".")[0])
+		if roots == (first, second):
+			pairs.append((left[0], right[0]))
+		elif roots == (second, first):
+			pairs.append((right[0], left[0]))
+
+	return pairs
