@@ -407,7 +407,7 @@ def is_python(path: Path) -> bool:
 	return first.startswith(b"#!") and b"python" in first
 
 
-def python_ascii_problems(text: str, where: Path):
+def python_ascii_problems(text: str, where: Path) -> list[Problem] | None:
 	"""Non-ASCII outside string literals, or None if it cannot be read.
 
 	The rule this enforces has always allowed Unicode in what a program
