@@ -5,7 +5,7 @@ Its proposed schema directive was withdrawn the same day by decision 0032,
 which puts the choice at `situc build --layer` instead. The five cases below
 are what that layer boundary is drawn around.
 Date: 2026-08-08
-Phase: unscheduled
+Phase: 26.99, which finishes rung 2 against the five cases below
 
 ## Context
 

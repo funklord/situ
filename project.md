@@ -4149,11 +4149,14 @@ list of absences, which goes stale the moment one of them lands.
 
 **What is outstanding is the layer ladder, and only above the bottom rung.**
 Decision 0032 puts six rungs on one axis chosen at `situc build --layer`;
-`view` is what ships and is the default, rung 2 (`edit`) exists in pieces --
-`--owned` emits a fixed-size decode and refuses variable-length members --
-and 26.95 through 26.98 schedule rungs 3 to 6. Finishing rung 2 has no phase
-yet, and the enumeration it has to serve is
-`docs/decisions/0031-where-allocation-is-unavoidable.md`.
+`view` is what ships and is the default, and rung 2 (`edit`) exists in pieces
+-- `--owned` emits a fixed-size decode and refuses variable-length members.
+26.95 through 26.98 schedule rungs 3 to 6, and 26.99 finishes rung 2 against
+the enumeration in
+`docs/decisions/0031-where-allocation-is-unavoidable.md`. The numbering is a
+log rather than a running order: nothing in 26.95 through 26.98 waits for
+26.99, because emitting a lower rung's files is not the same as needing its
+emitter written first.
 
 **Four backends over one layout**, and the claim that matters is that they
 agree. Each is tested against the C output on the same buffer, field by field,
@@ -10250,6 +10253,63 @@ Acceptance: a scenario of loss, reorder and duplication over ten simulated
 minutes reproduces byte-for-byte on every run and completes without sleeping;
 the shipped path and the tested path are the same program; a schema declaring
 no policy generates no scheduler rather than a defaulted one.
+
+### 26.99 Rung 2: finishing `edit`
+
+**Status: not started; the rung exists in pieces.** Numbered after the four
+above because these entries are a log rather than a running order -- its place
+on the ladder is second, and nothing in 26.95 through 26.98 waits for it.
+
+`--owned` (26.69) emits a fixed-size C struct and a decode that copies into
+it, which is case A of the enumeration in
+`docs/decisions/0031-where-allocation-is-unavoidable.md`. It refuses a
+variable-length member, and the refusal is worth quoting because this phase is
+what answers it: "a pointer reintroduces exactly the lifetime the caller was
+escaping, and an array of the worst case is a decision about memory nobody
+asked for". Both halves are true, and both stop being true once the caller
+supplies the backing. That is the whole of rung 2.
+
+The five cases and what each needs:
+
+| | size axis | what finishing it takes |
+|---|---|---|
+| A | `Fixed` | done -- `--owned` |
+| B | `Bounded`, small | an inline array at `SITU_X_SIZE_MAX` |
+| C | `Bounded`, large | measure with `_required()`, then caller-supplied backing |
+| D | `Unbounded`, measurable | the same two-pass shape |
+| E | `Unbounded`, not measurable | `situ_alloc_t`, and only here |
+
+Case E is the only one that allocates, and it allocates through a
+caller-supplied `{alloc, free, ctx}` rather than `malloc`, so a freestanding
+target passes a pool and an audit reads one struct to find every allocation.
+
+What else lands with it:
+
+- **`no_alloc(X)` stops being a tautology.** Section 16 lists it among four
+  predicates the compiler "names and cannot decide", because generated code
+  never allocates so it always holds. Rung 2 gives it content, and
+  `require no_alloc(payload);` becomes a real gate with the existing blame
+  chain.
+- **The `alloc` axis, per member**, feeding `layer_floor` (0032) -- a member
+  above `None` is one rung 1 cannot emit, and the schema's floor is the
+  highest such value in it.
+- **`--materialize` on an uncapped run** becomes permitted here, which is the
+  refusal 0032 reinterprets rather than removes.
+
+Two questions this phase decides rather than inherits. Whether an exhausted
+allocator earns an eighth failure class, which
+`test_the_failure_classes_match_the_runtimes` would then hold across four
+runtimes -- `SITU_ERR_TRUNCATED` was added to all four by hand, and nothing
+would have caught a fourth omission. And whether the owned form stays C-only,
+as `--owned` is today.
+
+Acceptance: a schema whose members are variable-length gets an owned decode
+against caller-supplied backing, with `_required()` sizing it; a schema with an
+unbounded-expansion codec builds at `--layer edit` and is refused at
+`--layer view` naming the construct; `require no_alloc(X)` fails a build that
+earns it and passes one that does not; and the additivity test of 26.96 keeps
+passing, which for this rung means asserting the file set genuinely *grows*
+from `view` to `edit` rather than merely not shrinking.
 
 ### Invariants to hold across all phases
 

@@ -2,9 +2,8 @@
 
 Status: accepted
 Date: 2026-08-08
-Phase: 26.95 through 26.98 schedule rungs 3 to 6. Rung 1 ships and is the
-default; rung 2 exists in part (`--owned`) and its completion has no phase
-yet.
+Phase: 26.95 through 26.98 schedule rungs 3 to 6, and 26.99 finishes rung 2.
+Rung 1 ships and is the default.
 
 ## Context
 
