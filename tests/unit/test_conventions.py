@@ -59,10 +59,57 @@ def test_linter_allows_block_comment_continuation(tmp_path: Path) -> None:
 	assert style_gate.check_file(source, tmp_path, CFG) == []
 
 
-def test_linter_flags_non_ascii(tmp_path: Path) -> None:
+def test_linter_flags_non_ascii_in_a_c_comment(tmp_path: Path) -> None:
+	"""A comment is prose, and prose is ASCII.
+
+	This asserted `non-ASCII byte` until `c_ascii_problems` arrived and gave
+	C the same literal exemption Python has. The detection never lapsed --
+	only the wording did -- which is the shape of a stale expectation worth
+	spelling out: the gate was right and the test was describing an older
+	one.
+	"""
 	source = tmp_path / "sample.c"
 	# Spelled as bytes so this file stays ASCII and passes its own check.
 	source.write_bytes(b"/* caf\xc3\xa9 */\n")
+
+	problems = style_gate.check_file(source, tmp_path, CFG)
+
+	assert len(problems) == 1
+	assert problems[0].message == "non-ASCII '\u00e9' outside a literal"
+	assert (problems[0].line, problems[0].col) == (1, 7)
+
+
+def test_linter_allows_non_ascii_inside_a_c_literal(tmp_path: Path) -> None:
+	"""A glyph a program prints is output, in C as in Python.
+
+	The rule's own example is `GREEN('gpg ')`, which is C -- so a scanner
+	that exempted only Python literals would have left the rule unenforced
+	in the language it was written about.
+	"""
+	source = tmp_path / "sample.c"
+	source.write_text('const char *tick = "\u2713";\n', encoding="utf-8")
+
+	assert style_gate.check_file(source, tmp_path, CFG) == []
+
+
+def test_linter_allows_non_ascii_inside_a_c_char_literal(
+		tmp_path: Path) -> None:
+	source = tmp_path / "sample.c"
+	source.write_text("static const char c = '\u00e9';\n", encoding="utf-8")
+
+	assert style_gate.check_file(source, tmp_path, CFG) == []
+
+
+def test_linter_falls_back_to_bytes_when_c_will_not_lex(
+		tmp_path: Path) -> None:
+	"""An unterminated comment means the scanner lost its place.
+
+	Same contract as the Python side: a file whose literals cannot be
+	located is not a file whose prose has been cleared, so the stricter
+	whole-file check decides.
+	"""
+	source = tmp_path / "sample.c"
+	source.write_bytes(b"/* caf\xc3\xa9\n")
 
 	problems = style_gate.check_file(source, tmp_path, CFG)
 
