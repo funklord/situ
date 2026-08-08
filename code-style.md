@@ -385,11 +385,18 @@ source's question, not situ's.
 ## The commit-msg hook
 
 The commit-msg hook is `tools/hooks/commit-msg`, installed with `make hooks`.
-It rejects generator attribution and a subject over 75 columns. It lives in
-the tree rather than only in `.git/hooks` so that it is reviewable and
-survives a clone; the copy that runs is installed from it.
+It rejects generator attribution, a subject over 75 columns, and body prose
+over 75 columns. It lives in the tree rather than only in `.git/hooks` so
+that it is reviewable and survives a clone; the copy that runs is installed
+from it.
 
-Two things it deliberately does not reject. Three *names* are spared, so a
+The body limit was stated long before anything checked it, and only the
+subject was checked -- so a body line at 76 columns went through while a
+subject at 76 was refused. No message in this project's history is affected:
+its 351 commits were checked against the rule and none has a body line past
+75.
+
+Three things it deliberately does not reject. Three *names* are spared, so a
 message may say where the shared tooling comes from: the directory
 `.claude`, the file `CLAUDE.md`, and `claude-guidelines`, the repository
 the guidelines live in. The ban is on crediting a generator and none of the
@@ -404,7 +411,19 @@ list, so it rejected every commit that edited it.
 The third name was added because this file's own reconciliation commit
 could not name the repository its source is in, and had to write "the
 repository holding it" instead. A rule that makes the log vaguer exactly
-where it is trying to be exact is the rule misfiring.
+where it is trying to be exact is the rule misfiring. This project had that
+change first, and carried it locally while the source went without it; it is
+in the source now, so the copy here is no longer ahead of it.
+
+And the length check exempts three shapes, each because wrapping it is the
+actual mistake rather than a concession: a *trailer*, since git parses the
+block a line at a time and a broken `Link:` stops being a trailer at all; a
+line holding a *url*, which no longer works once it is split; and an
+*indented* line, which is how a message quotes a compiler error or a stack
+trace, where reflowing what you are quoting corrupts the one thing it was
+included for. It cannot tell prose opening `Note:` from a trailer, so it
+forgives that -- the wrong way round would refuse a real trailer, and that
+is the expensive error.
 
 ## See also
 
