@@ -99,7 +99,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 
 | Command | Artifact |
 |---|---|
-| `situc build` | accessors: C, C++, Rust or Python (`--target`), and the shape they take (`--owned`, `--materialize`, `--single-file`). How much of a schema becomes code is `--layer`, which is decided and not yet built -- see *How much of it you take* |
+| `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), and the shape they take (`--owned`, `--materialize`, `--single-file`) |
 | `situc map` | the capability map; `--check` compares against a committed one and fails on a diff |
 | `situc explain` | one field's capability vector and the blame chain behind every weakening |
 | `situc advise` | ranked, costed schema changes that would restore what was lost |
@@ -142,16 +142,17 @@ for somebody to notice: `situc` has one and this ships beside it.
 
 A schema may describe more of a protocol than you want generated, so how much
 becomes code is a choice you make at the command line rather than in the
-schema. **`--layer` is a decision, not a flag you can type yet** -- what ships
-today is the bottom rung, which is what `situc build` does now with no flag at
-all. The ladder is written down ahead of the rungs on purpose, and the table
-says where each one stands:
+schema. `situc build --layer` takes it, defaulting to `view`, which is what
+`situc build` has always done. **Two rungs are real and four are decided and
+not built**; asking for one of those four says which phase adds it. The ladder
+was written down ahead of the rungs on purpose, and the table says where each
+one stands:
 
 | `--layer` | what it emits | the new "yes" | status |
 |---|---|---|---|
 | `view` | accessors over bytes you own | *(baseline)* | **ships** |
 | `edit` | build or resize a message whose extent is not fixed | may it allocate? | partly |
-| `relate` | predicates over two messages | may it look at two messages? | decided |
+| `relate` | predicates over two messages | may it look at two messages? | **C only** |
 | `frame` | a byte stream in, whole messages out | may it hold bytes between calls? | decided |
 | `converse` | match a reply to its request | may it hold messages between calls? | decided |
 | `drive` | send, receive, retransmit, time out | may it own I/O? | decided |
@@ -160,7 +161,22 @@ says where each one stands:
 down before the rungs exist is the point: "should situ do X" stops being asked
 once per adopter and becomes "at which rung does X live". Rung 2 exists in
 pieces -- `--owned` emits a fixed-size decode today and refuses
-variable-length members, which is that refusal seen from below.
+variable-length members, which is that refusal seen from below. Rung 3 emits C
+today and the other three backends are the rest of the same phase; nothing
+about the construct is C-specific.
+
+A relation is a pure predicate over two views, so `--layer relate` adds one
+function per relation and nothing else:
+
+```c
+situ_err_t situ_rel_response_to(situ_view_t request, situ_view_t response);
+```
+
+It reads through the generated getters rather than the bytes, which is what
+makes the comparison one of *values* -- a big-endian `u16` against a
+little-endian `u32` compares correctly without the author thinking about it.
+A failed constraint is `SITU_ERR_CONSTRAINT`, which already meant exactly
+that, so no new failure class had to reach four runtimes.
 
 Each rung answers one more question yes, and the rung you pick is the
 invariant you get: `--layer view` guarantees the allocation-free property

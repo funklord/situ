@@ -37,6 +37,16 @@ selects
 .IR c ", " cpp ", " rust " or " python ;
 .B \-\-out
 names the output directory.
+.B \-\-layer
+chooses how much of the schema becomes code, each rung emitting everything
+below it:
+.I view
+is accessors over bytes the caller owns and is the default, and
+.I relate
+adds one predicate per declared relation, over two views the caller already
+holds. The remaining rungs --
+.IR edit ", " frame ", " converse " and " drive
+-- are decided and not built, and asking for one says which phase adds it.
 .TP
 .B map
 Emit the capability map, or with

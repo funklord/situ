@@ -29,6 +29,22 @@ from situc.unparse import unparse
 #: next command to be planned will want it.
 FUTURE_COMMANDS: dict[str, int] = {}
 
+#: The layer ladder of decision 0032, low rung first. `--layer` is a choice
+#: over this list and the order is the ladder, so a rung emits everything the
+#: rungs before it emit.
+LAYERS = ("view", "edit", "relate", "frame", "converse", "drive")
+
+#: Rungs that are decided and not built, with the phase that adds each. A
+#: choice the parser accepts and the compiler then refuses by name beats
+#: "invalid choice", which tells a reader the rung does not exist rather than
+#: that it has not arrived -- the same reasoning as FUTURE_COMMANDS above.
+FUTURE_LAYERS: dict[str, str] = {
+	"edit":     "26.99",
+	"frame":    "26.96",
+	"converse": "26.97",
+	"drive":    "26.98",
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
@@ -76,6 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                            "index over each capped run, so reaching an "
 	                            "element is arithmetic rather than a walk "
 	                            "(decision 0022)")
+	build_cmd.add_argument("--layer", choices=LAYERS, default="view",
+	                       help="how much of the schema becomes code. Each rung "
+	                            "emits everything below it: `view` is accessors "
+	                            "over bytes the caller owns, `relate` adds a "
+	                            "predicate per relation (decision 0032)")
 
 	tests_cmd = sub.add_parser("gen-tests", help="generate golden-vector tests")
 	tests_cmd.add_argument("schema", type=Path)
@@ -466,6 +487,20 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
 
+	if args.layer in FUTURE_LAYERS:
+		raise SystemExit(
+			f"situc: --layer {args.layer} is decided and not built; phase "
+			f"{FUTURE_LAYERS[args.layer]} adds it. Decision 0032 has the rung "
+			f"ladder and what each one may assume; `--layer view` is what "
+			f"ships and is the default.")
+
+	if args.layer == "relate" and args.target != "c":
+		raise SystemExit(
+			f"situc: --layer relate emits C today and --target is "
+			f"{args.target}. The predicate is the same in every backend and "
+			f"the other three are part of the same phase, 26.95; nothing "
+			f"about the construct is C-specific.")
+
 	if args.target == "rust":
 		from situc.codegen.rust import generate as generate_rs
 
@@ -511,6 +546,20 @@ def cmd_build(args: argparse.Namespace) -> int:
 			# conclude the generator was broken.
 			for name, why in owned.refusals(resolved):
 				print(f"situc: no owned form for `{name}`: {why}",
+				      file=sys.stderr)
+
+		if args.layer == "relate":
+			from situc.codegen.c import relate
+
+			files.update(relate.generate(parsed, resolved, args.schema.stem,
+			                             args.prefix))
+			# Same reasoning as the owned refusals above: a relation that
+			# generates nothing is reported, because a caller who asked for
+			# the rung and found their predicate absent would conclude the
+			# generator was broken rather than that the comparison has no
+			# correct spelling.
+			for name, why in relate.refusals(parsed, resolved, args.prefix):
+				print(f"situc: no predicate for relation `{name}`: {why}",
 				      file=sys.stderr)
 
 	args.out.mkdir(parents=True, exist_ok=True)

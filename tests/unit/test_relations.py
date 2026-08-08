@@ -11,11 +11,29 @@ comparable is a resolved-layout question and is deliberately not asked yet.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
+from every_schema import ROOT
 from situc import ast, dump, namespaces, unparse, wellformed
+from situc.codegen.c import generate as generate_c
+from situc.codegen.c import relate
 from situc.diagnostics import SituError
+from situc.layout import solve
 from situc.parser import parse_text
+from situc.resolve import ResolvedSchema, resolve
+
+RUNTIME  = ROOT / "runtime" / "c"
+COMPILER = shutil.which("cc") or shutil.which("gcc")
+
+#: What `make test-c` builds generated code with. A predicate is code somebody
+#: ships, so it is held to the same bar -- and these flags are the reason
+#: every operand is widened rather than compared as it lies.
+WARNINGS = ("-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+            "-Wconversion", "-Wsign-conversion")
 
 HEAD = """target buffer;
 endian big;
@@ -24,6 +42,8 @@ struct head {
 	u16 msg;
 	u8  index;
 	u8  chunks;
+	i8  tweak;
+	u64 wide;
 }
 
 struct frame {
@@ -226,3 +246,146 @@ def test_unparse_round_trips_a_relation() -> None:
 	assert [(p.name, p.type_name) for p in again.params] == [
 		("request", "frame"), ("response", "frame")]
 	assert len(again.body) == 2
+
+
+# -- the C predicate (26.95) -------------------------------------------------
+
+
+def analysed(body: str) -> tuple[ast.Schema, ResolvedSchema]:
+	schema = parse_text(HEAD + "\n" + body)
+	wellformed.check(schema)
+	return schema, resolve(schema, solve(schema))
+
+
+def emitted(body: str, stem: str = "t") -> dict[str, str]:
+	schema, resolved = analysed(body)
+	return relate.generate(schema, resolved, stem)
+
+
+def test_the_predicate_takes_two_views_and_returns_an_error() -> None:
+	header = emitted(GOOD)["t_relate.h"]
+
+	assert ("situ_err_t situ_rel_response_to(situ_view_t request, "
+	        "situ_view_t response);") in header
+
+
+def test_the_predicate_lands_in_its_own_files() -> None:
+	"""A rung adds files and changes none (0032), so the ordinary header is
+	byte-identical whether or not this rung was asked for."""
+	schema, resolved = analysed(GOOD)
+
+	plain = generate_c(schema, resolved, "t").files()
+	extra = relate.generate(schema, resolved, "t")
+
+	assert set(extra) == {"t_relate.h", "t_relate.c"}
+	assert not set(plain) & set(extra)
+
+
+def test_a_rung_adds_files_and_changes_none() -> None:
+	"""The additivity invariant, over the pair of rungs that exist."""
+	schema, resolved = analysed(GOOD)
+
+	view   = generate_c(schema, resolved, "t").files()
+	higher = dict(view)
+	higher.update(relate.generate(schema, resolved, "t"))
+
+	assert set(view) < set(higher), "the file set must grow, not merely persist"
+	for name, text in view.items():
+		assert higher[name] == text, f"{name} changed between rungs"
+
+
+def test_it_compares_through_the_getters_not_the_bytes() -> None:
+	"""Reading through the generated getter is what makes the comparison one
+	of values: the getter already byte-swaps, scales and decodes."""
+	source = emitted(GOOD)["t_relate.c"]
+
+	assert "situ_head_msg_get(" in source
+	assert "situ_frame_hdr_view(" in source
+
+
+def test_a_failed_constraint_is_a_constraint_error() -> None:
+	"""No new failure class: `SITU_ERR_CONSTRAINT` already means this, and an
+	eighth would have to arrive in four runtimes."""
+	assert "return SITU_ERR_CONSTRAINT;" in emitted(GOOD)["t_relate.c"]
+
+
+def test_unsigned_operands_widen_to_uint64() -> None:
+	source = emitted(GOOD)["t_relate.c"]
+
+	assert "uint64_t situ_val" in source
+	assert "int64_t situ_val" not in source.replace("uint64_t situ_val", "")
+
+
+def test_a_signed_operand_widens_everything_to_int64() -> None:
+	"""Signed wins wherever it can: every unsigned width below 64 fits in
+	`int64_t` without changing a value."""
+	source = emitted(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.tweak == a.hdr.msg;\n}\n")["t_relate.c"]
+
+	assert "int64_t situ_val" in source
+
+
+def test_a_u64_against_a_signed_value_is_refused() -> None:
+	"""No 64-bit C type holds both ranges, so there is no correct spelling.
+
+	Refused rather than cast, because a cast here changes the answer rather
+	than the type.
+	"""
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.wide == a.hdr.tweak;\n}\n")
+
+	names = dict(relate.refusals(schema, resolved))
+
+	assert "r" in names
+	assert "no 64-bit C type holds both ranges" in names["r"]
+	assert relate.generate(schema, resolved, "t") == {}
+
+
+def test_a_refused_relation_does_not_take_the_others_with_it() -> None:
+	schema, resolved = analysed(
+		"relation bad(a: frame, b: frame) {\n"
+		"\tmust b.hdr.wide == a.hdr.tweak;\n}\n\n"
+		"relation good(a: frame, b: frame) {\n"
+		"\tmust b.hdr.msg == a.hdr.msg;\n}\n")
+
+	header = relate.generate(schema, resolved, "t")["t_relate.h"]
+
+	assert "situ_rel_good" in header
+	assert "situ_rel_bad" not in header
+	assert [name for name, _ in relate.refusals(schema, resolved)] == ["bad"]
+
+
+def test_a_call_is_refused_naming_what_a_relation_asks() -> None:
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust size(b.hdr) == size(a.hdr);\n}\n")
+
+	names = dict(relate.refusals(schema, resolved))
+
+	assert "asks the layout nothing" in names["r"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_predicate_compiles_under_the_same_warnings(
+		tmp_path: Path) -> None:
+	"""Generated code needing a relaxed warning set is code nobody can ship.
+
+	This is the check the widening exists for: `-Wsign-conversion` turns an
+	`i8` compared against a `u16` into a build failure rather than a warning.
+	"""
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in relate.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	assert COMPILER is not None
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{tmp_path}", f"-I{RUNTIME}",
+		 "-c", str(tmp_path / "t_relate.c"), "-o", str(tmp_path / "o.o")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
