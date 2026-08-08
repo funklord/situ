@@ -73,9 +73,12 @@ struct udp_header size=8 repr=ValueConverted
   udp_header.length            offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) ...
 ```
 
-Generated code never allocates, never recurses, and uses no VLAs. A view is a
-value: a base, a limit and a generation counter. One bounds check acquires it
-and every accessor after that is arithmetic.
+A view is a value: a base, a limit and a generation counter. One bounds check
+acquires it and every accessor after that is arithmetic. Generated C, C++ and
+Rust never allocates, never recurses and uses no VLAs; Python's data model has
+no non-allocating spelling and is the stated exception, bounded by the
+schema's own `max`. That guarantee belongs to the default layer -- see *How
+much of it you take*.
 
 ## Quickstart
 
@@ -96,7 +99,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 
 | Command | Artifact |
 |---|---|
-| `situc build` | accessors: C, C++, Rust or Python (`--target`), plus a second accessor family with `--materialize` |
+| `situc build` | accessors: C, C++, Rust or Python (`--target`), and the shape they take (`--owned`, `--materialize`, `--single-file`). How much of a schema becomes code is `--layer`, which is decided and not yet built -- see *How much of it you take* |
 | `situc map` | the capability map; `--check` compares against a committed one and fails on a diff |
 | `situc explain` | one field's capability vector and the blame chain behind every weakening |
 | `situc advise` | ranked, costed schema changes that would restore what was lost |
@@ -134,6 +137,53 @@ situ-walk <image> <hex>
 
 It has no manual page yet, which is a gap and is named here rather than left
 for somebody to notice: `situc` has one and this ships beside it.
+
+## How much of it you take
+
+A schema may describe more of a protocol than you want generated, so how much
+becomes code is a choice you make at the command line rather than in the
+schema. **`--layer` is a decision, not a flag you can type yet** -- what ships
+today is the bottom rung, which is what `situc build` does now with no flag at
+all. The ladder is written down ahead of the rungs on purpose, and the table
+says where each one stands:
+
+| `--layer` | what it emits | the new "yes" | status |
+|---|---|---|---|
+| `view` | accessors over bytes you own | *(baseline)* | **ships** |
+| `edit` | build or resize a message whose extent is not fixed | may it allocate? | partly |
+| `relate` | predicates over two messages | may it look at two messages? | decided |
+| `frame` | a byte stream in, whole messages out | may it hold bytes between calls? | decided |
+| `converse` | match a reply to its request | may it hold messages between calls? | decided |
+| `drive` | send, receive, retransmit, time out | may it own I/O? | decided |
+
+`docs/decisions/0032-the-layer-ladder.md` is the reasoning, and writing it
+down before the rungs exist is the point: "should situ do X" stops being asked
+once per adopter and becomes "at which rung does X live". Rung 2 exists in
+pieces -- `--owned` emits a fixed-size decode today and refuses
+variable-length members, which is that refusal seen from below.
+
+Each rung answers one more question yes, and the rung you pick is the
+invariant you get: `--layer view` guarantees the allocation-free property
+above and `--layer edit` is where it is spent. A rung emits every file the
+rung below emits, byte-identical, plus new ones, so moving up leaves you no
+already-reviewed file to review again.
+
+**The ladder is a second axis, not a replacement for the shape flags.**
+`--layer` says which invariants the output holds to; `--owned`,
+`--materialize` and `--single-file` say what shape it takes. They compose, and
+the ladder explains refusals that used to stand alone: `--materialize` turns
+down an uncapped run at `view` because the index would have to be allocated,
+and `--layer edit --materialize` is how you ask for it anyway.
+
+Above `relate` a schema has to say more than bytes -- which relation pairs a
+request with its reply, what the retry policy is -- because both endpoints
+must agree on those and a command-line flag cannot make them agree. **None of
+it is ever inferred.** There is no default timeout and no implicit
+retransmission; where a schema states no policy the generated code has none. A
+deployment may override a declared *value* at the command line and may never
+introduce a *shape*. Rung 6 owns I/O and never owns the clock: time enters as
+a parameter, so a timeout bug reproduces every run instead of racing a
+deadline nobody wrote down.
 
 ## The language
 
@@ -326,8 +376,15 @@ text files a reviewer can read.
 - No implicit schema evolution and no unknown-field retention. Compatibility is
   explicit, and silently preserving bytes nobody validated is a security
   position rather than an oversight (section 14.5).
-- No allocation in generated code. Callers supply memory.
+- No allocation in generated C, C++ or Rust at the default layer. Callers
+  supply memory, and `--layer edit` is the explicit way to ask for more.
+  Python allocates because its data model gives it no other spelling, bounded
+  by the schema's own `max`.
 - No recursive types: size and capability computation would not terminate.
+- No behaviour the schema did not state. Situ describes conversations where a
+  schema says so, and generates the machinery only when `--layer` asks for it,
+  but it never supplies a fact nobody declared -- no default timeout, no
+  implicit retransmission, no inferred correlation.
 
 ## Building and testing
 
