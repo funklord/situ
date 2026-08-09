@@ -10243,9 +10243,7 @@ doing its job, and it is a different job from writing the walk.
 
 ### 26.96 Rung 4: `frame`
 
-**Status: all four backends have a reader, and the additivity test is
-done. The walker does not frame, and whether it should is a scope question
-rather than work outstanding -- see below.**
+**Status: done, in all four backends and the walk.**
 
 Extent discovery already exists and is generated for every struct --
 `situ_X_required(data, have, &need)`, which answers "how many bytes does this
@@ -10271,11 +10269,12 @@ Rust also gets the lifetime rule for free. C warns in capitals that the view
 `next` returned dies at `advance`; there, `next` borrows the reader, so doing
 it early does not compile.
 
-**Whether the walker frames a stream is unsettled**, and it is the first rung
-where that question is real. Framing is parsing, so it is in scope in a way
-rung 5's table and rung 6's clock are not -- but the image carries no framing
-section yet and 0026's boundary deserves the same care it got for relations.
-Decide it before building it.
+**The walker frames, and it needed no framing section.** That was the
+question, and the answer turned out to be that the image already carries
+enough: `struct_extent` measures one instance from its own bytes, which is
+what `access = Sequential` costs, so a reader is that function plus a buffer
+held between calls. 0026's boundary is untouched -- nothing was added to the
+format.
 
 **The additivity test belongs to this phase**, being the first with two rungs
 above `view` to compare. For every schema and every adjacent pair, generate at
@@ -10290,8 +10289,7 @@ to a linked binary; the additivity test passes for all adjacent pairs.
 
 ### 26.97 Rung 5: `converse`
 
-**Status: all four backends have a table. The walker does not, and
-whether it should is a scope question rather than work outstanding.** The key is packed into one word and refused above 64 bits, because a
+**Status: done, in all four backends and the walk.** The key is packed into one word and refused above 64 bits, because a
 truncated key matches two exchanges to each other with no symptom.
 
 The schema states which relation pairs a request with its reply and what
@@ -10321,6 +10319,16 @@ language, so the cap is not optional in any of them.
 The key analysis is `situc.relation.key_sides`, hoisted out of the C backend
 when the second consumer arrived rather than copied -- so what has no correct
 spelling has none in any backend, and all four refuse the same relations.
+
+**The walker matches without a key at all.** The compiled backends pack the
+equality fields into a word because comparing every pending request would be
+a loop in somebody's hot path. A walker has no hot path and does have the
+predicate, so it runs the relation against each outstanding request instead:
+slower, exactly correct, and unable to disagree with the compiled answer,
+being the same program the fifth column already evaluates. The cost is
+O(pending) rather than O(1), and it is stated rather than hidden -- a walker
+that grew a key to avoid it would be re-deriving what `conversation_key`
+knows, somewhere that cannot see the schema.
 
 ### 26.98 Rung 6: `drive`
 

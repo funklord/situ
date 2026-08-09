@@ -46,7 +46,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.pack import pack
 from situc.resolve import ResolvedSchema, resolve
-from walker import report, vm
+from walker import report, session, vm
 from walker.image import Image, load
 from walker.report import ERR_CONSTRAINT, OK
 from walker.walk import View, acquire
@@ -2188,3 +2188,83 @@ assert owned.id == 0x1234
 assert owned.name == b"hello"
 assert owned.tail == 0x7f
 """
+
+
+# -- the walker at rungs 4 and 5 (26.96, 26.97) ------------------------------
+
+
+def test_the_walk_frames_a_stream_without_a_framing_section() -> None:
+	"""`struct_extent` already measures one instance from its own bytes --
+	that is what `access = Sequential` costs -- so a reader is that function
+	plus a buffer held between calls. The image did not have to grow, unlike
+	for relations."""
+	image, _ = packed(GOOD)
+	shape    = image.relations[0].request
+
+	def one(n: int) -> bytes:
+		return bytes([0x12, 0x30 + n, n, 4]) + bytes(13)
+
+	stream = b"".join(one(i) for i in range(3))
+
+	for chunk in range(1, len(stream) + 1):
+		reader = session.Reader(image, shape)
+		seen   = 0
+		for at in range(0, len(stream), chunk):
+			reader.push(stream[at:at + chunk])
+			while reader.next() is not None:
+				seen += 1
+				reader.advance()
+		assert seen == 3, f"chunk {chunk}: {seen}"
+
+
+def test_next_answers_none_rather_than_refusing_on_a_short_stream() -> None:
+	""""Not yet" is the ordinary answer when feeding a stream; reporting it
+	as a refusal would make every caller catch the common case."""
+	image, _ = packed(GOOD)
+	reader   = session.Reader(image, image.relations[0].request)
+
+	assert reader.next() is None
+	reader.push(b"\x12\x34")
+	assert reader.next() is None
+
+
+def test_the_walk_matches_by_running_the_relation() -> None:
+	"""No key, and no image section for one.
+
+	The compiled backends pack the equality fields into a `u64` because
+	comparing every pending request would be a loop in somebody's hot path.
+	A walker has no hot path and does have the predicate, so it runs the
+	relation -- exactly correct, and it cannot disagree with the compiled
+	answer because it is the same program.
+	"""
+	image, _ = packed(GOOD)
+	shape    = image.relations[0].request
+
+	def view(msg: int) -> View:
+		return acquire(image, bytes([msg >> 8, msg & 0xff, 0, 4]) + bytes(13),
+		               shape)
+
+	talk = session.Conversation(image, 0, cap=2)
+
+	assert talk.record(view(0x1234), 77)
+	assert talk.take(view(0x1234)) == 77
+	assert talk.take(view(0x1234)) is None, "a duplicate names an exchange over"
+	assert talk.take(view(0x9999)) is None, "nobody opened this one"
+
+
+def test_the_walkers_table_is_bounded_like_the_compiled_ones() -> None:
+	"""The bound is not about representation -- it is about refusing somebody
+	who opens exchanges and never answers, which is the same problem whoever
+	is walking."""
+	image, _ = packed(GOOD)
+	shape    = image.relations[0].request
+
+	def view(msg: int) -> View:
+		return acquire(image, bytes([msg >> 8, msg & 0xff, 0, 4]) + bytes(13),
+		               shape)
+
+	talk = session.Conversation(image, 0, cap=2)
+
+	assert talk.record(view(1), 1)
+	assert talk.record(view(2), 2)
+	assert not talk.record(view(3), 3)
