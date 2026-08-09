@@ -486,7 +486,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
 
-	if args.layer in ("frame", "converse", "drive") and args.target != "c":
+	if args.layer in ("converse", "drive") and args.target != "c":
 		raise SystemExit(
 			f"situc: --layer {args.layer} emits C today and --target is "
 			f"{args.target}. Nothing about it is C-specific; the other "
@@ -550,10 +550,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 		files.update(_relate(parse(source), resolved, args))
 
 	if args.layer in ("frame", "converse", "drive"):
-		from situc.codegen.c import frame
-
-		files.update(frame.generate(parse(source), resolved, args.schema.stem,
-		                            args.prefix))
+		files.update(_frame(parse(source), resolved, args))
 
 	if args.layer in ("converse", "drive"):
 		from situc.codegen.c import converse
@@ -835,6 +832,30 @@ def cmd_explain(args: argparse.Namespace) -> int:
 				print(f"    remedy: {weakening.rule.remedy}")
 
 	return 0
+
+
+def _frame(schema: ast.Schema, resolved: ResolvedSchema,
+		args: argparse.Namespace) -> dict[str, str]:
+	"""Rung 4's reader for whichever backend was asked for.
+
+	The four differ in shape here and not only in spelling: Rust answers a
+	`Framing` enum rather than an error code, C++ acquires a view through an
+	`rt::message` it has to own, and Python imposes no capacity because a
+	`bytearray` grows. Each is written against its own runtime rather than
+	translated from C.
+	"""
+	from situc.codegen.c import frame as frame_c
+	from situc.codegen.cpp import frame as frame_cpp
+	from situc.codegen.python import frame as frame_py
+	from situc.codegen.rust import frame as frame_rs
+
+	if args.target == "cpp":
+		return frame_cpp.generate(schema, resolved, args.schema.stem)
+	if args.target == "rust":
+		return frame_rs.generate(schema, resolved, args.schema.stem)
+	if args.target == "python":
+		return frame_py.generate(schema, resolved, args.schema.stem)
+	return frame_c.generate(schema, resolved, args.schema.stem, args.prefix)
 
 
 def _relate(schema: ast.Schema, resolved: ResolvedSchema,

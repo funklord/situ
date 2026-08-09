@@ -10238,8 +10238,9 @@ doing its job, and it is a different job from writing the walk.
 
 ### 26.96 Rung 4: `frame`
 
-**Status: the C reader and the additivity test are done; the other three
-backends and the walker are not.**
+**Status: all four backends have a reader, and the additivity test is
+done. The walker does not frame, and whether it should is a scope question
+rather than work outstanding -- see below.**
 
 Extent discovery already exists and is generated for every struct --
 `situ_X_required(data, have, &need)`, which answers "how many bytes does this
@@ -10250,6 +10251,26 @@ message in caller-supplied storage across calls.
 For a datagram schema this rung degenerates to a passthrough, and that is
 correct rather than waste: 0022 measured that an unused `static inline` in a
 header is never emitted at all, 40 of 44 functions in one schema.
+
+**The four readers are not one design in four spellings**, which is where
+this differs from 26.95. The runtimes disagree in shape: Rust's `required`
+answers a `Framing` enum rather than an error code, so there is no error to
+propagate and two variants to match; C++ acquires a view through an
+`rt::message` the reader has to own; and Python imposes no capacity at all,
+because a `bytearray` grows and a caller buffer would be a limit the language
+does not need -- the same reasoning 26.30 gives for `--materialize` needing a
+`max` in three backends and not the fourth. A reader translated from the C
+one was written and thrown away for exactly that reason.
+
+Rust also gets the lifetime rule for free. C warns in capitals that the view
+`next` returned dies at `advance`; there, `next` borrows the reader, so doing
+it early does not compile.
+
+**Whether the walker frames a stream is unsettled**, and it is the first rung
+where that question is real. Framing is parsing, so it is in scope in a way
+rung 5's table and rung 6's clock are not -- but the image carries no framing
+section yet and 0026's boundary deserves the same care it got for relations.
+Decide it before building it.
 
 **The additivity test belongs to this phase**, being the first with two rungs
 above `view` to compare. For every schema and every adjacent pair, generate at

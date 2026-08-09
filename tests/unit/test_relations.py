@@ -24,10 +24,13 @@ from situc.codegen.c import converse, drive, frame, fuzz
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.cpp import frame as frame_cpp
 from situc.codegen.cpp import relate as relate_cpp
 from situc.codegen.python import generate as generate_py
+from situc.codegen.python import frame as frame_py
 from situc.codegen.python import relate as relate_py
 from situc.codegen.rust import generate as generate_rs
+from situc.codegen.rust import frame as frame_rs
 from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
 from situc.layout import solve
@@ -1339,4 +1342,170 @@ int main(void)
 	}
 	return 0;
 }
+"""
+
+
+# -- rung 4 in the other three backends (26.96) ------------------------------
+#
+# Unlike `relate`, these are not one walk in four spellings. The runtimes
+# differ in shape: Rust answers a `Framing` enum rather than an error code,
+# C++ acquires a view through an `rt::message` the reader has to own, and
+# Python imposes no capacity because a `bytearray` grows. Each test below
+# pins the difference rather than asserting they are alike.
+
+
+def test_rust_matches_a_framing_enum_rather_than_an_error() -> None:
+	"""`required` answers `Complete(n)` or `Need(n)` there, so there is no
+	error to propagate and two variants to match. A reader translated from
+	the C one would have invented a failure that does not exist."""
+	schema, resolved = analysed(GOOD)
+
+	module = frame_rs.generate(schema, resolved, "t")["t_frame.rs"]
+
+	assert "Framing::Complete(n) => Ok(n)," in module
+	assert "Framing::Need(n) if n > self.buf.len() => Err(Error::Bounds)," in module
+
+
+def test_rust_lets_the_borrow_checker_write_the_lifetime_comment() -> None:
+	"""C has to warn in capitals that the view dies at `advance`. Here
+	`next` borrows the reader, so doing it early does not compile."""
+	schema, resolved = analysed(GOOD)
+
+	module = frame_rs.generate(schema, resolved, "t")["t_frame.rs"]
+
+	assert "pub fn next(&self) -> Result<Frame<'_>>" in module
+	assert "pub fn advance(&mut self)" in module
+
+
+def test_cpp_owns_the_message_it_acquires_views_from() -> None:
+	"""`at` takes an `rt::message`, not a raw pointer, so the reader holds
+	one over its own buffer."""
+	schema, resolved = analysed(GOOD)
+
+	header = frame_cpp.generate(schema, resolved, "t")["t_frame.hpp"]
+
+	assert "::situ::rt::message owner_;" in header
+	assert "::situ::frame::at(owner_, 0u, out)" in header
+
+
+def test_python_imposes_no_capacity() -> None:
+	"""A `bytearray` grows, so a caller buffer would be a limit the language
+	does not need -- the same reasoning 26.30 gives for `--materialize`
+	needing a `max` in three backends and not the fourth."""
+	schema, resolved = analysed(GOOD)
+
+	module = frame_py.generate(schema, resolved, "t")["t_frame.py"]
+
+	assert "self._buf   = bytearray()" in module
+	assert "cap" not in module
+
+
+def test_every_backend_frames_the_same_structs() -> None:
+	"""The set is a property of the schema, so it cannot differ per language
+	even though the readers do."""
+	schema, resolved = analysed(GOOD)
+
+	assert (set(frame.generate(schema, resolved, "t")) == {"t_frame.h"}
+	        and set(frame_cpp.generate(schema, resolved, "t")) == {"t_frame.hpp"}
+	        and set(frame_rs.generate(schema, resolved, "t")) == {"t_frame.rs"}
+	        and set(frame_py.generate(schema, resolved, "t")) == {"t_frame.py"})
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_reader_compiles_under_the_same_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in frame_cpp.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "tu.cpp").write_text(
+		'#include "t_frame.hpp"\nint main() { return 0; }\n', encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
+		 "-Wsign-conversion", "-Werror", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 "-fsyntax-only", str(tmp_path / "tu.cpp")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_reader_compiles_under_denied_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed(GOOD)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for name, text in frame_rs.generate(schema, resolved, "t").items():
+		(src / name).write_text(text, encoding="ascii")
+	(src / "lib.rs").write_text(
+		"pub mod situ_rt;\npub mod t;\npub mod t_frame;\n", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type", "lib",
+		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+def test_the_python_reader_reassembles_across_every_boundary(
+		tmp_path: Path) -> None:
+	"""Run, not read. A framing reader that only works when a message
+	arrives whole is one that works on a loopback and nowhere else."""
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_py(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in frame_py.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding="ascii"), encoding="ascii")
+	(tmp_path / "run.py").write_text(_PY_CHUNKS, encoding="ascii")
+
+	ran = subprocess.run(["python3", str(tmp_path / "run.py")],
+	                     capture_output=True, text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_PY_CHUNKS = """import sys
+
+sys.path.insert(0, ".")
+
+from t_frame import frame_reader
+from situ_runtime import TruncatedError
+
+
+def one(n):
+	return bytes([0x12, 0x30 + n, n, 4]) + bytes(13)
+
+
+stream = b"".join(one(i) for i in range(3))
+
+for chunk in range(1, len(stream) + 1):
+	reader = frame_reader()
+	seen = []
+	for at in range(0, len(stream), chunk):
+		reader.push(stream[at:at + chunk])
+		while True:
+			try:
+				view = reader.next()
+			except TruncatedError:
+				break
+			seen.append(view.hdr.index)
+			reader.advance()
+	assert seen == [0, 1, 2], f"chunk {chunk}: {seen}"
 """
