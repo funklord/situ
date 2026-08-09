@@ -10406,10 +10406,8 @@ IOCP -- still has to answer it, and that is where the answer belongs.
 
 ### 26.99 Rung 2: finishing `edit`
 
-**Status: done in C.** The boundary is enforced, `no_alloc` is decidable,
-and a length-prefixed or delimited run gets an owned decode against backing
-the caller supplies. The other three backends are not built; C is where
-`--owned` lives and where the refusal this answers was written. Numbered after the four
+**Status: done.** The boundary is enforced, `no_alloc` is decidable, and a
+length-prefixed or delimited run gets an owned form in all four backends. Numbered after the four
 above because these entries are a log rather than a running order -- its place
 on the ladder is second, and nothing in 26.95 through 26.98 waits for it.
 
@@ -10437,6 +10435,23 @@ case is what 26.69 already calls "a decision about memory nobody asked for",
 and the two-pass shape serves a small bounded run as well as a large one at
 the cost of one measure pass. Building both would be two answers to one
 question.
+
+**Three languages, three answers to "where does it live".** C hands back a
+pointer into backing and asks the caller not to free it. C++ says the same
+with one `rt::const_bytes` rather than a pointer and a length, that being the
+type its accessor already returns. Rust makes the backing a *lifetime*:
+`decode` takes it by mutable reference and returns a value borrowing it, so
+the compiler enforces what the C header asks for -- and `Vec`, the ordinary
+Rust answer, is unavailable because `situ_rt` is `no_std`, which is why a
+caller buffer is the design rather than a translation. **Python takes no
+backing at all**, because `bytes` is already storage that outlives the
+message; a parameter there would be ceremony around what the language did.
+
+That last one is the third time this axis has come up and the answers differ:
+26.96's reader imposes no capacity because a `bytearray` grows, 26.97's table
+requires one because its bound is about refusing an attacker rather than
+about representation, and here there is nothing to bound. The question each
+time is whether the limit exists for the language's sake or the protocol's.
 
 **What backing does not fix is a shape.** A variant, a TLV run or a region is
 refused at every rung, because backing answers a *length* -- giving one to a

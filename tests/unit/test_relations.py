@@ -26,16 +26,19 @@ from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.cpp import converse as converse_cpp
 from situc.codegen.cpp import drive as drive_cpp
+from situc.codegen.cpp import edit as edit_cpp
 from situc.codegen.cpp import frame as frame_cpp
 from situc.codegen.cpp import relate as relate_cpp
 from situc.codegen.python import generate as generate_py
 from situc.codegen.python import converse as converse_py
 from situc.codegen.python import drive as drive_py
+from situc.codegen.python import edit as edit_py
 from situc.codegen.python import frame as frame_py
 from situc.codegen.python import relate as relate_py
 from situc.codegen.rust import generate as generate_rs
 from situc.codegen.rust import converse as converse_rs
 from situc.codegen.rust import drive as drive_rs
+from situc.codegen.rust import edit as edit_rs
 from situc.codegen.rust import frame as frame_rs
 from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
@@ -2035,4 +2038,153 @@ int main(void)
 	}
 	return 0;
 }
+"""
+
+
+# -- rung 2 in the other three backends (26.99) ------------------------------
+
+
+def test_rust_makes_the_backing_a_lifetime_not_a_pointer() -> None:
+	"""The whole difference. C hands back a struct holding a pointer and asks
+	the caller not to free the storage; Rust holds `&'a [u8]` and the
+	compiler will not let them. `Vec` would be the ordinary Rust answer and
+	is unavailable -- `situ_rt` is `no_std`, which is why a caller buffer is
+	the design rather than a translation.
+	"""
+	schema, resolved = analysed_text(VARIABLE)
+
+	module = edit_rs.generate(schema, resolved, "t")["t_edit.rs"]
+
+	assert "pub struct LabelOwned<'a> {" in module
+	assert "pub name: &'a [u8]," in module
+	assert "pub fn decode(data: &[u8], store: &'a mut [u8]) -> Result<Self>" \
+		in module
+
+
+def test_cpp_uses_the_span_the_language_already_has() -> None:
+	"""One `rt::const_bytes` rather than a pointer and a length, and the same
+	type the ordinary accessor returns."""
+	schema, resolved = analysed_text(VARIABLE)
+
+	header = edit_cpp.generate(schema, resolved, "t")["t_edit.hpp"]
+
+	assert "::situ::rt::const_bytes name;" in header
+	assert "std::uint16_t id;" in header
+
+
+def test_python_takes_no_backing_because_bytes_is_the_backing() -> None:
+	"""The other three take a buffer because a variable member has to live
+	somewhere the message does not. `bytes` is already that somewhere, so a
+	backing parameter would be ceremony around what the language did.
+
+	Same reasoning as 26.96's reader imposing no capacity, and the opposite
+	of 26.97's table, whose bound is about refusing an attacker rather than
+	about representation.
+	"""
+	schema, resolved = analysed_text(VARIABLE)
+
+	module = edit_py.generate(schema, resolved, "t")["t_edit.py"]
+
+	assert "\tname: bytes" in module
+	# The word appears in the docstring explaining its absence, so the check
+	# is the signature: `decode` takes the view and nothing else.
+	assert "def decode(cls, view: label) -> \"label_owned\":" in module
+	assert "store" not in module
+
+
+def test_every_backend_offers_an_owned_form_for_the_same_structs() -> None:
+	"""Which structs qualify is a property of the schema, so it cannot differ
+	per language even though the forms do."""
+	schema, resolved = analysed_text(VARIABLE)
+
+	assert (set(edit.generate(schema, resolved, "t")) == {"t_edit.h"}
+	        and set(edit_cpp.generate(schema, resolved, "t")) == {"t_edit.hpp"}
+	        and set(edit_rs.generate(schema, resolved, "t")) == {"t_edit.rs"}
+	        and set(edit_py.generate(schema, resolved, "t")) == {"t_edit.py"})
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_owned_form_compiles_under_the_same_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed_text(VARIABLE)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in edit_cpp.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "tu.cpp").write_text(
+		'#include "t_edit.hpp"\nint main() { return 0; }\n', encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
+		 "-Wsign-conversion", "-Werror", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 "-fsyntax-only", str(tmp_path / "tu.cpp")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_owned_form_compiles_with_its_backing_lifetime(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed_text(VARIABLE)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for name, text in edit_rs.generate(schema, resolved, "t").items():
+		(src / name).write_text(text, encoding="ascii")
+	(src / "lib.rs").write_text(
+		"pub mod situ_rt;\npub mod t;\npub mod t_edit;\n", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type", "lib",
+		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+def test_the_python_owned_value_outlives_the_message(tmp_path: Path) -> None:
+	"""The trade, run in the backend that needs no backing for it."""
+	schema, resolved = analysed_text(VARIABLE)
+
+	for name, text in generate_py(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in edit_py.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding="ascii"), encoding="ascii")
+	(tmp_path / "run.py").write_text(_PY_OWNED, encoding="ascii")
+
+	ran = subprocess.run(["python3", str(tmp_path / "run.py")],
+	                     capture_output=True, text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_PY_OWNED = """import sys
+
+sys.path.insert(0, ".")
+
+from t import label
+from t_edit import label_owned
+from situ_runtime import Message
+
+raw = bytearray(b"\\x12\\x34\\x05hello\\x7f")
+owned = label_owned.decode(label.at(Message(raw), 0, len(raw)))
+
+raw[:] = b"\\xAA" * len(raw)
+
+assert owned.id == 0x1234
+assert owned.name == b"hello"
+assert owned.tail == 0x7f
 """

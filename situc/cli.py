@@ -550,15 +550,20 @@ def cmd_build(args: argparse.Namespace) -> int:
 				      file=sys.stderr)
 
 	if args.layer in ("edit", "relate", "frame", "converse", "drive"):
-		if args.target == "c":
-			from situc.codegen.c import edit
+		from situc.codegen.c import edit
+		from situc.codegen.cpp import edit as edit_cpp
+		from situc.codegen.python import edit as edit_py
+		from situc.codegen.rust import edit as edit_rs
 
-			parsed = parse(source)
-			files.update(edit.generate(parsed, resolved, args.schema.stem,
-			                           args.prefix))
-			for name, why in edit.refusals(resolved):
-				print(f"situc: no owned form for `{name}` at any rung: {why}",
-				      file=sys.stderr)
+		parsed = parse(source)
+		emit = {"cpp": edit_cpp.generate, "rust": edit_rs.generate,
+		        "python": edit_py.generate}.get(args.target)
+		files.update(emit(parsed, resolved, args.schema.stem) if emit
+		             else edit.generate(parsed, resolved, args.schema.stem,
+		                                args.prefix))
+		for name, why in edit.refusals(resolved):
+			print(f"situc: no owned form for `{name}` at any rung: {why}",
+			      file=sys.stderr)
 
 	if args.layer in ("relate", "frame", "converse", "drive"):
 		files.update(_relate(parse(source), resolved, args))
