@@ -46,6 +46,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.pack import pack
 from situc.resolve import ResolvedSchema, resolve
+from walker import owned as owned_walk
 from walker import report, session, vm
 from walker.image import Image, load
 from walker.report import ERR_CONSTRAINT, OK
@@ -2268,3 +2269,64 @@ def test_the_walkers_table_is_bounded_like_the_compiled_ones() -> None:
 	assert talk.record(view(1), 1)
 	assert talk.record(view(2), 2)
 	assert not talk.record(view(3), 3)
+
+
+# -- the walker at rung 2 (26.99) --------------------------------------------
+
+
+def test_the_walk_decodes_an_owned_value_from_an_image() -> None:
+	"""The shape 0034's editor wants: names against values you can hold.
+
+	No backing parameter, for the reason the Python backend takes none --
+	`bytes` is already storage that outlives the message, so a parameter
+	would be ceremony around what the language did.
+	"""
+	schema, resolved = analysed_text(VARIABLE)
+	image = load(pack(schema, resolved, metadata=True)[0])
+
+	raw  = bytearray(b"\x12\x34\x05hello\x7f")
+	held = owned_walk.decode(acquire(image, raw, 0))
+
+	assert held == {"id": 0x1234, "n": 5, "name": b"hello", "tail": 0x7f}
+
+
+def test_the_owned_value_does_not_read_the_message_afterwards() -> None:
+	"""Run against a live buffer, not a copy of one.
+
+	The first version of this test handed `acquire` a `bytes(raw)` and then
+	mutated `raw`, which proved nothing: the copy was made before the
+	overwrite. Passing the bytearray itself is what makes the claim real.
+	"""
+	schema, resolved = analysed_text(VARIABLE)
+	image = load(pack(schema, resolved, metadata=True)[0])
+
+	raw  = bytearray(b"\x12\x34\x05hello\x7f")
+	held = owned_walk.decode(acquire(image, raw, 0))
+	raw[:] = b"\xAA" * len(raw)
+
+	assert held["name"] == b"hello"
+	assert held["id"] == 0x1234
+
+
+def test_an_owned_run_is_bytes_rather_than_whatever_slicing_gave() -> None:
+	"""A bytearray slice of a bytearray message is a copy and so survives,
+	but it is mutable -- and an owned value a caller can edit in place is a
+	different promise from the one this makes."""
+	schema, resolved = analysed_text(VARIABLE)
+	image = load(pack(schema, resolved, metadata=True)[0])
+
+	held = owned_walk.decode(
+		acquire(image, bytearray(b"\x12\x34\x05hello\x7f"), 0))
+
+	assert type(held["name"]) is bytes
+
+
+def test_it_keys_by_name_where_the_image_carries_them() -> None:
+	"""`--metadata` is the tail 26.33 split off for a reader rather than a
+	device. This is a reader."""
+	schema, resolved = analysed_text(VARIABLE)
+	bare = load(pack(schema, resolved, metadata=False)[0])
+
+	held = owned_walk.decode(acquire(bare, bytearray(b"\x12\x34\x02hi\x7f"), 0))
+
+	assert all(key.startswith("placement[") for key in held), held

@@ -10414,8 +10414,9 @@ IOCP -- still has to answer it, and that is where the answer belongs.
 
 ### 26.99 Rung 2: finishing `edit`
 
-**Status: done.** The boundary is enforced, `no_alloc` is decidable, and a
-length-prefixed or delimited run gets an owned form in all four backends. Numbered after the four
+**Status: done, in all four backends and the walk.** The boundary is
+enforced, `no_alloc` is decidable, and a length-prefixed or delimited run
+gets an owned form everywhere. Numbered after the four
 above because these entries are a log rather than a running order -- its place
 on the ladder is second, and nothing in 26.95 through 26.98 waits for it.
 
@@ -10460,6 +10461,15 @@ That last one is the third time this axis has come up and the answers differ:
 requires one because its bound is about refusing an attacker rather than
 about representation, and here there is nothing to bound. The question each
 time is whether the limit exists for the language's sake or the protocol's.
+
+**The walk decodes one too, and needs no backing for the reason Python does
+not.** It hands back member names against values that own themselves, which
+is the shape 0034's editor wants: open an image and a buffer, get a document
+you can still read after the file is closed. The writing half does not exist
+-- the walk is read-only -- and this is the half that does. Whole or nothing,
+as `validate` is: a member the walk cannot place fails the decode naming it,
+because a partial owned value is silent about what it missed and reads as a
+message that lacked the field.
 
 **What backing does not fix is a shape.** A variant, a TLV run or a region is
 refused at every rung, because backing answers a *length* -- giving one to a
