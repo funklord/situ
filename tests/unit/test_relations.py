@@ -20,7 +20,7 @@ import pytest
 from every_schema import ROOT
 from situc import (ast, capmap, dissector, dump, namespaces, relation,
                    unparse, wellformed)
-from situc.codegen.c import converse, frame, fuzz
+from situc.codegen.c import converse, drive, frame, fuzz
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
@@ -1148,3 +1148,195 @@ def test_the_policy_survives_a_round_trip() -> None:
 
 	assert _policy(again.relations()[0]) == [("timeout_ms", 800), ("retries", 3)]
 	assert "[timeout_ms = 800, retries = 3]" in unparse.unparse(schema)
+
+
+# -- rung 6: retransmission, and the clock it does not own (26.98) -----------
+
+
+def driven_pair(body: str) -> tuple[ast.Schema, ResolvedSchema]:
+	return analysed(body)
+
+
+def test_no_policy_generates_no_scheduler() -> None:
+	"""Section 2's non-goal, working. A schema that says nothing about timing
+	gets nothing, rather than a default situ chose."""
+	schema, resolved = analysed(GOOD)
+
+	assert drive.generate(schema, resolved, "t") == {}
+
+
+def test_a_stated_policy_reaches_the_generated_code() -> None:
+	schema, resolved = analysed(POLICY)
+
+	header = drive.generate(schema, resolved, "t")["t_drive.h"]
+
+	assert "#define SITU_RESPONSE_TO_TIMEOUT_MS 800u" in header
+	assert "#define SITU_RESPONSE_TO_RETRIES 3u" in header
+
+
+def test_the_driver_never_reads_a_clock() -> None:
+	"""Time is a parameter at every entry point, which is what makes a
+	timeout bug reproduce instead of race."""
+	schema, resolved = analysed(POLICY)
+
+	header = drive.generate(schema, resolved, "t")["t_drive.h"]
+
+	for banned in ("time(", "clock_gettime", "gettimeofday", "sleep"):
+		assert banned not in header, f"the state machine reached for {banned}"
+	assert "uint32_t now_ms" in header
+
+
+def test_step_returns_the_next_deadline() -> None:
+	"""0033's core requirement: every multiplexing facility takes a timeout,
+	and only the state machine knows when it next needs waking. Without this
+	each driver invents a polling interval and the timing contract stops
+	being the schema's."""
+	schema, resolved = analysed(POLICY)
+
+	header = drive.generate(schema, resolved, "t")["t_drive.h"]
+
+	assert "uint32_t *next_ms," in header
+	assert "return SITU_ERR_TRUNCATED;" in header
+
+
+def test_io_is_a_vtable_the_caller_fills() -> None:
+	"""The shipped path and the tested path are the same program: they differ
+	in what fills this struct and in nothing else."""
+	schema, resolved = analysed(POLICY)
+
+	header = drive.generate(schema, resolved, "t")["t_drive.h"]
+
+	assert "situ_err_t (*submit)(void *ctx, const uint8_t *data, uint32_t len);" \
+		in header
+	assert "malloc" not in header
+
+
+def test_the_deployment_overrides_the_value_and_not_the_shape() -> None:
+	"""`init` takes both numbers, so a satellite link and a LAN run one
+	protocol -- and a relation stating no policy still generates nothing to
+	pass them to."""
+	schema, resolved = analysed(POLICY)
+
+	header = drive.generate(schema, resolved, "t")["t_drive.h"]
+
+	assert "uint32_t timeout_ms," in header
+	assert "uint32_t retries)" in header
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_ten_simulated_minutes_reproduce_exactly(tmp_path: Path) -> None:
+	"""26.98's acceptance criterion, run.
+
+	Loss, reorder and duplication over ten simulated minutes, twenty-one
+	times, with no sleep anywhere -- and the same answer every time. A wall
+	clock inside the state machine would make this a race; a parameter makes
+	it a function.
+	"""
+	schema, resolved = analysed(POLICY)
+
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for emitted in (converse.generate(schema, resolved, "t"),
+	                drive.generate(schema, resolved, "t")):
+		for name, text in emitted.items():
+			(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "scen.c").write_text(_SCENARIO, encoding="ascii")
+
+	assert COMPILER is not None
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{tmp_path}", f"-I{RUNTIME}",
+		 str(tmp_path / "scen.c"), str(tmp_path / "t.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "scen")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "scen")], capture_output=True,
+	                     text=True, timeout=120)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_SCENARIO = """#include <assert.h>
+#include <string.h>
+#include "t_drive.h"
+
+typedef struct { uint32_t sent; uint64_t digest; } wire_t;
+
+static situ_err_t wire_submit(void *ctx, const uint8_t *data, uint32_t len)
+{
+	wire_t *w = (wire_t *)ctx;
+	w->sent++;
+	for (uint32_t i = 0; i < len; i++) {
+		w->digest = w->digest * 1099511628211u ^ data[i];
+	}
+	return SITU_OK;
+}
+
+static uint32_t rng(uint32_t *s)
+{
+	*s ^= *s << 13; *s ^= *s >> 17; *s ^= *s << 5;
+	return *s;
+}
+
+static uint64_t run_once(void)
+{
+	enum { N = 4 };
+	uint8_t bufs[N][17];
+	situ_msg_t msgs[N];
+	situ_view_t views[N];
+	situ_drive_response_to_slot_t slots[N];
+	situ_conv_response_to_slot_t keys[N];
+	situ_drive_response_to_t drive;
+	wire_t wire = {0, 1469598103934665603u};
+	situ_io_t io = { wire_submit, &wire };
+	uint32_t seed = 12345u, expired_total = 0u, matched = 0u;
+
+	situ_drive_response_to_init(&drive, slots, keys, N, io, 100u, 2u);
+
+	for (unsigned i = 0; i < N; i++) {
+		memset(bufs[i], 0, 17);
+		bufs[i][0] = 0x10; bufs[i][1] = (uint8_t)i; bufs[i][3] = 4;
+		situ_msg_init(&msgs[i], bufs[i], 17);
+		assert(situ_frame_view(&msgs[i], 0u, &views[i]) == SITU_OK);
+		assert(situ_drive_response_to_send(&drive, views[i], bufs[i], 17u,
+		                                   i, 0u) == SITU_OK);
+	}
+
+	for (uint32_t now = 0; now <= 600000u; now += 10u) {
+		uint32_t next = 0u, expired = 0u, id = 0u;
+		uint32_t roll = rng(&seed) % 100u;
+
+		if (roll < 8u) {
+			unsigned which = rng(&seed) % N;
+			if (situ_drive_response_to_on_message(&drive, views[which], &id)
+					== SITU_OK) {
+				matched++;
+			}
+		}
+		if (roll >= 8u && roll < 10u) {
+			unsigned which = rng(&seed) % N;
+			(void)situ_drive_response_to_on_message(&drive, views[which], &id);
+		}
+
+		if (situ_drive_response_to_step(&drive, now, &next, &expired)
+				== SITU_ERR_TRUNCATED) {
+			expired_total += expired;
+			break;
+		}
+		expired_total += expired;
+	}
+
+	return wire.digest ^ ((uint64_t)wire.sent << 32)
+	     ^ ((uint64_t)matched << 16) ^ expired_total;
+}
+
+int main(void)
+{
+	const uint64_t first = run_once();
+	for (int i = 0; i < 20; i++) {
+		if (run_once() != first) {
+			return 1;
+		}
+	}
+	return 0;
+}
+"""

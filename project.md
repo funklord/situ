@@ -10285,9 +10285,10 @@ caller supplied.
 
 ### 26.98 Rung 6: `drive`
 
-**Status: the schema half is done -- an exchange states its own timing, and
-half a policy is refused. No emitter yet, and no driver.** Depends on 26.96
-and 26.97. The largest surface on the ladder and the last.
+**Status: the C driver is done -- the schema states a policy, the state
+machine retransmits against a `now_ms` it is handed, and the transcript
+driver is what tests it. The other three backends and the walker are not.**
+The largest surface on the ladder and the last.
 
 The schema states the retransmission and timing contract: on expiry
 retransmit, at most N times, giving up how. Shape in the schema, default value
@@ -10329,12 +10330,18 @@ the shipped path and the tested path are the same program, differing only in
 which driver they link; a schema declaring no policy generates no scheduler
 rather than a defaulted one.
 
-One question this phase inherits and does not get to ignore: a completion
-vtable means something other than the caller owns a buffer while an operation
-is in flight, and a view is a base, a limit and a generation counter over
-memory the caller owns. A kernel writing into that buffer is a mutation no
-setter was called for, so 12.3 has nothing to invalidate on. 0033 records the
-candidates and declines to pick one without a real driver in hand.
+One question this phase inherited: a completion vtable means something other
+than the caller owns a buffer while an operation is in flight, and a view is a
+base, a limit and a generation counter over memory the caller owns. 0033
+listed three candidates and declined to pick without a driver in hand.
+
+**With one in hand it took the simplest: an in-flight buffer is not viewed at
+all.** The state machine holds the *bytes* to retransmit, which are the
+caller's and which the caller undertakes not to move, and an inbound message
+is pushed in by the caller, who owns those bytes too. Nothing at this rung
+views memory it does not control, so 12.3 has nothing to invalidate and the
+question does not arise. A driver that hands buffers to a kernel -- io_uring,
+IOCP -- still has to answer it, and that is where the answer belongs.
 
 ### 26.99 Rung 2: finishing `edit`
 

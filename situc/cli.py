@@ -40,7 +40,6 @@ LAYERS = ("view", "edit", "relate", "frame", "converse", "drive")
 #: that it has not arrived -- the same reasoning as FUTURE_COMMANDS above.
 FUTURE_LAYERS: dict[str, str] = {
 	"edit":     "26.99",
-	"drive":    "26.98",
 }
 
 
@@ -487,11 +486,11 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
 
-	if args.layer in ("frame", "converse") and args.target != "c":
+	if args.layer in ("frame", "converse", "drive") and args.target != "c":
 		raise SystemExit(
 			f"situc: --layer {args.layer} emits C today and --target is "
 			f"{args.target}. Nothing about it is C-specific; the other "
-			f"backends are the rest of phases 26.96 and 26.97.")
+			f"backends are the rest of phases 26.96 to 26.98.")
 
 	if args.layer in FUTURE_LAYERS:
 		raise SystemExit(
@@ -547,16 +546,16 @@ def cmd_build(args: argparse.Namespace) -> int:
 				print(f"situc: no owned form for `{name}`: {why}",
 				      file=sys.stderr)
 
-	if args.layer in ("relate", "frame", "converse"):
+	if args.layer in ("relate", "frame", "converse", "drive"):
 		files.update(_relate(parse(source), resolved, args))
 
-	if args.layer in ("frame", "converse"):
+	if args.layer in ("frame", "converse", "drive"):
 		from situc.codegen.c import frame
 
 		files.update(frame.generate(parse(source), resolved, args.schema.stem,
 		                            args.prefix))
 
-	if args.layer == "converse":
+	if args.layer in ("converse", "drive"):
 		from situc.codegen.c import converse
 
 		parsed = parse(source)
@@ -564,6 +563,16 @@ def cmd_build(args: argparse.Namespace) -> int:
 		                               args.prefix))
 		for name, why in converse.refusals(parsed, resolved):
 			print(f"situc: no conversation table for `{name}`: {why}",
+			      file=sys.stderr)
+
+	if args.layer == "drive":
+		from situc.codegen.c import drive
+
+		parsed = parse(source)
+		files.update(drive.generate(parsed, resolved, args.schema.stem,
+		                            args.prefix))
+		for name, why in drive.refusals(parsed, resolved):
+			print(f"situc: no driver for relation `{name}`: {why}",
 			      file=sys.stderr)
 
 	args.out.mkdir(parents=True, exist_ok=True)
