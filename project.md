@@ -10406,8 +10406,10 @@ IOCP -- still has to answer it, and that is where the answer belongs.
 
 ### 26.99 Rung 2: finishing `edit`
 
-**Status: the boundary is real and `no_alloc` is decidable. The owned decode
-against caller-supplied backing -- cases B, C and D -- is not built.** Numbered after the four
+**Status: done in C.** The boundary is enforced, `no_alloc` is decidable,
+and a length-prefixed or delimited run gets an owned decode against backing
+the caller supplies. The other three backends are not built; C is where
+`--owned` lives and where the refusal this answers was written. Numbered after the four
 above because these entries are a log rather than a running order -- its place
 on the ladder is second, and nothing in 26.95 through 26.98 waits for it.
 
@@ -10425,10 +10427,21 @@ The five cases and what each needs:
 | | size axis | what finishing it takes |
 |---|---|---|
 | A | `Fixed` | done -- `--owned` |
-| B | `Bounded`, small | an inline array at `SITU_X_SIZE_MAX` |
-| C | `Bounded`, large | measure with `_required()`, then caller-supplied backing |
-| D | `Unbounded`, measurable | the same two-pass shape |
-| E | `Unbounded`, not measurable | `situ_alloc_t`, and only here |
+| B | `Bounded`, small | an inline array at `SITU_X_SIZE_MAX` -- not built, and C/D cover it |
+| C | `Bounded`, large | done -- `_edit.h`: measure, then caller-supplied backing |
+| D | `Unbounded`, measurable | done -- the same two-pass shape |
+| E | `Unbounded`, not measurable | refused before codegen by the layer check |
+
+**B was not built and does not need to be.** An inline array at the worst
+case is what 26.69 already calls "a decision about memory nobody asked for",
+and the two-pass shape serves a small bounded run as well as a large one at
+the cost of one measure pass. Building both would be two answers to one
+question.
+
+**What backing does not fix is a shape.** A variant, a TLV run or a region is
+refused at every rung, because backing answers a *length* -- giving one to a
+construct whose shape the data decides would not make an honest owned form of
+it. The refusal says so by name.
 
 Case E is the only one that allocates, and it allocates through a
 caller-supplied `{alloc, free, ctx}` rather than `malloc`, so a freestanding

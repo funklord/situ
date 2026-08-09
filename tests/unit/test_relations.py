@@ -20,7 +20,7 @@ import pytest
 from every_schema import ROOT
 from situc import (ast, capmap, dissector, dump, layers, namespaces,
                    relation, requirements, unparse, wellformed)
-from situc.codegen.c import converse, drive, frame, fuzz
+from situc.codegen.c import converse, drive, edit, frame, fuzz, owned
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
@@ -1885,3 +1885,154 @@ def test_the_reach_rises_with_a_timing_policy() -> None:
 	assert layers.reach(checked(GOOD)) == "relate"
 	assert layers.reach(checked(POLICY)) == "drive"
 	assert layers.reach(parse_text(CASE_E)) == "view"
+
+
+# -- rung 2: the owned decode against caller backing (26.99, 0031 C/D) -------
+
+
+VARIABLE = """target buffer;
+endian big;
+
+struct label {
+	u16 id;
+	u8  n;
+	u8  name[n];
+	u8  tail;
+}
+"""
+
+
+def analysed_text(body: str) -> tuple[ast.Schema, ResolvedSchema]:
+	schema = parse_text(body)
+	return schema, resolve(schema, solve(schema))
+
+
+def test_a_length_prefixed_run_gets_an_owned_form_at_rung_2() -> None:
+	"""`--owned` refuses it -- "a pointer reintroduces exactly the lifetime
+	the caller was escaping, and an array of the worst case is a decision
+	about memory nobody asked for". Both stop being true once the backing is
+	the caller's."""
+	schema, resolved = analysed_text(VARIABLE)
+
+	assert [s.name for s in edit.editable(resolved)] == ["label"]
+	assert [s.name for s in owned.owned_structs(resolved)] == []
+
+
+def test_the_owned_form_points_into_the_backing() -> None:
+	schema, resolved = analysed_text(VARIABLE)
+
+	header = edit.generate(schema, resolved, "t")["t_edit.h"]
+
+	assert "const uint8_t *name;\t/* into your backing */" in header
+	assert "uint32_t name_len;" in header
+	assert "uint16_t id;" in header and "uint8_t tail;" in header
+
+
+def test_it_reads_through_the_accessors_that_already_exist() -> None:
+	"""A delimited member's span and a length-prefixed run's extent are
+	questions the ordinary header answers; a second answer here would
+	eventually disagree with the first."""
+	schema, resolved = analysed_text(VARIABLE)
+
+	header = edit.generate(schema, resolved, "t")["t_edit.h"]
+
+	assert "situ_label_name_len(view)" in header
+	assert "situ_label_name_ptr(view)" in header
+
+
+def test_it_allocates_nothing_and_reports_too_little_backing() -> None:
+	schema, resolved = analysed_text(VARIABLE)
+
+	header = edit.generate(schema, resolved, "t")["t_edit.h"]
+
+	assert "malloc" not in header
+	assert "if (need > cap) {" in header
+	assert "return SITU_ERR_BOUNDS;" in header
+
+
+def test_a_shape_the_data_decides_is_still_refused() -> None:
+	"""Backing answers a length. It does not make an honest owned form of a
+	variant or a TLV run, which are shapes."""
+	schema, resolved = analysed_text(
+		"target buffer;\nendian big;\n\n"
+		"struct picky {\n\tu8 kind;\n"
+		"\tvariant body switch (kind) {\n"
+		"\t\tcase 0: u8 a;\n\t\tcase 1: u16 b;\n"
+		"\t\tdefault: error;\n\t}\n}\n")
+
+	assert edit.editable(resolved) == []
+	assert "shape the data decides" in dict(edit.refusals(resolved))["picky"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_owned_value_outlives_the_message(tmp_path: Path) -> None:
+	"""The whole trade, run: decode, scribble over the buffer, read back."""
+	schema, resolved = analysed_text(VARIABLE)
+
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in edit.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "drive.c").write_text(_EDIT_DRIVER, encoding="ascii")
+
+	assert COMPILER is not None
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{tmp_path}", f"-I{RUNTIME}",
+		 str(tmp_path / "drive.c"), str(tmp_path / "t.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "drive")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "drive")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_EDIT_DRIVER = """#include <assert.h>
+#include <string.h>
+#include "t_edit.h"
+
+int main(void)
+{
+	uint8_t backing[64];
+	situ_label_edit_t owned;
+	uint32_t need = 0;
+
+	{
+		uint8_t buf[32];
+		situ_msg_t msg;
+		memset(buf, 0, sizeof buf);
+		buf[0] = 0x12;
+		buf[1] = 0x34;
+		buf[2] = 5;
+		memcpy(buf + 3, "hello", 5);
+		buf[8] = 0x7f;
+		situ_msg_init(&msg, buf, 9);
+
+		assert(situ_label_edit_backing(&msg, 9u, &need) == SITU_OK);
+		assert(need == 5u);
+		assert(situ_label_edit_decode(&msg, 9u, backing, sizeof backing,
+		                              &owned) == SITU_OK);
+		memset(buf, 0xAA, sizeof buf);
+	}
+
+	assert(owned.id == 0x1234u);
+	assert(owned.n == 5u);
+	assert(owned.tail == 0x7fu);
+	assert(owned.name_len == 5u);
+	assert(memcmp(owned.name, "hello", 5) == 0);
+
+	{
+		uint8_t buf[32];
+		situ_msg_t msg;
+		uint8_t tiny[2];
+		memset(buf, 0, sizeof buf);
+		buf[2] = 5;
+		memcpy(buf + 3, "hello", 5);
+		situ_msg_init(&msg, buf, 9);
+		assert(situ_label_edit_decode(&msg, 9u, tiny, sizeof tiny, &owned)
+		       == SITU_ERR_BOUNDS);
+	}
+	return 0;
+}
+"""

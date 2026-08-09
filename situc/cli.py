@@ -549,6 +549,17 @@ def cmd_build(args: argparse.Namespace) -> int:
 				print(f"situc: no owned form for `{name}`: {why}",
 				      file=sys.stderr)
 
+	if args.layer in ("edit", "relate", "frame", "converse", "drive"):
+		if args.target == "c":
+			from situc.codegen.c import edit
+
+			parsed = parse(source)
+			files.update(edit.generate(parsed, resolved, args.schema.stem,
+			                           args.prefix))
+			for name, why in edit.refusals(resolved):
+				print(f"situc: no owned form for `{name}` at any rung: {why}",
+				      file=sys.stderr)
+
 	if args.layer in ("relate", "frame", "converse", "drive"):
 		files.update(_relate(parse(source), resolved, args))
 
