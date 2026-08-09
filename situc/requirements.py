@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from situc import ast
+from situc import ast, layers
 from situc.capability import Axis, Value, is_at_least
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.expr import Env, evaluate, path_text
@@ -59,6 +59,14 @@ class Predicate:
 
 
 PREDICATES: dict[str, Predicate] = {
+	# Not an axis question, and the axis below is never read: the discharge
+	# intercepts this name before the lookup. It is here because `PREDICATES`
+	# is what makes a name a capability call rather than an unknown function,
+	# and section 16 has listed `no_alloc` as one of the language's since
+	# before anything could answer it.
+	"no_alloc": Predicate(
+		"no_alloc", Axis.SIZE, Value("Unbounded"),
+		"nothing under it needs storage rung 1 cannot give (0031, 0032)"),
 	"absolute_static": Predicate(
 		"absolute_static", Axis.OFFSET, Value("AbsoluteStatic"),
 		"the offset is known at compile time from the message base"),
@@ -138,9 +146,6 @@ DEFERRED_PREDICATES = {
 	"deterministic":
 		"it asks about a codec's property signature rather than a field's "
 		"capability vector, and nothing connects a field to the codec above it",
-	"no_alloc":
-		"generated code never allocates (invariant 4), so this always holds "
-		"and the predicate would be a lint rather than a requirement",
 	"bounded_stack":
 		"it needs a stack-depth model of the generated code, which the "
 		"compiler does not build",
@@ -172,8 +177,13 @@ def discharge(schema: ast.Schema, resolved: ResolvedSchema) -> list[Outcome]:
 	env      = resolved.layout.env.with_layout(resolved.layout.lookup, resolved.layout.explain)
 	outcomes = []
 
+	# Computed once and threaded down: `ResolvedSchema` carries no AST, and
+	# widening every signature to take one for a single predicate would be a
+	# worse trade than passing the answer.
+	needy = layers.allocating(schema)
+
 	for requirement in schema.requirements():
-		outcome = _discharge_one(requirement, resolved, env)
+		outcome = _discharge_one(requirement, resolved, env, needy)
 		outcomes.append(outcome)
 		if outcome.is_error:
 			assert outcome.diagnostic is not None
@@ -183,7 +193,7 @@ def discharge(schema: ast.Schema, resolved: ResolvedSchema) -> list[Outcome]:
 
 
 def _discharge_one(requirement: ast.Requirement, resolved: ResolvedSchema,
-		env: Env) -> Outcome:
+		env: Env, needy: set[str]) -> Outcome:
 	reason = pending_reason(requirement.expr)
 	if reason is not None:
 		return Outcome(requirement, satisfied=False, deferred=reason,
@@ -191,7 +201,8 @@ def _discharge_one(requirement: ast.Requirement, resolved: ResolvedSchema,
 
 	predicate_call = _capability_call(requirement.expr)
 	if predicate_call is not None:
-		return _discharge_capability(requirement, predicate_call, resolved)
+		return _discharge_capability(requirement, predicate_call, resolved,
+		                             needy)
 
 	return _discharge_arithmetic(requirement, env)
 
@@ -219,10 +230,50 @@ def _discharge_arithmetic(requirement: ast.Requirement, env: Env) -> Outcome:
 	return outcome
 
 
+def _discharge_no_alloc(requirement: ast.Requirement, path: str,
+		needy: set[str]) -> Outcome:
+	"""Whether anything at or under `path` needs storage rung 1 cannot give.
+
+	This was one of four predicates section 16 recorded as named and
+	undecidable, on the grounds that generated code never allocates so it
+	always holds and the predicate would be a lint. The layer ladder gave the
+	answer somewhere to be no: a `coded` region whose codec expands without a
+	bound cannot report its output extent without transforming, so it needs
+	`--layer edit` and this says so (0031 case E, 0032).
+	"""
+	reaches = any(one == path or one.startswith(f"{path}.") for one in needy)
+	if not reaches:
+		return Outcome(requirement, satisfied=True,
+		               detail=f"nothing under `{path}` needs storage rung 1 "
+		                      f"cannot give")
+
+	detail = (f"`{path}` reaches a region whose codec expands without a "
+	          f"bound, so its output extent cannot be known without "
+	          f"transforming it")
+	return Outcome(
+		requirement, satisfied=False, detail=detail,
+		diagnostic=Diagnostic(
+			severity = _severity(requirement),
+			message  = f"`no_alloc({path})` does not hold",
+			labels   = [Label(requirement.span, "storage is needed here")],
+			notes    = [
+				detail,
+				"that is case E of "
+				"docs/decisions/0031-where-allocation-is-unavoidable.md, and "
+				"the one case no measure-then-allocate pass serves",
+				"build it at `--layer edit`, or move the region out of what "
+				"this requirement covers",
+			],
+		))
+
+
 def _discharge_capability(requirement: ast.Requirement, call: ast.Call,
-		resolved: ResolvedSchema) -> Outcome:
+		resolved: ResolvedSchema, needy: set[str]) -> Outcome:
 	predicate = PREDICATES[call.name]
 	path      = path_text(call.args[0]) if call.args else None
+
+	if call.name == "no_alloc" and path is not None:
+		return _discharge_no_alloc(requirement, path, needy)
 
 	if path is None:
 		raise error(

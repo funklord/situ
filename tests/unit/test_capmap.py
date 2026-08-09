@@ -262,15 +262,21 @@ def test_an_undecidable_predicate_is_deferred_not_passed() -> None:
 def test_a_deferral_says_why_rather_than_naming_a_phase() -> None:
 	"""These were once keyed by the phase that would implement them, and every
 	one of those phases landed without the predicate arriving. "needs phase 7"
-	then sent a reader to wait for something that had already happened."""
+	then sent a reader to wait for something that had already happened.
+
+	`no_alloc` used to be the first example here, deferred because generated
+	code never allocated so it always held. 26.99 gave the answer somewhere
+	to be no, and it is discharged rather than deferred now -- which is what
+	a list like this is supposed to do: shrink.
+	"""
 	outcomes = discharge(
 		"struct S { u8 a; }\n"
-		"require no_alloc(S);\n"
+		"require deterministic(S);\n"
 		"require no_realloc(S);\n")
 	report = "\n".join(note.render() for note in requirements.deferrals(outcomes))
 
 	assert "phase" not in report
-	assert "never allocates" in report		# no_alloc: true by construction
+	assert "property signature" in report	# deterministic: a codec question
 	assert "runtime value" in report		# no_realloc: a SITU_CHECKED check
 
 

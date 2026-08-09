@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 
 from every_schema import ROOT
-from situc import (ast, capmap, dissector, dump, namespaces, relation,
-                   unparse, wellformed)
+from situc import (ast, capmap, dissector, dump, layers, namespaces,
+                   relation, requirements, unparse, wellformed)
 from situc.codegen.c import converse, drive, frame, fuzz
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
@@ -1816,3 +1816,72 @@ def test_the_rust_driver_compiles_with_its_lifetimes(tmp_path: Path) -> None:
 		capture_output=True, text=True)
 
 	assert built.returncode == 0, built.stderr
+
+
+# -- rung 2: the layer boundary made real (26.99) ----------------------------
+
+
+CASE_E = """target buffer;
+endian big;
+
+codec squeeze {
+	expansion = unbounded;
+	granularity = byte;
+	seekable;
+	deterministic;
+}
+impl squeeze extern "squeeze_go";
+
+struct packed_up {
+	u16 len;
+	coded body(squeeze) { u8 raw[4]; }
+}
+"""
+
+
+def test_an_unbounded_expansion_names_the_member_that_needs_storage() -> None:
+	"""A path rather than a bare name: two structs may each have a `body`
+	and only one of them may need rung 2."""
+	schema = parse_text(CASE_E)
+
+	assert layers.allocating(schema) == {"packed_up.body"}
+	assert layers.floor(schema) == "edit"
+
+
+def test_a_schema_of_bounded_constructs_needs_nothing() -> None:
+	assert layers.allocating(checked(GOOD)) == set()
+	assert layers.floor(checked(GOOD)) == "view"
+
+
+def test_no_alloc_is_decidable_now() -> None:
+	"""Section 16 listed it among four predicates the compiler names and
+	cannot decide, because generated code never allocated so it always held
+	and the predicate would be a lint. The ladder gave the answer somewhere
+	to be no.
+	"""
+	schema   = parse_text(CASE_E + "\nrequire no_alloc(packed_up.len);\n")
+	resolved = resolve(schema, solve(schema))
+
+	outcomes = requirements.discharge(schema, resolved)
+
+	assert outcomes[0].satisfied
+	assert outcomes[0].deferred is None, "it is answered, not deferred"
+
+
+def test_no_alloc_fails_where_storage_is_needed() -> None:
+	schema   = parse_text(CASE_E + "\nassert no_alloc(packed_up.body);\n")
+	resolved = resolve(schema, solve(schema))
+
+	outcome = requirements.discharge(schema, resolved)[0]
+
+	assert not outcome.satisfied
+	assert "expands without a bound" in outcome.detail
+	assert outcome.diagnostic is not None, "a failure needs its blame chain"
+
+
+def test_the_reach_rises_with_a_timing_policy() -> None:
+	"""A relation reaches `relate`; one that states a retransmission policy
+	reaches `drive`, because that is the rung with something to emit for it."""
+	assert layers.reach(checked(GOOD)) == "relate"
+	assert layers.reach(checked(POLICY)) == "drive"
+	assert layers.reach(parse_text(CASE_E)) == "view"

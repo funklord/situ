@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 
 from situc import __version__, ast, capmap, requirements
+from situc import layers
+from situc.layers import LAYERS
 from situc.diagnostics import Diagnostic, Source, SituError
 from situc.dump import dump
 from situc.layout import solve
@@ -29,17 +31,11 @@ from situc.unparse import unparse
 #: next command to be planned will want it.
 FUTURE_COMMANDS: dict[str, int] = {}
 
-#: The layer ladder of decision 0032, low rung first. `--layer` is a choice
-#: over this list and the order is the ladder, so a rung emits everything the
-#: rungs before it emit.
-LAYERS = ("view", "edit", "relate", "frame", "converse", "drive")
-
 #: Rungs that are decided and not built, with the phase that adds each. A
 #: choice the parser accepts and the compiler then refuses by name beats
 #: "invalid choice", which tells a reader the rung does not exist rather than
 #: that it has not arrived -- the same reasoning as FUTURE_COMMANDS above.
 FUTURE_LAYERS: dict[str, str] = {
-	"edit":     "26.99",
 }
 
 
@@ -485,6 +481,19 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"The other backends already hand back owned values: Rust and "
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
+
+	# The layer boundary, made real. A construct whose output extent cannot be
+	# known without transforming it has nowhere to put the result at rung 1,
+	# so asking for it there is refused rather than emitted wrong.
+	needy = layers.allocating(parse(source))
+	if needy and LAYERS.index(args.layer) < LAYERS.index("edit"):
+		named = ", ".join(f"`{one}`" for one in sorted(needy))
+		raise SystemExit(
+			f"situc: --layer {args.layer} cannot emit {named}. Its codec "
+			f"expands without a bound, so the output extent is not known "
+			f"until the transform has run and rung 1 has nowhere to put it. "
+			f"Build it at `--layer edit`, which is what that rung is for "
+			f"(0031 case E, decision 0032).")
 
 	if args.layer in FUTURE_LAYERS:
 		raise SystemExit(

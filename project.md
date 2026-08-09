@@ -3713,6 +3713,11 @@ situ/
     capability.py             axes, lattice, meet
     propagate.py              the 11.3 table, data-driven
     resolve.py                the seam joining layout to the table
+    layers.py                 the layer ladder of decision 0032: which rung a
+                              schema needs, which members need storage rung 1
+                              cannot give, and the two scalars the capability
+                              map carries. Shared because three callers wanted
+                              one answer (26.99)
     relation.py               what a cross-message relation means, once: the
                               walk from a path to the getter that reads it,
                               and which comparisons are expressible at all.
@@ -10401,7 +10406,8 @@ IOCP -- still has to answer it, and that is where the answer belongs.
 
 ### 26.99 Rung 2: finishing `edit`
 
-**Status: not started; the rung exists in pieces.** Numbered after the four
+**Status: the boundary is real and `no_alloc` is decidable. The owned decode
+against caller-supplied backing -- cases B, C and D -- is not built.** Numbered after the four
 above because these entries are a log rather than a running order -- its place
 on the ladder is second, and nothing in 26.95 through 26.98 waits for it.
 
@@ -10430,11 +10436,19 @@ target passes a pool and an audit reads one struct to find every allocation.
 
 What else lands with it:
 
-- **`no_alloc(X)` stops being a tautology.** Section 16 lists it among four
-  predicates the compiler "names and cannot decide", because generated code
-  never allocates so it always holds. Rung 2 gives it content, and
-  `require no_alloc(payload);` becomes a real gate with the existing blame
-  chain.
+- **`no_alloc(X)` stops being a tautology.** Done. It was listed among four
+  predicates the compiler "names and cannot decide" -- and was not in the
+  predicate table at all, so it parsed as an unknown function rather than
+  deferring. It answers now, and fails with a blame chain naming the region
+  and both remedies.
+- **The layer boundary is enforced.** `--layer view` on a schema holding a
+  case-E region is refused, naming the member and saying to build it at
+  `--layer edit`. That is the first place a rung refuses rather than merely
+  emitting less.
+- **`situc/layers.py` holds the answer for all three callers** -- the map
+  prints it, the CLI validates against it, the predicate is discharged from
+  it. `capmap` had it privately, and a second copy of "which constructs need
+  storage" is the drift `relation.py` exists to stop.
 - **The `alloc` axis, per member**, feeding `layer_floor` (0032) -- a member
   above `None` is one rung 1 cannot emit, and the schema's floor is the
   highest such value in it.

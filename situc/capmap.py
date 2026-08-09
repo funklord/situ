@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import PurePath
 
-from situc import ast
+from situc import ast, layers
 from situc.capability import DOMAINS, Axis, Value, Vector
 from situc.resolve import ResolvedSchema
 
@@ -32,37 +32,6 @@ FORMAT_VERSION = 1
 CORE_AXES = (Axis.OFFSET, Axis.SIZE, Axis.ALIGN, Axis.REPR, Axis.ATOMIC)
 
 PATH_WIDTH = 38
-
-
-def _layer_floor(schema: ast.Schema) -> str:
-	"""The lowest rung of 0032's ladder that can emit this schema.
-
-	`edit` where a `coded` region's codec expands without a bound: its output
-	extent cannot be reported without performing the transform, so no
-	measure-then-allocate pass serves it and rung 1 has nowhere to put the
-	result. That is case E of
-	`docs/decisions/0031-where-allocation-is-unavoidable.md`, and the only one
-	of the five that leaves no choice.
-	"""
-	unbounded = {codec.name for codec in schema.codecs()
-	             if codec.expansion is ast.Expansion.UNBOUNDED}
-	if not unbounded:
-		return "view"
-
-	for struct in schema.structs():
-		for member in _walk(struct.members):
-			if (isinstance(member, (ast.Coded, ast.Sealed))
-					and member.codec in unbounded):
-				return "edit"
-	return "view"
-
-
-def _walk(members: tuple[ast.Member, ...]) -> list[ast.Member]:
-	found: list[ast.Member] = []
-	for member in members:
-		found.append(member)
-		found.extend(_walk(getattr(member, "members", ())))
-	return found
 
 
 def _layer_lines(schema: ast.Schema) -> list[str]:
@@ -78,8 +47,8 @@ def _layer_lines(schema: ast.Schema) -> list[str]:
 	what makes deleting a relation a visible regression to a consumer who
 	never built the rung that would emit one.
 	"""
-	floor = _layer_floor(schema)
-	reach = "relate" if schema.relations() else "view"
+	floor = layers.floor(schema)
+	reach = layers.reach(schema)
 	if floor == "view" and reach == "view":
 		return []
 	return ["#",
