@@ -486,12 +486,6 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
 
-	if args.layer == "drive" and args.target != "c":
-		raise SystemExit(
-			f"situc: --layer {args.layer} emits C today and --target is "
-			f"{args.target}. Nothing about it is C-specific; the other "
-			f"backends are the rest of phase 26.98.")
-
 	if args.layer in FUTURE_LAYERS:
 		raise SystemExit(
 			f"situc: --layer {args.layer} is decided and not built; phase "
@@ -563,10 +557,16 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 	if args.layer == "drive":
 		from situc.codegen.c import drive
+		from situc.codegen.cpp import drive as drive_cpp
+		from situc.codegen.python import drive as drive_py
+		from situc.codegen.rust import drive as drive_rs
 
 		parsed = parse(source)
-		files.update(drive.generate(parsed, resolved, args.schema.stem,
-		                            args.prefix))
+		emit = {"cpp": drive_cpp.generate, "rust": drive_rs.generate,
+		        "python": drive_py.generate}.get(args.target)
+		files.update(emit(parsed, resolved, args.schema.stem) if emit
+		             else drive.generate(parsed, resolved, args.schema.stem,
+		                                 args.prefix))
 		for name, why in drive.refusals(parsed, resolved):
 			print(f"situc: no driver for relation `{name}`: {why}",
 			      file=sys.stderr)

@@ -10319,9 +10319,10 @@ spelling has none in any backend, and all four refuse the same relations.
 
 ### 26.98 Rung 6: `drive`
 
-**Status: the C driver is done -- the schema states a policy, the state
-machine retransmits against a `now_ms` it is handed, and the transcript
-driver is what tests it. The other three backends and the walker are not.**
+**Status: all four backends drive. The walker does not, and should not --
+retransmission needs I/O and a clock, which is a protocol engine rather than
+a parser for a format it was not compiled against. Raise it against 0026 if
+it is ever wanted.**
 The largest surface on the ladder and the last.
 
 The schema states the retransmission and timing contract: on expiry
@@ -10353,6 +10354,27 @@ by doing the syscall once the descriptor is.
 What pumps the state machine is a third axis, `--driver`, additive over this
 rung and unknown to it. The transcript driver is the first one written,
 because it is how this phase is tested.
+
+**What the other three decided differently, and why none of it was
+spelling.** Rust's slot *borrows* the bytes it will resend -- C keeps a
+pointer the caller promises not to move, and Rust does not take promises --
+so the driver carries two lifetimes, `&'s mut [Slot<'a>]`, a single one being
+invariant in `'a` and unusable at nearly every call site. It also keeps its
+own key rather than composing with rung 5's table, which in C is free and
+here would be a second mutable borrow threaded through every method. And its
+`step` submits *after* walking the table, because `self.io` and `self.slots`
+cannot both be borrowed mutably -- the borrow checker noticing that the C
+version reenters its own table through a callback and gets away with it.
+
+I/O is a trait in Rust, an interface in C++ and a callable in Python. A
+struct of function pointers is C's way of saying "the caller supplies this",
+and emitting one into the other three would be C leaking through.
+
+One bug the scenario found rather than the reading: Python's `step` returned
+`None` where nothing was outstanding, which lost the expiry count on the very
+call that gave up on the last exchange. C writes it through a pointer
+alongside `SITU_ERR_TRUNCATED`, so the two were telling a caller different
+things about the same schema.
 
 **Invariant 8 is the one to re-read before starting.** This is the first rung
 whose output depends on libc, and the machine running `situc` must not be

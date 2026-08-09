@@ -25,14 +25,17 @@ from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.cpp import converse as converse_cpp
+from situc.codegen.cpp import drive as drive_cpp
 from situc.codegen.cpp import frame as frame_cpp
 from situc.codegen.cpp import relate as relate_cpp
 from situc.codegen.python import generate as generate_py
 from situc.codegen.python import converse as converse_py
+from situc.codegen.python import drive as drive_py
 from situc.codegen.python import frame as frame_py
 from situc.codegen.python import relate as relate_py
 from situc.codegen.rust import generate as generate_rs
 from situc.codegen.rust import converse as converse_rs
+from situc.codegen.rust import drive as drive_rs
 from situc.codegen.rust import frame as frame_rs
 from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
@@ -1539,7 +1542,7 @@ def test_the_rust_table_borrows_nothing_from_a_message() -> None:
 
 	assert "\tkey: u64," in module
 	assert "\tid: u32," in module
-	assert "&'a mut [Response_toSlot]" in module or "Slot]" in module
+	assert "slots: &'a mut [ResponseToSlot]," in module
 
 
 def test_cpp_types_both_halves_of_the_exchange() -> None:
@@ -1685,3 +1688,131 @@ try:
 except BoundsError:
 	pass
 """
+
+
+# -- rung 6 in the other three backends (26.98) ------------------------------
+
+
+def test_the_rust_slot_borrows_the_bytes_it_will_resend() -> None:
+	"""The design fork this rung forced.
+
+	C keeps a `const uint8_t *` the caller promises not to move. Rust will
+	not take a promise, so the slot borrows -- and the driver carries two
+	lifetimes, `&'s mut [Slot<'a>]`, because a single one is invariant in
+	`'a` and unusable at almost every call site.
+	"""
+	schema, resolved = analysed(POLICY)
+
+	module = drive_rs.generate(schema, resolved, "t")["t_drive.rs"]
+
+	assert "pub struct ResponseToSlot<'a> {" in module
+	assert "\tbytes: &'a [u8]," in module
+	assert "slots: &'s mut [ResponseToSlot<'a>]," in module
+
+
+def test_the_rust_driver_submits_after_walking_its_own_table() -> None:
+	"""`self.io` and `self.slots` cannot both be borrowed mutably, which is
+	the borrow checker noticing that C reenters its own table through a
+	callback and gets away with it."""
+	schema, resolved = analysed(POLICY)
+
+	module = drive_rs.generate(schema, resolved, "t")["t_drive.rs"]
+
+	assert "for bytes in due.iter().take(n).flatten() {" in module
+
+
+def test_io_is_the_shape_each_language_already_has() -> None:
+	"""A struct of function pointers is C's way of saying "the caller
+	supplies this". Emitting one into the other three would be C leaking."""
+	schema, resolved = analysed(POLICY)
+
+	assert "pub trait Io {" in drive_rs.generate(schema, resolved, "t")["t_drive.rs"]
+	assert "virtual ::situ::rt::err submit(" in \
+		drive_cpp.generate(schema, resolved, "t")["t_drive.hpp"]
+	assert "submit: Callable[[bytes], None]" in \
+		drive_py.generate(schema, resolved, "t")["t_drive.py"]
+
+
+def test_no_backend_reads_a_clock() -> None:
+	schema, resolved = analysed(POLICY)
+
+	for text in (drive.generate(schema, resolved, "t")["t_drive.h"],
+	             drive_cpp.generate(schema, resolved, "t")["t_drive.hpp"],
+	             drive_rs.generate(schema, resolved, "t")["t_drive.rs"],
+	             drive_py.generate(schema, resolved, "t")["t_drive.py"]):
+		for banned in ("time(", "clock_gettime", "Instant::now", "time.time",
+		               "sleep"):
+			assert banned not in text, f"a driver reached for {banned}"
+
+
+def test_python_returns_the_expiry_count_even_when_it_empties() -> None:
+	"""Found by running it. `step` returned None where nothing was left,
+	which lost the count on the very call that gave up on the last exchange
+	-- and C writes it through a pointer alongside SITU_ERR_TRUNCATED, so the
+	two backends were telling a caller different things.
+	"""
+	schema, resolved = analysed(POLICY)
+
+	module = drive_py.generate(schema, resolved, "t")["t_drive.py"]
+
+	assert "def step(self, now_ms: int) -> tuple[int | None, int]:" in module
+	assert "return (soonest, expired)" in module
+
+
+def test_no_policy_generates_no_driver_in_any_backend() -> None:
+	schema, resolved = analysed(GOOD)
+
+	assert drive.generate(schema, resolved, "t") == {}
+	assert drive_cpp.generate(schema, resolved, "t") == {}
+	assert drive_rs.generate(schema, resolved, "t") == {}
+	assert drive_py.generate(schema, resolved, "t") == {}
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_driver_compiles_under_the_same_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed(POLICY)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in drive_cpp.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "tu.cpp").write_text(
+		'#include "t_drive.hpp"\nint main() { return 0; }\n', encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
+		 "-Wsign-conversion", "-Werror", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 "-fsyntax-only", str(tmp_path / "tu.cpp")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_driver_compiles_with_its_lifetimes(tmp_path: Path) -> None:
+	"""The lifetimes are the point, so the check is that they resolve."""
+	schema, resolved = analysed(POLICY)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for name, text in drive_rs.generate(schema, resolved, "t").items():
+		(src / name).write_text(text, encoding="ascii")
+	(src / "lib.rs").write_text(
+		"pub mod situ_rt;\npub mod t;\npub mod t_drive;\n", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type", "lib",
+		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
