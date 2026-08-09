@@ -24,12 +24,15 @@ from situc.codegen.c import converse, drive, frame, fuzz
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c import relate
 from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.cpp import converse as converse_cpp
 from situc.codegen.cpp import frame as frame_cpp
 from situc.codegen.cpp import relate as relate_cpp
 from situc.codegen.python import generate as generate_py
+from situc.codegen.python import converse as converse_py
 from situc.codegen.python import frame as frame_py
 from situc.codegen.python import relate as relate_py
 from situc.codegen.rust import generate as generate_rs
+from situc.codegen.rust import converse as converse_rs
 from situc.codegen.rust import frame as frame_rs
 from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
@@ -1508,4 +1511,177 @@ for chunk in range(1, len(stream) + 1):
 			seen.append(view.hdr.index)
 			reader.advance()
 	assert seen == [0, 1, 2], f"chunk {chunk}: {seen}"
+"""
+
+
+# -- rung 5 in the other three backends (26.97) ------------------------------
+
+
+def test_rust_calls_the_taking_half_take_because_match_is_a_keyword() -> None:
+	"""And it is the better name: `Option::take` already establishes that it
+	leaves nothing behind, which is why a duplicate reply is refused."""
+	schema, resolved = analysed(GOOD)
+
+	module = converse_rs.generate(schema, resolved, "t")["t_converse.rs"]
+
+	assert "pub fn take(&mut self, response: &Frame) -> Result<u32>" in module
+	assert "fn match" not in module
+
+
+def test_the_rust_table_borrows_nothing_from_a_message() -> None:
+	"""A `u64` key and a `u32` handle, so ownership has no opinion. Had it
+	kept the request's bytes, a caller-supplied slice would have had to
+	outlive every call and the design would have changed rather than been
+	translated."""
+	schema, resolved = analysed(GOOD)
+
+	module = converse_rs.generate(schema, resolved, "t")["t_converse.rs"]
+
+	assert "\tkey: u64," in module
+	assert "\tid: u32," in module
+	assert "&'a mut [Response_toSlot]" in module or "Slot]" in module
+
+
+def test_cpp_types_both_halves_of_the_exchange() -> None:
+	"""So they cannot be passed the wrong way round. C cannot: every view
+	there is a `situ_view_t`."""
+	schema, resolved = analysed(GOOD)
+
+	header = converse_cpp.generate(schema, resolved, "t")["t_converse.hpp"]
+
+	assert "record(const ::situ::frame &request," in header
+	assert "take(const ::situ::frame &response," in header
+
+
+def test_python_requires_a_capacity_unlike_its_framing_reader() -> None:
+	"""The departure worth arguing. A reader's size is about representation
+	and a `bytearray` grows; a pending table's bound is about refusing
+	somebody who opens exchanges and never answers them, which is the same
+	problem in every language.
+	"""
+	schema, resolved = analysed(GOOD)
+
+	table  = converse_py.generate(schema, resolved, "t")["t_converse.py"]
+	reader = frame_py.generate(schema, resolved, "t")["t_frame.py"]
+
+	assert "def __init__(self, cap: int) -> None:" in table
+	assert "raise BoundsError(" in table
+	assert "cap" not in reader
+
+
+def test_every_backend_refuses_the_same_relations() -> None:
+	"""The key analysis is `situc.relation`'s, so what has no correct
+	spelling has none in any of them."""
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.wide == a.hdr.wide;\n"
+		"\tmust b.hdr.msg == a.hdr.msg;\n}\n")
+
+	assert (dict(converse.refusals(schema, resolved))
+	        == dict(converse_cpp.refusals(schema, resolved))
+	        == dict(converse_rs.refusals(schema, resolved))
+	        == dict(converse_py.refusals(schema, resolved)))
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_table_compiles_under_the_same_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in converse_cpp.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "tu.cpp").write_text(
+		'#include "t_converse.hpp"\nint main() { return 0; }\n',
+		encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
+		 "-Wsign-conversion", "-Werror", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 "-fsyntax-only", str(tmp_path / "tu.cpp")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_table_compiles_under_denied_warnings(
+		tmp_path: Path) -> None:
+	schema, resolved = analysed(GOOD)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for name, text in converse_rs.generate(schema, resolved, "t").items():
+		(src / name).write_text(text, encoding="ascii")
+	(src / "lib.rs").write_text(
+		"pub mod situ_rt;\npub mod t;\npub mod t_converse;\n", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type", "lib",
+		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
+
+
+def test_the_python_table_matches_refuses_and_fills(tmp_path: Path) -> None:
+	"""Every acceptance criterion of 26.97, run in the fourth backend."""
+	schema, resolved = analysed(GOOD)
+
+	for name, text in generate_py(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in converse_py.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding="ascii"), encoding="ascii")
+	(tmp_path / "run.py").write_text(_PY_TABLE, encoding="ascii")
+
+	ran = subprocess.run(["python3", str(tmp_path / "run.py")],
+	                     capture_output=True, text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_PY_TABLE = """import sys
+
+sys.path.insert(0, ".")
+
+from t import frame
+from t_converse import response_to_table
+from situ_runtime import BoundsError, ConstraintError, Message
+
+
+def view(msg):
+	raw = bytearray(msg.to_bytes(2, "big") + bytes([0, 4]) + bytes(13))
+	return frame.at(Message(raw), 0)
+
+
+table = response_to_table(2)
+table.record(view(0x1234), 77)
+assert table.take(view(0x1234)) == 77
+
+for bad in (0x1234, 0x9999):
+	try:
+		table.take(view(bad))
+		raise SystemExit("a stale reply was matched")
+	except ConstraintError:
+		pass
+
+table.record(view(1), 1)
+table.record(view(2), 2)
+try:
+	table.record(view(3), 3)
+	raise SystemExit("a full table accepted a third")
+except BoundsError:
+	pass
 """

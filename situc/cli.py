@@ -486,11 +486,11 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
 
-	if args.layer in ("converse", "drive") and args.target != "c":
+	if args.layer == "drive" and args.target != "c":
 		raise SystemExit(
 			f"situc: --layer {args.layer} emits C today and --target is "
 			f"{args.target}. Nothing about it is C-specific; the other "
-			f"backends are the rest of phases 26.96 to 26.98.")
+			f"backends are the rest of phase 26.98.")
 
 	if args.layer in FUTURE_LAYERS:
 		raise SystemExit(
@@ -556,8 +556,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 		from situc.codegen.c import converse
 
 		parsed = parse(source)
-		files.update(converse.generate(parsed, resolved, args.schema.stem,
-		                               args.prefix))
+		files.update(_converse(parsed, resolved, args))
 		for name, why in converse.refusals(parsed, resolved):
 			print(f"situc: no conversation table for `{name}`: {why}",
 			      file=sys.stderr)
@@ -856,6 +855,29 @@ def _frame(schema: ast.Schema, resolved: ResolvedSchema,
 	if args.target == "python":
 		return frame_py.generate(schema, resolved, args.schema.stem)
 	return frame_c.generate(schema, resolved, args.schema.stem, args.prefix)
+
+
+def _converse(schema: ast.Schema, resolved: ResolvedSchema,
+		args: argparse.Namespace) -> dict[str, str]:
+	"""Rung 5's table for whichever backend was asked for.
+
+	`match` is a keyword in Rust, so the taking half is `take` there -- and
+	Python's capacity is required rather than optional, unlike its framing
+	reader: a buffer's size is about representation and a pending table's
+	bound is about refusing somebody who opens exchanges and never answers.
+	"""
+	from situc.codegen.c import converse as conv_c
+	from situc.codegen.cpp import converse as conv_cpp
+	from situc.codegen.python import converse as conv_py
+	from situc.codegen.rust import converse as conv_rs
+
+	if args.target == "cpp":
+		return conv_cpp.generate(schema, resolved, args.schema.stem)
+	if args.target == "rust":
+		return conv_rs.generate(schema, resolved, args.schema.stem)
+	if args.target == "python":
+		return conv_py.generate(schema, resolved, args.schema.stem)
+	return conv_c.generate(schema, resolved, args.schema.stem, args.prefix)
 
 
 def _relate(schema: ast.Schema, resolved: ResolvedSchema,

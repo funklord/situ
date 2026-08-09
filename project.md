@@ -10285,8 +10285,8 @@ to a linked binary; the additivity test passes for all adjacent pairs.
 
 ### 26.97 Rung 5: `converse`
 
-**Status: the C table is done; the other three backends and the walker are
-not.** The key is packed into one word and refused above 64 bits, because a
+**Status: all four backends have a table. The walker does not, and
+whether it should is a scope question rather than work outstanding.** The key is packed into one word and refused above 64 bits, because a
 truncated key matches two exchanges to each other with no symptom.
 
 The schema states which relation pairs a request with its reply and what
@@ -10303,6 +10303,19 @@ Acceptance: a reply matched to its request through the relation alone; a late
 or duplicate reply refused rather than matched; the table bounded by a caller
 size with a named failure when it fills; and no allocation beyond what the
 caller supplied.
+
+**Two things the other backends decided differently.** `match` is a keyword
+in Rust, so the taking half is `take` there -- the better name anyway, since
+`Option::take` already carries "leaves nothing behind", which is exactly why
+a duplicate reply is refused. And **Python's capacity is required here,
+unlike its framing reader's**: a reader's size is about representation and a
+`bytearray` grows, while a pending table's bound is about refusing somebody
+who opens exchanges and never answers them. That reason is the same in every
+language, so the cap is not optional in any of them.
+
+The key analysis is `situc.relation.key_sides`, hoisted out of the C backend
+when the second consumer arrived rather than copied -- so what has no correct
+spelling has none in any backend, and all four refuse the same relations.
 
 ### 26.98 Rung 6: `drive`
 

@@ -351,3 +351,74 @@ def conversation_key(relation: ast.Relation) -> list[tuple[str, str]]:
 			pairs.append((right[0], left[0]))
 
 	return pairs
+
+
+#: Bits a packed key may occupy. One `uint64_t`, and see the module docstring
+#: for why a wider one is refused rather than truncated.
+KEY_BITS = 64
+
+
+def keykey_width(resolved: ResolvedSchema, bind: Read) -> int:
+	struct = resolved.structs[bind.struct]
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.path == f"{bind.struct}.{bind.member}":
+			return placement.size_bits or 0
+	return 0
+
+
+Side = list[tuple[list[Binding], int]]
+
+
+def key_width(resolved: ResolvedSchema, bind: Read) -> int:
+	"""How many bits the field a read lands on occupies."""
+	struct = resolved.structs[bind.struct]
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.path == f"{bind.struct}.{bind.member}":
+			return placement.size_bits or 0
+	return 0
+
+
+def key_sides(relation: ast.Relation,
+		resolved: ResolvedSchema) -> tuple[Side, Side]:
+	"""The reads that build each side's key, in declaration order.
+
+	Taken from the plan rather than resolved again here, so the accessors a
+	key is read through are the same ones the predicate compares.
+	"""
+	first, second = (param.name for param in relation.params)
+	pairs = conversation_key(relation)
+	if not pairs:
+		raise Refused("it states no equality, so nothing identifies an exchange")
+
+	request: Side = []
+	response: Side = []
+	total = 0
+
+	for constraint, must in zip(plan(relation, resolved), relation.body):
+		expr = must.expr
+		if not isinstance(expr, ast.Binary) or expr.op != "==":
+			continue
+
+		reads = [bind for bind in constraint.bindings if isinstance(bind, Read)]
+		if len(reads) != 2:
+			continue
+
+		for bind in reads:
+			chain = [step for step in constraint.bindings
+			         if step.path == bind.path or bind.path.startswith(
+				         step.path + ".")]
+			side = (chain, key_width(resolved, bind))
+			(request if bind.path.split(".")[0] == first else response).append(side)
+
+		total += key_width(resolved, reads[0])
+
+	if total > KEY_BITS:
+		raise Refused(f"its key is {total} bits and a packed one holds "
+		              f"{KEY_BITS}; two exchanges that collided would be "
+		              f"matched to each other")
+	if not request or len(request) != len(response):
+		raise Refused("its key does not read one field from each message")
+
+	return request, response
