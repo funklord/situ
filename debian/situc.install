@@ -1,6 +1,9 @@
 usr/bin/situc
 usr/bin/situ-walk
+usr/bin/situ-edit
+usr/bin/situ-edit-tui
 usr/lib/situc
 usr/lib/walker
+usr/lib/editor
 usr/share/situc
 usr/share/man

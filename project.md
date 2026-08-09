@@ -3808,6 +3808,12 @@ situ/
                               otherwise skip, and asserts the skip count --
                               a runner with none of them reports green over
                               a fraction of the tests (26.83)
+  editor/
+    document.py               one message, placed and read: the core of
+                              decision 0034, which the CLI, the TUI and the
+                              GUI all drive and none of them duplicates
+    text.py                   opening a document and rendering one as lines,
+                              shared by the two frontends that want text
   walker/                     the interpreter: a packed image, walked over
                               bytes. A second program, never imported by
                               `situc` -- decision 0026, amended (26.81)

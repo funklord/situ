@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""situ-edit-tui -- the same document, on a terminal.
+
+A frontend and nothing else: every question it asks is `editor.document`'s,
+and it holds no rule about what a field costs or what a write would mean.
+The CLI can do everything this can, which is 0034's rule and what keeps this
+testable -- the parts worth testing are in the core, and the core is what the
+CLI drives.
+
+`curses` is in the standard library, so this keeps the no-dependency
+property. Only the GUI takes a third-party dependency, in its own binary.
+"""
+
+from __future__ import annotations
+
+import argparse
+import curses
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+if str(HERE) not in sys.path:
+	sys.path.insert(0, str(HERE))
+
+from editor.document import Document			# noqa: E402
+from editor.text import open_from, render		# noqa: E402
+from walker.walk import Refused				# noqa: E402
+
+
+def rows(document: Document) -> list[str]:
+	"""The same lines the CLI prints, because they are the same document."""
+	return render(document)
+
+
+def _draw(screen: "curses._CursesWindow", document: Document) -> None:
+	lines = rows(document)
+	top   = 0
+
+	while True:
+		screen.erase()
+		height, width = screen.getmaxyx()
+		for row, line in enumerate(lines[top:top + height - 1]):
+			screen.addnstr(row, 0, line, width - 1)
+		screen.addnstr(height - 1, 0,
+		               "  up/down  q quit  --  read-only (decision 0034)",
+		               width - 1, curses.A_REVERSE)
+		screen.refresh()
+
+		key = screen.getch()
+		if key in (ord("q"), ord("Q"), 27):
+			return
+		if key in (curses.KEY_DOWN, ord("j")):
+			top = min(top + 1, max(0, len(lines) - 1))
+		elif key in (curses.KEY_UP, ord("k")):
+			top = max(top - 1, 0)
+
+
+def main() -> int:
+	parser = argparse.ArgumentParser(
+		prog="situ-edit-tui",
+		description="read a message against a situ schema, on a terminal")
+	parser.add_argument("schema", type=Path)
+	parser.add_argument("message", type=Path)
+	parser.add_argument("--struct", default=None)
+	parser.add_argument("--hex", action="store_true")
+	parser.add_argument("--no-ui", action="store_true",
+	                    help="print what would be shown and exit, so this "
+	                         "frontend is testable without a terminal")
+	args = parser.parse_args()
+
+	try:
+		document = open_from(args.schema, args.message,
+		                     HERE / "bin" / "situc", args.struct, args.hex)
+	except Refused as why:
+		print(f"situ-edit-tui: {why}", file=sys.stderr)
+		return 1
+
+	if args.no_ui:
+		print("\n".join(rows(document)))
+		return 0
+
+	curses.wrapper(_draw, document)
+	return 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

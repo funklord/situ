@@ -66,6 +66,7 @@ help:
 	@echo '  lint       alias for style-source'
 	@echo '  hooks      install the commit-message hook from tools/hooks/'
 	@echo '  walk       the walker over an image: bin/situ-walk'
+	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  cross      compile-only build for aarch64'
@@ -104,8 +105,11 @@ test-py: runtime
 # `walker` is named for the same reason. It arrived checked only because the
 # suite imports it, which is a coverage that disappears the moment a module
 # has no test importing it -- the exact shape of the gap above.
+#
+# `editor` is named on arrival rather than after the same lesson a third
+# time (0034).
 typecheck:
-	$(PYTHON) -m mypy situc walker tools tests
+	$(PYTHON) -m mypy situc walker editor tools tests
 	$(PYTHON) -m mypy --strict runtime/python
 
 # `style` replaced `lint_conventions.py`, and this target kept invoking the
@@ -173,6 +177,11 @@ install: runtime
 	find walker -name '*.py' -exec install -Dm644 '{}' \
 		'$(DESTDIR)$(PREFIX)/lib/{}' \;
 	install -Dm755 bin/situ-walk '$(DESTDIR)$(PREFIX)/bin/situ-walk'
+	@# The editor and its frontends. `editor/` is pure stdlib, like the rest
+	@# of the tool, and imports no compiler (0026, 0034).
+	find editor -name '*.py' -exec install -Dm644 '{}' '$(DESTDIR)$(PREFIX)/lib/{}' \;
+	install -Dm755 bin/situ-edit '$(DESTDIR)$(PREFIX)/bin/situ-edit'
+	install -Dm755 bin/situ-edit-tui '$(DESTDIR)$(PREFIX)/bin/situ-edit-tui'
 	install -Dm644 runtime/c/situ.h '$(DESTDIR)$(PREFIX)/include/situ.h'
 	install -Dm644 '$(RUNTIME_LIB)' '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
 	@# The manual page ships from here rather than from debhelper, so that a

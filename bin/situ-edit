@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""situ-edit -- read a message against a situ schema or packed image.
+
+The reference frontend of decision 0034, and its test harness. Nothing the
+TUI or the GUI can do may be absent here: an interactive frontend is hard to
+test and a scriptable one is not, so this is what keeps the other two
+testable, and it is what lets CI ask whether a capture still conforms.
+
+Read-only. The write path is its own piece of work (0034); this is the half
+that makes it worth having.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+if str(HERE) not in sys.path:
+	sys.path.insert(0, str(HERE))
+
+from editor.text import open_from, render		# noqa: E402
+from walker.walk import Refused			# noqa: E402
+
+
+def build_parser() -> argparse.ArgumentParser:
+	parser = argparse.ArgumentParser(
+		prog="situ-edit",
+		description="read a message against a situ schema or packed image")
+	parser.add_argument("schema", type=Path,
+	                    help="a .situ schema, or a packed image")
+	parser.add_argument("message", type=Path, help="the bytes to read")
+	parser.add_argument("--struct", default=None,
+	                    help="which layout to read it as (default: the first)")
+	parser.add_argument("--hex", action="store_true",
+	                    help="the message file holds hex rather than bytes")
+	return parser
+
+
+def main() -> int:
+	args = build_parser().parse_args()
+	try:
+		document = open_from(args.schema, args.message, HERE / "bin" / "situc",
+		                     args.struct, args.hex)
+	except Refused as why:
+		print(f"situ-edit: {why}", file=sys.stderr)
+		return 1
+
+	print("\n".join(render(document)))
+	return 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

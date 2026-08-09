@@ -1,7 +1,10 @@
 # 0034: the editor is the tooling walker, in three frontends over one core
 
-Status: accepted in shape. Blocked on 26.99 for anything that writes, and no
-frontend is scheduled.
+Status: accepted, and the read-only half is built -- the core, the CLI and
+the TUI. The GUI is not: no Qt binding is installed on the machine this was
+written on, and writing one that cannot be run or even imported is not
+building it. Anything that writes is still blocked, now on its own work
+rather than on 26.99, which has landed.
 Date: 2026-08-08
 Phase: unscheduled; depends on 26.99 (rung 2)
 
@@ -122,7 +125,12 @@ input is least trusted.
 ## Consequences
 
 - A new core module, and three frontends over it. None of the three holds an
-  editing rule.
+  editing rule. **Built: `editor/` plus `situ-edit` and `situ-edit-tui`.**
+  The shared opening and rendering live in the core rather than in the CLI --
+  the first attempt put them in the CLI and had the TUI import that script by
+  path, which is a worse answer wearing the shape of a better one. "The CLI
+  is the reference" is a statement about what it can do, not about where the
+  code lives.
 - The CLI is complete by construction, because the other two are specified
   not to exceed it.
 - The GUI is the first thing in this repository with a third-party

@@ -171,6 +171,7 @@ def test_every_installed_path_belongs_to_exactly_one_package() -> None:
 		"/include/situ.h", "/lib/libsitu.a",
 		"/share/man/man1/situc.1",
 		"/bin/situ-walk",
+		"/bin/situ-edit", "/bin/situ-edit-tui",
 	}, "install writes somewhere the deb rule has not been told about"
 
 
