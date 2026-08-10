@@ -6,6 +6,7 @@
 #define TAG_STRUCTS    1u
 #define TAG_PLACEMENTS 2u
 #define TAG_CODE       3u
+#define TAG_VARINTS    9u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
@@ -105,6 +106,10 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 		} else if (kind == TAG_CODE) {
 			out->code     = image + offset;
 			out->code_len = items * stride;
+		} else if (kind == TAG_VARINTS) {
+			out->varints       = image + offset;
+			out->varint_count  = items;
+			out->varint_stride = stride;
 		}
 	}
 
@@ -150,6 +155,85 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	out->located_code = u32_at(at + 32);
 	out->repeat_code  = u32_at(at + 36);
 	return SITU_WALK_OK;
+}
+
+/* -- varints ------------------------------------------------------------ */
+
+#define VARINT_BIG 0x02u
+
+/* The side tables are sorted by placement, so this searches rather than
+ * building a reverse map in an arena it may not have. That is the image
+ * format's own reasoning and it is why the sort is guaranteed. */
+static const uint8_t *varint_rules(const situ_walk_image *image,
+                                   uint32_t index)
+{
+	uint32_t low  = 0u;
+	uint32_t high = image->varint_count;
+
+	while (low < high) {
+		const uint32_t mid = low + (high - low) / 2u;
+		const uint8_t *at  = image->varints + mid * image->varint_stride;
+		const uint32_t who = u32_at(at);
+
+		if (who == index) {
+			return at;
+		}
+		if (who < index) {
+			low = mid + 1u;
+		} else {
+			high = mid;
+		}
+	}
+	return NULL;
+}
+
+situ_walk_err situ_walk_varint(const situ_walk_image *image,
+                               const uint8_t *message, uint32_t len,
+                               uint32_t index, uint32_t at,
+                               uint32_t *consumed, uint64_t *value)
+{
+	const uint8_t *rules = varint_rules(image, index);
+	if (rules == NULL) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	const uint32_t max_bytes     = rules[8];
+	const uint32_t terminal_bits = rules[9];
+	const int      big           = (rules[10] & VARINT_BIG) != 0;
+
+	if (at > len) {
+		return SITU_WALK_BOUNDS;
+	}
+	uint32_t avail = len - at;
+	if (avail > max_bytes) {
+		avail = max_bytes;
+	}
+
+	uint64_t acc = 0u;
+	for (uint32_t i = 0u; i < avail; i++) {
+		const uint8_t byte = message[at + i];
+
+		if (big) {
+			/* The last permitted byte has no continuation bit to spare, so
+			 * it is read whole and ends the value. */
+			if (terminal_bits == 8u && i + 1u == max_bytes) {
+				*consumed = i + 1u;
+				*value    = (acc << 8) | byte;
+				return SITU_WALK_OK;
+			}
+			acc = (acc << 7) | (uint64_t)(byte & 0x7fu);
+		} else if (i * 7u < 64u) {
+			acc |= (uint64_t)(byte & 0x7fu) << (i * 7u);
+		}
+
+		if ((byte & 0x80u) == 0u) {
+			*consumed = i + 1u;
+			*value    = acc;
+			return SITU_WALK_OK;
+		}
+	}
+
+	return SITU_WALK_BOUNDS;	/* the buffer ends mid-varint */
 }
 
 /* `image_endian`: 1 big, 2 little. */
@@ -199,6 +283,26 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 	 * indistinguishable from a right one. */
 	if (held.repeat_code != SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;
+	}
+
+	/* A varint's width is in its own bytes. The record's `size_bits` is a
+	 * lower bound, and taking it would place everything after one at the
+	 * wrong offset. */
+	if (varint_rules(image, index) != NULL) {
+		uint32_t at = 0u;
+		err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		uint32_t consumed = 0u;
+		uint64_t value    = 0u;
+		err = situ_walk_varint(image, message, len, index, at / 8u,
+		                       &consumed, &value);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = consumed * 8u;
+		return SITU_WALK_OK;
 	}
 
 	if (held.size_code == SITU_WALK_NONE) {

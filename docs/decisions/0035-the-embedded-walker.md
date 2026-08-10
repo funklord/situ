@@ -62,7 +62,7 @@ layer over the image; placing one field needs most of this:
 | sized runs | a `size_code` program, evaluated for the element count | **done** |
 | located members | `at expr`, which joins no offset chain | `walk.py` |
 | delimiter scan | where a delimited member stops, with quoting and escapes | `walk.py` |
-| varint decode | a width that is in its own bytes | `walk.py` |
+| varint decode | a width that is in its own bytes, and the value | **done** |
 | run walking | counted, capped and `while` runs | `walk.py` |
 | the probes | `validate`, tags, markers, gated regions | `report.py` |
 
@@ -110,3 +110,32 @@ member lengths the data decides, and the two walkers agree on the run's
 refusal *and* on placing the member after it. That is the offset chain
 holding in two independent implementations, which is the claim the fifth
 column makes about the four backends.
+
+
+## Amendment, 2026-08-10: the same shape again, in varints
+
+Adding varints to the C walker surfaced a second divergence of exactly the
+family the first one was.
+
+Both walkers agree on a varint's *width* -- `11 96 01 22` places `after` at
+offset 3 in each, so Python decodes the length correctly. They disagree on
+its *value*: the C walker answers 150, which is what `96 01` means in
+leb128, and Python's `read_scalar` answers 38401, which is those two bytes
+read as a big-endian integer.
+
+This is the byte-run question again with the opposite answer. A run is not a
+scalar and `read_scalar` was made to refuse it; a varint *is* a scalar -- it
+has a value, and every compiled backend's getter decodes one -- so refusing
+would be wrong and reading the bytes raw already is. **`read_scalar` should
+decode a varint**, and until it does the two walkers disagree about every
+schema holding one.
+
+Recorded rather than fixed in the same commit because the fix belongs to the
+Python walker and wants the full suite run behind it, as the byte-run change
+did -- that change passed 3431 tests untouched, which was the evidence that
+its old behaviour was accidental, and this one deserves the same test.
+
+The pattern is worth naming now it has happened twice: `read_scalar` reads
+*bits* where the walk's public answer should read *values*. Delimited
+members and text numbers are the remaining constructs where the distinction
+bites, and whoever ports them should expect a third instance.

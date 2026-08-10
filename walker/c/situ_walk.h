@@ -61,6 +61,10 @@ typedef struct {
 
 	const uint8_t *code;
 	uint32_t       code_len;
+
+	const uint8_t *varints;
+	uint32_t       varint_count;
+	uint32_t       varint_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */
@@ -92,6 +96,23 @@ situ_walk_err situ_walk_members(const situ_walk_image *image, uint32_t shape,
 situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	                                     uint32_t index,
 	                                     situ_walk_placement *out);
+
+/* Decode one varint at `at`, answering the bytes it consumed and the value.
+ *
+ * Two encodings, differing in which end the groups come from: `leb128` puts
+ * the low group first, `be128` the high one -- ASN.1's identifier octets,
+ * MIDI's delta times, SQLite's record varints. `terminal_bits` of eight is
+ * the case worth naming: the last permitted byte has no spare bit for a
+ * continuation flag, so it is read whole and ends the value whatever its
+ * high bit says. That is SQLite's ninth byte, and it is why nine bytes hold
+ * sixty-four bits where seven-bit groups would need ten.
+ *
+ * SITU_WALK_BOUNDS where the buffer ends mid-value, which is what the getter
+ * does in every backend. */
+situ_walk_err situ_walk_varint(const situ_walk_image *image,
+	                               const uint8_t *message, uint32_t len,
+	                               uint32_t index, uint32_t at,
+	                               uint32_t *consumed, uint64_t *value);
 
 /* How wide a member is, in bits. A constant where the image knows one; a
  * `size_code` program otherwise, which is what `size = Bounded` costs.
