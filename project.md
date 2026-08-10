@@ -10989,6 +10989,39 @@ struct's own rules, a text number's range -- each with a well-formed
 message, a rule broken, and a frame too short. `[since]` members, the span
 checks and gated regions are refused by name and are what remains.
 
+### 26.112 The span checks, and `remaining` measured from the wrong end
+
+The checks that read a member's *bytes* rather than its value -- the
+delimiter is there, a nul terminator is somewhere in the run, a reserved run
+is all zero, the bytes are the declared encoding. One code path, because they
+share one question: which bytes did the schema call text. A delimited
+member's answer is its content and not its span, the delimiter being where
+the next member starts rather than part of what was named.
+
+**UTF-8 is now implemented twice in this repository on purpose.**
+`runtime/c/situ.h` has one and generated code links it; the walker links
+nothing, which is the whole of what makes it droppable into an arena.
+Depending on the runtime would be the walker depending on the thing it exists
+to be independent of. The two are held together by the differential, and the
+cases that matter are the ones that look like text rather than like
+corruption -- a bad continuation byte and a surrogate half.
+
+**The differential then found `remaining` measured from the wrong end.** The
+C walker evaluated a size program with `remaining` as the frame's whole
+length rather than what is left of it from the member's own offset, so every
+`[remaining]` run came out as long as the buffer. `walk.py` carries a comment
+about exactly this -- "sqlite and ipv6ext both caught: 44 against C's 37, and
+38 against 46" -- and the C walker made the same mistake from a clean start.
+
+That is the strongest form of the argument for a second implementation, and
+it is worth separating from "two readers catch each other's typos". The
+comment in `walk.py` did not stop it: **a lesson recorded in one
+implementation is invisible to the next one**, because the next one is
+written from the format rather than from the code. What caught it was a
+schema with a `[remaining]` tail meeting the validator, and nothing before it
+had asked a size program for a length that could be wrong by exactly an
+offset.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -12211,6 +12244,16 @@ checks and gated regions are refused by name and are what remains.
    becomes "well-formed". The same shape as the signed flag one commit
    earlier: what a callee withholds, a caller invents. Where a check may be
    unavailable rather than merely unsatisfied, say which.
+
+145. **A lesson recorded in one implementation is invisible to the next.**
+   `walk.py` carries a comment about `remaining` meaning "to the end of the
+   frame *from here*", naming the two schemas that caught it getting that
+   wrong -- and the C walker, written from the format rather than from that
+   code, made the same mistake from a clean start. A second implementation
+   is not only a check on the first's typos: it repeats the first's
+   *reasoning* errors unless the format itself says otherwise. Where a
+   comment is the only thing holding a rule, the next implementation will
+   not read it.
 
 ---
 

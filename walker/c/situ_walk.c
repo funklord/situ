@@ -924,10 +924,23 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
+	/* `remaining` means "to the end of the frame *from here*", not the
+	 * frame's whole length. Passing the latter made every `[remaining]` run
+	 * as long as the buffer rather than as long as what is left of it --
+	 * the mistake `walk.py` records sqlite and ipv6ext catching, 44 against
+	 * C's 37 and 38 against 46, and this walker made it again from a clean
+	 * start. The member's own offset is what the word is relative to. */
+	uint32_t from = 0u;
+	err = offset_bits_deep(image, message, len, shape, index, depth, &from);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	from /= 8u;
+
 	walk_ctx ctx = {image, message, len, shape, depth};
 	int64_t  count = 0;
 	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
-	                     (int64_t)len, &count);
+	                     (int64_t)(len > from ? len - from : 0u), &count);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
@@ -1215,10 +1228,17 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;	/* not a run */
 	}
 
+	uint32_t from = 0u;
+	err = situ_walk_offset_bits(image, message, len, shape, index, &from);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	from /= 8u;
+
 	walk_ctx ctx   = {image, message, len, shape, 0u};
 	int64_t  count = 0;
 	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
-	                     (int64_t)len, &count);
+	                     (int64_t)(len > from ? len - from : 0u), &count);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
@@ -1283,6 +1303,75 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_FITS_FRAME     6u
 #define CHECK_DIGITS_VALID   9u
 #define CHECK_DIGITS_MINIMAL 10u
+
+#define CHECK_TERMINATED     7u
+#define CHECK_NUL_TERMINATED 11u
+#define CHECK_ENCODED_AS     12u
+#define CHECK_ZERO_RUN       13u
+
+/* `[encoding = ...]`, as the packer numbers it. */
+#define ENCODING_ASCII 0
+#define ENCODING_UTF8  1
+
+/* Whether a span is well-formed UTF-8: no overlong form, no surrogate half,
+ * nothing past U+10FFFF, no truncated sequence, no bad continuation byte.
+ *
+ * The second copy of this state machine in the repository, and deliberately
+ * so. `runtime/c/situ.h` has the first, and generated code links that; the
+ * walker links nothing, which is the whole of what makes it droppable into
+ * an arena. The alternative was for a walker to depend on the runtime it
+ * exists to be independent of. `edges.situ` carries the case that holds the
+ * two to the same answer.
+ */
+static int utf8_valid(const uint8_t *data, uint32_t len)
+{
+	uint32_t i = 0u;
+
+	while (i < len) {
+		const uint8_t lead = data[i];
+		uint32_t      extra;
+		uint32_t      code;
+		uint32_t      least;
+
+		if (lead < 0x80u) {
+			i++;
+			continue;
+		}
+
+		if (lead >= 0xc2u && lead <= 0xdfu) {
+			extra = 1u; code = lead & 0x1fu; least = 0x80u;
+		} else if (lead >= 0xe0u && lead <= 0xefu) {
+			extra = 2u; code = lead & 0x0fu; least = 0x800u;
+		} else if (lead >= 0xf0u && lead <= 0xf4u) {
+			extra = 3u; code = lead & 0x07u; least = 0x10000u;
+		} else {
+			return 0;	/* a continuation, an overlong lead, or 0xf5 up */
+		}
+
+		if (i + extra >= len) {
+			return 0;	/* truncated: the sequence runs off the end */
+		}
+		for (uint32_t k = 1u; k <= extra; k++) {
+			if ((data[i + k] & 0xc0u) != 0x80u) {
+				return 0;
+			}
+			code = (code << 6) | (uint32_t)(data[i + k] & 0x3fu);
+		}
+
+		if (code < least) {
+			return 0;	/* overlong: a second spelling of a shorter form */
+		}
+		if (code >= 0xd800u && code <= 0xdfffu) {
+			return 0;	/* a surrogate half, which UTF-8 may not carry */
+		}
+		if (code > 0x10ffffu) {
+			return 0;
+		}
+
+		i += extra + 1u;
+	}
+	return 1;
+}
 
 /* `image_struct.struct_flags` bit 0: whether the image carries *every* check
  * this struct needs. The packer sets it, and a walker that ignored it would
@@ -1408,7 +1497,11 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                && kind != CHECK_ENUM_KNOWN
 			                && kind != CHECK_FITS_FRAME
 			                && kind != CHECK_DIGITS_VALID
-			                && kind != CHECK_DIGITS_MINIMAL) {
+			                && kind != CHECK_DIGITS_MINIMAL
+			                && kind != CHECK_TERMINATED
+			                && kind != CHECK_NUL_TERMINATED
+			                && kind != CHECK_ENCODED_AS
+			                && kind != CHECK_ZERO_RUN) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 		}
@@ -1477,10 +1570,114 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			continue;
 		}
 
+		/* A delimited member's delimiter has to be there. A frame that does
+		 * not contain it was cut short: the member ran to the end of the
+		 * buffer rather than to its own end. */
+		for (uint32_t c = 0u; c < rows; c++) {
+			if (checks[c * image->constraint_stride + 12] != CHECK_TERMINATED) {
+				continue;
+			}
+			uint32_t content    = 0u;
+			int      terminated = 0;
+			err = situ_walk_scan(image, message, len, index, at / 8u,
+			                     &content, &terminated);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			*verdict = (err != SITU_WALK_OK) ? SITU_WALK_BOUNDS
+			                                 : SITU_WALK_CONSTRAINT;
+			if (err == SITU_WALK_OK && terminated) {
+				continue;
+			}
+			return SITU_WALK_OK;
+		}
+
+		/* The checks that read a *span* rather than a value, over the bytes
+		 * the schema called text. A delimited member's width is its content
+		 * plus its delimiter, because that is where the next member starts,
+		 * and the delimiter is not part of what was called text -- every
+		 * backend passes `_len` here and not `_span`. */
+		{
+			uint32_t span = 0u;
+			for (uint32_t c = 0u; c < rows; c++) {
+				const uint8_t kind = checks[c * image->constraint_stride + 12];
+				if (kind == CHECK_NUL_TERMINATED || kind == CHECK_ENCODED_AS
+				                || kind == CHECK_ZERO_RUN) {
+					span += 1u;
+				}
+			}
+			if (span > 0u) {
+				uint32_t content = wide / 8u;
+				if (delimiter_rules(image, index) != NULL) {
+					int terminated = 0;
+					err = situ_walk_scan(image, message, len, index, at / 8u,
+					                     &content, &terminated);
+					if (err == SITU_WALK_UNSUPPORTED) {
+						return err;
+					}
+					if (err != SITU_WALK_OK) {
+						*verdict = SITU_WALK_BOUNDS;
+						return SITU_WALK_OK;
+					}
+				}
+				if (at / 8u > len || content > len - at / 8u) {
+					*verdict = SITU_WALK_BOUNDS;
+					return SITU_WALK_OK;
+				}
+
+				const uint8_t *data = message + at / 8u;
+				for (uint32_t c = 0u; c < rows; c++) {
+					const uint8_t *row  = checks + c * image->constraint_stride;
+					const uint8_t  kind = row[12];
+					int            bad  = 0;
+
+					if (kind == CHECK_NUL_TERMINATED) {
+						bad = 1;
+						for (uint32_t d = 0u; d < content; d++) {
+							if (data[d] == 0u) {
+								bad = 0;
+							}
+						}
+					} else if (kind == CHECK_ZERO_RUN) {
+						for (uint32_t d = 0u; d < content; d++) {
+							if (data[d] != 0u) {
+								bad = 1;
+							}
+						}
+					} else if (kind == CHECK_ENCODED_AS) {
+						if (i64_at(row + 4) == ENCODING_ASCII) {
+							for (uint32_t d = 0u; d < content; d++) {
+								if (data[d] > 0x7fu) {
+									bad = 1;
+								}
+							}
+						} else if (i64_at(row + 4) == ENCODING_UTF8) {
+							bad = !utf8_valid(data, content);
+						} else {
+							return SITU_WALK_UNSUPPORTED;
+						}
+					} else {
+						continue;
+					}
+
+					if (bad) {
+						*verdict = SITU_WALK_CONSTRAINT;
+						return SITU_WALK_OK;
+					}
+				}
+			}
+		}
+
 		for (uint32_t c = 0u; c < rows; c++) {
 			const uint8_t *row   = checks + c * image->constraint_stride;
 			const int64_t  want  = i64_at(row + 4);
 			const uint8_t  kind  = row[12];
+
+			if (kind == CHECK_TERMINATED || kind == CHECK_NUL_TERMINATED
+			                || kind == CHECK_ENCODED_AS
+			                || kind == CHECK_ZERO_RUN) {
+				continue;	/* asked above, over the span rather than a value */
+			}
 
 			if (kind == CHECK_FITS_FRAME) {
 				/* The accessor clamps; this is where a message declaring

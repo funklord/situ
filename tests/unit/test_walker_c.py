@@ -691,6 +691,29 @@ VALIDATED = {
 		"struct hdr { decimal u16 n[3] [max = 500]; u8 tail; }",
 		[("313233ff", "0"), ("393939ff", "2"), ("3132ff", "1"),
 		 ("3132ffff", "2")]),
+	# The checks below read a member's *span* rather than its value, which
+	# is what separates them from everything above.
+	"a nul terminator that has to be there": (
+		"struct hdr { u8 name[4] [nul_terminated]; u8 tail; }",
+		[("41420000ff", "0"), ("41424344ff", "2")]),
+	"bytes that have to be ASCII": (
+		"struct hdr { u8 name[4] [nul_terminated, encoding = ascii];"
+		" u8 tail; }",
+		[("41420000ff", "0"), ("41ff0000ff", "2")]),
+	# UTF-8 is the one that could be got subtly wrong rather than plainly:
+	# a bad continuation byte and a surrogate half both look like text.
+	"bytes that have to be UTF-8": (
+		"struct hdr { u8 name[4] [nul_terminated, encoding = utf8];"
+		" u8 tail; }",
+		[("c3a90000ff", "0"), ("c3280000ff", "2"), ("eda08000ff", "2")]),
+	"a reserved run that has to be zero": (
+		"struct hdr { u8 v; reserved u8[2] [must_be_zero]; u8 tail; }",
+		[("010000ff", "0"), ("010100ff", "2")]),
+	# `[remaining]` is here because it is what caught the walker measuring
+	# it from the start of the buffer rather than from the member.
+	"a delimiter that has to be there": (
+		'struct hdr { u8 verb[] until " " max 4; u8 rest[remaining]; }',
+		[("47455420ff", "0"), ("47455454ff", "2"), ("4720ffffff", "0")]),
 }
 
 

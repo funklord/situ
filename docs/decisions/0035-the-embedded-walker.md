@@ -70,8 +70,8 @@ layer over the image; placing one field needs most of this:
 | `while` runs | however many elements pass the predicate | **done** |
 | variants | the extent of the arm the discriminant selects | **done** |
 | regions | a gate's interior, read through `authenticated` or `sealed` | `report.py` |
-| `validate` | the constraint table, the enum table, nested structs | **done** |
-| the rest of the probes | tags, markers, versioned members, span checks | `report.py` |
+| `validate` | constraints, enums, nested structs, the span checks | **done** |
+| the rest of the probes | tags, markers, versioned members, gated regions | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
 device is that section 10's language is total -- no calls, no recursion, no
@@ -387,3 +387,32 @@ Sixteen cases across four shapes -- constraints, enum membership, a nested
 struct's own rules, a text number's range -- each with a well-formed
 message, a rule broken and a frame too short. `[since]` members, the span
 checks and gated regions are refused by name and are what remains.
+
+
+## Amendment, 2026-08-10: the span checks, and `remaining` from the wrong end
+
+The checks that read a member's *bytes* rather than its value: the delimiter
+is there, a nul terminator is somewhere in the run, a reserved run is all
+zero, and the bytes are the encoding the schema declared. They share a code
+path because they share a question -- which bytes did the schema call text --
+and a delimited member's answer is its content, not its span: the delimiter
+is where the next member starts and is not part of what was named.
+
+**UTF-8 is a second implementation of that state machine in this repository,
+and it is deliberate.** `runtime/c/situ.h` has the first, and generated code
+links it; the walker links nothing, which is the whole of what makes it
+droppable into an arena. Depending on the runtime would be the walker
+depending on the thing it exists to be independent of. It is held to the
+first by `edges.situ`'s own cases and by the differential -- a bad
+continuation byte and a surrogate half are refused by both, which are the two
+that look like text rather than like corruption.
+
+**And the differential found `remaining` measured from the wrong end.** The C
+walker evaluated a size program with `remaining` as the frame's whole length
+rather than what is left of it from the member's own offset, so every
+`[remaining]` run came out as long as the buffer. `walk.py` carries a comment
+about this exact bug -- "sqlite and ipv6ext both caught: 44 against C's 37,
+and 38 against 46" -- and the C walker made it again from a clean start,
+which is what a second implementation is for. It was invisible until a schema
+with a `[remaining]` tail met the validator, because nothing else asks a size
+program for a length it can be wrong about by exactly the offset.
