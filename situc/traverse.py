@@ -370,6 +370,10 @@ class Check(Enum):
 	RESERVED   = "reserved"
 	#: `must_eq`, `min`, `max`, and enum membership.
 	CONSTRAINED = "constrained"
+	#: A fixed-width text number: the digits parse in its radix and fit the
+	#: scalar's domain, `[minimal]` where declared, and whatever `CONSTRAINED`
+	#: would have asked of it -- which is the part it was losing.
+	TEXT_NUMBER = "text_number"
 	#: The delimiter is there, and for a text number, that the digits parse.
 	DELIMITED  = "delimited"
 	#: The discriminant selects an arm that exists (`default: error`).
@@ -405,6 +409,18 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 	if placement.delimiter is not None:
 		return (Check.NOTHING if placement.type_name in structs
 		        else Check.DELIMITED)
+
+	# Before REPEATED, and for the reason `classify` states one function up:
+	# `decimal u16 code[3]` is one number in three digits, not three numbers.
+	# The *accessor* classifier learned that -- three backends had read the
+	# bracket as a count and said "element type u16 has no fixed size" about a
+	# type that plainly has one -- and this one did not. So a text number's
+	# check was an array's, which is an encoding and a terminator it has
+	# neither of, and its digits were parsed by nothing: cpio's magic is
+	# `decimal u32 magic[6] [min = 70701, max = 70702]` and `07070x` validated
+	# clean in all four backends. Two classifiers, one fact, learned once.
+	if placement.radix is not None and placement.delimiter is None:
+		return Check.TEXT_NUMBER
 
 	# Before NESTED: an array of structs is not a nested struct, and calling
 	# `self.recs().validate()` on one names a method that takes an index.

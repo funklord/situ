@@ -286,6 +286,66 @@ def _by_member(text: str) -> dict[tuple[str, str], str]:
 	return found
 
 
+#: The header of the first entry in `examples/cpio/cpio.vectors`, which GNU
+#: cpio wrote: `magic` and thirteen ASCII hex numbers, 110 bytes.
+CPIO_HEADER = bytes.fromhex(
+	"303730373031303031423131323930303030383142343030303030334538303030"
+	"303033453830303030303030313641373042414242303030303030303630303030"
+	"303030303030303030303242303030303030303030303030303030303030303030"
+	"3030443030303030303030"
+)
+
+
+@pytest.mark.skipif(not COMPLETE, reason="a backend is missing")
+def test_a_text_number_is_validated_in_all_five(tmp_path: Path) -> None:
+	"""cpio's header, and the constraint its own comment defends.
+
+	`decimal u32 magic[6] [min = 70701, max = 70702]` says in the schema why
+	it is written that way: "the alternative is six bytes nothing
+	constrains". Nothing constrained them. `traverse.classify_check` had no
+	branch for a text number, so its digit count read as an array and it was
+	checked as one -- an encoding and a terminator it has neither of -- while
+	the accessor classifier one function up has had that branch since three
+	backends misread the same bracket. `validate` returned OK for `07070x`
+	in every backend and in the walk.
+
+	Three mutations of bytes GNU cpio wrote, because a check that only ever
+	sees good input is not being asked anything: a magic outside its declared
+	range, a magic that is not a number, and a hex field of `z`. All five
+	must agree, and the good header must still pass -- Rust's validator read
+	a member's raw bytes, so the first version of this fix compared
+	0x303730373031 against 70701 and refused the real archive.
+	"""
+	schema  = ROOT / "examples" / "cpio" / "cpio.situ"
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	cases = {
+		"the header cpio wrote":  (CPIO_HEADER,                        report.OK),
+		"a magic out of range":   (b"999999" + CPIO_HEADER[6:],        report.ERR_CONSTRAINT),
+		"a magic that is not a number":
+		                          (b"07070x" + CPIO_HEADER[6:],        report.ERR_CONSTRAINT),
+		"a hex field of z":       (CPIO_HEADER[:6] + b"zzzzzzzz"
+		                           + CPIO_HEADER[14:],                 report.ERR_CONSTRAINT),
+	}
+
+	for label, (packet, expected) in cases.items():
+		walked = _by_member(report.listing(image, packet))
+		assert walked.get(("cpio_header", "validate")) \
+			== f"validate {expected}", f"the walk, on {label}"
+
+		for backend, argv in command.items():
+			found = _by_member(answers(argv, packet, tmp_path))
+			assert found.get(("cpio_header", "validate")) \
+				== f"validate {expected}", f"{backend}, on {label}"
+
+
 def test_a_struct_the_image_cannot_answer_for_says_so() -> None:
 	"""The other half of the `validate` bit, which the corpus stopped
 	exercising the moment it stopped needing to.

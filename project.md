@@ -10694,6 +10694,66 @@ now states how far into a row it reads, checked when the section is bound. A
 stride *wider* than expected stays fine, because that is how the format
 grows.
 
+### 26.104 The constraint cpio's own comment defends, checked by nobody
+
+Porting text numbers to the C walker began with the question of what the
+compiled backends answer for one, and the answer was that they do not ask.
+**`validate` checked nothing at all for a fixed-width text number**, in all
+four backends and the walk.
+
+cpio's header is the case, and it is not a corner: fourteen of its fields are
+text numbers, and the first of them is
+
+    decimal u32  magic[6]  [min = 70701, max = 70702];
+
+with a comment saying why it is spelled that way -- "there is no enum of text
+numbers, and the alternative is six bytes nothing constrains". Nothing
+constrained them. `07070x` validated clean, `999999` validated clean, and a
+`hex u32` field of `zzzzzzzz` validated clean, while the *accessor* for each
+refused all three. Thirty members across cpio, smtp and `edges` were in that
+state.
+
+**Two classifiers, one fact, learned once.** `traverse.classify` has had a
+`TEXT_NUMBER` branch since three backends read `decimal u16 code[3]` as three
+numbers and said "element type u16 has no fixed size" about a type that
+plainly has one. `traverse.classify_check` -- the same module, forty lines
+down -- never grew it, so a text number's *check* was an array's: an encoding
+and a terminator it has neither of. This is invariant 1 again and invariant
+17 again, and the thing that makes it new is that the derived fact had a
+second derivation nobody noticed because it was in the same file as the
+first.
+
+**Adding the branch found the same bug twice more, one backend each.** That
+is the differential working rather than three separate mistakes: the moment
+the classifier stopped calling a text number an array, each backend applied
+its ordinary constrained-member code to one, and each backend's ordinary code
+was wrong in the way its own shape allows.
+
+- **C++ spelled the accessor infallibly.** A text number's is
+  `err magic(std::uint32_t &)`, so `if (magic() < 70701)` did not compile.
+  Loud, and the good kind of wrong.
+- **Rust compared raw bytes.** Its validator reads a member's raw load
+  everywhere else, which for a text number is its digits as an integer, so
+  `[min = 70701]` compared 0x303730373031 against 70701 and refused GNU
+  cpio's own header. This is the bits-versus-values distinction the two
+  walkers keep meeting (invariant 127), in a fifth place.
+- **Python read nothing.** Its property parses the digits and raises for
+  bytes that are not digits, and no validator was reading it, so `zzzzzzzz`
+  passed there while three backends refused it.
+
+The test is GNU cpio's real header and three mutations of it, held to all
+five implementations. **A check that only ever sees good input is not being
+asked anything**, and this one had never seen anything else: the corpus
+differential draws pseudo-random bytes, which reach a valid cpio magic never.
+
+**What this leaves, stated rather than implied.** The *delimited* form of the
+same construct has its digits and its `[minimal]` checked and its declared
+`[min]`/`[max]` dropped -- `decimal u32 code[] until " " [min = 200, max =
+599]` emits the terminator and the parse and no range test, in all four
+backends. No schema in the tree writes that combination, which is exactly how
+the fixed-width form stayed hidden, and it is the next piece rather than a
+declared limitation.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -11821,6 +11881,25 @@ grows.
    while every table it names sits comfortably inside the image. Each table a
    build understands states how far into a row it reads. A stride wider than
    expected is not an error; it is how the format grows.
+
+134. **A fact learned in one classifier is not learned in its twin.**
+   `traverse.classify` knew that `decimal u16 code[3]` is one number in three
+   digits -- it has a comment naming the three backends that read the bracket
+   as a count -- and `classify_check`, forty lines below it in the same file,
+   did not. So a text number's *check* was an array's, and thirty members
+   across three schemas had their declared constraints enforced by nothing:
+   cpio's `[min = 70701, max = 70702]` on a magic whose own comment says the
+   alternative is "six bytes nothing constrains". Proximity is not sharing.
+   Where two functions answer "what kind of thing is this", they are one
+   table with two readers, and a fact added to either belongs in both.
+
+135. **A check that has only ever seen good input has not been asked
+   anything.** The corpus differential draws pseudo-random bytes, which
+   produce a valid cpio magic never and an invalid one that nothing was
+   checking -- so a validator returning OK unconditionally was
+   indistinguishable from one that worked, for as long as the schema existed.
+   Test a check with the bytes it exists to refuse, taken from a real
+   message and mutated one field at a time.
 
 ---
 

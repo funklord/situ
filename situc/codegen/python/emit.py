@@ -3857,17 +3857,30 @@ class Emitter:
 			# anywhere, and three backends passing the bytes.
 			digits = (f"trim(self.{name}_raw)" if placement.trimmed
 			          else f"self.{name}_raw")
-			lines.extend([
-				f"\t\tif not digits_minimal({digits}, {placement.radix}):",
-				"\t\t\traise ConstraintError(",
-				f'\t\t\t\t"{placement.path} is not the minimal spelling of '
-				'its value")',
-			])
+			lines.extend(self._minimal_check(placement, name, digits))
 		if placement.radix is not None:
 			# Reading it is the check: the property raises for digits that are
 			# not digits, which is the whole of what it is for.
 			lines.append(f"\t\t_ = self.{name}")
 		return lines
+
+	def _minimal_check(self, placement: Placement, name: str,
+			digits: str) -> list[str]:
+		"""`[minimal]`: one spelling per value.
+
+		Shared by both forms of the text number so that the two cannot start
+		disagreeing about what the predicate reads -- which they have before:
+		this was passed `self.{name}`, the parsed number, and `bytes(6)` is
+		six zero bytes rather than the digit `6`.
+		"""
+		if not placement.radix_minimal:
+			return []
+		return [
+			f"\t\tif not digits_minimal({digits}, {placement.radix}):",
+			"\t\t\traise ConstraintError(",
+			f'\t\t\t\t"{placement.path} is not the minimal spelling of '
+			'its value")',
+		]
 
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""Everything `validate` says about one member.
@@ -4024,6 +4037,17 @@ class Emitter:
 			return []
 
 		read = f"{name}_value" if versioned else f"self.{name}"
+
+		# A fixed-width text number: the property parses the digits and
+		# raises for bytes that are not digits of its radix, which is the
+		# whole of the check -- and nothing was reading it, so `zzzzzzzz` in
+		# a `hex u32 x[8]` validated clean here while three backends refused
+		# it. `[minimal]` goes with it, since the two questions are one
+		# construct's.
+		if check is Check.TEXT_NUMBER:
+			lines.extend(self._minimal_check(placement, name,
+			                                 f"self.{name}_digits"))
+			lines.append(f"\t\t_ = self.{name}")
 
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:

@@ -3035,19 +3035,42 @@ class Emitter:
 				"\t\t}",
 			])
 
+		lines.extend(self._text_number_checks(struct, placement, base))
+		return lines
+
+	def _text_number_checks(self, struct: ResolvedStruct,
+			placement: Placement, base: str) -> list[str]:
+		"""A text number's spelling and its digits, in that order.
+
+		One derivation for both forms. The delimited one has had this since
+		text numbers arrived; the fixed-width one had nothing, because
+		`classify_check` read its digit count as an array -- cpio's fourteen,
+		checked by no backend.
+
+		`base` is what the byte accessors are named from, and differs between
+		the two forms: a delimited member's digits come from `_raw`, a
+		fixed-width one's from `_digits`.
+		"""
+		if placement.radix is None:
+			return []
+
+		lines: list[str] = []
+		digits = (f"self.{_ident(f'{base}_raw')}()"
+		          if placement.delimiter is not None
+		          else f"self.{_ident(f'{base}_digits')}()")
+
 		if placement.radix_minimal:
-			value = (f"situ_rt::trim(self.{_ident(f'{base}_raw')}())"
-			         if placement.trimmed
-			         else f"self.{_ident(f'{base}_raw')}()")
+			value = (f"situ_rt::trim({digits})" if placement.trimmed
+			         else digits)
 			lines.extend([
 				f"\t\tif !situ_rt::digits_minimal({value}, {placement.radix}) {{",
 				"\t\t\treturn Err(Error::Constraint);",
 				"\t\t}",
 			])
-		if placement.radix is not None:
-			# Reading it is the check. `?` rather than a match, because the
-			# error is already the right one and `Result` cannot be dropped.
-			lines.append(f"\t\tself.{_ident(local_name(struct, placement))}()?;")
+
+		# Reading it is the check. `?` rather than a match, because the
+		# error is already the right one and `Result` cannot be dropped.
+		lines.append(f"\t\tself.{_ident(local_name(struct, placement))}()?;")
 		return lines
 
 	def _required(self, struct: ResolvedStruct) -> list[str]:
@@ -4694,8 +4717,21 @@ class Emitter:
 			# than a crash, and this was the silent one of the four.
 			versioned = placement.since is not None \
 			            and placement.version_field is not None
-			read      = self._raw_load(placement, scalar, offset)
 			mine: list[str] = []
+
+			# The parsed value, not the bytes. This backend reads a member's
+			# raw load everywhere else, which for a text number is its digits
+			# as an integer -- so `[min = 70701]` on cpio's magic compared
+			# 0x303730373031 against 70701 and refused GNU cpio's own header.
+			# The bits-versus-values distinction the walkers keep meeting,
+			# arriving here the moment the shared classifier stopped calling a
+			# text number an array.
+			if check is Check.TEXT_NUMBER:
+				mine.extend(self._text_number_checks(
+					struct, placement, _ident(local_name(struct, placement))))
+				read = f"self.{_ident(local_name(struct, placement))}_value()"
+			else:
+				read = self._raw_load(placement, scalar, offset)
 
 			enum = self.enums.get(placement.type_name or "")
 			if enum is not None \

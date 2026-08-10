@@ -5594,37 +5594,62 @@ class Emitter:
 			])
 
 		if placement.radix is not None:
-			# A text number's digits are a constraint like any other, so parse
-			# refuses them here rather than leaving every caller of the getter
-			# to be the first to find out.
-			ctype = self._field_ctype(placement)
-			if placement.radix_minimal:
-				lines.extend([
-					"",
-					"\t/* `[minimal]`: one spelling per value, so a leading zero",
-					"\t * is a second way to write a number that already has one. */",
-					f"\tif (!situ_digits_minimal("
-					f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
-					f"\t\t\t{ident(self.prefix, struct.name, local, 'len')}(view),"
-					f" {placement.radix}u)) {{",
-					"\t\t return SITU_ERR_CONSTRAINT;",
-					"\t}",
-				])
+			lines.append("")
+			lines.extend(self._text_number_check(struct, placement, local))
 
+		return lines
+
+	def _text_number_check(self, struct: ResolvedStruct, placement: Placement,
+			local: str) -> list[str]:
+		"""A text number's spelling and its digits, in that order.
+
+		One derivation for both forms of the construct. The delimited one has
+		had this since text numbers arrived; the fixed-width one had nothing
+		at all, because the chain that emits member checks reads its digit
+		count as an array and drops it -- so `[minimal]` and the parse were
+		absent from every `decimal u32 x[N]` in the tree, cpio's fourteen
+		included.
+
+		The spelling first and the number second, which is the order the
+		delimited form established and the order the answers have to keep: a
+		field of non-digits that is also padded is a `[minimal]` failure
+		before it is a parse failure, and reordering these answers the same
+		verdict for a different reason.
+		"""
+		if placement.radix is None:
+			return []
+
+		lines: list[str] = []
+		ptr  = ident(self.prefix, struct.name, local, "ptr")
+		wide = ident(self.prefix, struct.name, local, "len")
+		# The fixed-width form has no `_len`: its length is the digit count
+		# the schema declared, which is a constant here.
+		count = (f"{wide}(view)" if placement.delimiter is not None
+		         else f"{placement.array_count}u")
+
+		if placement.radix_minimal:
 			lines.extend([
-				"",
-				f"\t/* And its digits have to be digits, in range. */",
-				"\t{",
-				f"\t\t{ctype} parsed;",
-				f"\t\tsitu_err_t e = "
-				f"{ident(self.prefix, struct.name, local, 'get')}(view, &parsed);",
-				"",
-				"\t\tif (e != SITU_OK) {",
-				"\t\t\treturn e;",
-				"\t\t}",
+				"\t/* `[minimal]`: one spelling per value, so a leading zero",
+				"\t * is a second way to write a number that already has one. */",
+				f"\tif (!situ_digits_minimal({ptr}(view),",
+				f"\t\t\t{count}, {placement.radix}u)) {{",
+				"\t\t return SITU_ERR_CONSTRAINT;",
 				"\t}",
+				"",
 			])
 
+		lines.extend([
+			f"\t/* {placement.path}: its digits have to be digits, in range. */",
+			"\t{",
+			f"\t\t{self._field_ctype(placement)} parsed;",
+			f"\t\tsitu_err_t e = "
+			f"{ident(self.prefix, struct.name, local, 'get')}(view, &parsed);",
+			"",
+			"\t\tif (e != SITU_OK) {",
+			"\t\t\treturn e;",
+			"\t\t}",
+			"\t}",
+		])
 		return lines
 
 	def _validate_decl(self, struct: ResolvedStruct) -> list[str]:
@@ -5904,7 +5929,20 @@ class Emitter:
 			if attributed:
 				return attributed
 
-		if scalar is None or placement.array_count is not None:
+		# A fixed-width text number is one number in N digits, not N numbers,
+		# and the bail-out below reads its digit count as an array and drops
+		# it. So `decimal u32 magic[6] [min = 70701, max = 70702]` -- cpio's,
+		# with a comment saying the alternative is "six bytes nothing
+		# constrains" -- was checked by nothing at all: not the range, not
+		# `[minimal]`, not whether the bytes are digits. `07070x` validated
+		# clean. `traverse.classify_check` grew the same branch its accessor
+		# twin already had; this backend keeps its own chain and needs it
+		# here.
+		text_number = (scalar is not None and placement.radix is not None
+		               and placement.delimiter is None)
+
+		if scalar is None or (placement.array_count is not None
+		                      and not text_number):
 			return []
 		if placement.kind == "marker":
 			return []
@@ -5950,7 +5988,17 @@ class Emitter:
 		if versioned and placement.path not in self._emitted:
 			return []
 
-		value = f"{local}_value" if versioned else f"{getter}(view)"
+		# A text number's `_get` is fallible and takes an out-parameter, as a
+		# versioned member's does, so the constraints below read the
+		# infallible `_value` -- and the parse is checked here rather than
+		# left for whoever calls the getter first. The same two checks the
+		# delimited form has had, in the same order: the spelling, then the
+		# number.
+		if text_number:
+			lines.extend(self._text_number_check(struct, placement, local))
+			value = f"{ident(self.prefix, struct.name, local, 'value')}(view)"
+		else:
+			value = f"{local}_value" if versioned else f"{getter}(view)"
 
 		# An enum with `default = error` admits its members and nothing else.
 		# The declaration said so all along; this is what makes it true.

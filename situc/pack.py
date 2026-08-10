@@ -893,7 +893,26 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					continue
 				constraints_blob += _struct.pack("<IqBxxx", at, 0, 3)
 				continue
-			if kind is traverse.Check.CONSTRAINED:
+			# A fixed-width text number, whose digits are a check of their
+			# own and whose spelling is another. Then whatever `CONSTRAINED`
+			# would have asked of it, which is the half both forms of the
+			# construct were losing: `classify_check` called this an array,
+			# so cpio's `[min = 70701, max = 70702]` reached no backend and
+			# no image. The two records are packed in C's order -- the
+			# spelling, then the number -- because the order is the answer
+			# and not just the verdict.
+			if kind is traverse.Check.TEXT_NUMBER:
+				if placement.scalar is None or placement.radix is None:
+					whole = False
+					continue
+				if placement.radix_minimal:
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, placement.radix, 10)
+				constraints_blob += _struct.pack(
+					"<IqBxxx", at, (1 << placement.scalar.bits) - 1, 9)
+
+			if kind in (traverse.Check.CONSTRAINED,
+			            traverse.Check.TEXT_NUMBER):
 				for attr in placement.attrs:
 					code = {"must_eq": 0, "min": 1, "max": 2}.get(attr.name)
 					if code is None or attr.value is None:

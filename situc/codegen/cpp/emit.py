@@ -4848,6 +4848,25 @@ class Emitter:
 				"\t\t}",
 			])
 
+		lines.extend(self._text_number_check(placement, name))
+		return lines
+
+	def _text_number_check(self, placement: Placement,
+			name: str) -> list[str]:
+		"""A text number's spelling and its digits, in that order.
+
+		One derivation for both forms. The delimited one has had this since
+		text numbers arrived and the fixed-width one had nothing at all,
+		because `classify_check` read its digit count as an array -- so
+		cpio's fourteen were checked by no backend.
+		"""
+		if placement.radix is None:
+			return []
+
+		scalar = placement.scalar
+		assert scalar is not None
+		lines: list[str] = []
+
 		if placement.radix_minimal:
 			# The trimmed bytes, not `{name}()` -- for a text number that is
 			# the fallible getter and takes an out-parameter, so calling it
@@ -4856,26 +4875,27 @@ class Emitter:
 			at = (f"raw_.base + {name}_offset()" if not placement.trimmed else
 			      f"raw_.base + {name}_offset() + situ_trim_start("
 			      f"raw_.base + {name}_offset(), {name}_raw_len())")
+			# The fixed-width form has no `_len`: its length is the digit
+			# count the schema declared, which is a constant here.
+			count = (f"{name}_len()" if placement.delimiter is not None
+			         else f"{placement.array_count}u")
 			lines.extend([
 				"\t\t/* `[minimal]`: one spelling per value. */",
-				f"\t\tif (!situ_digits_minimal({at}, {name}_len(),"
+				f"\t\tif (!situ_digits_minimal({at}, {count},"
 				f" {placement.radix}u)) {{",
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])
 
-		if placement.radix is not None:
-			scalar = placement.scalar
-			assert scalar is not None
-			lines.extend([
-				f"\t\t{{",
-				f"\t\t\t{self._ctype(scalar)} parsed;",
-				f"\t\t\tif (const ::situ::rt::err e = {name}(parsed);"
-				" e != ::situ::rt::err::ok) {",
-				"\t\t\t\treturn e;",
-				"\t\t\t}",
-				"\t\t}",
-			])
+		lines.extend([
+			"\t\t{",
+			f"\t\t\t{self._ctype(scalar)} parsed;",
+			f"\t\t\tif (const ::situ::rt::err e = {name}(parsed);"
+			" e != ::situ::rt::err::ok) {",
+			"\t\t\t\treturn e;",
+			"\t\t\t}",
+			"\t\t}",
+		])
 		return lines
 
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
@@ -5090,7 +5110,18 @@ class Emitter:
 		if versioned and placement.path not in self._emitted:
 			return []
 
-		read = f"{name}_value" if versioned else f"{name}()"
+		# A text number's accessor is fallible and takes an out-parameter, as
+		# a versioned member's is, so the constraints below read the
+		# infallible `_value` -- and the parse comes first, here rather than
+		# at whoever calls the getter. `magic()` against
+		# `err magic(std::uint32_t &)` is what this backend emitted the
+		# moment the shared classifier stopped calling a text number an
+		# array, which is invariant 125 arriving on schedule.
+		if check is Check.TEXT_NUMBER:
+			lines.extend(self._text_number_check(placement, name))
+			read = f"{name}_value()"
+		else:
+			read = f"{name}_value" if versioned else f"{name}()"
 
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
