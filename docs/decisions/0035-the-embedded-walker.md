@@ -1,11 +1,11 @@
 # 0035: the walker that matters is embedded, and it is C
 
-Status: accepted, and begun. `walker/c/` reads an image, evaluates a section
-10 program, places a fixed or located member, decodes a varint, scans for a
-delimiter and parses a text number, held to the Python walker by a
-differential test. Runs, variants, regions and the probes are not written;
-the table below is the remaining work and each row this build does not render
-is refused by name rather than guessed.
+Status: accepted, and largely built. `walker/c/` reads an image, evaluates a
+section 10 program, places a fixed or located member, decodes a varint, scans
+for a delimiter, parses a text number, walks a counted or `while` run and
+measures a variant -- held to the Python walker by a differential test.
+Regions and the probes are what remain; the table below is the work and each
+row this build does not render is refused by name rather than guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -67,7 +67,9 @@ layer over the image; placing one field needs most of this:
 | text numbers | digits rather than bits, both forms and both radices | **done** |
 | run walking | counted and message-sized runs | **done** |
 | `while` runs | however many elements pass the predicate | **done** |
-| the probes | `validate`, tags, markers, gated regions | `report.py` |
+| variants | the extent of the arm the discriminant selects | **done** |
+| regions | a gate's interior, read through `authenticated` or `sealed` | `report.py` |
+| the probes | `validate`, tags, markers | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
 device is that section 10's language is total -- no calls, no recursion, no
@@ -310,3 +312,36 @@ version absorbed it into "the run ends here", which is the shape of mistake
 this component exists not to make: an extent that stops early reads exactly
 like one that is right. `SITU_WALK_UNSUPPORTED` propagates out of the walk;
 a frame that runs out still counts the elements that fit.
+
+
+## Amendment, 2026-08-10: variants, and a fifth instance of the pattern
+
+A variant's extent is a switch: read the discriminant, take the arm it names,
+answer that arm's size. Not the minimum -- reading the minimum instead made a
+dnsname label one byte long and walked thirty-nine of them through a
+thirty-eight byte buffer -- and not the worst case. An unrecognised
+discriminant is nought bytes rather than a refusal, matching the generated
+C's own `: 0u`: a discriminant naming no arm is a malformed message and
+saying so is `validate`'s job, not the extent's.
+
+The arms table is one row per arm, so a variant owns several contiguous rows.
+The search lands on one of them and walks back to the first, which is the
+first table here that is not one row per placement.
+
+**The differential found the pattern's fifth instance, and Python had it.**
+Both walkers agreed about every extent immediately -- two bytes for the small
+arm, eight for the large, nought for a discriminant matching nothing, with
+`tail` correctly placed in each -- and disagreed about the *value*:
+`read_scalar` read the selected arm's bytes as an integer, so a two-byte arm
+came back as 43707 and an eight-byte one as 4822678189205111.
+
+That is the byte run again. A variant is a shape the discriminant chooses,
+not a number; the arm is what holds a value and has its own placement to be
+read through. Refused now, which makes the tally five constructs and three
+answers of "this has no single value" against two of "it has one, decode it".
+
+**The test schema omits `[equalize]` deliberately.** Padding every arm to the
+largest is what buys back the offset axis for everything after a variant --
+and it would also hide a walk that picked the wrong arm, since every answer
+would then be right by construction. The arms here are two bytes and eight,
+so a walker taking either the smallest or the largest is caught.

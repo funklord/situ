@@ -359,6 +359,17 @@ def read_scalar(view: View, index: int) -> int:
 		raise Refused(f"placement {index} ends at a delimiter, so its bytes "
 		              f"are `read_bytes`")
 
+	# A variant is a shape the discriminant chooses, not a number. This read
+	# the selected arm's bytes as an integer -- a two-byte arm came back as
+	# 43707 and an eight-byte one as 4822678189205111 -- for the same reason
+	# a byte run did: the width fitted and nothing asked whether the result
+	# meant anything. The fifth construct to reach here as bits, and the
+	# third settled by refusing; the arm is what has a value, and it has its
+	# own placement to be read through.
+	if index in view.image.arms:
+		raise Refused(f"placement {index} is a variant, not a scalar; the arm "
+		              f"the discriminant selects is what holds a value")
+
 	start = offset_bits(view, index)
 	width = size_bits(view, index)
 	if width <= 0 or width > 64:

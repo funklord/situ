@@ -6,6 +6,7 @@
 #define TAG_STRUCTS    1u
 #define TAG_PLACEMENTS 2u
 #define TAG_CODE       3u
+#define TAG_ARMS       5u
 #define TAG_DELIMITERS 6u
 #define TAG_VARINTS    9u
 
@@ -21,6 +22,7 @@
 #define PLACEMENT_READS 48u
 #define VARINT_READS    11u
 #define DELIMITER_READS 32u
+#define ARM_READS       21u
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -138,6 +140,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->varints       = image + offset;
 			out->varint_count  = items;
 			out->varint_stride = stride;
+		} else if (kind == TAG_ARMS) {
+			if (stride < ARM_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->arms       = image + offset;
+			out->arm_count  = items;
+			out->arm_stride = stride;
 		} else if (kind == TAG_DELIMITERS) {
 			if (stride < DELIMITER_READS) {
 				return SITU_WALK_MALFORMED;
@@ -445,22 +454,6 @@ static situ_walk_err offset_bits_deep(const situ_walk_image *image,
                                       uint32_t shape, uint32_t index,
                                       uint32_t depth, uint32_t *out);
 
-static situ_walk_err ctx_load(void *raw, uint32_t index, int64_t *out)
-{
-	walk_ctx *ctx = (walk_ctx *)raw;
-	uint64_t value = 0u;
-	const situ_walk_err err = read_deep(ctx->image, ctx->message, ctx->len,
-	                                    ctx->shape, index, ctx->depth,
-	                                    &value);
-	if (err != SITU_WALK_OK) {
-		return err;
-	}
-	*out = (int64_t)value;
-	return SITU_WALK_OK;
-}
-
-/* -- `while` runs -------------------------------------------------------- */
-
 /* How deep a measurement may nest before this build refuses.
  *
  * A `while` run's extent is the sum of its elements' extents, and an element
@@ -480,6 +473,133 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
                                     const uint8_t *message, uint32_t len,
                                     uint32_t shape, uint32_t index,
                                     uint32_t depth, uint32_t *out);
+
+static situ_walk_err ctx_load(void *raw, uint32_t index, int64_t *out)
+{
+	walk_ctx *ctx = (walk_ctx *)raw;
+	uint64_t value = 0u;
+	const situ_walk_err err = read_deep(ctx->image, ctx->message, ctx->len,
+	                                    ctx->shape, index, ctx->depth,
+	                                    &value);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	*out = (int64_t)value;
+	return SITU_WALK_OK;
+}
+
+/* -- variants ------------------------------------------------------------ */
+
+/* `image_arm.arm_flags`: which of the three kinds of arm a row is. */
+#define ARM_DEFAULT 0x01u	/* `default:` -- selected by anything unmatched */
+#define ARM_ERROR   0x02u	/* `default: error` -- selects nothing at all */
+
+/* The first row of a variant's arms, or NULL where it has none.
+ *
+ * One row per arm, so a variant has several. They are contiguous because the
+ * table is sorted by placement, and the search lands on one of them rather
+ * than on the first -- so walk back. Bounded by the table, and by the rows
+ * before it belonging to a different placement. */
+static const uint8_t *arm_rows(const situ_walk_image *image, uint32_t index,
+                               uint32_t *count)
+{
+	const uint8_t *found = table_row(image->arms, image->arm_count,
+	                                 image->arm_stride, index);
+	if (found == NULL) {
+		return NULL;
+	}
+
+	while (found > image->arms
+	                && u32_at(found - image->arm_stride) == index) {
+		found -= image->arm_stride;
+	}
+
+	const uint8_t *last = image->arms + image->arm_count * image->arm_stride;
+	uint32_t       n    = 0u;
+	while (found + n * image->arm_stride < last
+	                && u32_at(found + n * image->arm_stride) == index) {
+		n += 1u;
+	}
+
+	*count = n;
+	return found;
+}
+
+/* A variant's extent: the arm the discriminant selects, not the worst case
+ * and not the minimum.
+ *
+ * "It cannot be computed" is often "it is not a constant" (invariant 37). A
+ * variant's extent is a switch: read the discriminant this message carries,
+ * take the arm it names, and the answer is that arm's size. Using the
+ * minimum instead made a dnsname label one byte long and walked thirty-nine
+ * of them through a thirty-eight byte buffer.
+ *
+ * A discriminant naming no arm is nought bytes rather than a refusal. That
+ * is a malformed message and saying so is `validate`'s job, not the
+ * extent's -- the generated C has the same `: 0u`, and refusing here counted
+ * zero dnsname labels where every backend counted one.
+ */
+static situ_walk_err variant_bits(const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t depth, uint32_t *out)
+{
+	uint32_t       count = 0u;
+	const uint8_t *rows  = arm_rows(image, index, &count);
+	if (rows == NULL || count == 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	if (depth >= WALK_DEPTH_MAX) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	const uint32_t selects = u32_at(rows + 16);
+	if (selects == SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;	/* no discriminant in this image */
+	}
+
+	uint64_t value = 0u;
+	situ_walk_err err = read_deep(image, message, len, shape, selects,
+	                              depth + 1u, &value);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	uint32_t fallback = SITU_WALK_NONE;
+	for (uint32_t i = 0u; i < count; i++) {
+		const uint8_t *row    = rows + i * image->arm_stride;
+		const uint32_t chosen = u32_at(row + 4);
+		const int64_t  when   = i64_at(row + 8);
+		const uint8_t  flags  = row[20];
+
+		if ((flags & ARM_ERROR) != 0u) {
+			continue;
+		}
+		if ((flags & ARM_DEFAULT) != 0u) {
+			fallback = chosen;
+			continue;
+		}
+		if ((uint64_t)when == value) {
+			if (chosen == SITU_WALK_NONE) {
+				*out = 0u;
+				return SITU_WALK_OK;
+			}
+			return size_bits_deep(image, message, len, shape, chosen,
+			                      depth + 1u, out);
+		}
+	}
+
+	if (fallback != SITU_WALK_NONE) {
+		return size_bits_deep(image, message, len, shape, fallback,
+		                      depth + 1u, out);
+	}
+
+	*out = 0u;
+	return SITU_WALK_OK;
+}
+
+/* -- `while` runs -------------------------------------------------------- */
+
 
 /* How many bytes one instance of a struct occupies, from its own bytes.
  *
@@ -666,6 +786,18 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+
+	/* A variant's extent is the arm the discriminant selects. Before the
+	 * branches below, as `walk.py` has it: an arm is not a member of the
+	 * struct holding the variant, and asking the chain to place one walks
+	 * back into the variant whose extent is that arm's. */
+	{
+		uint32_t arms = 0u;
+		if (arm_rows(image, index, &arms) != NULL && arms > 0u) {
+			return variant_bits(image, message, len, shape, index, depth,
+			                    out);
+		}
 	}
 
 	/* A `while` run's extent is however far the walk got. Falling through to

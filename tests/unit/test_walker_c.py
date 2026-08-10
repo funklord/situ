@@ -633,6 +633,76 @@ def test_they_agree_about_a_run_element_by_element(tmp_path: Path) -> None:
 		assert c_elements(tmp_path, blob, message) == expected, label
 
 
+#: Deliberately without `[equalize]`. Padding every arm to the largest is
+#: what buys back the offset axis, and it would also hide a walk that picked
+#: the wrong arm: every answer would be right by construction.
+VARIANT = """target buffer;
+endian big;
+
+enum kind : u8 {
+	small = 0x11,
+	large = 0x22,
+	default = error,
+}
+
+struct sized {
+	kind  which;
+	variant body switch (which) {
+		case kind.small: u8  a[2];
+		case kind.large: u8  b[8];
+	}
+	u16  tail;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_the_arm_a_discriminant_selects(
+		tmp_path: Path) -> None:
+	"""A variant's extent is a switch, not the minimum and not the worst
+	case.
+
+	Reading the minimum instead is what made a dnsname label one byte long
+	and walked thirty-nine of them through a thirty-eight byte buffer. The
+	arms here are two bytes and eight, so `tail` lands at 3 or at 9 and a
+	walk that took either the smallest or the largest would be caught by one
+	of the two messages.
+
+	An unrecognised discriminant is nought bytes rather than a refusal: that
+	is a malformed message and saying so is `validate`'s job, not the
+	extent's -- the generated C has the same `: 0u`.
+
+	And the *value* is refused in both, which it was not. Python read the
+	selected arm's bytes as an integer, so the two-byte arm came back as
+	43707 -- the fifth construct to reach the scalar read as bits, and the
+	third settled by refusing. A variant is a shape the discriminant chooses;
+	the arm is what holds a value, and it has its own placement.
+	"""
+	source   = parse(Source("variant.situ", VARIANT))
+	resolved = resolve(source, solve(source))
+	blob, _  = pack(source, resolved, metadata=True)
+	image    = load(blob)
+	shape    = [image.struct_name(i)
+	            for i in range(len(image.structs))].index("sized")
+
+	for message, widths, values in (
+			(bytes.fromhex("11aabbbeef"),
+			 ["1", "2", "2"], ["17", "refused", "48879"]),
+			(bytes.fromhex("220011223344556677beef"),
+			 ["1", "8", "2"], ["34", "refused", "48879"]),
+			(bytes.fromhex("99aabbbeef"),
+			 ["1", "0", "2"], ["153", "refused", "43707"]),
+	):
+		assert c_widths(tmp_path, blob, message, shape) \
+			== python_widths(blob, message, shape), message.hex()
+		assert c_widths(tmp_path, blob, message, shape) == widths, \
+			message.hex()
+		assert c_answers(tmp_path, blob, message, shape) \
+			== python_answers(blob, message, shape), message.hex()
+		assert c_answers(tmp_path, blob, message, shape) == values, \
+			message.hex()
+
+
 #: `beats` from `tests/schemas/edges.situ`, whose header says the walk is
 #: there so a termination bug in it has somewhere to show.
 WHILE_RUN = """target buffer;

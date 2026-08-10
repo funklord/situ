@@ -69,6 +69,12 @@ typedef struct {
 	const uint8_t *delimiters;
 	uint32_t       delimiter_count;
 	uint32_t       delimiter_stride;
+
+	/* One row per *arm*, so a variant has several and they are contiguous:
+	 * the table is sorted by placement like every other. */
+	const uint8_t *arms;
+	uint32_t       arm_count;
+	uint32_t       arm_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */

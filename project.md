@@ -10917,6 +10917,38 @@ walked struct 0, which is whichever the packer put first -- `beat`, not
 drivers take the struct as an argument now. A check that always asks about
 the first of something is one nobody has pointed at anything.
 
+### 26.110 The variant, and the fifth thing that is not a number
+
+A variant's extent is a switch -- read the discriminant, take the arm it
+names, answer that arm's size -- and the C walker measures one now. Not the
+minimum, which made a dnsname label one byte long and walked thirty-nine of
+them through a thirty-eight byte buffer; not the worst case; and nought
+bytes rather than a refusal where the discriminant matches nothing, because
+that is a malformed message and saying so is `validate`'s job.
+
+The arms table is the first in the image that is not one row per placement:
+a variant owns several contiguous rows, so the search lands on one and walks
+back to the first.
+
+**The differential found the pattern's fifth instance, and this time the
+Python walker had it.** The two agreed about every extent on the first run --
+two bytes for the small arm, eight for the large, nought for an unmatched
+discriminant, with `tail` correctly placed in each -- and disagreed about the
+*value*: `read_scalar` read the selected arm's bytes as an integer, so a
+two-byte arm came back as 43707 and an eight-byte one as 4822678189205111.
+
+A variant is a shape the discriminant chooses, not a number. The arm is what
+holds a value and has its own placement to be read through. That makes the
+tally five constructs and the split three-to-two: a byte run, a delimited
+member and a variant have no single value; a varint and a text number have
+one.
+
+**The schema omits `[equalize]` on purpose**, and the reason generalises.
+Padding every arm to the largest is what buys back the offset axis for
+everything after a variant -- and it would also hide a walk that picked the
+wrong arm, because every answer would then be right by construction. A test
+whose construct is uniform cannot tell a correct selection from any other.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -12123,6 +12155,14 @@ the first of something is one nobody has pointed at anything.
    whichever the packer emitted first: `beat` rather than `beats`, so the
    container holding the run under test was never measured, and the two
    walkers agreed about the element in both. Name the subject.
+
+143. **A construct whose cases are uniform cannot fail the test.** The
+   variant differential omits `[equalize]` deliberately: padding every arm to
+   the largest is what buys back the offset axis, and it would also make
+   every arm selection right by construction, so a walk taking the smallest
+   or the largest would pass unnoticed. Where a check is about *which* of
+   several things was chosen, the things have to differ in whatever the check
+   measures.
 
 ---
 
