@@ -43,6 +43,12 @@ install(DIRECTORY situc DESTINATION lib FILES_MATCHING PATTERN "*.py")
 install(PROGRAMS bin/situ-walk DESTINATION bin)
 install(DIRECTORY walker DESTINATION lib FILES_MATCHING PATTERN "*.py")
 
+# The editor and its frontends (decision 0034). Python and stdlib only; the
+# Qt one is not here, and when it is it takes its own package because it is
+# the one thing with a third-party dependency.
+install(PROGRAMS bin/situ-edit bin/situ-edit-tui DESTINATION bin)
+install(DIRECTORY editor DESTINATION lib FILES_MATCHING PATTERN "*.py")
+
 # VERSION sits beside the module because situc.__version__ reads it there.
 # The Makefile installs it too, and test_cmake.py holds the two installers
 # to the same file list -- which is how this omission was caught.

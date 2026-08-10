@@ -1,7 +1,10 @@
 # 0035: the walker that matters is embedded, and it is C
 
-Status: accepted in purpose, unwritten. The C walker does not exist; the
-Python one is a test instrument and stays one.
+Status: accepted, and begun. `walker/c/` reads an image, evaluates a section
+10 program and places a fixed member, held to the Python walker by a
+differential test. Delimited members, varints, runs, variants, regions and
+the probes are not written; the table below is the remaining work and each
+row this build does not render is refused by name rather than guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -50,10 +53,12 @@ have to write or trust.
 Named so the size is not discovered later. The Python walk is not a thin
 layer over the image; placing one field needs most of this:
 
-| | what it does | where it is today |
+| | what it does | state |
 |---|---|---|
+| image and directory | header, sections, structs, placements, all bounds-checked | **done** |
+| the expression VM | section 10's bytecode, about twenty opcodes | **done** |
+| fixed placement | a member at a constant offset and width, either byte order, sign-extended | **done** |
 | offset plan | where a member starts, including after one whose width is decoded | `walk.py` |
-| the expression VM | section 10's bytecode, about twenty opcodes | `vm.py` |
 | delimiter scan | where a delimited member stops, with quoting and escapes | `walk.py` |
 | varint decode | a width that is in its own bytes | `walk.py` |
 | run walking | counted, capped and `while` runs | `walk.py` |
