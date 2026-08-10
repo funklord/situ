@@ -148,6 +148,7 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	out->size_code    = u32_at(at + 24);
 	out->type_struct  = u32_at(at + 28);
 	out->located_code = u32_at(at + 32);
+	out->repeat_code  = u32_at(at + 36);
 	return SITU_WALK_OK;
 }
 
@@ -158,32 +159,166 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 #define FLAG_OFFSET_KNOWN 0x01u
 #define FLAG_SIGNED       0x10u
 
-situ_walk_err situ_walk_read(const situ_walk_image *image,
-                             const uint8_t *message, uint32_t len,
-                             uint32_t index, uint64_t *out)
+/* The load callback for a size expression: a field of this same message,
+ * read at whatever offset the chain has reached. */
+typedef struct {
+	const situ_walk_image *image;
+	const uint8_t         *message;
+	uint32_t               len;
+	uint32_t               shape;
+} walk_ctx;
+
+static situ_walk_err ctx_load(void *raw, uint32_t index, int64_t *out)
+{
+	walk_ctx *ctx = (walk_ctx *)raw;
+	uint64_t value = 0u;
+	const situ_walk_err err = situ_walk_read(ctx->image, ctx->message,
+	                                         ctx->len, ctx->shape, index,
+	                                         &value);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	*out = (int64_t)value;
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t *out)
 {
 	situ_walk_placement held;
-	const situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
 
-	/* Everything this build declines, declined explicitly. A number
-	 * returned for a member it cannot place is a wrong length that reads
-	 * exactly like a right one. */
-	if ((held.flags & FLAG_OFFSET_KNOWN) == 0u
-	                || held.offset_bits == SITU_WALK_NONE
-	                || held.size_code != SITU_WALK_NONE
-	                || held.located_code != SITU_WALK_NONE
-	                || held.array_count != SITU_WALK_NONE) {
+	/* A `while` run, a variant arm, a delimited member and a varint each
+	 * need a walk this build does not have. Named rather than approximated:
+	 * the whole reason an extent is refused is that a wrong one is
+	 * indistinguishable from a right one. */
+	if (held.repeat_code != SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;
 	}
-	if (held.offset_bits % 8u || held.size_bits % 8u || held.size_bits == 0u
+
+	if (held.size_code == SITU_WALK_NONE) {
+		*out = held.size_bits;
+		return SITU_WALK_OK;
+	}
+
+	/* A sized run: the program answers a count of elements, and the
+	 * element width is what each costs. */
+	if (held.element_bits == SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	walk_ctx ctx = {image, message, len, shape};
+	int64_t  count = 0;
+	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
+	                     (int64_t)len, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (count < 0 || (uint64_t)count > 0xffffffffu / held.element_bits) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	*out = (uint32_t)count * held.element_bits;
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	if (held.located_code != SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;	/* `at expr`, not yet */
+	}
+	if ((held.flags & FLAG_OFFSET_KNOWN) != 0u
+	                && held.offset_bits != SITU_WALK_NONE) {
+		*out = held.offset_bits;
+		return SITU_WALK_OK;
+	}
+
+	/* Sum what comes before. The loop is bounded by the struct's member
+	 * count, which the image states, so this needs no guard of its own. */
+	uint32_t first = 0u;
+	uint32_t count = 0u;
+	err = situ_walk_members(image, shape, &first, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	uint32_t total = 0u;
+	for (uint32_t i = 0u; i < count; i++) {
+		const uint32_t before = first + i;
+		if (before == index) {
+			*out = total;
+			return SITU_WALK_OK;
+		}
+
+		situ_walk_placement earlier;
+		err = situ_walk_placement_at(image, before, &earlier);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		/* A located member joins no offset chain: it says where it is. */
+		if (earlier.located_code != SITU_WALK_NONE) {
+			continue;
+		}
+
+		uint32_t wide = 0u;
+		err = situ_walk_size_bits(image, message, len, shape, before, &wide);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (wide > 0xffffffffu - total) {
+			return SITU_WALK_BOUNDS;
+		}
+		total += wide;
+	}
+
+	return SITU_WALK_BOUNDS;	/* not a member of this struct */
+}
+
+situ_walk_err situ_walk_read(const situ_walk_image *image,
+                             const uint8_t *message, uint32_t len,
+                             uint32_t shape, uint32_t index, uint64_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	/* A run has no single value, and neither does a member whose width the
+	 * data decides. Declined explicitly: a number returned for one of those
+	 * is a wrong answer that reads exactly like a right one. */
+	if (held.size_code != SITU_WALK_NONE
+	                || held.array_count != SITU_WALK_NONE
+	                || held.repeat_code != SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	uint32_t offset = 0u;
+	err = situ_walk_offset_bits(image, message, len, shape, index, &offset);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	if (offset % 8u || held.size_bits % 8u || held.size_bits == 0u
 	                || held.size_bits > 64u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	const uint32_t at    = held.offset_bits / 8u;
+	const uint32_t at    = offset / 8u;
 	const uint32_t width = held.size_bits / 8u;
 	if (at > len || width > len - at) {
 		return SITU_WALK_BOUNDS;

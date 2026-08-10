@@ -58,7 +58,9 @@ layer over the image; placing one field needs most of this:
 | image and directory | header, sections, structs, placements, all bounds-checked | **done** |
 | the expression VM | section 10's bytecode, about twenty opcodes | **done** |
 | fixed placement | a member at a constant offset and width, either byte order, sign-extended | **done** |
-| offset plan | where a member starts, including after one whose width is decoded | `walk.py` |
+| offset plan | where a member starts, summed through the members before it | **done** |
+| sized runs | a `size_code` program, evaluated for the element count | **done** |
+| located members | `at expr`, which joins no offset chain | `walk.py` |
 | delimiter scan | where a delimited member stops, with quoting and escapes | `walk.py` |
 | varint decode | a width that is in its own bytes | `walk.py` |
 | run walking | counted, capped and `while` runs | `walk.py` |
@@ -86,3 +88,24 @@ buffers were described for.
   rejected, because the point of a walker is a program that reads situ
   binary without one.
 - The Python walker is frozen in scope: fifth column, and nothing else.
+
+
+## Amendment, 2026-08-10: one disagreement the differential found
+
+The two walkers do not agree about a byte *run*. Python's `read_scalar` will
+answer one -- `u8 name[n]` over "hello" comes back as 448378203247, the five
+bytes as an integer -- and the C walker refuses it, because a member whose
+width the data decides has no single value to give.
+
+Neither is obviously wrong and the difference is real, so it is recorded
+rather than smoothed over. `read_scalar` in Python is a low-level primitive
+that reads `size_bits` and does not ask whether the result means anything;
+`situ_walk_read` is the walker's public answer and declines what it cannot
+call a value. **Which of those `read_scalar` should be is the open question**,
+and it is worth settling before more of the walk is ported, because every
+later probe rests on it.
+
+Until it is settled the differential test compares schemas whose members are
+scalars, which is what `examples/udp` is. That is a narrower claim than the
+one the fifth column makes about the four backends, and saying so is the
+point of this paragraph.

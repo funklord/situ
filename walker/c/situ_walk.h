@@ -73,6 +73,7 @@ typedef struct {
 	uint32_t element_bits;
 	uint32_t array_count;
 	uint32_t size_code;
+	uint32_t repeat_code;
 	uint32_t type_struct;
 	uint32_t located_code;
 } situ_walk_placement;
@@ -92,12 +93,32 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	                                     uint32_t index,
 	                                     situ_walk_placement *out);
 
+/* How wide a member is, in bits. A constant where the image knows one; a
+ * `size_code` program otherwise, which is what `size = Bounded` costs.
+ * SITU_WALK_UNSUPPORTED for a width this build cannot compute -- a
+ * delimiter scan, a varint, a `while` run or a variant arm. */
+situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
+	                                  const uint8_t *message, uint32_t len,
+	                                  uint32_t shape, uint32_t index,
+	                                  uint32_t *out);
+
+/* Where a member starts, in bits from the message base.
+ *
+ * A constant where the image knows one, and otherwise the members before it
+ * summed -- which is the answer `offset = Dynamic` names, and the reason a
+ * walk costs what the capability map says it costs. */
+situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
+	                                    const uint8_t *message, uint32_t len,
+	                                    uint32_t shape, uint32_t index,
+	                                    uint32_t *out);
+
 /* A member's value, from a message. Fixed offsets and widths up to 64 bits;
  * anything else answers SITU_WALK_UNSUPPORTED rather than a number, because
  * a wrong length is indistinguishable from a right one once it leaves. */
 situ_walk_err situ_walk_read(const situ_walk_image *image,
 	                             const uint8_t *message, uint32_t len,
-	                             uint32_t index, uint64_t *out);
+	                             uint32_t shape, uint32_t index,
+	                             uint64_t *out);
 
 /* Evaluate a section 10 program. `field` reads a placement's value for the
  * expression, and is the only thing tying this to a message. */

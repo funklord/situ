@@ -79,7 +79,7 @@ int main(int argc, char **argv)
 	}
 	for (uint32_t i = 0; i < count; i++) {
 		uint64_t value = 0;
-		if (situ_walk_read(&image, msg, len, first + i, &value)
+		if (situ_walk_read(&image, msg, len, 0u, first + i, &value)
 				== SITU_WALK_OK) {
 			printf("%llu\\n", (unsigned long long)value);
 		} else {
