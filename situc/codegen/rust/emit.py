@@ -3071,6 +3071,33 @@ class Emitter:
 		# Reading it is the check. `?` rather than a match, because the
 		# error is already the right one and `Result` cannot be dropped.
 		lines.append(f"\t\tself.{_ident(local_name(struct, placement))}()?;")
+
+		# And whatever the schema declared about the number. The delimited
+		# branch `continue`s before the scalar path that emits those, so a
+		# delimited text number's `[min]` and `[max]` reached no backend.
+		if placement.delimiter is not None:
+			lines.extend(self._attr_checks(
+				placement,
+				f"self.{_ident(local_name(struct, placement))}_value()"))
+		return lines
+
+	def _attr_checks(self, placement: Placement, read: str) -> list[str]:
+		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
+
+		Both routes into a constrained member need these; only `read`
+		differs -- a raw load, an infallible `_value`, a bound local.
+		"""
+		lines: list[str] = []
+		for attr in placement.attrs:
+			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
+				continue
+			expected = evaluate(attr.value, self.resolved.layout.env)
+			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			lines.extend([
+				f"\t\tif {read} {operator} {expected} {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			])
 		return lines
 
 	def _required(self, struct: ResolvedStruct) -> list[str]:
@@ -4743,16 +4770,7 @@ class Emitter:
 					"\t\t}",
 				])
 
-			for attr in placement.attrs:
-				if attr.name not in ("must_eq", "max", "min") or attr.value is None:
-					continue
-				expected = evaluate(attr.value, self.resolved.layout.env)
-				operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
-				mine.extend([
-					f"\t\tif {read} {operator} {expected} {{",
-					"\t\t\treturn Err(Error::Constraint);",
-					"\t\t}",
-				])
+			mine.extend(self._attr_checks(placement, read))
 
 			if versioned and mine:
 				# The accessor answers whether the field is *there*; the raw

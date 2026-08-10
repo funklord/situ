@@ -346,6 +346,50 @@ def test_a_text_number_is_validated_in_all_five(tmp_path: Path) -> None:
 				== f"validate {expected}", f"{backend}, on {label}"
 
 
+@pytest.mark.skipif(not COMPLETE, reason="a backend is missing")
+def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
+	"""The other form of the same construct, and the other half of the gap.
+
+	A delimited text number had its digits parsed and its declared range
+	dropped: the branch that handles a delimited member returns before the
+	one that emits `[min]` and `[max]`, in all four backends and in the
+	packer. So `999` passed `[min = 200, max = 599]` in all five while `12x`
+	was correctly refused -- the parse enforced, the bound not.
+
+	`edges.ranged_code` is the schema, added for this: nothing in the tree
+	wrote a delimited text number with a range, which is exactly how the
+	fixed-width form's missing checks stayed hidden. The corpus differential
+	covers it from here, but random bytes reach a valid three-digit code
+	followed by a space about never, so the cases are written out.
+	"""
+	schema  = ROOT / "tests" / "schemas" / "edges.situ"
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	cases = {
+		"a code in range":       (b"250 ok", report.OK),
+		"a code above max":      (b"999 ok", report.ERR_CONSTRAINT),
+		"a code below min":      (b"199 ok", report.ERR_CONSTRAINT),
+		"digits that are not":   (b"12x ok", report.ERR_CONSTRAINT),
+	}
+
+	for label, (packet, expected) in cases.items():
+		walked = _by_member(report.listing(image, packet))
+		assert walked.get(("ranged_code", "validate")) \
+			== f"validate {expected}", f"the walk, on {label}"
+
+		for backend, argv in command.items():
+			found = _by_member(answers(argv, packet, tmp_path))
+			assert found.get(("ranged_code", "validate")) \
+				== f"validate {expected}", f"{backend}, on {label}"
+
+
 def test_a_struct_the_image_cannot_answer_for_says_so() -> None:
 	"""The other half of the `validate` bit, which the corpus stopped
 	exercising the moment it stopped needing to.

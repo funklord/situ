@@ -1106,6 +1106,24 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					constraints_blob += _struct.pack(
 						"<IqBxxx", at,
 						(1 << placement.scalar.bits) - 1, 9)
+					# ...and then whatever the schema declared about the
+					# number. Every backend emits these after the parse now,
+					# and none of them did before: a delimited text number's
+					# `[min]` and `[max]` were dropped by the same early
+					# return in four backends, so `999` passed `[min = 200,
+					# max = 599]` everywhere including here.
+					for attr in placement.attrs:
+						code = {"must_eq": 0, "min": 1,
+						        "max": 2}.get(attr.name)
+						if code is None or attr.value is None:
+							continue
+						try:
+							held = evaluate(attr.value, resolved.layout.env)
+						except SituError:
+							whole = False
+							continue
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, int(held), code)
 				continue
 			if kind is traverse.Check.DISCRIMINANT:
 				# The only permissive shape is a `default:` arm that

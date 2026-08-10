@@ -3862,6 +3862,32 @@ class Emitter:
 			# Reading it is the check: the property raises for digits that are
 			# not digits, which is the whole of what it is for.
 			lines.append(f"\t\t_ = self.{name}")
+			# And whatever the schema declared about the number. This branch
+			# returns before the scalar path that emits those, so a delimited
+			# text number's `[min]` and `[max]` reached no backend.
+			lines.extend(self._attr_checks(placement, f"self.{name}"))
+		return lines
+
+	def _attr_checks(self, placement: Placement, read: str) -> list[str]:
+		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
+
+		Both routes into a constrained member need these; only `read`
+		differs -- a property, or a local bound behind a version gate.
+		"""
+		from situc.expr import evaluate
+
+		lines: list[str] = []
+		for attr in placement.attrs:
+			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
+				continue
+			expected = evaluate(attr.value, self.resolved.layout.env)
+			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			lines.extend([
+				f"\t\tif int({read}) {operator} {expected}:",
+				f"\t\t\traise ConstraintError("
+				f"f\"{placement.path} is {{{read}}},"
+				f" {attr.name} {expected}\")",
+			])
 		return lines
 
 	def _minimal_check(self, placement: Placement, name: str,
@@ -4058,17 +4084,7 @@ class Emitter:
 				f" {enum.name}\")",
 			])
 
-		for attr in placement.attrs:
-			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
-				continue
-			expected = evaluate(attr.value, self.resolved.layout.env)
-			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
-			lines.extend([
-				f"\t\tif int({read}) {operator} {expected}:",
-				f"\t\t\traise ConstraintError("
-				f"f\"{placement.path} is {{{read}}},"
-				f" {attr.name} {expected}\")",
-			])
+		lines.extend(self._attr_checks(placement, read))
 
 		if versioned and lines:
 			return [

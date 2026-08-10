@@ -169,6 +169,10 @@ struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable cano
   quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   quoted_row.rest                        offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct ranged_code size=1 access=Sequential mutate=Shifting address=Unstable repr=TextConverted canonical=NonCanonical
+  ranged_code.code                       offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
+  ranged_code.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
 struct sealed_run size=19 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated auth=Covered(seal_mac)
   sealed_run.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   sealed_run.body                        offset=AbsoluteStatic(0x01) size=Bounded(2, 10) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(seal_mac)

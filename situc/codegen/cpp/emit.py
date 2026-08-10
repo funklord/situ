@@ -4896,6 +4896,35 @@ class Emitter:
 			"\t\t\t}",
 			"\t\t}",
 		])
+		# And whatever the schema declared about the number. The delimited
+		# branch returns before the scalar path that emits those, so
+		# `[min]` and `[max]` on a delimited text number reached no backend.
+		lines.extend(self._attr_checks(placement, f"{name}_value()"))
+		return lines
+
+	def _attr_checks(self, placement: Placement, read: str) -> list[str]:
+		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
+
+		Both routes into a constrained member need these and only the `read`
+		expression differs -- an ordinary accessor, an infallible `_value`,
+		or a local bound behind a version gate.
+		"""
+		scalar = placement.scalar
+		lines: list[str] = []
+		for attr in placement.attrs:
+			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
+				continue
+			expected = evaluate(attr.value, self.resolved.layout.env)
+			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			cast     = (f"static_cast<{self._ctype(scalar)}>({read})"
+			            if scalar is not None
+			            and placement.type_name in self.enums else read)
+			lines.extend([
+				f"\t\t/* {placement.path} [{attr.name} = {expected}] */",
+				f"\t\tif ({cast} {operator} {expected}) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			])
 		return lines
 
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
@@ -5133,19 +5162,7 @@ class Emitter:
 				"\t\t}",
 			])
 
-		for attr in placement.attrs:
-			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
-				continue
-			expected = evaluate(attr.value, self.resolved.layout.env)
-			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
-			cast     = (f"static_cast<{self._ctype(scalar)}>({read})"
-			            if placement.type_name in self.enums else read)
-			lines.extend([
-				f"\t\t/* {placement.path} [{attr.name} = {expected}] */",
-				f"\t\tif ({cast} {operator} {expected}) {{",
-				"\t\t\treturn ::situ::rt::err::constraint;",
-				"\t\t}",
-			])
+		lines.extend(self._attr_checks(placement, read))
 
 		if versioned and lines:
 			return self._behind_a_version(placement, name, lines)

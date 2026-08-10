@@ -32,6 +32,7 @@ from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
 from situc.diagnostics import Diagnostic
+from situc.expr import Env
 from situc.layout import (
 	BITS_PER_BYTE, IndexTable, Placement, TlvGrammar, ValueRule,
 )
@@ -5596,6 +5597,18 @@ class Emitter:
 		if placement.radix is not None:
 			lines.append("")
 			lines.extend(self._text_number_check(struct, placement, local))
+			# And whatever the schema declared about the number itself. This
+			# branch returns before the scalar path that emits those, so a
+			# delimited text number's `[min]` and `[max]` reached no backend:
+			# `999` passed `[min = 200, max = 599]` in all four and in the
+			# walk, while `12x` was correctly refused -- the parse checked,
+			# the range not. `_value` because a text number's getter is
+			# fallible and takes an out-parameter.
+			lines.extend(self._enum_check(
+				placement, f"{ident(self.prefix, struct.name, local, 'value')}(view)"))
+			lines.extend(self._attr_checks(
+				placement, f"{ident(self.prefix, struct.name, local, 'value')}(view)",
+				self.resolved.layout.env))
 
 		return lines
 
@@ -6000,18 +6013,7 @@ class Emitter:
 		else:
 			value = f"{local}_value" if versioned else f"{getter}(view)"
 
-		# An enum with `default = error` admits its members and nothing else.
-		# The declaration said so all along; this is what makes it true.
-		enum = self.enums.get(placement.type_name or "")
-		if enum is not None \
-				and enum.effective_default is ast.EnumDefault.ERROR:
-			lines.extend([
-				f"\t/* {placement.path}: `{enum.name}` rejects unknown values"
-				f" (section 8.7) */",
-				f"\tif (!{ident(self.prefix, enum.name)}_is_known({value})) {{",
-				"\t\treturn SITU_ERR_CONSTRAINT;",
-				"\t}",
-			])
+		lines.extend(self._enum_check(placement, value))
 
 		# A BCD field can hold a bit pattern that is not a number: a nibble
 		# above nine. The getter cannot report that -- it returns a number
@@ -6025,19 +6027,7 @@ class Emitter:
 				"\t}",
 			])
 
-		for attr in placement.attrs:
-			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
-				continue
-
-			from situc.expr import evaluate
-			expected = evaluate(attr.value, env)
-			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
-			lines.extend([
-				f"\t/* {placement.path} [{attr.name} = {expected}] */",
-				f"\tif ({value} {operator} {expected}) {{",
-				"\t\treturn SITU_ERR_CONSTRAINT;",
-				"\t}",
-			])
+		lines.extend(self._attr_checks(placement, value, env))
 
 		# The gate is emitted for its own sake where the member has no
 		# constraints at all: the fit check moved inside it, so a plain
@@ -6049,6 +6039,50 @@ class Emitter:
 			return self._behind_a_version(placement, getter, local, lines,
 			                              fits)
 
+		return lines
+
+	def _enum_check(self, placement: Placement, value: str) -> list[str]:
+		"""An enum with `default = error` admits its members and nothing else.
+
+		The declaration said so all along; this is what makes it true.
+		"""
+		enum = self.enums.get(placement.type_name or "")
+		if enum is None or enum.effective_default is not ast.EnumDefault.ERROR:
+			return []
+		return [
+			f"\t/* {placement.path}: `{enum.name}` rejects unknown values"
+			f" (section 8.7) */",
+			f"\tif (!{ident(self.prefix, enum.name)}_is_known({value})) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
+	def _attr_checks(self, placement: Placement, value: str,
+			env: Env) -> list[str]:
+		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
+
+		Split out because a delimited text number needs exactly these and
+		reaches them by a different route: its own branch returns before the
+		scalar path, so `decimal u32 code[] until " " [min = 200, max = 599]`
+		had its digits parsed and its range tested by nothing, in all four
+		backends. `value` differs between the routes -- a plain getter, an
+		infallible `_value`, a local behind a version gate -- and that is the
+		whole of what varies.
+		"""
+		from situc.expr import evaluate
+
+		lines: list[str] = []
+		for attr in placement.attrs:
+			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
+				continue
+			expected = evaluate(attr.value, env)
+			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			lines.extend([
+				f"\t/* {placement.path} [{attr.name} = {expected}] */",
+				f"\tif ({value} {operator} {expected}) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			])
 		return lines
 
 	def _behind_a_version(self, placement: Placement, getter: str,

@@ -10752,7 +10752,36 @@ same construct has its digits and its `[minimal]` checked and its declared
 599]` emits the terminator and the parse and no range test, in all four
 backends. No schema in the tree writes that combination, which is exactly how
 the fixed-width form stayed hidden, and it is the next piece rather than a
-declared limitation.
+declared limitation. 26.105 is that piece.
+
+### 26.105 The other form, and the schema that had to be written for it
+
+26.104 ended by naming the delimited text number's missing range as the next
+piece, and it was: `999` passed `[min = 200, max = 599]` in all four backends
+and in the walk, while `12x` was refused. The parse enforced, the bound not.
+
+**One early return, four times.** Each backend handles a delimited member in
+its own branch and *returns* from it, and the code that emits `[must_eq]`,
+`[min]` and `[max]` lives after that return on the scalar path. So the two
+halves of "what does the schema say about this member" were split by control
+flow rather than by anything about the construct. The attribute checks are
+one function per backend now, called from both routes, with the value
+expression as the only thing that varies between them -- an ordinary getter,
+an infallible `_value`, a raw load, a local behind a version gate.
+
+**The schema is the interesting part.** Nothing in the tree wrote a delimited
+text number with a declared range, so `edges.situ` gains `ranged_code`, which
+is what that file is for -- "a construct the language offers and nothing
+exercises is a construct whose generated code has never run", and this was
+one the language offered as a *combination* of two constructs it already had
+separately. The two forms of one construct had drifted into two
+implementations with different holes, and neither hole was visible from
+inside its own form.
+
+**The corpus differential covers it from here and could not have found it.**
+Random draws reach a valid three-digit code followed by a space about never,
+so the four cases are written out and held to all five implementations -- the
+same shape as 26.104's cpio header, and for the reason invariant 135 states.
 
 ### Invariants to hold across all phases
 
@@ -11900,6 +11929,24 @@ declared limitation.
    indistinguishable from one that worked, for as long as the schema existed.
    Test a check with the bytes it exists to refuse, taken from a real
    message and mutated one field at a time.
+
+136. **An early return splits a member's checks by control flow rather than
+   by construct.** Each backend handles a delimited member in its own branch
+   and returns from it, and `[min]`/`[max]`/`[must_eq]` are emitted after
+   that return -- so a delimited text number had its digits parsed and its
+   declared range dropped, in four backends and the packer, by one `return`
+   copied four times. What a member is and what the schema declares about it
+   are different questions, and a branch that answers the first must not
+   silently decline the second.
+
+137. **Two forms of one construct drift into two implementations.** A text
+   number is fixed-width or delimited, and each form had a hole the other did
+   not: the fixed-width one had no checks at all, the delimited one had
+   everything except the range. Neither is visible from inside its own form.
+   Where a construct has two spellings, write the schema that has both and
+   ask them the same question -- `edges.situ` gained `ranged_code` for
+   exactly this, a combination of two constructs the tree already had
+   separately and had never put together.
 
 ---
 

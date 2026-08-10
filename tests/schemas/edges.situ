@@ -627,3 +627,18 @@ struct keywords {
 	u8   match;
 	u8   lambda;
 }
+
+// A delimited text number carrying a declared range, which is two constructs
+// the tree had separately and never together.
+//
+// `validate` checked the digits and dropped the range. The branch that
+// handles a delimited member returns before the one that emits `[min]` and
+// `[max]`, in all four backends and in the packer -- so `999` passed
+// `[min = 200, max = 599]` everywhere while `12x` was correctly refused: the
+// parse enforced, the bound not. Nothing here wrote the combination, which
+// is exactly how the fixed-width form's missing checks stayed hidden until
+// cpio's magic was looked at.
+struct ranged_code {
+	decimal u32  code[] until " " max 4  [min = 200, max = 599];
+	u8           rest[remaining];
+}
