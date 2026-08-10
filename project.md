@@ -10821,6 +10821,27 @@ the C parse accumulates into `uint64_t` and refuses on overflow, Python's has
 arbitrary precision and does not. cpio's widest text number is eight digits,
 so the two agree everywhere the tree can ask.
 
+### 26.107 The member that says where it is
+
+`at expr` is the fifth row of 0035's table and the smallest: a member that
+joins no offset chain, because it states its own offset. The Python walk has
+evaluated one since it had a VM; the C walker refused it by name, which was
+honest and is now unnecessary -- the program is the answer, the VM was
+already there, and the summing loop had known to skip a located member when
+measuring what comes before it since it was written.
+
+**The test uses two messages, and that is the whole of its design.** A
+located member whose expression happens to land where the chain would have
+put it proves nothing, because both readings agree there. `where = 4` places
+the `u16` at 4; `where = 2` places it at 2, overlapping the member before
+it. That overlap is deliberate: `at` is what a format uses when a header
+declares an offset, and nothing says the regions it names are disjoint --
+bmp's `pixels at file.pixel_offset` is the case the tree already has.
+
+It is the same lesson as 26.101's `96 01`, in the smaller form it takes when
+you are writing the check rather than reading somebody's conclusion: choose
+the input on which the readings differ.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means

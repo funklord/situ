@@ -489,6 +489,43 @@ def test_they_agree_about_a_text_number(tmp_path: Path) -> None:
 		assert c_widths(tmp_path, blob, message) == widths, message
 
 
+LOCATED = """target buffer;
+endian big;
+
+struct s {
+	u8   where;
+	u8   pad;
+	u16  tail at where;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_member_that_says_where_it_is(
+		tmp_path: Path) -> None:
+	"""`at expr`: a member that joins no offset chain.
+
+	The C walker refused one outright and the offset is the whole of the
+	construct, so the program answers it. Two messages rather than one,
+	because a located member whose expression happens to land where the chain
+	would have put it is a member that proves nothing: `where = 4` reads the
+	`u16` at 4, and `where = 2` reads it at 2, overlapping `pad`.
+
+	Overlapping deliberately. `at` is what a format uses when a header
+	declares an offset, and nothing says the regions it names are disjoint --
+	bmp's `pixels at file.pixel_offset` is the case in the tree.
+	"""
+	blob = packed_text(LOCATED)
+
+	for message, expected in ((bytes.fromhex("0400deadbeef"),
+	                           ["4", "0", "48879"]),
+	                          (bytes.fromhex("02aabbcc"),
+	                           ["2", "170", "48076"])):
+		assert c_answers(tmp_path, blob, message) \
+			== python_answers(blob, message), message.hex()
+		assert c_answers(tmp_path, blob, message) == expected, message.hex()
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_they_agree_that_a_quoted_delimiter_is_content(tmp_path: Path) -> None:
 	"""8.6.1's other half: inside a quoted run the delimiter is data. `"a,b",`

@@ -1,11 +1,11 @@
 # 0035: the walker that matters is embedded, and it is C
 
 Status: accepted, and begun. `walker/c/` reads an image, evaluates a section
-10 program, places a fixed member, decodes a varint, scans for a delimiter
-and parses a text number, held to the Python walker by a differential test.
-Runs, variants, regions and the probes are not written; the table below is
-the remaining work and each row this build does not render is refused by name
-rather than guessed.
+10 program, places a fixed or located member, decodes a varint, scans for a
+delimiter and parses a text number, held to the Python walker by a
+differential test. Runs, variants, regions and the probes are not written;
+the table below is the remaining work and each row this build does not render
+is refused by name rather than guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -61,7 +61,7 @@ layer over the image; placing one field needs most of this:
 | fixed placement | a member at a constant offset and width, either byte order, sign-extended | **done** |
 | offset plan | where a member starts, summed through the members before it | **done** |
 | sized runs | a `size_code` program, evaluated for the element count | **done** |
-| located members | `at expr`, which joins no offset chain | `walk.py` |
+| located members | `at expr`, which joins no offset chain | **done** |
 | delimiter scan | where a delimited member stops, with quoting and escapes | **done** |
 | varint decode | a width that is in its own bytes, and the value | **done** |
 | text numbers | digits rather than bits, both forms and both radices | **done** |

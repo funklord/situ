@@ -569,8 +569,25 @@ situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
 		return err;
 	}
 
+	/* `at expr` says where the member is rather than joining the chain, so
+	 * the program answers the offset outright. The loop below already knows
+	 * to skip one when summing what comes before: a located member
+	 * contributes nothing to the members after it, which is the whole of what
+	 * separates it from an ordinary one. */
 	if (held.located_code != SITU_WALK_NONE) {
-		return SITU_WALK_UNSUPPORTED;	/* `at expr`, not yet */
+		walk_ctx ctx = {image, message, len, shape};
+		int64_t  at  = 0;
+
+		err = situ_walk_eval(image, held.located_code, ctx_load, &ctx,
+		                     (int64_t)len, &at);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (at < 0 || (uint64_t)at > 0xffffffffu / 8u) {
+			return SITU_WALK_BOUNDS;
+		}
+		*out = (uint32_t)at * 8u;
+		return SITU_WALK_OK;
 	}
 	if ((held.flags & FLAG_OFFSET_KNOWN) != 0u
 	                && held.offset_bits != SITU_WALK_NONE) {
