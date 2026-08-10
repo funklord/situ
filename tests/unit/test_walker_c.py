@@ -27,6 +27,8 @@ from situc.parser import parse
 from situc.resolve import resolve
 from situc.diagnostics import Source
 from walker.image import load
+from walker import report, walk
+from walker.image import NONE
 from walker.walk import Refused, Unplaceable, acquire, read_scalar, size_bits
 
 COMPILER = shutil.which("cc") or shutil.which("gcc")
@@ -42,10 +44,13 @@ DRIVER = """#include <stdio.h>
 #include <string.h>
 #include "situ_walk.h"
 
+SHOW
 int main(int argc, char **argv)
 {
 	static uint8_t img[65536];
 	static uint8_t msg[512];
+
+	(void)show;	/* the width ask has no value to print */
 
 	if (argc < 3) {
 		return 2;
@@ -91,14 +96,60 @@ int main(int argc, char **argv)
 }
 """
 
+#: Print one value the way its own placement says to read it. A value comes
+#: back sign-extended through a `uint64_t`, so `-2` and 18446744073709551614
+#: are the same answer and only `SITU_WALK_SIGNED` says which -- printing it
+#: unsigned reported a disagreement with the Python walk that was not there.
+SHOW = """static void show(const situ_walk_placement *held, uint64_t value,
+                 const char *end)
+{
+	if ((held->flags & SITU_WALK_SIGNED) != 0u) {
+		printf("%lld%s", (long long)value, end);
+	} else {
+		printf("%llu%s", (unsigned long long)value, end);
+	}
+}
+"""
+
 #: The value read: what a caller asks a member for.
 VALUES = """uint64_t value = 0;
+		situ_walk_placement held;
+		if (situ_walk_placement_at(&image, first + i, &held) != SITU_WALK_OK) {
+			return 1;
+		}
 		if (situ_walk_read(&image, msg, len, 0u, first + i, &value)
 				== SITU_WALK_OK) {
-			printf("%llu\\n", (unsigned long long)value);
+			show(&held, value, "\\n");
 		} else {
 			printf("refused\\n");
 		}"""
+
+#: A run's elements, as `count:e0,e1,...`. The third quantity the walk
+#: computes and the one a caller of a run actually wants: `situ_walk_read`
+#: refuses a run because it has no single value, which says nothing about the
+#: values it does have.
+ELEMENTS = """uint32_t n = 0;
+		situ_walk_placement held;
+		if (situ_walk_placement_at(&image, first + i, &held) != SITU_WALK_OK) {
+			return 1;
+		}
+		if (situ_walk_count(&image, msg, len, 0u, first + i, &n)
+				!= SITU_WALK_OK) {
+			printf("refused\\n");
+			continue;
+		}
+		printf("%u:", n);
+		for (uint32_t e = 0; e < n; e++) {
+			uint64_t one = 0;
+			const char *end = (e + 1 == n) ? "" : ",";
+			if (situ_walk_element(&image, msg, len, 0u, first + i, e, &one)
+					== SITU_WALK_OK) {
+				show(&held, one, end);
+			} else {
+				printf("refused%s", end);
+			}
+		}
+		printf("\\n");"""
 
 #: The width, in bytes. A member the walk declines to *value* still has an
 #: extent, and the extent is what places everything after it -- so a walker
@@ -148,8 +199,8 @@ def python_widths(blob: bytes, message: bytes) -> list[str]:
 
 def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str) -> list[str]:
 	(tmp_path / "img").write_bytes(blob)
-	(tmp_path / "drive.c").write_text(DRIVER.replace("ASK", ask),
-	                                  encoding="ascii")
+	(tmp_path / "drive.c").write_text(
+		DRIVER.replace("SHOW", SHOW).replace("ASK", ask), encoding="ascii")
 
 	assert COMPILER is not None
 	built = subprocess.run(
@@ -170,6 +221,39 @@ def c_answers(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
 
 def c_widths(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
 	return _drive(tmp_path, blob, message, WIDTHS)
+
+
+def c_elements(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
+	return _drive(tmp_path, blob, message, ELEMENTS)
+
+
+def python_elements(blob: bytes, message: bytes) -> list[str]:
+	"""The same question of the Python walk, spelled its way.
+
+	`report._element` is where the fifth column reads one, and `walk._count`
+	is what says how many -- the two the C API had no equivalent of until a
+	run was more than a span to skip over.
+	"""
+	image = load(blob)
+	view  = acquire(image, message, 0)
+	found = []
+	for index in image.members(image.structs[0]):
+		placement = image.placements[index]
+		try:
+			if placement.radix or placement.repeat_code != NONE:
+				raise Refused("not a counted run")
+			count = walk._count(view, index)
+		except (Refused, Unplaceable):
+			found.append("refused")
+			continue
+		held = []
+		for at in range(count):
+			try:
+				held.append(str(report._element(view, index, at)))
+			except (Refused, Unplaceable):
+				held.append("refused")
+		found.append(f"{count}:" + ",".join(held))
+	return found
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
@@ -489,6 +573,56 @@ def test_they_agree_about_a_text_number(tmp_path: Path) -> None:
 		assert c_widths(tmp_path, blob, message) == widths, message
 
 
+RUNS = {
+	"a counted run":
+		("struct s { u16 xs[3]; u8 tail; }",
+		 bytes.fromhex("0001000200037f"), ["3:1,2,3", "refused"]),
+	"a run the message sizes":
+		("struct s { u8 n; u16 xs[n]; u8 tail; }",
+		 bytes.fromhex("02000100027f"), ["refused", "2:1,2", "refused"]),
+	"a run the message sizes to nothing":
+		("struct s { u8 n; u16 xs[n]; u8 tail; }",
+		 bytes.fromhex("007f"), ["refused", "0:", "refused"]),
+	"a signed element":
+		("struct s { i16 xs[2]; u8 tail; }",
+		 bytes.fromhex("fffe00027f"), ["2:-2,2", "refused"]),
+	"a byte run":
+		("struct s { u8 n; u8 xs[n]; u8 tail; }",
+		 bytes.fromhex("034142437f"), ["refused", "3:65,66,67", "refused"]),
+}
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_run_element_by_element(tmp_path: Path) -> None:
+	"""What a run holds, which `situ_walk_read` refusing one says nothing
+	about.
+
+	A run has no single value and both walkers decline to give it one; the
+	values it *does* have needed an accessor, and the C walker had none --
+	so a device could be told a run is fourteen bytes long and had no way to
+	read any of them. `situ_walk_count` and `situ_walk_element` are that,
+	and the element read is the scalar read at a different offset rather
+	than a second spelling of it.
+
+	The signed case earns its place. A value comes back sign-extended
+	through a `uint64_t`, so `-2` and 18446744073709551614 are the same
+	answer, and the walker had no way for a caller to ask which it was
+	looking at -- this test printed one unsigned and reported a
+	disagreement that was not there. `SITU_WALK_SIGNED` is named in the
+	header now, which is what a missing accessor costs when it is only
+	found from outside.
+
+	A run of zero elements is a run, not a refusal: `n = 0` answers `0:`
+	in both, and nothing after it moves.
+	"""
+	for label, (body, message, expected) in RUNS.items():
+		blob = packed_text(f"target buffer;\nendian big;\n\n{body}\n")
+
+		assert c_elements(tmp_path, blob, message) \
+			== python_elements(blob, message), label
+		assert c_elements(tmp_path, blob, message) == expected, label
+
+
 LOCATED = """target buffer;
 endian big;
 
@@ -584,8 +718,8 @@ def test_a_truncated_image_is_malformed_rather_than_read(
 	one."""
 	blob = image_for(ROOT / "examples" / "udp" / "udp.situ")
 	(tmp_path / "img").write_bytes(blob[:len(blob) // 2])
-	(tmp_path / "drive.c").write_text(DRIVER.replace("ASK", VALUES),
-	                                  encoding="ascii")
+	(tmp_path / "drive.c").write_text(
+		DRIVER.replace("SHOW", SHOW).replace("ASK", VALUES), encoding="ascii")
 
 	assert COMPILER is not None
 	# Not `check=True`, which throws the compiler's own sentence away and

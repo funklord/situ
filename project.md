@@ -10842,6 +10842,39 @@ It is the same lesson as 26.101's `96 01`, in the smaller form it takes when
 you are writing the check rather than reading somebody's conclusion: choose
 the input on which the readings differ.
 
+### 26.108 The run a device could measure and not read
+
+`situ_walk_read` refuses a run because a run has no single value. That is
+right, and it had been standing in for an accessor that did not exist: **the
+C walker could tell a caller a run is fourteen bytes long and offer no way
+to read any of them.** `situ_walk_count` and `situ_walk_element` are that
+accessor, and `situ_walk_bytes` is the same for a byte run and a delimited
+member -- a pointer into the caller's buffer, because an embedded walker in
+a fixed arena has nowhere to copy to.
+
+The element read is the scalar read at a different offset, and it is one
+function rather than two for the reason `walk.py` gives about its own split:
+two spellings of "how do these bits become a number" is how a backend and
+its own run accessor once disagreed.
+
+**The differential found an API gap that was invisible from inside the
+module.** A value comes back sign-extended through a `uint64_t`, so `-2` and
+18446744073709551614 are the same answer, and the caller decides which it is
+looking at -- with nothing to ask. The harness printed a signed element
+unsigned and reported a disagreement that was not there, which is the false
+positive the differ module warns about, arriving from a real cause: the
+walker was withholding what the number means. `SITU_WALK_SIGNED` is in the
+header now.
+
+That is worth separating from the usual finding. Most of this session's
+divergences were one implementation being wrong; this one was **both being
+right and the interface between them being incomplete**. The first consumer
+outside a module is what shows that, and a differential is a consumer.
+
+`while` runs stay refused and are their own piece: their extent is a loop,
+bounded by `repeat_cap`, by the frame, and by refusing to advance on a
+zero-length element, and a loop in an arena is worth its own commit.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -12016,6 +12049,16 @@ the input on which the readings differ.
    differential over extents can, and that is the argument for asking a check
    for the quantity the code computes rather than the one that is convenient
    to compare (invariant 132, one instance later).
+
+139. **A number handed back without how to read it is an incomplete API.**
+   The C walker sign-extends into a `uint64_t`, so `-2` and
+   18446744073709551614 are one answer and the caller decides which -- and it
+   had no way to ask, `SITU_WALK_SIGNED` being private to the module. The
+   differential printed a signed element unsigned and reported a
+   disagreement that was not there. Both implementations were right and the
+   interface between them was not, which is a class of defect a differential
+   finds *as* a false positive: the first consumer outside a module is what
+   shows what the module withholds.
 
 ---
 

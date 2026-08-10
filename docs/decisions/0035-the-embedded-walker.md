@@ -65,7 +65,8 @@ layer over the image; placing one field needs most of this:
 | delimiter scan | where a delimited member stops, with quoting and escapes | **done** |
 | varint decode | a width that is in its own bytes, and the value | **done** |
 | text numbers | digits rather than bits, both forms and both radices | **done** |
-| run walking | counted, capped and `while` runs | `walk.py` |
+| run walking | counted and message-sized runs | **done** |
+| `while` runs | however many elements pass the predicate | `walk.py` |
 | the probes | `validate`, tags, markers, gated regions | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
@@ -241,3 +242,33 @@ accumulates into `uint64_t` and refuses on overflow; Python's has arbitrary
 precision and does not. No schema here writes a text number long enough to
 reach it -- cpio's widest is eight digits -- so the two agree everywhere the
 tree can ask, and this says where they would stop.
+
+
+## Amendment, 2026-08-10: runs, and the flag a caller could not ask for
+
+`situ_walk_count` and `situ_walk_element` are what a run needs, and their
+absence was a real gap rather than a missing convenience: **a device could be
+told a run is fourteen bytes long and had no way to read any of them.**
+`situ_walk_read` refuses a run because a run has no single value, which says
+nothing about the values it does have, and until now nothing else answered.
+`situ_walk_bytes` is the same for a byte run and a delimited member, handing
+back a pointer into the caller's buffer because an embedded walker in a fixed
+arena has nowhere to copy to.
+
+The element read is the scalar read at a different offset, extracted into one
+function rather than written twice -- which is what `walk.py` says about its
+own split, having watched a backend and its own run accessor disagree about
+exactly that.
+
+**Writing the differential found an API gap the walker could not see from
+inside.** A value comes back sign-extended through a `uint64_t`, so `-2` and
+18446744073709551614 are the same answer and the *caller* decides which it is
+looking at -- with no way to ask. The harness printed a signed element
+unsigned and reported a disagreement that was not there. `SITU_WALK_SIGNED`
+is in the header now. The lesson is the shape of the finding: a walker that
+hands back a number and withholds how to read it has an incomplete API, and
+the first consumer outside the module is what shows it.
+
+`while` runs stay refused and are their own row. Their extent is a loop --
+bounded by `repeat_cap`, by the frame, and by refusing to advance on a
+zero-length element -- and a loop in an arena is worth its own commit.

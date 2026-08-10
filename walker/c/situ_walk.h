@@ -91,6 +91,17 @@ typedef struct {
 	uint16_t radix_digits;
 } situ_walk_placement;
 
+/* Bits of `situ_walk_placement.flags` a caller needs.
+ *
+ * `SITU_WALK_SIGNED` is not a detail. A value comes back in a `uint64_t`
+ * with the sign extended through it, so `-2` and `18446744073709551614` are
+ * the same answer and the caller decides which it is looking at -- and a
+ * caller with no way to ask decides wrongly. The differential printed a
+ * signed element unsigned and reported a disagreement that was not there,
+ * which is what a missing accessor looks like from outside. */
+#define SITU_WALK_OFFSET_KNOWN 0x01u
+#define SITU_WALK_SIGNED       0x10u
+
 /* Bind an image. Every table it names is bounds-checked against the whole
  * before anything reads one, because the image is the least trusted input
  * this component has. */
@@ -167,6 +178,40 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
 	                             const uint8_t *message, uint32_t len,
 	                             uint32_t shape, uint32_t index,
 	                             uint64_t *out);
+
+/* How many elements a run holds: a declared count, or the `size_code`
+ * program the message answers.
+ *
+ * SITU_WALK_UNSUPPORTED for a member that is not a run, and for a `while`
+ * run -- how many elements one holds is whichever first fails the predicate,
+ * which is a walk this build does not have. */
+situ_walk_err situ_walk_count(const situ_walk_image *image,
+	                              const uint8_t *message, uint32_t len,
+	                              uint32_t shape, uint32_t index,
+	                              uint32_t *out);
+
+/* One element of a run, by index rather than by pointer.
+ *
+ * A run has no single value and `situ_walk_read` refuses one; this is how a
+ * caller asks for the values it does have. The elements are the bytes, so
+ * this is the same read at a different offset -- which is deliberately one
+ * function rather than two, a backend and its own run accessor having once
+ * disagreed about exactly that. */
+situ_walk_err situ_walk_element(const situ_walk_image *image,
+	                               const uint8_t *message, uint32_t len,
+	                               uint32_t shape, uint32_t index,
+	                               uint32_t at, uint64_t *out);
+
+/* A member's bytes: where they start in `message`, and how many.
+ *
+ * For the runs and arrays that have no scalar value, and for a delimited
+ * member, whose span carries its delimiter because that is what places the
+ * member after it. Points into the caller's buffer and copies nothing: an
+ * embedded walker in a fixed arena has nowhere to copy to. */
+situ_walk_err situ_walk_bytes(const situ_walk_image *image,
+	                              const uint8_t *message, uint32_t len,
+	                              uint32_t shape, uint32_t index,
+	                              const uint8_t **out, uint32_t *count);
 
 /* Evaluate a section 10 program. `field` reads a placement's value for the
  * expression, and is the only thing tying this to a message. */

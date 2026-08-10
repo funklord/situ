@@ -413,8 +413,10 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 #define ENDIAN_BIG    1u
 #define ENDIAN_LITTLE 2u
 
-#define FLAG_OFFSET_KNOWN 0x01u
-#define FLAG_SIGNED       0x10u
+/* Named in the header now, a caller needing the signedness to print a value
+ * at all. Kept as the short spellings this file already reads by. */
+#define FLAG_OFFSET_KNOWN SITU_WALK_OFFSET_KNOWN
+#define FLAG_SIGNED       SITU_WALK_SIGNED
 
 /* The load callback for a size expression: a field of this same message,
  * read at whatever offset the chain has reached. */
@@ -636,6 +638,61 @@ situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
 	return SITU_WALK_BOUNDS;	/* not a member of this struct */
 }
 
+/* One value of `width_bits` bits at `start_bits`, in the member's own terms.
+ *
+ * Split out because an element of a run is the same read at a different
+ * offset, and two spellings of "how do these bits become a number" is how a
+ * backend and its own run accessor once disagreed. The width is a parameter
+ * rather than the placement's, which is the whole of the difference: an
+ * element is as wide as an element, and sign extension follows it.
+ *
+ * A member that does not start or end on a byte is refused rather than
+ * assembled. The layout solver will not place a bit-packed field at a
+ * dynamic offset, so the case this declines to render is one that cannot
+ * arise -- and a walker that guessed at it would be inventing an answer for
+ * a construct that has none. */
+static situ_walk_err read_at(const uint8_t *message, uint32_t len,
+                             const situ_walk_placement *held,
+                             uint32_t start_bits, uint32_t width_bits,
+                             uint64_t *out)
+{
+	if (start_bits % 8u || width_bits % 8u || width_bits == 0u
+	                || width_bits > 64u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	const uint32_t at    = start_bits / 8u;
+	const uint32_t width = width_bits / 8u;
+	if (at > len || width > len - at) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	uint64_t value = 0u;
+	if (held->endian == ENDIAN_LITTLE) {
+		for (uint32_t i = width; i > 0u; i--) {
+			value = (value << 8) | message[at + i - 1u];
+		}
+	} else if (held->endian == ENDIAN_BIG) {
+		for (uint32_t i = 0u; i < width; i++) {
+			value = (value << 8) | message[at + i];
+		}
+	} else {
+		/* `native` has no answer a walker can give: the capture and the
+		 * machine reading it are different machines. */
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	if ((held->flags & FLAG_SIGNED) != 0u && width < 8u) {
+		const uint64_t sign = (uint64_t)1 << (width_bits - 1u);
+		if (value & sign) {
+			value |= ~(((uint64_t)1 << width_bits) - 1u);
+		}
+	}
+
+	*out = value;
+	return SITU_WALK_OK;
+}
+
 situ_walk_err situ_walk_read(const situ_walk_image *image,
                              const uint8_t *message, uint32_t len,
                              uint32_t shape, uint32_t index, uint64_t *out)
@@ -727,40 +784,123 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	if (offset % 8u || held.size_bits % 8u || held.size_bits == 0u
-	                || held.size_bits > 64u) {
+	return read_at(message, len, &held, offset, held.size_bits, out);
+}
+
+situ_walk_err situ_walk_count(const situ_walk_image *image,
+                              const uint8_t *message, uint32_t len,
+                              uint32_t shape, uint32_t index,
+                              uint32_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	/* A text number's bracket is digits, not elements: `decimal u32 n[4]` is
+	 * one number and asking it for four would be the array reading of the
+	 * bracket that `traverse.classify` exists to stop. */
+	if (held.radix != 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	/* A `while` run's count is whichever element first fails the predicate,
+	 * which is a walk this build does not have. Named rather than
+	 * approximated. */
+	if (held.repeat_code != SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	const uint32_t at    = offset / 8u;
-	const uint32_t width = held.size_bits / 8u;
-	if (at > len || width > len - at) {
+	if (held.array_count != SITU_WALK_NONE) {
+		*out = held.array_count;
+		return SITU_WALK_OK;
+	}
+	if (held.size_code == SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;	/* not a run */
+	}
+
+	walk_ctx ctx   = {image, message, len, shape};
+	int64_t  count = 0;
+	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
+	                     (int64_t)len, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (count < 0 || (uint64_t)count > 0xffffffffu) {
 		return SITU_WALK_BOUNDS;
 	}
 
-	uint64_t value = 0u;
-	if (held.endian == ENDIAN_LITTLE) {
-		for (uint32_t i = width; i > 0u; i--) {
-			value = (value << 8) | message[at + i - 1u];
-		}
-	} else if (held.endian == ENDIAN_BIG) {
-		for (uint32_t i = 0u; i < width; i++) {
-			value = (value << 8) | message[at + i];
-		}
-	} else {
-		/* `native` has no answer a walker can give: the capture and the
-		 * machine reading it are different machines. */
+	*out = (uint32_t)count;
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_element(const situ_walk_image *image,
+                               const uint8_t *message, uint32_t len,
+                               uint32_t shape, uint32_t index,
+                               uint32_t at, uint64_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (held.element_bits == SITU_WALK_NONE || held.element_bits == 0u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	if ((held.flags & FLAG_SIGNED) != 0u && width < 8u) {
-		const uint64_t sign = (uint64_t)1 << (held.size_bits - 1u);
-		if (value & sign) {
-			value |= ~(((uint64_t)1 << held.size_bits) - 1u);
-		}
+	uint32_t count = 0u;
+	err = situ_walk_count(image, message, len, shape, index, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (at >= count) {
+		return SITU_WALK_BOUNDS;
 	}
 
-	*out = value;
+	uint32_t start = 0u;
+	err = situ_walk_offset_bits(image, message, len, shape, index, &start);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (at > 0xffffffffu / held.element_bits) {
+		return SITU_WALK_BOUNDS;
+	}
+	const uint32_t into = at * held.element_bits;
+	if (into > 0xffffffffu - start) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	return read_at(message, len, &held, start + into, held.element_bits, out);
+}
+
+situ_walk_err situ_walk_bytes(const situ_walk_image *image,
+                              const uint8_t *message, uint32_t len,
+                              uint32_t shape, uint32_t index,
+                              const uint8_t **out, uint32_t *count)
+{
+	uint32_t start = 0u;
+	uint32_t width = 0u;
+	situ_walk_err err = situ_walk_offset_bits(image, message, len, shape,
+	                                          index, &start);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	err = situ_walk_size_bits(image, message, len, shape, index, &width);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (start % 8u || width % 8u) {
+		return SITU_WALK_UNSUPPORTED;	/* a run that does not start on a byte */
+	}
+
+	start /= 8u;
+	width /= 8u;
+	if (start > len || width > len - start) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	*out   = message + start;
+	*count = width;
 	return SITU_WALK_OK;
 }
 
