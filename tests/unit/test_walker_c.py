@@ -199,6 +199,111 @@ def test_they_agree_where_the_data_decides_a_length(tmp_path: Path) -> None:
 	assert answers == ["4660", "5", "refused", "127"]
 
 
+VARINT = """target buffer;
+endian big;
+
+varint_type small {
+	encoding  = leb128;
+	max_bits  = 32;
+	max_bytes = 5;
+}
+
+struct counted {
+	u8    lead;
+	small n;
+	u8    after;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_what_a_varint_holds(tmp_path: Path) -> None:
+	"""Both walkers read the bytes rather than the value, and neither said so.
+
+	Python answered `ac 02` as 44034, those two bytes as an integer; the C
+	side answered 172, the first of them, because a varint's record carries
+	the one-byte lower bound as its width. Both decode now, which is what
+	every compiled backend's `_get` does.
+
+	The bytes matter to this test. `96 01` is 150 decoded and 0x96 is 150
+	raw, so a walker reading one byte and a walker decoding two agree on it
+	by coincidence -- and that pair is what the divergence was first written
+	up from, which had the C side down as already correct. Nothing here uses
+	a number two readings can produce.
+	"""
+	source   = parse(Source("varint.situ", VARINT))
+	resolved = resolve(source, solve(source))
+	blob     = pack(source, resolved)[0]
+	message  = bytes.fromhex("11ac0222")
+
+	answers = c_answers(tmp_path, blob, message)
+
+	assert answers == python_answers(blob, message)
+	assert answers == ["17", "300", "34"]
+
+
+WIDE = """target buffer;
+endian big;
+
+varint_type wide {
+	encoding  = be128;
+	max_bits  = 64;
+	max_bytes = 9;
+}
+
+struct counted {
+	u8   lead;
+	wide n;
+	u8   after;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_the_other_varint_encoding(tmp_path: Path) -> None:
+	"""`be128` takes the high group first -- ASN.1's identifier octets and
+	SQLite's record varints -- and is the other byte order rather than the
+	same one spelled differently. `81 00` holds 128 there and 33024 read as
+	raw bytes, so the two encodings are told apart by this and not only the
+	decode from the raw read."""
+	source   = parse(Source("wide.situ", WIDE))
+	resolved = resolve(source, solve(source))
+	blob     = pack(source, resolved)[0]
+	message  = bytes.fromhex("11810022")
+
+	answers = c_answers(tmp_path, blob, message)
+
+	assert answers == python_answers(blob, message)
+	assert answers == ["17", "128", "34"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_a_truncated_varint_has_no_value(
+		tmp_path: Path) -> None:
+	"""The width answers zero and the value refuses, in both.
+
+	Two readers, as for a text number: the generated `_len` gives a truncated
+	varint no bytes and goes on placing what follows, because the length
+	arithmetic downstream of it is not fallible, and only `_get` refuses. The
+	C walker refused the width and so dropped `after` out of a struct four
+	backends read to the end -- the same rule Python learned in 26.94, learned
+	again by the implementation written after it was recorded.
+
+	`after` is asserted, not just the refusal: it is the whole of what the lax
+	reader buys, and a walker that refuses the width passes a test that only
+	looks at the varint.
+	"""
+	source   = parse(Source("varint.situ", VARINT))
+	resolved = resolve(source, solve(source))
+	blob     = pack(source, resolved)[0]
+	message  = bytes.fromhex("11ac")
+
+	answers = c_answers(tmp_path, blob, message)
+
+	assert answers == python_answers(blob, message)
+	assert answers == ["17", "refused", "172"]
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_truncated_image_is_malformed_rather_than_read(
 		tmp_path: Path) -> None:

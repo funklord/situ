@@ -63,6 +63,56 @@ def test_byte_order_comes_from_the_image() -> None:
 	assert read_scalar(view, 0) == 0xBBAA
 
 
+LEB128 = ("target buffer;\nendian big;\n"
+          "varint_type small { encoding = leb128; max_bits = 32;"
+          " max_bytes = 5; }\n"
+          "struct s { u8 lead; small n; u8 after; }\n")
+
+BE128 = ("target buffer;\nendian big;\n"
+         "varint_type wide { encoding = be128; max_bits = 64; max_bytes = 9; }\n"
+         "struct s { u8 lead; wide n; u8 after; }\n")
+
+
+def test_a_varint_answers_its_value_and_not_its_bytes() -> None:
+	"""The scalar read decodes one, because a varint has a value.
+
+	`ac 02` is 300 in leb128 and 44034 read as two big-endian bytes, and the
+	walk answered the second. This is the byte-run question with the opposite
+	answer: a run has no single value and `read_scalar` refuses one, a varint
+	has one and every compiled backend's `_get` decodes it.
+
+	The bytes are chosen so the two answers differ in every reading. `96 01`
+	-- the pair this was first seen with -- is 150 decoded and 0x96 is 150
+	raw, so a walker reading one byte agrees with a walker decoding two by
+	coincidence, which is how the C side survived a differential.
+	"""
+	view = acquire(load(packed(LEB128)), bytes.fromhex("11ac0222"), 0)
+
+	assert read_scalar(view, 1) == 300
+	assert read_scalar(view, 2) == 0x22	# and `after` is still placed at 3
+
+
+def test_the_high_group_first_encoding_decodes_too() -> None:
+	"""`be128` is ASN.1's identifier octets and SQLite's record varints, and
+	it is the other byte order rather than the same one. `81 00` holds 128
+	there and 33024 read as raw bytes."""
+	view = acquire(load(packed(BE128)), bytes.fromhex("11810022"), 0)
+
+	assert read_scalar(view, 1) == 128
+	assert read_scalar(view, 2) == 0x22
+
+
+def test_a_truncated_varint_is_refused_by_the_value_read() -> None:
+	"""Two readers, as for a text number: the width answers zero and lets the
+	offset chain carry on, and the *value* refuses. That is what every
+	backend's `_get` does where the frame ends mid-value."""
+	view = acquire(load(packed(LEB128)), bytes.fromhex("11ac"), 0)
+
+	with pytest.raises(Refused):
+		read_scalar(view, 1)
+	assert read_scalar(view, 2) == 0xAC	# and `after` is placed at 1, not lost
+
+
 def test_a_bit_packed_field_is_read_from_the_bytes_it_straddles() -> None:
 	"""`u4` twice in one byte, most significant first."""
 	image = load(packed("target buffer;\nendian big;\nbit_order msb_first;\n"

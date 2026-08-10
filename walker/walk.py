@@ -340,6 +340,15 @@ def read_scalar(view: View, index: int) -> int:
 		raise Refused(f"placement {index} is a run, not a scalar; its bytes "
 		              f"are `read_bytes`")
 
+	# A varint *is* a scalar, and its value is what it encodes rather than the
+	# bytes it is written in. Falling through read those bytes as an integer:
+	# `ac 02` came back as 44034 where leb128 says 300. The byte-run question
+	# with the opposite answer -- a run has no single value and is refused, a
+	# varint has one -- and decoding is what every compiled backend's `_get`
+	# does.
+	if index in view.image.varints:
+		return varint(view, index)[1]
+
 	start = offset_bits(view, index)
 	width = size_bits(view, index)
 	if width <= 0 or width > 64:

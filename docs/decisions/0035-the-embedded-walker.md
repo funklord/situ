@@ -1,8 +1,8 @@
 # 0035: the walker that matters is embedded, and it is C
 
 Status: accepted, and begun. `walker/c/` reads an image, evaluates a section
-10 program and places a fixed member, held to the Python walker by a
-differential test. Delimited members, varints, runs, variants, regions and
+10 program, places a fixed member and decodes a varint, held to the Python
+walker by a differential test. Delimited members, runs, variants, regions and
 the probes are not written; the table below is the remaining work and each
 row this build does not render is refused by name rather than guessed.
 Date: 2026-08-10
@@ -139,3 +139,37 @@ The pattern is worth naming now it has happened twice: `read_scalar` reads
 *bits* where the walk's public answer should read *values*. Delimited
 members and text numbers are the remaining constructs where the distinction
 bites, and whoever ports them should expect a third instance.
+
+
+## Amendment, 2026-08-10: the amendment above was wrong about which walker
+
+**Neither walker decoded the varint.** The entry above has the C side down as
+answering correctly and Python as the one to fix, and that reading came from a
+single pair of bytes on which the two readings coincide. `96 01` is 150 in
+leb128, and `0x96` is 150 -- so a walker decoding two bytes and a walker
+reading the first one produce the same number, and the difference between
+them is invisible. `situ_walk_read` had no varint case at all: it took
+`size_bits` from the record, which for a varint is the one-byte lower bound.
+
+Measured on `ac 02`, where no two readings agree: leb128 says 300, the two
+bytes read big-endian are 44034, and the first byte alone is 172. Python
+answered 44034 and C answered 172. Both are fixed here, and the test uses
+`ac 02` for that reason -- a differential over a value two readings can
+produce is a differential that passes without comparing anything, which is
+what the first write-up was reading.
+
+**A third divergence, found by the test asserting the truncated case.** They
+disagreed about a varint whose last byte never arrived: Python gives it a
+width of zero and places the member after it, C refused the width and so
+dropped everything downstream. The compiled backends settle it -- the
+generated `_len` returns zero and only `_get` refuses, deliberately, because
+"the length arithmetic downstream of this field is not fallible". The C
+walker follows them now. Two readers again, and it is the same split the
+first amendment describes rather than a new one: a width and a value are
+different questions and a truncated encoding answers them differently.
+
+What this costs the earlier claim, and it is the point worth keeping: the
+divergence had been *recorded* rather than fixed, and recording it is what
+made it look settled. A written-up disagreement with one side named correct
+is a conclusion, and this one was drawn from a coincidence that a second
+input would have destroyed.

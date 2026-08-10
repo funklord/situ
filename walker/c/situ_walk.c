@@ -298,6 +298,16 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 		uint64_t value    = 0u;
 		err = situ_walk_varint(image, message, len, index, at / 8u,
 		                       &consumed, &value);
+		if (err == SITU_WALK_BOUNDS) {
+			/* A truncated one is zero bytes wide, not a refusal: that is
+			 * what the generated `_len` answers, and it keeps every offset
+			 * derived from it inside the frame. Refusing here dropped every
+			 * member after a varint whose last byte never arrived, out of a
+			 * struct four backends read to the end. The *value* still
+			 * refuses -- two readers, as for a text number. */
+			*out = 0u;
+			return SITU_WALK_OK;
+		}
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -415,6 +425,21 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
 	err = situ_walk_offset_bits(image, message, len, shape, index, &offset);
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+
+	/* A varint *is* a scalar, and its value is what it encodes rather than
+	 * the bytes it is written in. The read below would take `size_bits`,
+	 * which for a varint is the one-byte lower bound: `ac 02` answered 172
+	 * where leb128 says 300, and a one-byte encoding answered correctly by
+	 * coincidence, which is how this survived a differential. Decoding is
+	 * what every compiled backend's `_get` does. */
+	if (varint_rules(image, index) != NULL) {
+		uint32_t consumed = 0u;
+		if (offset % 8u) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		return situ_walk_varint(image, message, len, index, offset / 8u,
+		                        &consumed, out);
 	}
 
 	if (offset % 8u || held.size_bits % 8u || held.size_bits == 0u

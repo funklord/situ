@@ -10569,6 +10569,45 @@ off: a schema describes and does not hold, so "an ack names a sequence
 number that was actually sent" is a rule the schema states and a table the
 caller sizes.
 
+### 26.101 The divergence that was recorded with the wrong side named
+
+26.100 was written a commit after 0035 recorded a disagreement between the two
+walkers about a varint, named the Python one as the side to fix, and left it
+for the next commit so the full suite would be behind the change. The next
+commit is this one, and the recorded finding was wrong: **neither walker
+decoded the varint**, and the C one was named correct because of the bytes it
+was measured on.
+
+`96 01` is 150 in leb128. `0x96` is 150. So a walker decoding two bytes and a
+walker reading the record's declared width -- one byte, a varint's lower bound
+-- answer identically, and the two implementations cannot be told apart on
+that input. `situ_walk_read` had no varint case at all. On `ac 02`, where the
+three candidate readings are 300 decoded, 44034 as a big-endian pair and 172
+as the first byte alone, Python answered 44034 and C answered 172.
+
+Both decode now, which is what every compiled backend's `_get` does, and the
+differential uses `ac 02` for the reason the failure gives: **an input on
+which two implementations agree by arithmetic accident is an input that
+compares nothing.** The differential over `96 01` would have passed at every
+point in this story, including before either walker was right.
+
+**The test for the truncated case then found a third disagreement, of the
+same family.** A varint whose last byte never arrives has a width of zero and
+no value: the generated `_len` answers zero and goes on placing what follows,
+deliberately, because "the length arithmetic downstream of this field is not
+fallible", and only `_get` refuses. Python learned that in 26.94; the C walker
+was written afterwards and refused the width, dropping every member after a
+truncated varint out of a struct four backends read to the end. That is the
+fourth instance of the lax reader and the strict one -- text numbers, sqlite's
+`02 c3 a9`, and now once per walker.
+
+What the phase is really about is the shape of the earlier mistake. Recording
+a divergence rather than fixing it is right when the fix wants a suite behind
+it, and it was right here. But **a record that names one side correct is a
+conclusion, not a note**, and this one was drawn from a single input. The
+weaker record -- "they disagree, and neither has been checked against the
+backends" -- would have cost nothing and been true.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -11578,6 +11617,10 @@ caller sizes.
    member whether or not the field parsed. Three instances of this in two
    sections -- text numbers, varints, and a truncated varint's length -- each
    found as a walker calling malformed what four backends read to the end.
+   A fourth arrived with the second walker: the C one was written after the
+   rule was recorded here and refused a truncated varint's width anyway, which
+   is what a rule recorded in prose and enforced nowhere is worth to the next
+   implementation.
 120. **An unstated default is a decision, not an absence.** Section 8.7 makes
    an enum reject an unknown value and 14.5 makes a variant reject an unknown
    discriminant, so a construct that writes no `default:` clause has chosen
@@ -11646,6 +11689,17 @@ caller sizes.
    from `python3 -c "import PyQt6" | head -1`, which prints nothing on
    success. PyQt6 was installed and so were Qt6's C++ headers. Check the exit
    status, or ask the tool a question whose answer is not empty.
+
+130. **Two implementations agreeing on one input have not been compared.**
+   The walkers' varint divergence was written up from `96 01`, which is 150
+   decoded and 0x96 raw -- so a walker decoding two bytes and a walker reading
+   one produce the same number, and the write-up named the C side correct when
+   it had no varint case at all. Both were wrong, and a second input said so
+   immediately: on `ac 02` the three readings are 300, 44034 and 172. A
+   differential is only as wide as the values its input can distinguish, so
+   choose bytes where every candidate reading differs -- and where a
+   comparison has already been drawn from one, treat the conclusion as
+   untested rather than as recorded.
 
 ---
 
