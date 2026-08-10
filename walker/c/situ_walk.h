@@ -89,6 +89,9 @@ typedef struct {
 	 * fixed-width form's width; the delimited form's comes from the scan. */
 	uint8_t  radix;
 	uint16_t radix_digits;
+	/* `max` on a `while` run: the ceiling the schema put on how many
+	 * elements one may hold, and zero where it stated none. */
+	uint16_t repeat_cap;
 } situ_walk_placement;
 
 /* Bits of `situ_walk_placement.flags` a caller needs.

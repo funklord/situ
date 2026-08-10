@@ -84,9 +84,14 @@ int main(int argc, char **argv)
 		msg[len++] = (uint8_t)strtoul(pair, NULL, 16);
 	}
 
+	/* Which struct, because the first one in an image is whichever the
+	 * packer put there and a run's *container* is the interesting one. */
+	const uint32_t shape = (argc > 3) ? (uint32_t)strtoul(argv[3], NULL, 10)
+	                                  : 0u;
+
 	uint32_t first = 0;
 	uint32_t count = 0;
-	if (situ_walk_members(&image, 0, &first, &count) != SITU_WALK_OK) {
+	if (situ_walk_members(&image, shape, &first, &count) != SITU_WALK_OK) {
 		return 1;
 	}
 	for (uint32_t i = 0; i < count; i++) {
@@ -117,7 +122,7 @@ VALUES = """uint64_t value = 0;
 		if (situ_walk_placement_at(&image, first + i, &held) != SITU_WALK_OK) {
 			return 1;
 		}
-		if (situ_walk_read(&image, msg, len, 0u, first + i, &value)
+		if (situ_walk_read(&image, msg, len, shape, first + i, &value)
 				== SITU_WALK_OK) {
 			show(&held, value, "\\n");
 		} else {
@@ -133,7 +138,7 @@ ELEMENTS = """uint32_t n = 0;
 		if (situ_walk_placement_at(&image, first + i, &held) != SITU_WALK_OK) {
 			return 1;
 		}
-		if (situ_walk_count(&image, msg, len, 0u, first + i, &n)
+		if (situ_walk_count(&image, msg, len, shape, first + i, &n)
 				!= SITU_WALK_OK) {
 			printf("refused\\n");
 			continue;
@@ -142,7 +147,7 @@ ELEMENTS = """uint32_t n = 0;
 		for (uint32_t e = 0; e < n; e++) {
 			uint64_t one = 0;
 			const char *end = (e + 1 == n) ? "" : ",";
-			if (situ_walk_element(&image, msg, len, 0u, first + i, e, &one)
+			if (situ_walk_element(&image, msg, len, shape, first + i, e, &one)
 					== SITU_WALK_OK) {
 				show(&held, one, end);
 			} else {
@@ -158,7 +163,7 @@ ELEMENTS = """uint32_t n = 0;
 #: inferring from the next member's offset, which says nothing about the
 #: last member.
 WIDTHS = """uint32_t bits = 0;
-		if (situ_walk_size_bits(&image, msg, len, 0u, first + i, &bits)
+		if (situ_walk_size_bits(&image, msg, len, shape, first + i, &bits)
 				== SITU_WALK_OK) {
 			printf("%u\\n", bits / 8u);
 		} else {
@@ -173,11 +178,11 @@ def image_for(path: Path) -> bytes:
 	return pack(schema, resolved)[0]
 
 
-def python_answers(blob: bytes, message: bytes) -> list[str]:
+def python_answers(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 	image = load(blob)
-	view  = acquire(image, message, 0)
+	view  = acquire(image, message, shape)
 	found = []
-	for index in image.members(image.structs[0]):
+	for index in image.members(image.structs[shape]):
 		try:
 			found.append(str(read_scalar(view, index)))
 		except Refused:
@@ -185,11 +190,11 @@ def python_answers(blob: bytes, message: bytes) -> list[str]:
 	return found
 
 
-def python_widths(blob: bytes, message: bytes) -> list[str]:
+def python_widths(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 	image = load(blob)
-	view  = acquire(image, message, 0)
+	view  = acquire(image, message, shape)
 	found = []
-	for index in image.members(image.structs[0]):
+	for index in image.members(image.structs[shape]):
 		try:
 			found.append(str(size_bits(view, index) // 8))
 		except (Refused, Unplaceable):
@@ -197,7 +202,8 @@ def python_widths(blob: bytes, message: bytes) -> list[str]:
 	return found
 
 
-def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str) -> list[str]:
+def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
+		shape: int = 0) -> list[str]:
 	(tmp_path / "img").write_bytes(blob)
 	(tmp_path / "drive.c").write_text(
 		DRIVER.replace("SHOW", SHOW).replace("ASK", ask), encoding="ascii")
@@ -210,24 +216,28 @@ def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str) -> list[str]:
 	assert built.returncode == 0, built.stderr
 
 	ran = subprocess.run([str(tmp_path / "drive"), str(tmp_path / "img"),
-	                      message.hex()], capture_output=True, text=True)
+	                      message.hex(), str(shape)],
+	                     capture_output=True, text=True)
 	assert ran.returncode == 0, ran.stdout + ran.stderr
 	return ran.stdout.split()
 
 
-def c_answers(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
-	return _drive(tmp_path, blob, message, VALUES)
+def c_answers(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, VALUES, shape)
 
 
-def c_widths(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
-	return _drive(tmp_path, blob, message, WIDTHS)
+def c_widths(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, WIDTHS, shape)
 
 
-def c_elements(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
-	return _drive(tmp_path, blob, message, ELEMENTS)
+def c_elements(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, ELEMENTS, shape)
 
 
-def python_elements(blob: bytes, message: bytes) -> list[str]:
+def python_elements(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 	"""The same question of the Python walk, spelled its way.
 
 	`report._element` is where the fifth column reads one, and `walk._count`
@@ -235,9 +245,9 @@ def python_elements(blob: bytes, message: bytes) -> list[str]:
 	run was more than a span to skip over.
 	"""
 	image = load(blob)
-	view  = acquire(image, message, 0)
+	view  = acquire(image, message, shape)
 	found = []
-	for index in image.members(image.structs[0]):
+	for index in image.members(image.structs[shape]):
 		placement = image.placements[index]
 		try:
 			if placement.radix or placement.repeat_code != NONE:
@@ -621,6 +631,62 @@ def test_they_agree_about_a_run_element_by_element(tmp_path: Path) -> None:
 		assert c_elements(tmp_path, blob, message) \
 			== python_elements(blob, message), label
 		assert c_elements(tmp_path, blob, message) == expected, label
+
+
+#: `beats` from `tests/schemas/edges.situ`, whose header says the walk is
+#: there so a termination bug in it has somewhere to show.
+WHILE_RUN = """target buffer;
+endian big;
+
+struct beat {
+	u8  kind;
+	u8  payload;
+}
+
+struct beats {
+	beat  pulse[] while (kind == 0x33) max 6;
+	u16   after;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_where_a_while_run_stops(tmp_path: Path) -> None:
+	"""A run that ends at whichever element first fails the predicate.
+
+	Four ways to stop and a case for each, because every guard in that loop
+	is there for an adversary who picks the bytes:
+
+	  - the predicate goes false, which is the construct's own reason;
+	  - the frame runs out mid-run, and the elements that fit still count;
+	  - the cap is reached, `max 6` over nine elements' worth of input;
+	  - and the first element already fails, which is one element and not
+	    zero -- `while` asks about the element just parsed, which is the
+	    whole difference from `until`.
+
+	The struct is named rather than assumed. `beats` is the container and
+	`beat` is the element, and the packer put the element first -- so a
+	harness that always walked struct 0 was measuring the wrong struct and
+	agreeing with itself about it.
+	"""
+	source   = parse(Source("beats.situ", WHILE_RUN))
+	resolved = resolve(source, solve(source))
+	blob, _  = pack(source, resolved, metadata=True)
+	image    = load(blob)
+	shape    = [image.struct_name(i)
+	            for i in range(len(image.structs))].index("beats")
+
+	for message, widths in (
+			(bytes.fromhex("3301330233ffbeef"),                 ["8", "2"]),
+			(bytes.fromhex("4401beef"),                         ["2", "2"]),
+			(bytes.fromhex("33013302"),                         ["4", "2"]),
+			(bytes.fromhex("33013302330333043305330633073308beef"),
+			                                                    ["12", "2"]),
+	):
+		assert c_widths(tmp_path, blob, message, shape) \
+			== python_widths(blob, message, shape), message.hex()
+		assert c_widths(tmp_path, blob, message, shape) == widths, \
+			message.hex()
 
 
 LOCATED = """target buffer;

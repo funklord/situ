@@ -10875,6 +10875,48 @@ outside a module is what shows that, and a differential is a consumer.
 bounded by `repeat_cap`, by the frame, and by refusing to advance on a
 zero-length element, and a loop in an arena is worth its own commit.
 
+### 26.109 The loop in the arena, and the bound that had a public entrance
+
+A `while` run's extent is the one thing in the C walker that is a loop, and
+0026's argument for shipping an evaluator to a device does not cover it: the
+VM is safe because section 10's language is total, and a run walk is not an
+expression. So its termination is argued separately and written in the
+source, four ways, two of which do not depend on the message at all -- the
+cap, and the frame, the latter holding because every iteration advances by at
+least one byte. An adversary choosing every byte cannot make it run longer
+than the buffer.
+
+**Recursion needed a decision rather than a guard.** A run's extent is the
+sum of its elements', and an element is a struct that may hold another run:
+mutual recursion through `size_bits`, the walk and `struct_extent`, bounded
+in principle by the schema's nesting and in practice by nothing, since the
+schema arrives in an image at run time. On a device the stack is the arena's
+neighbour, so the depth is a constant -- eight, against a corpus whose
+deepest nesting is three.
+
+**The first version of that bound had a public entrance.** The depth was
+threaded through the measurement and *not* through `situ_walk_offset_bits`,
+`situ_walk_read` or the evaluator's load callback -- each of which starts at
+zero, and each of which the measurement calls. An expression names a field;
+reading that field sums the members before it; one of those may be a run.
+Two structs referring to each other through that path would have recursed
+freely past a limit that looked enforced. A bound with a public entry point
+that restarts the count is not a bound, and this one read as complete.
+
+**Reaching the limit is a refusal, not a short answer.** The first version
+absorbed it into "the run ends here", which is the mistake this component
+exists not to make: an extent that stops early reads exactly like one that is
+right. A ten-deep schema now answers `refused` for the run and nothing else,
+where before it answered a length. `SITU_WALK_UNSUPPORTED` propagates; a
+frame that runs out still counts the elements that fit, those being different
+questions.
+
+**And the harness was measuring the wrong struct.** Every C differential
+walked struct 0, which is whichever the packer put first -- `beat`, not
+`beats`, so the container holding the run was never the thing under test. The
+drivers take the struct as an argument now. A check that always asks about
+the first of something is one nobody has pointed at anything.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -12059,6 +12101,28 @@ zero-length element, and a loop in an arena is worth its own commit.
    interface between them was not, which is a class of defect a differential
    finds *as* a false positive: the first consumer outside a module is what
    shows what the module withholds.
+
+140. **A bound with a public entry point that restarts it is not a bound.**
+   The walker's recursion limit was threaded through the measurement and not
+   through the three public functions the measurement calls -- offset, read,
+   and the evaluator's load callback -- each of which begins at depth zero.
+   An expression names a field, reading it sums the members before it, one of
+   those may be a run of structs: the limit looked enforced and had a door in
+   it. Where a guard counts, every path that can re-enter has to carry the
+   count.
+
+141. **A limit reached is a refusal, not a short answer.** The `while` walk
+   absorbed "this build cannot measure that element" into "the run ends
+   here", which turns a guard into a wrong length that reads exactly like a
+   right one -- the thing this component states it exists not to do. Separate
+   the data running out, which is an answer, from the walker running out,
+   which is a refusal.
+
+142. **A check that always asks about the first of something has not been
+   pointed at anything.** Every C differential walked struct 0, which is
+   whichever the packer emitted first: `beat` rather than `beats`, so the
+   container holding the run under test was never measured, and the two
+   walkers agreed about the element in both. Name the subject.
 
 ---
 

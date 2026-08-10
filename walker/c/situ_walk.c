@@ -18,7 +18,7 @@
  * entry here would be read past. `fits` bounds the *table*, which leaves
  * exactly this hole at the last row of it. */
 #define STRUCT_READS     8u
-#define PLACEMENT_READS 44u
+#define PLACEMENT_READS 48u
 #define VARINT_READS    11u
 #define DELIMITER_READS 32u
 
@@ -191,6 +191,7 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	out->repeat_code  = u32_at(at + 36);
 	out->radix        = at[40];
 	out->radix_digits = u16_at(at + 42);
+	out->repeat_cap   = u16_at(at + 46);
 	return SITU_WALK_OK;
 }
 
@@ -419,25 +420,232 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 #define FLAG_SIGNED       SITU_WALK_SIGNED
 
 /* The load callback for a size expression: a field of this same message,
- * read at whatever offset the chain has reached. */
+ * read at whatever offset the chain has reached.
+ *
+ * It carries the depth because it is one of the ways the measurement
+ * descends: an expression names a field, reading that field may sum the
+ * members before it, and one of those may be a run whose elements are
+ * structs. A callback that started the count again would be a hole in the
+ * bound rather than a bound. */
 typedef struct {
 	const situ_walk_image *image;
 	const uint8_t         *message;
 	uint32_t               len;
 	uint32_t               shape;
+	uint32_t               depth;
 } walk_ctx;
+
+static situ_walk_err read_deep(const situ_walk_image *image,
+                               const uint8_t *message, uint32_t len,
+                               uint32_t shape, uint32_t index,
+                               uint32_t depth, uint64_t *out);
+
+static situ_walk_err offset_bits_deep(const situ_walk_image *image,
+                                      const uint8_t *message, uint32_t len,
+                                      uint32_t shape, uint32_t index,
+                                      uint32_t depth, uint32_t *out);
 
 static situ_walk_err ctx_load(void *raw, uint32_t index, int64_t *out)
 {
 	walk_ctx *ctx = (walk_ctx *)raw;
 	uint64_t value = 0u;
-	const situ_walk_err err = situ_walk_read(ctx->image, ctx->message,
-	                                         ctx->len, ctx->shape, index,
-	                                         &value);
+	const situ_walk_err err = read_deep(ctx->image, ctx->message, ctx->len,
+	                                    ctx->shape, index, ctx->depth,
+	                                    &value);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
 	*out = (int64_t)value;
+	return SITU_WALK_OK;
+}
+
+/* -- `while` runs -------------------------------------------------------- */
+
+/* How deep a measurement may nest before this build refuses.
+ *
+ * A `while` run's extent is the sum of its elements' extents, and an element
+ * is a struct whose members may include another such run. That is mutual
+ * recursion -- `size_bits` to the walk to `struct_extent` and back -- bounded
+ * in principle by the schema's nesting and in practice by nothing this
+ * program controls, since the schema arrives in an image at run time. On a
+ * device the stack is the arena's neighbour, so the depth is a number here
+ * rather than a property of the input.
+ *
+ * Eight, because the deepest nesting in this repository's corpus is three and
+ * a walker that refuses a legitimate schema is worse than one that costs a
+ * few frames. Refused by name when it is reached, never guessed at. */
+#define WALK_DEPTH_MAX 8u
+
+static situ_walk_err size_bits_deep(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t depth, uint32_t *out);
+
+/* How many bytes one instance of a struct occupies, from its own bytes.
+ *
+ * A fixed struct answers from the image; anything else is the sum of what its
+ * members turn out to be, which is what makes a run of them walkable rather
+ * than indexable. A located member contributes nothing -- it says where it is
+ * and joins no chain.
+ *
+ * Zero is an answer rather than a refusal. A `name` whose first label does not
+ * fit holds no labels and is zero bytes long. The guard against a zero extent
+ * belongs where it stops something, which is the walk below. */
+static situ_walk_err struct_extent(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t depth,
+                                   uint32_t *out)
+{
+	if (depth >= WALK_DEPTH_MAX) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	if (shape >= image->struct_count) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	const uint8_t *entry = image->structs + shape * image->struct_stride;
+	uint32_t       first = 0u;
+	uint32_t       count = 0u;
+	situ_walk_err  err   = situ_walk_members(image, shape, &first, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	/* Byte 8 of an `image_struct` is its own fixed size in bits, and
+	 * SITU_WALK_NONE where it has none. */
+	const uint32_t fixed = u32_at(entry + 8);
+	if (fixed != SITU_WALK_NONE) {
+		*out = (fixed + 7u) / 8u;
+		return SITU_WALK_OK;
+	}
+
+	uint32_t total = 0u;
+	for (uint32_t i = 0u; i < count; i++) {
+		situ_walk_placement held;
+		err = situ_walk_placement_at(image, first + i, &held);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (held.located_code != SITU_WALK_NONE) {
+			continue;
+		}
+
+		uint32_t wide = 0u;
+		err = size_bits_deep(image, message, len, shape, first + i,
+		                     depth + 1u, &wide);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (wide > 0xffffffffu - total) {
+			return SITU_WALK_BOUNDS;
+		}
+		total += wide;
+	}
+
+	*out = (total + 7u) / 8u;
+	return SITU_WALK_OK;
+}
+
+/* How many elements a `while` run holds, and how many bytes they occupy.
+ *
+ * THE LOOP STOPS FOUR WAYS, and two of them are independent of the message:
+ *
+ *   - `count` reaches the cap, which is the schema's `max` or 0xFFFF. A
+ *     ceiling that does not depend on the bytes at all.
+ *   - `at` reaches the frame. Every iteration advances `at` by at least one
+ *     byte, because a zero extent breaks below, so this alone bounds the
+ *     loop by the length of the message.
+ *   - an element does not fit, or measures zero. An element whose bytes the
+ *     frame does not hold is not a short element, it is not an element --
+ *     every backend answers zero for netlink's first attribute, which
+ *     declares a length past the end of the buffer. And a record whose
+ *     members are all delimited and all empty occupies nothing, which is
+ *     invariant 24's denial of service rather than a wrong answer.
+ *   - the predicate is false, which is the construct's own reason to stop.
+ *
+ * The predicate is asked about the element *just parsed*, which is the whole
+ * difference from `until`: `until` asks about the position before an element
+ * and `while` about the one behind it.
+ */
+static situ_walk_err while_walk(const situ_walk_image *image,
+                                const uint8_t *message, uint32_t len,
+                                uint32_t shape, uint32_t index,
+                                uint32_t depth, uint32_t *count,
+                                uint32_t *bytes)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (held.repeat_code == SITU_WALK_NONE
+	                || held.type_struct == SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;	/* not a `while` run */
+	}
+	if (depth >= WALK_DEPTH_MAX) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	uint32_t start = 0u;
+	err = offset_bits_deep(image, message, len, shape, index, depth,
+	                       &start);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (start % 8u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	start /= 8u;
+	if (start > len) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	const uint32_t cap = (held.repeat_cap != 0u) ? held.repeat_cap : 0xffffu;
+	uint32_t       at  = start;
+	uint32_t       n   = 0u;
+
+	while (n < cap && at < len) {
+		uint32_t extent = 0u;
+		err = struct_extent(image, message + at, len - at, held.type_struct,
+		                    depth + 1u, &extent);
+		/* Two different things wear one error here, and folding them
+		 * together is how a walk answers a wrong length confidently. "This
+		 * build cannot measure that element" is a limit of the walker and
+		 * has to propagate: absorbing it would report the run as ending
+		 * where the measurement stopped, which is a short extent that reads
+		 * exactly like a right one. Anything else is the data running out,
+		 * and the elements that fit still count. */
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK) {
+			break;
+		}
+		if (extent == 0u || extent > len - at) {
+			break;
+		}
+
+		n  += 1u;
+		at += extent;
+
+		/* The predicate reads the element just parsed, so the context is
+		 * that element's frame rather than this struct's, and it descends
+		 * one level -- which is what the depth has to say for the bound to
+		 * mean anything. */
+		const uint8_t *from = message + at - extent;
+		const uint32_t left = len - at + extent;
+
+		walk_ctx ctx  = {image, from, left, held.type_struct, depth + 1u};
+		int64_t  more = 0;
+		err = situ_walk_eval(image, held.repeat_code, ctx_load, &ctx,
+		                     (int64_t)left, &more);
+		if (err != SITU_WALK_OK || more == 0) {
+			break;
+		}
+	}
+
+	*count = n;
+	*bytes = at - start;
 	return SITU_WALK_OK;
 }
 
@@ -446,17 +654,36 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
                                   uint32_t shape, uint32_t index,
                                   uint32_t *out)
 {
+	return size_bits_deep(image, message, len, shape, index, 0u, out);
+}
+
+static situ_walk_err size_bits_deep(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t depth, uint32_t *out)
+{
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
 
-	/* A `while` run and a variant arm each need a walk this build does not
-	 * have. Named rather than approximated: the whole reason an extent is
-	 * refused is that a wrong one is indistinguishable from a right one. */
+	/* A `while` run's extent is however far the walk got. Falling through to
+	 * the record's `size_bits` gives the *minimum* -- one element -- so a
+	 * struct holding one measured a byte where it held two. */
 	if (held.repeat_code != SITU_WALK_NONE) {
-		return SITU_WALK_UNSUPPORTED;
+		if (held.type_struct == SITU_WALK_NONE) {
+			return SITU_WALK_UNSUPPORTED;	/* a variant arm, not a run */
+		}
+		uint32_t count = 0u;
+		uint32_t bytes = 0u;
+		err = while_walk(image, message, len, shape, index, depth,
+		                 &count, &bytes);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = bytes * 8u;
+		return SITU_WALK_OK;
 	}
 
 	/* A varint's width is in its own bytes. The record's `size_bits` is a
@@ -464,7 +691,8 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 	 * wrong offset. */
 	if (varint_rules(image, index) != NULL) {
 		uint32_t at = 0u;
-		err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+		err = offset_bits_deep(image, message, len, shape, index, depth,
+		                       &at);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -517,7 +745,8 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 	                     ? delimiter_rules(image, index) : NULL;
 	if (delim != NULL) {
 		uint32_t at = 0u;
-		err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+		err = offset_bits_deep(image, message, len, shape, index, depth,
+		                       &at);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -545,7 +774,7 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	walk_ctx ctx = {image, message, len, shape};
+	walk_ctx ctx = {image, message, len, shape, depth};
 	int64_t  count = 0;
 	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
 	                     (int64_t)len, &count);
@@ -565,6 +794,14 @@ situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
                                     uint32_t shape, uint32_t index,
                                     uint32_t *out)
 {
+	return offset_bits_deep(image, message, len, shape, index, 0u, out);
+}
+
+static situ_walk_err offset_bits_deep(const situ_walk_image *image,
+                                      const uint8_t *message, uint32_t len,
+                                      uint32_t shape, uint32_t index,
+                                      uint32_t depth, uint32_t *out)
+{
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
@@ -577,7 +814,7 @@ situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
 	 * contributes nothing to the members after it, which is the whole of what
 	 * separates it from an ordinary one. */
 	if (held.located_code != SITU_WALK_NONE) {
-		walk_ctx ctx = {image, message, len, shape};
+		walk_ctx ctx = {image, message, len, shape, depth};
 		int64_t  at  = 0;
 
 		err = situ_walk_eval(image, held.located_code, ctx_load, &ctx,
@@ -625,7 +862,8 @@ situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
 		}
 
 		uint32_t wide = 0u;
-		err = situ_walk_size_bits(image, message, len, shape, before, &wide);
+		err = size_bits_deep(image, message, len, shape, before, depth,
+		                     &wide);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -697,6 +935,14 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
                              const uint8_t *message, uint32_t len,
                              uint32_t shape, uint32_t index, uint64_t *out)
 {
+	return read_deep(image, message, len, shape, index, 0u, out);
+}
+
+static situ_walk_err read_deep(const situ_walk_image *image,
+                               const uint8_t *message, uint32_t len,
+                               uint32_t shape, uint32_t index,
+                               uint32_t depth, uint64_t *out)
+{
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
@@ -713,11 +959,11 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
 		uint32_t at    = 0u;
 		uint32_t width = 0u;
 
-		err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+		err = offset_bits_deep(image, message, len, shape, index, depth, &at);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
-		err = situ_walk_size_bits(image, message, len, shape, index, &width);
+		err = size_bits_deep(image, message, len, shape, index, depth, &width);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -754,7 +1000,7 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
 	}
 
 	uint32_t offset = 0u;
-	err = situ_walk_offset_bits(image, message, len, shape, index, &offset);
+	err = offset_bits_deep(image, message, len, shape, index, depth, &offset);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
@@ -819,7 +1065,7 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;	/* not a run */
 	}
 
-	walk_ctx ctx   = {image, message, len, shape};
+	walk_ctx ctx   = {image, message, len, shape, 0u};
 	int64_t  count = 0;
 	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
 	                     (int64_t)len, &count);

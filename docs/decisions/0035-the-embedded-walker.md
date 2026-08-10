@@ -66,7 +66,7 @@ layer over the image; placing one field needs most of this:
 | varint decode | a width that is in its own bytes, and the value | **done** |
 | text numbers | digits rather than bits, both forms and both radices | **done** |
 | run walking | counted and message-sized runs | **done** |
-| `while` runs | however many elements pass the predicate | `walk.py` |
+| `while` runs | however many elements pass the predicate | **done** |
 | the probes | `validate`, tags, markers, gated regions | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
@@ -272,3 +272,41 @@ the first consumer outside the module is what shows it.
 `while` runs stay refused and are their own row. Their extent is a loop --
 bounded by `repeat_cap`, by the frame, and by refusing to advance on a
 zero-length element -- and a loop in an arena is worth its own commit.
+
+
+## Amendment, 2026-08-10: the `while` run, and the depth a device pays for
+
+The loop lands, and 0026's bound argument needs extending to cover it. The
+VM's totality is what makes an *expression* safe to ship to a device; a run
+walk is not an expression, so its termination is argued separately and in
+the source:
+
+  - `count` reaches the cap, which is the schema's `max` or 0xFFFF -- a
+    ceiling that does not depend on the bytes;
+  - `at` reaches the frame, and every iteration advances by at least one
+    byte because a zero extent breaks, so the message length alone bounds
+    the loop;
+  - an element does not fit or measures zero;
+  - the predicate goes false, which is the construct's own reason to stop.
+
+Two of the four are independent of the message, which is the property worth
+having: an adversary choosing every byte cannot make the loop run longer
+than the frame.
+
+**Recursion is the part that needed a decision rather than a guard.** A
+`while` run's extent is the sum of its elements' extents, and an element is a
+struct that may hold another such run -- mutual recursion through
+`size_bits`, the walk and `struct_extent`, bounded in principle by the
+schema's nesting and in practice by nothing, the schema arriving in an image
+at run time. On a device the stack is the arena's neighbour. So the depth is
+a constant here, `WALK_DEPTH_MAX` of eight against a corpus whose deepest
+nesting is three, and it is threaded through *every* path that descends --
+including the expression evaluator's load callback, which reads a field,
+which may sum members, one of which may be a run. A bound with a public
+entry point that restarts the count is not a bound.
+
+**Reaching that bound is a refusal and not a short answer.** The first
+version absorbed it into "the run ends here", which is the shape of mistake
+this component exists not to make: an extent that stops early reads exactly
+like one that is right. `SITU_WALK_UNSUPPORTED` propagates out of the walk;
+a frame that runs out still counts the elements that fit.
