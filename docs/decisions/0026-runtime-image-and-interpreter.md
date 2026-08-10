@@ -148,3 +148,22 @@ mattered -- image emitted by `situc`, walked by something that is not `situc`,
 format described by a schema and checked like one -- is unchanged. Only the
 distance was wrong, and a second record would leave two documents disagreeing
 about a boundary rather than one saying where it moved and why.
+
+
+## Amendment, 2026-08-10: which walker
+
+The 2026-08-07 amendment says "the walker is a separate binary in this
+repository rather than a separate project". That was true and is now
+ambiguous, because there are two.
+
+`bin/situ-walk` is Python and is the fifth column of the differential check:
+a table walk answering what four compiled backends answer over the same
+hostile bytes. It is a test instrument.
+
+`walker/c/` is the walker *this decision was argued from* -- the radio whose
+framing changes without a firmware rebuild -- and `make walk-c` builds it.
+Decision 0035 records why it is C, what it renders so far, and what it
+refuses by name rather than guessing.
+
+The boundary this decision draws is unchanged and applies to both: neither
+links the compiler, and `situc` never learns an interpreter exists.

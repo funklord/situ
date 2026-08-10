@@ -49,7 +49,7 @@ endif
 export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
-.PHONY: all runtime compiler test test-c test-py check typecheck lint bench fuzz \ veryclean distclean style style-source style-docs hooks
+.PHONY: all runtime compiler test test-c test-py check typecheck lint bench fuzz \ veryclean distclean style style-source style-docs hooks walk-c
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
@@ -66,6 +66,7 @@ help:
 	@echo '  lint       alias for style-source'
 	@echo '  hooks      install the commit-message hook from tools/hooks/'
 	@echo '  walk       the walker over an image: bin/situ-walk'
+	@echo '  walk-c     build the embedded walker: situ-walk-c (0035)'
 	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
@@ -124,6 +125,16 @@ lint: style-source
 # machine that took it (26.30), so this reports and asserts nothing.
 bench:
 	$(PYTHON) tools/bench.py
+
+# The embedded walker (0035): the one 0026 was argued from, and the one a
+# device links. Built with the same warnings as the generated code, because
+# a reader that needs a relaxed set is one nobody can put in a build.
+walk-c: $(BUILD_DIR)/situ-walk-c
+
+$(BUILD_DIR)/situ-walk-c: walker/c/situ_walk.c walker/c/main.c walker/c/situ_walk.h
+	@mkdir -p '$(@D)'
+	$(CC) $(CFLAGS) -Iwalker/c walker/c/situ_walk.c walker/c/main.c \
+		$(LDFLAGS) -o $@
 
 test-c: runtime
 	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' test
