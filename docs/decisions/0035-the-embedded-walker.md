@@ -1,11 +1,11 @@
 # 0035: the walker that matters is embedded, and it is C
 
 Status: accepted, and begun. `walker/c/` reads an image, evaluates a section
-10 program, places a fixed member, decodes a varint and scans for a
-delimiter, held to the Python walker by a differential test. Runs, variants,
-regions and the probes are not written; the table below is the remaining work
-and each row this build does not render is refused by name rather than
-guessed.
+10 program, places a fixed member, decodes a varint, scans for a delimiter
+and parses a text number, held to the Python walker by a differential test.
+Runs, variants, regions and the probes are not written; the table below is
+the remaining work and each row this build does not render is refused by name
+rather than guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -64,6 +64,7 @@ layer over the image; placing one field needs most of this:
 | located members | `at expr`, which joins no offset chain | `walk.py` |
 | delimiter scan | where a delimited member stops, with quoting and escapes | **done** |
 | varint decode | a width that is in its own bytes, and the value | **done** |
+| text numbers | digits rather than bits, both forms and both radices | **done** |
 | run walking | counted, capped and `while` runs | `walk.py` |
 | the probes | `validate`, tags, markers, gated regions | `report.py` |
 
@@ -208,3 +209,35 @@ back. Content and not span: the span carries the delimiter because that is
 what places the member after it, and the two numbers differ by exactly the
 delimiter. `[trim]` has one derivation feeding both readers now, rather than
 a length for the probe and a second copy for the value.
+
+
+## Amendment, 2026-08-10: text numbers, and the pattern closed
+
+The last of the four constructs the first amendment's pattern named. Both
+forms parse in the C walker now -- fixed-width and delimited, both radices --
+and the pattern's four instances are settled: a byte run and a delimited
+member have no value and are refused, a varint and a text number have one and
+are decoded.
+
+**The refusal it replaces was true for a false reason.** `decimal u32 n[4]`
+is one number in four digits, so the run refusal declined it on the grounds
+that it looked like four numbers -- the answer a caller wanted, from a
+premise about the construct that is wrong. Invariant 18 is the rule: a real
+gap must be attributed to whatever actually causes it, and this one was
+attributed to a count that is not a count.
+
+**Writing it found a width bug the values could not show.** `size_code` is
+set on a fixed-width text number, so the sized-run branch read `[4]` as four
+32-bit elements and answered sixteen bytes for a four-byte member -- the same
+arithmetic that once put `edges`' `text_driver` tail twelve bytes past every
+backend, in the Python walker. It was invisible through a value differential
+because the layout solver hands a member *after* a fixed-width text number a
+constant offset, so the struct was measured four times too long and every
+member in it still read correctly. The width differential of the previous
+amendment is what caught it, which is the argument for having added it.
+
+**One divergence remains, stated rather than left to be found.** The C parse
+accumulates into `uint64_t` and refuses on overflow; Python's has arbitrary
+precision and does not. No schema here writes a text number long enough to
+reach it -- cpio's widest is eight digits -- so the two agree everywhere the
+tree can ask, and this says where they would stop.

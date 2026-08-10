@@ -10783,6 +10783,44 @@ Random draws reach a valid three-digit code followed by a space about never,
 so the four cases are written out and held to all five implementations -- the
 same shape as 26.104's cpio header, and for the reason invariant 135 states.
 
+### 26.106 The last construct, and the width its values could not show
+
+Text numbers were the fourth and last construct in the pattern 0035 named
+when `read_scalar` first answered a byte run as an integer, and the C walker
+parses both forms now. The pattern's four instances settle two ways, and the
+split is the question rather than an inconsistency: **a byte run and a
+delimited member have no single value and are refused; a varint and a text
+number have one and are decoded.**
+
+**The refusal this replaces was true for a false reason.** `decimal u32 n[4]`
+is one number in four digits, and the C walker declined it through the branch
+that refuses a run -- because `array_count` is 4. The caller got the answer
+it should have got, from a premise about the construct that is wrong, which
+is invariant 18's other half: a real gap has to be attributed to whatever
+actually causes it. `traverse.classify` puts the text-number branch before
+the array branch for exactly this reason and has since three backends read
+the bracket as a count; the walker now does the same.
+
+**Writing it found a width bug that no value differential could show.**
+`size_code` is set on a fixed-width text number, so C's sized-run branch read
+`[4]` as four 32-bit elements and answered *sixteen bytes* for a four-byte
+member -- the same arithmetic that once put `edges`' `text_driver` tail
+twelve bytes past every backend, in the Python walker, and the reason
+`walk.py` carries that branch with a comment.
+
+Why it hid is the part worth keeping. **The layout solver hands a member
+after a fixed-width text number a constant offset**, because the width is
+known at compile time -- so `situ_walk_offset_bits` returns that constant and
+never sums the wrong width. The struct was measured four times too long and
+every value in it still read correctly. Only the extent was wrong, and only
+a check that asks for extents could see it: the width differential added one
+commit earlier, for a reason that turned out to be this one.
+
+One divergence is left and is written down rather than waiting to be found:
+the C parse accumulates into `uint64_t` and refuses on overflow, Python's has
+arbitrary precision and does not. cpio's widest text number is eight digits,
+so the two agree everywhere the tree can ask.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -11849,8 +11887,9 @@ same shape as 26.104's cpio header, and for the reason invariant 135 states.
    reading its bytes raw is wrong, settled by decoding; a delimited member is
    a run whose end the data decides, settled by refusing. Opposite answers
    from one question -- does this construct have a value, and is this the
-   layer that should produce it. Text numbers are the last of them, and are
-   the case the Python walker already decodes and the C one still cannot.
+   layer that should produce it. Four instances, and all four are settled:
+   a byte run and a delimited member have no value and are refused, a varint
+   and a text number have one and are decoded.
 
    The prediction of where it would bite next was right twice and wrong twice
    about who had it: each time the write-up named one walker, and each time
@@ -11947,6 +11986,15 @@ same shape as 26.104's cpio header, and for the reason invariant 135 states.
    ask them the same question -- `edges.situ` gained `ranged_code` for
    exactly this, a combination of two constructs the tree already had
    separately and had never put together.
+
+138. **A wrong extent hides behind a constant offset.** The C walker measured
+   a fixed-width text number four times too wide -- `[4]` read as four 32-bit
+   elements -- and every value in the struct still read correctly, because
+   the layout solver hands a member after one a constant offset and the walk
+   never sums the wrong width. A differential over values cannot see this; a
+   differential over extents can, and that is the argument for asking a check
+   for the quantity the code computes rather than the one that is convenient
+   to compare (invariant 132, one instance later).
 
 ---
 

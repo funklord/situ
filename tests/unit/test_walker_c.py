@@ -424,6 +424,71 @@ def test_they_agree_that_an_unterminated_member_reaches_its_cap(
 	assert c_answers(tmp_path, blob, message) == ["refused", "255"]
 
 
+TEXT_FIXED = """target buffer;
+endian big;
+
+struct counted {
+	decimal u32  n[4];
+	u8           after;
+}
+"""
+
+TEXT_HEX = """target buffer;
+endian big;
+
+struct counted {
+	hex u32  n[4];
+	u8       after;
+}
+"""
+
+TEXT_DELIMITED = """target buffer;
+endian big;
+
+struct counted {
+	decimal u32  n[] until " " max 4;
+	u8           after;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_text_number(tmp_path: Path) -> None:
+	"""The last construct in the bits-versus-values pattern, and the one the
+	C walker was refusing for the wrong reason.
+
+	`decimal u32 n[4]` is one number in four digits, so the run refusal
+	declined it -- a true answer drawn from a false premise, since the digit
+	count is not a count of numbers. It parses now, in both radices, and the
+	upper and lower case of a hex digit are one number.
+
+	The widths are asserted because that is where the second bug was.
+	`size_code` is set on a fixed-width text number, so the sized-run branch
+	read `[4]` as four 32-bit elements and answered sixteen bytes -- the same
+	arithmetic that once put `edges`' `text_driver` tail twelve bytes past
+	where every backend places it. It was invisible through the values alone:
+	the solver hands a member after a fixed-width text number a constant
+	offset, so `after` was read correctly out of a struct measured four times
+	too long.
+	"""
+	for text, message, expected, widths in (
+			(TEXT_FIXED,     b"0123\xff", ["123", "255"],     ["4", "1"]),
+			(TEXT_FIXED,     b"12x4\xff", ["refused", "255"], ["4", "1"]),
+			(TEXT_HEX,       b"00ff\xff", ["255", "255"],     ["4", "1"]),
+			(TEXT_HEX,       b"00FF\xff", ["255", "255"],     ["4", "1"]),
+			(TEXT_DELIMITED, b"250 \xff", ["250", "255"],     ["4", "1"]),
+			(TEXT_DELIMITED, b"7 \xff",   ["7", "255"],       ["2", "1"]),
+	):
+		blob = packed_text(text)
+
+		assert c_answers(tmp_path, blob, message) \
+			== python_answers(blob, message), message
+		assert c_answers(tmp_path, blob, message) == expected, message
+		assert c_widths(tmp_path, blob, message) \
+			== python_widths(blob, message), message
+		assert c_widths(tmp_path, blob, message) == widths, message
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_they_agree_that_a_quoted_delimiter_is_content(tmp_path: Path) -> None:
 	"""8.6.1's other half: inside a quoted run the delimiter is data. `"a,b",`

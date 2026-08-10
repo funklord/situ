@@ -84,6 +84,11 @@ typedef struct {
 	uint32_t repeat_code;
 	uint32_t type_struct;
 	uint32_t located_code;
+	/* A text number's base, 2 to 16, and zero for a member that is not one.
+	 * `radix_digits` is how many digits the schema declared, which is the
+	 * fixed-width form's width; the delimited form's comes from the scan. */
+	uint8_t  radix;
+	uint16_t radix_digits;
 } situ_walk_placement;
 
 /* Bind an image. Every table it names is bounds-checked against the whole

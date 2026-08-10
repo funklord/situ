@@ -18,7 +18,7 @@
  * entry here would be read past. `fits` bounds the *table*, which leaves
  * exactly this hole at the last row of it. */
 #define STRUCT_READS     8u
-#define PLACEMENT_READS 40u
+#define PLACEMENT_READS 44u
 #define VARINT_READS    11u
 #define DELIMITER_READS 32u
 
@@ -189,6 +189,8 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	out->type_struct  = u32_at(at + 28);
 	out->located_code = u32_at(at + 32);
 	out->repeat_code  = u32_at(at + 36);
+	out->radix        = at[40];
+	out->radix_digits = u16_at(at + 42);
 	return SITU_WALK_OK;
 }
 
@@ -298,6 +300,52 @@ situ_walk_err situ_walk_scan(const situ_walk_image *image,
 	 * cap or the buffer allowed, and the member after it starts there. */
 	*content    = limit;
 	*terminated = 0;
+	return SITU_WALK_OK;
+}
+
+/* -- text numbers -------------------------------------------------------- */
+
+/* The digits of a text number, in the member's own terms: `situ_parse_uint`
+ * without the declared domain, because that is a `validate` question and this
+ * answers what the field holds. Refuses on overflow of `uint64_t` rather than
+ * wrapping -- the Python walker has arbitrary precision and no schema here
+ * writes a number that needs it, so the two agree for every digit count the
+ * tree contains and this says where they would stop. */
+static situ_walk_err parse_digits(const uint8_t *data, uint32_t len,
+                                  uint32_t radix, uint64_t *out)
+{
+	uint64_t value = 0u;
+
+	if (len == 0u || radix < 2u || radix > 16u) {
+		return SITU_WALK_CONSTRAINT;	/* no digits is not the number zero */
+	}
+
+	for (uint32_t i = 0u; i < len; i++) {
+		const uint8_t byte = data[i];
+		uint32_t      digit;
+
+		if (byte >= (uint8_t)'0' && byte <= (uint8_t)'9') {
+			digit = (uint32_t)(byte - (uint8_t)'0');
+		} else if (byte >= (uint8_t)'a' && byte <= (uint8_t)'f') {
+			digit = (uint32_t)(byte - (uint8_t)'a') + 10u;
+		} else if (byte >= (uint8_t)'A' && byte <= (uint8_t)'F') {
+			digit = (uint32_t)(byte - (uint8_t)'A') + 10u;
+		} else {
+			return SITU_WALK_CONSTRAINT;
+		}
+
+		if (digit >= radix) {
+			return SITU_WALK_CONSTRAINT;
+		}
+		/* Before it happens, not after: a result that got smaller is a wrap
+		 * rather than a detection. */
+		if (value > (0xffffffffffffffffu - digit) / radix) {
+			return SITU_WALK_CONSTRAINT;
+		}
+		value = value * radix + digit;
+	}
+
+	*out = value;
 	return SITU_WALK_OK;
 }
 
@@ -449,6 +497,20 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 	 * Taking the record's `size_bits` instead gives the *delimiter's* width
 	 * -- a true lower bound, and the one number that is not the answer -- so
 	 * a `u16` after `verb[] until " "` was read at offset 1. */
+	/* A text number's width is its digits, not its value's. `decimal u32
+	 * n[4]` is four bytes holding one number, and the sized-run branch below
+	 * reads `[4]` as four 32-bit elements and answers sixteen -- which is
+	 * what put `edges`' `text_driver` tail twelve bytes past where every
+	 * backend places it, in the Python walker, and was invisible here
+	 * because the solver hands a member after a fixed-width text number a
+	 * constant offset. The delimited form is measured by its scan below;
+	 * this is the fixed-width one, whose digit count the image carries. */
+	if (held.radix != 0u && held.radix_digits != 0u
+	                && delimiter_rules(image, index) == NULL) {
+		*out = (uint32_t)held.radix_digits * 8u;
+		return SITU_WALK_OK;
+	}
+
 	const uint8_t *delim = (held.type_struct == SITU_WALK_NONE)
 	                     ? delimiter_rules(image, index) : NULL;
 	if (delim != NULL) {
@@ -565,6 +627,47 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+
+	/* A text number is digits, not bits, and it comes first for the same
+	 * reason `traverse.classify` puts it before the array branch: `decimal
+	 * u16 code[3]` is one number in three digits, so the run refusal below
+	 * would decline it -- the right answer for the wrong reason, since its
+	 * digit count is not a count of numbers. `validate` is where the declared
+	 * domain is asked; this answers what the field holds. */
+	if (held.radix != 0u) {
+		uint32_t at    = 0u;
+		uint32_t width = 0u;
+
+		err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		err = situ_walk_size_bits(image, message, len, shape, index, &width);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (at % 8u || width % 8u) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+
+		/* The digits, which for the delimited form stop where the scan
+		 * stopped: its *span* carries the delimiter, and a delimiter is not
+		 * a digit of any radix. */
+		at /= 8u;
+		width /= 8u;
+		if (delimiter_rules(image, index) != NULL) {
+			int terminated = 0;
+			err = situ_walk_scan(image, message, len, index, at,
+			                     &width, &terminated);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+		}
+		if (at > len || width > len - at) {
+			return SITU_WALK_BOUNDS;
+		}
+		return parse_digits(message + at, width, held.radix, out);
 	}
 
 	/* A run has no single value, and neither does a member whose width the
