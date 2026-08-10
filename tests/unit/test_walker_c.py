@@ -39,6 +39,7 @@ WARNINGS = ("-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
 
 DRIVER = """#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "situ_walk.h"
 
 int main(int argc, char **argv)
@@ -57,7 +58,13 @@ int main(int argc, char **argv)
 	const size_t n = fread(img, 1, sizeof img, f);
 	fclose(f);
 
+	/* Poisoned before opening, in every case this file runs. A caller
+	 * declares this struct on the stack, and `situ_walk_open` is what has to
+	 * leave every table it did not find reading as empty -- it did not, and
+	 * an image with no varint section searched whatever was there. A zero
+	 * stack is not a test of that. */
 	situ_walk_image image;
+	memset(&image, 0xAA, sizeof image);
 	if (situ_walk_open(&image, img, (uint32_t)n) != SITU_WALK_OK) {
 		printf("malformed\\n");
 		return 1;
@@ -302,6 +309,27 @@ def test_they_agree_that_a_truncated_varint_has_no_value(
 
 	assert answers == python_answers(blob, message)
 	assert answers == ["17", "refused", "172"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_table_the_image_omits_reads_as_empty(tmp_path: Path) -> None:
+	"""An absent section must not leave the caller's stack deciding.
+
+	`situ_walk_open` cleared each table it knew about by name, and the varint
+	table was added to the struct and to the section loop without being added
+	to that list. udp has no varints, so `varint_rules` binary-searched a
+	pointer and a count that were never written -- a segfault under a
+	poisoned struct, and correct for as long as the stack happened to be
+	zero. It clears the whole struct now, which is the version of this that
+	cannot go stale when the next table arrives.
+
+	Every case in this file runs against a poisoned struct, so this is the
+	name rather than the only coverage.
+	"""
+	blob    = image_for(ROOT / "examples" / "udp" / "udp.situ")
+	message = bytes.fromhex("1f90238200105f2a")
+
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")

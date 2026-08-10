@@ -70,16 +70,17 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 		return SITU_WALK_MALFORMED;
 	}
 
-	out->image            = image;
-	out->image_len        = len;
-	out->structs          = NULL;
-	out->struct_count     = 0u;
-	out->struct_stride    = 0u;
-	out->placements       = NULL;
-	out->placement_count  = 0u;
-	out->placement_stride = 0u;
-	out->code             = NULL;
-	out->code_len         = 0u;
+	/* Everything at once, rather than a field per table. A section the image
+	 * does not carry leaves its entry untouched by the loop below, so an
+	 * absent table has to read as empty -- and the varint table was added to
+	 * the struct and to the loop and not to the list that used to stand here.
+	 * An image without varints then searched whatever the caller's stack held,
+	 * which is a segfault under a memset of 0xAA and passed here for as long
+	 * as that stack happened to be zero. A list of what to clear is a list
+	 * that goes stale; this cannot. */
+	*out = (situ_walk_image){0};
+	out->image     = image;
+	out->image_len = len;
 
 	for (uint32_t i = 0u; i < count; i++) {
 		const uint8_t *entry = image + directory + i * SECTION_BYTES;

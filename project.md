@@ -10608,6 +10608,39 @@ conclusion, not a note**, and this one was drawn from a single input. The
 weaker record -- "they disagree, and neither has been checked against the
 backends" -- would have cost nothing and been true.
 
+### 26.102 The table nobody cleared, and the stack that was zero
+
+Reading `situ_walk_open` on the way to the delimiter scan found the varint
+commit's other half. It added three fields to `situ_walk_image` and a branch
+to the section loop that fills them, and did not add them to the list of
+fields cleared before the loop runs -- which was ten lines of `= NULL` and
+`= 0u`, one per table. **A section the image does not carry leaves its entry
+exactly as the caller's stack left it**, so an image with no varints sent
+`varint_rules` binary-searching a pointer and a count nobody wrote.
+
+Every test passed, and every test passed for the reason that makes this the
+worst shape of defect: the callers declare `situ_walk_image` on the stack at
+the top of `main`, where it is zero. `memset(&image, 0xAA, sizeof image)`
+before the open is an immediate segfault under a sanitizer, in `u32_at`,
+reached from `situ_walk_read` on udp -- a schema with no varint in it.
+
+Two things follow, and the second is the one worth keeping.
+
+**The fix is `*out = (situ_walk_image){0}`, not another line in the list.**
+A list of what to clear is a list that goes stale the next time a table
+arrives, and this is invariant 39 in its smallest form: the hand-maintained
+enumeration was wrong within one commit of being right. Clearing the whole
+struct cannot be.
+
+**The differential cannot see this class at all.** Two walkers are compared
+on what they answer, and this one answered correctly whenever it did not
+crash -- there is no divergence to find, because uninitialised memory is not
+a second opinion. What found it was reading the function, and what makes it
+a regression test is the poison: every C case in the file now opens against
+a struct filled with `0xAA`, so "the stack was zero" stops being available
+as an accident. A test that supplies a *clean* environment tests the
+environment as much as the code.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -11700,6 +11733,17 @@ backends" -- would have cost nothing and been true.
    choose bytes where every candidate reading differs -- and where a
    comparison has already been drawn from one, treat the conclusion as
    untested rather than as recorded.
+
+131. **A test that hands the code a clean environment is testing the
+   environment.** `situ_walk_open` cleared its tables by name and the varint
+   table was left out, so an image without varints searched whatever the
+   caller's stack held -- and every test passed, because a struct declared at
+   the top of `main` is zero. Poisoning it with `0xAA` before the call is a
+   segfault under a sanitizer on a schema with no varint in it. Where the
+   code's contract is "this is initialised whatever you hand me", the test
+   has to hand it something. A differential is no help here: uninitialised
+   memory answers correctly when it does not crash, so there is no second
+   opinion to disagree with it.
 
 ---
 
