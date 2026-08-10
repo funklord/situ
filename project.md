@@ -11022,6 +11022,68 @@ schema with a `[remaining]` tail meeting the validator, and nothing before it
 had asked a size program for a length that could be wrong by exactly an
 offset.
 
+### 26.113 The walker, folded
+
+26.101 through 26.112 built the embedded walker 0035 said did not exist --
+image, expression VM, every placement kind, runs, variants and `validate` --
+and fixed two `validate` holes across all five implementations on the way.
+Section 26 is a log and stays one, but a reader should not have to read
+twelve entries to learn what they settled. Invariants 130 to 145 carry the
+rest.
+
+**A differential finds three different kinds of thing, and they need
+different responses.** One implementation wrong is the case everyone expects.
+*Both* wrong is what happened with varints, delimited members and text
+numbers -- each looked like a disagreement between a right side and a wrong
+one, and each was two wrong answers that happened to differ. And *neither*
+wrong, with the interface between them incomplete, is what the signed flag
+was: the walker sign-extended into a `uint64_t` and gave no way to ask
+whether to read it as signed, so the harness reported a disagreement that
+was not there. Treating that third case as a false positive to be silenced
+would have left the API broken.
+
+**A second implementation repeats the first's reasoning, not only its
+typos.** `walk.py` carries a comment naming the two schemas that caught
+`remaining` being measured from the start of the buffer rather than from the
+member -- and the C walker, written from the format rather than from that
+code, made the same mistake from a clean start. A rule that lives only in a
+comment is a rule the next implementation will not read.
+
+**Five constructs asked one question, and it splits three to two.** Does
+this construct have a value at all? A byte run, a delimited member and a
+variant do not, and are refused; a varint and a text number do, and are
+decoded. Each was found the same way -- something read the bits where the
+walk's public answer wanted values -- and the pattern took five instances
+because the answer is a property of the construct rather than of the layer.
+
+**A check that has only ever seen good input has not been asked anything.**
+cpio's `decimal u32 magic[6] [min = 70701, max = 70702]` carries a comment
+saying the alternative is "six bytes nothing constrains", and nothing
+constrained them in four backends and the walk. The corpus differential
+draws pseudo-random bytes, which produce a valid cpio magic never. Two
+classifiers in one file disagreed about what a text number is, forty lines
+apart, and only the one nobody exercised was wrong.
+
+**The test harness is part of the system under test.** Three defects this
+session were in the checking apparatus rather than the code: a driver that
+always walked struct 0, so the container holding a run was never measured; a
+driver that printed a signed value unsigned; and a differential over an
+input on which two readings coincide by arithmetic accident. Each made a
+real check into a vacuous one, and none of them would fail.
+
+**A guard is only as good as its entrances.** The walker's recursion limit
+was threaded through the measurement and not through the three public
+functions the measurement calls, each of which starts the count again. A
+bound with a public entry point that restarts it is not a bound -- and the
+version that looked enforced read exactly like the version that was.
+
+**Reaching a limit is a refusal, not a short answer.** The `while` walk
+absorbed "this build cannot measure that element" into "the run ends here",
+and `validate` had to keep "I cannot answer" separate from "the answer is
+no". Both are the same rule: a walker that folds its own limits into its
+answers produces wrong values indistinguishable from right ones, which is
+the one failure this component exists to avoid.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
