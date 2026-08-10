@@ -10522,6 +10522,53 @@ earns it and passes one that does not; and the additivity test of 26.96 keeps
 passing, which for this rung means asserting the file set genuinely *grows*
 from `view` to `edit` rather than merely not shrinking.
 
+### 26.100 The ladder, folded
+
+26.95 through 26.99 built six rungs across four backends and two walkers,
+and 0030 through 0035 decided what each rung may assume. Section 26 is a log
+and stays one, but a reader should not have to read six phase entries to
+learn a rule that now holds everywhere. What follows is what those phases
+settled, distilled; the invariants below carry the rest.
+
+**A rung adds files and changes none, and the test asserts the set grows.**
+Merely "does not shrink" is satisfied by a generator that emits nothing,
+which is the vacuous pass wearing a green tick. Two rules make it hold and
+both fail silently otherwise: includes point down the ladder and never up,
+and no rung's file switches on a rung above it.
+
+**What is expressible is decided once; how it is spelled is decided per
+backend.** `situc/relation.py` and `situc/layers.py` both exist because a
+second consumer arrived and the answer was private to the first. Python's
+integers would compare a `u64` against an `i8` happily and are refused
+anyway, because a schema one backend accepts and another does not is a
+schema that means two things.
+
+**The backends differ in shape, not only in spelling, and translating one is
+how you find out.** Rust's `required` answers a `Framing` enum rather than
+an error code; C++ acquires a view through an `rt::message` it must own;
+Python imposes no buffer at all. A reader translated from C was written and
+thrown away twice before that was believed.
+
+**Whether a limit exists for the language's sake or the protocol's decides
+whether Python imposes it.** The framing reader takes no capacity, because a
+`bytearray` grows. The conversation table requires one, because its bound is
+about refusing somebody who opens exchanges and never answers -- the same
+problem in every language. The owned decode takes no backing, because
+`bytes` is already storage that outlives the message.
+
+**Time is a parameter and the state machine returns its next deadline.**
+Rung 6 owns I/O and never the clock, so ten simulated minutes of loss,
+reorder and duplication reproduce byte for byte with no sleep in the loop.
+Every multiplexing facility takes a timeout and only the machine knows when
+it next needs waking; without the deadline each driver invents a polling
+interval and the timing contract stops being the schema's.
+
+**The schema states the conversation; the generated code holds the set.**
+That is what made the acknowledgement case expressible after 0030 wrote it
+off: a schema describes and does not hold, so "an ack names a sequence
+number that was actually sent" is a rule the schema states and a table the
+caller sizes.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -11553,6 +11600,52 @@ from `view` to `edit` rather than merely not shrinking.
    image cannot say" still worked -- and that bit is the whole of what keeps a
    partial `validate` from reporting OK where the schema refuses. Write the
    case that used to exist.
+
+124. **A rung adds files and changes none, and the test must assert the set
+   grew.** Additivity is what lets somebody build at `view` and read the
+   output of `drive` as a superset of it, and it rests on two rules that fail
+   silently: includes point down the ladder and never up, and no file switches
+   on a rung above its own. "The file set does not shrink" is satisfied by a
+   generator that emits nothing, which is the vacuous pass wearing a green
+   tick; assert it grows.
+
+125. **Backends differ in shape, not only in spelling, and translating one is
+   how you find that out.** Rust's `required` answers a `Framing` enum where C
+   answers an error code and an out-parameter; C++ acquires a view through an
+   `rt::message` it must own; Python imposes no buffer at all. A reader
+   translated from C was written and thrown away twice -- it invented a
+   failure Rust does not have, and called a C++ overload that does not exist.
+   Read the target's real contract before writing against it. Nine backends
+   are nine designs, not one design typed nine times.
+
+126. **Whether a limit exists for the language's sake or the protocol's
+   decides whether Python imposes it.** The framing reader takes no capacity,
+   because a `bytearray` grows and a cap would be C's problem leaking. The
+   conversation table requires one, because its bound is about refusing a peer
+   who opens exchanges and never answers -- the same problem in every
+   language. Ask which of the two a limit is before copying or dropping it.
+
+127. **`read_scalar` reads bits where the walk's public answer should read
+   values.** Twice now: a byte run is not a scalar and reading it as an
+   integer was accidental, settled by refusing; a varint *is* a scalar and
+   reading its bytes raw is wrong, settled by decoding. Opposite answers from
+   one question -- does this construct have a value, and is this the layer
+   that should produce it. Delimited members and text numbers are where it
+   bites next.
+
+128. **A test that builds its evidence before the mutation it is testing
+   cannot fail.** An independence check passed `bytes(raw)` and then overwrote
+   `raw`; the copy predated the write, so the assertion held whether or not
+   the property did. A round-trip passed because `dump` and `unparse` both
+   dropped the attribute, comparing two schemas that had each lost the same
+   thing. Both were green for a year of nothing. Ask what would have to break
+   for the test to notice.
+
+129. **A command that succeeds may print nothing, and silence is not
+   absence.** "No Qt binding is installed" was recorded in a decision record
+   from `python3 -c "import PyQt6" | head -1`, which prints nothing on
+   success. PyQt6 was installed and so were Qt6's C++ headers. Check the exit
+   status, or ask the tool a question whose answer is not empty.
 
 ---
 
