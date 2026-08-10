@@ -349,6 +349,16 @@ def read_scalar(view: View, index: int) -> int:
 	if index in view.image.varints:
 		return varint(view, index)[1]
 
+	# A delimited member is a byte run whose end the data decides, so it has
+	# no more of a value than a counted one has. This answered `"GET "` as
+	# 1195725856 -- the third construct to reach here as bits where the walk's
+	# public answer wants values, and the second to be settled by refusing.
+	# `read_bytes` is its reader, and the C walker cannot give it a number
+	# either.
+	if index in view.image.delimiters and placement.type_struct == NONE:
+		raise Refused(f"placement {index} ends at a delimiter, so its bytes "
+		              f"are `read_bytes`")
+
 	start = offset_bits(view, index)
 	width = size_bits(view, index)
 	if width <= 0 or width > 64:

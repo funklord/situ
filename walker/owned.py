@@ -20,7 +20,7 @@ it did not, which reads as a message that simply lacked it.
 from __future__ import annotations
 
 from walker.image import NONE, Image
-from walker.report import FIELD, RESERVED
+from walker.report import FIELD, RESERVED, content_bytes
 from walker.walk import Refused, View, read_bytes, read_scalar
 
 #: What an owned decode can hand back. A scalar is a number and a run of
@@ -64,8 +64,15 @@ def decode(view: View) -> dict[str, Value]:
 		local = name.rpartition(".")[2] or name
 
 		try:
-			if placement.element_bits == 8 and (placement.array_count != NONE
-			                                    or placement.size_code != NONE):
+			if index in image.delimiters and placement.type_struct == NONE:
+				# Its content, not its span: the span carries the delimiter,
+				# because that is what places the member after it, and an
+				# owned value wants what `_ptr` and `_len` hand back. Before
+				# this it came through `read_scalar` and `"GET "` was the
+				# number 1195725856.
+				out[local] = content_bytes(view, index)
+			elif placement.element_bits == 8 and (placement.array_count != NONE
+			                                      or placement.size_code != NONE):
 				# `bytes`, not whatever slicing the buffer produced. A
 				# bytearray view over a bytearray message is a copy and so
 				# survives, but it is mutable -- and an "owned value" a

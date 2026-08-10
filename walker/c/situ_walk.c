@@ -6,10 +6,21 @@
 #define TAG_STRUCTS    1u
 #define TAG_PLACEMENTS 2u
 #define TAG_CODE       3u
+#define TAG_DELIMITERS 6u
 #define TAG_VARINTS    9u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
+
+/* How far into a row this build reads, per table. Not the record's declared
+ * width -- these are what `situ_walk_members`, `situ_walk_placement_at`,
+ * `situ_walk_varint` and `situ_walk_scan` touch, and a row narrower than its
+ * entry here would be read past. `fits` bounds the *table*, which leaves
+ * exactly this hole at the last row of it. */
+#define STRUCT_READS     8u
+#define PLACEMENT_READS 40u
+#define VARINT_READS    11u
+#define DELIMITER_READS 32u
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -95,12 +106,25 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 
 		/* A tag this build does not know is skipped rather than refused.
 		 * That is the whole point of a directory: an image from a later
-		 * situc is readable, not an error. */
+		 * situc is readable, not an error.
+		 *
+		 * A tag it *does* know is checked against the width this build reads
+		 * out of a row, which `fits` cannot do for it: that bounds the table,
+		 * and a record shorter than the fields read from it runs off the end
+		 * of the last row rather than off the end of the table. A stride
+		 * wider than this build expects is fine and is how the format grows.
+		 */
 		if (kind == TAG_STRUCTS) {
+			if (stride < STRUCT_READS) {
+				return SITU_WALK_MALFORMED;
+			}
 			out->structs       = image + offset;
 			out->struct_count  = items;
 			out->struct_stride = stride;
 		} else if (kind == TAG_PLACEMENTS) {
+			if (stride < PLACEMENT_READS) {
+				return SITU_WALK_MALFORMED;
+			}
 			out->placements       = image + offset;
 			out->placement_count  = items;
 			out->placement_stride = stride;
@@ -108,9 +132,19 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->code     = image + offset;
 			out->code_len = items * stride;
 		} else if (kind == TAG_VARINTS) {
+			if (stride < VARINT_READS) {
+				return SITU_WALK_MALFORMED;
+			}
 			out->varints       = image + offset;
 			out->varint_count  = items;
 			out->varint_stride = stride;
+		} else if (kind == TAG_DELIMITERS) {
+			if (stride < DELIMITER_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->delimiters       = image + offset;
+			out->delimiter_count  = items;
+			out->delimiter_stride = stride;
 		}
 	}
 
@@ -158,22 +192,24 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
-/* -- varints ------------------------------------------------------------ */
+/* -- delimiters --------------------------------------------------------- */
 
-#define VARINT_BIG 0x02u
+/* What a record can hold, from `DELIMITER_BYTES` in `situc/pack.py`: four
+ * words, a length byte, and fifteen bytes of delimiter. */
+#define DELIMITER_MAX 15u
 
-/* The side tables are sorted by placement, so this searches rather than
- * building a reverse map in an arena it may not have. That is the image
- * format's own reasoning and it is why the sort is guaranteed. */
-static const uint8_t *varint_rules(const situ_walk_image *image,
-                                   uint32_t index)
+static const uint8_t *table_row(const uint8_t *table, uint32_t count,
+                                uint32_t stride, uint32_t index)
 {
 	uint32_t low  = 0u;
-	uint32_t high = image->varint_count;
+	uint32_t high = count;
 
+	/* Sorted by placement, which the image format guarantees precisely so
+	 * that a walker can search rather than build a reverse map in an arena
+	 * it may not have. */
 	while (low < high) {
 		const uint32_t mid = low + (high - low) / 2u;
-		const uint8_t *at  = image->varints + mid * image->varint_stride;
+		const uint8_t *at  = table + mid * stride;
 		const uint32_t who = u32_at(at);
 
 		if (who == index) {
@@ -186,6 +222,94 @@ static const uint8_t *varint_rules(const situ_walk_image *image,
 		}
 	}
 	return NULL;
+}
+
+static const uint8_t *delimiter_rules(const situ_walk_image *image,
+                                      uint32_t index)
+{
+	return table_row(image->delimiters, image->delimiter_count,
+	                 image->delimiter_stride, index);
+}
+
+static int delimiter_at(const uint8_t *message, const uint8_t *delim,
+                        uint32_t width)
+{
+	for (uint32_t i = 0u; i < width; i++) {
+		if (message[i] != delim[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+situ_walk_err situ_walk_scan(const situ_walk_image *image,
+                             const uint8_t *message, uint32_t len,
+                             uint32_t index, uint32_t at,
+                             uint32_t *content, int *terminated)
+{
+	const uint8_t *rules = delimiter_rules(image, index);
+	if (rules == NULL) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	const uint32_t quote  = u32_at(rules + 4);
+	const uint32_t escape = u32_at(rules + 8);
+	const uint32_t cap    = u32_at(rules + 12);
+	const uint32_t width  = rules[16];
+	const uint8_t *delim  = rules + 17;
+
+	if (width == 0u || width > DELIMITER_MAX) {
+		return SITU_WALK_MALFORMED;
+	}
+	if (at > len) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	/* `max` bounds the search, not just the member: a delimiter that never
+	 * arrives must stop being looked for somewhere the schema chose. */
+	uint32_t limit = len - at;
+	if (cap != SITU_WALK_NONE && cap < limit) {
+		limit = cap;
+	}
+
+	int      quoted = 0;
+	uint32_t i      = 0u;
+	while (width <= limit && i <= limit - width) {
+		const uint8_t byte = message[at + i];
+
+		if (escape != SITU_WALK_NONE && byte == (uint8_t)escape) {
+			i += 2u;	/* the next byte is content, whatever it is */
+			continue;
+		}
+		if (quote != SITU_WALK_NONE && byte == (uint8_t)quote) {
+			quoted = !quoted;
+			i += 1u;
+			continue;
+		}
+		if (!quoted && delimiter_at(message + at + i, delim, width)) {
+			*content    = i;
+			*terminated = 1;
+			return SITU_WALK_OK;
+		}
+		i += 1u;
+	}
+
+	/* Truncated, and that is not a refusal: the member reached as far as the
+	 * cap or the buffer allowed, and the member after it starts there. */
+	*content    = limit;
+	*terminated = 0;
+	return SITU_WALK_OK;
+}
+
+/* -- varints ------------------------------------------------------------ */
+
+#define VARINT_BIG 0x02u
+
+static const uint8_t *varint_rules(const situ_walk_image *image,
+                                   uint32_t index)
+{
+	return table_row(image->varints, image->varint_count,
+	                 image->varint_stride, index);
 }
 
 situ_walk_err situ_walk_varint(const situ_walk_image *image,
@@ -278,10 +402,9 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 		return err;
 	}
 
-	/* A `while` run, a variant arm, a delimited member and a varint each
-	 * need a walk this build does not have. Named rather than approximated:
-	 * the whole reason an extent is refused is that a wrong one is
-	 * indistinguishable from a right one. */
+	/* A `while` run and a variant arm each need a walk this build does not
+	 * have. Named rather than approximated: the whole reason an extent is
+	 * refused is that a wrong one is indistinguishable from a right one. */
 	if (held.repeat_code != SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;
 	}
@@ -313,6 +436,37 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 			return err;
 		}
 		*out = consumed * 8u;
+		return SITU_WALK_OK;
+	}
+
+	/* A delimited member ends where its delimiter starts, and the *member*
+	 * ends where the delimiter does -- or the member after it would begin on
+	 * the terminator. Where the delimiter is absent there is none to add and
+	 * the member reaches as far as it got. `type_struct` separates the two
+	 * uses of `until`: this is a member ending at the first occurrence
+	 * anywhere, not a run of records checked at each element boundary.
+	 *
+	 * Taking the record's `size_bits` instead gives the *delimiter's* width
+	 * -- a true lower bound, and the one number that is not the answer -- so
+	 * a `u16` after `verb[] until " "` was read at offset 1. */
+	const uint8_t *delim = (held.type_struct == SITU_WALK_NONE)
+	                     ? delimiter_rules(image, index) : NULL;
+	if (delim != NULL) {
+		uint32_t at = 0u;
+		err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+
+		uint32_t content    = 0u;
+		int      terminated = 0;
+		err = situ_walk_scan(image, message, len, index, at / 8u,
+		                     &content, &terminated);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+
+		*out = (content + (terminated ? delim[16] : 0u)) * 8u;
 		return SITU_WALK_OK;
 	}
 
@@ -441,6 +595,16 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
 		}
 		return situ_walk_varint(image, message, len, index, offset / 8u,
 		                        &consumed, out);
+	}
+
+	/* A delimited member is a byte run whose end the data decides, so it has
+	 * no more of a value than a counted run has. Reading `size_bits` gave the
+	 * delimiter's width and answered `"GET "` as 0x47; the Python walker read
+	 * the whole span and answered 1195725856. Both are the same mistake, and
+	 * the answer to it is that neither is a number this returns. */
+	if (held.type_struct == SITU_WALK_NONE
+	                && delimiter_rules(image, index) != NULL) {
+		return SITU_WALK_UNSUPPORTED;
 	}
 
 	if (offset % 8u || held.size_bits % 8u || held.size_bits == 0u

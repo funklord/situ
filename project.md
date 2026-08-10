@@ -10641,6 +10641,59 @@ a struct filled with `0xAA`, so "the stack was zero" stops being available
 as an accident. A test that supplies a *clean* environment tests the
 environment as much as the code.
 
+### 26.103 The delimiter scan, and the value a run does not have
+
+0035 predicted delimited members as the next place `read_scalar` would read
+bits where the walk's public answer wants values, and named the Python
+walker as the one to watch. It was right about the construct and wrong about
+the ownership again, in the same way and for a different reason each time.
+
+**Both walkers answered a delimited member as a number.** Python read the
+span, so `"GET "` came back as 1195725856. The C walker had no scan at all,
+so it took the record's `size_bits` -- which for a delimited member is its
+*delimiter's* width, the number invariant 25 names as the one that is not
+the answer -- and gave 0x47, then placed the `u16` after it at offset 1
+where it belongs at 4. Two implementations, two different wrong numbers, one
+question neither was asking: does this construct have a value at all.
+
+It does not, and both refuse it now. Two of the three constructs in this
+pattern are settled by refusing and one by decoding, which is the shape of
+the question rather than an inconsistency: a run and a delimited member have
+no single value, a varint has one.
+
+**The scan is what the C walker actually gained**: quoting, escapes, the
+`max` cap, and the truncated case where the delimiter never arrives and the
+member reaches as far as it got rather than becoming unplaceable. Two
+binary searches over two side tables became one, which is the second
+consumer arriving and the answer being private to the first -- `relation.py`
+and `layers.py` one level down.
+
+**The differential compares widths now, not only values.** A walker can
+agree about every value in a struct and still disagree about the struct: the
+extent is what places everything after it, and the last member's extent is
+not observable through anything's offset. The scan is exactly the answer
+that shape of check was missing -- before this, "they agree" meant "they
+agree about the numbers each was willing to produce".
+
+**The owned decode is where the refusal would have cost something.** Rung 2
+is whole-or-nothing, so `read_scalar` refusing means every schema with a
+delimited member fails to produce an owned value -- the editor's document,
+for HTTP and SMTP and every text protocol. It routes a delimited member to
+its content instead, which is what a backend's `_ptr` and `_len` hand back:
+content and not span, the two differing by exactly the delimiter, because
+the span is what places the member after it and the value is not. `[trim]`
+now has one derivation serving the probe's length and the owned value's
+bytes, rather than a second copy waiting to disagree.
+
+**A bounds hole found on the way through.** `fits` checks that a table's
+`count * stride` lies inside the image, which is the table -- and says
+nothing about a row narrower than the fields this build reads out of one. A
+hostile image declaring a four-byte varint stride would have had
+`situ_walk_varint` read past the last row. Each table this build understands
+now states how far into a row it reads, checked when the section is bound. A
+stride *wider* than expected stays fine, because that is how the format
+grows.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -11702,12 +11755,18 @@ environment as much as the code.
    language. Ask which of the two a limit is before copying or dropping it.
 
 127. **`read_scalar` reads bits where the walk's public answer should read
-   values.** Twice now: a byte run is not a scalar and reading it as an
+   values.** Three times now: a byte run is not a scalar and reading it as an
    integer was accidental, settled by refusing; a varint *is* a scalar and
-   reading its bytes raw is wrong, settled by decoding. Opposite answers from
-   one question -- does this construct have a value, and is this the layer
-   that should produce it. Delimited members and text numbers are where it
-   bites next.
+   reading its bytes raw is wrong, settled by decoding; a delimited member is
+   a run whose end the data decides, settled by refusing. Opposite answers
+   from one question -- does this construct have a value, and is this the
+   layer that should produce it. Text numbers are the last of them, and are
+   the case the Python walker already decodes and the C one still cannot.
+
+   The prediction of where it would bite next was right twice and wrong twice
+   about who had it: each time the write-up named one walker, and each time
+   both were wrong in whatever way their own implementation made available.
+   The construct is what carries the bug, not the language.
 
 128. **A test that builds its evidence before the mutation it is testing
    cannot fail.** An independence check passed `bytes(raw)` and then overwrote
@@ -11744,6 +11803,24 @@ environment as much as the code.
    has to hand it something. A differential is no help here: uninitialised
    memory answers correctly when it does not crash, so there is no second
    opinion to disagree with it.
+
+132. **Agreeing about every value in a struct is not agreeing about the
+   struct.** A member's extent is what places everything after it, and two
+   readers can hand back the same numbers for every member they are willing
+   to answer while disagreeing about the width of one they both decline. The
+   differential asked only for values until the delimiter scan, where the
+   whole of the new work is an extent -- and the last member's extent is not
+   observable through the offset of anything, because there is nothing after
+   it. Ask a check for the quantity the code computes, not the one that is
+   convenient to print.
+
+133. **A bound on the table is not a bound on the row.** The image's section
+   check confirms `count * stride` lies inside the file, and says nothing
+   about a row narrower than the fields read out of it -- so a hostile image
+   declaring a four-byte varint stride reads past the end of the last row
+   while every table it names sits comfortably inside the image. Each table a
+   build understands states how far into a row it reads. A stride wider than
+   expected is not an error; it is how the format grows.
 
 ---
 

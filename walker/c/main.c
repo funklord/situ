@@ -86,19 +86,30 @@ int main(int argc, char **argv)
 	for (uint32_t i = 0u; i < count; i++) {
 		uint64_t value  = 0u;
 		uint32_t offset = 0u;
+		uint32_t bits   = 0u;
 		const situ_walk_err at = situ_walk_offset_bits(&image, message_bytes,
 		                                               len, shape, first + i,
 		                                               &offset);
+		/* The width is printed beside the value because a member this build
+		 * declines to *value* still has an extent, and the extent is what
+		 * places everything after it. A delimited member is the case: no
+		 * number to give, and four bytes wide over `GET `. */
+		const situ_walk_err wide = situ_walk_size_bits(&image, message_bytes,
+		                                               len, shape, first + i,
+		                                               &bits);
 		err = situ_walk_read(&image, message_bytes, len, shape, first + i,
 		                     &value);
 
-		if (err == SITU_WALK_OK) {
-			printf("  [%u] @%u = %llu\n", i, offset / 8u,
+		if (at != SITU_WALK_OK) {
+			printf("  [%u] -- %s\n", i, why(at));
+		} else if (err == SITU_WALK_OK) {
+			printf("  [%u] @%u +%u = %llu\n", i, offset / 8u, bits / 8u,
 			       (unsigned long long)value);
-		} else if (at == SITU_WALK_OK) {
-			printf("  [%u] @%u -- %s\n", i, offset / 8u, why(err));
+		} else if (wide == SITU_WALK_OK) {
+			printf("  [%u] @%u +%u -- %s\n", i, offset / 8u, bits / 8u,
+			       why(err));
 		} else {
-			printf("  [%u] -- %s\n", i, why(err));
+			printf("  [%u] @%u -- %s\n", i, offset / 8u, why(err));
 		}
 	}
 

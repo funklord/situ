@@ -1,10 +1,11 @@
 # 0035: the walker that matters is embedded, and it is C
 
 Status: accepted, and begun. `walker/c/` reads an image, evaluates a section
-10 program, places a fixed member and decodes a varint, held to the Python
-walker by a differential test. Delimited members, runs, variants, regions and
-the probes are not written; the table below is the remaining work and each
-row this build does not render is refused by name rather than guessed.
+10 program, places a fixed member, decodes a varint and scans for a
+delimiter, held to the Python walker by a differential test. Runs, variants,
+regions and the probes are not written; the table below is the remaining work
+and each row this build does not render is refused by name rather than
+guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -61,7 +62,7 @@ layer over the image; placing one field needs most of this:
 | offset plan | where a member starts, summed through the members before it | **done** |
 | sized runs | a `size_code` program, evaluated for the element count | **done** |
 | located members | `at expr`, which joins no offset chain | `walk.py` |
-| delimiter scan | where a delimited member stops, with quoting and escapes | `walk.py` |
+| delimiter scan | where a delimited member stops, with quoting and escapes | **done** |
 | varint decode | a width that is in its own bytes, and the value | **done** |
 | run walking | counted, capped and `while` runs | `walk.py` |
 | the probes | `validate`, tags, markers, gated regions | `report.py` |
@@ -173,3 +174,37 @@ divergence had been *recorded* rather than fixed, and recording it is what
 made it look settled. A written-up disagreement with one side named correct
 is a conclusion, and this one was drawn from a coincidence that a second
 input would have destroyed.
+
+
+## Amendment, 2026-08-10: the delimiter scan, and the third instance
+
+The prediction above was right about where it bit next and wrong about who
+had it. **Both walkers answered a delimited member as a number**, in the two
+different ways their implementations made available: Python read the whole
+span, so `"GET "` came back as 1195725856, and the C walker had no scan at
+all, so it took the record's `size_bits` -- which for a delimited member is
+its *delimiter's* width, the one number invariant 25 names as not being the
+answer -- and gave 0x47. The C one then placed the `u16` after it at offset
+1, where it belongs at 4.
+
+Settled the same way the byte run was: **a delimited member has no scalar
+value**, because its end is the data's to decide, and `read_bytes` is its
+reader. That is two of the three constructs in the pattern settled by
+refusing and one by decoding, and the question each time is whether the
+construct has a value rather than whether this layer can produce one.
+
+The scan itself is now in C: quoting, escapes, the `max` cap, and the
+truncated case where the delimiter never arrives and the member reaches as
+far as it got. The differential compares *widths* as well as values for it,
+because a walker can agree about every value in a struct and still disagree
+about the struct -- and the last member's extent is not observable through
+the offset of anything after it.
+
+**The owned decode needed the other half of the same answer.** `read_scalar`
+refusing would have failed the whole message under the whole-or-nothing
+rule, for every schema with a delimited member -- so `owned.decode` routes
+one to its content instead, which is what a backend's `_ptr` and `_len` hand
+back. Content and not span: the span carries the delimiter because that is
+what places the member after it, and the two numbers differ by exactly the
+delimiter. `[trim]` has one derivation feeding both readers now, rather than
+a length for the probe and a second copy for the value.

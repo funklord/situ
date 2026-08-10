@@ -27,7 +27,7 @@ from situc.parser import parse
 from situc.resolve import resolve
 from situc.diagnostics import Source
 from walker.image import load
-from walker.walk import Refused, acquire, read_scalar
+from walker.walk import Refused, Unplaceable, acquire, read_scalar, size_bits
 
 COMPILER = shutil.which("cc") or shutil.which("gcc")
 WALKER   = ROOT / "walker" / "c"
@@ -85,17 +85,34 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	for (uint32_t i = 0; i < count; i++) {
-		uint64_t value = 0;
+		ASK
+	}
+	return 0;
+}
+"""
+
+#: The value read: what a caller asks a member for.
+VALUES = """uint64_t value = 0;
 		if (situ_walk_read(&image, msg, len, 0u, first + i, &value)
 				== SITU_WALK_OK) {
 			printf("%llu\\n", (unsigned long long)value);
 		} else {
 			printf("refused\\n");
-		}
-	}
-	return 0;
-}
-"""
+		}"""
+
+#: The width, in bytes. A member the walk declines to *value* still has an
+#: extent, and the extent is what places everything after it -- so a walker
+#: can agree about every value in a struct and still disagree about the
+#: struct. The delimiter scan is an answer this asks for directly rather than
+#: inferring from the next member's offset, which says nothing about the
+#: last member.
+WIDTHS = """uint32_t bits = 0;
+		if (situ_walk_size_bits(&image, msg, len, 0u, first + i, &bits)
+				== SITU_WALK_OK) {
+			printf("%u\\n", bits / 8u);
+		} else {
+			printf("refused\\n");
+		}"""
 
 
 def image_for(path: Path) -> bytes:
@@ -117,9 +134,22 @@ def python_answers(blob: bytes, message: bytes) -> list[str]:
 	return found
 
 
-def c_answers(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
+def python_widths(blob: bytes, message: bytes) -> list[str]:
+	image = load(blob)
+	view  = acquire(image, message, 0)
+	found = []
+	for index in image.members(image.structs[0]):
+		try:
+			found.append(str(size_bits(view, index) // 8))
+		except (Refused, Unplaceable):
+			found.append("refused")
+	return found
+
+
+def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str) -> list[str]:
 	(tmp_path / "img").write_bytes(blob)
-	(tmp_path / "drive.c").write_text(DRIVER, encoding="ascii")
+	(tmp_path / "drive.c").write_text(DRIVER.replace("ASK", ask),
+	                                  encoding="ascii")
 
 	assert COMPILER is not None
 	built = subprocess.run(
@@ -132,6 +162,14 @@ def c_answers(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
 	                      message.hex()], capture_output=True, text=True)
 	assert ran.returncode == 0, ran.stdout + ran.stderr
 	return ran.stdout.split()
+
+
+def c_answers(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
+	return _drive(tmp_path, blob, message, VALUES)
+
+
+def c_widths(tmp_path: Path, blob: bytes, message: bytes) -> list[str]:
+	return _drive(tmp_path, blob, message, WIDTHS)
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
@@ -311,6 +349,110 @@ def test_they_agree_that_a_truncated_varint_has_no_value(
 	assert answers == ["17", "refused", "172"]
 
 
+DELIMITED = """target buffer;
+endian big;
+
+struct line {
+	u8  verb[] until " " max 8;
+	u16 code;
+}
+"""
+
+QUOTED = """target buffer;
+endian big;
+
+struct row {
+	u8  field[] until "," max 16 [quoted = "\\""];
+	u16 after;
+}
+"""
+
+ESCAPED = """target buffer;
+endian big;
+
+struct row {
+	u8  field[] until "," max 16 [escape = "\\\\"];
+	u16 after;
+}
+"""
+
+
+def packed_text(text: str) -> bytes:
+	source   = parse(Source("scan.situ", text))
+	resolved = resolve(source, solve(source))
+	return pack(source, resolved)[0]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_where_a_delimiter_decides_the_end(tmp_path: Path) -> None:
+	"""The third construct to reach the scalar read as bits, and the second
+	settled by refusing.
+
+	Python answered `"GET "` as 1195725856, the span read as an integer; the
+	C walker had no scan at all, so it took the record's `size_bits` -- which
+	for a delimited member is its *delimiter's* width, the one number that is
+	not the answer -- and gave 0x47 for the member and offset 1 for the `u16`
+	after it, where it belongs at 4.
+
+	Neither answers a value now, and the widths are compared rather than
+	inferred: 4 is the content plus the delimiter, which is what places
+	`code`.
+	"""
+	blob    = packed_text(DELIMITED)
+	message = b"GET \x00\xff"
+
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+	assert c_answers(tmp_path, blob, message) == ["refused", "255"]
+	assert c_widths(tmp_path, blob, message) == python_widths(blob, message)
+	assert c_widths(tmp_path, blob, message) == ["4", "2"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_an_unterminated_member_reaches_its_cap(
+		tmp_path: Path) -> None:
+	"""A delimiter that never arrives leaves the member truncated, not
+	unplaceable: it reaches as far as `max` allowed and `code` begins there.
+	Refusing instead drops every member after it, which is not what any
+	backend does -- and the delimiter is not part of the member when it is
+	not there, so the width is 8 rather than 9."""
+	blob    = packed_text(DELIMITED)
+	message = b"GETTINGX\x00\xff"
+
+	assert c_widths(tmp_path, blob, message) == python_widths(blob, message)
+	assert c_widths(tmp_path, blob, message) == ["8", "2"]
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+	assert c_answers(tmp_path, blob, message) == ["refused", "255"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_a_quoted_delimiter_is_content(tmp_path: Path) -> None:
+	"""8.6.1's other half: inside a quoted run the delimiter is data. `"a,b",`
+	ends at the fifth byte and not the second, so the member is six bytes with
+	its delimiter and `after` starts there."""
+	blob    = packed_text(QUOTED)
+	message = b'"a,b",\x00\xff'
+
+	assert c_widths(tmp_path, blob, message) == python_widths(blob, message)
+	assert c_widths(tmp_path, blob, message) == ["6", "2"]
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+	assert c_answers(tmp_path, blob, message) == ["refused", "255"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_an_escaped_delimiter_is_content(
+		tmp_path: Path) -> None:
+	"""The same question answered the other way: the byte after the escape is
+	content whatever it is, itself included. `a\\,b,` ends at the fifth byte,
+	so the member is five bytes and `after` starts there."""
+	blob    = packed_text(ESCAPED)
+	message = b"a\\,b,\x00\xff"
+
+	assert c_widths(tmp_path, blob, message) == python_widths(blob, message)
+	assert c_widths(tmp_path, blob, message) == ["5", "2"]
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+	assert c_answers(tmp_path, blob, message) == ["refused", "255"]
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_table_the_image_omits_reads_as_empty(tmp_path: Path) -> None:
 	"""An absent section must not leave the caller's stack deciding.
@@ -340,13 +482,17 @@ def test_a_truncated_image_is_malformed_rather_than_read(
 	one."""
 	blob = image_for(ROOT / "examples" / "udp" / "udp.situ")
 	(tmp_path / "img").write_bytes(blob[:len(blob) // 2])
-	(tmp_path / "drive.c").write_text(DRIVER, encoding="ascii")
+	(tmp_path / "drive.c").write_text(DRIVER.replace("ASK", VALUES),
+	                                  encoding="ascii")
 
 	assert COMPILER is not None
-	subprocess.run(
+	# Not `check=True`, which throws the compiler's own sentence away and
+	# leaves a status code to explain a build (invariant 115).
+	built = subprocess.run(
 		[COMPILER, *WARNINGS, f"-I{WALKER}", str(tmp_path / "drive.c"),
 		 str(WALKER / "situ_walk.c"), "-o", str(tmp_path / "drive")],
-		capture_output=True, text=True, check=True)
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
 
 	ran = subprocess.run([str(tmp_path / "drive"), str(tmp_path / "img"), "00"],
 	                     capture_output=True, text=True)

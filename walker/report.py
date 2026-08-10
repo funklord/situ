@@ -196,17 +196,24 @@ MINIMAL, TRIMMED, CASE_INSENSITIVE = 1, 2, 4
 OWS = (0x20, 0x09)
 
 
-def _trimmed(view: View, index: int, content: int) -> int:
-	"""The reported length, with `[trim]` applied.
+def _trim_span(view: View, index: int, content: int) -> tuple[int, int]:
+	"""Where a delimited member's value starts inside its span, and how long.
 
 	`[trim]` says whitespace at either end is framing rather than value. The
 	member's *span* is unchanged -- the bytes are still there and still
-	partition the struct -- and only the length handed to a caller shrinks,
-	which is why this is applied to the answer and not to the extent.
+	partition the struct -- and only what is handed to a caller shrinks,
+	which is why this is applied to the answer and not to the extent. C says
+	the same thing in two accessors, `situ_trim_start` shifting the pointer
+	and `situ_trim_len` shortening the length.
+
+	Both numbers, because a length alone cannot say which bytes: the probe
+	wants the second and an owned value wants the span. One derivation, since
+	a second copy of "what does `[trim]` remove" is how two readers of one
+	attribute start disagreeing.
 	"""
 	placement = view.image.placements[index]
 	if not placement.text_flags & TRIMMED:
-		return content
+		return 0, content
 	start = view.at + offset_bits(view, index) // 8
 	data  = view.buffer[start:start + content]
 	head  = 0
@@ -215,7 +222,29 @@ def _trimmed(view: View, index: int, content: int) -> int:
 	tail = len(data)
 	while tail > head and data[tail - 1] in OWS:
 		tail -= 1
-	return tail - head
+	return head, tail - head
+
+
+def _trimmed(view: View, index: int, content: int) -> int:
+	"""The reported length, with `[trim]` applied."""
+	return _trim_span(view, index, content)[1]
+
+
+def content_bytes(view: View, index: int) -> bytes:
+	"""A delimited member's value: its content, without the delimiter.
+
+	What every backend's `_ptr` and `_len` hand back, and not what
+	`read_bytes` does -- that answers the member's *span*, which includes the
+	delimiter, because the span is what places the member after it. The two
+	numbers differ by the delimiter's width and an owned value wants the
+	smaller one.
+	"""
+	content, _ = scan(view, index)
+	head, width = _trim_span(view, index, content)
+	start = view.at + offset_bits(view, index) // 8 + head
+	if start + width > view.limit:
+		raise Refused("the frame does not reach this member")
+	return bytes(view.buffer[start:start + width])
 
 
 def _nested(image: Image, struct_index: int) -> list[int]:

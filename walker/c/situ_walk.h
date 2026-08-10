@@ -65,6 +65,10 @@ typedef struct {
 	const uint8_t *varints;
 	uint32_t       varint_count;
 	uint32_t       varint_stride;
+
+	const uint8_t *delimiters;
+	uint32_t       delimiter_count;
+	uint32_t       delimiter_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */
@@ -114,10 +118,28 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 	                               uint32_t index, uint32_t at,
 	                               uint32_t *consumed, uint64_t *value);
 
+/* Where a delimited member's content stops, and whether the delimiter was
+ * there. `at` is the member's own byte offset.
+ *
+ * The two answers are separate on purpose, and the C runtime says why: a
+ * member whose delimiter is absent is *truncated*, not empty, and it reaches
+ * as far as the cap or the buffer allowed -- so the member after it starts
+ * at that point rather than being unplaceable. The member's span is the
+ * content plus the delimiter where there is one, which is `situ_walk_size_
+ * bits`; the content alone is what a backend's `_ptr` and `_len` hand back.
+ *
+ * Naive matching, as the generated code does it: a delimiter is one or two
+ * bytes in every format this targets, and a reader has to be able to check
+ * it against the specification they are implementing. */
+situ_walk_err situ_walk_scan(const situ_walk_image *image,
+	                             const uint8_t *message, uint32_t len,
+	                             uint32_t index, uint32_t at,
+	                             uint32_t *content, int *terminated);
+
 /* How wide a member is, in bits. A constant where the image knows one; a
  * `size_code` program otherwise, which is what `size = Bounded` costs.
- * SITU_WALK_UNSUPPORTED for a width this build cannot compute -- a
- * delimiter scan, a varint, a `while` run or a variant arm. */
+ * SITU_WALK_UNSUPPORTED for a width this build cannot compute -- a `while`
+ * run or a variant arm. */
 situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 	                                  const uint8_t *message, uint32_t len,
 	                                  uint32_t shape, uint32_t index,
