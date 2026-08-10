@@ -90,22 +90,23 @@ buffers were described for.
 - The Python walker is frozen in scope: fifth column, and nothing else.
 
 
-## Amendment, 2026-08-10: one disagreement the differential found
+## Amendment, 2026-08-10: one disagreement the differential found, settled
 
 The two walkers do not agree about a byte *run*. Python's `read_scalar` will
 answer one -- `u8 name[n]` over "hello" comes back as 448378203247, the five
 bytes as an integer -- and the C walker refuses it, because a member whose
 width the data decides has no single value to give.
 
-Neither is obviously wrong and the difference is real, so it is recorded
-rather than smoothed over. `read_scalar` in Python is a low-level primitive
-that reads `size_bits` and does not ask whether the result means anything;
-`situ_walk_read` is the walker's public answer and declines what it cannot
-call a value. **Which of those `read_scalar` should be is the open question**,
-and it is worth settling before more of the walk is ported, because every
-later probe rests on it.
+**Settled the same day: `read_scalar` refuses a run.** A run is not a scalar
+however few bytes it happens to hold, and the old answer came about because
+the width fitted and nothing asked whether the result meant anything.
+`read_bytes` is the reader for those and every probe that wants one already
+called it -- which is why the whole suite passed unchanged when the refusal
+was added. Nothing depended on the behaviour; it was accidental rather than
+relied upon, and a suite that does not move is the evidence for saying so.
 
-Until it is settled the differential test compares schemas whose members are
-scalars, which is what `examples/udp` is. That is a narrower claim than the
-one the fifth column makes about the four backends, and saying so is the
-point of this paragraph.
+The differential is correspondingly wider: it now covers a schema whose
+member lengths the data decides, and the two walkers agree on the run's
+refusal *and* on placing the member after it. That is the offset chain
+holding in two independent implementations, which is the claim the fifth
+column makes about the four backends.

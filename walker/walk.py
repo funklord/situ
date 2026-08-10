@@ -327,6 +327,19 @@ def read_scalar(view: View, index: int) -> int:
 	placement = view.image.placements[index]
 	if placement.radix:
 		return parse_digits(view, index)
+
+	# A run is not a scalar, however few bytes it happens to hold. This used
+	# to answer one -- `u8 name[n]` over "hello" came back as 448378203247,
+	# the five bytes as an integer -- because the width fitted and nothing
+	# asked whether the result meant anything. The C walker refused it, and
+	# the differential between the two is what surfaced the disagreement;
+	# `read_bytes` is the reader for these, and every probe that wants one
+	# already calls it.
+	if (placement.size_code != NONE or placement.array_count != NONE
+			or placement.repeat_code != NONE):
+		raise Refused(f"placement {index} is a run, not a scalar; its bytes "
+		              f"are `read_bytes`")
+
 	start = offset_bits(view, index)
 	width = size_bits(view, index)
 	if width <= 0 or width > 64:

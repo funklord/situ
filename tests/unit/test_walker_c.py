@@ -166,6 +166,39 @@ def test_a_variable_member_is_refused_rather_than_guessed(
 	assert all(one != "refused" for one in answers[:-1])
 
 
+VARIABLE = """target buffer;
+endian big;
+
+struct label {
+	u16 id;
+	u8  n;
+	u8  name[n];
+	u8  tail;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_where_the_data_decides_a_length(tmp_path: Path) -> None:
+	"""The case that once disagreed, and the reason the claim is no longer
+	narrowed to schemas whose members are all scalars.
+
+	Python's `read_scalar` answered a byte run -- "hello" came back as
+	448378203247 -- and the C walker refused it. `read_scalar` refuses one
+	now, so both decline the run and both place `tail` *after* it, which is
+	the offset chain working in two independent implementations.
+	"""
+	source   = parse(Source("var.situ", VARIABLE))
+	resolved = resolve(source, solve(source))
+	blob     = pack(source, resolved)[0]
+	message  = bytes.fromhex("12340568656c6c6f7f")
+
+	answers = c_answers(tmp_path, blob, message)
+
+	assert answers == python_answers(blob, message)
+	assert answers == ["4660", "5", "refused", "127"]
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_truncated_image_is_malformed_rather_than_read(
 		tmp_path: Path) -> None:
