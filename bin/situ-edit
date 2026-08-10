@@ -20,7 +20,7 @@ HERE = Path(__file__).resolve().parent.parent
 if str(HERE) not in sys.path:
 	sys.path.insert(0, str(HERE))
 
-from editor.text import open_from, render		# noqa: E402
+from editor.text import as_json, open_from, render	# noqa: E402
 from walker.walk import Refused			# noqa: E402
 
 
@@ -35,6 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
 	                    help="which layout to read it as (default: the first)")
 	parser.add_argument("--hex", action="store_true",
 	                    help="the message file holds hex rather than bytes")
+	parser.add_argument("--format", choices=("text", "json"), default="text",
+	                    help="json is for a frontend that is not Python, and "
+	                         "is how the Qt window reads a document without "
+	                         "a second copy of the model")
 	return parser
 
 
@@ -47,7 +51,8 @@ def main() -> int:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1
 
-	print("\n".join(render(document)))
+	print(as_json(document) if args.format == "json"
+	      else "\n".join(render(document)))
 	return 0
 
 

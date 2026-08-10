@@ -1,10 +1,13 @@
 # 0034: the editor is the tooling walker, in three frontends over one core
 
-Status: accepted, and the read-only half is built -- the core, the CLI and
-the TUI. The GUI is not: no Qt binding is installed on the machine this was
-written on, and writing one that cannot be run or even imported is not
-building it. Anything that writes is still blocked, now on its own work
-rather than on 26.99, which has landed.
+Status: accepted, and the read-only half is built for the two frontends that
+are Python -- the core, `situ-edit` and `situ-edit-tui`. The GUI is not, and
+the reason recorded here first was wrong: it said no Qt binding was
+installed, from a check that piped a successful import through `head -1` and
+read the silence as a failure. PyQt6 is installed and Qt6's C++ headers are
+too. The real blocker is that the GUI is to be C++ (and the whole point of a
+walker is an embedded program), so it wants a C walker that does not exist --
+see `docs/decisions/0035-the-embedded-walker.md`.
 Date: 2026-08-08
 Phase: unscheduled; depends on 26.99 (rung 2)
 

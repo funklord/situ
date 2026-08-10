@@ -18,9 +18,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import json
+
 from editor.document import Document, open_document
 
-__all__ = ["image_bytes", "open_from", "read_message", "render"]
+__all__ = ["as_json", "image_bytes", "open_from", "read_message",
+           "render"]
 
 
 def image_bytes(path: Path, situc: Path) -> bytes:
@@ -84,3 +87,35 @@ def render(document: Document) -> list[str]:
 			shown = str(field.value)
 		lines.append(f"  {where} +{wide}  {field.name:<24} {shown}")
 	return lines
+
+
+def as_json(document: Document) -> str:
+	"""The document as structured data, for a frontend that is not Python.
+
+	The C++ window drives `situ-edit` rather than reimplementing the
+	document model, because a second implementation is precisely what 0034
+	forbids -- three frontends with their own idea of what a field costs is
+	the failure `traverse.py` exists to prevent. So the process boundary
+	0034 already uses for `situc pack` carries the model as well, and this
+	is what crosses it.
+
+	`--format json` rather than parsing the table: `advise` and `diff` both
+	offer one, so a reader of this tool already knows to ask.
+	"""
+	return json.dumps({
+		"struct": document.name,
+		"bytes":  len(document.buffer),
+		"fields": [
+			{
+				"name":   field.name,
+				"offset": field.offset,
+				"size":   field.size,
+				"value":  (field.value.hex() if isinstance(field.value, bytes)
+				           else field.value),
+				"kind":   ("bytes" if isinstance(field.value, bytes)
+				           else "int" if field.value is not None else "none"),
+				"note":   field.note,
+			}
+			for field in document.fields()
+		],
+	}, indent=1)
