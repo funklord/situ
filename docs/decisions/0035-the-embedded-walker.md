@@ -2,10 +2,11 @@
 
 Status: accepted, and largely built. `walker/c/` reads an image, evaluates a
 section 10 program, places a fixed or located member, decodes a varint, scans
-for a delimiter, parses a text number, walks a counted or `while` run and
-measures a variant -- held to the Python walker by a differential test.
-Regions and the probes are what remain; the table below is the work and each
-row this build does not render is refused by name rather than guessed.
+for a delimiter, parses a text number, walks a counted or `while` run,
+measures a variant and answers `validate` -- held to the Python walker by a
+differential test. Regions and the remaining probes are what is left; the
+table below is the work and each row this build does not render is refused
+by name rather than guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -69,7 +70,8 @@ layer over the image; placing one field needs most of this:
 | `while` runs | however many elements pass the predicate | **done** |
 | variants | the extent of the arm the discriminant selects | **done** |
 | regions | a gate's interior, read through `authenticated` or `sealed` | `report.py` |
-| the probes | `validate`, tags, markers | `report.py` |
+| `validate` | the constraint table, the enum table, nested structs | **done** |
+| the rest of the probes | tags, markers, versioned members, span checks | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
 device is that section 10's language is total -- no calls, no recursion, no
@@ -345,3 +347,43 @@ largest is what buys back the offset axis for everything after a variant --
 and it would also hide a walk that picked the wrong arm, since every answer
 would then be right by construction. The arms here are two bytes and eight,
 so a walker taking either the smallest or the largest is caught.
+
+
+## Amendment, 2026-08-10: `validate`, whole or nothing
+
+This is the answer a device wanted and could not get. The walker could say
+where every member of a message is and what it holds, and not whether the
+message is a legal instance of the schema -- so anything asking that still
+needed Python, which is the thing 0026 exists to remove.
+
+**Whole or nothing is what had to be built rather than ported.** Every other
+probe renders per member and skips what it cannot do, because each is a
+separate line. `validate` is one verdict about a whole struct, so a partial
+one reports OK for the rules it happened to be given -- and that is the one
+wrong answer indistinguishable from a right one. Two things follow, and
+both are refusals of the *struct*:
+
+  - the image carries a bit per struct saying it holds every check, and a
+    walker that ignored it would answer for rules it was never given;
+  - a kind of check this build does not render refuses the struct rather
+    than skipping the member.
+
+**The return value and the verdict are different questions**, and the API
+keeps them apart: the verdict is about the message, the return is about the
+walker. Folding them together is how "this build cannot say" becomes
+"well-formed".
+
+Two things the differential settled on the way. A **nested struct** is
+`validate` called through, with the inner verdict returned as it stands
+rather than folded into CONSTRAINT -- the first version refused nested
+structs wholesale, which would have made most real schemas unanswerable. And
+the **frame check belongs at the top**: section 20.2's check, the one every
+constant-offset access below it depends on, which the Python walk does when
+it acquires a view. Without it the two agreed about every well-formed
+message and disagreed about short ones, C answering for the members that
+happened to fit.
+
+Sixteen cases across four shapes -- constraints, enum membership, a nested
+struct's own rules, a text number's range -- each with a well-formed
+message, a rule broken and a frame too short. `[since]` members, the span
+checks and gated regions are refused by name and are what remains.

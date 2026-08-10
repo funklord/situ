@@ -28,7 +28,7 @@ from situc.resolve import resolve
 from situc.diagnostics import Source
 from walker.image import load
 from walker import report, walk
-from walker.image import NONE
+from walker.image import NONE, Image
 from walker.walk import Refused, Unplaceable, acquire, read_scalar, size_bits
 
 COMPILER = shutil.which("cc") or shutil.which("gcc")
@@ -631,6 +631,110 @@ def test_they_agree_about_a_run_element_by_element(tmp_path: Path) -> None:
 		assert c_elements(tmp_path, blob, message) \
 			== python_elements(blob, message), label
 		assert c_elements(tmp_path, blob, message) == expected, label
+
+
+#: `validate`'s verdict, or `cannot-say` where this build declines to answer
+#: for the struct at all. The two are different questions: the verdict is
+#: about the message and the refusal is about the walker, and folding them
+#: together would report a struct whose rules are not carried as well-formed.
+VERDICT = """situ_walk_err verdict = SITU_WALK_OK;
+		const situ_walk_err e = situ_walk_validate(&image, msg, len, shape,
+		                                           &verdict);
+		if (i > 0) {
+			continue;	/* one answer per struct, not per member */
+		}
+		printf("%s\\n", e != SITU_WALK_OK ? "cannot-say"
+		       : (verdict == SITU_WALK_OK ? "0"
+		          : (verdict == SITU_WALK_BOUNDS ? "1" : "2")));"""
+
+
+def c_verdict(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> str:
+	return _drive(tmp_path, blob, message, VERDICT, shape)[0]
+
+
+def python_verdict(blob: bytes, message: bytes, shape: int = 0) -> str:
+	"""The same question of the fifth column.
+
+	A frame too short for the struct's own minimum is refused when the view
+	is *acquired* here and reached by placing members there, so the one
+	raises and the other answers BOUNDS. Same check, same verdict, different
+	place -- named rather than papered over, because it is the only
+	structural difference between the two validators.
+	"""
+	image = load(blob)
+	try:
+		view = acquire(image, message, shape)
+	except Refused:
+		return "1"
+	answer = report._validate(image, view, shape)
+	return "cannot-say" if answer is None else str(answer)
+
+
+#: Each is `hdr` plus whatever it needs, and the messages are chosen so that
+#: every verdict appears: well-formed, a rule broken, and a frame too short.
+VALIDATED = {
+	"a constrained header": (
+		"struct hdr { u16 magic [must_eq = 0x1234]; u8 n [min = 1, max = 4];"
+		" u8 pad [must_eq = 0]; u16 tail; }",
+		[("12340200beef", "0"), ("99990200beef", "2"), ("12340900beef", "2"),
+		 ("12340000beef", "2"), ("12340207beef", "2"), ("123402", "1")]),
+	"an enum that rejects the unknown": (
+		"enum kind : u8 { a = 0x11, b = 0x22, default = error, }\n"
+		"struct hdr { kind k; u16 tail; }",
+		[("1100ff", "0"), ("9900ff", "2"), ("11", "1")]),
+	"a nested struct's own rules": (
+		"struct inner { u16 m [must_eq = 1]; }\n"
+		"struct hdr { inner i; u16 tail; }",
+		[("0001beef", "0"), ("0002beef", "2"), ("00", "1")]),
+	"a text number in range": (
+		"struct hdr { decimal u16 n[3] [max = 500]; u8 tail; }",
+		[("313233ff", "0"), ("393939ff", "2"), ("3132ff", "1"),
+		 ("3132ffff", "2")]),
+}
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_whether_a_message_is_well_formed(
+		tmp_path: Path) -> None:
+	"""`validate` in C, held to the fifth column.
+
+	This is the answer a device wants and could not get: the walker could
+	say where every member is and what it holds, and not whether the message
+	is a legal instance of the schema.
+
+	Whole or nothing, which is the part that needed building rather than
+	porting. Every other probe renders per member and skips what it cannot
+	do; `validate` is one verdict about a whole struct, so a partial one
+	reports OK for the rules it happened to be given. The image carries a
+	bit per struct saying it holds every check, and a kind of check this
+	build does not render refuses the *struct* rather than skipping the
+	member.
+
+	The messages cover each verdict for each shape, because a validator that
+	has only seen well-formed input has not been asked anything -- and the
+	short frames are there for the one structural difference between the two
+	validators, which `python_verdict` names.
+	"""
+	for label, (body, cases) in VALIDATED.items():
+		blob, image = _packed_named(f"target buffer;\nendian big;\n\n{body}\n")
+		shape = [image.struct_name(i)
+		         for i in range(len(image.structs))].index("hdr")
+
+		for hexed, expected in cases:
+			message = bytes.fromhex(hexed)
+			assert c_verdict(tmp_path, blob, message, shape) \
+				== python_verdict(blob, message, shape), f"{label}: {hexed}"
+			assert c_verdict(tmp_path, blob, message, shape) == expected, \
+				f"{label}: {hexed}"
+
+
+def _packed_named(text: str) -> tuple[bytes, Image]:
+	"""An image with its metadata tail, so a struct can be found by name."""
+	source   = parse(Source("named.situ", text))
+	resolved = resolve(source, solve(source))
+	blob, _  = pack(source, resolved, metadata=True)
+	return blob, load(blob)
 
 
 #: Deliberately without `[equalize]`. Padding every arm to the largest is

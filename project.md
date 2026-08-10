@@ -10949,6 +10949,46 @@ everything after a variant -- and it would also hide a walk that picked the
 wrong arm, because every answer would then be right by construction. A test
 whose construct is uniform cannot tell a correct selection from any other.
 
+### 26.111 `validate` in C, and the difference between two refusals
+
+The walker could say where every member of a message is and what it holds,
+and not whether the message was a legal instance of the schema. Anything
+asking that still needed Python -- which is the dependency 0026 exists to
+remove, so this is the row that changes what the C walker *is* rather than
+what it can reach.
+
+**Whole or nothing had to be built rather than ported.** Every other probe
+renders per member and skips what it cannot do, each being a separate line.
+`validate` is one verdict about a whole struct, so a partial one reports OK
+for the rules it happened to be given -- the one wrong answer that cannot be
+told from a right one. Two refusals of the *struct* follow: the image's
+per-struct bit saying it carries every check, and any kind of check this
+build does not render.
+
+**The return value and the verdict are different questions**, and keeping
+them apart is the whole of the API's shape here. The verdict is about the
+message: OK, BOUNDS, CONSTRAINT. The return is about the walker: can it
+answer at all. Folding them together is exactly how "this build cannot say"
+becomes "well-formed", and it is the same distinction 26.108 found in the
+signed flag -- a caller cannot ask what the callee does not say.
+
+Two things the differential settled while it was being written. A **nested
+struct** is `validate` called through with the inner verdict returned as it
+stands rather than folded into CONSTRAINT; the first version refused nested
+structs wholesale, which would have left most real schemas unanswerable for
+a reason that was mine rather than the format's. And **the frame check
+belongs at the top** -- section 20.2's check, which the Python walk does
+when it acquires a view. Without it the two agreed about every well-formed
+message and disagreed about short ones, C answering for the members that
+happened to fit. That the disagreement appeared only on malformed input is
+the point: the shapes a validator exists for are the ones a happy-path test
+never reaches.
+
+Sixteen cases across four shapes -- constraints, enum membership, a nested
+struct's own rules, a text number's range -- each with a well-formed
+message, a rule broken, and a frame too short. `[since]` members, the span
+checks and gated regions are refused by name and are what remains.
+
 ### Invariants to hold across all phases
 
 1. The propagation table (11.3) is data, not code. Adding a construct means
@@ -12163,6 +12203,14 @@ whose construct is uniform cannot tell a correct selection from any other.
    or the largest would pass unnoticed. Where a check is about *which* of
    several things was chosen, the things have to differ in whatever the check
    measures.
+
+144. **"I cannot answer" and "the answer is no" are different returns.**
+   `situ_walk_validate` reports the verdict about the message through an
+   out-parameter and its own ability to answer through the return, because
+   one value carrying both is how "this build does not render that check"
+   becomes "well-formed". The same shape as the signed flag one commit
+   earlier: what a callee withholds, a caller invents. Where a check may be
+   unavailable rather than merely unsatisfied, say which.
 
 ---
 

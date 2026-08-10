@@ -75,6 +75,19 @@ typedef struct {
 	const uint8_t *arms;
 	uint32_t       arm_count;
 	uint32_t       arm_stride;
+
+	/* One row per check, several per member, contiguous and in the order
+	 * they are asked -- which is part of the schema's meaning rather than
+	 * an implementation detail, the first failure being the answer. */
+	const uint8_t *constraints;
+	uint32_t       constraint_count;
+	uint32_t       constraint_stride;
+
+	/* One row per enum member: the values an enum admits, for the
+	 * membership check a `default = error` enum makes. */
+	const uint8_t *enum_values;
+	uint32_t       enum_value_count;
+	uint32_t       enum_value_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */
@@ -221,6 +234,26 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
 	                              const uint8_t *message, uint32_t len,
 	                              uint32_t shape, uint32_t index,
 	                              const uint8_t **out, uint32_t *count);
+
+/* Is this message a well-formed instance of the struct?
+ *
+ * `*verdict` is SITU_WALK_OK, SITU_WALK_BOUNDS for a frame that does not
+ * hold what the message claims, or SITU_WALK_CONSTRAINT for a rule it
+ * breaks. Which of those comes first is part of the schema's meaning, not an
+ * implementation detail: the first failure is the answer, so the order the
+ * image lists the checks in is the order they are asked.
+ *
+ * The return value is a different question from the verdict. It is
+ * SITU_WALK_UNSUPPORTED where this build cannot answer *at all* -- because
+ * the image says it does not carry every check for this struct, or because
+ * it carries a kind of check this build does not render. Whole or nothing:
+ * `validate` is one answer about a whole struct, so a partial one reports OK
+ * where the schema refuses, which is the one shape of wrong answer that
+ * cannot be told from a right one.
+ */
+situ_walk_err situ_walk_validate(const situ_walk_image *image,
+	                                 const uint8_t *message, uint32_t len,
+	                                 uint32_t shape, situ_walk_err *verdict);
 
 /* Evaluate a section 10 program. `field` reads a placement's value for the
  * expression, and is the only thing tying this to a message. */

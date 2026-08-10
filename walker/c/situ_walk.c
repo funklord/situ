@@ -9,6 +9,8 @@
 #define TAG_ARMS       5u
 #define TAG_DELIMITERS 6u
 #define TAG_VARINTS    9u
+#define TAG_CONSTRAINTS 15u
+#define TAG_ENUM_VALUES 16u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
@@ -23,6 +25,8 @@
 #define VARINT_READS    11u
 #define DELIMITER_READS 32u
 #define ARM_READS       21u
+#define CONSTRAINT_READS 13u
+#define ENUM_VALUE_READS 12u
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -147,6 +151,20 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->arms       = image + offset;
 			out->arm_count  = items;
 			out->arm_stride = stride;
+		} else if (kind == TAG_CONSTRAINTS) {
+			if (stride < CONSTRAINT_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->constraints       = image + offset;
+			out->constraint_count  = items;
+			out->constraint_stride = stride;
+		} else if (kind == TAG_ENUM_VALUES) {
+			if (stride < ENUM_VALUE_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->enum_values       = image + offset;
+			out->enum_value_count  = items;
+			out->enum_value_stride = stride;
 		} else if (kind == TAG_DELIMITERS) {
 			if (stride < DELIMITER_READS) {
 				return SITU_WALK_MALFORMED;
@@ -1249,6 +1267,314 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 	}
 
 	return read_at(message, len, &held, start + into, held.element_bits, out);
+}
+
+/* -- validate ------------------------------------------------------------ */
+
+/* `image_check`: what one constraint row asks. The numbering is the packer's
+ * and the order rows appear in is the order they are asked, the first
+ * failure being the answer. */
+#define CHECK_MUST_EQ        0u
+#define CHECK_MINIMUM        1u
+#define CHECK_MAXIMUM        2u
+#define CHECK_MUST_BE_ZERO   3u
+#define CHECK_MUST_BE_ONE    4u
+#define CHECK_ENUM_KNOWN     5u
+#define CHECK_FITS_FRAME     6u
+#define CHECK_DIGITS_VALID   9u
+#define CHECK_DIGITS_MINIMAL 10u
+
+/* `image_struct.struct_flags` bit 0: whether the image carries *every* check
+ * this struct needs. The packer sets it, and a walker that ignored it would
+ * report OK for a struct whose rules it was never given. */
+#define STRUCT_VALIDATABLE 0x01u
+
+/* The first constraint row for a member, or NULL. Contiguous, like the arms
+ * table and for the same reason. */
+static const uint8_t *check_rows(const situ_walk_image *image, uint32_t index,
+                                 uint32_t *count)
+{
+	const uint8_t *found = table_row(image->constraints,
+	                                 image->constraint_count,
+	                                 image->constraint_stride, index);
+	if (found == NULL) {
+		*count = 0u;
+		return NULL;
+	}
+
+	while (found > image->constraints
+	                && u32_at(found - image->constraint_stride) == index) {
+		found -= image->constraint_stride;
+	}
+
+	const uint8_t *last = image->constraints
+	                    + image->constraint_count * image->constraint_stride;
+	uint32_t       n    = 0u;
+	while (found + n * image->constraint_stride < last
+	                && u32_at(found + n * image->constraint_stride) == index) {
+		n += 1u;
+	}
+
+	*count = n;
+	return found;
+}
+
+static int enum_admits(const situ_walk_image *image, uint32_t which,
+                       int64_t value)
+{
+	for (uint32_t i = 0u; i < image->enum_value_count; i++) {
+		const uint8_t *row = image->enum_values + i * image->enum_value_stride;
+		if (u32_at(row) == which && i64_at(row + 4) == value) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static situ_walk_err validate_deep(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t depth,
+                                   situ_walk_err *verdict);
+
+situ_walk_err situ_walk_validate(const situ_walk_image *image,
+                                 const uint8_t *message, uint32_t len,
+                                 uint32_t shape, situ_walk_err *verdict)
+{
+	return validate_deep(image, message, len, shape, 0u, verdict);
+}
+
+static situ_walk_err validate_deep(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t depth,
+                                   situ_walk_err *verdict)
+{
+	if (shape >= image->struct_count) {
+		return SITU_WALK_BOUNDS;
+	}
+	if (depth >= WALK_DEPTH_MAX) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	/* The image says whether it carries every check for this struct. Where
+	 * it does not, there is no partial answer to give: `validate` is one
+	 * verdict about a whole struct, and a partial one reports OK for the
+	 * rules it happened to be given. */
+	const uint8_t *entry = image->structs + shape * image->struct_stride;
+	if ((u32_at(entry + 12) & STRUCT_VALIDATABLE) == 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	/* The frame has to hold the struct's own minimum before anything in it
+	 * is placed -- section 20.2's check, the one every constant-offset
+	 * access below it depends on, and what the Python walk does when it
+	 * acquires a view. Without it the two agreed about every well-formed
+	 * message and disagreed about short ones, C answering for the members
+	 * that happened to fit. */
+	const uint32_t fixed = u32_at(entry + 8);
+	if (fixed != SITU_WALK_NONE && len < (fixed + 7u) / 8u) {
+		*verdict = SITU_WALK_BOUNDS;
+		return SITU_WALK_OK;
+	}
+
+	uint32_t first = 0u;
+	uint32_t count = 0u;
+	situ_walk_err err = situ_walk_members(image, shape, &first, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	for (uint32_t i = 0u; i < count; i++) {
+		const uint32_t index = first + i;
+		situ_walk_placement held;
+
+		err = situ_walk_placement_at(image, index, &held);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+
+		uint32_t rows = 0u;
+		const uint8_t *checks = check_rows(image, index, &rows);
+
+		/* A kind of check this build does not render makes the whole
+		 * struct unanswerable rather than the member unchecked. Skipping
+		 * one would answer OK for a message that breaks it, which is the
+		 * one wrong answer indistinguishable from a right one. */
+		for (uint32_t c = 0u; c < rows; c++) {
+			const uint8_t kind = checks[c * image->constraint_stride + 12];
+			if (kind != CHECK_MUST_EQ && kind != CHECK_MINIMUM
+			                && kind != CHECK_MAXIMUM
+			                && kind != CHECK_MUST_BE_ZERO
+			                && kind != CHECK_MUST_BE_ONE
+			                && kind != CHECK_ENUM_KNOWN
+			                && kind != CHECK_FITS_FRAME
+			                && kind != CHECK_DIGITS_VALID
+			                && kind != CHECK_DIGITS_MINIMAL) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+		}
+
+		/* A `[since]` member is there only in a message whose own version
+		 * reaches it, which is a rule this build does not have -- and a
+		 * field that is not there is not a field that is wrong, so guessing
+		 * would answer for bytes the message never claimed to carry. */
+		if (u16_at(image->placements + index * image->placement_stride + 44)
+		                != 0u) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+
+		/* One nested member, not a run of them and not a variant: a run gets
+		 * the repeated check rather than the nested one, and recursing into
+		 * it would validate element zero as though it were the member. */
+		uint32_t on_arms = 0u;
+		const int nested = (held.type_struct != SITU_WALK_NONE
+		                    && held.repeat_code == SITU_WALK_NONE
+		                    && held.array_count == SITU_WALK_NONE
+		                    && held.size_code == SITU_WALK_NONE
+		                    && arm_rows(image, index, &on_arms) == NULL);
+
+		/* Every member is *placed*, not only the constrained ones: a struct
+		 * whose later members the frame does not reach is BOUNDS before any
+		 * constraint is asked. */
+		uint32_t at   = 0u;
+		uint32_t wide = 0u;
+		err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK) {
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		err = situ_walk_size_bits(image, message, len, shape, index, &wide);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK) {
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		if (at / 8u > len || (wide + 7u) / 8u > len - at / 8u) {
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+
+		/* A nested member is `validate` called through, and its verdict is
+		 * returned as it stands rather than folded into CONSTRAINT: the
+		 * inner code is what the generated C propagates. Without this the
+		 * enclosing struct validated nothing at all -- a header whose own
+		 * version field was wrong parsed clean. */
+		if (nested) {
+			situ_walk_err inner = SITU_WALK_OK;
+			err = validate_deep(image, message + at / 8u, len - at / 8u,
+			                    held.type_struct, depth + 1u, &inner);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if (inner != SITU_WALK_OK) {
+				*verdict = inner;
+				return SITU_WALK_OK;
+			}
+			continue;
+		}
+
+		for (uint32_t c = 0u; c < rows; c++) {
+			const uint8_t *row   = checks + c * image->constraint_stride;
+			const int64_t  want  = i64_at(row + 4);
+			const uint8_t  kind  = row[12];
+
+			if (kind == CHECK_FITS_FRAME) {
+				/* The accessor clamps; this is where a message declaring
+				 * more than it carries is called malformed, and it answers
+				 * BOUNDS rather than CONSTRAINT. */
+				uint32_t held_bits = 0u;
+				err = situ_walk_size_bits(image, message, len, shape, index,
+				                          &held_bits);
+				if (err != SITU_WALK_OK) {
+					return err;
+				}
+				if ((held_bits + 7u) / 8u > len - at / 8u) {
+					*verdict = SITU_WALK_BOUNDS;
+					return SITU_WALK_OK;
+				}
+				continue;
+			}
+
+			uint64_t value = 0u;
+			err = situ_walk_read(image, message, len, shape, index, &value);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				*verdict = (kind == CHECK_DIGITS_VALID
+				            || kind == CHECK_DIGITS_MINIMAL)
+				         ? SITU_WALK_CONSTRAINT : SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+
+			int broken = 0;
+			switch (kind) {
+			case CHECK_MUST_EQ:
+				broken = ((int64_t)value != want);
+				break;
+			case CHECK_MINIMUM:
+				broken = ((int64_t)value < want);
+				break;
+			case CHECK_MAXIMUM:
+				broken = ((int64_t)value > want);
+				break;
+			case CHECK_MUST_BE_ZERO:
+				broken = (value != 0u);
+				break;
+			case CHECK_MUST_BE_ONE:
+				broken = ((int64_t)value != want);
+				break;
+			case CHECK_ENUM_KNOWN:
+				broken = !enum_admits(image, (uint32_t)want, (int64_t)value);
+				break;
+			case CHECK_DIGITS_VALID:
+				/* The read has already parsed the digits; what is left is
+				 * the declared domain the row carries. */
+				broken = (value > (uint64_t)want);
+				break;
+			case CHECK_DIGITS_MINIMAL:
+				broken = 0;	/* the spelling, checked below */
+				break;
+			default:
+				return SITU_WALK_UNSUPPORTED;
+			}
+
+			if (kind == CHECK_DIGITS_MINIMAL) {
+				const uint8_t *digits = NULL;
+				uint32_t       count_of = 0u;
+				err = situ_walk_bytes(image, message, len, shape, index,
+				                      &digits, &count_of);
+				if (err == SITU_WALK_UNSUPPORTED) {
+					return err;
+				}
+				if (err != SITU_WALK_OK) {
+					*verdict = SITU_WALK_CONSTRAINT;
+					return SITU_WALK_OK;
+				}
+				if (count_of == 0u
+				                || (count_of > 1u && digits[0] == (uint8_t)'0')) {
+					broken = 1;
+				}
+				for (uint32_t d = 0u; want > 10 && d < count_of; d++) {
+					if (digits[d] >= (uint8_t)'A' && digits[d] <= (uint8_t)'F') {
+						broken = 1;
+					}
+				}
+			}
+
+			if (broken) {
+				*verdict = SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+		}
+	}
+
+	*verdict = SITU_WALK_OK;
+	return SITU_WALK_OK;
 }
 
 situ_walk_err situ_walk_bytes(const situ_walk_image *image,
