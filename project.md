@@ -4009,6 +4009,20 @@ The version is read from `situc/__init__.py`, which is also what `situc
 `tests/unit/test_packaging.py` holds the control files to the tree without
 building anything; `lintian` is clean on both packages.
 
+**`DEB_MAINTAINER` defaults to a placeholder, and a real build must pass
+one.** The default is `situ maintainers <noreply@example.invalid>`, which
+keeps the repository from carrying a maintainer identity nobody agreed to:
+
+```sh
+make deb DEB_MAINTAINER='Nabeel Sowan <nabeel@vibes.se>'
+```
+
+A package built for anyone else to install and left with the placeholder is
+embarrassing rather than merely wrong, so set it whenever the output leaves
+this machine -- and read the licence paragraph below first, because until
+that is settled the packages are not distributable whatever the control
+file says.
+
 **There is no licence in this tree**, and `packaging/copyright` says so rather
 than choosing one: no `LICENSE` file, no licence field in `pyproject.toml`, and
 the default in that situation is that no rights are granted. The packages are
