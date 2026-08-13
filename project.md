@@ -3652,6 +3652,43 @@ packet bytes through the Wireshark stub in `tests/lua/dissect.lua`, which
 reports what each dissector showed and where. And the aarch64 big-endian target
 is compile-only; only the little-endian one runs under emulation.
 
+**A green run reports what was installed as much as what was checked.** The
+gates shrink quietly as tooling goes missing, and every intermediate state
+prints the same `rc=0` as the full one. Measured on one machine as packages
+arrived, with no line of the tree changing between the first figure and the
+last: the suite went from 3354 passed and 130 skipped to 3449 and 36,
+`cross-test` went from printing `skipped` for both aarch64 legs to running
+them, and `make typecheck` went from ten errors to clean. So the number worth
+reading out of a run is the skip count, not the exit status.
+
+**The gates disagree about what an absent tool means, and that is unsettled.**
+`make test` skips and says which tool was missing, which is 26.61's rule
+working. `cross-test` prints `skipped (...)` and exits zero, the same choice.
+`make typecheck` *fails*: mypy cannot resolve `pymodbus` or `paho.mqtt`, so ten
+errors land in `tests/unit/oracles.py` -- two of them the `Unused "type:
+ignore"` that absent stubs produce, since an unresolved module becomes `Any` and
+the ignores it needed look redundant. Whether that asymmetry is right is a real
+question and is not answered here. Against it: the suite calls those libraries
+optional and the typecheck calls them required, for the same imports in the same
+file. For it: mypy has no way to say "this import is optional" that does not
+also silence genuine errors in the code around it, and a gate that refuses is at
+least not pretending.
+
+**What a fully non-vacuous run needs**, beyond a C compiler and Python: lua5.4
+for the dissectors, pymodbus and paho-mqtt as importable libraries, tshark,
+protoc and sqlite3 as commands, aarch64-linux-gnu-gcc and qemu-aarch64 for the
+two cross legs, and clang with libFuzzer for `make fuzz`. A run without them is
+still worth having. It is just smaller than its exit status suggests, and
+nothing in it says so except the skips.
+
+**The failure that produced this note skipped nowhere it should have.**
+`test_a_dns_name_is_walked_label_by_label` reached `dissect` with no `skipif`
+where its eight siblings carried one, so a machine without Lua got a red result
+about the machine wearing the costume of a defect in the dissector. The guard
+and the thing it guards are maintained by hand and nothing checks that they
+agree -- which is the same shape as a schema left out of the generated
+Makefile, one row above.
+
 
 **Performance is measured and never asserted.** `tools/bench.py` builds a
 driver in each backend and reports what the offset cache of 26.30 costs and
