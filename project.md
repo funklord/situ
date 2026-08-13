@@ -3661,18 +3661,28 @@ last: the suite went from 3354 passed and 130 skipped to 3449 and 36,
 them, and `make typecheck` went from ten errors to clean. So the number worth
 reading out of a run is the skip count, not the exit status.
 
-**The gates disagree about what an absent tool means, and that is unsettled.**
-`make test` skips and says which tool was missing, which is 26.61's rule
-working. `cross-test` prints `skipped (...)` and exits zero, the same choice.
-`make typecheck` *fails*: mypy cannot resolve `pymodbus` or `paho.mqtt`, so ten
-errors land in `tests/unit/oracles.py` -- two of them the `Unused "type:
-ignore"` that absent stubs produce, since an unresolved module becomes `Any` and
-the ignores it needed look redundant. Whether that asymmetry is right is a real
-question and is not answered here. Against it: the suite calls those libraries
-optional and the typecheck calls them required, for the same imports in the same
-file. For it: mypy has no way to say "this import is optional" that does not
-also silence genuine errors in the code around it, and a gate that refuses is at
-least not pretending.
+**The gates disagree about what an absent tool means, and the disagreement is
+right.** `make test` skips and says which tool was missing, which is 26.61's
+rule working; `cross-test` prints `skipped (...)` and exits zero, the same
+choice. `make typecheck` refuses to run at all. That is not the inconsistency
+it looks like. A skipped test still reports honestly on what it did not do,
+whereas an unresolvable import makes the module `Any` -- so mypy would check
+`tests/unit/oracles.py` against nothing and call it clean, which is a vacuous
+pass rather than a declined one, and the one failure mode this project treats
+as worse than a red result.
+
+**Configuring around it was measured rather than argued.**
+`ignore_missing_imports` for the two modules silences the import errors and
+then reports the `type: ignore` comments they needed as unused, an `Any` module
+raising no `attr-defined` for them to suppress: a machine without the libraries
+still fails, with two errors instead of eight. Silencing those as well needs
+`warn_unused_ignores` off for the file, which withdraws a real check on every
+machine, including the ones that have the libraries, to accommodate the ones
+that do not. Excluding the file was rejected for the same reason as the `Any`
+-- it reports success over something nobody checked. So the requirement stays
+and only the diagnosis changed: `typecheck` now names the module it needs and
+points at the different answer `make test` gives, instead of emitting ten mypy
+errors that read as defects in the code.
 
 **What a fully non-vacuous run needs**, beyond a C compiler and Python: lua5.4
 for the dissectors, pymodbus and paho-mqtt as importable libraries, tshark,

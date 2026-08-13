@@ -109,7 +109,39 @@ test-py: runtime
 #
 # `editor` is named on arrival rather than after the same lesson a third
 # time (0034).
+#
+# The oracle libraries are a hard prerequisite here, which is not the
+# accommodation the suite makes: `test` skips an oracle whose tool is absent
+# and prints that it did, while this refuses to run at all. That asymmetry is
+# deliberate. A skipped test still reports honestly on what it did not do,
+# whereas an unresolvable import makes the module `Any` -- so mypy would check
+# `oracles.py` against nothing and say it was fine, which is the vacuous pass
+# in its purest form.
+#
+# Configuring around it was measured rather than assumed. `ignore_missing_imports`
+# for the two modules silences the import errors and leaves the `type: ignore`
+# comments they needed reported as unused, because an `Any` module raises no
+# `attr-defined` for them to suppress -- so a machine without the libraries
+# still fails, with 2 errors instead of 8. Silencing those too needs
+# `warn_unused_ignores` off for the file, which withdraws a real check on every
+# machine, including the ones that have the libraries, to accommodate the ones
+# that do not. Excluding `oracles.py` was rejected for the same reason as the
+# `Any`: it reports success over a file nobody checked.
+#
+# So the requirement stays and only the diagnosis improves. Ten mypy errors
+# about missing stubs read as defects in the code; a named prerequisite reads
+# as what it is.
+TYPECHECK_MODULES := pymodbus paho.mqtt.client
+
 typecheck:
+	@for m in $(TYPECHECK_MODULES); do \
+		$(PYTHON) -c "import $$m" >/dev/null 2>&1 || { \
+			echo "typecheck: needs the python module '$$m', which the" >&2; \
+			echo "typecheck: oracles import and mypy must resolve to check" >&2; \
+			echo "typecheck: them. Install: python3-pymodbus python3-paho-mqtt" >&2; \
+			echo "typecheck: (\`make test\` skips these oracles instead; 22)" >&2; \
+			exit 1; }; \
+	done
 	$(PYTHON) -m mypy situc walker editor tools tests
 	$(PYTHON) -m mypy --strict runtime/python
 
