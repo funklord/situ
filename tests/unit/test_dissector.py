@@ -423,6 +423,7 @@ def test_a_condition_keeps_its_logical_operators() -> None:
 	assert " and " in code(text) and "&&" not in code(text)
 
 
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
 def test_a_dns_name_is_walked_label_by_label(tmp_path: Path) -> None:
 	"""`www.example.com`, then qtype and qclass.
 
@@ -434,7 +435,7 @@ def test_a_dns_name_is_walked_label_by_label(tmp_path: Path) -> None:
 	runs through `a and b or c` with `b` zero -- the idiom section 22 named as
 	the one semantic dependency riding on Lua's truthiness. Executed, it
 	advances by one byte and the question's fields land at 17 and 19, which is
-    where the layout puts them."""
+	where the layout puts them."""
 	consumed, rows = dissect(
 		tmp_path, ROOT / "examples" / "dnsname" / "dnsname.situ", "question",
 		bytes.fromhex("03777777076578616d706c6503636f6d0000010001"))
