@@ -25,6 +25,7 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.names import ident, macro
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.traverse import frameable
 
 __all__ = ["framed_structs", "generate"]
 
@@ -35,11 +36,20 @@ def framed_structs(resolved: ResolvedSchema) -> list[ResolvedStruct]:
 	A register is a bus transaction rather than bytes off a wire, and a
 	zero-byte struct would frame an unbounded number of empty messages out of
 	an empty stream.
+
+	**And a struct has to be frameable**, which is a different question from
+	whether it is a struct: `traverse.frameable` asks whether a whole one can
+	be recognised in a prefix of a stream, and the reader is built out of the
+	`_required` that only a frameable struct has. Emitting one for the rest
+	produced a reader calling a function nobody declared -- which compiled
+	nowhere, and was noticed nowhere either, because until the checks suite
+	learned to include this header nothing ever compiled it.
 	"""
 	return [struct for struct in resolved.structs.values()
 	        if struct.layout.register is None
 	        and not (struct.layout.is_fixed_size
-	                 and struct.layout.size_bytes == 0)]
+	                 and struct.layout.size_bytes == 0)
+	        and frameable(resolved.structs, struct)]
 
 
 def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
@@ -126,7 +136,9 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		"\t}",
 		"",
 		"\tsitu_msg_init(msg, reader->buf, need);",
-		f"\terr = {view}(msg, 0u, out);",
+		f"\terr = {view}(msg, 0u, out);"
+		if struct.layout.is_fixed_size else
+		f"\terr = {view}(msg, 0u, need, out);",
 		"\tif (err != SITU_OK) {",
 		"\t\treturn err;",
 		"\t}",

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from situc.codegen.c import checks, generate, relate
+from situc.codegen.c import checks, frame, generate, relate
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
@@ -78,7 +78,13 @@ def build(tmp_path: Path, body: str, preamble: str = PREAMBLE,
 	# lets a relation check be held to the same standard as an accessor one:
 	# break the predicate, and the check has to notice.
 	sources = [tmp_path / "unit.c", tmp_path / "unit_checks.c"]
-	for name, text in relate.generate(schema, resolved, "unit").items():
+	emitted = dict(relate.generate(schema, resolved, "unit"))
+	# Rung 4 is header-only, so it adds nothing to link -- but the suite
+	# includes it, so a helper that did not write it would fail every test in
+	# this file at the preprocessor rather than at the thing under test.
+	emitted.update(frame.generate(schema, resolved, "unit"))
+
+	for name, text in emitted.items():
 		if corrupt is not None and not applied and corrupt[0] in text:
 			text    = text.replace(corrupt[0], corrupt[1], 1)
 			applied = True
@@ -614,3 +620,27 @@ def test_a_predicate_that_accepts_everything_is_caught(tmp_path: Path) -> None:
 
 	assert result.returncode != 0, "a predicate accepting everything went unnoticed"
 	assert "check_relation_response_to_refuses_a_mismatched_key" in result.stdout
+
+
+# -- framing -----------------------------------------------------------------
+
+
+def test_a_framed_struct_gets_a_whole_and_a_partial_case() -> None:
+	"""A reader announcing a message on every push would satisfy the first
+	alone; one that never announced anything would satisfy the second."""
+	emitted = emit(SIMPLE)
+
+	assert "check_s_reader_reassembles_across_every_boundary" in emitted
+	assert "check_s_reader_yields_nothing_from_a_partial_message" in emitted
+	assert "SITU_ERR_TRUNCATED" in emitted
+	assert '#include "unit_frame.h"' in emitted
+
+
+def test_the_reassembly_loop_is_bounded_by_the_answer() -> None:
+	"""A reader that answered SITU_OK for ever would spin here, and a test that
+	hangs is worse than one that fails: CI reports a timeout with no name on
+	it. The third message is impossible, so seeing it is the failure."""
+	emitted = emit(SIMPLE)
+
+	assert "while (seen <= 2u" in emitted
+	assert "assert_int_equal(seen, 2u);" in emitted

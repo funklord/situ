@@ -1528,6 +1528,33 @@ def test_python_imposes_no_capacity() -> None:
 	assert "cap" not in module
 
 
+#: A struct a stream cannot be framed into: where one ends is decided by a
+#: quoted delimiter and a `remaining` tail, so no prefix of a stream says a
+#: whole one has arrived.
+UNFRAMEABLE = """struct row {
+	u8 field[] until "," [quoted = "\\""];
+	u8 rest[remaining];
+}
+"""
+
+
+def test_a_struct_that_cannot_be_framed_gets_no_reader() -> None:
+	"""`framed_structs` and `frameable` used to disagree, and the reader was
+	built out of a `_required` only a frameable struct has -- so the header
+	called a function nobody declared. It compiled nowhere and was caught
+	nowhere, because until the checks suite included this header nothing in
+	the repository ever compiled it. Four structs in `tests/schemas/edges.situ`
+	were in that state."""
+	schema, resolved = analysed(UNFRAMEABLE)
+
+	framed = [struct.name for struct in frame.framed_structs(resolved)]
+	assert "row" not in framed, "a struct no prefix can delimit got a reader"
+	assert "frame" in framed, "the frameable structs must still get one"
+
+	header = frame.generate(schema, resolved, "t")["t_frame.h"]
+	assert "situ_row_required" not in header
+
+
 def test_every_backend_frames_the_same_structs() -> None:
 	"""The set is a property of the schema, so it cannot differ per language
 	even though the readers do."""

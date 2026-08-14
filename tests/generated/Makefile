@@ -145,6 +145,13 @@ all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
 generate: $(GEN_HEADERS)
 
 # One rule per schema, because they live in different directories and a single
+# Built at `--layer frame` rather than the default: a rung emits every file
+# the rung below emits, byte-identical, plus new ones, so the accessors these
+# suites have always checked are unchanged and `<name>_frame.h` arrives beside
+# them for the ones that now check the reader. The header is a side effect of
+# this recipe rather than a target of its own, which is what keeps make from
+# treating it as an intermediate and deleting it between runs.
+#
 # pattern rule cannot serve both. situc runs from the repository root so
 # `python3 -m situc.cli` finds the package; GEN_DIR may be absolute (parent) or
 # relative (standalone), so it is resolved before the directory change.
@@ -152,7 +159,8 @@ define situ_generate
 $$(GEN_DIR)/$(notdir $(basename $(1))).h $$(GEN_DIR)/$(notdir $(basename $(1))).c: \
 		$$(REPO_ROOT)/$(1) $$(SITUC_SOURCES)
 	@mkdir -p '$$(GEN_DIR)'
-	cd '$$(REPO_ROOT)' && $$(SITUC) build '$(1)' --out '$$(abspath $$(GEN_DIR))'
+	cd '$$(REPO_ROOT)' && $$(SITUC) build '$(1)' --layer frame \
+		--out '$$(abspath $$(GEN_DIR))'
 endef
 
 REPO_ROOT	:= $(abspath ../..)

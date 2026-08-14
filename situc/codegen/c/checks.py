@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
+from situc.codegen.c import frame
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
@@ -78,6 +79,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 			_struct_checks(suite, schema, resolved, struct, prefix)
 
 	_relation_checks(suite, schema, resolved, basename, prefix)
+	_frame_checks(suite, resolved, basename, prefix)
 
 	return _render(suite, basename)
 
@@ -229,6 +231,109 @@ def _relation_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 
 	if emitted:
 		suite.includes.append(f"{basename}_relate.h")
+
+
+# ---------------------------------------------------------------------------
+# Framing
+# ---------------------------------------------------------------------------
+
+
+def _frame_checks(suite: Suite, resolved: ResolvedSchema, basename: str,
+		prefix: str) -> None:
+	"""Rung 4's reader, fed the way a stream actually arrives.
+
+	The permission this rung buys is holding bytes between calls, so the
+	property worth checking is that where the bytes are cut does not change
+	what comes out. Pushing one byte at a time cuts the stream at every
+	boundary there is, which is the strongest version of that for the cost of
+	a loop.
+
+	The pair discriminates for the same reason as the relation one. A reader
+	that announced a message on every push would satisfy "two messages arrive"
+	and fail on a stream a byte short; one that never announced anything would
+	pass the short case and fail the whole one.
+	"""
+	emitted = False
+
+	for struct in frame.framed_structs(resolved):
+		name   = struct.name
+		layout = struct.layout
+
+		if not (layout.is_byte_sized and layout.is_fixed_size):
+			suite.skip(f"framing {name}", "has no fixed extent, so a stream of "
+			           "whole messages cannot be built out of zeroes")
+			continue
+
+		extent = _buffer_size(layout)
+		if extent is None or extent < 2:
+			suite.skip(f"framing {name}", "is under two bytes, so there is no "
+			           "partial message C can declare a buffer for")
+			continue
+
+		reader = ident(prefix, name, "reader")
+		whole  = extent * 2
+
+		suite.add(
+			f"check_{c_name(name)}_reader_reassembles_across_every_boundary",
+			[
+				f"\tuint8_t stream[{whole}u];",
+				f"\tuint8_t back[{whole}u];",
+				f"\t{reader}_t reader;",
+				"\tsitu_msg_t msg;",
+				"\tsitu_view_t view;",
+				"\tuint32_t seen = 0u;",
+				"\tuint32_t i;",
+				"",
+				"\tmemset(stream, 0, sizeof stream);",
+				f"\t{reader}_init(&reader, back, (uint32_t)sizeof back);",
+				"",
+				"\tfor (i = 0u; i < (uint32_t)sizeof stream; i++) {",
+				f"\t\tassert_int_equal({reader}_push(&reader, &stream[i], 1u),",
+				"\t\t                 SITU_OK);",
+				"\t\t/* Bounded by the answer, not by the reader. A reader that",
+				"\t\t * announced a message on every call would spin here for",
+				"\t\t * ever, and a test that hangs is worse than one that",
+				"\t\t * fails: the third message is impossible, so seeing it is",
+				"\t\t * the failure. */",
+				f"\t\twhile (seen <= 2u",
+				f"\t\t       && {reader}_next(&reader, &msg, &view) == SITU_OK) {{",
+				"\t\t\tseen++;",
+				f"\t\t\t{reader}_advance(&reader);",
+				"\t\t}",
+				"\t}",
+				"",
+				"\tassert_int_equal(seen, 2u);",
+			],
+			[f"/* Two whole {name} messages pushed one byte at a time, which",
+			 " * cuts the stream at every boundary it has. Exactly two must",
+			 " * come out: where the bytes were split is not allowed to change",
+			 " * what the reader reassembles. */"])
+
+		suite.add(
+			f"check_{c_name(name)}_reader_yields_nothing_from_a_partial_message",
+			[
+				f"\tuint8_t stream[{extent - 1}u];",
+				f"\tuint8_t back[{extent}u];",
+				f"\t{reader}_t reader;",
+				"\tsitu_msg_t msg;",
+				"\tsitu_view_t view;",
+				"",
+				"\tmemset(stream, 0, sizeof stream);",
+				f"\t{reader}_init(&reader, back, (uint32_t)sizeof back);",
+				f"\tassert_int_equal({reader}_push(&reader, stream,",
+				"\t                 (uint32_t)sizeof stream), SITU_OK);",
+				f"\tassert_int_equal({reader}_next(&reader, &msg, &view),",
+				"\t                 SITU_ERR_TRUNCATED);",
+			],
+			[f"/* One byte short of a whole {name}. A reader that handed this",
+			 " * out would be handing out a message that has not arrived, and",
+			 " * without this case a reader announcing one on every push would",
+			 " * still satisfy the check above. */"])
+
+		emitted = True
+
+	if emitted:
+		suite.includes.append(f"{basename}_frame.h")
 
 
 # ---------------------------------------------------------------------------
