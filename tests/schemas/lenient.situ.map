@@ -1,0 +1,17 @@
+# situ capability map v1
+# schema: lenient.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+struct relaxed size=5 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  relaxed.version                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  relaxed.<reserved0>                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  relaxed.length                         offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord canonical=NonCanonical
+  relaxed.urgent                         offset=AbsoluteStatic(0x04) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  relaxed.final                          offset=AbsoluteStatic(0x04:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  relaxed.<reserved1>                    offset=AbsoluteStatic(0x04:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic canonical=NonCanonical

@@ -1986,7 +1986,21 @@ class Solver:
 			nested = self.layout_of(type_ref.name)
 			return Interval(nested.size_bits, nested.size_max_bits)
 
-		raise error(f"unknown type `{type_ref.name}`", type_ref.span, label="not declared")
+		# An import in the file changes what this error means. `wellformed`
+		# already steps aside for exactly this case -- a type may legitimately
+		# live in the imported file -- and then the solver, which has to have a
+		# layout, fails here instead. Without the note the author is told their
+		# type does not exist, which is not what went wrong: the type may be
+		# perfectly good and the resolution that would find it is not built.
+		notes = None
+		if any(isinstance(decl, ast.ImportDirective) for decl in self.schema.decls):
+			notes = ["this file has an `import`, and import resolution is not "
+			         "implemented: a type declared in the imported file cannot "
+			         "be found yet, so a schema that needs one has to declare "
+			         "it here"]
+
+		raise error(f"unknown type `{type_ref.name}`", type_ref.span,
+		            label="not declared", notes=notes)
 
 	def array_extent(self, member: ast.Field | ast.Reserved, state: Walk,
 			last: bool) -> Interval:

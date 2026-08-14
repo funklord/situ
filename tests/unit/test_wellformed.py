@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from situc.diagnostics import SituError
+from situc.layout import solve
 from situc.parser import ATTRIBUTE_NAMES, parse_text
 
 
@@ -190,6 +191,34 @@ def test_type_resolution_is_skipped_when_a_file_imports() -> None:
 	resolution does not exist yet."""
 	schema = parse_text('import "other.situ"; struct S { Elsewhere x; }')
 	assert len(schema.structs()) == 1
+
+
+def test_a_type_from_an_import_says_why_it_cannot_be_found() -> None:
+	"""Stepping aside above is only half an answer.
+
+	The solver has to have a layout, so it raises `unknown type` a moment
+	later -- and told the author their type does not exist, which is not what
+	went wrong: the type may be perfectly good and the resolution that would
+	find it is not built. The note is the difference between a diagnostic
+	that sends someone looking for a typo and one that names the gap.
+	"""
+	with pytest.raises(SituError) as caught:
+		solve(parse_text('target buffer;\nendian big;\n'
+		                 'import "other.situ"; struct s { elsewhere x; }'))
+
+	rendered = caught.value.diagnostic.render()
+	assert "unknown type `elsewhere`" in rendered
+	assert "import resolution is not implemented" in rendered
+
+
+def test_an_unknown_type_without_an_import_does_not_blame_one() -> None:
+	"""The note is conditional, and a schema with no import must not be told
+	to look at one."""
+	with pytest.raises(SituError) as caught:
+		solve(parse_text('target buffer;\nendian big;\n'
+		                 'struct s { elsewhere x; }'))
+
+	assert "import resolution" not in caught.value.diagnostic.render()
 
 
 # -- recursion --------------------------------------------------------------

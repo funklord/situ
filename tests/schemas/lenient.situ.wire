@@ -1,0 +1,22 @@
+# situ wire signature v0
+# schema: lenient.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct relaxed size=5
+  @0x0000   1         u8         version
+  @0x0001   1         u8         <reserved0>
+  @0x0002   2         u16        length  big
+  @0x0004   1bit      bit        urgent  msb_first
+  @0x0004:1 1bit      bit        final  msb_first
+  @0x0004:2 6bit      u6         <reserved1>  msb_first

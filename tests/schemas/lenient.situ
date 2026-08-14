@@ -1,0 +1,41 @@
+// `strictness = lenient`, which no other schema in the tree sets.
+//
+// Same reason as `edges.situ` next door: a construct the language offers and
+// nothing exercises is a construct whose generated code has never run. This
+// one is a *file-level* directive rather than a member, which is why it needs
+// a file of its own -- setting it in `edges.situ` would turn every struct
+// there NonCanonical and rewrite a committed map that is checking something
+// else.
+//
+// What it changes is section 14.5's answer about malleability: lenient makes
+// `canonical` NonCanonical throughout, so the generated code does not hold a
+// message to one canonical form. The map records that, and the capability
+// table's `strictness-lenient` row is the claim this file is the evidence for.
+
+target buffer;
+endian big;
+bit_order msb_first;
+strictness = lenient;
+
+struct relaxed {
+	// A plain field, so the accessors have something ordinary to be checked
+	// against under a capability the strict schemas never carry.
+	u8       version;
+
+	// Preserved rather than rejected, which is the pairing lenient exists
+	// for: under `strict` an ignored bit is a malleability surface and the
+	// parse refuses it, and here it round-trips instead.
+	reserved u8 [preserve];
+
+	u16      length;
+
+	// One packed byte, because canonicity and bit packing meet in the same
+	// accessor and a lenient schema should still place bits where the map
+	// says.
+	bit      urgent;
+	bit      final;
+	reserved u6 [preserve];
+}
+
+require size(relaxed) == 5;
+require absolute_static(relaxed);

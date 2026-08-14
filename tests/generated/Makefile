@@ -49,6 +49,7 @@ GEN_DIR		:= $(BUILD_DIR)/gen
 # code for whatever construct it uses. Before this, half the constructs in the
 # language had generated code that compiled and had never run.
 SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
+		   tests/schemas/lenient.situ \
 		   examples/arp/arp.situ examples/ble/ble.situ examples/bmp/bmp.situ \
 		   examples/cpio/cpio.situ \
 		   examples/dns/dns.situ examples/dnsname/dnsname.situ examples/ethernet/ethernet.situ examples/http/http.situ \
