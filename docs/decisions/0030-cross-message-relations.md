@@ -230,3 +230,56 @@ it.
 
 What remains ruled out at rung 3, unchanged: a `relation` is two views, pure,
 and allocates nothing.
+
+## Amendment, 2026-08-14: an identifier is often not a number
+
+The table at the top of this record opens with "a response carries the
+request's identifier". In an authenticated protocol that identifier is a
+public key or a nonce -- thirty-two bytes, essentially never an integer -- and
+until now the first example this decision gives could not be written unless
+the identifier happened to be scalar. `==` and `!=` between two fixed-size
+arrays of the same element type and the same length are emitted now, in all
+four backends.
+
+**The refusal that blocked it was never decided.** Nothing in this record
+mentioned arrays, `project.md` did not either, and no test pinned it. What it
+had was a neighbour: it stood immediately beside the float refusal, which *is*
+a judgement and says so -- "an exact comparison of one is rarely what a wire
+contract means" -- and inherited the look of one by proximity. Its own wording
+asserted a definition rather than a reason. Raised by fuzznet, whose
+`same_message` correlates on a `u8[32]` sender and had to enforce it by hand
+in the one place where getting it wrong is a security bug rather than a bug.
+
+**It is a different operation, not a relaxed scalar.** Everything else here
+resolves to `(signed, bits)` and widens toward a 64-bit comparison; equal-length
+bytes have nothing to widen and no signedness to reconcile. So the plan carries
+a `ReadBytes` binding and a `BytesEqual` beside the expression rather than in
+it. C spells it `memcmp`, C++ the same over a span, Rust and Python with `==`
+on a slice. Putting an array operand in the expression tree would have made
+four backends each decide what one means, which is what this module exists to
+prevent.
+
+**Three refusals are kept, each with its own reason rather than one shared
+one.** Differing lengths, because a comparison holding only over the shorter
+one answers a question the schema did not ask, and a mismatch is almost
+certainly a mistake. Ordering, because an identifier has no order: `<` over two
+keys is a question nobody asked. One side an array and the other a scalar,
+which keeps the message it always had, about the side that is wrong.
+
+**Two consequences, both recorded rather than discovered later.**
+
+The packed image does not carry these. `pack.compile_relation` trusts this
+module to have refused everything it cannot emit, and that stopped being true:
+the program would have carried a scalar read of a run, which the walker refuses
+at evaluation time rather than at pack time. Such a relation is `unencodable`
+now, with the reason. Teaching the image means a new opcode in three
+implementations -- the packer, `walker/vm.py` and `walker/c/situ_walk.c` --
+with the drift test that ties them together, and that is its own piece of work.
+
+Rung 5 still refuses an array-keyed exchange, and now says why. A packed
+conversation key is one 64-bit word; thirty-two bytes do not fit, and hashing
+them would make two exchanges that collided indistinguishable -- which is the
+failure the width check exists to prevent. So `relate` reaches the example this
+record opens with, and `converse` does not. What a conversation key should be
+when it exceeds a word is a question about collisions rather than about
+codegen, and it is not answered here.

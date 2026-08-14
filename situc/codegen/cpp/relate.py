@@ -13,7 +13,8 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
-from situc.relation import Constraint, Read, SubView, plans, refusals, render
+from situc.relation import (Constraint, Read, ReadBytes, SubView, plans,
+                            refusals, render)
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate", "refusals", "signature"]
@@ -36,7 +37,7 @@ def signature(relation: ast.Relation, resolved: ResolvedSchema) -> str:
 	        f"rel_{c_name(relation.name)}({params}) noexcept")
 
 
-def _binding(bind: SubView | Read, cast: str,
+def _binding(bind: SubView | Read | ReadBytes, cast: str,
 		resolved: ResolvedSchema) -> list[str]:
 	source = _source(bind.source)
 	target = _local(bind.target)
@@ -54,6 +55,12 @@ def _binding(bind: SubView | Read, cast: str,
 			f"&{target} = {held};",
 		]
 
+	if isinstance(bind, ReadBytes):
+		# The accessor already returns a span; the comparison is over what it
+		# points at rather than over the span object.
+		return [f"\tconst ::situ::rt::bytes {target} = "
+		        f"{source}.{c_name(bind.member)}();\t/* {bind.path} */"]
+
 	return [f"\tconst {cast} {target} = static_cast<{cast}>"
 	        f"({source}.{c_name(bind.member)}());\t/* {bind.path} */"]
 
@@ -68,6 +75,18 @@ def _body(constraints: list[Constraint],
 
 		for bind in constraint.bindings:
 			block += _binding(bind, cast, resolved)
+
+		if constraint.bytes_equal is not None:
+			same = constraint.bytes_equal
+			test = "!=" if not same.negated else "=="
+			block += [
+				f"\tif (std::memcmp({_local(same.left)}.data(), "
+				f"{_local(same.right)}.data(), {same.length}u) {test} 0) {{",
+				"\t\treturn ::situ::rt::err::constraint;",
+				"\t}",
+			]
+			lines += ["\t{", *[f"\t{line}" for line in block], "\t}", ""]
+			continue
 
 		assert constraint.expr is not None
 		locals_for = {path: _local(name)
@@ -103,6 +122,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		f"#define {guard}",
 		"",
 		"#include <cstdint>",
+		# Only where a constraint compares bytes: a header a freestanding
+		# target may not want, for a function nothing else here calls.
+		*(["#include <cstring>"]
+		  if any(one.bytes_equal is not None
+		         for _, cs in ready for one in cs) else []),
 		"",
 		f"#include \"{basename}.hpp\"",
 		"",

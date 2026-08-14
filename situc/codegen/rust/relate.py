@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.rust.emit import _ident, _pascal
-from situc.relation import Constraint, Read, SubView, plans, refusals, render
+from situc.relation import (Constraint, Read, ReadBytes, SubView, plans,
+                            refusals, render)
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate", "refusals", "signature"]
@@ -39,12 +40,18 @@ def signature(relation: ast.Relation) -> str:
 	return f"pub fn rel_{_ident(relation.name)}({params}) -> Result<()>"
 
 
-def _binding(bind: SubView | Read, cast: str) -> list[str]:
+def _binding(bind: SubView | Read | ReadBytes, cast: str) -> list[str]:
 	source = _source(bind.source)
 	target = _local(bind.target)
 
 	if isinstance(bind, SubView):
 		return [f"\t\tlet {target} = {source}.{_member(bind.member)}()?;"
+		        f"\t// {bind.path}"]
+
+	if isinstance(bind, ReadBytes):
+		# A slice, not a widened integer: Rust compares two of them by value
+		# and the length is part of that comparison.
+		return [f"\t\tlet {target} = {source}.{_member(bind.member)}();"
 		        f"\t// {bind.path}"]
 
 	return [f"\t\tlet {target} = {source}.{_member(bind.member)}() as {cast};"
@@ -60,6 +67,17 @@ def _body(constraints: list[Constraint]) -> list[str]:
 
 		for bind in constraint.bindings:
 			block += _binding(bind, cast)
+
+		if constraint.bytes_equal is not None:
+			same = constraint.bytes_equal
+			test = "!=" if not same.negated else "=="
+			block += [
+				f"\t\tif {_local(same.left)} {test} {_local(same.right)} {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			]
+			lines += ["\t{", *block, "\t}", ""]
+			continue
 
 		assert constraint.expr is not None
 		locals_for = {path: _local(name)

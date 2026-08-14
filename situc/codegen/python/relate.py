@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.python.emit import py_name
-from situc.relation import (PYTHON, Constraint, Read, SubView, plans, refusals,
+from situc.relation import (PYTHON, Constraint, Read, ReadBytes, SubView,
+                            plans, refusals,
                             render)
 from situc.resolve import ResolvedSchema
 
@@ -40,10 +41,11 @@ def signature(relation: ast.Relation) -> str:
 	return f"def rel_{py_name(relation.name)}({params}) -> None:"
 
 
-def _binding(bind: SubView | Read) -> list[str]:
+def _binding(bind: SubView | Read | ReadBytes) -> list[str]:
 	source = _source(bind.source)
 	target = _local(bind.target)
-	kind   = "sub-view" if isinstance(bind, SubView) else "value"
+	kind   = ("sub-view" if isinstance(bind, SubView)
+	          else "bytes" if isinstance(bind, ReadBytes) else "value")
 	return [f"\t{target} = {source}.{py_name(bind.member)}"
 	        f"\t# {bind.path} ({kind})"]
 
@@ -54,6 +56,18 @@ def _body(constraints: list[Constraint]) -> list[str]:
 	for constraint in constraints:
 		for bind in constraint.bindings:
 			lines += _binding(bind)
+
+		if constraint.bytes_equal is not None:
+			same = constraint.bytes_equal
+			test = "!=" if not same.negated else "=="
+			lines += [
+				f"\tif bytes({_local(same.left)}) {test} "
+				f"bytes({_local(same.right)}):",
+				"\t\traise ConstraintError(",
+				f"\t\t\t{_reason(constraint)!r})",
+				"",
+			]
+			continue
 
 		assert constraint.expr is not None
 		locals_for = {path: _local(name)

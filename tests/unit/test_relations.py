@@ -2791,3 +2791,109 @@ fn main()
 
 	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
 	assert ran.returncode == 0, ran.stderr
+
+
+# -- arrays as keys -----------------------------------------------------------
+#
+# Decision 0030's table opens with "a response carries the request's
+# identifier", and in an authenticated protocol that identifier is a key or a
+# nonce rather than an integer. The refusal that blocked it was never decided:
+# no rationale in 0030, none in project.md, and no test pinned it -- it read as
+# a judgement because it stood beside the float one, which is a judgement and
+# says so.
+
+KEYED_ARRAY = """relation same_message(request: frame, response: frame) {
+	must response.hdr.wide == request.hdr.wide;
+	must response.payload  == request.payload;
+}
+"""
+
+
+def test_two_equal_length_arrays_compare() -> None:
+	"""The narrow case: same element type, same length, equality only."""
+	schema, resolved = analysed(KEYED_ARRAY)
+	planned = relation.plan(schema.relations()[0], resolved)
+
+	assert planned[1].bytes_equal is not None
+	assert planned[1].bytes_equal.length == 4
+	assert planned[1].bytes_equal.negated is False
+
+
+def test_an_array_and_a_scalar_still_refuse() -> None:
+	"""One side an array is the case `_leaf` always refused, and it keeps the
+	reason it had rather than gaining a confusing new one."""
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.payload == a.hdr.wide;\n}\n")
+
+	assert "is an array" in dict(relate.refusals(schema, resolved))["r"]
+
+
+def test_ordering_two_arrays_is_refused_with_its_own_reason() -> None:
+	"""`<` over two identifiers is a question nobody asked, and the reason
+	says that rather than falling through to the scalar refusal."""
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.payload < a.payload;\n}\n")
+
+	assert "has no order" in dict(relate.refusals(schema, resolved))["r"]
+
+
+def test_arrays_of_different_lengths_are_refused() -> None:
+	"""Comparing the shorter prefix would answer a question the schema did
+	not ask, and a mismatch here is almost certainly a mistake."""
+	schema, resolved = analysed(
+		"struct short_tag { u8 tag[2]; }\n\n"
+		"relation r(a: frame, b: short_tag) {\n"
+		"\tmust b.tag == a.payload;\n}\n")
+
+	assert "bytes against" in dict(relate.refusals(schema, resolved))["r"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_array_predicate_answers_both_ways_in_c(tmp_path: Path) -> None:
+	"""Compiled is not run. Equal payloads accepted, one byte inside the array
+	refused, and a byte outside it left alone -- the third case is what says
+	the comparison is over the member rather than over the message."""
+	schema, resolved = analysed(KEYED_ARRAY)
+
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in relate.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "main.c").write_text("""#include <string.h>
+#include "t_relate.h"
+
+int main(void)
+{
+	uint8_t a[64], b[64];
+	situ_msg_t ma, mb;
+	situ_view_t va, vb;
+
+	memset(a, 0, sizeof a);
+	memset(b, 0, sizeof b);
+	situ_msg_init(&ma, a, (uint32_t)sizeof a);
+	situ_msg_init(&mb, b, (uint32_t)sizeof b);
+	if (situ_frame_view(&ma, 0, &va) != SITU_OK) return 1;
+	if (situ_frame_view(&mb, 0, &vb) != SITU_OK) return 2;
+
+	if (situ_rel_same_message(va, vb) != SITU_OK) return 3;
+
+	situ_frame_payload_ptr(va)[0] = 0xff;
+	if (situ_rel_same_message(va, vb) != SITU_ERR_CONSTRAINT) return 4;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	built = subprocess.run(
+		[COMPILER or "cc", *WARNINGS, f"-I{tmp_path}", f"-I{RUNTIME}",
+		 str(tmp_path / "main.c"), str(tmp_path / "t.c"),
+		 str(tmp_path / "t_relate.c"), str(RUNTIME / "situ.c"),
+		 "-o", str(tmp_path / "run")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, f"the array predicate answered wrongly at step {ran.returncode}"

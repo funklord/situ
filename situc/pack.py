@@ -35,6 +35,8 @@ from situc.capability import DOMAINS, Axis
 from situc.diagnostics import SituError
 from situc.expr import evaluate
 from situc.layout import Placement
+from situc.relation import Refused as RelationRefused
+from situc.relation import plan as plan_relation
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 MAGIC		= b"SITU"
@@ -1318,6 +1320,29 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			if index is None:
 				return None
 			return (list(params).index(head), index)
+
+		# `compile_relation` trusts `situc.relation` to have refused
+		# everything it cannot emit, and that stopped being true when a
+		# relation learned to compare arrays: the program would carry a
+		# scalar read of a run, which the walker refuses at evaluation time
+		# rather than here. The image says what it can answer, so a relation
+		# it cannot is recorded as unencodable instead of encoded wrongly.
+		#
+		# The four compiled backends emit it. Teaching the image would mean a
+		# new opcode in three implementations -- the packer, `walker/vm.py`
+		# and `walker/c/situ_walk.c` -- with the drift test that ties them
+		# together, which is its own piece of work rather than a line here.
+		try:
+			if any(one.bytes_equal is not None
+			       for one in plan_relation(decl, resolved)):
+				coverage.unencodable[f"relation {decl.name}"] = (
+					"compares arrays, and the image's expression VM reads "
+					"scalars")
+				continue
+		except RelationRefused:
+			# Not expressible at all; the backends have said so already and
+			# this is not the place to repeat the reason.
+			continue
 
 		first = len(musts_blob) // RELATION_MUST_BYTES
 		try:

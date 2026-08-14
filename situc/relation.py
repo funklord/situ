@@ -83,7 +83,44 @@ class Read:
 	path: str
 
 
-Binding = SubView | Read
+@dataclass(frozen=True)
+class ReadBytes:
+	"""Bind the bytes of the fixed-size array `struct.member` in `source`.
+
+	A separate binding from `Read` because it is a different operation, not a
+	relaxed one: there is no scalar to widen, no signedness to reconcile, and
+	the thing bound is a span rather than a value.
+	"""
+
+	struct: str
+	member: str
+	source: str
+	target: str
+	path: str
+	#: Bytes, known here because only fixed-size arrays reach this.
+	length: int
+
+
+Binding = SubView | Read | ReadBytes
+
+
+@dataclass(frozen=True)
+class BytesEqual:
+	"""`==` or `!=` between two equal-length fixed-size arrays.
+
+	Kept off the expression tree on purpose. Every other constraint is an
+	expression over scalars that each backend spells with its own operators;
+	this one is "do these bytes equal those bytes", which C spells with
+	`memcmp`, Rust and Python with `==` on a slice, and no backend spells by
+	widening anything. Putting it in the expression would make four backends
+	each decide what an array operand means, which is what this module exists
+	to prevent.
+	"""
+
+	left: str
+	right: str
+	length: int
+	negated: bool
 
 
 @dataclass
@@ -96,6 +133,10 @@ class Constraint:
 	#: Whether every operand must be widened as signed. Meaningless where a
 	#: language has no fixed-width integers, and harmless to ignore there.
 	signed: bool = False
+	#: Set instead of `expr` where the constraint compares two arrays. A
+	#: backend that finds this emits its own byte comparison and ignores the
+	#: expression, which is still carried for the comment at the call site.
+	bytes_equal: BytesEqual | None = None
 
 
 def paths_in(expr: ast.Expr) -> list[str]:
@@ -126,6 +167,105 @@ def _member(struct: ResolvedStruct, name: str) -> Placement | None:
 				and local_name(struct, placement) == name):
 			return placement
 	return None
+
+
+def _leaf_placement(path: str, params: dict[str, ast.RelationParam],
+		resolved: ResolvedSchema) -> Placement:
+	"""The placement a path ends at, without binding anything.
+
+	The walk in `plan` binds as it goes, which is what a backend needs and
+	the wrong shape for deciding whether the comparison is expressible at
+	all: that answer has to be known for *both* sides before either is
+	bound, or a refusal arrives half-way through a constraint.
+	"""
+	components = path.split(".")
+	param      = params[components[0]]
+	struct     = resolved.structs.get(param.type_name)
+	if struct is None:
+		raise Refused(f"`{param.type_name}` has no resolved layout")
+
+	placement: Placement | None = None
+	for position, component in enumerate(components[1:]):
+		placement = _member(struct, component)
+		if placement is None:
+			raise Refused(f"`{struct.name}.{component}` has no placement")
+		if position == len(components) - 2:
+			break
+		nested = resolved.structs.get(placement.type_name or "")
+		if nested is None:
+			raise Refused(f"`{path}` reaches through `{component}`, "
+			              f"which is not a struct")
+		struct = nested
+
+	if placement is None:
+		raise Refused(f"`{path}` names no member")
+	return placement
+
+
+def _array_bytes(path: str, placement: Placement) -> int:
+	"""How many bytes the array occupies, or a refusal naming why not."""
+	scalar = placement.scalar
+	if scalar is None:
+		raise Refused(f"`{path}` names `{placement.kind}`, which is not an "
+		              f"array of scalars")
+	if scalar.kind is ScalarKind.FLOAT:
+		raise Refused(f"`{path}` is an array of floating point, and an exact "
+		              f"comparison of one is rarely what a wire contract means")
+	if scalar.bits % 8 != 0:
+		raise Refused(f"`{path}` has {scalar.bits}-bit elements, which do not "
+		              f"land on byte boundaries to compare")
+	assert placement.array_count is not None
+	return placement.array_count * (scalar.bits // 8)
+
+
+def _array_equality(expr: ast.Expr, params: dict[str, ast.RelationParam],
+		resolved: ResolvedSchema, where: str) -> tuple[str, str, int, bool] | None:
+	"""`a.x == b.y` between two equal-length fixed arrays, or None.
+
+	None means "not this shape", and the ordinary scalar path handles it --
+	including one side being an array, which `_leaf` refuses with the reason
+	it always did.
+
+	The refusals here are the narrow ones the shape needs. Differing lengths
+	stay refused because a schema comparing a 16-byte field against a 32-byte
+	one is almost certainly a mistake, and silently comparing the shorter
+	prefix would be the dangerous reading. Ordering is refused because a key
+	has no order: `<` over two identifiers is a question nobody asked.
+	"""
+	if not isinstance(expr, ast.Binary) or expr.op not in ("==", "!=", "<",
+	                                                       "<=", ">", ">="):
+		return None
+
+	paths = [paths_in(side) for side in (expr.left, expr.right)]
+	if any(len(side) != 1 for side in paths):
+		return None
+
+	left, right = paths[0][0], paths[1][0]
+	places = [_leaf_placement(one, params, resolved) for one in (left, right)]
+	if all(place.array_count is None for place in places):
+		return None
+	if any(place.array_count is None for place in places):
+		# One side an array and the other not. `_leaf` already says what is
+		# wrong with that, and says it about the side that is wrong.
+		return None
+
+	if expr.op not in ("==", "!="):
+		raise Refused(f"{where} orders two arrays with `{expr.op}`, and an "
+		              f"identifier has no order -- equality is the only "
+		              f"comparison a key answers")
+
+	widths = [_array_bytes(one, place) for one, place in zip((left, right), places)]
+	if widths[0] != widths[1]:
+		raise Refused(f"{where} compares {widths[0]} bytes against "
+		              f"{widths[1]}; a comparison that held only over the "
+		              f"shorter one would answer a question the schema did "
+		              f"not ask")
+
+	kinds = [place.scalar.kind for place in places if place.scalar is not None]
+	if len(set(kinds)) != 1:
+		raise Refused(f"{where} compares arrays of different element types")
+
+	return left, right, widths[0], expr.op == "!="
 
 
 def _leaf(path: str, placement: Placement) -> tuple[bool, int]:
@@ -176,6 +316,7 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 		where      = f"constraint {number} of `{relation.name}`"
 		constraint = Constraint(expr=must.expr)
 		operands: list[tuple[bool, int]] = []
+		arrays     = _array_equality(must.expr, params, resolved, where)
 
 		for path in dict.fromkeys(paths_in(must.expr)):
 			components = path.split(".")
@@ -201,6 +342,12 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 				last   = position == len(components) - 2
 
 				if last:
+					if arrays is not None:
+						constraint.bindings.append(
+							ReadBytes(struct.name, component, source, target,
+							          path, _array_bytes(path, placement)))
+						constraint.locals_for[path] = target
+						break
 					operands.append(_leaf(path, placement))
 					constraint.bindings.append(
 						Read(struct.name, component, source, target, path))
@@ -217,8 +364,15 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 				source = target
 				struct = nested
 
-		constraint.signed = _widen(operands, where)
-		_check(must.expr, constraint.locals_for, where)
+		if arrays is not None:
+			left, right, length, negated = arrays
+			constraint.bytes_equal = BytesEqual(
+				constraint.locals_for[left], constraint.locals_for[right],
+				length, negated)
+		else:
+			constraint.signed = _widen(operands, where)
+			_check(must.expr, constraint.locals_for, where)
+
 		plans.append(constraint)
 
 	return plans
@@ -367,7 +521,11 @@ def keykey_width(resolved: ResolvedSchema, bind: Read) -> int:
 	return 0
 
 
-Side = list[tuple[list[Binding], int]]
+#: A key is read out of scalars, so a step in one is never a `ReadBytes`.
+#: Saying so in the type is what stops each backend's `converse` and
+#: `drive` having to ask.
+KeyStep = SubView | Read
+Side = list[tuple[list[KeyStep], int]]
 
 
 def key_width(resolved: ResolvedSchema, bind: Read) -> int:
@@ -397,6 +555,13 @@ def key_sides(relation: ast.Relation,
 	total = 0
 
 	for constraint, must in zip(plan(relation, resolved), relation.body):
+		if constraint.bytes_equal is not None:
+			raise Refused(
+				f"its key includes `{must.expr}`, which compares "
+				f"{constraint.bytes_equal.length} bytes; a packed key holds "
+				f"{KEY_BITS // 8}, and hashing one would make two exchanges "
+				f"that collided indistinguishable")
+
 		expr = must.expr
 		if not isinstance(expr, ast.Binary) or expr.op != "==":
 			continue
@@ -407,8 +572,9 @@ def key_sides(relation: ast.Relation,
 
 		for bind in reads:
 			chain = [step for step in constraint.bindings
-			         if step.path == bind.path or bind.path.startswith(
-				         step.path + ".")]
+			         if isinstance(step, (SubView, Read))
+			         and (step.path == bind.path
+			              or bind.path.startswith(step.path + "."))]
 			side = (chain, key_width(resolved, bind))
 			(request if bind.path.split(".")[0] == first else response).append(side)
 

@@ -28,7 +28,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.c.names import ident
-from situc.relation import Constraint, Read, SubView, plans, refusals, render
+from situc.relation import (Constraint, Read, ReadBytes, SubView, plans,
+                            refusals, render)
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate", "refusals", "signature"]
@@ -55,7 +56,8 @@ def _source(name: str) -> str:
 	return _local(name) if name.startswith("_") else name
 
 
-def _binding(bind: SubView | Read, cast: str, prefix: str) -> list[str]:
+def _binding(bind: SubView | Read | ReadBytes, cast: str,
+		prefix: str) -> list[str]:
 	source = _source(bind.source)
 	target = _local(bind.target)
 
@@ -68,6 +70,13 @@ def _binding(bind: SubView | Read, cast: str, prefix: str) -> list[str]:
 			"\t\treturn err;",
 			"\t}",
 		]
+
+	if isinstance(bind, ReadBytes):
+		# `_ptr` rather than `_get`: an array has no single value, and the
+		# span is what the comparison is over.
+		pointer = ident(prefix, bind.struct, bind.member, "ptr")
+		return [f"\tconst uint8_t *{target} = {pointer}({source});"
+		        f"\t/* {bind.path} */"]
 
 	getter = ident(prefix, bind.struct, bind.member, "get")
 	return [f"\t{cast} {target} = ({cast}){getter}({source});"
@@ -83,6 +92,18 @@ def _body(constraints: list[Constraint], prefix: str) -> list[str]:
 
 		for bind in constraint.bindings:
 			block += _binding(bind, cast, prefix)
+
+		if constraint.bytes_equal is not None:
+			same  = constraint.bytes_equal
+			test  = "!=" if not same.negated else "=="
+			block += [
+				f"\tif (memcmp({_local(same.left)}, {_local(same.right)}, "
+				f"{same.length}u) {test} 0) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			]
+			lines += ["\t{", *[f"\t{line}" for line in block], "\t}", ""]
+			continue
 
 		assert constraint.expr is not None
 		locals_for = {path: _local(name)
@@ -166,6 +187,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		f"#include \"{basename}_relate.h\"",
 		"",
 	]
+
+	# Only where something needs it. An unconditional include is a header a
+	# freestanding target may not have, for a function it does not call.
+	if any(one.bytes_equal is not None
+	       for _, constraints in ready for one in constraints):
+		source[3:3] = ["#include <string.h>", ""]
 
 	for relation, constraints in ready:
 		source += [
