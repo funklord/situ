@@ -556,8 +556,16 @@ def key_sides(relation: ast.Relation,
 
 	for constraint, must in zip(plan(relation, resolved), relation.body):
 		if constraint.bytes_equal is not None:
+			# `span.text()` and not the node. An `ast.Expr` stringifies to its
+			# dataclass repr, and a `Span` holds the `Source`, which holds the
+			# whole file -- so interpolating one embeds the schema in the
+			# message, once per operand. A 138-byte schema produced a 2436-byte
+			# diagnostic and a real one produced 212kB, in which the reason was
+			# findable by grep and not by reading. A diagnostic nobody can read
+			# is the same as no diagnostic, which is the fault this very
+			# refusal was written to fix one layer up.
 			raise Refused(
-				f"its key includes `{must.expr}`, which compares "
+				f"its key includes `{must.expr.span.text()}`, which compares "
 				f"{constraint.bytes_equal.length} bytes; a packed key holds "
 				f"{KEY_BITS // 8}, and hashing one would make two exchanges "
 				f"that collided indistinguishable")

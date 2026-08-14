@@ -2897,3 +2897,23 @@ int main(void)
 
 	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
 	assert ran.returncode == 0, f"the array predicate answered wrongly at step {ran.returncode}"
+
+
+def test_the_array_key_refusal_quotes_the_schema_not_the_ast() -> None:
+	"""A diagnostic nobody can read is the same as no diagnostic.
+
+	`ast.Expr` stringifies to its dataclass repr, and a `Span` holds the
+	`Source`, which holds the whole file -- so interpolating a node embeds the
+	schema in the message once per operand. The first version of this refusal
+	did exactly that: 2436 bytes for a 138-byte schema, and 212kB against a
+	real one, with the reason findable by grep rather than by reading. Caught
+	by fuzznet checking the claim the message was making.
+	"""
+	schema, resolved = analysed(KEYED_ARRAY)
+	reason = dict(converse.refusals(schema, resolved))["same_message"]
+
+	assert "response.payload  == request.payload" in reason
+	assert "Span(" not in reason and "Source(" not in reason
+	# The bound is what makes this a test rather than a wish: the failing
+	# version was seventeen times the schema it described.
+	assert len(reason) < 300, f"{len(reason)} bytes of diagnostic"
