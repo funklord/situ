@@ -487,3 +487,124 @@ We will keep `[max = chunks - 1]` in `frame.situ` rather than dropping it,
 since dropping it would lose the constraint from the one place it is written
 down. If you would rather it were spelled differently, say which and we will
 change it.
+
+---
+
+# Two findings from running `situc build`, 2026-08-14, situ `497c1ea`
+
+The report above ends by saying `situc build` had never been run here. It
+has now, with the `[max = chunks - 1]` refusal stepped around by a literal,
+and two things came out. **situ diagnoses both clearly and neither is a
+silent failure** -- that is worth leading with, because the first probe here
+recorded one of them as silent and was wrong: it was swallowing stdout and
+grepping for the word "error", so a notice read as nothing at all. The
+tooling was the broken part, not situ.
+
+What follows is therefore not "these are bugs". It is two places where what
+situ declines to do collides with something one of your own decisions has
+planned, and you are better placed than we are to say which side should
+move.
+
+## 1. A relation over arrays produces no predicate
+
+    target buffer;
+    endian big;
+    struct m { u16 id; u8 who[32]; }
+    relation ok(a: m, b: m)     { must b.id  == a.id;  }
+    relation arrays(a: m, b: m) { must b.who == a.who; }
+
+    situc build --target c --layer relate
+
+    situc: no predicate for relation `arrays`: `b.who` is an array, and a
+           relation compares one value against another
+    ... wrote p_relate.h, p_relate.c        # holding `ok` only
+    exit 0
+
+The message is good: it names the relation, the field, and the rule. `ok` is
+emitted, so one relation does not poison the file.
+
+**Both of `fuzznet`'s relations are dropped by it.** `same_message` and
+`reply_to` each compare `sender`, which is `u8[32]`, and `wire/frame.situ`
+describes `same_message` as "THE ONE THAT MATTERS, and it is a security
+property rather than tidiness" -- it is what stops two senders' chunks
+reassembling into one message that authenticates as neither.
+
+### Why this is worth raising rather than absorbing
+
+**Decision 0030's own first example is "a response carries the request's
+identifier".** In an authenticated datagram protocol the identifier that
+correlates two messages is almost always a *key or a nonce* -- 32 bytes --
+rather than an integer. `fuzznet` correlates on `msg` (a `u32`, which works)
+and on `sender` (32 bytes, which does not), and the second is the clause
+that carries the security weight: differing `msg` means two unrelated
+messages, differing `sender` means an attempted splice.
+
+So the construct 0030 designed reaches the example it was designed for only
+when the identifier happens to be scalar. That is not obvious from the
+record and it is what we would most like your view on.
+
+Fixed-size arrays look like the case that could be added without disturbing
+the rung: a `u8[32]` against a `u8[32]` is a bounded, allocation-free,
+constant-time-able comparison over two views, which is the same shape the
+rung already permits. Variable-length ones plainly are not, and we are not
+asking for those.
+
+### The severity question, which is yours and not ours
+
+A relation that generates nothing is a notice and exit 0. That is defensible
+-- it is not an error in the schema, and refusing the build would stop a
+schema that is otherwise fine. But it means **a schema can declare a
+relation, have it validated, appear in the committed contract, and emit
+nothing**, with the only evidence a line on stdout during a build. That is
+the same shape as the `[max]` finding in the report above, and this library
+walked into it the same way.
+
+If a flag existed that made "declared but not generated" a refusal, we would
+turn it on. We are not asking for the default to change.
+
+## 2. No owned form where the size is data-decided
+
+    struct m {
+        u16 length  [max = 1024];
+        u8  payload[length];
+    }
+
+    situc build --target c --owned
+
+    situc: no owned form for `m`: its size is decided by the data, so an
+           owned struct would need a pointer or a worst-case array; neither
+           is this generator's to choose
+
+Give `payload` a fixed `[64]` and the owned form is emitted. So the rule is
+clear and the refusal is principled: the generator will not choose a pointer
+(allocation) or a worst-case array (silently large) on the author's behalf.
+
+**It collides with decision 0031.** That record has `fuzzypickles` adopting
+at rung 2 with `--owned`, because 225 call sites hold decoded structs that
+outlive the buffer. `fuzznet`'s frame has a `Bounded(0,1024)` sealed payload,
+so it has no owned form at any rung -- and `fuzznet` is what `fuzzypickles`
+would be adopting. The migration path 0031 describes does not reach this
+frame as it stands.
+
+Three ways that could resolve, and the choice is not ours:
+
+- **The schema changes**: a fixed-size payload, which costs the difference
+  between the real length and the maximum on every datagram, on a frame
+  sec 13 of our `project.md` is already arguing about.
+- **`--owned` grows a worst-case option** the author asks for explicitly,
+  which is the "neither is this generator's to choose" made choosable.
+- **0031's plan for `fuzzypickles` changes**, and it adopts differently.
+
+We have no preference and would rather not have one -- we are the consumer
+asking, which is the weakest position from which to argue that somebody
+else's generator should grow. What we can offer is that the collision is
+real, it is between two of your own records rather than between us and you,
+and it is cheaper to notice now than during a 225-call-site migration.
+
+## What we are not asking for
+
+- **Not for the notice to become an error by default.** Named above.
+- **Not for variable-length array comparison in relations.**
+- **Not for anything to be prioritised.** `fuzznet`'s own step 2 is blocked
+  on the `[max]` refusal in the report above, and everything this library
+  owns is built and tested without generated code.
