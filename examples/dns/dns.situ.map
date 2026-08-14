@@ -7,6 +7,8 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# layers: floor=view reach=drive
 
 struct dns_header size=12 repr=ValueConverted atomic=NonAtomic
   dns_header.id                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

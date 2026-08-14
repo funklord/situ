@@ -67,6 +67,27 @@ require in_place(dns_header.answer_count);
 // DNS responses are a well-known covert channel.
 require canonical(dns_header);
 
+// What pairs a reply with its query, and what to do when one does not
+// arrive. RFC 1035 section 4.1.1 says a response carries the ID of the query
+// it answers and repeats its OPCODE, so those two equalities are the whole
+// conversation key -- and stating them here states them once, rather than in
+// each endpoint where the two could drift apart.
+//
+// The retransmission policy is the resolver side of section 4.2.1, which
+// asks for a retry interval in the 2-to-5 second range. Five seconds and two
+// retries is the conservative end of that; both endpoints must agree on it,
+// which is why it is schema rather than a flag (decision 0032).
+//
+// QR is deliberately absent. `must reply.is_response == 1` names only one of
+// the two messages, and the compiler refuses it with the reason: a rule about
+// a single message belongs on the member or beside the schema, where it is
+// checked whenever that message is validated, rather than only when somebody
+// evaluates a pair. The refusal is the layer boundary doing its job.
+relation reply_to(query: dns_header, reply: dns_header) [timeout_ms = 5000, retries = 2] {
+	must reply.id     == query.id;
+	must reply.opcode == query.opcode;
+}
+
 // OUT OF SCOPE HERE, and described next door. A DNS name is a chain of
 // length-prefixed labels which may terminate in a two-byte pointer to an
 // earlier offset in the same message. `examples/dnsname` writes that chain out
