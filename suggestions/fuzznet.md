@@ -608,3 +608,80 @@ and it is cheaper to notice now than during a 225-call-site migration.
 - **Not for anything to be prioritised.** `fuzznet`'s own step 2 is blocked
   on the `[max]` refusal in the report above, and everything this library
   owns is built and tested without generated code.
+
+---
+
+# A request: fixed-size array comparison in a relation
+
+The report above described this and deliberately did not ask for it, on the
+grounds that the consumer asking is the weakest position from which to argue
+that somebody else's generator should grow. `fuzznet`'s holder has now asked
+us to put it as a request, so here it is as one.
+
+## The ask, narrowly
+
+**`==` and `!=` between two fixed-size arrays of the same element type and
+the same length**, in a relation predicate. Nothing else:
+
+- **not** variable-length arrays, whose length is a runtime value and whose
+  comparison is a different problem;
+- **not** ordering (`<`, `>`), which is meaningless over a key;
+- **not** arrays of differing length, which should stay a refusal because it
+  is almost certainly a mistake in the schema.
+
+## Why it is worth the change
+
+**Decision 0030's own first example asks for it.** The table there opens
+with "a response carries the request's identifier". In an authenticated
+protocol the identifier that correlates two messages is a public key or a
+nonce -- 32 bytes -- and almost never an integer. `fuzznet` correlates on
+`msg`, a `u32` which compiles today, and on `sender`, a `u8[32]` which does
+not. So `relate` reaches its designed example only when the identifier
+happens to be scalar, and that is not visible from the record.
+
+**What it costs here, concretely.** `wire/frame.situ`'s `same_message` is
+the clause that stops two senders' chunks reassembling into one message that
+authenticates as neither. It generates nothing, so `chunk/reassembly.c`
+enforces it by hand -- which is the duplication `situ` exists to remove,
+appearing in the one place where getting it wrong is a security bug rather
+than a bug.
+
+**It also closes four rungs rather than one.** No predicate means no
+conversation table, and no table means no driver, so `relate`, `converse`
+and `drive` all emit nothing for this schema. Measured: at every rung above
+`view` our frame gets the same bytes plus a stream reader. `fuzznet` stands
+on `view` today for that reason and it is recorded as the answer to its own
+step 4.
+
+## What we think the change actually is, so the ask is not glib
+
+We read `situc/relation.py`. `_leaf` returns `(signed, bits)` and everything
+downstream widens operands toward a signed or unsigned 64-bit comparison, so
+**an array is not a relaxed scalar -- it is a different operation**: an
+equal-length byte comparison with no widening, and no signedness to
+reconcile. That is a new branch through the predicate emitter and the four
+backends, not a check to loosen. We would rather ask for it knowing that
+than have it read as a one-line removal of a `raise`.
+
+## One thing that might be an accident of placement
+
+The array refusal sits immediately beside the float one, which says an exact
+comparison of a float "is rarely what a wire contract means". That is a
+**judgement** -- a deliberate no. The array refusal reads as the same kind of
+statement because of where it stands, but it may simply be unimplemented.
+
+Worth one line in the record either way. If it is deliberate, we will take
+the other route and say so below. If it is unimplemented, the neighbouring
+refusal is making it look decided.
+
+## If the answer is no
+
+That is a fine answer and needs no justification to us. The alternative here
+is to drop `sender` from `same_message` so the two scalar clauses generate,
+and we would rather not: a schema declaring the harmless clauses and omitting
+the dangerous one is partial *in the direction of looking complete*, and the
+next reader takes the generated predicate for the whole check. We would keep
+the hand-written enforcement either way.
+
+Knowing it is a no is worth as much to us as a yes, because it settles
+`fuzznet`'s rung question permanently rather than leaving it waiting.
