@@ -165,6 +165,11 @@ struct packed_driver size=3 mutate=Shifting address=Unstable repr=ValueConverted
   packed_driver.d                        offset=AbsoluteStatic(0x01) size=Bounded(0, 60) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
   packed_driver.tail                     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct placed size=7 repr=ValueConverted atomic=NonAtomic
+  placed.first                           offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  placed.second                          offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  placed.after                           offset=AbsoluteStatic(0x06) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+
 struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
   quoted_row.field                       offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   quoted_row.rest                        offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable

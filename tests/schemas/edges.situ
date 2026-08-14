@@ -642,3 +642,32 @@ struct ranged_code {
 	decimal u32  code[] until " " max 4  [min = 200, max = 599];
 	u8           rest[remaining];
 }
+
+// A `positional` block, which the grammar has had since the beginning and no
+// schema in the tree wrote. Section 4 calls mixed paradigms in one schema a
+// feature and says positional layout is what makes canonical encoding a
+// structural property rather than a convention -- a claim with no schema
+// behind it until here.
+//
+// The block is the point rather than what is in it: members inside one are
+// laid out by their order at a fixed offset, which is what the default
+// already does for a plain struct, so a generator can drop the construct
+// entirely and every test still passes. That is the shape this file exists
+// to catch -- the mutation has nowhere to show up unless something reaches
+// the code path at all.
+//
+// The trailing member is outside the block on purpose. A block that held the
+// whole struct would be indistinguishable from no block, and the offsets
+// after it are what say the block ended where it said it did.
+struct placed {
+	positional {
+		u16 first;
+		u32 second;
+	}
+
+	u8  after;
+}
+
+require size(placed) == 7;
+require absolute_static(placed);
+require in_place(placed.after);

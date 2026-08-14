@@ -154,6 +154,11 @@ struct packed_driver size=3..63
   @0x0001   0..60     u32        d  sized-by=n
   ~         2         u16        tail  big
 
+struct placed size=7
+  @0x0000   2         u16        first  big
+  @0x0002   4         u32        second  big
+  @0x0006   1         u8         after
+
 struct quoted_row size=1..
   @0x0000   until:2c  u8         field  quote=0x22
   ~         0..       u8         rest  sized-by=remaining
