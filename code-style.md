@@ -23,8 +23,8 @@ file, that file is the reasoning and this is the summary.
 3. **Lowercase filenames,** unless a tool demands otherwise.
 
 Everything below is these three rules in detail, plus the exceptions that
-are already settled. An exception not listed here is not yet settled: raise
-it rather than deciding in passing.
+are already settled. An exception not listed here is not yet settled: signal it to the list in
+`claude-guidelines`' `project.md` rather than deciding in passing.
 
 ## 1. Naming
 
@@ -134,8 +134,10 @@ Continuation lines inside brackets are not indentation-significant at all.
 Never a space *before* a tab in leading whitespace -- that is the case that
 raises `TabError`.
 
-Anything else that seems to need spaces: raise it, get it settled, and add
-it here.
+Anything else that seems to need spaces: signal it to the list in
+`claude-guidelines`' `project.md`, follow the rule meanwhile, and it gets
+settled and added here in a pass rather than in whichever project met it
+first.
 
 ## 3. Filenames
 
@@ -255,8 +257,9 @@ Three layers, and they are not equals:
 
 A project copy that disagrees with the source is **drift, not an
 override**: fix it. A project that genuinely needs to diverge needs a
-technical reason, and that is a decision to raise with the user -- not one
-to make while working on something else.
+technical reason, and that is not a decision to make while working
+on something else -- signal it to the list in `claude-guidelines`'
+`project.md` and keep following the source meanwhile.
 
 **When a conflict between layers actually comes up, stop and ask.** Do not
 silently pick a winner, even the global one.
