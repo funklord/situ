@@ -2475,3 +2475,153 @@ def test_it_keys_by_name_where_the_image_carries_them() -> None:
 	held = owned_walk.decode(acquire(bare, bytearray(b"\x12\x34\x02hi\x7f"), 0))
 
 	assert all(key.startswith("placement[") for key in held), held
+
+
+# -- rungs 4 and 5, executed rather than compiled -----------------------------
+#
+# The checks suite runs the C reader and the C table on every `make test`. The
+# other two backends were taken as far as their compilers and no further, which
+# is the same gap the predicate had: `-fsyntax-only` and `--crate-type lib`
+# both report success over code nobody ran.
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_reader_and_table_answer_at_runtime(tmp_path: Path) -> None:
+	"""Two whole messages a byte at a time, then a reply matched to its
+	request and refused the second time. Distinct exit codes so a failure
+	names which step went wrong rather than only that one did."""
+	schema, resolved = analysed(KEYED)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for module in (relate_cpp, frame_cpp, converse_cpp):
+		for name, text in module.generate(schema, resolved, "t").items():
+			(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "main.cpp").write_text("""#include <cstdint>
+#include <cstring>
+
+#include "t_converse.hpp"
+#include "t_frame.hpp"
+
+int main()
+{
+	const std::uint32_t n = ::situ::frame::size_bytes;
+	std::uint8_t stream[::situ::frame::size_bytes * 2u];
+	std::uint8_t back[::situ::frame::size_bytes * 2u];
+	std::memset(stream, 0, sizeof stream);
+
+	::situ::frame_reader reader(back, (std::uint32_t)sizeof back);
+	::situ::frame got;
+	unsigned seen = 0u;
+
+	for (std::uint32_t i = 0u; i < (std::uint32_t)sizeof stream; i++) {
+		if (reader.push(&stream[i], 1u) != ::situ::rt::err::ok) return 1;
+		while (seen <= 2u && reader.next(got) == ::situ::rt::err::ok) {
+			seen++;
+			reader.advance();
+		}
+	}
+	if (seen != 2u) return 2;
+
+	std::uint8_t q[::situ::frame::size_bytes];
+	std::uint8_t r[::situ::frame::size_bytes];
+	std::memset(q, 0, sizeof q);
+	std::memset(r, 0, sizeof r);
+
+	::situ::rt::message owner_q(q, n);
+	::situ::rt::message owner_r(r, n);
+	::situ::frame view_q;
+	::situ::frame view_r;
+	if (::situ::frame::at(owner_q, 0, view_q) != ::situ::rt::err::ok) return 3;
+	if (::situ::frame::at(owner_r, 0, view_r) != ::situ::rt::err::ok) return 4;
+
+	::situ::keyed_to_table::slot slots[2];
+	::situ::keyed_to_table table(slots, 2u);
+	std::uint32_t id = 0u;
+
+	if (table.record(view_q, 7u) != ::situ::rt::err::ok) return 5;
+	if (table.take(view_r, id)  != ::situ::rt::err::ok) return 6;
+	if (id != 7u) return 7;
+	if (table.take(view_r, id)  == ::situ::rt::err::ok) return 8;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "situ.c"),
+		 "-o", str(tmp_path / "run")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, f"the C++ rungs answered wrongly at step {ran.returncode}"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_reader_and_table_answer_at_runtime(tmp_path: Path) -> None:
+	"""The Rust half of the case above."""
+	schema, resolved = analysed(KEYED)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for module in (relate_rs, frame_rs, converse_rs):
+		for name, text in module.generate(schema, resolved, "t").items():
+			(src / name).write_text(text, encoding="ascii")
+
+	(src / "main.rs").write_text("""pub mod situ_rt;
+pub mod t;
+pub mod t_converse;
+pub mod t_frame;
+pub mod t_relate;
+
+fn main()
+{
+	const N: usize = t::Frame::SIZE;
+
+	let stream = [0u8; N * 2];
+	let mut back = [0u8; N * 2];
+	let mut reader = t_frame::FrameReader::new(&mut back);
+	let mut seen = 0u32;
+
+	for i in 0..stream.len() {
+		reader.push(&stream[i..i + 1]).expect("a byte the buffer has room for");
+		while seen <= 2 && reader.next().is_ok() {
+			seen += 1;
+			reader.advance().expect("a message the reader just handed out");
+		}
+	}
+	assert_eq!(seen, 2, "a two-message stream did not yield two messages");
+
+	let zeroed = [0u8; N];
+	let query = t::Frame::new(&zeroed).expect("a view over zeroed bytes");
+	let reply = t::Frame::new(&zeroed).expect("a view over zeroed bytes");
+
+	let mut slots = [t_converse::KeyedToSlot::default(); 2];
+	let mut table = t_converse::KeyedToTable::new(&mut slots);
+
+	table.record(&query, 7).expect("a slot to record into");
+	assert_eq!(table.take(&reply).expect("the request just recorded"), 7);
+	assert!(table.take(&reply).is_err(), "matching did not forget");
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-A", "warnings",
+		 str(src / "main.rs"), "-o", str(tmp_path / "run")],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, ran.stderr
