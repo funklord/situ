@@ -87,6 +87,18 @@ GOOD = """relation response_to(request: frame, response: frame) {
 """
 
 
+#: An equality-only relation, for the cases that need two messages known to
+#: satisfy one. `GOOD` carries `response.hdr.index < request.hdr.chunks` as
+#: well, deliberately -- that inequality is what separates a rule about a pair
+#: from the key that identifies one -- and `0 < 0` is false, so a pair of
+#: zeroed messages does not satisfy it. Every equality is satisfied by them,
+#: which is what makes a positive case free of any layout knowledge.
+KEYED = """relation keyed_to(request: frame, response: frame) {
+	must response.hdr.msg == request.hdr.msg;
+}
+"""
+
+
 def checked(body: str) -> ast.Schema:
 	schema = parse_text(HEAD + "\n" + body)
 	wellformed.check(schema)
@@ -571,6 +583,112 @@ def test_the_rust_predicate_compiles_under_denied_warnings(
 		capture_output=True, text=True)
 
 	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_predicate_answers_both_ways(tmp_path: Path) -> None:
+	"""Compiled is not run, and `-fsyntax-only` is not even linked.
+
+	The check above takes the predicate as far as the C++ front end and stops,
+	which invariant 35 names by example as the shape that looks like a test
+	and is not. This one builds a program, runs it, and requires the predicate
+	to accept a matching pair and refuse a mismatched one -- the same two
+	cases the generated cmocka suite holds the C to.
+	"""
+	schema, resolved = analysed(KEYED)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in relate_cpp.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "main.cpp").write_text("""#include <cstdint>
+#include <cstring>
+
+#include "t_relate.hpp"
+
+int main()
+{
+	std::uint8_t a[::situ::frame::size_bytes];
+	std::uint8_t b[::situ::frame::size_bytes];
+
+	std::memset(a, 0x00, sizeof a);
+	std::memset(b, 0x00, sizeof b);
+
+	::situ::rt::message owner_a(a, (std::uint32_t)sizeof a);
+	::situ::rt::message owner_b(b, (std::uint32_t)sizeof b);
+	::situ::frame view_a;
+	::situ::frame view_b;
+
+	if (::situ::frame::at(owner_a, 0, view_a) != ::situ::rt::err::ok) return 1;
+	if (::situ::frame::at(owner_b, 0, view_b) != ::situ::rt::err::ok) return 2;
+	if (::situ::rel_keyed_to(view_a, view_b) != ::situ::rt::err::ok) return 3;
+
+	std::memset(a, 0xff, sizeof a);
+	if (::situ::rel_keyed_to(view_a, view_b) == ::situ::rt::err::ok) return 4;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "situ.c"),
+		 "-o", str(tmp_path / "run")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, f"the C++ predicate answered wrongly at step {ran.returncode}"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_predicate_answers_both_ways(tmp_path: Path) -> None:
+	"""The Rust half of the case above: `--crate-type lib` never runs either."""
+	schema, resolved = analysed(KEYED)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for name, text in relate_rs.generate(schema, resolved, "t").items():
+		(src / name).write_text(text, encoding="ascii")
+
+	(src / "main.rs").write_text("""pub mod situ_rt;
+pub mod t;
+pub mod t_relate;
+
+fn main()
+{
+	let zeroed = [0u8; 64];
+	let filled = [0xffu8; 64];
+
+	let a = t::Frame::new(&zeroed).expect("a view over zeroed bytes");
+	let b = t::Frame::new(&zeroed).expect("a view over zeroed bytes");
+	assert!(t_relate::rel_keyed_to(&a, &b).is_ok(),
+		"a matching pair was refused");
+
+	let c = t::Frame::new(&filled).expect("a view over filled bytes");
+	assert!(t_relate::rel_keyed_to(&c, &b).is_err(),
+		"a mismatched pair was accepted");
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-A", "warnings",
+		 str(src / "main.rs"), "-o", str(tmp_path / "run")],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, ran.stderr
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
