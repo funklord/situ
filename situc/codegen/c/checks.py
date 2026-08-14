@@ -34,7 +34,7 @@ from situc.codegen.c import frame
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
-from situc.relation import conversation_key
+from situc.relation import Refused, conversation_key, key_sides
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Obligation, data_sized, enclosing_arm, has_computable_extent,
@@ -79,6 +79,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 			_struct_checks(suite, schema, resolved, struct, prefix)
 
 	_relation_checks(suite, schema, resolved, basename, prefix)
+	_converse_checks(suite, schema, resolved, basename, prefix)
 	_frame_checks(suite, resolved, basename, prefix)
 
 	return _render(suite, basename)
@@ -231,6 +232,131 @@ def _relation_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 
 	if emitted:
 		suite.includes.append(f"{basename}_relate.h")
+
+
+# ---------------------------------------------------------------------------
+# Conversations
+# ---------------------------------------------------------------------------
+
+
+def _message_preamble(params: list[tuple[str, ResolvedStruct, int]],
+		prefix: str) -> tuple[list[str], list[str]]:
+	"""Declarations and statements for one zeroed message per parameter."""
+	decls: list[str] = []
+	stmts: list[str] = []
+
+	for label, struct, extent in params:
+		decls.extend([
+			f"\tuint8_t {label}_buf[{extent}u];",
+			f"\tsitu_msg_t {label}_msg;",
+			f"\tsitu_view_t {label}_view;",
+		])
+		view = ident(prefix, struct.name, "view")
+		stmts.extend([
+			f"\tmemset({label}_buf, 0, sizeof {label}_buf);",
+			f"\tsitu_msg_init(&{label}_msg, {label}_buf, "
+			f"(uint32_t)sizeof {label}_buf);",
+			f"\tassert_int_equal({view}(&{label}_msg, 0, &{label}_view), SITU_OK);",
+		])
+
+	return decls, stmts
+
+
+def _converse_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
+		basename: str, prefix: str) -> None:
+	"""Rung 5's table, asked the two questions it exists to answer.
+
+	A reply is matched to the request it answers, and a reply nobody asked for
+	is refused. Those discriminate in opposite directions: a table that
+	answered `SITU_OK` to anything would match a reply it never recorded, and
+	one that never matched would fail to find the request it just wrote down.
+
+	Zeroed messages carry the same key on both sides, which is what makes the
+	positive case free of any knowledge of which members the key is built
+	from -- the same reason the relation checks use them.
+	"""
+	emitted = False
+
+	for relation in schema.relations():
+		name = relation.name
+
+		# Mirror what the backend itself refuses, so a check can never name a
+		# table that was not emitted. Asking the same function is what keeps
+		# the two from drifting apart.
+		try:
+			key_sides(relation, resolved)
+		except Refused:
+			suite.skip(f"conversation {name}", "carries no key a table can be "
+			           "built on, which is what the backend refuses too")
+			continue
+
+		params = []
+		for param in relation.params:
+			struct = resolved.structs.get(param.type_name)
+			extent = None
+			if (struct is not None and struct.layout.is_byte_sized
+					and struct.layout.is_fixed_size):
+				extent = _buffer_size(struct.layout)
+			params.append((param.name, struct, extent))
+
+		if any(extent is None for _, _, extent in params):
+			suite.skip(f"conversation {name}", "names a message whose extent "
+			           "is decided by the data, so a fixed buffer cannot "
+			           "stand in")
+			continue
+
+		usable = [(label, struct, extent) for label, struct, extent in params
+		          if struct is not None and extent is not None]
+		table  = ident(prefix, "conv", name)
+		asked, answered = (label for label, _, _ in usable)
+
+		decls, stmts = _message_preamble(usable, prefix)
+		table_decls = [
+			f"\t{table}_slot_t slots[2u];",
+			f"\t{table}_t table;",
+			"\tuint32_t id = 0u;",
+		]
+		init = [f"\t{table}_init(&table, slots, 2u);"]
+
+		suite.add(
+			f"check_conv_{c_name(name)}_matches_a_reply_to_its_request",
+			[*decls, *table_decls, "", *stmts, "", *init,
+			 f"\tassert_int_equal({table}_record(&table, {asked}_view, 7u),",
+			 "\t                 SITU_OK);",
+			 f"\tassert_int_equal({table}_match(&table, {answered}_view, &id),",
+			 "\t                 SITU_OK);",
+			 "\tassert_int_equal(id, 7u);"],
+			[f"/* {name}: a request recorded under its key, and the reply that",
+			 " * answers it handed back the caller's own handle for it. The",
+			 " * handle is arbitrary and that is the point -- the table stores",
+			 " * what the caller gave it rather than anything of its own. */"])
+
+		suite.add(
+			f"check_conv_{c_name(name)}_forgets_once_matched",
+			[*decls, *table_decls, "", *stmts, "", *init,
+			 f"\tassert_int_equal({table}_record(&table, {asked}_view, 7u),",
+			 "\t                 SITU_OK);",
+			 f"\tassert_int_equal({table}_match(&table, {answered}_view, &id),",
+			 "\t                 SITU_OK);",
+			 f"\tassert_int_not_equal({table}_match(&table, {answered}_view, &id),",
+			 "\t                     SITU_OK);"],
+			[f"/* A second copy of the same reply is not a second exchange.",
+			 " * Without this, a table that recorded and never removed would",
+			 " * pass the check above and fill up in service. */"])
+
+		suite.add(
+			f"check_conv_{c_name(name)}_refuses_a_reply_nobody_asked_for",
+			[*decls, *table_decls, "", *stmts, "", *init,
+			 f"\tassert_int_not_equal({table}_match(&table, {answered}_view, &id),",
+			 "\t                     SITU_OK);"],
+			[f"/* Nothing was recorded, so nothing can match. A table that",
+			 " * answered SITU_OK here would satisfy the first check by",
+			 " * accident rather than by remembering anything. */"])
+
+		emitted = True
+
+	if emitted:
+		suite.includes.append(f"{basename}_converse.h")
 
 
 # ---------------------------------------------------------------------------

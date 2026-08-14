@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from situc.codegen.c import checks, frame, generate, relate
+from situc.codegen.c import checks, converse, frame, generate, relate
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
@@ -79,10 +79,12 @@ def build(tmp_path: Path, body: str, preamble: str = PREAMBLE,
 	# break the predicate, and the check has to notice.
 	sources = [tmp_path / "unit.c", tmp_path / "unit_checks.c"]
 	emitted = dict(relate.generate(schema, resolved, "unit"))
-	# Rung 4 is header-only, so it adds nothing to link -- but the suite
-	# includes it, so a helper that did not write it would fail every test in
-	# this file at the preprocessor rather than at the thing under test.
+	# Rungs 4 and 5 are header-only, so they add nothing to link -- but the
+	# suite includes them, so a helper that did not write them would fail every
+	# test in this file at the preprocessor rather than at the thing under
+	# test.
 	emitted.update(frame.generate(schema, resolved, "unit"))
+	emitted.update(converse.generate(schema, resolved, "unit"))
 
 	for name, text in emitted.items():
 		if corrupt is not None and not applied and corrupt[0] in text:
@@ -644,3 +646,38 @@ def test_the_reassembly_loop_is_bounded_by_the_answer() -> None:
 
 	assert "while (seen <= 2u" in emitted
 	assert "assert_int_equal(seen, 2u);" in emitted
+
+
+# -- conversations -----------------------------------------------------------
+
+
+CONVERSATION = """struct frame {
+	u16 msg;
+	u8  index;
+	u8  chunks;
+}
+
+relation answers(request: frame, response: frame) {
+	must response.msg == request.msg;
+}
+"""
+
+
+def test_a_conversation_gets_the_three_questions_a_table_answers() -> None:
+	"""Match, forget, and refuse. A table answering SITU_OK to anything passes
+	the first alone; one that never matched passes the last alone."""
+	emitted = emit(CONVERSATION)
+
+	assert "check_conv_answers_matches_a_reply_to_its_request" in emitted
+	assert "check_conv_answers_forgets_once_matched" in emitted
+	assert "check_conv_answers_refuses_a_reply_nobody_asked_for" in emitted
+	assert '#include "unit_converse.h"' in emitted
+
+
+def test_the_handle_a_table_returns_is_the_callers_own() -> None:
+	"""It stores what it was given rather than anything of its own, so the
+	check records an arbitrary 7 and requires 7 back."""
+	emitted = emit(CONVERSATION)
+
+	assert "_record(&table, request_view, 7u)" in emitted
+	assert "assert_int_equal(id, 7u);" in emitted

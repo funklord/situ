@@ -145,21 +145,26 @@ all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
 generate: $(GEN_HEADERS)
 
 # One rule per schema, because they live in different directories and a single
-# Built at `--layer frame` rather than the default: a rung emits every file
-# the rung below emits, byte-identical, plus new ones, so the accessors these
-# suites have always checked are unchanged and `<name>_frame.h` arrives beside
-# them for the ones that now check the reader. The header is a side effect of
-# this recipe rather than a target of its own, which is what keeps make from
-# treating it as an intermediate and deleting it between runs.
-#
 # pattern rule cannot serve both. situc runs from the repository root so
 # `python3 -m situc.cli` finds the package; GEN_DIR may be absolute (parent) or
 # relative (standalone), so it is resolved before the directory change.
+#
+# Built at `--layer converse` rather than the default: a rung emits every file
+# the rung below emits, byte-identical, plus new ones, so the accessors these
+# suites have always checked are unchanged while `<name>_frame.h` and
+# `<name>_converse.h` arrive beside them for the ones that now check the reader
+# and the conversation table. The headers are side effects of this recipe
+# rather than targets of their own, which is what keeps make from treating
+# them as intermediates and deleting them between runs.
+#
+# Not `drive`: rung 6 owns I/O, and what it emits is not something a suite
+# built out of buffers can execute. The ladder stops here for the same reason
+# the checks do.
 define situ_generate
 $$(GEN_DIR)/$(notdir $(basename $(1))).h $$(GEN_DIR)/$(notdir $(basename $(1))).c: \
 		$$(REPO_ROOT)/$(1) $$(SITUC_SOURCES)
 	@mkdir -p '$$(GEN_DIR)'
-	cd '$$(REPO_ROOT)' && $$(SITUC) build '$(1)' --layer frame \
+	cd '$$(REPO_ROOT)' && $$(SITUC) build '$(1)' --layer converse \
 		--out '$$(abspath $$(GEN_DIR))'
 endef
 
