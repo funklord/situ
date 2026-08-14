@@ -143,25 +143,32 @@ for somebody to notice: `situc` has one and this ships beside it.
 A schema may describe more of a protocol than you want generated, so how much
 becomes code is a choice you make at the command line rather than in the
 schema. `situc build --layer` takes it, defaulting to `view`, which is what
-`situc build` has always done. **Two rungs are real and four are decided and
-not built**; asking for one of those four says which phase adds it. The ladder
-was written down ahead of the rungs on purpose, and the table says where each
-one stands:
+`situc build` has always done. **All six rungs are built**, in all four
+backends. The ladder was written down ahead of the rungs on purpose, and the
+table says what each one adds:
 
 | `--layer` | what it emits | the new "yes" | status |
 |---|---|---|---|
 | `view` | accessors over bytes you own | *(baseline)* | **ships** |
-| `edit` | build or resize a message whose extent is not fixed | may it allocate? | partly |
+| `edit` | build or resize a message whose extent is not fixed | may it allocate? | **ships** |
 | `relate` | predicates over two messages | may it look at two messages? | **ships** |
-| `frame` | a byte stream in, whole messages out | may it hold bytes between calls? | decided |
-| `converse` | match a reply to its request | may it hold messages between calls? | decided |
-| `drive` | send, receive, retransmit, time out | may it own I/O? | decided |
+| `frame` | a byte stream in, whole messages out | may it hold bytes between calls? | **ships** |
+| `converse` | match a reply to its request | may it hold messages between calls? | **ships** |
+| `drive` | send, receive, retransmit, time out | may it own I/O? | **ships** |
 
 `docs/decisions/0032-the-layer-ladder.md` is the reasoning, and writing it
-down before the rungs exist is the point: "should situ do X" stops being asked
-once per adopter and becomes "at which rung does X live". Rung 2 exists in
-pieces -- `--owned` emits a fixed-size decode today and refuses
-variable-length members, which is that refusal seen from below.
+down before the rungs existed is the point: "should situ do X" stops being
+asked once per adopter and becomes "at which rung does X live".
+
+Rung 2 is where allocation is spent, and `--owned` is only its first case:
+it emits a fixed-size struct and a decode that copies into it, and refuses a
+variable-length member because "a pointer reintroduces exactly the lifetime
+the caller was escaping, and an array of the worst case is a decision about
+memory nobody asked for". Both stop being true once the caller supplies the
+backing, which is what `_edit.h` adds -- measure, then decode into storage
+you hand it. `docs/decisions/0031-where-allocation-is-unavoidable.md`
+enumerates the five cases and `project.md` 26.99 says which shape serves
+each.
 
 A relation is a pure predicate over two views, so `--layer relate` adds one
 function per relation and nothing else, in whichever backend you asked for:
@@ -184,8 +191,9 @@ that, so no new failure class had to reach four runtimes; Python raises
 integers are arbitrary precision and would compare a `u64` against an `i8`
 happily; C, C++ and Rust cannot, no 64-bit type holding both ranges. It is
 refused in all four, because a schema one backend accepts and another does
-not is a schema that means two things. The walker does not read relations
-yet -- that needs a section in the packed image, which is the rest of 26.95.
+not is a schema that means two things. The walker reads relations out of the
+packed image and answers them too, so a schema's predicates can be exercised
+without generating or compiling anything.
 
 Each rung answers one more question yes, and the rung you pick is the
 invariant you get: `--layer view` guarantees the allocation-free property
