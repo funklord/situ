@@ -363,3 +363,127 @@ rather than a `view` consumer. `fuzznet`'s own migration order has fuzzypickles
 adopting this library last, so the two constraints meet there and neither is
 urgent -- but a rung-2 requirement discovered at that point would be expensive,
 and it is known now.
+
+---
+
+# Bug, 2026-08-14: one unimplemented feature, four inconsistent answers
+
+Found while building `fuzznet`'s `chain/`, by running `situc build` against
+`wire/frame.situ` for the first time. situc 1.0.
+
+**The schema `fuzznet` has committed since 2026-08-08 does not build.** That
+was not known here, and the reason it was not known is worth stating first,
+because it is the failure this file's own reporting terms are about:
+`fuzznet`'s `project.md` cited `situc wire`, `situc map`, `situc advise` and
+`require canonical` as evidence the schema was good. All four still pass.
+`situc build` had simply never been run, and a passing check is not evidence
+for a property it does not cover. That half is ours.
+
+## The reproduction
+
+Six lines, no crypto, no relations:
+
+```
+target buffer;
+endian big;
+
+struct m {
+	u16 total  [must_ne = 0];
+	u16 index  [max = total - 1];
+}
+```
+
+    situc wire  min.situ      # OK -- and see below
+    situc map   min.situ      # OK
+    situc build min.situ      # error: `total` is not a compile-time constant
+    situc verify min.situ ... # same error
+
+The same shape in `require` form, which is the spelling decision 0030 names:
+
+```
+require m.index < m.total;
+```
+
+    situc wire  req.situ      # OK
+    situc map   req.situ      # error: field references are not compile-time
+    situc build req.situ      # constants ... reading a value out of a parsed
+                              # message arrives in phase 5
+
+## What is actually wrong, which is not "build rejects it"
+
+Refusing an unimplemented construct is correct. **Four commands disagreeing
+about whether it is legal is not**, and the disagreement is not even
+consistent between two spellings of one idea:
+
+| | `[max = total - 1]` | `require m.index < m.total` |
+|---|---|---|
+| `wire` | accepts, **and publishes the bound as contract** | accepts |
+| `map` | accepts | refuses, names phase 5 |
+| `build` | refuses, blames "compile-time constant" | refuses, names phase 5 |
+| `verify` | refuses | -- |
+
+Three things follow, in the order they cost us:
+
+1. **`situc wire` emits `max=total - 1` into the committed byte contract for
+   a bound nothing can enforce.** That is the dangerous one. `fuzznet`'s
+   `project.md` records, as a win, that "`frame.situ` now carries
+   `[max = chunks - 1]`, which `situc wire` reports as part of the contract"
+   -- so this library believed it had a check it does not have, and believed
+   it on the strength of situ's own output. A contract entry for an
+   unenforceable constraint reads as protection.
+2. **The two diagnostics are not equally honest.** "reading a value out of a
+   parsed message arrives in phase 5" is a good diagnostic: it names what is
+   missing and where it lands. "only `const` values and enum members are
+   compile-time constants" describes a rule without saying whether the thing
+   asked for is unimplemented or wrong forever, and a reader takes it as the
+   second.
+3. **The phase it names is marked complete.** 26.5, "Phase 5: expressions and
+   dynamic layout", reads **Status: complete**. So either the diagnostic is
+   stale or the status is, and from outside there is no way to tell which.
+   This is exactly the designed-versus-built property this file asked for
+   and got; it has come loose in one spot.
+
+## Where situ is right and we were wrong
+
+Stated plainly, because we are the ones who wrote the schema:
+
+- **Field references work fine in sizes.** `u8 payload[length]` builds. So
+  situ is not refusing field references generally, only in bounds and
+  predicates, which is a coherent line and not an oversight.
+- **Constant bounds work fine.** `[max = 65534]` builds.
+- **Every documented `max =` in situ's `project.md` is a constant**
+  (`MAX_PAYLOAD`, `1500`, `1024`). A field-referencing `max` is undocumented,
+  so we used a construct nobody promised, and the parser's accepting it is
+  what let us believe otherwise.
+
+## The one claim we would ask you to look at
+
+Decision 0030's table says of "a chunk's `index` is below its own `chunks`
+count": **"one view -- already a plain `require`"**, and the prose adds that
+it "needs nothing new". That is true of the grammar and not of the
+implementation -- the `require` spelling refuses at `map` and `build`.
+
+That row is what sent us to write the constraint at all. `fuzznet`'s own
+`project.md` repeats it approvingly, and calls the earlier miscount "the more
+useful half of the mistake", because a constraint filed under "needs a
+feature that does not exist" is a constraint nobody writes. The correction
+was right and the constraint is still not writable.
+
+## What we are not asking for
+
+- **Not for phase 5 to be reopened, or for anything to be prioritised.** Our
+  own step 2 is not blocked on this in a way that costs a date: `chain/` went
+  first precisely because sec 7a had already assigned it to us as semantics
+  rather than layout, so it needs no generated code and is built and tested.
+- **Not for the bound to be silently accepted.** Refusing it is fine.
+
+What would be worth having, cheapest first: **`wire` refusing what `build`
+refuses**, so a contract cannot be published for a constraint that cannot be
+checked; the constant-bound diagnostic naming the phase the way the `require`
+one does; and 26.5's status or that diagnostic reconciled, whichever is
+stale.
+
+We will keep `[max = chunks - 1]` in `frame.situ` rather than dropping it,
+since dropping it would lose the constraint from the one place it is written
+down. If you would rather it were spelled differently, say which and we will
+change it.
