@@ -139,9 +139,31 @@ it here.
 
 ## 3. Filenames
 
-Lowercase and `snake_case` for everything the project names itself --
-sources, headers, documentation. So `main_window.cpp`, not
-`MainWindow.cpp`.
+**Lowercase, always**, for everything the project names itself. So
+`main_window.cpp`, not `MainWindow.cpp`.
+
+**The separator follows what the name binds to**, and the two cases are a
+technical difference rather than a matter of taste:
+
+- **`snake_case` where the filename becomes an identifier** -- a source
+  file, a header, a module. `desired_state.rs` *is* the module
+  `desired_state`, and `desired-state.rs` cannot be a module at all,
+  because a hyphen is not legal in a Rust path; Python imports are the
+  same. That is the language's requirement wearing a convention's
+  clothes, and it is not negotiable where it applies.
+- **`kebab-case` for prose** -- documentation, design notes, decision
+  records. Nothing imports `code-style.md`, so no identifier is at stake,
+  and kebab-case is what markdown and URLs settled on long ago.
+
+This rule used to say `snake_case` for documentation too, and every
+private project was quietly ignoring it -- including this one. Measured
+across all fourteen trees before it was rewritten: of 197 tracked markdown
+basenames, 174 are kebab-case, 19 are a single word with no separator to
+argue about, and four carry an underscore. Three of those four are SHOUTY
+and break the lowercase half regardless of separator, which leaves exactly
+one genuine counter-example in the workspace. Every file in this
+guidelines directory was already kebab-case, so the rule as written was
+one its own document broke.
 
 Settled exceptions:
 
@@ -150,7 +172,9 @@ Settled exceptions:
 - **Root files with an established convention** -- `README.md`, `LICENSE`,
   `CHANGELOG.md`, `AUTHORS`.
 - **Package-system spellings** -- kebab-case where Cargo or Debian require
-  it.
+  it. That is now the same spelling prose uses, so a crate directory and
+  the design note beside it agree by construction rather than by
+  coincidence.
 
 ## ASCII in source
 
@@ -168,16 +192,26 @@ rather than holes in it:
   parser, a terminal emulator's character tables, a font tool.
 
 Where a project needs the rule enforced, `ascii_only` in `.style-gate.toml`
-turns it on. In Python it enforces exactly the shape above -- ASCII outside
-string literals, Unicode allowed inside them -- because the gate reads the
-file with `tokenize`. Other languages get a whole-file byte check, having
-no tokenizer here, and so does a Python file that will not tokenise: a file
-nobody can parse is not a file that has been cleared.
+turns it on. In Python and in C/C++ it enforces exactly the shape above --
+ASCII outside string literals, Unicode allowed inside them. Python is read
+with `tokenize`; C and C++ get a scanner written for the purpose, nothing in
+the standard library lexing them. Every other language still gets a
+whole-file byte check, having no lexer here, and so does a file in either of
+those two that will not lex: a file nobody can parse is not a file that has
+been cleared.
 
 It was the whole file for everyone until a project that prints two status
 ticks had to switch the check off to keep them, which switched it off for
 its comments as well, and an em dash arrived in one. **An exception wider
 than its reason is how a rule stops being enforced.**
+
+The C/C++ half followed from the same shape, measured. A Qt tree kept the
+check off for the glyphs on its toolbar and in its media dialog, which are
+genuinely output; of the 1114 non-ASCII characters in the 233 C and C++
+files its gate reads, 260 were those, and the other 854 were prose that had
+collected in comments across 163 of the files -- 437 em dashes and 369
+section signs, the two characters this rule names by example. One em dash is
+what the first incident cost. The difference is only how long nobody looked.
 
 ## Formatters
 
@@ -270,6 +304,7 @@ fixed.
 
 The project's `project.md` may state the three rules in brief and point
 here for the detail. It does not restate the precedence rule.
+
 ---
 
 # Additions specific to situ
