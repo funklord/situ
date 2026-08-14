@@ -177,6 +177,31 @@ $(foreach schema,$(SCHEMAS),\
 $(foreach name,$(VECTOR_SCHEMAS),\
 	$(eval VECTORS_$(name) := $(basename $(SCHEMA_$(name))).vectors))
 
+# Which schemas declare a relation, and therefore have a predicate for the
+# checks suite to call. Derived by reading them rather than listed: this file
+# is already the third answer to "which schemas are there" (26.31), and a
+# fourth kept in step by hand is exactly how a relation comes to be generated
+# and linked by nothing. Reading the list this file already names means the
+# two cannot disagree.
+RELATE_NAMES	:= $(sort $(notdir $(basename \
+		   $(shell grep -l '^relation ' $(SCHEMAS:%=$(REPO_ROOT)/%) 2>/dev/null))))
+
+$(foreach name,$(RELATE_NAMES),\
+	$(eval RELATE_OBJS_$(name) := $(GEN_DIR)/$(name)_relate.o))
+
+# Keep the relation sources, and name them rather than writing a bare
+# `.SECONDARY:` that would catch every pattern rule in the file.
+#
+# Make deletes an intermediate once it has served its purpose, and then does
+# not rebuild a *missing* one when the thing depending on it already exists.
+# The header is what the checks suite includes while the object is what it
+# links, so the first build passed, the header was deleted as spent, and the
+# second build failed compiling a suite whose header no longer existed. A
+# build bug that appears only on the second run is the expensive kind, and
+# this is the third time this repository has met that rule.
+.SECONDARY: $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.c) \
+	    $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.h)
+
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
@@ -259,10 +284,23 @@ $(GEN_DIR)/%_checks.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 	cd '$(REPO_ROOT)' && $(SITUC) gen-checks '$(SCHEMA_$*)' \
 		--out '$(abspath $(GEN_DIR))'
 
-$(BUILD_DIR)/%_checks: $(GEN_DIR)/%_checks.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
+# The predicate a relation compiles to. `situc build` at the default rung does
+# not emit it, so a schema that declares one needs this second invocation --
+# and the checks suite calls it, which is what makes rung 3 executed rather
+# than merely generated. The rung emits the view-level files again on the way
+# past, byte-identical, so the only cost is one rebuild of the object below.
+$(GEN_DIR)/%_relate.c $(GEN_DIR)/%_relate.h: $(REPO_ROOT)/$$(SCHEMA_$$*) \
+		$(SITUC_SOURCES)
+	@mkdir -p '$(GEN_DIR)'
+	cd '$(REPO_ROOT)' && $(SITUC) build '$(SCHEMA_$*)' --layer relate \
+		--out '$(abspath $(GEN_DIR))'
+
+$(BUILD_DIR)/%_checks: $(GEN_DIR)/%_checks.c $(GEN_DIR)/%.o \
+		$$(RELATE_OBJS_$$*) $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$< $(GEN_DIR)/$*.o $(RELATE_OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) \
+		$(CMOCKA_LIBS) -o $@
 
 $(BUILD_DIR)/%_vectors: $(GEN_DIR)/%_vectors.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'

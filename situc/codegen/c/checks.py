@@ -33,6 +33,7 @@ from situc.capability import Axis
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
+from situc.relation import conversation_key
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Obligation, data_sized, enclosing_arm, has_computable_extent,
@@ -49,6 +50,11 @@ class Suite:
 	lines: list[str]      = field(default_factory=list)
 	names: list[str]      = field(default_factory=list)
 	skipped: list[str]    = field(default_factory=list)
+	#: Headers beyond the schema's own, added by a check family that needs
+	#: one. A relation's predicate lives in `<basename>_relate.h`, which the
+	#: view-level suite has no reason to include and must not include when
+	#: the schema declares no relation -- the file is not emitted then.
+	includes: list[str]   = field(default_factory=list)
 
 	def add(self, name: str, body: list[str], doc: list[str]) -> None:
 		self.lines.extend(["", *doc,
@@ -70,6 +76,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 			_register_checks(suite, struct, prefix)
 		else:
 			_struct_checks(suite, schema, resolved, struct, prefix)
+
+	_relation_checks(suite, schema, resolved, basename, prefix)
 
 	return _render(suite, basename)
 
@@ -94,6 +102,8 @@ def _render(suite: Suite, basename: str) -> str:
 		"",
 		f'#include "{basename}.h"',
 	]
+
+	lines.extend(f'#include "{header}"' for header in suite.includes)
 
 	if suite.skipped:
 		lines.extend(["", "/* Not checked here, and why:"])
@@ -121,6 +131,104 @@ def _render(suite: Suite, basename: str) -> str:
 	              "\treturn cmocka_run_group_tests(checks, NULL, NULL);", "}"])
 
 	return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Relations
+# ---------------------------------------------------------------------------
+
+
+def _relation_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
+		basename: str, prefix: str) -> None:
+	"""A relation's predicate, executed rather than merely compiled.
+
+	Two zeroed messages satisfy every equality a relation can state, and a
+	message of `0xff` beside a zeroed one satisfies none of them. That gives a
+	positive and a negative case without reading an offset or naming a
+	member's type, which is what lets this cover a nested path and a bit-packed
+	enum on the same terms as a plain integer.
+
+	**Both cases or neither.** A predicate that answers `SITU_OK` to everything
+	passes the positive alone, and one that answers `SITU_ERR_CONSTRAINT` to
+	everything passes the negative alone; only the pair says the predicate
+	discriminates. That is the same reasoning as invariant 35, applied to the
+	one construct that had generated code nothing ever ran.
+	"""
+	emitted = False
+
+	for relation in schema.relations():
+		name = relation.name
+		key  = conversation_key(relation)
+
+		if not key:
+			suite.skip(f"relation {name}", "states no equality, so a pair of "
+			           "zeroed messages is not known to satisfy it")
+			continue
+		if len(key) != len(relation.body):
+			suite.skip(f"relation {name}", "carries a constraint that is not "
+			           "an equality, which zeroed messages need not satisfy")
+			continue
+
+		params = []
+		for param in relation.params:
+			struct = resolved.structs.get(param.type_name)
+			extent = None
+			if (struct is not None and struct.layout.is_byte_sized
+					and struct.layout.is_fixed_size):
+				extent = _buffer_size(struct.layout)
+			params.append((param.name, struct, extent))
+
+		if any(extent is None for _, _, extent in params):
+			suite.skip(f"relation {name}", "names a message whose extent is "
+			           "decided by the data, so a fixed buffer cannot stand in")
+			continue
+
+		def case(fill: int, expect: str) -> list[str]:
+			decls: list[str] = []
+			stmts: list[str] = []
+			fills = (fill, 0x00)
+
+			for (label, struct, extent), byte in zip(params, fills):
+				assert struct is not None
+				decls.extend([
+					f"\tuint8_t {label}_buf[{extent}u];",
+					f"\tsitu_msg_t {label}_msg;",
+					f"\tsitu_view_t {label}_view;",
+				])
+				view = ident(prefix, struct.name, "view")
+				stmts.extend([
+					f"\tmemset({label}_buf, 0x{byte:02x}, sizeof {label}_buf);",
+					f"\tsitu_msg_init(&{label}_msg, {label}_buf, "
+					f"(uint32_t)sizeof {label}_buf);",
+					f"\tassert_int_equal({view}(&{label}_msg, 0, &{label}_view), "
+					"SITU_OK);",
+				])
+
+			args = ", ".join(f"{label}_view" for label, _, _ in params)
+			stmts.append(f"\tassert_int_equal({ident(prefix, 'rel', name)}"
+			             f"({args}), {expect});")
+			return [*decls, "", *stmts]
+
+		spelled = ", ".join(f"{left} == {right}" for left, right in key)
+
+		suite.add(
+			f"check_relation_{c_name(name)}_holds_when_the_key_matches",
+			case(0x00, "SITU_OK"),
+			[f"/* {name} says {spelled}. Two zeroed messages agree on every",
+			 " * one of those, so the predicate must accept the pair. */"])
+
+		suite.add(
+			f"check_relation_{c_name(name)}_refuses_a_mismatched_key",
+			case(0xff, "SITU_ERR_CONSTRAINT"),
+			[f"/* The same relation, with the first message filled with 0xff:",
+			 " * every equality above now compares a nonzero value against a",
+			 " * zero one, so the predicate must refuse the pair. Without this",
+			 " * case a predicate that accepts everything would still pass. */"])
+
+		emitted = True
+
+	if emitted:
+		suite.includes.append(f"{basename}_relate.h")
 
 
 # ---------------------------------------------------------------------------

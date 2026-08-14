@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from situc.codegen.c import checks, generate
+from situc.codegen.c import checks, generate, relate
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
@@ -58,23 +58,42 @@ def build(tmp_path: Path, body: str, preamble: str = PREAMBLE,
 	header = generated.header
 	source = generated.source
 
+	applied = corrupt is None
 	if corrupt is not None:
 		before, after = corrupt
 		if before in header:
-			header = header.replace(before, after, 1)
+			header  = header.replace(before, after, 1)
+			applied = True
 		elif before in source:
-			source = source.replace(before, after, 1)
-		else:
-			raise AssertionError(f"nothing to corrupt: {before}")
+			source  = source.replace(before, after, 1)
+			applied = True
 
 	(tmp_path / "unit.h").write_text(header, encoding="ascii")
 	(tmp_path / "unit.c").write_text(source, encoding="ascii")
 	(tmp_path / "unit_checks.c").write_text(
 		checks.generate(schema, resolved, "unit"), encoding="ascii")
 
+	# A schema that declares a relation needs rung 3 emitted as well, because
+	# the suite calls the predicate. `corrupt` reaches these too, which is what
+	# lets a relation check be held to the same standard as an accessor one:
+	# break the predicate, and the check has to notice.
+	sources = [tmp_path / "unit.c", tmp_path / "unit_checks.c"]
+	for name, text in relate.generate(schema, resolved, "unit").items():
+		if corrupt is not None and not applied and corrupt[0] in text:
+			text    = text.replace(corrupt[0], corrupt[1], 1)
+			applied = True
+		(tmp_path / name).write_text(text, encoding="ascii")
+		if name.endswith(".c"):
+			sources.append(tmp_path / name)
+
+	# The corruption has to land somewhere. A test that silently corrupted
+	# nothing would compile a correct program and report a pass, which is the
+	# vacuous case this whole file exists to rule out.
+	assert applied, f"nothing to corrupt: {corrupt[0] if corrupt else ''}"
+
 	built = subprocess.run(
 		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
-		 str(tmp_path / "unit.c"), str(tmp_path / "unit_checks.c"),
+		 *(str(path) for path in sources),
 		 str(ROOT / "build" / "host" / "runtime" / "libsitu.a"),
 		 "-lcmocka", "-o", str(tmp_path / "run")],
 		capture_output=True, text=True, cwd=tmp_path)
@@ -523,3 +542,75 @@ def test_a_run_gets_no_sub_view_check() -> None:
 	text = emit(WHILE_RUN)
 
 	assert "chain_items_view" not in text
+
+
+# -- relations ---------------------------------------------------------------
+#
+# Rung 3 emitted a predicate that nothing in the repository ever called. The
+# suite below is what makes it executed rather than merely compiled, which is
+# the distinction invariant 35 exists to draw.
+
+PAIR = """struct frame {
+	u16 msg;
+	u8  index;
+	u8  chunks;
+}
+
+relation response_to(request: frame, response: frame) {
+	must response.msg == request.msg;
+}
+"""
+
+UNEQUAL = """struct frame {
+	u16 msg;
+	u8  index;
+	u8  chunks;
+}
+
+relation ordered(request: frame, response: frame) {
+	must response.index < request.chunks;
+}
+"""
+
+
+def test_a_relation_gets_both_a_positive_and_a_negative_case() -> None:
+	"""Either alone passes for a predicate that ignores its arguments."""
+	emitted = emit(PAIR)
+
+	assert "check_relation_response_to_holds_when_the_key_matches" in emitted
+	assert "check_relation_response_to_refuses_a_mismatched_key" in emitted
+	assert "SITU_ERR_CONSTRAINT" in emitted
+
+
+def test_the_relation_header_is_included_only_where_there_is_one() -> None:
+	"""`_relate.h` is not emitted for a schema with no relation, so including
+	it unconditionally would break every other suite at the preprocessor."""
+	assert '#include "unit_relate.h"' in emit(PAIR)
+	assert "_relate.h" not in emit(SIMPLE)
+
+
+def test_a_relation_that_is_not_an_equality_says_why_it_is_skipped() -> None:
+	"""Zeroed messages satisfy every equality and need not satisfy `<`, so the
+	generic pair of cases cannot serve one. Recorded rather than silently
+	absent: a check nobody emitted looks exactly like a check that passed."""
+	emitted = emit(UNEQUAL)
+
+	assert "relation ordered: states no equality" in emitted
+	assert "check_relation_ordered" not in emitted
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_predicate_that_accepts_everything_is_caught(tmp_path: Path) -> None:
+	"""The test that makes the two relation checks worth emitting.
+
+	A predicate rewritten to answer `SITU_OK` whatever it is handed passes the
+	positive case, and only the negative one notices. This is the relation
+	half of `test_a_wrong_offset_is_caught`, and it failed as required before
+	the negative case existed.
+	"""
+	result = build(tmp_path, PAIR,
+		corrupt=("situ_err_t err = SITU_OK;",
+		         "situ_err_t err = SITU_OK; return err;"))
+
+	assert result.returncode != 0, "a predicate accepting everything went unnoticed"
+	assert "check_relation_response_to_refuses_a_mismatched_key" in result.stdout
