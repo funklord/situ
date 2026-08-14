@@ -2625,3 +2625,169 @@ fn main()
 
 	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
 	assert ran.returncode == 0, ran.stderr
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_the_cpp_driver_retransmits_on_the_clock_it_is_given(
+		tmp_path: Path) -> None:
+	"""Rung 6 owns I/O and never owns the clock.
+
+	Time enters `step` as a parameter, so a retransmission is a function of
+	the number passed in rather than of how long the test took to run. The
+	sink counts submissions: one for the send, none while the deadline is in
+	the future, a second once it is past.
+	"""
+	schema, resolved = analysed(POLICY)
+
+	for name, text in generate_cpp(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for module in (relate_cpp, frame_cpp, converse_cpp, drive_cpp):
+		for name, text in module.generate(schema, resolved, "t").items():
+			(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "main.cpp").write_text("""#include <cstdint>
+#include <cstring>
+
+#include "t_drive.hpp"
+
+namespace {
+
+class counting_io : public ::situ::io {
+public:
+	unsigned submissions = 0u;
+
+	::situ::rt::err submit(const std::uint8_t *data,
+	                       std::uint32_t len) noexcept override
+	{
+		(void)data;
+		(void)len;
+		submissions++;
+		return ::situ::rt::err::ok;
+	}
+};
+
+}  /* namespace */
+
+int main()
+{
+	const std::uint32_t n = ::situ::frame::size_bytes;
+	std::uint8_t bytes[::situ::frame::size_bytes];
+	std::memset(bytes, 0, sizeof bytes);
+
+	::situ::rt::message owner(bytes, n);
+	::situ::frame view;
+	if (::situ::frame::at(owner, 0, view) != ::situ::rt::err::ok) return 1;
+
+	counting_io sink;
+	::situ::response_to_driver::slot slots[2];
+	::situ::response_to_driver driver(slots, 2u, sink, 800u, 3u);
+
+	if (driver.send(view, bytes, n, 7u, 0u) != ::situ::rt::err::ok) return 2;
+	if (sink.submissions != 1u) return 3;
+
+	std::uint32_t next_ms = 0u;
+	std::uint32_t expired = 0u;
+
+	if (driver.step(100u, next_ms, expired) != ::situ::rt::err::ok) return 4;
+	if (sink.submissions != 1u) return 5;
+
+	if (driver.step(2000u, next_ms, expired) != ::situ::rt::err::ok) return 6;
+	if (sink.submissions != 2u) return 7;
+
+	std::uint32_t id = 0u;
+	if (driver.on_message(view, id) != ::situ::rt::err::ok) return 8;
+	if (id != 7u) return 9;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, "-std=c++17", "-O1", f"-I{tmp_path}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{RUNTIME}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "situ.c"),
+		 "-o", str(tmp_path / "run")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, f"the C++ driver answered wrongly at step {ran.returncode}"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_rust_driver_retransmits_on_the_clock_it_is_given(
+		tmp_path: Path) -> None:
+	"""The Rust half of the case above. `Io` is a trait here rather than an
+	abstract class, and the counting sink is the whole implementation."""
+	schema, resolved = analysed(POLICY)
+
+	src = tmp_path / "src"
+	src.mkdir()
+	(src / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "t.rs").write_text(
+		generate_rs(schema, resolved, "t").module, encoding="ascii")
+	for module in (relate_rs, frame_rs, converse_rs, drive_rs):
+		for name, text in module.generate(schema, resolved, "t").items():
+			(src / name).write_text(text, encoding="ascii")
+
+	(src / "main.rs").write_text("""pub mod situ_rt;
+pub mod t;
+pub mod t_converse;
+pub mod t_drive;
+pub mod t_frame;
+pub mod t_relate;
+
+use situ_rt::Result;
+
+/// The count lives outside the sink, because the driver takes the sink by
+/// value and a test that could not read the count back would pass whether or
+/// not anything was ever retransmitted.
+struct Counting {
+	submissions: std::rc::Rc<std::cell::Cell<u32>>,
+}
+
+impl t_drive::Io for Counting {
+	fn submit(&mut self, data: &[u8]) -> Result<()> {
+		let _ = data;
+		self.submissions.set(self.submissions.get() + 1);
+		Ok(())
+	}
+}
+
+fn main()
+{
+	let bytes = [0u8; t::Frame::SIZE];
+	let query = t::Frame::new(&bytes).expect("a view over zeroed bytes");
+
+	let seen = std::rc::Rc::new(std::cell::Cell::new(0u32));
+	let mut slots = [t_drive::ResponseToSlot::default(); 2];
+	let mut driver = t_drive::ResponseToDriver::new(
+		&mut slots, Counting { submissions: seen.clone() }, 800, 3);
+
+	driver.send(&query, &bytes, 7, 0).expect("a slot to send from");
+	assert_eq!(seen.get(), 1, "sending did not submit");
+
+	driver.step(100).expect("a step before the deadline");
+	assert_eq!(seen.get(), 1, "retransmitted before the deadline");
+
+	driver.step(2000).expect("a step past the deadline");
+	assert_eq!(seen.get(), 2, "the deadline passed and nothing was resent");
+
+	let id = driver.on_message(&query).expect("the request just sent");
+	assert_eq!(id, 7, "the driver returned somebody else's handle");
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-A", "warnings",
+		 str(src / "main.rs"), "-o", str(tmp_path / "run")],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, ran.stderr
