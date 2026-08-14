@@ -3487,7 +3487,7 @@ value:
 | Artifact | Command | Why |
 |---|---|---|
 | golden-vector tests | `situc gen-tests` | schema + hex vectors -> cmocka test cases; the only reliable way to know a layout change broke the wire format |
-| capability conformance | `situc gen-checks` | schema alone -> cmocka test cases holding the accessors to what the map claims; a map the generated code contradicts is worse than no map |
+| capability conformance | `situc gen-checks` | schema alone -> cmocka test cases holding the accessors to what the map claims, and every layer rung the schema reaches to what that rung promises; a map the generated code contradicts is worse than no map |
 | fuzz harness | `situc gen-fuzz` | libFuzzer/AFL entry point per parseable struct; parse safety is the top risk in a protocol parser |
 | byte-layout diagram | `situc doc --format=ascii` | RFC-style packet diagrams straight from the schema; what protocol documentation always needs |
 | Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff. Lua rather than a C plugin, for the ABI reason in `docs/decisions/0021-dissector-language.md` |
@@ -3620,6 +3620,8 @@ promise.
 | canonicity | pytest | one test per source of non-canonicity in 14.4 |
 | codegen golden | pytest + file compare | generated C compared against committed expected output |
 | capability conformance | generated cmocka | the accessors are held to the map they were generated beside: a field must occupy exactly the bytes claimed, a write must move nothing else, a constraint must refuse what it forbids. Generated from the schema alone, so it costs nothing to run over every example and a new construct is covered the day it lands |
+| the layer ladder, rungs 3 to 5 | generated cmocka | the same suite, extended past the accessors: a relation's predicate accepts a matching pair and refuses a mismatched one, a framing reader fed a byte at a time yields exactly the messages that were in the stream and nothing from a partial one, and a conversation table matches a reply to its request, forgets it, and refuses one nobody asked for. Each rung emits both cases or neither, because a predicate that accepts everything passes the positive alone. Rung 6 is not here: `drive` owns I/O, and a suite built out of buffers cannot execute it |
+| the layer ladder, in four backends | pytest + each toolchain | every rung's output *run* rather than compiled. This was `-fsyntax-only` for C++ and `--crate-type lib` for Rust, neither of which links or executes anything, so rungs 3 to 6 were checked in four backends and executed in one. A driver is given its clock as a parameter, so a retransmission follows from the number passed to `step` rather than from how long the test took |
 | generated code behavior | cmocka | compile generated C and exercise it; use `--wrap` for syscall-level mocking where needed |
 | offset constancy | cmocka + disassembly check | verify view field access compiles to constant offsets |
 | round-trip | pytest + hex vectors | parse then re-emit must be byte-identical for canonical schemas |
@@ -11144,6 +11146,58 @@ and `validate` had to keep "I cannot answer" separate from "the answer is
 no". Both are the same rule: a walker that folds its own limits into its
 answers produces wrong values indistinguishable from right ones, which is
 the one failure this component exists to avoid.
+
+### 26.114 The ladder nobody had run
+
+The six rungs were built, in four backends, and **no schema in the repository
+declared a relation.** Rungs 3 to 6 existed only in the fixtures inside
+`tests/unit/test_relations.py`, which put them outside every mechanism section
+22 calls the highest-value coverage: the example sweep, the generated cmocka
+suites, the fuzz harnesses and the four-backend differential had none of them
+ever been pointed at one. `examples/dns` carries the exchange now -- RFC 1035
+makes ID and OPCODE the match and asks for a retry interval of two to five
+seconds, so none of it is invented -- and the capability map gained
+`layers: floor=view reach=drive`, which makes a schema's reach up the ladder a
+reviewable line rather than a property nobody would notice changing.
+
+**Including a header is what compiles it.** `<name>_frame.h` had never been
+compiled by anything, and the moment the checks suite included it, it did not
+compile: `framed_structs` returned every struct that was not a register, while
+`traverse.frameable` answers whether a whole one can be recognised in a prefix
+of a stream. Four structs in `tests/schemas/edges.situ` got a reader built out
+of a `_required` only a frameable struct has, and a variable-extent view was
+passed three arguments where it takes four. Both had shipped. This is the third
+time this repository has paid for "generating is not compiling", after the
+`edges.situ` C++ gap and the fuzz harness that named a macro only fixed structs
+have.
+
+**A check that hangs is worse than one that fails.** The reassembly check
+looped while the reader kept answering `SITU_OK`, which against a reader that
+always does is not a loop that ends. It was found by breaking the reader rather
+than by reading the code: the mutation that should have failed in a second ran
+until it was killed. CI reports that as a timeout with no name on it. The loop
+is bounded by the answer now -- three messages cannot arrive from a
+two-message stream, so seeing a third is the failure.
+
+**Five probes proved nothing on their first attempt**, and every one returned a
+clean result that read like evidence. A venv built to stand in for a machine
+without the oracle libraries also lacked pytest, so it reported 419 errors
+rather than the ten under test. A regex meant to break a C++ predicate named a
+parameter `reply` where the schema calls it `response`. Two harnesses picked
+the first `main.rs` or `main.cpp` in a file rather than the one that mentions
+the thing under test, and ran a program that could not have failed. One import
+named `situ` where the package is `situc`. Each was caught only because a
+specific failure was expected and did not arrive -- which is the argument for
+predicting the failure before running the probe, rather than reading whatever
+comes back as confirmation. The mutation harnesses select by content and assert
+that the mutation landed.
+
+**What is not covered, and why it is not a gap.** Rung 6 has no schema-derived
+suite: `drive` owns I/O, and a cmocka suite built out of buffers cannot execute
+it. It is driven from `tests/unit/test_relations.py` in three backends instead,
+each given its clock as a parameter. The generated build stops at `converse`
+and says so, because a boundary that is not written down is read as an
+oversight by whoever finds it next.
 
 ### Invariants to hold across all phases
 
