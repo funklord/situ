@@ -5742,6 +5742,33 @@ Measured, the build included in both cases:
 | forty-one DNS labels, every one | 103 ms | 5 ms |
 | thirty header fields, every one, 300 times | 20 ms | 1 ms |
 
+**Those two rows are C's, and for a long time they were the whole of the
+evidence.** The other three backends grew the second accessor family after the
+measurements were taken, so this page claimed a cost in four languages and had
+numbers for one. `tools/bench.py` exists to close that, and this is what it
+answers -- for the case where the cache can help at all, an eight-field record
+with seven dynamic offsets:
+
+| | C | C++ | Rust | Python |
+|---|---|---|---|---|
+| per-call offsets against cached | 3.0x | 3.1x | 2.5x | 3.0x |
+
+**Ratios and deliberately not milliseconds.** A wall-clock number belongs to
+the machine that took it, and no machine here was quiet: the three runs these
+came from sat at load averages of 2.0, 4.6 and 16 on twelve cores, with a fuzz
+run and then another project's Qt build alongside. Across that spread the
+absolute times moved by as much as 2.2x -- Python's uncached case ran 6633 ms
+and 14840 ms -- while every ratio moved by at most 0.5, and most by 0.1. That
+is the signature of a measurement of algorithmic shape rather than of a
+machine, which is the only part worth writing down. Whoever gets a quiet
+machine can add the times.
+
+The three-member case is here too, and its answer is that the cache buys
+nothing: 0.9x in C, 1.0x in C++ and Rust, 1.3x in Python. Resolving the offsets
+scans the target and reading the members scans it again, so three members leave
+the quadratic nothing to be quadratic about -- and C being *slower* with the
+cache is that stated honestly rather than rounded to parity.
+
 The two runs walk differently -- one stops on a condition, the other where the
 terminator stands in for an element -- so each shares *its own* loop with the
 index rather than the index carrying a third copy. An index that disagreed
