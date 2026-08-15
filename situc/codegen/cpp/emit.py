@@ -45,6 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	is_own_member,
 	Check, Member, arm_members, arm_of, containment_order, covered_run,
 	data_sized,
 	dynamic_frame_owner,
@@ -540,6 +541,20 @@ class Emitter:
 
 	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
 		return self._count_expression(struct, placement)
+
+	def value(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""What a sibling holds, for a bound that names one."""
+		if placement.scalar is None or placement.array_count is not None:
+			return None
+		if not is_own_member(struct, placement):
+			return None
+		return f"static_cast<std::int64_t>({local_name(struct, placement)}())"
+
+	def bound_literal(self, value: int) -> str:
+		"""Plain, because a bound is compared against a widened value."""
+		return str(value)
+
 
 	def _struct_comment(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
@@ -4848,10 +4863,11 @@ class Emitter:
 				"\t\t}",
 			])
 
-		lines.extend(self._text_number_check(placement, name))
+		lines.extend(self._text_number_check(struct, placement, name))
 		return lines
 
-	def _text_number_check(self, placement: Placement,
+	def _text_number_check(self, struct: ResolvedStruct,
+			placement: Placement,
 			name: str) -> list[str]:
 		"""A text number's spelling and its digits, in that order.
 
@@ -4899,10 +4915,11 @@ class Emitter:
 		# And whatever the schema declared about the number. The delimited
 		# branch returns before the scalar path that emits those, so
 		# `[min]` and `[max]` on a delimited text number reached no backend.
-		lines.extend(self._attr_checks(placement, f"{name}_value()"))
+		lines.extend(self._attr_checks(struct, placement, f"{name}_value()"))
 		return lines
 
-	def _attr_checks(self, placement: Placement, read: str) -> list[str]:
+	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
+			read: str) -> list[str]:
 		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
 
 		Both routes into a constrained member need these and only the `read`
@@ -4910,12 +4927,27 @@ class Emitter:
 		or a local bound behind a version gate.
 		"""
 		scalar = placement.scalar
+		from situc.diagnostics import SituError
+		from situc.invariant import bound as bound_expression
+		from situc.invariant import bound_refusal
+
 		lines: list[str] = []
 		for attr in placement.attrs:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue
-			expected = evaluate(attr.value, self.resolved.layout.env)
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			try:
+				expected = str(evaluate(attr.value, self.resolved.layout.env))
+				read_as  = read
+			except SituError as why:
+				# A bound naming a sibling is checked against a message that
+				# is in front of you, so the value is there to read.
+				rendered = bound_expression(struct, attr.value, self)
+				if rendered is None:
+					raise bound_refusal(struct, attr.value, why) from why
+				expected = f"({rendered})"
+				read_as  = f"static_cast<std::int64_t>({read})"
+
 			cast     = (f"static_cast<{self._ctype(scalar)}>({read})"
 			            if scalar is not None
 			            and placement.type_name in self.enums else read)
@@ -5147,7 +5179,7 @@ class Emitter:
 		# moment the shared classifier stopped calling a text number an
 		# array, which is invariant 125 arriving on schedule.
 		if check is Check.TEXT_NUMBER:
-			lines.extend(self._text_number_check(placement, name))
+			lines.extend(self._text_number_check(struct, placement, name))
 			read = f"{name}_value()"
 		else:
 			read = f"{name}_value" if versioned else f"{name}()"
@@ -5162,7 +5194,7 @@ class Emitter:
 				"\t\t}",
 			])
 
-		lines.extend(self._attr_checks(placement, read))
+		lines.extend(self._attr_checks(struct, placement, read))
 
 		if versioned and lines:
 			return self._behind_a_version(placement, name, lines)

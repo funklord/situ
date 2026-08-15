@@ -42,6 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	is_own_member,
 	Check, Member, arm_members, arm_of, covered_run, data_sized, decode_bound,
 	dynamic_frame_owner, offset_plan,
 	readable_names,
@@ -3077,24 +3078,40 @@ class Emitter:
 		# delimited text number's `[min]` and `[max]` reached no backend.
 		if placement.delimiter is not None:
 			lines.extend(self._attr_checks(
-				placement,
+				struct, placement,
 				f"self.{_ident(local_name(struct, placement))}_value()"))
 		return lines
 
-	def _attr_checks(self, placement: Placement, read: str) -> list[str]:
+	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
+			read: str) -> list[str]:
 		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
 
 		Both routes into a constrained member need these; only `read`
 		differs -- a raw load, an infallible `_value`, a bound local.
 		"""
+		from situc.diagnostics import SituError
+		from situc.invariant import bound as bound_expression
+		from situc.invariant import bound_refusal
+
 		lines: list[str] = []
 		for attr in placement.attrs:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue
-			expected = evaluate(attr.value, self.resolved.layout.env)
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			try:
+				expected = str(evaluate(attr.value, self.resolved.layout.env))
+				read_as  = read
+			except SituError as why:
+				# A bound naming a sibling is checked against a message that
+				# is in front of you, so the value is there to read.
+				rendered = bound_expression(struct, attr.value, self)
+				if rendered is None:
+					raise bound_refusal(struct, attr.value, why) from why
+				expected = f"({rendered})"
+				read_as  = f"({read} as i64)"
+
 			lines.extend([
-				f"\t\tif {read} {operator} {expected} {{",
+				f"\t\tif {read_as} {operator} {expected} {{",
 				"\t\t\treturn Err(Error::Constraint);",
 				"\t\t}",
 			])
@@ -4451,6 +4468,20 @@ class Emitter:
 	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
 		return self._count_expression(struct, placement)
 
+	def value(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""What a sibling holds, for a bound that names one."""
+		if placement.scalar is None or placement.array_count is not None:
+			return None
+		if not is_own_member(struct, placement):
+			return None
+		return f"(self.{_ident(local_name(struct, placement))}() as i64)"
+
+	def bound_literal(self, value: int) -> str:
+		"""Plain, because a bound is compared against a widened value."""
+		return str(value)
+
+
 	def _setter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
@@ -4770,7 +4801,7 @@ class Emitter:
 					"\t\t}",
 				])
 
-			mine.extend(self._attr_checks(placement, read))
+			mine.extend(self._attr_checks(struct, placement, read))
 
 			if versioned and mine:
 				# The accessor answers whether the field is *there*; the raw

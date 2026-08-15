@@ -3324,3 +3324,73 @@ def test_a_struct_is_emitted_before_the_one_that_reaches_into_it() -> None:
 
 	assert header.index("situ_inner_extent(situ_view_t") \
 		< header.index("situ_inner_extent(probe)")
+
+
+# -- bounds that name a sibling ----------------------------------------------
+#
+# `[max = chunks - 1]` parsed, passed wellformed, laid out, resolved, and was
+# published by `situc wire` as committed contract -- and then the constraint
+# emitter refused the schema, because it folded every bound to a constant and
+# baked the number in. Five stages accepted it and one did not, which made two
+# commands in one compiler disagree about a single file. Reported by fuzznet,
+# whose `frame.situ` could not be built at all.
+
+RELATIVE = """struct chunked {
+	u8 chunks;
+	u8 index [max = chunks - 1];
+	u8 body[4];
+}
+"""
+
+
+def test_a_bound_may_name_a_sibling() -> None:
+	"""The check reads the sibling rather than a folded number."""
+	_, source = emit(RELATIVE)
+
+	assert "situ_chunked_chunks_get(view)" in source
+	assert "[max = chunks - 1]" in source
+
+
+def test_a_constant_bound_is_still_folded() -> None:
+	"""The common case does not pay for the new one: a constant bound is
+	still a literal in the generated comparison, not a read."""
+	_, source = emit("struct s { u8 v [max = 7]; }\n")
+
+	assert "if (situ_s_v_get(view) > 7) {" in source
+	# The read is on the left only: a folded bound costs no second access.
+	assert source.count("situ_s_v_get(view)") == source.count("> 7")
+
+
+@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler")
+def test_a_sibling_bound_tracks_the_sibling(tmp_path: Path) -> None:
+	"""The point of a runtime bound: it moves when the field it names moves.
+
+	Compiled and run rather than inspected. A folded bound would pass the
+	first two cases and fail the third, which is what makes the third the one
+	worth having.
+	"""
+	compile_generated(tmp_path, RELATIVE, extra="""
+#include <string.h>
+
+#include "unit.h"
+int main(void)
+{
+	uint8_t buf[6];
+	situ_msg_t m;
+	situ_view_t v;
+
+	memset(buf, 0, sizeof buf);
+	situ_msg_init(&m, buf, (uint32_t)sizeof buf);
+	if (situ_chunked_view(&m, 0, &v) != SITU_OK) return 1;
+
+	buf[0] = 4; buf[1] = 3;
+	if (situ_chunked_validate(v) != SITU_OK) return 2;
+
+	buf[1] = 4;
+	if (situ_chunked_validate(v) != SITU_ERR_CONSTRAINT) return 3;
+
+	buf[0] = 8;
+	if (situ_chunked_validate(v) != SITU_OK) return 4;
+	return 0;
+}
+""")

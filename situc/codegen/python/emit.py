@@ -40,6 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	is_own_member,
 	Check, Member, arm_members, containment_order, covered_run, data_sized,
 	dynamic_frame_owner,
 	readable_names,
@@ -582,6 +583,20 @@ class Emitter:
 
 	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
 		return self._count_expression(struct, placement)
+
+	def value(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""What a sibling holds, for a bound that names one."""
+		if placement.scalar is None or placement.array_count is not None:
+			return None
+		if not is_own_member(struct, placement):
+			return None
+		return f"int(self.{py_name(local_name(struct, placement))})"
+
+	def bound_literal(self, value: int) -> str:
+		"""Plain, because a bound is compared against a widened value."""
+		return str(value)
+
 
 	def _register(self, struct: ResolvedStruct) -> list[str]:
 		"""A register's word composition, without pretending to be a driver.
@@ -3865,10 +3880,11 @@ class Emitter:
 			# And whatever the schema declared about the number. This branch
 			# returns before the scalar path that emits those, so a delimited
 			# text number's `[min]` and `[max]` reached no backend.
-			lines.extend(self._attr_checks(placement, f"self.{name}"))
+			lines.extend(self._attr_checks(struct, placement, f"self.{name}"))
 		return lines
 
-	def _attr_checks(self, placement: Placement, read: str) -> list[str]:
+	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
+			read: str) -> list[str]:
 		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
 
 		Both routes into a constrained member need these; only `read`
@@ -3876,14 +3892,29 @@ class Emitter:
 		"""
 		from situc.expr import evaluate
 
+		from situc.diagnostics import SituError
+		from situc.invariant import bound as bound_expression
+		from situc.invariant import bound_refusal
+
 		lines: list[str] = []
 		for attr in placement.attrs:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue
-			expected = evaluate(attr.value, self.resolved.layout.env)
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			try:
+				expected = str(evaluate(attr.value, self.resolved.layout.env))
+				read_as  = read
+			except SituError as why:
+				# A bound naming a sibling is checked against a message that
+				# is in front of you, so the value is there to read.
+				rendered = bound_expression(struct, attr.value, self)
+				if rendered is None:
+					raise bound_refusal(struct, attr.value, why) from why
+				expected = f"({rendered})"
+				read_as  = f"int({read})"
+
 			lines.extend([
-				f"\t\tif int({read}) {operator} {expected}:",
+				f"\t\tif {read_as} {operator} {expected}:",
 				f"\t\t\traise ConstraintError("
 				f"f\"{placement.path} is {{{read}}},"
 				f" {attr.name} {expected}\")",
@@ -4084,7 +4115,7 @@ class Emitter:
 				f" {enum.name}\")",
 			])
 
-		lines.extend(self._attr_checks(placement, read))
+		lines.extend(self._attr_checks(struct, placement, read))
 
 		if versioned and lines:
 			return [

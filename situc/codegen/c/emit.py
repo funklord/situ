@@ -31,7 +31,7 @@ from situc.capability import Axis
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
-from situc.diagnostics import Diagnostic
+from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
 from situc.layout import (
 	BITS_PER_BYTE, IndexTable, Placement, TlvGrammar, ValueRule,
@@ -43,7 +43,8 @@ from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
 	Check, arm_members, arm_of, classify_check, containment_order,
-	covered_run, data_sized, dynamic_frame_owner, local_name, offset_plan,
+	covered_run, data_sized, dynamic_frame_owner, is_own_member,
+	local_name, offset_plan,
 	readable_names,
 	region_extent,
 	decode_counts_bits, decodes_here,
@@ -359,6 +360,26 @@ class Emitter:
 
 	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
 		return self._count_expression(struct, placement)
+
+	def value(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		"""What a sibling holds, for a bound that names one.
+
+		Only a scalar that is this struct's own member: a bound reaching into
+		a nested struct would need a sub-view the check does not hold, and one
+		reaching an array has no single value to compare against.
+		"""
+		if placement.scalar is None or placement.array_count is not None:
+			return None
+		if not is_own_member(struct, placement):
+			return None
+		getter = ident(self.prefix, struct.name, local_name(struct, placement),
+		               "get")
+		return f"(int64_t){getter}(view)"
+
+	def bound_literal(self, value: int) -> str:
+		"""Plain, because a bound is compared against a widened value."""
+		return str(value)
+
 
 	# -- the cryptographic model (section 14) ---------------------------
 
@@ -5607,7 +5628,8 @@ class Emitter:
 			lines.extend(self._enum_check(
 				placement, f"{ident(self.prefix, struct.name, local, 'value')}(view)"))
 			lines.extend(self._attr_checks(
-				placement, f"{ident(self.prefix, struct.name, local, 'value')}(view)",
+				struct, placement,
+				f"{ident(self.prefix, struct.name, local, 'value')}(view)",
 				self.resolved.layout.env))
 
 		return lines
@@ -6027,7 +6049,7 @@ class Emitter:
 				"\t}",
 			])
 
-		lines.extend(self._attr_checks(placement, value, env))
+		lines.extend(self._attr_checks(struct, placement, value, env))
 
 		# The gate is emitted for its own sake where the member has no
 		# constraints at all: the fit check moved inside it, so a plain
@@ -6057,8 +6079,8 @@ class Emitter:
 			"\t}",
 		]
 
-	def _attr_checks(self, placement: Placement, value: str,
-			env: Env) -> list[str]:
+	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
+			value: str, env: Env) -> list[str]:
 		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
 
 		Split out because a delimited text number needs exactly these and
@@ -6070,16 +6092,35 @@ class Emitter:
 		whole of what varies.
 		"""
 		from situc.expr import evaluate
+		from situc.invariant import bound as bound_expression
+		from situc.invariant import bound_refusal
 
 		lines: list[str] = []
 		for attr in placement.attrs:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue
-			expected = evaluate(attr.value, env)
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+
+			try:
+				expected: str = str(evaluate(attr.value, env))
+				shown  = expected
+				tested = f"{value} {operator} {expected}"
+			except SituError as why:
+				# Not a constant, which does not mean not a bound. A `[max]`
+				# naming a sibling is checked against a message that is in
+				# front of you, so the value is there to read -- and `wire`
+				# has always published such a bound as committed contract
+				# while this refused the schema outright, which is two
+				# commands disagreeing about one file.
+				rendered = bound_expression(struct, attr.value, self)
+				if rendered is None:
+					raise bound_refusal(struct, attr.value, why) from why
+				shown  = attr.value.span.text()
+				tested = f"(int64_t){value} {operator} ({rendered})"
+
 			lines.extend([
-				f"\t/* {placement.path} [{attr.name} = {expected}] */",
-				f"\tif ({value} {operator} {expected}) {{",
+				f"\t/* {placement.path} [{attr.name} = {shown}] */",
+				f"\tif ({tested}) {{",
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t}",
 			])

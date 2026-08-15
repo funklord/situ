@@ -65,6 +65,101 @@ class Terms(Protocol):
 		"""How many elements it holds."""
 
 
+class BoundTerms(Terms, Protocol):
+	"""A `Terms` that can also read what a member *holds*."""
+
+	def value(self, struct: "ResolvedStruct",
+			placement: "Placement") -> str | None:
+		"""The member's value, read from the view being validated."""
+
+	def bound_literal(self, value: int) -> str:
+		"""A constant in a bound, which is not the same context as a constant
+		in an invariant. `literal` spells one for the type the *invariant*
+		assigns to -- `1u`, `1usize` -- and a bound is compared against a
+		widened signed value, where those do not type-check."""
+
+
+def bound(struct: "ResolvedStruct", expr: ast.Expr,
+		terms: BoundTerms) -> str | None:
+	"""A constraint's bound, in the backend's language, or None.
+
+	A separate entry point from `expression` rather than a flag on it, because
+	the two are asking different questions and the difference is worth keeping
+	where a reader can see it. An invariant says what a field *equals*, and
+	may read a layout fact -- offset, size, count -- which the solver knows
+	without looking at any message. A `[max]` is checked against a message
+	that is in front of you, so a sibling's *value* is available to it and is
+	not available to an invariant. Sharing one function would have made
+	invariants able to read values as a side effect of fixing bounds.
+	"""
+	if isinstance(expr, ast.IntLiteral):
+		return terms.bound_literal(expr.value)
+
+	if isinstance(expr, (ast.NameRef, ast.Access)):
+		# Not `member()`: it strips everything before the first dot, which is
+		# right for `size(s.chunks)` and drops the whole name from a bare
+		# `chunks`. A bound is written beside the member it constrains, so the
+		# sibling is usually named without a qualifier.
+		paths = paths_in(expr)
+		if len(paths) != 1:
+			return None
+		field     = paths[0].partition(".")[2] or paths[0]
+		placement = next((entry.placement for entry in struct.entries
+		                  if entry.placement.path == f"{struct.name}.{field}"),
+		                 None)
+		if placement is None or placement.scalar is None:
+			return None
+		return terms.value(struct, placement)
+
+	if isinstance(expr, ast.Binary):
+		if expr.op not in OPERATORS:
+			return None
+		left  = bound(struct, expr.left, terms)
+		right = bound(struct, expr.right, terms)
+		if left is None or right is None:
+			return None
+		return terms.binary(expr.op, left, right)
+
+	return expression(struct, expr, terms)
+
+
+def bound_refusal(struct: "ResolvedStruct", expr: ast.Expr,
+		original: Exception) -> Exception:
+	"""A better reason than the constant folder's, where there is one.
+
+	Once a bound may name a sibling, "not a compile-time constant" stops being
+	the whole story: the likeliest cause of an unresolvable name is a typo in
+	a sibling's, and that note sends the author looking for a `const` they
+	never meant to write. Only replaces the message where the expression is a
+	bare name, which is the case it can speak to.
+	"""
+	from situc.diagnostics import error
+
+	# The name is usually inside an expression rather than the whole of it:
+	# `chunks - 1` is the shape a bound takes, so looking only at a bare name
+	# would speak to almost none of them.
+	known = {entry.placement.path.partition(".")[2] for entry in struct.entries}
+	unresolved = [one for one in paths_in(expr)
+	              if (one.partition(".")[2] or one) not in known]
+	if len(unresolved) != 1:
+		return original
+
+	paths = unresolved
+
+	named = [entry.placement.path.partition(".")[2] for entry in struct.entries
+	         if entry.placement.scalar is not None
+	         and entry.placement.array_count is None]
+	return error(
+		f"`{paths[0]}` is neither a constant nor a member of `{struct.name}`",
+		expr.span,
+		label = "not found",
+		notes = ["a bound may be a `const`, an enum member, or the name of a "
+		         "scalar member of this struct, read from the message being "
+		         "validated",
+		         f"this struct has: {', '.join(named) or 'no scalar members'}"],
+	)
+
+
 def paths_in(expr: ast.Expr) -> list[str]:
 	"""Every dotted field path the expression mentions, in order.
 
