@@ -2917,3 +2917,60 @@ def test_the_array_key_refusal_quotes_the_schema_not_the_ast() -> None:
 	# The bound is what makes this a test rather than a wish: the failing
 	# version was seventeen times the schema it described.
 	assert len(reason) < 300, f"{len(reason)} bytes of diagnostic"
+
+
+def test_the_python_driver_retransmits_on_the_clock_it_is_given(
+		tmp_path: Path) -> None:
+	"""Run, not read -- the fourth backend of rung 6.
+
+	Its driver was checked by asserting on the text of its own source:
+	`"submit: Callable[[bytes], None]" in module`. That is `-fsyntax-only` in
+	a different costume, and it left the four-way differential able to compare
+	three answers and read a fourth. The tell was already here -- a sibling
+	test is docstringed "Found by running it", describing a `step` that
+	returned None and lost the expiry count where C wrote it through a
+	pointer, which is a real divergence found by running the thing once and
+	then recorded as a string assertion.
+	"""
+	schema, resolved = analysed(POLICY)
+
+	for name, text in generate_py(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for module in (relate_py, converse_py, drive_py):
+		for name, text in module.generate(schema, resolved, "t").items():
+			(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding="ascii"), encoding="ascii")
+	(tmp_path / "run.py").write_text(_PY_DRIVES, encoding="ascii")
+
+	ran = subprocess.run(["python3", str(tmp_path / "run.py")],
+	                     capture_output=True, text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_PY_DRIVES = """import sys
+
+sys.path.insert(0, ".")
+
+import t
+import t_drive
+from situ_runtime import Message
+
+sent = []
+buf = bytearray(t.frame.SIZE_BYTES)
+view = t.frame(Message(buf), 0, len(buf))
+
+driver = t_drive.response_to_driver(sent.append, 2, 800, 3)
+
+driver.send(view, bytes(buf), 7, 0)
+assert len(sent) == 1, "sending did not submit"
+
+driver.step(100)
+assert len(sent) == 1, "retransmitted before the deadline"
+
+driver.step(2000)
+assert len(sent) == 2, "the deadline passed and nothing was resent"
+
+assert driver.on_message(view) == 7, "the driver returned somebody else's handle"
+"""
