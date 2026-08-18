@@ -63,6 +63,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 		_check_host_dependence(decl, struct_layout)
 		_check_required_alignment(decl, struct_layout)
 		_check_secret_is_not_layout_bearing(decl, struct_layout)
+		_check_transform_tag_order(decl, struct_layout)
 
 		entries = [
 			apply(_context(placement, decl, structs, enums, codecs, lenient))
@@ -194,6 +195,107 @@ def _check_host_dependence(decl: ast.StructDecl, layout: StructLayout) -> None:
 					"an `endian_marker` so the order travels with the data "
 					"(project.md section 8.3)",
 				],
+			)
+
+
+TAG_ORDER = ("after", "before")
+
+
+def _transform_covers(layout: StructLayout,
+		region: Placement) -> list[Placement]:
+	"""The placements a `coded` region's transform runs over (14.1a)."""
+	return [placement for placement in layout.placements
+	        if placement is region
+	        or (placement.name in region.coded_covers
+	            and "." not in placement.path.partition(".")[2].partition(".")[2])]
+
+
+def _check_transform_tag_order(decl: ast.StructDecl,
+		layout: StructLayout) -> None:
+	"""Whether a tag covers the transformed or untransformed bytes (14.1b).
+
+	Only where a `covers` clause reaches bytes some tag also covers. Then two
+	orders are coherent and they disagree about what is on the wire:
+
+	- `after`  -- the tag is computed first, over untransformed bytes, and the
+	  transform goes on top. QUIC's header protection: the AEAD's associated
+	  data is the *unprotected* header, and the mask is applied afterwards.
+	- `before` -- the transform runs first and the tag covers its output, so
+	  the tag authenticates what a peer actually reads off the wire.
+
+	Situ settles orderings that are data dependencies with one terminating
+	answer -- decision 0011 does exactly that for nested tags, innermost
+	first, because no other order converges. This one has two answers that
+	both terminate, and which is right is the protocol's choice rather than a
+	consequence of the structure. So it is 17.0's case instead: an ambiguity
+	the schema must resolve, and an error until it does.
+
+	The wrong choice is undetectable at run time by construction -- both
+	produce a message of the same length with the same fields in the same
+	places, and the peer that disagrees reports a failed tag rather than a
+	misordered transform. That is exactly the class 17.0 exists for.
+	"""
+	for region in layout.placements:
+		if region.kind != "coded" or not region.coded_covers:
+			continue
+
+		tags = sorted({tag for placement in _transform_covers(layout, region)
+		               for tag in placement.covered_by})
+		order = next((attr for attr in region.attrs
+		              if attr.name == "tag_order"), None)
+
+		if order is not None and not tags:
+			raise error(
+				f"`{region.name}` has `tag_order` and no tag covers what it"
+				" transforms",
+				region.span,
+				label = "nothing to be ordered against",
+				notes = ["the attribute says whether a tag covers this"
+				         " transform's input or its output, and here no tag"
+				         " covers either",
+				         "drop it: an attribute that decides nothing is a"
+				         " construct whose meaning is silently nothing"
+				         " (project.md section 14.1b)"],
+			)
+
+		if not tags:
+			continue
+
+		named = ", ".join(f"`{one}`" for one in tags)
+		if order is None:
+			raise error(
+				f"`{region.name}` transforms bytes that {named} covers, and"
+				" the schema does not say in which order",
+				region.span,
+				label = "add `[tag_order = after]` or `[tag_order = before]`",
+				notes = ["`after`: the tag is computed first and the transform"
+				         " goes on top, so the tag covers untransformed bytes"
+				         " -- QUIC's header protection, whose associated data"
+				         " is the unprotected header",
+				         "`before`: the transform runs first and the tag"
+				         " covers its output, so the tag authenticates what a"
+				         " peer reads off the wire",
+				         "both orders produce the same bytes in the same"
+				         " places, so a peer that disagrees reports a failed"
+				         " tag rather than a misordered transform -- which is"
+				         " why this is an error rather than a default"
+				         " (project.md sections 14.1b and 17.0)"],
+			)
+
+		value = order.value
+		# A bare identifier is the spelling the grammar gives here; a quoted
+		# one is accepted rather than reported as an unknown value, since the
+		# author plainly meant the word they wrote.
+		spelled = (value.name if isinstance(value, ast.NameRef)
+		           else value.value if isinstance(value, ast.StringLiteral)
+		           else None)
+		if spelled not in TAG_ORDER:
+			raise error(
+				f"`{region.name}` has an unknown `tag_order`",
+				order.span,
+				label = f"expected `after` or `before`, found `{spelled}`",
+				notes = ["`after` puts the transform on top of the tag,"
+				         " `before` puts it underneath (14.1b)"],
 			)
 
 

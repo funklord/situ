@@ -184,9 +184,12 @@ def test_both_directions_are_emitted() -> None:
 # them while silently ignoring the clause in exactly the shape QUIC needs --
 # the first byte wrapped in `authenticated` so the AEAD covers it too.
 
+# `[tag_order = after]` because a tag covers `first` here, which 14.1b makes
+# an error to leave unsaid. These predate that rule and were the first schemas
+# it caught -- which is the rule working, not the fixtures being awkward.
 REGION_ADJACENT = """struct radj {
 	authenticated first { u8 flags; }
-	coded pn(hp) covers(first) { u8 number; }
+	coded pn(hp) covers(first) [tag_order = after] { u8 number; }
 	tag u8[16] covers(first);
 }
 """
@@ -194,7 +197,7 @@ REGION_ADJACENT = """struct radj {
 REGION_SPLIT = """struct rsplit {
 	authenticated first { u8 flags; }
 	u32 cid;
-	coded pn(hp) covers(first) { u8 number; }
+	coded pn(hp) covers(first) [tag_order = after] { u8 number; }
 	tag u8[16] covers(first);
 }
 """
@@ -214,3 +217,64 @@ def test_covering_a_region_across_a_gap_emits_two_spans_too() -> None:
 	out = emit_c(REGION_SPLIT)
 	assert "situ_span_t spans[2];" in out
 	assert "app_hp_mask_decode_spans(spans, 2u);" in out
+
+
+# Ordering against a tag (14.1b, decision 0037). A `covers` clause that
+# reaches authenticated bytes has two coherent orders, and the schema says
+# which -- 17.0's case rather than 0011's, because both orders terminate.
+
+TAGGED = """struct tagged {
+	authenticated first { u8 flags; }
+	coded pn(hp) covers(first)%s { u8 number; }
+	tag u8[16] covers(first);
+}
+"""
+
+
+def test_an_unordered_transform_over_authenticated_bytes_is_refused() -> None:
+	"""Both orders produce the same bytes in the same places, so the wrong
+	one surfaces as a failed tag somewhere else entirely."""
+	text = refusal(TAGGED % "")
+	assert "does not say in which order" in text
+	assert "tag_order = after" in text
+	assert "tag_order = before" in text
+
+
+def test_tag_order_after_leaves_the_tag_alone() -> None:
+	"""The tag was computed over the untransformed bytes and still matches
+	them, so applying the transform invalidates nothing -- and the accessor
+	needs no message to say so."""
+	out = emit_c(TAGGED % " [tag_order = after]")
+	assert "situ_tagged_pn_encode_spans(situ_view_t view)" in out
+	assert "situ_tagged_pn_decode_spans(situ_view_t view)" in out
+
+
+def test_tag_order_before_marks_the_tag_dirty() -> None:
+	"""The tag covers the transform's output, so applying it leaves the tag
+	stale. The signature carries the obligation: there is no way to call this
+	without somewhere to record the staleness."""
+	out = emit_c(TAGGED % " [tag_order = before]")
+	assert "situ_tagged_pn_encode_spans(situ_msg_t *msg, situ_view_t view)" in out
+	assert "situ_msg_mark_dirty(msg, SITU_TAGGED_TAG_DIRTY);" in out
+
+
+def test_the_dirty_bit_is_set_only_when_the_codec_succeeded() -> None:
+	"""A codec that refused its input has not changed the bytes, so the tag
+	is exactly as stale as it was."""
+	out = emit_c(TAGGED % " [tag_order = before]")
+	marked = out.index("situ_msg_mark_dirty(msg, SITU_TAGGED_TAG_DIRTY);")
+	guard  = out.rindex("if (err != SITU_OK) {", 0, marked)
+	assert "return err;" in out[guard:marked]
+
+
+def test_tag_order_without_a_tag_is_refused() -> None:
+	"""An attribute that decides no order is a construct whose meaning is
+	silently nothing, which is what 14.5 refuses."""
+	text = refusal(ADJACENT.replace("covers(flags)",
+	                                "covers(flags) [tag_order = after]"))
+	assert "no tag covers what it transforms" in text
+
+
+def test_an_unknown_tag_order_is_refused() -> None:
+	assert "unknown `tag_order`" in refusal(
+		TAGGED % " [tag_order = sideways]")

@@ -1744,6 +1744,28 @@ class Emitter:
 					"\t# no span list can be built for it.",
 				]
 
+			# 14.1b: where a tag covers what this transforms, the schema
+			# had to say which order, and the note repeats it -- a Python
+			# reader sequencing calls by hand needs it more than the three
+			# backends whose signatures carry it.
+			order = next((attr.value.name for attr in placement.attrs
+			              if attr.name == "tag_order"
+			              and isinstance(attr.value, ast.NameRef)), None)
+			tags = sorted({tag for held in struct.layout.placements
+			               if held is placement
+			               or held.name in placement.coded_covers
+			               for tag in held.covered_by})
+			sequence = ([] if not tags else
+			            ["\t# `tag_order = before`: the tag covers this"
+			             " transform's",
+			             f"\t# output, so applying it leaves"
+			             f" {', '.join(tags)} stale.",
+			             "\t# Transform first, then recompute."]
+			            if order == "before" else
+			            ["\t# `tag_order = after`: the tag covers this"
+			             " transform's",
+			             f"\t# input. Compute {', '.join(tags)} first, then"
+			             " transform."])
 			return [*preamble,
 				f"\t# `{symbol}_encode_spans(spans, count)` and"
 				f" `{symbol}_decode_spans`",
@@ -1753,6 +1775,7 @@ class Emitter:
 				f"\t# {len(runs)} span(s) here, which the other three backends"
 				" build",
 				"\t# and pass in one call.",
+				*sequence,
 			]
 
 		if not decodes_here(codec):

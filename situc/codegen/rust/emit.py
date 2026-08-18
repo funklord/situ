@@ -1471,6 +1471,20 @@ class Emitter:
 				]
 				continue
 
+			# 14.1b, as C's copy explains: `before` means the tag covers
+			# this transform's output, so it goes stale and the caller has
+			# to be handed the `Dirty` that records it.
+			order = next((attr.value.name for attr in placement.attrs
+			              if attr.name == "tag_order"
+			              and isinstance(attr.value, ast.NameRef)), None)
+			tags  = sorted({tag for held in struct.layout.placements
+			                if held is placement
+			                or held.name in placement.coded_covers
+			                for tag in held.covered_by})
+			stales = order == "before" and bool(tags)
+			params = ("&mut self, dirty: &mut Dirty" if stales
+			          else "&mut self")
+
 			extent = self._region_length(struct, placement)
 			if extent is None:
 				lines += [
@@ -1487,7 +1501,7 @@ class Emitter:
 					f" `{placement.path}`",
 					f"\t/// and {names}, in place, over the spans below"
 					" (13.2b).",
-					f"\tpub fn {name}_{direction}_spans(&mut self)"
+					f"\tpub fn {name}_{direction}_spans({params})"
 					" -> Result<()> {",
 					"\t\tlet mut spans = [SituSpan { base: "
 					"core::ptr::null_mut(), len: 0 }; " + f"{len(runs)}];",
@@ -1514,6 +1528,8 @@ class Emitter:
 					"\t\tif code != 0 {",
 					"\t\t\treturn Err(situ_rt::Error::from_code(code));",
 					"\t\t}",
+					*([f"\t\tdirty.mark({self._dirty_bits(struct, placement)});"]
+					  if stales else []),
 					"\t\tOk(())",
 					"\t}",
 				]

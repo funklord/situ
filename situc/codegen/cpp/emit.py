@@ -3265,6 +3265,19 @@ class Emitter:
 		name  = bare_name(local_name(struct, placement))
 		names = ", ".join(f"`{one}`" for one in placement.coded_covers)
 
+		# 14.1b, as C's copy explains: `before` means the tag covers this
+		# transform's output, so applying it leaves the tag stale and the
+		# method takes the message that has to record it.
+		order = next((attr.value.name for attr in placement.attrs
+		              if attr.name == "tag_order"
+		              and isinstance(attr.value, ast.NameRef)), None)
+		tags  = sorted({tag for held in struct.layout.placements
+		                if held is placement
+		                or held.name in placement.coded_covers
+		                for tag in held.covered_by})
+		stales = order == "before" and bool(tags)
+		params = "::situ::rt::message &owner" if stales else ""
+
 		out = [
 			"",
 			f"\t/* Apply and remove {placement.codec} across {placement.path}",
@@ -3279,8 +3292,8 @@ class Emitter:
 
 		for direction in ("encode", "decode"):
 			out += [
-				f"\t[[nodiscard]] ::situ::rt::err {name}_{direction}_spans()"
-				" noexcept",
+				f"\t[[nodiscard]] ::situ::rt::err {name}_{direction}_spans("
+				f"{params}) noexcept",
 				"\t{",
 				f"\t\tsitu_span_t spans[{len(runs)}];",
 			]
@@ -3296,9 +3309,24 @@ class Emitter:
 					f" + {first.offset_bits // 8}u;",
 					f"\t\tspans[{index}].len  = {size};",
 				]
+			if not stales:
+				out += [
+					"\t\treturn static_cast<::situ::rt::err>(",
+					f"\t\t\t{symbol}_{direction}_spans(spans,"
+					f" {len(runs)}u));",
+					"\t}",
+				]
+				continue
+
+			bits = self._dirty_bits(struct, placement)
 			out += [
-				"\t\treturn static_cast<::situ::rt::err>(",
+				"\t\tconst auto err = static_cast<::situ::rt::err>(",
 				f"\t\t\t{symbol}_{direction}_spans(spans, {len(runs)}u));",
+				"\t\tif (err != ::situ::rt::err::ok) {",
+				"\t\t\treturn err;",
+				"\t\t}",
+				f"\t\towner.mark_dirty({bits});",
+				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",
 			]
 

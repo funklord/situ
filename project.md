@@ -2691,6 +2691,52 @@ that function, because a new tag brings a new field and the member comparison
 already reports one; a `coded` region gaining a clause changes no member, and
 without it two signatures compared equal while the peers disagreed.
 
+### 14.1b Which comes first, the transform or the tag
+
+Where a `covers` clause reaches bytes a tag also covers, two orders are
+coherent and they disagree about what is on the wire. The schema says which:
+
+```
+coded pn(masking) covers(first) [tag_order = after] { u8 number[..]; }
+```
+
+- **`after`** -- the tag is computed first, over untransformed bytes, and the
+  transform goes on top. QUIC's header protection: the AEAD's associated data
+  is the *unprotected* header, and the mask is applied afterwards.
+- **`before`** -- the transform runs first and the tag covers its output, so
+  the tag authenticates what a peer actually reads off the wire.
+
+**It is an error to leave it unsaid, and an error to say it where no tag is
+involved.** The first is 17.0: an ambiguity whose wrong answer is undetectable
+at run time, since both orders produce a message of the same length with the
+same fields in the same places, and the peer that disagrees reports a failed
+tag rather than a misordered transform. The second is 14.5's rule about
+constructs that mean nothing -- an attribute that decides no order is one.
+
+**Why this is settled by the schema and nested tag coverage is not.** Decision
+0011 has situ decide an order without being told: an outer tag covers an inner
+tag's own bytes, so innermost-first is the *only* order that terminates, and
+there is nothing for an author to choose. That is a data dependency, and
+deciding one is not the same as knowing an algorithm -- 13.1's rule is about
+the latter. Here both orders terminate and both are used by real protocols, so
+there is no answer to derive and 17.0 applies instead.
+
+**The attribute is load-bearing, not documentation.** It decides the generated
+signature:
+
+- `after` -- applying the transform does not invalidate the tag, which was
+  computed over the untransformed bytes. The accessor takes a view.
+- `before` -- applying the transform leaves the tag stale, so the accessor
+  takes the message as well and marks the dirty bit on success. It is not
+  possible to call it without having somewhere to record that.
+
+The dirty bit is set only where the codec returned `SITU_OK`. A transform that
+refused its input has not changed the bytes, so the tag is exactly as stale as
+it was.
+
+Situ still does not *run* the sequence. It says which order is required and
+makes the wrong one visible; performing it is the caller's, per 13.1.
+
 ### 14.2 Tag coverage and the dirty bit
 
 This is the sharpest capability interaction in the language: **in-place
@@ -2938,13 +2984,13 @@ default -- an omitted clause infers every region for a tag and means "only
 myself" for a transform, because there is a sensible default for what a tag
 authenticates and none for what a transform reaches.
 
-**What is still open is ordering.** Situ does not sequence a mask against a tag
-covering the same bytes, and QUIC's real construction needs that order --
-authenticate the unmasked header, then mask. 13.1's rule says a transform's
-algorithm is not situ's, and it is not obvious whether its *order relative to
-another construct* is the same kind of thing or a different one. Recorded here
-rather than guessed at: today the two accessors are the caller's to sequence,
-and nothing in the generated code says which way round.
+**Ordering is settled too** (14.1b, `docs/decisions/0037-transform-and-tag-
+order.md`). A transform covering bytes a tag covers must say whether the tag
+sees its input or its output, and the answer decides the generated signature:
+under `before` the accessor takes the message and marks the tag dirty, so the
+staleness cannot be forgotten. What situ does not do is run the sequence --
+it says which order is required and makes the wrong one visible, which is the
+line 13.1 draws.
 
 **What stays out of scope, and why that is not in tension with the intent
 above.** Key schedules, transcript hashing and signature computation are
@@ -3175,6 +3221,7 @@ resolved:
 | bit order with any sub-byte field present | `bit_order` directive |
 | a bit field straddling a byte boundary | `[allow_straddle]` on the struct |
 | overlapping non-nested tag coverage | explicit `covers(...)` on each tag |
+| a transform covering bytes a tag covers | `[tag_order = after]` or `[tag_order = before]` (14.1b) |
 | variant arms of unequal size | accepted, but the dynamic consequence is reported; `[equalize]` to pad |
 | unknown enum value, TLV tag, or version | explicit `error` / `skip` / `preserve` / `pass` policy |
 | non-minimal varint acceptance | `minimal` present or absent, never defaulted |

@@ -3899,6 +3899,22 @@ class Emitter:
 		length = f"{ident(self.prefix, struct.name, local, 'len')}(view)"
 		names  = ", ".join(f"`{name}`" for name in placement.coded_covers)
 
+		# 14.1b: whether a tag covers this transform's input or its output.
+		# `before` means the tag covers the output, so applying the transform
+		# leaves the tag stale and the accessor has to say so -- which is why
+		# it takes the message. `after` means the tag was computed over the
+		# untransformed bytes and is still correct, so it does not.
+		order = next((attr.value.name for attr in placement.attrs
+		              if attr.name == "tag_order"
+		              and isinstance(attr.value, ast.NameRef)), None)
+		tags  = sorted({tag for held in struct.layout.placements
+		                if held is placement
+		                or held.name in placement.coded_covers
+		                for tag in held.covered_by})
+		stales = order == "before" and bool(tags)
+		params = ("situ_msg_t *msg, situ_view_t view" if stales
+		          else "situ_view_t view")
+
 		out = [
 			"",
 			f"/* Apply and remove `{placement.codec}` across `{placement.name}`"
@@ -3911,10 +3927,21 @@ class Emitter:
 			" * per call is a different transform -- which is what a `covers`",
 			" * clause is asking for and why it does not decompose.",
 			" *",
-			" * The message is mutated directly. Sequencing this against a tag"
-			" that",
-			" * covers the same bytes is the protocol's business, not situ's"
-			" (14.8). */",
+			*(["	 * The message is mutated directly, and no tag covers"
+			   " these bytes,",
+			   "	 * so there is nothing to go stale. */"] if not tags else
+			  ["	 * `tag_order = before`: the tag covers this transform's"
+			   " *output*,",
+			   f"	 * so applying it leaves {', '.join(tags)} stale. That is"
+			   " why this",
+			   "	 * takes the message -- call it, then recompute and"
+			   " finalize. */"] if stales else
+			  ["	 * `tag_order = after`: the tag covers this transform's"
+			   " *input*, so",
+			   "	 * it was computed over the untransformed bytes and stays"
+			   " correct.",
+			   f"	 * Compute and finalize {', '.join(tags)} first, then call"
+			   " this. */"]),
 			f"extern situ_err_t {symbol}_encode_spans(const situ_span_t *spans,",
 			"		uint32_t count);",
 			f"extern situ_err_t {symbol}_decode_spans(const situ_span_t *spans,",
@@ -3926,7 +3953,7 @@ class Emitter:
 				"",
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, direction, 'spans')}"
-				"(situ_view_t view)",
+				f"({params})",
 				"{",
 				f"	situ_span_t spans[{len(runs)}];",
 			]
@@ -3942,8 +3969,24 @@ class Emitter:
 					f" + {first.offset_bits // 8}u;",
 					f"	spans[{index}].len  = {size};",
 				]
+			if not stales:
+				out += [
+					f"	return {symbol}_{direction}_spans(spans, {len(runs)}u);",
+					"}",
+				]
+				continue
+
+			bits = " | ".join(self._tag_bit(struct, tag) for tag in tags)
 			out += [
-				f"	return {symbol}_{direction}_spans(spans, {len(runs)}u);",
+				f"	situ_err_t err = {symbol}_{direction}_spans(spans,"
+				f" {len(runs)}u);",
+				"	if (err != SITU_OK) {",
+				"		return err;",
+				"	}",
+				# Only on success: a transform that refused the input has not
+				# changed the bytes, so the tag is exactly as stale as it was.
+				f"	situ_msg_mark_dirty(msg, {bits});",
+				"	return SITU_OK;",
 				"}",
 			]
 
