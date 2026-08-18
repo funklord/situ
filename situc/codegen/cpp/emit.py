@@ -51,7 +51,7 @@ from situc.traverse import (
 	data_sized,
 	dynamic_frame_owner,
 	readable_names,
-	decode_bound, region_extent, offset_plan,
+	decode_bound, decode_ratio, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
 	extent_parts, frameable,
@@ -3199,7 +3199,9 @@ class Emitter:
 		if not decodes_here(codec):
 			return []
 
-		ratio = codec.ratio
+		# `decode_ratio`, not `codec.ratio`: a length-preserving kernel
+		# declares no ratio and its decoded size is the encoded one.
+		ratio = decode_ratio(codec)
 		if ratio is None or ratio[0] == 0:
 			return []
 
@@ -3214,10 +3216,16 @@ class Emitter:
 			"\t/* The decoded bytes, into a buffer the caller owns. Nothing",
 			"\t * here allocates, so the capacity is a parameter.",
 			"\t *",
-			f"\t * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so the value"
-			" is that much",
-			"\t * smaller than the wire form. A short buffer is refused rather",
-			"\t * than half-filled. */",
+			*([f"\t * `{placement.codec}` preserves length, so the value is"
+			   " exactly as",
+			   "\t * long as the wire form. A short buffer is refused rather",
+			   "\t * than half-filled. */"]
+			  if ratio == (1, 1) else
+			  [f"\t * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so the"
+			   " value is that much",
+			   "\t * smaller than the wire form. A short buffer is refused"
+			   " rather",
+			   "\t * than half-filled. */"]),
 			*([f"\tstatic constexpr std::uint32_t {name}_decoded_max ="
 			   f" {bound}u;"] if bound is not None else []),
 			f"\t[[nodiscard]] ::situ::rt::err {name}_decode(std::uint8_t *out,",

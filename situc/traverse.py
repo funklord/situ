@@ -19,6 +19,7 @@ from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
+from situc import ast
 from situc.ast import Schema
 from math import lcm
 
@@ -1474,10 +1475,16 @@ def decodes_here(codec: object) -> bool:
 	kernel = getattr(codec, "kernel", None)
 	if kernel is None:
 		return False
-	family = getattr(kernel, "family", None)
-	if getattr(family, "value", None) == "table":
+	# `permutation` and `shift_register` emit the same `(in, len, out) ->
+	# count` shape as `table`, so a region decode over them is not a guess.
+	# They were excluded by a docstring that named Hamming's nibble-in,
+	# byte-out interface as the reason and then generalised it to "the other
+	# families" -- which is the mistake this function's own history records
+	# one step earlier, when `stuffing` was in the same position.
+	family = getattr(getattr(kernel, "family", None), "value", None)
+	if family in ("table", "permutation", "shift_register"):
 		return True
-	if getattr(family, "value", None) != "stuffing":
+	if family != "stuffing":
 		return False
 
 	named = kernel.argument("code")
@@ -1528,6 +1535,28 @@ def decode_counts_bits(codec: object) -> bool:
 	return getattr(unit, "name", None) == "bit"
 
 
+def decode_ratio(codec: object) -> tuple[int, int] | None:
+	"""How the decoded length follows the encoded one, as a ratio.
+
+	The codec's declared ratio, or `1:1` where it declares none and preserves
+	length. A length-preserving kernel computes no ratio -- there is nothing
+	for one to say -- and four backends read `codec.ratio` directly and
+	emitted no decode accessor at all for `permutation` and `shift_register`
+	as a result. The buffer size was never the unknown: it is the encoded
+	length, exactly.
+
+	`None` still, where neither a ratio nor length-preservation is declared:
+	then the decoded size genuinely is not computable without decoding, and a
+	wrong number would size a buffer the decode overruns.
+	"""
+	ratio: tuple[int, int] | None = getattr(codec, "ratio", None)
+	if ratio is not None:
+		return ratio if ratio[0] else None
+
+	expansion = getattr(codec, "expansion", None)
+	return (1, 1) if expansion is ast.Expansion.PRESERVING else None
+
+
 def decode_bound(codec: object, placement: Placement) -> int | None:
 	"""How many bytes the decoded form of this region can occupy.
 
@@ -1540,8 +1569,8 @@ def decode_bound(codec: object, placement: Placement) -> int | None:
 	declared numbers, and the only thing that differs is how each spells the
 	result.
 	"""
-	ratio: tuple[int, int] | None = getattr(codec, "ratio", None)
-	if ratio is None or not ratio[0] or placement.size_max_bits is None:
+	ratio = decode_ratio(codec)
+	if ratio is None or placement.size_max_bits is None:
 		return None
 
 	bound = (placement.size_max_bits // BITS_PER_BYTE) * ratio[1] // ratio[0]

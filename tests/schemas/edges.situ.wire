@@ -180,6 +180,11 @@ struct ranged_code size=1..
   @0x0000   until:20  u32        code  radix=10 cap=4 min=200 max=599
   ~         0..       u8         rest  sized-by=remaining
 
+struct scrambled size=7
+  @0x0000   1         u8         head
+  @0x0001   4         scramble   body  codec=scramble
+  @0x0005   2         u16        tail  big
+
 struct sealed_run size=19..27
   @0x0000   1         u8         n  max=4
   @0x0001   2..10     sealing_aead body  codec=sealing_aead

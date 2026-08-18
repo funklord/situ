@@ -3423,3 +3423,80 @@ def test_the_widening_guard_refuses_only_what_it_must() -> None:
 	             "struct s { i64 cap; i64 used [max = cap]; }\n",
 	             "struct s { u64 used [max = 99]; }\n"):
 		emit(body)		# raises if the guard is too broad
+
+
+# -- a length-preserving derived codec gets a decode accessor (13.6a) -------
+#
+# It got none for a long time, behind two gates that both looked reasonable.
+# `decodes_here` admitted `table` and named `stuffing` families only, on a
+# docstring naming Hamming's nibble-in, byte-out interface as the reason and
+# then generalising it to "the other families" -- while `permutation` and
+# `shift_register` emit exactly the `(in, len, out) -> count` shape `table`
+# does. Behind that, the emitters read `codec.ratio`, which a length-preserving
+# kernel does not compute: there is nothing for a ratio to say when the answer
+# is the same size as the question.
+
+SCRAMBLER = """codec scramble {
+	kernel = shift_register(taps = 0x8810, width = 16, seed = 0xFFFF,
+	                        unit = stream, feedback = input);
+}
+impl scramble derived;
+
+struct s {
+	u8    head;
+	coded body(scramble) { u8 payload[4]; }
+}
+"""
+
+INTERLEAVER = """codec weave {
+	kernel = permutation(rows = 4, columns = 4);
+}
+impl weave derived;
+
+struct s {
+	u8    head;
+	coded body(weave) { u8 payload[16]; }
+}
+"""
+
+HAMMING = """codec ham {
+	kernel = linear_block(n = 7, k = 4, standard_form, code = hamming_7_4);
+}
+impl ham derived;
+
+struct s {
+	u8    head;
+	coded body(ham) { u8 payload[4]; }
+}
+"""
+
+
+def test_a_shift_register_region_gets_a_decode_accessor() -> None:
+	header, _ = emit(SCRAMBLER)
+	assert "situ_s_body_decode(situ_view_t view" in header
+	# 1:1, so the buffer is the encoded length rather than a scaled one.
+	assert "encoded * 1u / 1u" in header
+	assert "#define SITU_S_BODY_DECODED_MAX 4u" in header
+
+
+def test_a_permutation_region_gets_one_too() -> None:
+	header, _ = emit(INTERLEAVER)
+	assert "situ_s_body_decode(situ_view_t view" in header
+	assert "#define SITU_S_BODY_DECODED_MAX 16u" in header
+
+
+def test_the_prose_does_not_claim_a_preserving_codec_shrinks() -> None:
+	"""The comment beside it was written for a codec that expands, and said
+	the decoded form was "that much smaller" -- which at 1:1 is nothing."""
+	header, _ = emit(SCRAMBLER)
+	assert "preserves length" in header
+	assert "smaller than the bytes on the wire" not in header
+
+
+def test_a_hamming_region_still_gets_none() -> None:
+	"""The control, and the reason the gate exists at all. A codeword is a
+	nibble in and a byte out with a correction flag, so a generic region
+	decode over it would be guessing -- which is what the docstring said
+	before it was over-applied to two families that do fit."""
+	header, _ = emit(HAMMING)
+	assert "situ_s_body_decode(" not in header

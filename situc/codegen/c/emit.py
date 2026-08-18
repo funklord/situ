@@ -50,7 +50,7 @@ from situc.traverse import (
 	region_extent,
 	decode_counts_bits, decodes_here,
 	declares_its_own_length,
-	decode_bound,
+	decode_bound, decode_ratio,
 	extent_parts, extern_symbol, frameable,
 	element_bytes, has_computable_extent, index_entry_bytes,
 	indexed_elements, is_run, walk_order,
@@ -3788,7 +3788,9 @@ class Emitter:
 			return []		# the decoder's shape is the kernel's, and
 					# only some of them are settled
 
-		ratio = codec.ratio
+		# `decode_ratio`, not `codec.ratio`: a length-preserving kernel
+		# declares no ratio and its decoded size is the encoded one.
+		ratio = decode_ratio(codec)
 		if ratio is None or ratio[0] == 0:
 			return []
 
@@ -3823,9 +3825,14 @@ class Emitter:
 			" caller's",
 			f" * and `{decoded}` is how large it has to be.",
 			" *",
-			f" * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so the decoded"
-			" form is that much",
-			" * smaller than the bytes on the wire. */",
+			*([f" * `{placement.codec}` preserves length, so the decoded"
+			   " form is exactly",
+			   " * as long as the bytes on the wire -- the buffer is the same"
+			   " size. */"]
+			  if ratio == (1, 1) else
+			  [f" * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so the"
+			   " decoded form is that much",
+			   " * smaller than the bytes on the wire. */"]),
 		]
 		if bound is not None:
 			out.append(f"#define {decoded} {bound}u")

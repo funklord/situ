@@ -2360,6 +2360,30 @@ authenticates the unmasked header and masks afterwards -- and 13.1's rule is
 that situ describes a transform's properties and never its algorithm or its
 order. See 14.8.
 
+A length-preserving kernel reaches this too, and did not for a long time. Two
+gates stood in the way and both looked reasonable:
+
+- `decodes_here` admitted the `table` family and named `stuffing` codes only.
+  Its docstring gave the reason as Hamming's interface -- a codeword is a
+  nibble in and a byte out with a correction flag, so a generic region decode
+  over it would be guessing -- and then generalised that to "the other
+  families". `permutation` and `shift_register` emit exactly the
+  `(in, len, out) -> count` shape `table` does, so the reason did not reach
+  them. This is the same over-generalisation the function's own history
+  records one step earlier, when `stuffing` sat where these two did and four
+  comments said the other families were "described and not yet generated".
+- Behind it, all four backends read `codec.ratio` and returned nothing when it
+  was absent. A length-preserving kernel computes no ratio because there is
+  nothing for one to say, and the buffer size was never the unknown: it is the
+  encoded length exactly.
+
+`traverse.decode_ratio` answers the second -- the declared ratio, or `1:1`
+where the codec declares none and preserves length, and `None` only where the
+size genuinely is not computable without decoding. The prose beside the
+accessor was written for a codec that expands and said the decoded form was
+"that much smaller", which at 1:1 is nothing; it now says the buffer is the
+same size.
+
 ### 13.3 The decidability rule
 
 **The compiler reasons only about property signatures, never about transform
@@ -2672,16 +2696,15 @@ error, and a mask or a scramble is what the clause is for.
 
 That rule has a consequence for tier 2 worth writing down, because it was found
 by trying to test the path and not finding one: **a derived codec never reaches
-this clause.** Every length-preserving kernel family (`shift_register`,
-`permutation`) computes no ratio, and the derived decode accessor is emitted
-only where a ratio says how large the output buffer must be -- so it is not
-emitted for them at all, with or without a `covers` clause. The widening was
+this clause.** The scattered ABI is a tier-1 shape, bound by an `impl ... extern`
+symbol, and a derived codec's implementation is situ's own. The widening was
 written into the derived path in three backends before this was measured, and
 removed again: an unreachable branch claiming to handle a case is worse than an
-absent one, because nothing can ever exercise it. Whether a length-preserving
-derived codec should emit a decode accessor at all (its output buffer is
-exactly its input length, so the size is known) is a separate gap and is not
-about coverage.
+absent one, because nothing can ever exercise it.
+
+What that investigation turned up was a separate defect, since fixed and
+recorded in 13.6a: a length-preserving derived codec emitted **no decode
+accessor at all**, coverage or no coverage.
 
 The clause is wire-visible and appears in the signature (`pn covers: pn flags`).
 Widening it makes a peer transform bytes the old version left alone while every

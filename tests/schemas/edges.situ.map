@@ -12,6 +12,7 @@
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
+codec scramble derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec sealing_aead trusted length_preserving seekable=linear granularity=stream authenticated invertible deterministic
 
 struct arithmetic size=14 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
@@ -191,6 +192,12 @@ struct quoted_row size=1 access=Sequential mutate=Shifting address=Unstable cano
 struct ranged_code size=1 access=Sequential mutate=Shifting address=Unstable repr=TextConverted canonical=NonCanonical
   ranged_code.code                       offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   ranged_code.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
+struct scrambled size=7 repr=ValueConverted atomic=NonAtomic
+  scrambled.head                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  scrambled.body                         offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  scrambled.body.payload                 offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  scrambled.tail                         offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
 
 struct sealed_run size=19 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated auth=Covered(seal_mac)
   sealed_run.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

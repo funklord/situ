@@ -262,11 +262,16 @@ $(GEN_DIR)/edges_codec_tests.c: $(REPO_ROOT)/tests/schemas/edges.situ \
 	cd '$(REPO_ROOT)' && $(SITUC) gen-codec-tests tests/schemas/edges.situ \
 		--out '$(abspath $(GEN_DIR))'
 
+# `edges_derived.o` as well as the hand-written implementations: the schema
+# binds tier-1 codecs to `codec_impl.c` and also describes a tier-2 one, whose
+# implementation situ writes itself. Both tiers get a property suite in the
+# same file, so both have to be linked into it.
 $(BUILD_DIR)/edges_codec_tests: $(GEN_DIR)/edges_codec_tests.c codec_impl.c \
-		$(RUNTIME_LIB)
+		$(GEN_DIR)/edges_derived.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< codec_impl.c $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$< codec_impl.c $(GEN_DIR)/edges_derived.o $(RUNTIME_LIB) \
+		$(LDFLAGS) $(CMOCKA_LIBS) -o $@
 
 # And the tier-2 half: the property tests for every codec `std/kernels.situ`
 # describes, run against the implementations `gen-derived` writes from the same

@@ -729,3 +729,33 @@ struct hp_split {
 
 require size(hp_split) == 10;
 require absolute_static(hp_split);
+
+// A length-preserving *derived* codec over a region, which emitted no decode
+// accessor at all until the ratio gate learned to read `decode_ratio`.
+//
+// The gap was two mistakes stacked. `decodes_here` admitted only `table` and
+// named `stuffing` families, on a docstring that named Hamming's nibble-in,
+// byte-out interface as the reason and then generalised it to "the other
+// families" -- but `permutation` and `shift_register` emit exactly the same
+// `(in, len, out) -> count` shape as `table`. And behind that, the emitters
+// read `codec.ratio` directly, which a length-preserving kernel does not
+// compute: there is nothing for a ratio to say when the answer is the same
+// size as the question.
+//
+// So the buffer size was never the unknown. It is the encoded length exactly,
+// and the accessor is emitted with `1:1` now.
+codec scramble {
+	kernel = shift_register(taps = 0x8810, width = 16, seed = 0xFFFF,
+	                        unit = stream, feedback = input);
+}
+
+impl scramble derived;
+
+struct scrambled {
+	u8    head;
+	coded body(scramble) { u8 payload[4]; }
+	u16   tail;
+}
+
+require size(scrambled) == 7;
+require absolute_static(scrambled);

@@ -44,7 +44,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
-	decode_bound,
+	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
 	readable_names,
 	region_extent,
@@ -1385,7 +1385,9 @@ class Emitter:
 		if not decodes_here(codec):
 			return []
 
-		ratio = codec.ratio
+		# `decode_ratio`, not `codec.ratio`: a length-preserving kernel
+		# declares no ratio and its decoded size is the encoded one.
+		ratio = decode_ratio(codec)
 		if ratio is None or ratio[0] == 0:
 			return []
 
@@ -1399,10 +1401,16 @@ class Emitter:
 			"",
 			f"\t/// The decoded bytes of `{placement.path}`, into a buffer the",
 			"\t/// caller owns. Nothing here allocates, so the capacity is a",
-			f"\t/// parameter -- {ratio[0]}:{ratio[1]}, so the value is that"
-			" much smaller",
-			"\t/// than the wire form. A short buffer is refused rather than",
-			"\t/// half-filled.",
+			*([f"\t/// parameter -- {placement.codec} preserves length, so"
+			   " the value is",
+			   "\t/// exactly as long as the wire form. A short buffer is",
+			   "\t/// refused rather than half-filled."]
+			  if ratio == (1, 1) else
+			  [f"\t/// parameter -- {ratio[0]}:{ratio[1]}, so the value is"
+			   " that much smaller",
+			   "\t/// than the wire form. A short buffer is refused rather"
+			   " than",
+			   "\t/// half-filled."]),
 			*([f"\tpub const {name.upper()}_DECODED_MAX: usize = {bound};", ""]
 			  if bound is not None else []),
 			f"\tpub fn {name}_decode(&self, out: &mut [u8]) -> Result<usize> {{",
