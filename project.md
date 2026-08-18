@@ -2760,69 +2760,36 @@ same text.
 both. Length hiding is not a detail for a protocol whose threat model
 includes an observer.
 
-**One question this survey could not answer, said plainly rather than left to
-look settled.** QUIC-style header protection derives a mask from a *sample of
-the ciphertext* and applies it to header bits that precede that sample -- a
-circular layout dependency rather than a missing dimension. No valid test was
-built for it, so whether the structural model has a hole there is genuinely
-unknown, and it outranks everything above: a dimensional gap is a check that
-is missing, and a structural one is a protocol that cannot be described.
+**The question this survey opened as unknown, now measured.** QUIC-style
+header protection derives a mask from a sample of the ciphertext and applies
+it to the low bits of the first byte *and* to the packet number field, whose
+length lives in those same protected bits. It is not expressible here, and the
+model does not have an accidental hole -- it has a deliberate boundary that
+this construct crosses twice.
 
-**The direction the holder has given for closing this: ship built-in codecs
-for every operation, replaceable where a project needs its own.** The second
-half is what keeps it from being lock-in -- `impl x extern "sym"` already
-binds a symbol and says nothing about what is behind it, so a built-in is a
-default binding rather than a fixed algorithm. The first half is what gives
-this section something to test, and the argument is stronger than it looks.
+**Layout may not depend on transform output, and 13.3 says why.** Sizing a
+member from a field inside a `coded` region is refused in terms: "the compiler
+reasons about property signatures, never about what a transform produces; a
+size that depended on decoded content would make in-place mutability
+undecidable". That is coherent rather than an oversight -- until the mask is
+removed nobody knows how long the packet number is, so nobody knows where the
+payload starts, and every capability this compiler computes is a statement
+about offsets it can name.
 
-**Today there is nothing to test, and the tree says so in its own words.** The
-only sealing implementation here is `my_sealing_aead` in
-`tests/generated/codec_impl.c`, and its comment reads: "It authenticates
-nothing, which is the one property here that is a lie." So `VerifyGated`,
-`[allow_unverified_read]` and the dirty-bit recomputation -- the machinery
-behind the loudest security claim this project makes -- have never been
-exercised against anything that authenticates. The gate has been tested
-against a codec that cannot fail to open.
+**And a transform covers one contiguous block.** A `coded` region takes no
+`covers` clause -- the parser expects `{` where one would go -- so the two
+disjoint spans a single header-protection mask covers cannot be named as one
+transform. Writing them as two `coded` regions is accepted and means something
+else: two independent transforms rather than one mask over both.
 
-**And a real primitive cannot currently be plugged in at all**, which is the
-mechanism behind the emitted API being identical with and without a declared
-nonce. The ABI of 13.2a is a pure byte transform:
-
-    situ_err_t my_x_encode(const uint8_t *in, uint32_t in_len,
-                           uint8_t *out, uint32_t out_cap, uint32_t *out_len);
-
-There is no key parameter, no nonce, no associated data and nowhere to return
-a tag. `sealed(codec, nonce = n)` names a nonce the ABI has no way to receive,
-so the declaration has no destination rather than merely no consumer. Any
-built-in AEAD needs that ABI widened first; the codecs are the second step and
-not the first.
-
-**Three of the four things an AEAD needs are already computed here**, which
-makes the ABI question narrower than "add key, nonce, associated data and
-tag". The nonce is named in the `sealed(...)` clause; the associated data is
-the covered span, which `_covered_spans` emits today for tag recomputation;
-the ciphertext extent is the layout's. Only the key comes from outside the
-schema, and it always will -- it is derived per session and is not a property
-of a message. So the ABI is not missing four unknowns; it is failing to pass
-three things the compiler has in hand, plus a handle to one it never will.
-
-That measurement is fuzznet's, in `suggestions/fuzznet.md`, and is recorded
-rather than restated because it corroborates independently: they measured what
-a consumer's frame needs, this section measured what the compiler emits, and
-the two met at the same place. Their earlier recommendation -- write the
-tier-1 boundary into 13.2a as a scope decision -- was withdrawn on learning
-the intent above, on the grounds that it "would write a temporary gap into the
-specification as though it were a decision, and the next reader would take it
-for one". That is the right reason and worth keeping, because the same
-temptation applies to every gap this section lists.
-
-**Which puts the work in an order rather than a list.** Widen the ABI so a
-primitive can be called at all; supply reference implementations behind it, as
-defaults a project overrides; and only then do the dimensional checks above
-become enforceable, because a built-in codec is a thing that can *state* its
-tag and nonce widths for a schema to be checked against. The third step is
-also where the test material arrives: a real tag to verify, and a real forgery
-for the generated suites to reject in four backends.
+So the honest position is that a whole class of protocols -- QUIC, and
+anything else that encrypts its own framing -- sits outside the model by
+construction rather than by omission. **Whether that boundary is permanent is
+a question for the intent at the top of this section, not for this survey.**
+"Cover protocol needs whole" and "layout never depends on decoded content" are
+both defensible and they are in tension here; what is not defensible is
+leaving the tension unwritten, because the refusal reads as settled and the
+intent reads as unbounded, and only one of them can be right about QUIC.
 
 **What stays out of scope, and why that is not in tension with the intent
 above.** Key schedules, transcript hashing and signature computation are
