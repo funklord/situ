@@ -3622,6 +3622,7 @@ promise.
 | capability conformance | generated cmocka | the accessors are held to the map they were generated beside: a field must occupy exactly the bytes claimed, a write must move nothing else, a constraint must refuse what it forbids. Generated from the schema alone, so it costs nothing to run over every example and a new construct is covered the day it lands |
 | the layer ladder, rungs 3 to 5 | generated cmocka | the same suite, extended past the accessors: a relation's predicate accepts a matching pair and refuses a mismatched one, a framing reader fed a byte at a time yields exactly the messages that were in the stream and nothing from a partial one, and a conversation table matches a reply to its request, forgets it, and refuses one nobody asked for. Each rung emits both cases or neither, because a predicate that accepts everything passes the positive alone. Rung 6 is not here: `drive` owns I/O, and a suite built out of buffers cannot execute it |
 | the layer ladder, in four backends | pytest + each toolchain | every rung's output *run* rather than compiled. This was `-fsyntax-only` for C++ and `--crate-type lib` for Rust, neither of which links or executes anything, so rungs 3 to 6 were checked in four backends and executed in one. A driver is given its clock as a parameter, so a retransmission follows from the number passed to `step` rather than from how long the test took |
+| bounds that name a sibling | pytest + cc | `[max = chunks - 1]` is checked against a message in hand, so the bound is read rather than folded, and the test moves the field it names to prove it: a folded bound passes "3 of 4 accepted" and "4 of 4 refused" and fails only when `chunks` becomes 8. The widening refusal is checked in both directions, because a guard that refused every sibling bound would satisfy the first half and take the feature with it |
 | generated code behavior | cmocka | compile generated C and exercise it; use `--wrap` for syscall-level mocking where needed |
 | offset constancy | cmocka + disassembly check | verify view field access compiles to constant offsets |
 | round-trip | pytest + hex vectors | parse then re-emit must be byte-identical for canonical schemas |
@@ -11225,6 +11226,47 @@ it. It is driven from `tests/unit/test_relations.py` in three backends instead,
 each given its clock as a parameter. The generated build stops at `converse`
 and says so, because a boundary that is not written down is read as an
 oversight by whoever finds it next.
+
+### 26.115 One keyword doing two jobs, and the cast that lost a comparison
+
+`[max = chunks - 1]` parsed, passed wellformed, laid out, resolved, and was
+published by `situc wire` as committed contract -- and then `situc build`
+refused the file. Five stages accepted one schema and one did not, so two
+commands in the same compiler disagreed about it, and a real consumer's
+schema could not be built at all.
+
+**`max` had been doing two jobs and nobody had separated them.** On a run it
+is a *storage budget*: the cap is how many offsets the index holds, and
+without a constant the array would have to be allocated, which generated code
+does not do (invariant 4). On a scalar it is a *value bound*, checked against
+a message that is already in hand -- so a sibling's value is simply there to
+read, and no storage is implied at all. The emitter folded every bound because
+the first job requires it, and the second had inherited that requirement
+without ever needing it.
+
+**The disagreeing gate was the suspect, not the accepted file.** Making `wire`
+refuse would have made the two commands agree by removing a capability five
+stages already had. That framing was put as a coin-flip by both sides of the
+conversation -- the consumer wrote it into their own record twice -- and it was
+not even: counting which stages accepted settled it in one command.
+
+**A separate entry point, so fixing bounds did not change invariants.**
+`invariant.expression` renders what an invariant may say, and an invariant
+reads facts the solver knows without a message: offset, size, count. Extending
+it would have let invariants read member *values* as a side effect.
+`invariant.bound` sits beside it, and the comment on each says which question
+it answers.
+
+**Then the fix shipped a wrong answer for two days.** The comparison widened
+both sides to a signed 64-bit type, which is right for every unsigned width
+below 64 and wrong for `u64`: `used = 2**63` against `cap = 1` arrived
+negative and validated as **OK**, a message accepted that should have been
+refused. `relation._widen` has refused exactly this shape from the start, with
+exactly this reasoning, and the bound path did not carry the rule across. It
+was noticed, and recorded as a caveat in a message to the consumer rather than
+as a guard in the compiler -- which is the same failure as a limit written in
+prose beside a gate that does not enforce it. **A caveat is not a guard, and
+the difference is a wrong answer nobody sees.**
 
 ### Invariants to hold across all phases
 

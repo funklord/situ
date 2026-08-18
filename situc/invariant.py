@@ -123,6 +123,52 @@ def bound(struct: "ResolvedStruct", expr: ast.Expr,
 	return expression(struct, expr, terms)
 
 
+def bound_widening(struct: "ResolvedStruct", against: "Placement",
+		expr: ast.Expr) -> Exception | None:
+	"""Refuse a bound whose comparison has no correct spelling, or None.
+
+	The same rule `relation._widen` applies, and for the same reason: every
+	unsigned width below 64 fits in a signed 64-bit value unchanged, and a
+	64-bit unsigned does not. The generated comparison casts both sides to a
+	signed 64-bit type, so a `u64` above `INT64_MAX` arrives negative and the
+	test silently answers the opposite of the truth -- `used = 2**63` against
+	`cap = 1` validated as OK, which is a message accepted that should have
+	been refused.
+
+	Relations refused this from the start. Bounds widened without carrying the
+	rule across, and a caveat written in a message is not a guard in the
+	compiler.
+	"""
+	from situc.diagnostics import error
+
+	names = {entry.placement.path.partition(".")[2]: entry.placement
+	         for entry in struct.entries}
+	operands = [against]
+	for path in paths_in(expr):
+		found = names.get(path.partition(".")[2] or path)
+		if found is not None:
+			operands.append(found)
+
+	wide = [one for one in operands
+	        if one.scalar is not None
+	        and not one.scalar.signed and one.scalar.bits >= 64]
+	if not wide:
+		return None
+
+	return error(
+		f"this bound compares a 64-bit unsigned value, which has no correct "
+		f"spelling as a comparison",
+		expr.span,
+		label = "cannot be widened",
+		notes = ["the check widens both sides to a signed 64-bit type, and no "
+		         "64-bit type holds both ranges -- a value above the signed "
+		         "maximum would arrive negative and the test would answer the "
+		         "opposite of the truth",
+		         f"`{wide[0].path}` is the operand that does not fit",
+		         "a relation refuses the same comparison for the same reason"],
+	)
+
+
 def bound_refusal(struct: "ResolvedStruct", expr: ast.Expr,
 		original: Exception) -> Exception:
 	"""A better reason than the constant folder's, where there is one.

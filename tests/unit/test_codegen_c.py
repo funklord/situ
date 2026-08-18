@@ -3394,3 +3394,32 @@ int main(void)
 	return 0;
 }
 """)
+
+
+def test_a_sibling_bound_refuses_what_it_cannot_widen() -> None:
+	"""A wrong answer, not a missing feature, and it shipped for two days.
+
+	The generated comparison casts both sides to `int64_t`, so a `u64` above
+	`INT64_MAX` arrives negative and the test answers the opposite of the
+	truth: `used = 2**63` against `cap = 1` validated as OK -- a message
+	accepted that should have been refused. `relation._widen` has refused this
+	shape from the start; the bound path widened without carrying the rule
+	across, and the limitation was written in a message to a consumer rather
+	than built into the compiler.
+	"""
+	with pytest.raises(SituError) as caught:
+		emit("struct s { u64 cap; u64 used [max = cap]; }\n")
+
+	rendered = caught.value.diagnostic.render()
+	assert "no correct spelling" in rendered
+	assert "s.used" in rendered, "the refusal must name the operand that does not fit"
+
+
+def test_the_widening_guard_refuses_only_what_it_must() -> None:
+	"""A guard that refused every sibling bound would pass the test above and
+	take the feature with it."""
+	for body in ("struct s { u8 cap; u8 used [max = cap]; }\n",
+	             "struct s { u32 cap; u32 used [max = cap]; }\n",
+	             "struct s { i64 cap; i64 used [max = cap]; }\n",
+	             "struct s { u64 used [max = 99]; }\n"):
+		emit(body)		# raises if the guard is too broad

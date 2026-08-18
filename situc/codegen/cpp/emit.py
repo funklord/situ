@@ -4929,7 +4929,7 @@ class Emitter:
 		scalar = placement.scalar
 		from situc.diagnostics import SituError
 		from situc.invariant import bound as bound_expression
-		from situc.invariant import bound_refusal
+		from situc.invariant import bound_refusal, bound_widening
 
 		lines: list[str] = []
 		for attr in placement.attrs:
@@ -4945,6 +4945,9 @@ class Emitter:
 				rendered = bound_expression(struct, attr.value, self)
 				if rendered is None:
 					raise bound_refusal(struct, attr.value, why) from why
+				too_wide = bound_widening(struct, placement, attr.value)
+				if too_wide is not None:
+					raise too_wide from why
 				expected = f"({rendered})"
 				read_as  = f"static_cast<std::int64_t>({read})"
 
