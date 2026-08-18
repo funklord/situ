@@ -2691,6 +2691,128 @@ the canonicity item they contribute -- padding whose content is unconstrained
 a name that exists. They belong with the schema-evolution work of section 19,
 whichever phase takes that.
 
+### 14.8 What the model does not yet say
+
+**The intent, stated by the holder and recorded here because the rest of this
+section reads narrower than it:** situ is eventually to cover all protocol
+needs, including full understanding of complex, layered, nested and
+distributed cryptographic contexts -- and to do so **even where a project
+plugs in its own primitives and routines**. That last clause is the one that
+moves things. "situ does not implement AEAD" is true and has been quietly
+doing the work of "situ does not check AEAD", which does not follow. The
+primitive is the caller's; the *contract around it* is this compiler's.
+
+**The model is structural, and within that it is strong.** Measured by writing
+schemas rather than by reading the section: the doom principle is
+unrepresentable-by-construction, a sealed interior being VerifyGated with no
+API to view it unverified; coverage is inferred, nested tags recompute
+innermost-first, and overlapping non-nested coverage is refused; one nonce
+field feeding two sealed regions is refused, which is real nonce-reuse
+reasoning; `[secret]` suppresses debug accessors, zeroizes, and forbids
+secret-dependent layout and data-dependent branching, refusing to generate
+where it cannot; a block cipher with padding is expressible as
+`expansion = +16`, and granularity and seekability decide whether the sealed
+interior keeps fixed offsets. Post-quantum sizes are a non-issue: a 1184-byte
+Kyber key and a 4595-byte Dilithium signature are accepted without complaint.
+
+**Where it stops is dimensional, and the root is one decision rather than
+several oversights.** Everywhere else in this language a declaration produces
+a checkable claim in generated code. In this section it does not: the emitted
+API is byte-identical whether a schema names a nonce or names none at all, so
+`nonce = n` is currently a comment that happens to parse. Nothing derives an
+obligation from it, which is why nothing can catch the cases below.
+
+| what a schema may say today | what situ does with it |
+|---|---|
+| `tag u8[1]` -- an 8-bit authentication tag | accepted; advisor silent |
+| `u8 n [nonce]` -- 256 distinct nonces | accepted; advisor silent |
+| `sealed(codec)` naming no nonce | accepted, and an omission looks the same |
+
+**A codec cannot state its own parameters.** Its vocabulary is
+`authenticated`, `deterministic`, `error_propagating`, `expansion`,
+`granularity`, `invertible`, `kernel`, `length_preserving`, `seekability`,
+`seekable`, `systematic` -- every one of them about *shape*, none about
+*size*. There is no tag width, nonce width or key width, so a declared
+`tag u8[8]` cannot be compared against what the codec actually produces. Note
+that a truncated tag is legitimate rather than wrong -- OSCORE uses eight
+bytes on constrained links -- which is precisely why it needs to be *sayable*
+instead of banned: as it stands a deliberate truncation and a mistake are the
+same text.
+
+**Three more, each a construct real protocols need and this cannot express.**
+
+- **Key selection.** DTLS carries a 16-bit epoch, QUIC a key-phase bit,
+  WireGuard a receiver index. Every protocol that outlives one key needs to
+  say "this field selects which key", and there is no vocabulary for it --
+  zero occurrences of epoch, key phase or key id in this document.
+- **Out-of-band material.** A nonce or key supplied by the caller rather than
+  carried in the message cannot be distinguished from one left out by
+  accident, because both spell the same thing.
+- **A conversation key of more than 64 bits** (26.95, `KEY_BITS`). TLS session
+  identifiers are 32 bytes, QUIC connection identifiers up to 20, and
+  WireGuard and Noise identify a peer by a 32-byte public key. A tool that can
+  only correlate on eight bytes cannot describe the correlation those
+  protocols perform. What a key should be when it exceeds a word is a question
+  about collisions rather than about codegen, and is not answered here.
+
+**And one that is specified and unbuilt.** 14.7 gives `pad_to(n)` and
+`pad_random(min, max)` for traffic-analysis resistance; the parser refuses
+both. Length hiding is not a detail for a protocol whose threat model
+includes an observer.
+
+**One question this survey could not answer, said plainly rather than left to
+look settled.** QUIC-style header protection derives a mask from a *sample of
+the ciphertext* and applies it to header bits that precede that sample -- a
+circular layout dependency rather than a missing dimension. No valid test was
+built for it, so whether the structural model has a hole there is genuinely
+unknown, and it outranks everything above: a dimensional gap is a check that
+is missing, and a structural one is a protocol that cannot be described.
+
+**The direction the holder has given for closing this: ship built-in codecs
+for every operation, replaceable where a project needs its own.** The second
+half is what keeps it from being lock-in -- `impl x extern "sym"` already
+binds a symbol and says nothing about what is behind it, so a built-in is a
+default binding rather than a fixed algorithm. The first half is what gives
+this section something to test, and the argument is stronger than it looks.
+
+**Today there is nothing to test, and the tree says so in its own words.** The
+only sealing implementation here is `my_sealing_aead` in
+`tests/generated/codec_impl.c`, and its comment reads: "It authenticates
+nothing, which is the one property here that is a lie." So `VerifyGated`,
+`[allow_unverified_read]` and the dirty-bit recomputation -- the machinery
+behind the loudest security claim this project makes -- have never been
+exercised against anything that authenticates. The gate has been tested
+against a codec that cannot fail to open.
+
+**And a real primitive cannot currently be plugged in at all**, which is the
+mechanism behind the emitted API being identical with and without a declared
+nonce. The ABI of 13.2a is a pure byte transform:
+
+    situ_err_t my_x_encode(const uint8_t *in, uint32_t in_len,
+                           uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+
+There is no key parameter, no nonce, no associated data and nowhere to return
+a tag. `sealed(codec, nonce = n)` names a nonce the ABI has no way to receive,
+so the declaration has no destination rather than merely no consumer. Any
+built-in AEAD needs that ABI widened first; the codecs are the second step and
+not the first.
+
+**Which puts the work in an order rather than a list.** Widen the ABI so a
+primitive can be called at all; supply reference implementations behind it, as
+defaults a project overrides; and only then do the dimensional checks above
+become enforceable, because a built-in codec is a thing that can *state* its
+tag and nonce widths for a schema to be checked against. The third step is
+also where the test material arrives: a real tag to verify, and a real forgery
+for the generated suites to reject in four backends.
+
+**What stays out of scope, and why that is not in tension with the intent
+above.** Key schedules, transcript hashing and signature computation are
+computation rather than layout, and a schema compiler that grew them would be
+a cryptographic library with a parser attached. Covering a context does not
+mean performing it: the obligation situ should carry is that a message's
+shape, coverage, ordering, staging and *dimensions* are described and checked,
+whoever supplies the arithmetic underneath.
+
 ---
 
 ## 15. MMIO target
