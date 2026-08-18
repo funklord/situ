@@ -685,3 +685,95 @@ the hand-written enforcement either way.
 
 Knowing it is a no is worth as much to us as a yes, because it settles
 `fuzznet`'s rung question permanently rather than leaving it waiting.
+
+---
+
+## The tier-1 codec ABI cannot express a keyed transform (2026-08-18)
+
+`fuzznet` has finished its sealed-region work, and the report is mostly good
+news: **the sealed-region ABI is complete and we built against it without
+needing anything from you.** One thing did not fit, and it is the ABI rather
+than an implementation.
+
+### What worked, so the finding is not read as a complaint
+
+`wire/frame.situc`'s frame is `hop | authenticated{head} | sealed(fzn_aead,
+nonce = head.nonce){capability, payload} | tag[16]`, and the generated C gave
+us everything the open path needs:
+
+- `situ_fzn_frame_tag_covered()` -- the exact span to authenticate, computed
+  from the layout rather than restated in our source. This is the one we would
+  otherwise have hard-coded and got wrong the next time the schema moved.
+- `situ_fzn_frame_sealed_open(view, verified, &gate)` -- and every interior
+  accessor taking that gate, so the plaintext is unaddressable until something
+  says the tag verified.
+- `situ_fzn_frame_validate()` for shape, before any cryptography is spent.
+
+Our whole open path is: validate, check the key commitment, run the AEAD over
+`tag_covered`'s span, hand the verdict to `sealed_open`. **The discipline you
+enforce is order, and it is the part we would most likely have got wrong.**
+
+Worth saying plainly because our own document was wrong about it for weeks:
+we recorded this as "waiting on situ's sealed-region ABI, and the calling
+convention is still a guess". It had been exercisable since `18b3537`, which
+we adopted for the relation work without noticing it unblocked this too.
+
+### The finding
+
+`impl fzn_aead extern "fzn_aead_xchacha20poly1305"` is **unbound in our tree
+and will stay that way**, because sec 13.2a's shape cannot carry what an AEAD
+needs:
+
+```c
+situ_err_t x_decode(const uint8_t *in, uint32_t in_len,
+                    uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+```
+
+No key, no nonce, no associated data. For us:
+
+- the **key** is per-session and derived outside the schema's knowledge;
+- the **nonce** is `head.nonce`, and the schema *states* it --
+  `sealed(fzn_aead, nonce = head.nonce)` -- so this is a value the compiler
+  already knows and does not pass;
+- the **associated data** is the authenticated header, which is exactly the
+  part of `tag_covered`'s span that is not the sealed region.
+
+The only ways to satisfy the signature are a global holding the key and nonce,
+or a thread-local. Both put mutable state in the one seam where it must not
+be, and a codec bound that way would be a keyed primitive whose key is set by
+action at a distance. So we call our own vtable instead.
+
+**We are not blocked by this.** Since the accessors do not call the codec, an
+unbound `impl` costs us nothing but a line in the schema that describes
+something no longer true. That is the smallest part of the finding and the
+easiest to act on: if a tier-1 `impl` cannot be bound for a codec of this
+shape, it may be worth refusing the declaration rather than accepting one
+nothing can implement -- which is the same class as the `[max]` disagreement
+we reported before, where `wire` published a bound `build` could not enforce.
+
+### What we are not asking for
+
+Not a redesign. Three shapes seem possible and the choice is yours:
+
+1. **A second ABI tier for keyed codecs** -- an extra `const void *params`, or
+   a context pointer threaded from the call site. It changes the accessor
+   signature, which may cost more than it buys.
+2. **Refuse the binding** -- if `authenticated` in a codec's property set means
+   the tier-1 shape cannot serve it, say so at `impl` time. Cheapest, and it
+   would have told us on day one rather than after we read the ABI.
+3. **Leave it and document it** -- say in sec 13.2a that an `authenticated` codec
+   is expected to be driven by the caller through the gate rather than bound as
+   a tier-1 impl. This matches what actually happens and costs nothing.
+
+We would be happy with (3). The gate is the valuable part and it already
+works; what cost us time was believing the `extern` declaration meant
+something we would eventually be able to satisfy.
+
+### One smaller note
+
+`situc verify` requires a `vectors` argument. Our own reproduction script had
+been running it without one for weeks and recording the usage error as a
+refusal of the schema, which was our mistake and is now corrected in our
+`project.md`. Mentioning it only because a reader of our earlier report would
+have seen `verify` in a table of four commands and drawn the wrong conclusion
+about situ.
