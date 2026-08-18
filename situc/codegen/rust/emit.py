@@ -43,7 +43,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	is_own_member,
-	Check, Member, arm_members, arm_of, covered_run, data_sized, decode_bound,
+	Check, Member, arm_members, arm_of, coded_run, covered_run, data_sized, decode_bound,
 	dynamic_frame_owner, offset_plan,
 	readable_names,
 	region_extent,
@@ -1393,7 +1393,6 @@ class Emitter:
 		sym     = f"situ_{c_name(placement.codec or '')}_decode"
 		scale   = " * 8" if bitwise else ""
 		unscale = " / 8" if bitwise else ""
-
 		return [
 			"",
 			f"\t/// The decoded bytes of `{placement.path}`, into a buffer the",
@@ -1423,11 +1422,43 @@ class Emitter:
 			"\t}",
 		]
 
+	def _disjoint_coverage(self, placement: Placement) -> list[str]:
+		"""Why no decode method exists for a region covering a gap (14.1a)."""
+		covered = ", ".join(f"`{name}`" for name in placement.coded_covers)
+		return [
+			"",
+			f"\t// No decode method for `{placement.path}`: it covers"
+			f" {covered},",
+			"\t// which with its own bytes is not one contiguous run. A"
+			" tier-1",
+			"\t// codec takes one pointer and one length (13.2a), so there is"
+			" no",
+			"\t// single range to hand it. Cover a contiguous run instead.",
+		]
+
 	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
 			codec: object, symbol: str, encoded: str) -> list[str]:
 		"""The decode of a tier-1 region, through the ABI its `impl` binds."""
 		name  = _ident(c_name(local_name(struct, placement)))
 		bound = decode_bound(codec, placement)
+		start = f"self.{name}().as_ptr()"
+
+		# A `covers` clause widens what the transform runs over (14.1a).
+		run = coded_run(struct, placement)
+		if run is None:
+			return self._disjoint_coverage(placement)
+
+		first, last = run
+		if first is not placement or last is not placement:
+			# Indexed off the backing slice rather than through the covered
+			# members' accessors: a scalar hands back a value, not a span,
+			# and `coded_run` guarantees this start is a fixed offset.
+			assert first.offset_bits is not None
+			assert last.offset_bits is not None
+			lead    = (last.offset_bits - first.offset_bits) // 8
+			tail    = f"({encoded})" if last is placement else str(last.size_bits // 8)
+			start   = f"self.bytes[{first.offset_bits // 8}..].as_ptr()"
+			encoded = f"{lead} + {tail}" if lead else tail
 
 		return [
 			"",
@@ -1448,7 +1479,7 @@ class Emitter:
 			"\t\t// this region's own bytes and the output is the caller's,",
 			"\t\t// both passed with the lengths they actually have.",
 			"\t\tlet code = unsafe {",
-			f"\t\t\t{symbol}_decode(self.{name}().as_ptr(),"
+			f"\t\t\t{symbol}_decode({start},"
 			f" ({encoded}) as u32,",
 			"\t\t\t\tout.as_mut_ptr(), out.len() as u32, &mut written)",
 			"\t\t};",

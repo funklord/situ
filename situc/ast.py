@@ -595,6 +595,20 @@ class Coded(Member):
 	args: tuple[Attr, ...]
 	members: tuple[Member, ...]
 	attrs: tuple[Attr, ...] = ()
+	#: `coded pn(hp) covers(first) { u8 number[..]; }` -- regions *outside*
+	#: this one whose bytes the transform also runs over, beyond the region's
+	#: own extent (section 14.1a).
+	#:
+	#: Additive, not a replacement: the codec sees the union of this region
+	#: and everything named here. Empty is the ordinary case and means the
+	#: region covers only itself -- unlike a tag, where an empty `covers` is
+	#: inference over every region in the struct. There is nothing to infer
+	#: here, because a transform that reached beyond its own bytes without
+	#: being told to would be a surprise rather than a default.
+	#:
+	#: Header protection is what this is for: QUIC masks the first byte and
+	#: the packet number under one operation, and the two are not adjacent.
+	covers: tuple[str, ...] = ()
 	#: `coded body(dot_stuffing) until "\r\n.\r\n" { ... }` -- a region whose
 	#: extent is found by scanning rather than computed from its interior.
 	#:

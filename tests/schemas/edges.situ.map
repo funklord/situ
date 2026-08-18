@@ -11,6 +11,7 @@
 # codecs. `trusted` means the properties are declared and
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
+codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
 codec sealing_aead trusted length_preserving seekable=linear granularity=stream authenticated invertible deterministic
 
 struct arithmetic size=14 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
@@ -110,6 +111,12 @@ struct framed_tail size=6 mutate=Shifting address=Unstable repr=ValueConverted a
   framed_tail.head.seq                   offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   framed_tail.head.flags                 offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   framed_tail.tail                       offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct hp_packet size=6 repr=ValueConverted atomic=NonAtomic
+  hp_packet.first                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  hp_packet.pn                           offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  hp_packet.pn.number                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  hp_packet.rest                         offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
 
 struct keywords size=10 repr=ValueConverted
   keywords.int                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

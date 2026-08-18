@@ -41,7 +41,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	is_own_member,
-	Check, Member, arm_members, containment_order, covered_run, data_sized,
+	Check, Member, arm_members, coded_run, containment_order, covered_run, data_sized,
 	dynamic_frame_owner,
 	readable_names,
 	decode_bound, region_extent, offset_plan,
@@ -1713,6 +1713,20 @@ class Emitter:
 		# should be told what they call (26.35).
 		symbol = extern_symbol(self.schema, placement.codec or "")
 		if symbol is not None:
+			# A `covers` clause changes which bytes go through the codec, so
+			# the note has to say so: a Python reader comparing this against
+			# the C the other three backends emit would otherwise see a call
+			# over a span this comment did not describe (14.1a).
+			run = coded_run(struct, placement)
+			covers = ", ".join(f"`{one}`" for one in placement.coded_covers)
+			extra = ([] if not placement.coded_covers else
+			         [f"\t# It runs over {covers} as well as this region's own",
+			          "\t# bytes, as one contiguous span."] if run is not None
+			         else
+			         [f"\t# The schema asks it to cover {covers} as well, which",
+			          "\t# is not contiguous with this region -- the other",
+			          "\t# backends refuse it, because 13.2a's ABI takes one",
+			          "\t# pointer and one length."])
 			return [
 				"",
 				f"\t# No `{name}_decode`: the codec is the caller's, and",
@@ -1720,6 +1734,7 @@ class Emitter:
 				"\t# a path this generator would have to invent (0017).",
 				f"\t# `{symbol}_decode(in, in_len, out, out_cap, &out_len)`",
 				f"\t# is the ABI this schema binds (13.2a); {sized}.",
+				*extra,
 			]
 
 		if not decodes_here(codec):

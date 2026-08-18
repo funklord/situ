@@ -282,6 +282,7 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 		elif isinstance(member, ast.Coded):
 			lines.append(f"{indent}coded {member.name}"
 			             f"({_codec_args(member.codec, member.args)})"
+			             f"{_covers_to_source(member.covers)}"
 			             f"{_attrs_to_source(member.attrs)} {{")
 			lines.extend(member_lines(member.members, depth + 1))
 			lines.append(f"{indent}}}")

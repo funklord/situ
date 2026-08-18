@@ -55,6 +55,7 @@ def check(schema: ast.Schema) -> None:
 	check_variant_exhaustiveness(schema)
 	check_codec_bindings(schema)
 	check_tag_coverage(schema)
+	check_coded_coverage(schema)
 	check_nonce_references(schema)
 	check_registers(schema)
 	check_no_recursive_types(schema)
@@ -1500,6 +1501,98 @@ def check_tag_coverage(schema: ast.Schema) -> None:
 			spread.append((tag, set(covers)))
 
 		_check_coverage_is_disjoint_or_nested(spread)
+
+
+def _coverable_spans(members: tuple[ast.Member, ...]) -> dict[str, ast.Member]:
+	"""Everything in a struct a `coded ... covers(...)` may name.
+
+	Wider than a tag's namespace on purpose. A tag covers *regions* because its
+	coverage is an authentication boundary and a region is what draws one; a
+	transform's coverage is only a range of bytes, and a plain field names one
+	just as well. Header protection is the case that needs it -- QUIC masks the
+	first byte, which is a field, not a region anybody would wrap.
+
+	Recurses into `authenticated` because its members flatten into the
+	enclosing struct and stay addressable, and stops at `coded` and `sealed`
+	because their interiors are transform output: naming one would be asking a
+	transform to run over bytes that do not exist until another has (13.3).
+	"""
+	found: dict[str, ast.Member] = {}
+	for member in members:
+		name = getattr(member, "name", None)
+		if isinstance(member, ast.Authenticated):
+			if name is not None:
+				found[name] = member
+			found.update(_coverable_spans(member.members))
+		elif isinstance(member, (ast.Coded, ast.Sealed)):
+			if name is not None:
+				found[name] = member
+		elif name is not None:
+			found[name] = member
+	return found
+
+
+def check_coded_coverage(schema: ast.Schema) -> None:
+	"""`covers(...)` on a `coded` region names spans that exist (14.1a)."""
+	for struct in schema.structs():
+		spans = _coverable_spans(struct.members)
+
+		for region in _coded_regions(struct.members):
+			covers = tuple(getattr(region, "covers", ()))
+
+			# A transform that changes length may not reach outside its own
+			# region. Everything it covers is already placed at a fixed
+			# offset, and a codec that returns more or fewer bytes than it was
+			# given would move members the layout has already committed to --
+			# so the decoded form would not correspond to the struct at all.
+			# Header protection, the case the clause exists for, is a mask and
+			# preserves length (14.1a).
+			decl = next((one for one in schema.codecs()
+			             if one.name == region.codec), None)
+			if covers and decl is not None \
+					and decl.expansion is not ast.Expansion.PRESERVING:
+				raise error(
+					f"`{region.name}` covers other spans, but `{region.codec}`"
+					f" does not preserve length",
+					region.span,
+					label = f"its expansion is `{decl.expansion.value}`",
+					notes = ["a covered span sits at an offset the layout has "
+					         "already fixed, and a transform that returns a "
+					         "different number of bytes would move it",
+					         "`covers` is for a mask or a scramble -- something "
+					         "that rewrites bytes in place (project.md section "
+					         "14.1a)"],
+				)
+
+			for name in covers:
+				if name == region.name:
+					raise error(
+						f"`{region.name}` covers itself",
+						region.span,
+						label = "a region already transforms its own bytes",
+						notes = ["`covers` names what the transform runs over "
+						         "*beyond* this region; listing the region "
+						         "itself is either a no-op or a second pass "
+						         "over the same bytes, and neither is what the "
+						         "clause means (project.md section 14.1a)"],
+					)
+
+				if name in spans:
+					continue
+
+				known = ", ".join(sorted(spans)) or "nothing in this struct"
+				raise error(
+					f"`{region.name}` covers unknown span `{name}`",
+					region.span,
+					label = "no such field or region in this struct",
+					notes = [f"nameable here: {known}",
+					         "unlike a tag, a coded region may cover a plain "
+					         "field: its coverage is a range of bytes rather "
+					         "than an authentication boundary",
+					         "the interior of another coded or sealed region "
+					         "cannot be named -- those bytes are transform "
+					         "output and do not exist until it has run"],
+				)
 
 
 def _check_region_names(regions: list[ast.Authenticated | ast.Sealed]) -> None:

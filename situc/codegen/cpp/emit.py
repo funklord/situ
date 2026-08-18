@@ -46,7 +46,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	is_own_member,
-	Check, Member, arm_members, arm_of, containment_order, covered_run,
+	Check, Member, arm_members, arm_of, coded_run, containment_order, covered_run,
 	data_sized,
 	dynamic_frame_owner,
 	readable_names,
@@ -3222,6 +3222,25 @@ class Emitter:
 			"\t}",
 		]
 
+	def _disjoint_coverage(self, placement: Placement) -> list[str]:
+		"""Why no decode method exists for a region covering a gap (14.1a).
+
+		C's copy carries the full reasoning; the short of it is that 13.2a
+		hands a codec one pointer and one length, and spans with something
+		uncovered between them have no single range to be.
+		"""
+		covered = ", ".join(f"`{name}`" for name in placement.coded_covers)
+		return [
+			"",
+			f"\t/* No decode method for {placement.path}: it covers"
+			f" {covered},",
+			"\t * which with its own bytes is not one contiguous run. A"
+			" tier-1",
+			"\t * codec takes one pointer and one length (13.2a), so there"
+			" is no",
+			"\t * single range to hand it. Cover a contiguous run instead. */",
+		]
+
 	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
 			codec: ast.CodecDecl, symbol: str, encoded: str) -> list[str]:
 		"""The decode of a tier-1 region, through the ABI its `impl` binds.
@@ -3233,6 +3252,24 @@ class Emitter:
 		"""
 		name  = bare_name(local_name(struct, placement))
 		bound = decode_bound(codec, placement)
+		start = f"{name}().data()"
+
+		# A `covers` clause widens what the transform runs over (14.1a).
+		run = coded_run(struct, placement)
+		if run is None:
+			return self._disjoint_coverage(placement)
+
+		first, last = run
+		if first is not placement or last is not placement:
+			# `raw_.base`, not the covered members' own accessors: a scalar
+			# has no span accessor, and `coded_run` guarantees the start is a
+			# fixed offset.
+			assert first.offset_bits is not None
+			assert last.offset_bits is not None
+			lead    = (last.offset_bits - first.offset_bits) // 8
+			tail    = encoded if last is placement else f"{last.size_bits // 8}u"
+			start   = f"raw_.base + {first.offset_bits // 8}u"
+			encoded = f"{lead}u + {tail}" if lead else tail
 
 		return [
 			"",
@@ -3251,7 +3288,7 @@ class Emitter:
 			"\t\t\tstd::uint32_t cap, std::uint32_t &len) const noexcept",
 			"\t{",
 			f"\t\treturn static_cast<::situ::rt::err>({symbol}_decode(",
-			f"\t\t\t{name}().data(), {encoded}, out, cap, &len));",
+			f"\t\t\t{start}, {encoded}, out, cap, &len));",
 			"\t}",
 		]
 

@@ -107,6 +107,12 @@ struct framed_tail size=6..10
   ~         3         beacon     head  big
   ~         2         u16        tail  big
 
+struct hp_packet size=6
+  @0x0000   1         u8         first
+  @0x0001   1         masking    pn  codec=masking
+  @0x0002   4         u32        rest  big
+  pn covers: pn first
+
 struct keywords size=10
   @0x0000   4         u32        int  big
   @0x0004   2         u16        short  big

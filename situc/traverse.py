@@ -700,6 +700,56 @@ def covered_run(struct: "ResolvedStruct",
 	return ordered[0], ordered[-1]
 
 
+def coded_run(struct: "ResolvedStruct",
+		region: Placement) -> tuple[Placement, Placement] | None:
+	"""The byte range a `coded` region's transform runs over (section 14.1a).
+
+	The union of the region itself and everything its `covers` clause names.
+	Returns the first and last placement of that union when they form one
+	contiguous run, and `None` when they do not.
+
+	`None` is not a failure to compute -- it is the answer. The codec ABI of
+	13.2a takes one pointer and one length, so a transform over two spans with
+	a gap between them has nothing to be handed: gathering the pieces into a
+	temporary would copy the bytes a zero-copy accessor exists to avoid, and
+	calling the codec once per span is a different operation from calling it
+	once over both. Whichever a protocol meant, the generated code would be
+	guessing, so the backends refuse and say so instead.
+
+	Structural, and here rather than in a backend, for `covered_run`'s reason:
+	which spans, in what order, and whether each ends where the next begins is
+	one question with one answer, and four backends disagreeing about it would
+	be four dialects of the language.
+	"""
+	if not region.coded_covers:
+		return region, region
+
+	# The struct's own members only. A nested struct's fields appear in these
+	# entries too, under a dotted path, and share their bare names -- so an
+	# unrestricted search could bind `covers(flags)` to `sub.flags` while
+	# `wellformed` validated the clause against the top-level namespace, and
+	# the two would disagree about which bytes the transform ran over.
+	#
+	# The test is the dotted path, not `is_own_member`: that also excludes a
+	# region by kind, and a region is exactly what `covers(first)` names in
+	# the case this clause exists for. Filtering by it emitted the ordinary
+	# accessor for a coverage that should have been refused -- the clause
+	# silently ignored, which is the failure this whole feature guards.
+	named = [entry.placement for entry in struct.entries
+	         if entry.placement.name in region.coded_covers
+	         and "." not in local_name(struct, entry.placement)]
+	ordered = sorted([*named, region],
+	                 key=lambda p: struct.layout.placements.index(p))
+
+	for earlier, later in zip(ordered, ordered[1:]):
+		if (earlier.offset_bits is None or later.offset_bits is None
+				or not earlier.is_fixed_size
+				or earlier.offset_bits + earlier.size_bits != later.offset_bits):
+			return None
+
+	return ordered[0], ordered[-1]
+
+
 def containment_order(structs: dict[str, "ResolvedStruct"],
 		roots: Sequence[str]) -> list[str]:
 	"""Struct names, each placed after every struct it names.

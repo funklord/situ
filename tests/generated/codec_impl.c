@@ -116,3 +116,47 @@ situ_err_t my_sealing_aead_decode(const uint8_t *in, uint32_t in_len,
 {
 	return my_sealing_aead_encode(in, in_len, out, out_cap, out_len);
 }
+
+/* app_header_mask -- the codec behind `coded pn(masking) covers(first)` in
+ * `tests/schemas/edges.situ`, so section 14.1a's clause has an implementation
+ * its property tests can run against.
+ *
+ * A mask is what `covers` exists for. Header protection in QUIC derives one
+ * from a sample of the ciphertext and XORs it across the first byte and the
+ * packet number under a single operation, and the clause's whole reason to
+ * exist is that those are two spans rather than one field. What matters here
+ * is only that the transform preserves length -- 14.1a refuses the clause
+ * otherwise, because a covered span sits at an offset the layout has already
+ * fixed and a codec returning a different count would move it.
+ *
+ * XOR with a constant again, for `my_sealing_aead`'s reasons: it is its own
+ * inverse, changes no length, and touches each byte independently, which is
+ * exactly the four properties the schema declares. A different constant so
+ * that a test confusing the two codecs fails rather than passing by accident.
+ */
+
+situ_err_t app_header_mask_encode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+situ_err_t app_header_mask_decode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+
+situ_err_t app_header_mask_encode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	uint32_t i;
+
+	if (out_cap < in_len) {
+		return SITU_ERR_BOUNDS;
+	}
+	for (i = 0u; i < in_len; i++) {
+		out[i] = (uint8_t)(in[i] ^ 0xA5u);
+	}
+	*out_len = in_len;
+	return SITU_OK;
+}
+
+situ_err_t app_header_mask_decode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	return app_header_mask_encode(in, in_len, out, out_cap, out_len);
+}

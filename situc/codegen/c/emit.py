@@ -43,7 +43,7 @@ from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
 	Check, arm_members, arm_of, classify_check, containment_order,
-	covered_run, data_sized, dynamic_frame_owner, is_own_member,
+	coded_run, covered_run, data_sized, dynamic_frame_owner, is_own_member,
 	local_name, offset_plan,
 	readable_names,
 	region_extent,
@@ -3809,7 +3809,6 @@ class Emitter:
 		           else self._length_expression(struct, placement))
 		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
 		bound   = decode_bound(codec, placement)
-
 		out = [
 			"",
 			f"/* The decoded bytes of `{placement.name}`, into a buffer the"
@@ -3854,6 +3853,35 @@ class Emitter:
 		])
 		return out
 
+	def _disjoint_coverage(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Why no decode accessor exists for a region covering a gap.
+
+		The same answer the tag path gives, for the same reason: 13.2a's ABI
+		takes one pointer and one length, and there is no honest single range
+		over spans with something uncovered between them. Emitting a comment
+		rather than nothing, because a missing accessor with no explanation is
+		indistinguishable from a backend that forgot.
+		"""
+		covered = ", ".join(f"`{name}`" for name in placement.coded_covers)
+		return [
+			"",
+			f"/* No decode accessor for `{placement.name}`: it covers"
+			f" {covered}, which",
+			" * together with its own bytes is not one contiguous run in this"
+			" struct.",
+			" *",
+			" * A tier-1 codec is handed one pointer and one length (13.2a),"
+			" so a",
+			" * transform over spans with a gap between them has no single"
+			" range to",
+			" * be given. Gathering them would copy what a zero-copy accessor"
+			" exists",
+			" * to avoid, and calling the codec once per span is a different",
+			" * operation from calling it once over both -- so this is refused",
+			" * rather than guessed at. Cover a contiguous run instead. */",
+		]
+
 	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
 			codec: ast.CodecDecl, symbol: str) -> list[str]:
 		"""The decode of a tier-1 region, through the ABI its `impl` binds.
@@ -3869,8 +3897,28 @@ class Emitter:
 		# interior is sized by fields the message chose. Handing the codec a
 		# length past the frame is the one thing this accessor must not do.
 		span    = f"{ident(self.prefix, struct.name, local, 'len')}(view)"
+		start   = f"{ident(self.prefix, struct.name, local, 'ptr')}(view)"
 		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
 		bound   = decode_bound(codec, placement)
+
+		# A `covers` clause widens what the transform runs over (14.1a).
+		run = coded_run(struct, placement)
+		if run is None:
+			return self._disjoint_coverage(struct, placement)
+
+		first, last = run
+		if first is not placement or last is not placement:
+			# Addressed from the view base rather than through the covered
+			# members' own accessors: a scalar field has no `_ptr`, and the
+			# run's start is a fixed offset by construction -- `coded_run`
+			# returns nothing when it is not.
+			assert first.offset_bits is not None
+			assert last.offset_bits is not None
+			lead  = (last.offset_bits - first.offset_bits) // 8
+			tail  = (span if last is placement
+			         else f"{last.size_bits // 8}u")
+			start = f"view.base + {first.offset_bits // 8}u"
+			span  = f"{lead}u + {tail}" if lead else tail
 
 		out = [
 			"",
@@ -3896,8 +3944,7 @@ class Emitter:
 			f"{ident(self.prefix, struct.name, local, 'decode')}"
 			"(situ_view_t view, uint8_t *out, uint32_t cap, uint32_t *len)",
 			"{",
-			f"	return {symbol}_decode("
-			f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
+			f"	return {symbol}_decode({start},",
 			f"		{span}, out, cap, len);",
 			"}",
 		])

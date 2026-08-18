@@ -2530,6 +2530,7 @@ add-on. It is a first-class part of the capability system.
 | `nonce` attribute | marks a field as a nonce for a codec |
 | `secret` attribute | marks a field as key material or plaintext secret |
 | `checksum T[N] [covers(...)]` | non-cryptographic integrity field (CRC); shares the entire tag mechanism |
+| `coded name(codec) [covers(...)]` | a transform, optionally over spans outside the region (14.1a) |
 
 Coverage inference: an omitted `covers` clause means "every `authenticated` and
 `sealed` region in the enclosing struct, in declaration order". Explicit
@@ -2545,6 +2546,87 @@ one afterwards would leave the outer one stale again
 A region no tag covers is an error. `authenticated { }` states that these bytes
 are covered; with no tag in the struct that statement is false, and a construct
 whose meaning is silently nothing is what 14.5 refuses.
+
+### 14.1a Transform coverage: `coded ... covers(...)`
+
+A `coded` region transforms its own bytes. `covers(...)` widens that to spans
+outside it:
+
+```
+coded pn(hp) covers(first) { u8 number[..]; }
+```
+
+Header protection is what it is for. QUIC derives a mask from a sample of the
+ciphertext and applies it to the first byte and to the packet number under one
+operation, and those two are not the same field.
+
+The clause is **additive and never inferred**. The codec sees the union of the
+region and everything named; an empty clause means the region covers only
+itself. That is deliberately the opposite of a tag, where an omitted `covers`
+means "every region in the struct": there is a sensible default for what a tag
+authenticates and none for what a transform reaches, and a transform that ran
+over bytes nobody named would be a surprise rather than a convenience.
+
+Unlike a tag, it may name a **plain field**. A tag covers regions because its
+coverage is an authentication boundary and a region is what draws one; a
+transform's coverage is a range of bytes, and a field names one just as well.
+The first byte of a QUIC packet is a field, not a region anybody would wrap.
+
+The interior of another `coded` or `sealed` region cannot be named. Those bytes
+are transform output and do not exist until it has run (13.3), so naming one is
+an ordering error rather than a coverage one.
+
+**A coverage that is not contiguous is refused, and this is the interesting
+half.** The codec ABI of 13.2a hands an implementation one pointer and one
+length. Spans with something uncovered between them have no single range to be
+given, and neither way out is honest:
+
+- **Gathering them into a temporary** copies the bytes that a zero-copy
+  accessor exists to avoid, and 13.2a has nowhere to say the result must be
+  scattered back.
+- **Calling the codec once per span** is a *different operation* from calling
+  it once over both. For a mask derived per-call they are not the same
+  transform, and the schema does not say which was meant.
+
+So the four backends emit no decode accessor and a comment saying why. This is
+the answer `covered_run` already gives for a tag whose regions are not
+contiguous, and `coded_run` beside it is the same structural question asked of
+a transform -- shared, so that four backends cannot disagree about whether a
+schema compiles.
+
+The consequence worth stating plainly: **QUIC's header protection can be
+expressed and checked, and cannot yet be emitted**, because its two spans are
+separated by the connection ID and length fields. Widening the ABI to take a
+list of spans is what would change that, and it is step one of the ordering in
+14.8. Until then the clause is honest about its limit rather than silently
+producing a transform over the wrong bytes.
+
+**The codec must preserve length.** A covered span sits at an offset the
+layout has already fixed, and a transform returning a different number of bytes
+than it was given would move it -- the decoded form would not correspond to the
+struct. So `covers` on a `ratio_bounded` codec like SMTP's dot-stuffing is an
+error, and a mask or a scramble is what the clause is for.
+
+That rule has a consequence for tier 2 worth writing down, because it was found
+by trying to test the path and not finding one: **a derived codec never reaches
+this clause.** Every length-preserving kernel family (`shift_register`,
+`permutation`) computes no ratio, and the derived decode accessor is emitted
+only where a ratio says how large the output buffer must be -- so it is not
+emitted for them at all, with or without a `covers` clause. The widening was
+written into the derived path in three backends before this was measured, and
+removed again: an unreachable branch claiming to handle a case is worse than an
+absent one, because nothing can ever exercise it. Whether a length-preserving
+derived codec should emit a decode accessor at all (its output buffer is
+exactly its input length, so the size is known) is a separate gap and is not
+about coverage.
+
+The clause is wire-visible and appears in the signature (`pn covers: pn flags`).
+Widening it makes a peer transform bytes the old version left alone while every
+member, offset and size stays identical -- so `wire.compare` gained the
+*added-coverage* case for it. That case had been absent while only tags reached
+that function, because a new tag brings a new field and the member comparison
+already reports one; a `coded` region gaining a clause changes no member, and
+without it two signatures compared equal while the peers disagreed.
 
 ### 14.2 Tag coverage and the dirty bit
 
@@ -12610,6 +12692,30 @@ the difference is a wrong answer nobody sees.**
    *reasoning* errors unless the format itself says otherwise. Where a
    comment is the only thing holding a rule, the next implementation will
    not read it.
+
+### 26.116 A struct named `protected`, and the keyword nobody checks
+
+Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
+obvious name was `protected`. Every backend accepted it. The C++ one emitted
+`class protected` inside `namespace situ`, and g++ reported six errors in the
+generated driver -- `expected unqualified-id before 'protected'` -- none of
+which named the schema, the struct, or situc.
+
+The generator already refuses two constructs that flatten to one C identifier,
+because a collision there surfaces as a redefinition naming a function nobody
+wrote. This is the same failure one language over and is not checked: a schema
+identifier that is a keyword in a target language compiles here and does not
+compile there. `protected`, `private`, `class`, `template`, `operator`, `new`
+and `delete` are all legal `situ` identifiers and none of them is a legal C++
+class name; Rust's `match`, `type`, `move` and `ref` are the same hazard, and
+its emitter already has an `_ident` that escapes some of them.
+
+Not fixed here, because it is a front-end rule and this was a codegen change:
+the diagnostic belongs beside the identifier-flattening check, where it can
+name the struct and the language rather than leaving g++ to. What the incident
+argues is that the four-backend differential earns its cost -- the schema was
+valid, three backends were correct, and nothing but actually compiling the
+fourth would have said so.
 
 ---
 

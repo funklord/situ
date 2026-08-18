@@ -671,3 +671,39 @@ struct placed {
 require size(placed) == 7;
 require absolute_static(placed);
 require in_place(placed.after);
+
+// A `coded` region whose transform reaches outside itself: section 14.1a.
+//
+// Header protection is the case the clause exists for -- QUIC masks the first
+// byte and the packet number under one operation. Here the two spans are
+// adjacent, which is the half that can be emitted: the codec ABI of 13.2a
+// takes one pointer and one length, so a coverage with a gap in it has no
+// single range to hand over and the backends refuse it instead.
+//
+// It is here rather than in an example because no protocol in the tree masks
+// a header, and a clause nothing reaches is a clause whose generated code has
+// never run -- which is what this file is for. The mutation it keeps honest:
+// dropping the widening emits the region's own pointer, and every schema
+// without a `covers` clause still passes.
+//
+// The codec is `extern` deliberately. A derived one cannot reach the clause
+// at all: every length-preserving kernel family computes no ratio, and the
+// derived decode accessor is emitted only where a ratio sizes the output.
+codec masking {
+	granularity = byte;
+	length_preserving;      // required by 14.1a: a covered span is already placed
+	seekable;
+	invertible;
+	deterministic;
+}
+
+impl masking extern "app_header_mask";
+
+struct hp_packet {
+	u8 first;
+	coded pn(masking) covers(first) { u8 number; }
+	u32 rest;
+}
+
+require size(hp_packet) == 6;
+require absolute_static(hp_packet);

@@ -250,6 +250,10 @@ class Placement:
 	unverified_ok: bool		= False
 	# For a tag or checksum placement: the regions it covers, after inference.
 	tag_covers: tuple[str, ...]	= ()
+	# For a `coded` placement: the sibling regions its transform also runs
+	# over, beyond its own extent (section 14.1a). Unlike `tag_covers` this is
+	# never inferred -- empty means the region covers only itself.
+	coded_covers: tuple[str, ...]	= ()
 	# The tags covering these bytes. Written after the whole struct is placed,
 	# because a tag is usually declared after the regions it covers.
 	covered_by: tuple[str, ...]	= ()
@@ -824,6 +828,9 @@ class Solver:
 			span          = region.span,
 			attrs         = region.attrs,
 			codec         = region.codec,
+			# `getattr`, because `sealed` shares this function and has no
+			# `covers` clause of its own -- same reason as `until` above.
+			coded_covers  = tuple(getattr(region, "covers", ())),
 			delimiter     = until.delimiter if until is not None else None,
 			delimiter_cap = (evaluate(until.cap, self.result.env)
 			                 if until is not None and until.cap is not None

@@ -231,6 +231,16 @@ def _coverage(struct: ResolvedStruct) -> list[str]:
 	lines = []
 	for placement in struct.entries:
 		held = placement.placement
+
+		# A `coded` region's `covers` belongs here for this function's own
+		# reason (14.1a). Widening it makes a peer transform bytes the old
+		# version left alone, and the structure is identical either way --
+		# which is the shape of change this signature exists to catch.
+		if held.kind == "coded" and held.coded_covers:
+			over = " ".join(sorted(held.coded_covers))
+			lines.append(f"  {held.name} covers: {held.name} {over}")
+			continue
+
 		if held.kind not in ("tag", "checksum"):
 			continue
 
@@ -626,6 +636,16 @@ def _compare_coverage(name: str, old: list[str], new: list[str]) -> list[Finding
 		findings.append(Finding("coverage", name,
 		                        f"`{tag}` is gone; what it authenticated is "
 		                        "now unauthenticated"))
+
+	# Coverage that was not there before. Absent while only tags reached this
+	# function, because a new tag brings a new field and the member comparison
+	# already reports one. A `coded` region gaining a `covers` clause changes
+	# no member and no offset (14.1a), so without this the two signatures
+	# compared equal while the peers disagreed about which bytes to transform.
+	for tag in sorted(set(new_cover) - set(old_cover)):
+		findings.append(Finding("coverage", name,
+		                        f"`{tag}` now covers {new_cover[tag]}, which "
+		                        "nothing covered before"))
 	return findings
 
 
