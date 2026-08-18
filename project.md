@@ -2760,36 +2760,38 @@ same text.
 both. Length hiding is not a detail for a protocol whose threat model
 includes an observer.
 
-**The question this survey opened as unknown, now measured.** QUIC-style
-header protection derives a mask from a sample of the ciphertext and applies
-it to the low bits of the first byte *and* to the packet number field, whose
-length lives in those same protected bits. It is not expressible here, and the
-model does not have an accidental hole -- it has a deliberate boundary that
-this construct crosses twice.
+**The question this survey opened as unknown, now measured -- and the first
+measurement of it was wrong.** It reported that QUIC-style header protection
+crossed the model's boundary twice, on contiguity and on layout depending on
+transform output. The second is not true, and the error came from testing the
+wrong shape: sizing a member *outside* a `coded` region from a field inside it
+is refused, and that was read as a rule about decoded content in general.
 
-**Layout may not depend on transform output, and 13.3 says why.** Sizing a
-member from a field inside a `coded` region is refused in terms: "the compiler
-reasons about property signatures, never about what a transform produces; a
-size that depended on decoded content would make in-place mutability
-undecidable". That is coherent rather than an oversight -- until the mask is
-removed nobody knows how long the packet number is, so nobody knows where the
-payload starts, and every capability this compiler computes is a statement
-about offsets it can name.
+**Layout may depend on decoded content, inside the region that decoded it.**
+`coded prot(hp) { u2 pn_len; u8 pn[pn_len]; }` is accepted, and so is the same
+shape inside a `sealed` region. That is the staged model 12.1 already
+describes: the transform runs, and behind the gate the interior is as dynamic
+as any other message, at whatever cost the transform had. 13.3's refusal bites
+only where a reference leaves the region, which is the right place for it --
+what would be undecidable is the layout *around* a transform, not the layout
+*within* one.
 
-**And a transform covers one contiguous block.** A `coded` region takes no
-`covers` clause -- the parser expects `{` where one would go -- so the two
-disjoint spans a single header-protection mask covers cannot be named as one
-transform. Writing them as two `coded` regions is accepted and means something
-else: two independent transforms rather than one mask over both.
+So the whole of QUIC's byte zero -- the protected bits, the two-bit packet
+number length, and a packet number sized by that decoded field -- compiles
+today.
 
-So the honest position is that a whole class of protocols -- QUIC, and
-anything else that encrypts its own framing -- sits outside the model by
-construction rather than by omission. **Whether that boundary is permanent is
-a question for the intent at the top of this section, not for this survey.**
-"Cover protocol needs whole" and "layout never depends on decoded content" are
-both defensible and they are in tension here; what is not defensible is
-leaving the tension unwritten, because the refusal reads as settled and the
-intent reads as unbounded, and only one of them can be right about QUIC.
+**What actually blocks it is contiguity, and only that.** A `coded` region is
+one block and takes no `covers` clause; the parser expects `{` where one would
+go. QUIC's mask covers two disjoint spans, byte zero and the packet number,
+with the destination connection id between them. Written as two `coded`
+regions it is accepted and means something else -- two independent transforms
+rather than one mask over both -- and the second cannot see the first's
+`pn_len`, which is the cross-region rule doing its job.
+
+**That is a much smaller gap than a class of protocols being outside the
+model.** One transform over a non-contiguous span is the missing vocabulary,
+and tags already have the shape it would take: `covers(a, b)` names a disjoint
+set for a tag, and a transform has no equivalent.
 
 **What stays out of scope, and why that is not in tension with the intent
 above.** Key schedules, transcript hashing and signature computation are
