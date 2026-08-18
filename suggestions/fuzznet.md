@@ -777,3 +777,66 @@ refusal of the schema, which was our mistake and is now corrected in our
 `project.md`. Mentioning it only because a reader of our earlier report would
 have seen `verify` in a table of four commands and drawn the wrong conclusion
 about situ.
+
+---
+
+## Correction: withdraw the recommendation above (2026-08-18, same day)
+
+**We recommended the wrong thing, and it is the kind of wrong thing that gets
+acted on.** The section above offers three shapes and says we would be happy
+with (3) -- record in sec 13.2a that an `authenticated` codec is driven by the
+caller through the gate rather than bound as a tier-1 `impl`.
+
+That recommendation assumed the tier-1 shape reflected a deliberate scope
+boundary: that situ had decided keyed transforms were the caller's business
+and the ABI was drawn to match. On that assumption, writing the boundary down
+is the cheapest honest fix.
+
+**The assumption was wrong.** situ's scope is eventually to cover protocol
+needs whole, including layered, nested and distributed cryptographic contexts,
+and including the case where a project plugs in its own routines. Against that,
+(3) is the worst of the three rather than the cheapest: it would write a
+temporary gap into the specification as though it were a decision, and the next
+reader would take it for one. **Please disregard it.**
+
+We have no standing to choose between (1) and (2) and are not trying to. What
+we can offer is our case as data, since it is a small instance of the general
+shape rather than a special one.
+
+### What our frame actually needs, as a data point
+
+`fzn_frame` is `hop | authenticated{head} | sealed(fzn_aead, nonce =
+head.nonce){capability, payload} | tag[16]`, and a codec serving it needs four
+things:
+
+| what | where it comes from | does the schema know it? |
+|---|---|---|
+| the nonce | `head.nonce`, a field of this message | **yes, and it is already declared** in the `sealed(...)` clause |
+| the associated data | the `authenticated` region -- the part of the tag's span that is not the sealed region | **yes**, `tag_covered()` computes it today |
+| the ciphertext extent | the sealed region | **yes**, the layout owns it |
+| the key | derived per session, outside the schema entirely | **no**, and it never will be |
+
+Three of the four are things situ already computes. Only the key comes from
+outside, which suggests the gap is narrower than "the ABI cannot carry a keyed
+transform" -- it may be closer to "the ABI passes none of what the layout
+already knows, so even the parts situ owns have to be re-derived by the
+caller."
+
+Ours is also the simple case, and worth flagging as such if the design is
+aiming at the general one: one region, one tag, one nonce, one key. The shapes
+we would expect to be harder are a tag covering regions that are not
+contiguous, nested sealed regions where an inner key is carried in an outer
+plaintext, and a key schedule where one message's plaintext derives the key for
+the next. We do not have those and are not asking for them; we mention them
+because a design settled against our frame alone would be settled against the
+easy case.
+
+### What we are doing meanwhile, so nothing waits on this
+
+`wire/seal.c` calls our own vtable and drives situ through the gate --
+`tag_covered()` for the span, `sealed_open(view, verified, &gate)` for the
+verdict. That works today, needs nothing from you, and is not a workaround we
+resent: the gate is the part that made parse-before-verify unrepresentable in
+our code, which is the property we most wanted. **Our `impl fzn_aead extern`
+line stays unbound for now rather than permanently**, and we have corrected our
+own `project.md` where it read as a settled position rather than a current one.
