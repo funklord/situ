@@ -2797,6 +2797,25 @@ so the declaration has no destination rather than merely no consumer. Any
 built-in AEAD needs that ABI widened first; the codecs are the second step and
 not the first.
 
+**Three of the four things an AEAD needs are already computed here**, which
+makes the ABI question narrower than "add key, nonce, associated data and
+tag". The nonce is named in the `sealed(...)` clause; the associated data is
+the covered span, which `_covered_spans` emits today for tag recomputation;
+the ciphertext extent is the layout's. Only the key comes from outside the
+schema, and it always will -- it is derived per session and is not a property
+of a message. So the ABI is not missing four unknowns; it is failing to pass
+three things the compiler has in hand, plus a handle to one it never will.
+
+That measurement is fuzznet's, in `suggestions/fuzznet.md`, and is recorded
+rather than restated because it corroborates independently: they measured what
+a consumer's frame needs, this section measured what the compiler emits, and
+the two met at the same place. Their earlier recommendation -- write the
+tier-1 boundary into 13.2a as a scope decision -- was withdrawn on learning
+the intent above, on the grounds that it "would write a temporary gap into the
+specification as though it were a decision, and the next reader would take it
+for one". That is the right reason and worth keeping, because the same
+temptation applies to every gap this section lists.
+
 **Which puts the work in an order rather than a list.** Widen the ABI so a
 primitive can be called at all; supply reference implementations behind it, as
 defaults a project overrides; and only then do the dimensional checks above
