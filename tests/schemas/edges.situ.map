@@ -118,6 +118,13 @@ struct hp_packet size=6 repr=ValueConverted atomic=NonAtomic
   hp_packet.pn.number                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   hp_packet.rest                         offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
 
+struct hp_split size=10 repr=ValueConverted atomic=NonAtomic
+  hp_split.first                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  hp_split.cid                           offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  hp_split.pn                            offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  hp_split.pn.number                     offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  hp_split.rest                          offset=AbsoluteStatic(0x06) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+
 struct keywords size=10 repr=ValueConverted
   keywords.int                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   keywords.short                         offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord

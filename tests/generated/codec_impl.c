@@ -21,6 +21,7 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include "situ.h"
 
@@ -159,4 +160,54 @@ situ_err_t app_header_mask_decode(const uint8_t *in, uint32_t in_len,
         uint8_t *out, uint32_t out_cap, uint32_t *out_len)
 {
 	return app_header_mask_encode(in, in_len, out, out_cap, out_len);
+}
+
+/* The scattered half of the same mask (13.2b).
+ *
+ * What `covers` actually reaches. The accessors call this pair rather than
+ * the contiguous one above whenever a `coded` region carries a `covers`
+ * clause, because the spans it names need not be adjacent -- QUIC's header
+ * protection masks the first byte and the packet number with the connection
+ * id between them.
+ *
+ * In place, so there is no output buffer: 14.1a admits only a
+ * length-preserving codec here, and in place is meaningful only where the
+ * answer is the same size as the question.
+ *
+ * The same constant as above, so that a test can check the two forms agree
+ * on a single contiguous span -- which is the property that says the
+ * scattered path did not quietly become a second algorithm.
+ */
+
+situ_err_t app_header_mask_encode_spans(const situ_span_t *spans,
+        uint32_t count);
+situ_err_t app_header_mask_decode_spans(const situ_span_t *spans,
+        uint32_t count);
+
+situ_err_t app_header_mask_encode_spans(const situ_span_t *spans,
+        uint32_t count)
+{
+	uint32_t which;
+	uint32_t i;
+
+	if (spans == NULL && count != 0u) {
+		return SITU_ERR_CONSTRAINT;
+	}
+
+	for (which = 0u; which < count; which++) {
+		if (spans[which].base == NULL && spans[which].len != 0u) {
+			return SITU_ERR_CONSTRAINT;
+		}
+		for (i = 0u; i < spans[which].len; i++) {
+			spans[which].base[i] = (uint8_t)(spans[which].base[i] ^ 0xA5u);
+		}
+	}
+
+	return SITU_OK;
+}
+
+situ_err_t app_header_mask_decode_spans(const situ_span_t *spans,
+        uint32_t count)
+{
+	return app_header_mask_encode_spans(spans, count);
 }

@@ -73,33 +73,46 @@ def test_the_clause_round_trips_through_unparse() -> None:
 	assert "covers(flags)" in unparse(parse_text(source))
 
 
-def test_a_contiguous_cover_widens_the_span_handed_to_the_codec() -> None:
-	"""The whole point. `flags` sits at offset 0 and the region at 1, so the
-	transform runs over both bytes from the start of the struct."""
+def test_a_contiguous_cover_reaches_the_codec_as_one_span() -> None:
+	"""`flags` sits at offset 0 and the region at 1, so the two merge into a
+	single run -- the span count a caller sees is the number of *separated*
+	pieces, not the number of names written down."""
 	out = emit_c(ADJACENT)
-	assert "app_hp_mask_decode(view.base + 0u," in out
-	assert "1u + situ_adj_pn_len(view)" in out
+	assert "situ_span_t spans[1];" in out
+	assert "spans[0].base = view.base + 0u;" in out
+	assert "spans[0].len  = 1u + situ_adj_pn_len(view);" in out
+	assert "app_hp_mask_decode_spans(spans, 1u);" in out
 
 
-def test_without_the_clause_the_region_covers_only_itself() -> None:
-	"""The control. Without this the test above passes for a backend that
-	widened every region, covers clause or not."""
+def test_without_the_clause_the_ordinary_abi_is_used() -> None:
+	"""The control, and the compatibility guarantee. A region with no clause
+	keeps 13.2a exactly: one pointer, one length, an output buffer -- so every
+	codec written against it goes on working."""
 	out = emit_c(ADJACENT.replace(" covers(flags)", ""))
 	assert "app_hp_mask_decode(situ_adj_pn_ptr(view)," in out
-	# Not a bare `view.base + 0u`, which the `flags` accessor legitimately
-	# emits: what must be absent is the *decode* reaching outside the region.
-	assert "app_hp_mask_decode(view.base" not in out
+	assert "situ_span_t" not in out
+	assert "_decode_spans" not in out
 
 
-def test_a_split_cover_is_refused_rather_than_gathered() -> None:
-	"""13.2a hands a codec one pointer and one length. Two spans with an
-	uncovered `gap` between them have no single range, and gathering them
-	would copy what a zero-copy accessor exists to avoid."""
+def test_a_split_cover_emits_two_spans_and_skips_the_gap() -> None:
+	"""What widening the ABI bought. `flags` is at 0, `gap` occupies 1..5 and
+	is not covered, and the region follows -- so the codec is handed two
+	spans and the four bytes between them are untouched."""
 	out = emit_c(SPLIT)
-	assert "No decode accessor for `pn`" in out
-	assert "not one contiguous run" in out
-	# The accessor is genuinely absent, not merely commented near.
-	assert "app_hp_mask_decode(" not in out
+	assert "situ_span_t spans[2];" in out
+	assert "spans[0].base = view.base + 0u;" in out
+	assert "spans[0].len  = 1u;" in out
+	assert "spans[1].base = view.base + 5u;" in out
+	assert "app_hp_mask_decode_spans(spans, 2u);" in out
+
+
+def test_a_split_cover_does_not_swallow_the_uncovered_gap() -> None:
+	"""The assertion that would catch a merge doing too much: a single span
+	from 0 running the whole width would transform `gap` as well, which no
+	schema asked for and which no length check would notice."""
+	out = emit_c(SPLIT)
+	assert "spans[0].len  = 1u;" in out
+	assert "_decode_spans(spans, 1u);" not in out
 
 
 def test_covering_an_unknown_span_is_an_error() -> None:
@@ -153,7 +166,17 @@ struct s {
 
 def test_a_length_preserving_codec_may() -> None:
 	"""The control for the test above: same shape, a codec that masks."""
-	assert "app_hp_mask_decode" in emit_c(ADJACENT)
+	assert "app_hp_mask_decode_spans" in emit_c(ADJACENT)
+
+
+def test_both_directions_are_emitted() -> None:
+	"""A mask is applied as well as removed. The contiguous ABI needs only a
+	decode accessor because the plaintext is somewhere else; an in-place
+	transform has to be reversible from the same side, so both are here."""
+	out = emit_c(SPLIT)
+	assert "situ_split_pn_encode_spans(situ_view_t view)" in out
+	assert "situ_split_pn_decode_spans(situ_view_t view)" in out
+	assert "app_hp_mask_encode_spans(spans, 2u);" in out
 
 
 # A region, not a field. These exist because every test above names `flags`,
@@ -180,13 +203,14 @@ REGION_SPLIT = """struct rsplit {
 def test_a_coded_region_may_cover_an_authenticated_region() -> None:
 	"""`first` ends where `pn` begins, so the two are one run."""
 	out = emit_c(REGION_ADJACENT)
-	assert "app_hp_mask_decode(view.base + 0u," in out
+	assert "situ_span_t spans[1];" in out
+	assert "spans[0].base = view.base + 0u;" in out
 
 
-def test_covering_a_region_across_a_gap_is_refused_too() -> None:
-	"""The same refusal as for a field, and the case that regressed: a filter
-	keyed on "is a field" dropped the region, left one span, and emitted the
-	ordinary accessor for a coverage that should never have compiled."""
+def test_covering_a_region_across_a_gap_emits_two_spans_too() -> None:
+	"""The case that regressed once: a filter keyed on "is a field" dropped
+	the region, left one span, and emitted an accessor covering the wrong
+	bytes. Two spans is what says the region was seen."""
 	out = emit_c(REGION_SPLIT)
-	assert "No decode accessor for `pn`" in out
-	assert "app_hp_mask_decode(" not in out
+	assert "situ_span_t spans[2];" in out
+	assert "app_hp_mask_decode_spans(spans, 2u);" in out

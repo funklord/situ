@@ -41,7 +41,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	is_own_member,
-	Check, Member, arm_members, coded_run, containment_order, covered_run, data_sized,
+	Check, Member, arm_members, coded_spans, containment_order, covered_run,
+	data_sized,
 	dynamic_frame_owner,
 	readable_names,
 	decode_bound, region_extent, offset_plan,
@@ -1717,24 +1718,41 @@ class Emitter:
 			# the note has to say so: a Python reader comparing this against
 			# the C the other three backends emit would otherwise see a call
 			# over a span this comment did not describe (14.1a).
-			run = coded_run(struct, placement)
-			covers = ", ".join(f"`{one}`" for one in placement.coded_covers)
-			extra = ([] if not placement.coded_covers else
-			         [f"\t# It runs over {covers} as well as this region's own",
-			          "\t# bytes, as one contiguous span."] if run is not None
-			         else
-			         [f"\t# The schema asks it to cover {covers} as well, which",
-			          "\t# is not contiguous with this region -- the other",
-			          "\t# backends refuse it, because 13.2a's ABI takes one",
-			          "\t# pointer and one length."])
-			return [
+			preamble = [
 				"",
 				f"\t# No `{name}_decode`: the codec is the caller's, and",
 				"\t# calling it from here means loading a shared object from",
 				"\t# a path this generator would have to invent (0017).",
-				f"\t# `{symbol}_decode(in, in_len, out, out_cap, &out_len)`",
-				f"\t# is the ABI this schema binds (13.2a); {sized}.",
-				*extra,
+			]
+
+			if not placement.coded_covers:
+				return [*preamble,
+					f"\t# `{symbol}_decode(in, in_len, out, out_cap,"
+					" &out_len)`",
+					f"\t# is the ABI this schema binds (13.2a); {sized}.",
+				]
+
+			# A `covers` clause binds the *scattered* pair instead (13.2b),
+			# so naming 13.2a's signature here would send a Python reader to
+			# write the wrong two functions.
+			runs   = coded_spans(struct, placement)
+			covers = ", ".join(f"`{one}`" for one in placement.coded_covers)
+			if runs is None:
+				return [*preamble,
+					f"\t# The schema asks it to cover {covers} as well, and",
+					"\t# one of those has no offset this layout can fix, so",
+					"\t# no span list can be built for it.",
+				]
+
+			return [*preamble,
+				f"\t# `{symbol}_encode_spans(spans, count)` and"
+				f" `{symbol}_decode_spans`",
+				"\t# are the ABI this schema binds (13.2b): in place, over a",
+				f"\t# list of spans, because the transform also runs over"
+				f" {covers}.",
+				f"\t# {len(runs)} span(s) here, which the other three backends"
+				" build",
+				"\t# and pass in one call.",
 			]
 
 		if not decodes_here(codec):

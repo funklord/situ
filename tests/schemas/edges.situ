@@ -707,3 +707,25 @@ struct hp_packet {
 
 require size(hp_packet) == 6;
 require absolute_static(hp_packet);
+
+// And the split coverage, which is what widening the ABI bought (13.2b).
+//
+// This is QUIC's header protection in miniature: the mask covers the first
+// byte and the packet number, and the connection id sits between them. Until
+// the ABI took a list of spans this schema could be written and checked and
+// not emitted, because a codec handed one pointer and one length has nowhere
+// to be told about the second span.
+//
+// `cid` is deliberately in the gap and deliberately not covered. If the
+// generated span list ever collapses into one run from `first` to `number`,
+// the transform would run over three bytes that no schema asked it to touch
+// -- so the count in the generated code is the thing to read.
+struct hp_split {
+	u8 first;
+	u32 cid;
+	coded pn(masking) covers(first) { u8 number; }
+	u32 rest;
+}
+
+require size(hp_split) == 10;
+require absolute_static(hp_split);

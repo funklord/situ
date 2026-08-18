@@ -62,11 +62,12 @@ PREFIXES = frozenset({"clear", "dirty", "recompute", "set", "trigger", "with"})
 #: `span_from` both appear -- because the check below matches a whole affix
 #: rather than a prefix of one.
 SUFFIXES = frozenset({
-	"at", "big", "count", "covered", "decode", "decoded_max", "digits", "eq",
+	"at", "big", "count", "covered", "decode", "decode_spans", "decoded_max",
+	"digits", "encode_spans", "eq",
 	"extent", "finalize", "find", "first", "from", "gate", "host", "index",
 	"indexed", "is_dirty", "is_little", "is_stale", "item", "len", "little",
 	"next", "of_host", "offset", "raw_len", "read", "self_span", "span",
-	"span_from", "t",
+	"span_from", "spans", "t",
 	"terminated", "terminated_from", "valid", "value",
 })
 

@@ -2297,6 +2297,69 @@ call, the spec did not name, and no `impl` bound. So the harness could not be
 linked against any implementation this repository produces, and had never once
 been run (26.35, `docs/decisions/0028-the-tier-one-codec-abi.md`).
 
+### 13.2b The scattered form, for a transform that covers spans
+
+13.2a takes one pointer and one length, which cannot express a transform over
+bytes that are not adjacent. QUIC's header protection is the case: a mask
+derived from a sample of the ciphertext, applied to the first byte and to the
+packet number, with the connection id sitting between them.
+
+A `coded` region carrying a `covers` clause (14.1a) is reached through a second
+pair instead:
+
+```c
+situ_err_t my_x_encode_spans(const situ_span_t *spans, uint32_t count);
+situ_err_t my_x_decode_spans(const situ_span_t *spans, uint32_t count);
+```
+
+```c
+typedef struct situ_span {
+	uint8_t  *base;
+	uint32_t  len;
+} situ_span_t;
+```
+
+**In place, so there is no output buffer.** That is the whole reason the form
+exists: gathering the spans into a temporary would copy exactly what a
+zero-copy accessor is for, and a codec writing its answer somewhere else would
+have copied them after all. It is confined to length-preserving codecs, which
+is what 14.1a already requires of a `covers` clause -- in place is meaningful
+only where the answer is the same size as the question.
+
+**Every run in one call, never one call per run.** A mask derived per call is a
+different transform from one derived once and spread across the spans, and the
+schema does not say which was meant. Handing the codec the whole list is the
+only reading that does not guess.
+
+**An addition, not a replacement.** A region with no `covers` clause keeps
+13.2a exactly, so every implementation written against it goes on working. The
+two shapes answer different questions and neither subsumes the other: 13.2a is
+out-of-place and may change length, which is what `stuffing` and `base64` need
+and what an in-place pair cannot express; this one is in-place and scattered,
+which is what a mask needs and what a single pointer cannot express.
+
+**The clause decides, not the layout.** A contiguous coverage comes here too,
+as a list of one span, rather than being sent through 13.2a because it happens
+to be adjacent. Otherwise inserting a field between two covered spans would
+silently change which symbol a schema demands -- a link error at best, and at
+worst a second implementation to keep in step. One clause, one contract,
+whatever the layout does.
+
+Adjacent covered members are merged, so `count` is the number of *separated*
+pieces rather than the number of names written down. The generated span list is
+the thing to read when checking that an uncovered field in the gap is really
+left alone.
+
+The one shape still refused is a covered member whose offset the layout cannot
+fix. A span is an address and a length, and the list is built before the codec
+is called, so an offset nobody can compute is not a span.
+
+Situ never sequences this against a tag covering the same bytes. Whether a mask
+goes on before or after authentication is the protocol's decision -- QUIC
+authenticates the unmasked header and masks afterwards -- and 13.1's rule is
+that situ describes a transform's properties and never its algorithm or its
+order. See 14.8.
+
 ### 13.3 The decidability rule
 
 **The compiler reasons only about property signatures, never about transform
@@ -2576,30 +2639,30 @@ The interior of another `coded` or `sealed` region cannot be named. Those bytes
 are transform output and do not exist until it has run (13.3), so naming one is
 an ordering error rather than a coverage one.
 
-**A coverage that is not contiguous is refused, and this is the interesting
-half.** The codec ABI of 13.2a hands an implementation one pointer and one
-length. Spans with something uncovered between them have no single range to be
-given, and neither way out is honest:
+**A clause sends the region to the scattered ABI** (13.2b), contiguous or not:
+in place, over a list of spans, rather than through 13.2a's single pointer and
+length. That is what makes a coverage with a gap in it emittable at all --
+gathering the spans would copy what a zero-copy accessor exists to avoid, and
+calling the codec once per span is a *different operation* from calling it once
+over both, which the schema does not choose between.
 
-- **Gathering them into a temporary** copies the bytes that a zero-copy
-  accessor exists to avoid, and 13.2a has nowhere to say the result must be
-  scattered back.
-- **Calling the codec once per span** is a *different operation* from calling
-  it once over both. For a mask derived per-call they are not the same
-  transform, and the schema does not say which was meant.
+The clause decides this, not the layout. A contiguous coverage goes the same
+way, as a list of one span, so that inserting a field between two covered spans
+does not silently change which symbol an implementation must provide.
 
-So the four backends emit no decode accessor and a comment saying why. This is
-the answer `covered_run` already gives for a tag whose regions are not
-contiguous, and `coded_run` beside it is the same structural question asked of
-a transform -- shared, so that four backends cannot disagree about whether a
-schema compiles.
+`coded_spans` computes the list, merging adjacent members, so the count is the
+number of *separated* pieces rather than of names written down. It sits beside
+`covered_run` for the same reason that one is shared: which spans, in what
+order, and where each ends is one question with one answer, and four backends
+disagreeing about it would be four dialects of the language.
 
-The consequence worth stating plainly: **QUIC's header protection can be
-expressed and checked, and cannot yet be emitted**, because its two spans are
-separated by the connection ID and length fields. Widening the ABI to take a
-list of spans is what would change that, and it is step one of the ordering in
-14.8. Until then the clause is honest about its limit rather than silently
-producing a transform over the wrong bytes.
+The one shape still refused is a covered member whose offset the layout cannot
+fix. The span list is built before the codec is called, and an offset nobody
+can compute is not an address.
+
+**QUIC's header protection is expressible, checkable and emittable.** Its two
+spans are separated by the connection id, and the generated span list carries
+both with the gap left alone.
 
 **The codec must preserve length.** A covered span sits at an offset the
 layout has already fixed, and a transform returning a different number of bytes
@@ -2862,18 +2925,26 @@ So the whole of QUIC's byte zero -- the protected bits, the two-bit packet
 number length, and a packet number sized by that decoded field -- compiles
 today.
 
-**What actually blocks it is contiguity, and only that.** A `coded` region is
-one block and takes no `covers` clause; the parser expects `{` where one would
-go. QUIC's mask covers two disjoint spans, byte zero and the packet number,
-with the destination connection id between them. Written as two `coded`
-regions it is accepted and means something else -- two independent transforms
-rather than one mask over both -- and the second cannot see the first's
-`pn_len`, which is the cross-region rule doing its job.
+**What blocked it was contiguity, and that is closed.** A `coded` region now
+takes a `covers` clause (14.1a) and reaches its codec through the scattered
+ABI (13.2b) -- in place, over a list of spans. QUIC's mask covers byte zero
+and the packet number with the destination connection id between them, and the
+generated span list carries both with the gap left alone.
 
-**That is a much smaller gap than a class of protocols being outside the
-model.** One transform over a non-contiguous span is the missing vocabulary,
-and tags already have the shape it would take: `covers(a, b)` names a disjoint
-set for a tag, and a transform has no equivalent.
+The shape was borrowed from tags, as this section predicted it would be:
+`covers(a, b)` already named a disjoint set for a tag, and a transform had no
+equivalent until it was given one. What the borrowing did not survive is the
+default -- an omitted clause infers every region for a tag and means "only
+myself" for a transform, because there is a sensible default for what a tag
+authenticates and none for what a transform reaches.
+
+**What is still open is ordering.** Situ does not sequence a mask against a tag
+covering the same bytes, and QUIC's real construction needs that order --
+authenticate the unmasked header, then mask. 13.1's rule says a transform's
+algorithm is not situ's, and it is not obvious whether its *order relative to
+another construct* is the same kind of thing or a different one. Recorded here
+rather than guessed at: today the two accessors are the caller's to sequence,
+and nothing in the generated code says which way round.
 
 **What stays out of scope, and why that is not in tension with the intent
 above.** Key schedules, transcript hashing and signature computation are

@@ -86,6 +86,23 @@ typedef struct situ_view {
 	uint32_t  generation;
 } situ_view_t;
 
+/* One run of bytes a scattered transform runs over (13.2b).
+ *
+ * `base` is mutable because the scattered form of the tier-1 ABI works in
+ * place: it exists for a transform that covers spans with something
+ * uncovered between them, and the only reason to reach for it is to avoid
+ * gathering those spans into a temporary. A codec that wrote its answer
+ * somewhere else would have copied them after all.
+ *
+ * That is why the scattered form is confined to length-preserving codecs,
+ * which is what section 14.1a already requires of a `covers` clause: in
+ * place is only meaningful where the answer is the same size as the
+ * question. */
+typedef struct situ_span {
+	uint8_t	 *base;
+	uint32_t  len;
+} situ_span_t;
+
 /* Bind a message to a caller-supplied buffer. Generation starts at 1 so that
  * a zero-initialised view is never mistaken for a live one. */
 void situ_msg_init(situ_msg_t *msg, uint8_t *buf, uint32_t size);

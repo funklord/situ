@@ -46,7 +46,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	is_own_member,
-	Check, Member, arm_members, arm_of, coded_run, containment_order, covered_run,
+	Check, Member, arm_members, arm_of, coded_spans, containment_order,
+	covered_run,
 	data_sized,
 	dynamic_frame_owner,
 	readable_names,
@@ -2560,6 +2561,15 @@ class Emitter:
 			return "bits" if codec is not None and decode_counts_bits(codec) \
 				else "len"
 
+		# And the scattered pair (13.2b), for a region whose `covers` clause
+		# sends it there instead. Keyed on the clause rather than the codec:
+		# the same codec may be reached both ways by two different schemas.
+		scattered = sorted({
+			symbol for struct in self.resolved.structs.values()
+			for held in own_members(struct)
+			if held.codec and held.kind == "coded" and held.coded_covers
+			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
+
 		return ['extern "C" {', *[
 			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
 			f" std::uint32_t {counted(name)}, std::uint8_t *out);"
@@ -2568,7 +2578,12 @@ class Emitter:
 			" std::uint32_t in_len,"
 			f" std::uint8_t *out, std::uint32_t out_cap,"
 			" std::uint32_t *out_len);"
-			for symbol in tier_one], "}", ""]
+			for symbol in tier_one if symbol not in scattered], *[
+			line for symbol in scattered for line in (
+				f"situ_err_t {symbol}_encode_spans(const situ_span_t *spans,"
+				" std::uint32_t count);",
+				f"situ_err_t {symbol}_decode_spans(const situ_span_t *spans,"
+				" std::uint32_t count);")], "}", ""]
 
 	def _decodes(self, placement: Placement) -> bool:
 		"""Whether a decode accessor is emitted for this region."""
@@ -3222,24 +3237,72 @@ class Emitter:
 			"\t}",
 		]
 
-	def _disjoint_coverage(self, placement: Placement) -> list[str]:
-		"""Why no decode method exists for a region covering a gap (14.1a).
+	def _unplaceable_coverage(self, placement: Placement) -> list[str]:
+		"""Why no scattered accessor exists when a covered offset is unknown.
 
-		C's copy carries the full reasoning; the short of it is that 13.2a
-		hands a codec one pointer and one length, and spans with something
-		uncovered between them have no single range to be.
+		C's copy carries the reasoning: a span is an address and a length, and
+		a member the layout could not place has no address to put in the list.
 		"""
 		covered = ", ".join(f"`{name}`" for name in placement.coded_covers)
 		return [
 			"",
-			f"\t/* No decode method for {placement.path}: it covers"
+			f"\t/* No transform accessor for {placement.path}: it covers"
 			f" {covered},",
-			"\t * which with its own bytes is not one contiguous run. A"
-			" tier-1",
-			"\t * codec takes one pointer and one length (13.2a), so there"
-			" is no",
-			"\t * single range to hand it. Cover a contiguous run instead. */",
+			"\t * and one of those does not sit at an offset this layout can",
+			"\t * fix. The scattered ABI (13.2b) takes a list of spans, and a",
+			"\t * span is an address and a length. */",
 		]
+
+	def _scattered_transform(self, struct: ResolvedStruct, placement: Placement,
+			symbol: str, runs: list[tuple[Placement, Placement]],
+			encoded: str) -> list[str]:
+		"""A region whose transform covers spans outside it (13.2b, 14.1a).
+
+		In place and over a span list, for the reasons C's copy gives. Not
+		`const`, because it mutates the bytes the view is over -- the setters
+		next to it are not const either, and this is a write.
+		"""
+		name  = bare_name(local_name(struct, placement))
+		names = ", ".join(f"`{one}`" for one in placement.coded_covers)
+
+		out = [
+			"",
+			f"\t/* Apply and remove {placement.codec} across {placement.path}",
+			f"\t * and {names}, in place, over the spans below (13.2b).",
+			"\t *",
+			"\t * Every run in one call: a mask derived per call is a"
+			" different",
+			"\t * transform, which is what a `covers` clause asks for and why"
+			" it",
+			"\t * does not decompose into one call per span. */",
+		]
+
+		for direction in ("encode", "decode"):
+			out += [
+				f"\t[[nodiscard]] ::situ::rt::err {name}_{direction}_spans()"
+				" noexcept",
+				"\t{",
+				f"\t\tsitu_span_t spans[{len(runs)}];",
+			]
+			for index, (first, last) in enumerate(runs):
+				assert first.offset_bits is not None
+				assert last.offset_bits is not None
+				lead = (last.offset_bits - first.offset_bits) // 8
+				tail = (encoded if last is placement
+				        else f"{last.size_bits // 8}u")
+				size = f"{lead}u + {tail}" if lead else tail
+				out += [
+					f"\t\tspans[{index}].base = raw_.base"
+					f" + {first.offset_bits // 8}u;",
+					f"\t\tspans[{index}].len  = {size};",
+				]
+			out += [
+				"\t\treturn static_cast<::situ::rt::err>(",
+				f"\t\t\t{symbol}_{direction}_spans(spans, {len(runs)}u));",
+				"\t}",
+			]
+
+		return out
 
 	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
 			codec: ast.CodecDecl, symbol: str, encoded: str) -> list[str]:
@@ -3254,22 +3317,14 @@ class Emitter:
 		bound = decode_bound(codec, placement)
 		start = f"{name}().data()"
 
-		# A `covers` clause widens what the transform runs over (14.1a).
-		run = coded_run(struct, placement)
-		if run is None:
-			return self._disjoint_coverage(placement)
-
-		first, last = run
-		if first is not placement or last is not placement:
-			# `raw_.base`, not the covered members' own accessors: a scalar
-			# has no span accessor, and `coded_run` guarantees the start is a
-			# fixed offset.
-			assert first.offset_bits is not None
-			assert last.offset_bits is not None
-			lead    = (last.offset_bits - first.offset_bits) // 8
-			tail    = encoded if last is placement else f"{last.size_bits // 8}u"
-			start   = f"raw_.base + {first.offset_bits // 8}u"
-			encoded = f"{lead}u + {tail}" if lead else tail
+		# A `covers` clause takes the scattered form of the ABI instead
+		# (13.2b): in place, over a span list, whatever the layout does.
+		if placement.coded_covers:
+			runs = coded_spans(struct, placement)
+			if runs is None:
+				return self._unplaceable_coverage(placement)
+			return self._scattered_transform(struct, placement, symbol,
+			                                 runs, encoded)
 
 		return [
 			"",

@@ -43,7 +43,8 @@ from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
 	Check, arm_members, arm_of, classify_check, containment_order,
-	coded_run, covered_run, data_sized, dynamic_frame_owner, is_own_member,
+	coded_spans, covered_run, data_sized, dynamic_frame_owner,
+	is_own_member,
 	local_name, offset_plan,
 	readable_names,
 	region_extent,
@@ -3853,34 +3854,100 @@ class Emitter:
 		])
 		return out
 
-	def _disjoint_coverage(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
-		"""Why no decode accessor exists for a region covering a gap.
+	def _unplaceable_coverage(self, placement: Placement) -> list[str]:
+		"""Why no scattered accessor exists when a covered offset is unknown.
 
-		The same answer the tag path gives, for the same reason: 13.2a's ABI
-		takes one pointer and one length, and there is no honest single range
-		over spans with something uncovered between them. Emitting a comment
-		rather than nothing, because a missing accessor with no explanation is
-		indistinguishable from a backend that forgot.
+		The span list is built before the codec is called, so every covered
+		run has to have an address by then. A member whose offset the layout
+		could not fix has none, and there is nothing honest to put in the
+		array -- so this is refused rather than guessed at.
 		"""
 		covered = ", ".join(f"`{name}`" for name in placement.coded_covers)
 		return [
 			"",
-			f"/* No decode accessor for `{placement.name}`: it covers"
-			f" {covered}, which",
-			" * together with its own bytes is not one contiguous run in this"
-			" struct.",
+			f"/* No transform accessor for `{placement.name}`: it covers"
+			f" {covered},",
+			" * and one of those does not sit at an offset this layout can"
+			" fix.",
 			" *",
-			" * A tier-1 codec is handed one pointer and one length (13.2a),"
-			" so a",
-			" * transform over spans with a gap between them has no single"
-			" range to",
-			" * be given. Gathering them would copy what a zero-copy accessor"
-			" exists",
-			" * to avoid, and calling the codec once per span is a different",
-			" * operation from calling it once over both -- so this is refused",
-			" * rather than guessed at. Cover a contiguous run instead. */",
+			" * The scattered ABI (13.2b) is handed a list of spans, and a"
+			" span is",
+			" * an address and a length. An offset nobody can compute is not"
+			" one. */",
 		]
+
+	def _scattered_transform(self, struct: ResolvedStruct, placement: Placement,
+			symbol: str, runs: list[tuple[Placement, Placement]]) -> list[str]:
+		"""A region whose transform covers spans outside it (13.2b, 14.1a).
+
+		In place, and over a span list rather than one pointer. That is the
+		whole reason the scattered form of the ABI exists: header protection
+		masks bytes that are not adjacent, and gathering them into a buffer
+		would copy exactly what a zero-copy accessor is for.
+
+		No output buffer and no `_len`, because 14.1a admits only a
+		length-preserving codec here -- in place is meaningful only where the
+		answer is the same size as the question.
+
+		Emitted for a contiguous coverage too, where the list is one span.
+		The alternative was to send a contiguous clause through the ordinary
+		ABI and a split one through this, which would mean a field inserted
+		between two covered spans silently changed which symbol a schema
+		demands. One clause, one contract, whatever the layout does.
+		"""
+		local  = c_name(self._local(struct, placement))
+		length = f"{ident(self.prefix, struct.name, local, 'len')}(view)"
+		names  = ", ".join(f"`{name}`" for name in placement.coded_covers)
+
+		out = [
+			"",
+			f"/* Apply and remove `{placement.codec}` across `{placement.name}`"
+			f" and {names}.",
+			" *",
+			" * In place, over the spans below (13.2b). The codec is handed"
+			" every",
+			" * run at once rather than one call per run, because a mask"
+			" derived",
+			" * per call is a different transform -- which is what a `covers`",
+			" * clause is asking for and why it does not decompose.",
+			" *",
+			" * The message is mutated directly. Sequencing this against a tag"
+			" that",
+			" * covers the same bytes is the protocol's business, not situ's"
+			" (14.8). */",
+			f"extern situ_err_t {symbol}_encode_spans(const situ_span_t *spans,",
+			"		uint32_t count);",
+			f"extern situ_err_t {symbol}_decode_spans(const situ_span_t *spans,",
+			"		uint32_t count);",
+		]
+
+		for direction in ("encode", "decode"):
+			out += [
+				"",
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, direction, 'spans')}"
+				"(situ_view_t view)",
+				"{",
+				f"	situ_span_t spans[{len(runs)}];",
+			]
+			for index, (first, last) in enumerate(runs):
+				assert first.offset_bits is not None
+				assert last.offset_bits is not None
+				lead = (last.offset_bits - first.offset_bits) // 8
+				tail = (length if last is placement
+				        else f"{last.size_bits // 8}u")
+				size = f"{lead}u + {tail}" if lead else tail
+				out += [
+					f"	spans[{index}].base = view.base"
+					f" + {first.offset_bits // 8}u;",
+					f"	spans[{index}].len  = {size};",
+				]
+			out += [
+				f"	return {symbol}_{direction}_spans(spans, {len(runs)}u);",
+				"}",
+			]
+
+		return out
 
 	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
 			codec: ast.CodecDecl, symbol: str) -> list[str]:
@@ -3901,24 +3968,13 @@ class Emitter:
 		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
 		bound   = decode_bound(codec, placement)
 
-		# A `covers` clause widens what the transform runs over (14.1a).
-		run = coded_run(struct, placement)
-		if run is None:
-			return self._disjoint_coverage(struct, placement)
-
-		first, last = run
-		if first is not placement or last is not placement:
-			# Addressed from the view base rather than through the covered
-			# members' own accessors: a scalar field has no `_ptr`, and the
-			# run's start is a fixed offset by construction -- `coded_run`
-			# returns nothing when it is not.
-			assert first.offset_bits is not None
-			assert last.offset_bits is not None
-			lead  = (last.offset_bits - first.offset_bits) // 8
-			tail  = (span if last is placement
-			         else f"{last.size_bits // 8}u")
-			start = f"view.base + {first.offset_bits // 8}u"
-			span  = f"{lead}u + {tail}" if lead else tail
+		# A `covers` clause takes the scattered form of the ABI instead
+		# (13.2b): in place, over a span list, whatever the layout does.
+		if placement.coded_covers:
+			runs = coded_spans(struct, placement)
+			if runs is None:
+				return self._unplaceable_coverage(placement)
+			return self._scattered_transform(struct, placement, symbol, runs)
 
 		out = [
 			"",

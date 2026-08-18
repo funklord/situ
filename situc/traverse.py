@@ -700,29 +700,32 @@ def covered_run(struct: "ResolvedStruct",
 	return ordered[0], ordered[-1]
 
 
-def coded_run(struct: "ResolvedStruct",
-		region: Placement) -> tuple[Placement, Placement] | None:
-	"""The byte range a `coded` region's transform runs over (section 14.1a).
+def coded_spans(struct: "ResolvedStruct",
+		region: Placement) -> list[tuple[Placement, Placement]] | None:
+	"""The runs of bytes a `coded` region's transform covers (13.2b).
 
-	The union of the region itself and everything its `covers` clause names.
-	Returns the first and last placement of that union when they form one
-	contiguous run, and `None` when they do not.
+	The region itself plus everything its `covers` clause names, in offset
+	order, with adjacent members merged into one run. Each run is a first and
+	last placement, exactly as `covered_run` reports one. `None` where a
+	covered span's offset is not statically known, which is the one shape the
+	scattered ABI still cannot express -- a span list has to be built before
+	the codec is called, and an offset nobody can compute is not a span.
 
-	`None` is not a failure to compute -- it is the answer. The codec ABI of
-	13.2a takes one pointer and one length, so a transform over two spans with
-	a gap between them has nothing to be handed: gathering the pieces into a
-	temporary would copy the bytes a zero-copy accessor exists to avoid, and
-	calling the codec once per span is a different operation from calling it
-	once over both. Whichever a protocol meant, the generated code would be
-	guessing, so the backends refuse and say so instead.
+	Without a `covers` clause the answer is the region alone, which is what
+	makes the ordinary contiguous case fall out of the same function.
+
+	Merging matters. A clause naming a member that happens to sit against the
+	region produces one run rather than two, so the contiguous case reaches
+	the codec as a single span and the count a caller sees is the number of
+	*separated* pieces rather than the number of names written down.
 
 	Structural, and here rather than in a backend, for `covered_run`'s reason:
-	which spans, in what order, and whether each ends where the next begins is
-	one question with one answer, and four backends disagreeing about it would
-	be four dialects of the language.
+	which spans, in what order, and where each one ends is one question with
+	one answer, and four backends disagreeing about it would be four dialects
+	of the language.
 	"""
 	if not region.coded_covers:
-		return region, region
+		return [(region, region)]
 
 	# The struct's own members only. A nested struct's fields appear in these
 	# entries too, under a dotted path, and share their bare names -- so an
@@ -741,13 +744,23 @@ def coded_run(struct: "ResolvedStruct",
 	ordered = sorted([*named, region],
 	                 key=lambda p: struct.layout.placements.index(p))
 
-	for earlier, later in zip(ordered, ordered[1:]):
-		if (earlier.offset_bits is None or later.offset_bits is None
-				or not earlier.is_fixed_size
-				or earlier.offset_bits + earlier.size_bits != later.offset_bits):
-			return None
+	if any(one.offset_bits is None for one in ordered):
+		return None
 
-	return ordered[0], ordered[-1]
+	runs: list[tuple[Placement, Placement]] = []
+	first = last = ordered[0]
+	for later in ordered[1:]:
+		assert last.offset_bits is not None
+		assert later.offset_bits is not None
+		if (last.is_fixed_size
+				and last.offset_bits + last.size_bits == later.offset_bits):
+			last = later
+			continue
+		runs.append((first, last))
+		first = last = later
+	runs.append((first, last))
+
+	return runs
 
 
 def containment_order(structs: dict[str, "ResolvedStruct"],

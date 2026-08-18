@@ -43,7 +43,8 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	is_own_member,
-	Check, Member, arm_members, arm_of, coded_run, covered_run, data_sized, decode_bound,
+	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
+	decode_bound,
 	dynamic_frame_owner, offset_plan,
 	readable_names,
 	region_extent,
@@ -336,6 +337,7 @@ class Emitter:
 
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._invariants(struct))
+		lines.extend(self._scattered_transforms(struct))
 		lines.extend(["}", ""])
 		return [*types, *lines]
 
@@ -1422,19 +1424,101 @@ class Emitter:
 			"\t}",
 		]
 
-	def _disjoint_coverage(self, placement: Placement) -> list[str]:
-		"""Why no decode method exists for a region covering a gap (14.1a)."""
+	def _unplaceable_coverage(self, placement: Placement) -> list[str]:
+		"""Why no scattered accessor exists when a covered offset is unknown."""
 		covered = ", ".join(f"`{name}`" for name in placement.coded_covers)
 		return [
 			"",
-			f"\t// No decode method for `{placement.path}`: it covers"
+			f"\t// No transform accessor for `{placement.path}`: it covers"
 			f" {covered},",
-			"\t// which with its own bytes is not one contiguous run. A"
-			" tier-1",
-			"\t// codec takes one pointer and one length (13.2a), so there is"
-			" no",
-			"\t// single range to hand it. Cover a contiguous run instead.",
+			"\t// and one of those does not sit at an offset this layout can",
+			"\t// fix. The scattered ABI (13.2b) takes a list of spans, and a",
+			"\t// span is an address and a length.",
 		]
+
+	def _scattered_transforms(self, struct: ResolvedStruct) -> list[str]:
+		"""In-place transforms for every region whose `covers` clause sends it
+		to the scattered ABI (13.2b, 14.1a).
+
+		On the `Mut` view, because this writes: `self.bytes` is `&mut [u8]`
+		here and `&[u8]` on the read-only one, so the borrow checker says what
+		the other backends leave to a comment.
+
+		Every run in one call: a mask derived per call is a different
+		transform, which is what a `covers` clause asks for and why it does
+		not decompose into one call per span.
+		"""
+		lines: list[str] = []
+
+		for placement in own_members(struct):
+			if placement.kind != "coded" or not placement.coded_covers:
+				continue
+			symbol = extern_symbol(self.schema, placement.codec or "")
+			if symbol is None:
+				continue
+
+			name  = _ident(c_name(local_name(struct, placement)))
+			names = ", ".join(f"`{one}`" for one in placement.coded_covers)
+			runs  = coded_spans(struct, placement)
+			if runs is None:
+				lines += [
+					"",
+					f"\t// No transform accessor for `{placement.path}`: it"
+					f" covers {names},",
+					"\t// and one of those does not sit at an offset this"
+					" layout can",
+					"\t// fix. A span is an address and a length (13.2b).",
+				]
+				continue
+
+			extent = self._region_length(struct, placement)
+			if extent is None:
+				lines += [
+					"",
+					f"\t// No transform accessor for `{placement.path}`: its",
+					f"\t// encoded extent is {placement.codec}'s to report.",
+				]
+				continue
+
+			for direction in ("encode", "decode"):
+				lines += [
+					"",
+					f"\t/// Apply and remove `{placement.codec}` across"
+					f" `{placement.path}`",
+					f"\t/// and {names}, in place, over the spans below"
+					" (13.2b).",
+					f"\tpub fn {name}_{direction}_spans(&mut self)"
+					" -> Result<()> {",
+					"\t\tlet mut spans = [SituSpan { base: "
+					"core::ptr::null_mut(), len: 0 }; " + f"{len(runs)}];",
+				]
+				for index, (first, last) in enumerate(runs):
+					assert first.offset_bits is not None
+					assert last.offset_bits is not None
+					lead = (last.offset_bits - first.offset_bits) // 8
+					tail = (extent if last is placement
+					        else str(last.size_bits // 8))
+					size = f"{lead} + {tail}" if lead else tail
+					lines += [
+						f"\t\tspans[{index}].base = self.bytes"
+						f"[{first.offset_bits // 8}..].as_mut_ptr();",
+						f"\t\tspans[{index}].len  = ({size}) as u32;",
+					]
+				lines += [
+					"\t\t// SAFETY: every span addresses this message's own",
+					"\t\t// bytes and carries the length the layout gives it.",
+					"\t\tlet code = unsafe {",
+					f"\t\t\t{symbol}_{direction}_spans(spans.as_ptr(),"
+					f" {len(runs)})",
+					"\t\t};",
+					"\t\tif code != 0 {",
+					"\t\t\treturn Err(situ_rt::Error::from_code(code));",
+					"\t\t}",
+					"\t\tOk(())",
+					"\t}",
+				]
+
+		return lines
 
 	def _extern_decode(self, struct: ResolvedStruct, placement: Placement,
 			codec: object, symbol: str, encoded: str) -> list[str]:
@@ -1443,22 +1527,21 @@ class Emitter:
 		bound = decode_bound(codec, placement)
 		start = f"self.{name}().as_ptr()"
 
-		# A `covers` clause widens what the transform runs over (14.1a).
-		run = coded_run(struct, placement)
-		if run is None:
-			return self._disjoint_coverage(placement)
-
-		first, last = run
-		if first is not placement or last is not placement:
-			# Indexed off the backing slice rather than through the covered
-			# members' accessors: a scalar hands back a value, not a span,
-			# and `coded_run` guarantees this start is a fixed offset.
-			assert first.offset_bits is not None
-			assert last.offset_bits is not None
-			lead    = (last.offset_bits - first.offset_bits) // 8
-			tail    = f"({encoded})" if last is placement else str(last.size_bits // 8)
-			start   = f"self.bytes[{first.offset_bits // 8}..].as_ptr()"
-			encoded = f"{lead} + {tail}" if lead else tail
+		# A `covers` clause takes the scattered form of the ABI (13.2b),
+		# which works in place -- so its accessor belongs on the `Mut` type
+		# and not here. Rust is the only backend where that distinction is in
+		# the type system rather than in a comment, and it is the right one:
+		# an in-place transform is a write, and this view cannot write.
+		if placement.coded_covers:
+			name = _ident(c_name(local_name(struct, placement)))
+			return [
+				"",
+				f"\t/// `{placement.path}` covers spans outside itself"
+				" (14.1a), so",
+				f"\t/// its transform is in place: see"
+				f" `{name}_encode_spans` and",
+				f"\t/// `{name}_decode_spans` on the `Mut` view.",
+			]
 
 		return [
 			"",
@@ -1508,18 +1591,45 @@ class Emitter:
 		if not wanted and not tier_one:
 			return []
 
+		# And the scattered pair (13.2b), for a region whose `covers` clause
+		# sends it there. Keyed on the clause rather than the codec: the same
+		# codec may be reached both ways by two different schemas.
+		scattered = sorted({
+			symbol for struct in self.resolved.structs.values()
+			for held in own_members(struct)
+			if held.codec and held.kind == "coded" and held.coded_covers
+			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
+
 		return [
 			"",
 			# `//` and not `///`: a doc comment on an `extern` block is an
 			# `unused_doc_comments` warning, and warnings are errors here.
 			"// The codec implementations, which are C's (decision 0017).",
+			*([
+				"// The span a scattered transform is handed (13.2b). `repr(C)`",
+				"// because C is what reads it, and the layout is the contract.",
+				"// `Copy` so that a fixed-size array of them can be built in",
+				"// one expression before the list is filled in.",
+				"#[derive(Clone, Copy)]",
+				"#[repr(C)]",
+				"pub struct SituSpan {",
+				"\tpub base: *mut u8,",
+				"\tpub len:  u32,",
+				"}",
+				"",
+			] if scattered else []),
 			'extern "C" {',
 			*[f"\tfn situ_{c_name(name)}_decode(input: *const u8,"
 			  f" {'bits' if decode_counts_bits(self.codecs[name]) else 'len'}:"
 			  " u32, out: *mut u8) -> u32;" for name in wanted],
 			*[f"\tfn {symbol}_decode(input: *const u8, in_len: u32,"
 			  " out: *mut u8, out_cap: u32, out_len: *mut u32) -> u32;"
-			  for symbol in tier_one],
+			  for symbol in tier_one if symbol not in scattered],
+			*[line for symbol in scattered for line in (
+				f"\tfn {symbol}_encode_spans(spans: *const SituSpan,"
+				" count: u32) -> u32;",
+				f"\tfn {symbol}_decode_spans(spans: *const SituSpan,"
+				" count: u32) -> u32;")],
 			"}",
 		]
 
