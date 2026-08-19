@@ -264,6 +264,34 @@ class Emitter:
 		lines.extend(self._struct_extent(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._offsets(struct))
+
+		# After `_offsets`, for the reason `_struct_extent` above gives and
+		# from the same failure. A tag's covered span may end at a member's
+		# offset function -- `payload[remaining]` puts
+		# `situ_tcp_header_payload_offset` in the expression -- and the tag
+		# is declared where the schema writes it, which for TCP's checksum
+		# is eighty lines before the payload it reaches. Emitted beside the
+		# member, every such call was ahead of its declaration.
+		#
+		# It never fired while a covered span ended at a *field*: UDP's
+		# payload is `length - 8`, so its end is arithmetic on a value and
+		# needs no offset function. TCP's is `remaining`, which does.
+		for entry in struct.entries:
+			held = entry.placement
+			if held.kind not in ("tag", "checksum"):
+				continue
+			# Both guards the tag branch applied before this moved out of it.
+			# A tag whose offset nothing can resolve -- something before it
+			# has no computable extent -- gets no offset function, so a
+			# covered span calling one would name a function nobody emitted.
+			# The branch expressed that as an early return, and moving the
+			# call out of a branch is moving it out of the branch's
+			# conditions.
+			if held.offset_bits is None \
+					and self._offset_blocker(struct, held) is not None:
+				continue
+			lines.extend(self._tag_support(struct, entry))
+
 		lines.extend(self._shifting_setters(struct))
 		lines.extend(self._covered_setters(struct))
 		lines.extend(self._invariants(struct))
@@ -1159,7 +1187,6 @@ class Emitter:
 					return lines + self._unresolvable_offset(placement, blocker)
 				lines.extend(self._offset_function(struct, placement))
 			lines.extend(self._array(struct, entry))
-			lines.extend(self._tag_support(struct, entry))
 			return lines
 
 		if placement.kind == "sealed":

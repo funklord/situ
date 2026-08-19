@@ -3500,3 +3500,38 @@ def test_a_hamming_region_still_gets_none() -> None:
 	before it was over-applied to two families that do fit."""
 	header, _ = emit(HAMMING)
 	assert "situ_s_body_decode(" not in header
+
+
+# -- a covered span that ends at a later member's offset --------------------
+
+REMAINING_COVER = """struct r {
+	u16 count;
+	authenticated summed {
+		checksum u8 sum[2] covers(summed) [self_as = 0];
+		u8  opts[count];
+		u8  rest[remaining];
+	}
+}
+"""
+
+
+def test_a_tag_is_emitted_after_the_offsets_it_calls(tmp_path: Path) -> None:
+	"""A covered span may end at a member's *offset function*, and the tag is
+	declared where the schema writes it -- which is before the member it
+	reaches. `situ_r_rest_offset` was called forty lines above its
+	definition, and the C preprocessor is not a scope.
+
+	It never fired while a covered span ended at a field: a payload sized
+	`length - 8` is arithmetic on a value and needs no offset function, and
+	`remaining` is the extent that does. The same lesson `_struct_extent`
+	records three lines above the fix.
+	"""
+	compile_generated(tmp_path, REMAINING_COVER)
+
+
+def test_the_offset_comes_first_in_the_text() -> None:
+	"""The ordering itself, so a regression is a diff rather than a compiler
+	error somebody has to read."""
+	header, _ = emit(REMAINING_COVER)
+	assert header.index("situ_r_rest_offset(situ_view_t") < header.index(
+		"situ_r_sum_covered(situ_view_t")

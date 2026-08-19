@@ -2851,8 +2851,8 @@ It is wire-visible, so it appears in the signature as
 prefix disagrees about the value while every member, offset and size is
 identical -- exactly the class of change that signature exists to catch.
 
-**`examples/udp` uses it and is fully described; `examples/tcp` cannot, and
-that is a different gap.**
+**`examples/udp` uses it and is fully described. `examples/tcp` still does
+not, and the reason has changed twice.**
 
 UDP has a `length` field, so its payload is its own and the coverage closes:
 the pseudo-header is a struct beside the header, the checksum covers the whole
@@ -2860,14 +2860,39 @@ datagram, and `require in_place(udp_header.checksum)` became
 `require immutable(...)` -- the field used to be freely mutable precisely
 because situ knew nothing about it.
 
-TCP's checksum also covers the segment payload, whose length lives in the IP
-layer, so `tcp_header` does not know where its coverage *ends*. Naming a prefix
-would get the start right and leave the end wrong, which is worse than
-describing neither, so TCP still declares a plain `u16` and says why. The shape
-left over, for whoever designs it: **coverage running to an extent a different
-layer knows.** That is not this problem in another hat -- a prefix is bytes a
-caller hands over whole, and that is a length a caller would have to be asked
-for.
+TCP was recorded here as inexpressible: its coverage "runs to an extent a
+different layer knows", since the segment length is the IP layer's. **That was
+wrong.** `remaining` means to the end of the enclosing frame, and the frame is
+the view the caller acquired -- so a caller who knows the segment length
+acquires a view of it and the coverage closes exactly. The claim reasoned about
+what the *schema* knows when the question is what the *view* carries, and
+`examples/message` had been sizing its trailer that way the whole time. It was
+disproved in one build, by checking the gap was real before designing for it.
+
+Writing it uncovered two defects instead, one fixed and one open.
+
+**Fixed:** a tag's covered span may end at a member's *offset function* --
+`payload[remaining]` puts `situ_tcp_header_payload_offset` in the expression --
+and the tag is emitted where the schema declares it, which for TCP's checksum
+is eighty lines before the payload it reaches. Every such call sat ahead of its
+declaration. It never fired while a covered span ended at a *field*: UDP's
+payload is `length - 8`, arithmetic on a value, and needs no offset function.
+The fix is the one `_struct_extent` records three lines above it -- emit after
+the offsets, because the preprocessor is not a scope.
+
+**Open, and it is why TCP is still a plain `u16`:** the four backends disagree
+about a *negative computed length*. `options[(data_offset - 5) * 4]` with
+`data_offset` below its `[min = 5]` is negative, and C casts it to `uint32_t`
+and clamps to the frame, Python slices with a negative end and gets nothing,
+and the walker refuses outright with "a computed size is negative". Three
+answers to one question. It arises only on invalid input, which is exactly what
+`test_the_four_agree_about_bytes_nobody_meant_to_send` generates, and TCP's
+payload made it reachable because nothing had followed the options before.
+
+**What a negative computed length means is a decision, not a bug to patch**:
+clamp to zero, refuse, or wrap. Situ's own rule is that ambiguity is an error
+(17.0), and three implementations disagreeing is the strongest form of it.
+Until that is settled, TCP keeps a `u16` and this paragraph is the reason.
 
 **Describing UDP uncovered a walker defect, and it was the walker's worst
 shape: `validate` answering OK for a message every backend refuses.**
@@ -7495,10 +7520,11 @@ reference, not the name the schema chose.
 
 **What was open here is `prefix(...)`, and it is built** (14.2a). `examples/udp`
 declares RFC 768's pseudo-header as a struct of its own and covers it, so its
-checksum is described where it used to be a plain `u16`. `examples/tcp` takes
-neither half: its coverage also *ends* somewhere the header cannot name, since
-the segment length is the IP layer's. Describing UDP uncovered a packer defect
-that made the walker call a malformed message valid, recorded in 14.2a.
+checksum is described where it used to be a plain `u16`. `examples/tcp` does not yet,
+though not for the reason recorded: `payload[remaining]` closes its coverage,
+and what stops it is three backends disagreeing about a negative computed
+length. Describing UDP uncovered a packer defect that made the walker call a
+malformed message valid. Both are in 14.2a.
 
 **And the frontier, re-derived rather than trusted.** Section 0 asks a reader
 to rebuild 26.31's list from the generated output instead of believing it, and
