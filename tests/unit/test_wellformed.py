@@ -635,3 +635,36 @@ def test_volatile_on_a_member_is_refused() -> None:
 	a member ever carrying one."""
 	text = rendered(BUFFER + "struct b { u16 x [volatile]; }\n")
 	assert "`register` body" in text
+
+
+# -- a codec that should have come from an import ---------------------------
+#
+# `check_types_resolve` steps aside when a schema imports, and the solver
+# names the gap when it cannot lay the type out. A codec had neither half.
+
+CODEC_USE = (BUFFER + "struct b {\n\tcoded body(aes_gcm_128) { u8 x; }\n}\n")
+
+
+def test_an_unknown_codec_names_the_import_gap() -> None:
+	"""Before this, the author was told the codec was undeclared and advised
+	to write it out by hand: the import doing nothing, reported as their
+	mistake."""
+	text = rendered('import "std/codecs.situ";\n' + CODEC_USE)
+	assert "import resolution is not implemented" in text
+	# The gap first, the workaround second -- a reader has to be able to tell
+	# "not built yet" from "you wrote it wrong".
+	assert text.index("import resolution") < text.index("declare it with")
+
+
+def test_an_unknown_codec_without_an_import_says_nothing_about_imports() -> None:
+	"""The control. A schema with no import has an ordinary typo, and a note
+	about unimplemented resolution would send the reader somewhere useless."""
+	text = rendered(CODEC_USE)
+	assert "import resolution" not in text
+	assert "declare it with" in text
+
+
+def test_an_impl_naming_an_imported_codec_says_the_same() -> None:
+	text = rendered('import "std/codecs.situ";\n' + BUFFER
+	                + 'impl aes_gcm_128 extern "x";\nstruct b { u16 v; }\n')
+	assert "import resolution is not implemented" in text

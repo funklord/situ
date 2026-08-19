@@ -3304,6 +3304,37 @@ editors, and CI can consume them without parsing prose.
 
 ---
 
+### 17.0a A name that should have come from an import
+
+`import "other.situ";` parses, and resolution is not built. Two halves of an
+honest answer were already in place for *types*: `check_types_resolve` steps
+aside entirely when a schema imports, because the missing name may legitimately
+live in the imported file, and the solver names the gap when it later cannot
+lay the type out -- "import resolution is not implemented", rather than telling
+the author their type does not exist.
+
+A **codec** had neither half. `import "std/codecs.situ";` followed by a region
+naming a codec from it was told the codec was undeclared, at the line that used
+it, and advised to write `codec aes_gcm_128 { ... }` by hand: the import doing
+nothing, reported as the author's mistake, with a remedy that deletes the
+correct line and hand-copies a declaration.
+
+Stepping aside is not available for a codec. Its properties are what the
+lattice reads, so a region whose codec is unknown cannot be placed at all and
+there is nothing to defer to. The note is the honest half, and it goes first,
+ahead of the workaround: a reader has to be able to tell "not built yet" from
+"you wrote it wrong". The `impl` lookup carries it too.
+
+**Refusing `import` outright was the wrong instinct, and was written and
+reverted.** The reasoning was `UNIMPLEMENTED_ATTRS`': a schema that states what
+the build does not honour is worse than one that states nothing. It is wrong
+here because the directive is *not* inert -- three places read it, and what
+they do with it is step aside so that a name they cannot resolve is not called
+a typo. Refusing would have deleted that behaviour and failed the two tests
+that document it. The lesson is 26.60's, met from the other side: **a construct
+can look unread because the reading is a step somebody else's code declines to
+take.**
+
 ## 18. The advisor
 
 This is the differentiator. The compiler helps designers make protocols *less

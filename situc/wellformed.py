@@ -1470,6 +1470,29 @@ def _within_one_edit(a: str, b: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+#: Why a name that should have come from an imported file cannot be found.
+#:
+#: `check_types_resolve` steps aside entirely when a schema imports, and the
+#: solver names the gap when it later cannot lay the type out. A codec had
+#: neither half: `import "std/codecs.situ"` followed by a region naming a
+#: codec from it was told the codec was undeclared, at the line that used it,
+#: and advised to write `codec aes_gcm_128 { ... }` by hand -- the import
+#: doing nothing, reported as the author's mistake.
+#:
+#: Stepping aside is not available here. A codec's properties are what the
+#: lattice reads, so a region whose codec is unknown cannot be placed at all,
+#: and there is nothing to defer to. The note is the honest half: it says the
+#: name may be perfectly good and the resolution that would find it is not
+#: built.
+IMPORT_NOTE = ("this file has an `import`, and import resolution is not "
+               "implemented: a codec declared in the imported file cannot be "
+               "found yet, so a schema that needs one has to declare it here")
+
+
+def _imports(schema: ast.Schema) -> bool:
+	return any(isinstance(decl, ast.ImportDirective) for decl in schema.decls)
+
+
 def check_codec_bindings(schema: ast.Schema) -> None:
 	"""Every `impl` names a declared codec, and no codec is bound twice.
 
@@ -1482,12 +1505,16 @@ def check_codec_bindings(schema: ast.Schema) -> None:
 
 	for impl in schema.impls():
 		if impl.codec not in codecs:
+			notes = ["declare the signature first; an implementation binds to "
+			         "a contract, not the other way round"]
+			if _imports(schema):
+				notes.insert(0, IMPORT_NOTE)
+
 			raise error(
 				f"`impl` names unknown codec `{impl.codec}`",
 				impl.span,
 				label = "no such codec",
-				notes = ["declare the signature first; an implementation binds to "
-				         "a contract, not the other way round"],
+				notes = notes,
 			)
 
 		previous = bound.get(impl.codec)
@@ -1501,13 +1528,17 @@ def check_codec_bindings(schema: ast.Schema) -> None:
 	for struct in schema.structs():
 		for region in _coded_regions(struct.members):
 			if region.codec not in codecs:
+				notes = ["declare it with `codec " + region.codec + " { ... }`",
+				         "a codec's properties are what the lattice reads; "
+				         "without them nothing can be said about the region"]
+				if _imports(schema):
+					notes.insert(0, IMPORT_NOTE)
+
 				raise error(
 					f"unknown codec `{region.codec}`",
 					region.span,
 					label = "not declared",
-					notes = ["declare it with `codec " + region.codec + " { ... }`",
-					         "a codec's properties are what the lattice reads; "
-					         "without them nothing can be said about the region"],
+					notes = notes,
 				)
 			if isinstance(region, ast.Sealed):
 				_check_sealing_codec(region, codecs[region.codec],
