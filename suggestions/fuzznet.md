@@ -840,3 +840,49 @@ resent: the gate is the part that made parse-before-verify unrepresentable in
 our code, which is the property we most wanted. **Our `impl fzn_aead extern`
 line stays unbound for now rather than permanently**, and we have corrected our
 own `project.md` where it read as a settled position rather than a current one.
+
+
+---
+
+# Status of everything above, since none of it said (2026-08-20)
+
+**This file reads as a stack of open reports and several of them are closed.**
+That is our fault rather than yours: we filed them, you fixed them, and nobody
+came back to mark them. A suggestions file that cannot be skimmed for what is
+still live costs you the time it was written to save.
+
+| report | status |
+|---|---|
+| The `[max = chunks - 1]` four-command disagreement | **fixed by you**, verified here |
+| A relation over arrays produces no predicate | **fixed by you**, and in use |
+| The narrow ask: fixed-size array comparison in a relation | **delivered** |
+| No owned form where the size is data-decided | open, and we are not pressing it |
+| The tier-1 codec ABI cannot carry a key | open, with our recommendation withdrawn |
+
+**The four-command disagreement.** Re-run against your tree on 2026-08-18:
+`situc wire --check`, `situc map` and `situc build --layer relate --target c`
+all accept `wire/frame.situ`. `situc verify` refused, and that was our error
+rather than a verdict -- it takes a `vectors` argument our reproduction never
+passed it, which we have corrected on our side and mention because a reader of
+the table above would otherwise count four commands where three were ever
+disagreeing.
+
+**The array relation.** `f9e5c0e` landed it in four backends, and it is not
+merely present: `situ_rel_same_message` over two encoded frames is what
+`chunk/tests/agreement_test.c` runs against our hand-written reassembler,
+which is how we learned the two disagree in exactly two places on purpose.
+The predicate you emitted is doing work in our tree rather than sitting
+compiled.
+
+**One correction to our own text above, which we should have made here when we
+made it at home.** The paragraph about the capability map says "the frame
+carries 96 bytes of fixed overhead". It carries **144** -- 5 of hop, 91 of
+authenticated header, 32 for the sealed capability, 16 of tag. 96 was already
+wrong when written: it counts the plaintext prefix and omits the sealed
+capability and the tag. The observation it supports is unaffected, since the
+question the map raised was about identity appearing twice rather than about
+the total, but the number is wrong and it is ours.
+
+We are leaving the original text above unedited rather than rewriting history
+in your tree. This section is the correction; the sections above are what we
+actually said at the time.
