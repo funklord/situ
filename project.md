@@ -5069,8 +5069,18 @@ Recommended order within the phase, cheapest and highest-value first:
    cover RS(255, 223), RS(255, 239) and a shortened RS(64, 56), all from the
    same generator.
 
-   No performance work yet. The arithmetic is table-driven but scalar, and
-   The constant-time question is open question 11, and is still open.
+   No performance work yet. The arithmetic is table-driven but scalar. The
+   constant-time question is open question 11 and is *settled*: section 27
+   records the answer and `wellformed._check_sealing_codec` enforces it -- a
+   derived implementation may not seal, because generated code is table
+   driven and a table indexed by secret data is the cache-timing channel
+   14.6 forbids. Situ cannot promise constant time, so it declines rather
+   than pretending, and sealing takes a tier-1 extern whose timing is the
+   supplier's to state.
+
+   This line said "still open" while section 27 said RESOLVED, which is one
+   document disagreeing with itself rather than with the code: the refusal
+   has been in `wellformed` throughout.
 
 **Acceptance per family:** derived properties match a hand-written signature for
 a known code; generated implementation passes vectors from an independent
@@ -5433,10 +5443,17 @@ is worth having, and it came to three things:
   as ignorable as any other `int`.
 - A `enum class` cannot be confused with its backing width.
 
-The stage gate is the fourth and is not built yet: a class whose constructor is
-private, so a sealed region's view cannot be made except by the function that
-verifies the tag. In C the struct is there for anybody determined enough to
-fill in. That is the headline and it waits on codec binding.
+The stage gate is the fourth and it is built: `sealed_gate` has a private
+constructor and a `friend` declaration, so a sealed region's view cannot be
+made except by `with_sealed`, which returns `err::tag` unless the caller says
+the tag verified. In C the struct is there for anybody determined enough to
+fill in.
+
+This paragraph said "not built yet ... waits on codec binding" for as long as
+it took codec binding to land and nobody to come back. Decision 0028 settled
+the tier-1 ABI, the gate followed, and the sentence stayed -- which is the
+failure mode 0 warns about, a document outliving the thing it describes. It
+was found by reading the generated header rather than the prose.
 
 **The design decisions, and why.** A view is a value, as in C: it owns nothing,
 so a destructor would be a lie about what it is, and section 12.3's
