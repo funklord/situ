@@ -97,7 +97,7 @@ def test_integer_bases_survive_a_round_trip() -> None:
 	"struct S { u8 buf[]; }",
 	"struct S { u32 seq @ 0x06; }",
 	"struct S { u8 a [must_eq = 1]; }",
-	"struct S { bit x [rw]; }",
+	"target mmio; register S @ 0x00 { width = 32; access_width = 32; bit x [rw]; }",
 	"struct S { u8 a [must_eq = 1, max = 4]; }",
 	"struct S [allow_straddle] { u12 wide; }",
 	"struct S { reserved u3 [must_be_zero]; }",

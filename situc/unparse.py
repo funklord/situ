@@ -282,6 +282,7 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 		elif isinstance(member, ast.Coded):
 			lines.append(f"{indent}coded {member.name}"
 			             f"({_codec_args(member.codec, member.args)})"
+			             f"{_until_to_source(member.until)}"
 			             f"{_covers_to_source(member.covers)}"
 			             f"{_attrs_to_source(member.attrs)} {{")
 			lines.extend(member_lines(member.members, depth + 1))
@@ -308,7 +309,10 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 
 def member_to_source(member: ast.Member) -> str:
 	if isinstance(member, ast.Field):
-		parts = [member.type_ref.name, " ", member.name, _array_to_source(member.array)]
+		parts = [_radix_to_source(getattr(member, "radix", None)),
+		         member.type_ref.name, " ", member.name,
+		         _array_to_source(member.array),
+		         _until_to_source(getattr(member, "until", None))]
 		if member.pin is not None:
 			parts.append(f" @ {expr_to_source(member.pin)}")
 		parts.append(_attrs_to_source(member.attrs))
@@ -447,6 +451,30 @@ def _expr(expr: ast.Expr, parent_binding: int) -> str:
 
 def _wrap(rendered: str, binding: int, parent_binding: int) -> str:
 	return f"({rendered})" if binding < parent_binding else rendered
+
+
+#: `decimal`/`hex`, by the radix the parser recorded (8.6.2).
+RADIX_KEYWORDS = {10: "decimal", 16: "hex"}
+
+
+def _radix_to_source(radix: int | None) -> str:
+	return f"{RADIX_KEYWORDS[radix]} " if radix in RADIX_KEYWORDS else ""
+
+
+def _until_to_source(until: "ast.Until | None") -> str:
+	"""`until "\\r\\n"`, and the cap where one was written.
+
+	Absent entirely until an attribute-placement check found it: a delimited
+	`decimal` field reprinted as a plain binary scalar, which parses, means
+	something else, and says so nowhere. `quoted` and `escape` are not here
+	because the grammar carries them as attributes, which are printed already.
+	"""
+	if until is None:
+		return ""
+
+	body = _escape(until.delimiter.decode("latin-1"))
+	cap  = f" max {expr_to_source(until.cap)}" if until.cap is not None else ""
+	return f' until "{body}"{cap}'
 
 
 def _escape(text: str) -> str:

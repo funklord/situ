@@ -56,6 +56,7 @@ def check(schema: ast.Schema) -> None:
 	check_codec_bindings(schema)
 	check_tag_coverage(schema)
 	check_coded_coverage(schema)
+	check_attribute_places(schema)
 	check_nonce_references(schema)
 	check_registers(schema)
 	check_no_recursive_types(schema)
@@ -1215,6 +1216,105 @@ UNIMPLEMENTED_ATTRS: dict[str, str] = {
 #: unknown one is refused rather than ignored: a schema declaring `utf16` and
 #: getting no check would be worse off than one declaring nothing.
 TEXT_ENCODINGS = frozenset({"ascii", "utf8"})
+
+
+#: Attributes whose *place* has been established, by reading what reads them.
+#:
+#: An attribute was checked for spelling and never for place, so `[equalize]`
+#: on a plain field or `[rw]` outside a register was accepted, dropped, and
+#: produced output byte-identical to the schema without it. That is the shape
+#: 14.5 refuses everywhere else -- a construct whose meaning is silently
+#: nothing -- and 17.0's principle applied to attributes: a schema that states
+#: what the generated code does not enforce is worse than one stating nothing.
+#:
+#: Each entry below was settled by finding the code that consumes the
+#: attribute and reading its guard, not by inference from the name. The
+#: families still unchecked are named in `UNPLACED_ATTRS`, so the remaining
+#: hole is a list rather than a comment.
+
+#: SystemRDL access modes (15.2). `layout._access_mode` returns `None` unless
+#: the struct is a register *and* the member is a field, so every one of these
+#: is inert anywhere else.
+ACCESS_MODE_ATTRS = frozenset({
+	"rw", "ro", "wo", "w1c", "w0c", "w1s", "w0s", "rc", "rs", "wo_once",
+	"rsvd",
+})
+
+#: Read from `decl.attrs` and never from a member's.
+STRUCT_ONLY_ATTRS = {
+	"allow_straddle":       "a struct, where a bit field may cross a byte",
+	"allow_host_dependent": "a struct, whose layout the host decides",
+}
+
+
+def _attribute_place(struct: ast.StructDecl,
+		member: ast.Member, attr: ast.Attr) -> str | None:
+	"""Where `attr` would have meant something, if not here.
+
+	`None` when the placement is fine or is not one this table has settled.
+	"""
+	if attr.name in ACCESS_MODE_ATTRS:
+		if struct.register is not None and isinstance(member, ast.Field):
+			return None
+		return ("a field of a `register` struct -- outside one there is no bus "
+		        "to have an access mode on")
+
+	if attr.name in STRUCT_ONLY_ATTRS:
+		return STRUCT_ONLY_ATTRS[attr.name]
+
+	if attr.name == "equalize":
+		return None if isinstance(member, ast.Variant) else (
+			"a `variant`, whose arms it pads to the largest")
+
+	if attr.name == "allow_unverified_read":
+		return None if isinstance(member, ast.Sealed) else (
+			"a `sealed` region, whose stage gate it waives")
+
+	if attr.name == "minimal":
+		return None if getattr(member, "radix", None) is not None else (
+			"a radix-encoded number, whose leading zeros it forbids")
+
+	return None
+
+
+#: Attributes whose place is not yet settled, so that the hole is a list here
+#: rather than a paragraph somewhere else. Adding one is a row in
+#: `_attribute_place` plus a refusing test and an accepting control -- the
+#: control being the half that matters, since a table that refuses a valid
+#: schema is worse than the silence it replaces.
+#:
+#: `quoted`, `escape`, `timeout_ms` and `retries` are absent because
+#: `check_delimiters` and `_check_exchange_policy` already place them.
+UNPLACED_ATTRS = frozenset({
+	"bit_order", "bits", "case_insensitive", "covers", "encoding", "endian",
+	"max", "min", "must_be_one", "must_be_zero", "must_eq", "non_canonical",
+	"nonce", "nul_terminated", "on_read", "on_write", "preserve",
+	"require_aligned", "secret", "self_as", "since", "trim", "trusted",
+	"unknown", "version", "volatile",
+})
+
+
+def check_attribute_places(schema: ast.Schema) -> None:
+	"""An attribute has to sit where something reads it (14.5, 17.0)."""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			for attr in getattr(member, "attrs", ()):
+				where = _attribute_place(struct, member, attr)
+				if where is None:
+					continue
+
+				raise error(
+					f"`[{attr.name}]` means nothing here",
+					attr.span,
+					label = f"belongs on {where}",
+					notes = ["nothing reads it in this position, so the "
+					         "generated code is byte-identical to the schema "
+					         "without it",
+					         "remove it, or move it where it is read: a schema "
+					         "that states what the generated code does not "
+					         "enforce is worse than one that states nothing "
+					         "(project.md section 14.5)"],
+				)
 
 
 def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:

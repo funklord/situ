@@ -8575,14 +8575,49 @@ recommending the wrong kind of thing for the member that reaches it. No
 committed schema reaches that branch, which is why nobody had read the
 sentence: invariant 92 twice in one fold.
 
-**The remaining hole, recorded rather than closed.** An attribute is checked
-for spelling and never for *place*: `[minimal]` on a binary scalar,
-`[equalize]` on a field that is not an arm, `[volatile]` on a buffer target,
-`[secret]` where nothing is encrypted -- all eight tried are accepted and
-dropped. Each is individually read by something somewhere, so none is
-`UNIMPLEMENTED`; what is missing is a table of attribute against the member
-kinds that consume it. That is a construct's worth of work and it is the next
-thing this section should be about.
+**The remaining hole, since closed for the families that could be settled.**
+An attribute was checked for spelling and never for *place*: `[minimal]` on a
+binary scalar, `[equalize]` on a field that is not an arm, `[rw]` outside a
+register -- all accepted, dropped, and producing output byte-identical to the
+schema without them. Each is read by something somewhere, so none is
+`UNIMPLEMENTED`; what was missing was a table of attribute against the member
+kinds that consume it.
+
+`wellformed.check_attribute_places` is that table, and the rule it enforces is
+14.5's applied to attributes: a construct whose meaning is silently nothing is
+refused. The diagnostic says what the attribute would have meant and where,
+and states that the generated code is byte-identical without it -- which is
+the argument for refusing rather than warning, since there is no way to tell
+from the output that it did nothing.
+
+**Every row was settled by reading the code that consumes the attribute**, not
+inferred from its name, because an over-restrictive table refuses valid
+schemas and that is worse than the silence it replaces. Each rule has a
+control test beside it holding the accepting half. The first draft keyed
+`[minimal]` on a `radix` *attribute* and refused `examples/http`, whose
+`decimal u16 code` carries the radix on the type keyword instead; the control
+is what caught it.
+
+Settled so far: the eleven SystemRDL access modes, which `layout._access_mode`
+reads only for a field of a `register` struct; `[equalize]`, read only from a
+`variant`; `[allow_straddle]` and `[allow_host_dependent]`, read only from a
+struct declaration; `[allow_unverified_read]`, read only from a `sealed`
+region; and `[minimal]`, read only where a radix is set. `[quoted]`,
+`[escape]`, `[timeout_ms]` and `[retries]` already had placement rules of
+their own. The rest are unchecked, and that is now a list in the source rather
+than a paragraph here.
+
+**It found a defect nobody was looking for.** `unparse` emitted no `until`
+clause at all and dropped the radix keyword, so
+
+    decimal u16 code until " " max 4 [minimal]
+
+reprinted as `u16 code [minimal]` -- which parses, means a plain binary
+scalar, and says so nowhere. The attribute rule turned that silent change of
+meaning into a refusal, because the reprinted field no longer had the radix
+its attribute needed. A round-trip test holds both halves now, including
+idempotence, which is the property that says nothing is lost per pass rather
+than merely surviving the first one.
 
 **Status:** 2949 unit tests, 7 skipped; `make lint` and `make check` clean;
 generated C compiled and run on the host and under aarch64 emulation.

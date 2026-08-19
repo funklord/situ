@@ -253,15 +253,28 @@ def test_attribute_with_value() -> None:
 	assert isinstance(field.attrs[0].value, ast.IntLiteral)
 
 
+#: A register, because `[rw]` and `[wo]` are access modes and mean nothing
+#: outside one (14.5). These two tests are about decision 0006's bracket
+#: disambiguation rather than about registers, but the fixture still has to be
+#: a schema somebody could write -- the attribute-placement rule refuses a
+#: bare access mode on a buffer field, which is how these were found.
+REGISTER = ("target mmio;\nendian big;\nbit_order msb_first;\n\n"
+            "register S @ 0x00 {\n"
+            "\twidth = 32;\n"
+            "\taccess_width = 32;\n"
+            "\t%s\n"
+            "}\n")
+
+
 def test_attribute_list() -> None:
-	field = first_field("struct S { bit start [wo, on_write = trigger]; }")
+	field = first_field(REGISTER % "bit start [wo, on_write = trigger];")
 	assert field.array is None
 	assert [attr.name for attr in field.attrs] == ["wo", "on_write"]
 
 
 def test_bare_attribute_flag_is_not_an_array() -> None:
 	"""Decision 0006: a lone known attribute name means attributes."""
-	field = first_field("struct S { bit enable [rw]; }")
+	field = first_field(REGISTER % "bit enable [rw];")
 	assert field.array is None
 	assert [attr.name for attr in field.attrs] == ["rw"]
 

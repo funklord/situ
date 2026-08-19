@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import pytest
 
+from situc import wellformed
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import ATTRIBUTE_NAMES, parse_text
+from situc.unparse import unparse
 
 
 def rendered(source: str) -> str:
@@ -464,3 +466,122 @@ def test_a_condition_needs_an_element_with_fields() -> None:
 	message = rendered("struct s { u8 x[] while (x == 1); }")
 
 	assert "which is not a struct" in message
+
+
+# -- an attribute has to sit where something reads it (14.5, 17.0) ----------
+#
+# Spelling was checked and place was not, so `[equalize]` on a plain field or
+# `[rw]` outside a register was accepted, dropped, and produced output
+# byte-identical to the schema without it. Each entry in the table was settled
+# by reading the code that consumes the attribute, not inferred from its name
+# -- an over-restrictive table refuses valid schemas, which is worse than the
+# silence it replaces, so every rule here has a control below it.
+
+BUFFER = "target buffer;\nendian big;\nbit_order msb_first;\n\n"
+
+
+def test_an_access_mode_outside_a_register_is_refused() -> None:
+	text = rendered(BUFFER + "struct b { u16 x [rw]; }\n")
+	assert "`[rw]` means nothing here" in text
+	assert "field of a `register` struct" in text
+
+
+def test_an_access_mode_on_a_register_field_is_accepted() -> None:
+	"""The control. `layout._access_mode` reads these only when the struct is
+	a register and the member is a field, which is exactly what is allowed."""
+	parse_text("target mmio;\nendian big;\nbit_order msb_first;\n\n"
+	           "register r @ 0x00 {\n"
+	           "\twidth = 32;\n"
+	           "\taccess_width = 32;\n"
+	           "\tbit armed [rs];\n"
+	           "\tbit done [w1c];\n"
+	           "\tu16 rest;\n"
+	           "\tbit spare [ro];\n"
+	           "}\n", path="s.situ")
+
+
+def test_equalize_off_a_variant_is_refused() -> None:
+	text = rendered(BUFFER + "struct b { u16 x [equalize]; }\n")
+	assert "`[equalize]` means nothing here" in text
+	assert "`variant`" in text
+
+
+def test_a_struct_attribute_on_a_member_is_refused() -> None:
+	assert "`[allow_straddle]` means nothing here" in rendered(
+		BUFFER + "struct b { u16 x [allow_straddle]; }\n")
+
+
+def test_allow_unverified_read_off_a_sealed_region_is_refused() -> None:
+	text = rendered(BUFFER + "struct b { u16 x [allow_unverified_read]; }\n")
+	assert "`sealed` region" in text
+
+
+def test_minimal_on_a_binary_scalar_is_refused() -> None:
+	"""`radix_minimal` is read only where `radix` is set, so this is inert on
+	a scalar whose value is stored as bits rather than written as digits."""
+	text = rendered(BUFFER + "struct b { u16 x [minimal]; }\n")
+	assert "radix-encoded number" in text
+
+
+def test_minimal_on_a_radix_field_is_accepted() -> None:
+	"""The control, and the one that caught an over-restrictive first draft:
+	`decimal` sets `radix` on the field rather than leaving an attribute, so a
+	rule keyed on the wrong thing refused `examples/http`."""
+	parse_text(BUFFER + 'struct b { decimal u16 code until " " max 4 [minimal]; }\n',
+	           path="s.situ")
+
+
+def test_the_diagnostic_says_the_output_would_be_identical() -> None:
+	"""Which is the argument for refusing rather than warning: there is no
+	way for a reader to tell from the generated code that it did nothing."""
+	text = rendered(BUFFER + "struct b { u16 x [equalize]; }\n")
+	assert "byte-identical to the schema without it" in text
+
+
+def test_a_delimited_radix_field_survives_a_reprint() -> None:
+	"""Found by the attribute check rather than looked for: `unparse` emitted
+	no `until` at all and dropped the radix keyword, so
+
+	    decimal u16 code until " " max 4 [minimal]
+
+	came back as `u16 code [minimal]` -- which parses, means a plain binary
+	scalar, and says so nowhere. The attribute rule turned a silent change of
+	meaning into a refusal, which is how it was noticed.
+	"""
+	source = BUFFER + 'struct b { decimal u16 code until " " max 4 [minimal]; }\n'
+	once   = unparse(parse_text(source, path="s.situ"))
+	assert "decimal u16 code" in once
+	assert 'until " "' in once
+	assert "max 4" in once
+	# Idempotent, which is the property that says nothing is lost per pass
+	# rather than merely surviving the first one.
+	assert unparse(parse_text(once, path="s.situ")) == once
+
+
+def test_every_attribute_is_accounted_for() -> None:
+	"""A new attribute has to have its place decided, or say it has not.
+
+	The standing form of this section's rule. Without it the table is a
+	snapshot that decays: an attribute added later would be neither placed nor
+	listed as unplaced, and the silence it was added under is exactly what was
+	just removed. Failing here is not a bug -- it is the question "where is
+	this read?" arriving at the moment somebody can still answer it.
+	"""
+	placed = (wellformed.ACCESS_MODE_ATTRS
+	          | set(wellformed.STRUCT_ONLY_ATTRS)
+	          | {"equalize", "allow_unverified_read", "minimal"})
+	# Placed by rules that predate the table, in their own checks.
+	elsewhere = {"quoted", "escape", "timeout_ms", "retries"}
+
+	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
+	         | set(wellformed.UNIMPLEMENTED_ATTRS))
+
+	assert set(ATTRIBUTE_NAMES) - known == set(), (
+		"attribute with no place decided and not listed as unplaced")
+	assert known - set(ATTRIBUTE_NAMES) == set(), (
+		"a name in the tables that the parser does not accept")
+	# The four groups do not overlap: an attribute is placed, or unplaced, or
+	# unimplemented, and two of those at once is a table disagreeing with
+	# itself rather than a fact about the language.
+	assert not placed & wellformed.UNPLACED_ATTRS
+	assert not placed & set(wellformed.UNIMPLEMENTED_ATTRS)
