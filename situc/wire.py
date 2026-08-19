@@ -248,6 +248,12 @@ def _coverage(struct: ResolvedStruct) -> list[str]:
 			entry.placement.path for entry in struct.entries
 			if held.name in entry.placement.covered_by)
 		names = " ".join(path.rpartition(".")[2] for path in covered) or "nothing"
+		# The prefix is part of what a peer has to sum (14.2a), and it is
+		# invisible in the structure: every member, offset and size is
+		# identical whether or not a pseudo-header is covered, so a change
+		# here is exactly the kind this signature exists to catch.
+		if held.tag_prefix is not None:
+			names = f"{held.tag_prefix}(prefix) {names}"
 		lines.append(f"  {held.name} covers: {names}")
 	return lines
 

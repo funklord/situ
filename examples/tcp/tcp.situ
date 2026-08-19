@@ -56,10 +56,27 @@ require aligned(tcp_header.sequence, 4);
 // in `csum_tcpudp_nofold` (lib/checksum.c:149), which takes `saddr` and
 // `daddr` as arguments precisely because they are not in the segment.
 //
-// `[self_as = 0]` covers the other half of the problem -- a checksum over its
-// own bytes -- and `examples/icmp` uses it. Coverage over bytes a *different*
-// message owns is not something situ has, and `examples/udp` carries the same
-// note: two askers, and no design.
+// Half of that is expressible now and half is not, and the half that is not
+// is a different gap from the one `prefix(...)` closed.
+//
+// `prefix(...)` (14.2a) says the pseudo-header, and `examples/udp` uses it:
+// the layout is a struct of its own, the caller fills it in, and the
+// generated header says how many bytes. `[self_as = 0]` says the checksum's
+// own bytes, and `examples/icmp` uses that.
+//
+// What TCP still cannot say is where its coverage *ends*. The sum runs over
+// the header, the options and the payload -- and the payload is not in this
+// struct, because its length is not in this header. UDP has a `length` field
+// and so describes its own payload; TCP's segment length comes from the IP
+// layer, so a `tcp_header` genuinely does not know how far the checksum
+// reaches. Naming a prefix would describe the start correctly and leave the
+// end wrong, which is worse than describing neither, so this schema still
+// declares a plain `u16` and says why.
+//
+// The remaining shape, stated for whoever designs it: coverage that runs to
+// an extent a *different* layer knows. That is not the pseudo-header problem
+// wearing another hat -- a prefix is bytes the caller can hand over whole,
+// and this is a length the caller would have to be asked for.
 
 // A bit field is never atomic: setting one flag is a read-modify-write of the
 // containing byte, so two threads setting different flags can lose one of

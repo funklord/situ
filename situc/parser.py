@@ -1290,11 +1290,31 @@ class Parser:
 			)
 
 		covers = self.parse_covers()
+		# After `covers`, because it names bytes the algorithm reaches before
+		# this message's and reads as the same question continued (14.2a).
+		prefix = self.parse_prefix()
 		attrs  = self.parse_attrs()
 		self.expect_symbol(";", f"after the {start.text} declaration")
 
 		return ast.TagField(self.span_from(start), name, type_ref, array,
-		                    covers, kind, attrs)
+		                    covers, kind, attrs, prefix)
+
+	def parse_prefix(self) -> str | None:
+		"""`prefix(udp_pseudo)`, or nothing.
+
+		One struct rather than a list: it is a layout the caller builds and
+		hands over whole, and two of them would raise an ordering question the
+		protocols that need this do not have.
+		"""
+		if not (self.current.kind is TokenKind.IDENT
+				and self.current.text == "prefix"):
+			return None
+
+		self.advance()
+		self.expect_symbol("(", "before the prefix struct")
+		name = self.expect_ident("a struct name")
+		self.expect_symbol(")", "after the prefix struct")
+		return name.text
 
 	def parse_covers(self) -> tuple[str, ...]:
 		"""`covers(a, b)`, or nothing at all, which means inference."""

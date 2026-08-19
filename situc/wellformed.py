@@ -55,6 +55,7 @@ def check(schema: ast.Schema) -> None:
 	check_variant_exhaustiveness(schema)
 	check_codec_bindings(schema)
 	check_tag_coverage(schema)
+	check_tag_prefixes(schema)
 	check_coded_coverage(schema)
 	check_attribute_places(schema)
 	check_nonce_references(schema)
@@ -1757,6 +1758,51 @@ def check_coded_coverage(schema: ast.Schema) -> None:
 					         "the interior of another coded or sealed region "
 					         "cannot be named -- those bytes are transform "
 					         "output and do not exist until it has run"],
+				)
+
+
+def check_tag_prefixes(schema: ast.Schema) -> None:
+	"""`prefix(...)` names a struct this message does not contain (14.2a).
+
+	TCP's and UDP's checksums cover a pseudo-header built from the IP layer's
+	addresses, which is why the kernel's `csum_tcpudp_nofold` takes `saddr`
+	and `daddr` as arguments rather than reading them out of the datagram.
+
+	Situ describes byte layouts, and a pseudo-header is one. What it cannot do
+	is fill one in from this message, so the clause names a declared struct
+	and the generated code says how many bytes the caller supplies and in what
+	shape. Computing the sum was already the caller's (14.1); this widens
+	which bytes are covered and nothing else.
+	"""
+	structs = {decl.name: decl for decl in schema.structs()}
+
+	for struct in schema.structs():
+		for tag in tag_fields(struct.members):
+			if tag.prefix is None:
+				continue
+
+			if tag.prefix == struct.name:
+				raise error(
+					f"`{tag.name}` names its own struct as its prefix",
+					tag.span,
+					label = f"`{struct.name}` is the message this covers",
+					notes = ["a prefix is bytes the message does not contain; "
+					         "to cover more of this struct, name the regions "
+					         "in `covers(...)`"],
+				)
+
+			if tag.prefix not in structs:
+				known = ", ".join(f"`{name}`" for name in sorted(structs)
+				                  if name != struct.name) or "none"
+				raise error(
+					f"`{tag.name}` has an unknown prefix `{tag.prefix}`",
+					tag.span,
+					label = "no such struct in this file",
+					notes = [f"structs declared here: {known}",
+					         "a prefix is a layout the caller builds and hands "
+					         "over, so it has to be one this schema describes "
+					         "-- situ has no import resolution to find it "
+					         "elsewhere (17.0a)"],
 				)
 
 

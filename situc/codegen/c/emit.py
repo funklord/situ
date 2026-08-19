@@ -458,6 +458,12 @@ class Emitter:
 			" * clears the dirty bit. Until then the message is not transmittable. */",
 		]
 
+		# A prefix the message does not contain (14.2a). Situ knows its layout
+		# and its size and cannot know its contents, so it says both and stops
+		# there -- which is 14.1's division of labour, not a new one.
+		if placement.tag_prefix is not None:
+			lines.extend(self._tag_prefix(struct, placement, local))
+
 		if spans is None:
 			lines.extend([
 				f"/* No covered-span accessor for `{name}`: the regions it covers are",
@@ -770,6 +776,41 @@ class Emitter:
 			])
 
 		return lines
+
+	def _tag_prefix(self, struct: ResolvedStruct, placement: Placement,
+			local: str) -> list[str]:
+		"""Bytes the algorithm covers before this message's (14.2a).
+
+		TCP's and UDP's pseudo-header: the addresses belong to the IP layer,
+		so no accessor here can reach them and none is emitted. What situ
+		contributes is the layout and the length, which is exactly what a
+		caller cannot safely guess and exactly what a schema compiler is for.
+		"""
+		prefix = placement.tag_prefix or ""
+		held   = self.resolved.structs.get(prefix)
+		size   = (held.layout.size_bytes
+		          if held is not None and held.layout.is_fixed_size else None)
+
+		out = [
+			"",
+			f"/* {placement.name} also covers `{prefix}`, which this message"
+			" does not",
+			" * contain: the algorithm runs over those bytes first, then over"
+			" the",
+			" * span below.",
+			" *",
+			f" * Build one with the `{ident(self.prefix, prefix)}` accessors in"
+			" this header,",
+			" * in a buffer of your own, and sum it before this message. Its"
+			" contents",
+			" * are not situ's to supply -- they come from a layer this schema"
+			" does",
+			" * not describe, which is the whole reason the clause exists. */",
+		]
+		if size is not None:
+			out.append(f"#define {macro(self.prefix, struct.name, local, 'PREFIX_BYTES')}"
+			           f" {size}u")
+		return out
 
 	def _covered_pointer_note(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

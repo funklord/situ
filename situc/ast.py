@@ -680,6 +680,23 @@ class TagField(Member):
 	covers: tuple[str, ...]		= ()
 	kind: TagKind			= TagKind.TAG
 	attrs: tuple[Attr, ...]		= ()
+	#: `checksum u16 sum covers(hdr, payload) prefix(udp_pseudo);` -- a struct
+	#: whose bytes the algorithm runs over *before* this message's, and which
+	#: this message does not contain (section 14.2a).
+	#:
+	#: TCP's and UDP's checksums are the case. They cover a pseudo-header made
+	#: of the source and destination addresses, the protocol number and the
+	#: transport length -- two of which belong to the IP layer, which is why
+	#: the kernel's `csum_tcpudp_nofold` takes `saddr` and `daddr` as
+	#: arguments rather than reading them out of the datagram.
+	#:
+	#: A pseudo-header is a byte layout, which is what situ describes; what
+	#: situ cannot do is fill one in from this message alone. So the clause
+	#: names a declared struct and the generated code says how many bytes the
+	#: caller has to hand over and in what shape. Computing the sum was
+	#: already the caller's (14.1), so this widens *which bytes are covered*
+	#: and nothing else.
+	prefix: str | None		= None
 
 	@property
 	def infers_coverage(self) -> bool:

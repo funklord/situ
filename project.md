@@ -2811,6 +2811,83 @@ invalidates tag coverage, and points at the two fixes (move the field out of
 coverage, or accept recomputation and use `require in_place_dirty(...)`).
 Implement both requirement forms.
 
+### 14.2a Coverage over bytes the message does not contain
+
+```
+checksum u8 checksum[2] covers(summed) prefix(udp_pseudo_header) [self_as = 0];
+```
+
+TCP's and UDP's checksums run over a *pseudo-header* -- the source and
+destination addresses, the protocol number and the transport length -- two of
+which belong to the IP layer. The kernel's `csum_tcpudp_nofold` takes `saddr`
+and `daddr` as arguments precisely because they are not in the datagram it is
+summing.
+
+**A pseudo-header is a byte layout, and that is what situ describes.** What
+situ cannot do is fill one in from this message. So the clause names a struct
+declared in the same file, the caller builds one with the accessors situ
+already generates for it, and the generated header says how many bytes to hand
+over:
+
+```c
+#define SITU_UDP_HEADER_CHECKSUM_PREFIX_BYTES 12u
+```
+
+**This widens which bytes are covered and nothing else.** Computing the sum was
+always the caller's -- 14.1's rule that a signature says what a transform does
+and never how -- so the clause adds no arithmetic and no algorithm. It adds the
+one thing only the compiler knows, which is the same thing coverage always
+added: which bytes, and when they went stale.
+
+The earlier note said coverage over bytes another schema owns "would mean a
+schema that cannot be checked against the bytes in front of it". That was the
+right worry and it is answered by *not* pretending: the prefix is a separate
+struct, checked against its own bytes like any other, and the message's own
+accessors reach none of it. Nothing here is validated against data situ cannot
+see.
+
+It is wire-visible, so it appears in the signature as
+`checksum covers: udp_pseudo_header(prefix) ...`. A peer that sums a different
+prefix disagrees about the value while every member, offset and size is
+identical -- exactly the class of change that signature exists to catch.
+
+**Neither asker adopts it yet, for two different reasons, and both are worth
+knowing.**
+
+`examples/tcp` cannot, and that is a language gap. TCP's checksum also covers
+the segment payload, whose length lives in the IP layer -- so `tcp_header` does
+not know where its coverage *ends*. Naming a prefix would get the start right
+and leave the end wrong, which is worse than describing neither. The shape left
+over, for whoever designs it: **coverage running to an extent a different layer
+knows.** That is not this problem in another hat -- a prefix is bytes a caller
+hands over whole, and that is a length a caller would have to be asked for.
+
+`examples/udp` *can* be described in full -- it has a `length` field, so its
+payload is its own -- and the change was written and then reverted, because it
+uncovers a walker defect that has nothing to do with coverage. Putting the
+payload inside the `authenticated` region the checksum covers makes the walker
+report a malformed message as valid:
+
+```
+authenticated s {
+	u16 port;  u16 length [min = 8];
+	checksum u8 sum[2] covers(s) [self_as = 0];
+	u8 payload[length - 8];         // inside:  walker says validate 0
+}                                       // outside: walker says validate 1
+```
+
+C answers `1` both ways, correctly: a `length` of 0x2F20 in a ten-byte frame
+puts the payload past the end. The walker's `_validate` breaks out of its walk
+on `Unplaceable` and returns OK, and something about a variable-extent member
+*inside* a region makes it unplaceable there and placeable one line further
+down. **`examples/icmp` has the same shape and has always had it** -- its
+`type` and `code` sit in an `authenticated` region and appear in no walker
+listing -- so this is not new and not `prefix`'s. It has been invisible because
+no covered region held a member whose bounds C would reject.
+
+So the feature is built and tested and no example uses it, which is the
+uncomfortable half of the report and the true one.
+
 ### 14.3 The doom principle as a stage gate
 
 A sealed region's interior schema is `stage = VerifyGated`. The generated API
@@ -7400,11 +7477,12 @@ only when the field became covered and grew a second method after its property.
 Decision 0025 makes the same move in C++ for the same reason: rename the
 reference, not the name the schema chose.
 
-**What is still open here**, and it is the interesting half: `examples/tcp` and
-`examples/udp` carry the same checksum over a *pseudo-header* -- source and
-destination addresses from the IP layer, which are not in the struct at all.
-`self_as` does nothing for that, and neither does anything else here: it is
-coverage over bytes another schema owns. Two askers, and no design yet.
+**What was open here is `prefix(...)`, and it is built** (14.2a): a checksum
+may cover a struct the message does not contain, and the generated header says
+how many bytes the caller supplies. Neither asker adopts it yet. `examples/tcp`
+cannot -- its coverage also *ends* somewhere the header cannot name -- and
+`examples/udp` can but uncovers a walker defect in doing so, which 14.2a
+records with its repro.
 
 **And the frontier, re-derived rather than trusted.** Section 0 asks a reader
 to rebuild 26.31's list from the generated output instead of believing it, and

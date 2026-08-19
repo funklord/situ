@@ -250,6 +250,10 @@ class Placement:
 	unverified_ok: bool		= False
 	# For a tag or checksum placement: the regions it covers, after inference.
 	tag_covers: tuple[str, ...]	= ()
+	# For a tag or checksum: a struct whose bytes the algorithm runs over
+	# before this message's, and which this message does not contain
+	# (section 14.2a). TCP's and UDP's pseudo-header.
+	tag_prefix: str | None		= None
 	# For a `coded` placement: the sibling regions its transform also runs
 	# over, beyond its own extent (section 14.1a). Unlike `tag_covers` this is
 	# never inferred -- empty means the region covers only itself.
@@ -1009,7 +1013,8 @@ class Solver:
 			tag = next(field for field in tag_fields(decl.members)
 			           if field.name == held.name)
 			layout.placements[index] = replace(
-				held, tag_covers=coverage_of(tag, regions))
+				held, tag_covers=coverage_of(tag, regions),
+				tag_prefix=tag.prefix)
 
 	def place_tag(self, member: ast.TagField, scope: Scope, layout: StructLayout,
 			prefix: str, state: Walk) -> None:
