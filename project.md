@@ -2892,7 +2892,34 @@ payload made it reachable because nothing had followed the options before.
 **What a negative computed length means is a decision, not a bug to patch**:
 clamp to zero, refuse, or wrap. Situ's own rule is that ambiguity is an error
 (17.0), and three implementations disagreeing is the strongest form of it.
-Until that is settled, TCP keeps a `u16` and this paragraph is the reason.
+
+**The holder has since settled it -- clamp to zero -- and a first attempt at
+implementing that found the trap the next one has to avoid.** Clamping is
+right for a length that is *negative* and wrong for one that has *overflowed*,
+and in C the two are the same bit pattern.
+
+`edges.situ`'s `varint_driver` is the case. Its `u16 d[n + 1]` is driven by a
+varint, and a message that lies can make `n` a nine-byte encoding worth
+1.6e19. `(n + 1) * 2` in `int64_t` overflows, wraps negative, and a clamp
+reads that as *zero* -- so the member after it lands at a small offset, well
+inside the frame, and C reads bytes that Python (arbitrary precision, so the
+value stays enormous and saturates at the frame) correctly refuses. The clamp
+turned an unreachable member into a readable one.
+
+So the rule needs both halves: **a negative length is zero, and an overflowing
+one saturates high**, where the frame then clamps it. Bounding each leaf
+before the arithmetic is what makes that true, and it costs nothing
+observable, because any length at or past the view's limit already saturates.
+
+Two further notes for whoever takes it. The arithmetic must be signed
+*throughout*, not cast at the end: an unsigned getter or `align_up`'s `- 1u`
+makes the subexpression unsigned and it wraps before anything can look at its
+sign, which is true in C and C++ as well as Rust. And there is no write-path
+defect, though this section once said there was: C's setter guards with
+`situ_in_bounds` and no-ops, and its getter returns zero, exactly as Python
+does.
+
+Until it is done, TCP keeps a `u16` and this paragraph is the reason.
 
 **Describing UDP uncovered a walker defect, and it was the walker's worst
 shape: `validate` answering OK for a message every backend refuses.**
