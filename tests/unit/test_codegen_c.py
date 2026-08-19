@@ -1694,7 +1694,10 @@ def test_a_length_in_units_is_not_zero() -> None:
 	which is about as common as a length gets."""
 	header, _ = emit(CHAIN)
 
-	assert "(situ_e_len_get(view) + 1) * 8 - 2" in header
+	# The leaf is bounded before the arithmetic (14.2b), so the read is
+	# wrapped -- the point here is the `* 8 - 2`, which is what a length
+	# in units means and what was once computed as a count.
+	assert "(situ_leaf_u64(situ_e_len_get(view)) + 1) * 8 - 2" in header
 
 
 def test_the_substitution_takes_the_longest_name_first() -> None:

@@ -3273,13 +3273,32 @@ class Emitter:
 		return self._over_fields(element, placement.repeat_while or "", "element")
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
-			held: str) -> str:
+			held: str, bounded: bool = False) -> str:
 		"""A schema expression over a struct's own fields, as C.
 
 		Every name in it is a field of `struct`, so each becomes that field's
 		getter over the view named by `held`. Longest name first, or `len`
 		would rewrite the `len` inside `hdr_ext_len`.
+
+		`bounded` holds every leaf to `SITU_LEAF_MAX` and widens it to
+		`int64_t`, which a *size* expression asks for (14.2b). Two things
+		make it necessary and neither is optional. The arithmetic has to be
+		signed *throughout* -- an unsigned getter, or `align_up` emitting
+		`- 1u`, makes the subexpression unsigned and it wraps before anything
+		can look at its sign. And it has to stay inside `int64_t`, or a
+		varint a lying message set to 1.6e19 overflows, wraps negative, and a
+		clamp reads it as zero -- putting the member after it a few bytes in
+		rather than past the frame.
+
+		The bound costs nothing observable: a length at or past the view's
+		limit saturates against the frame either way.
 		"""
+		def leaf(text: str, signed: bool) -> str:
+			if not bounded:
+				return text
+			helper = "situ_leaf_i64" if signed else "situ_leaf_u64"
+			return f"{helper}({text})"
+
 		# Its own scalars and its nested structs': `at file.pixel_offset` names
 		# a field of a header nested in this struct, and the dotted path was
 		# emitted verbatim -- an identifier in C that does not exist.
@@ -3294,7 +3313,13 @@ class Emitter:
 
 		def read(local: str) -> str:
 			if local in consts:
-				return str(consts[local])
+				# A compile-time constant is bounded here rather than at
+				# run time: it cannot be what overflows, and wrapping it
+				# would put a helper call around a literal.
+				value = consts[local]
+				if bounded:
+					value = max(-0x7FFFFFFF, min(value, 0x7FFFFFFF))
+				return str(value)
 			placement = by_local[local]
 			if "." not in local:
 				# A varint's `_get` is fallible and takes an out-parameter;
@@ -3310,20 +3335,25 @@ class Emitter:
 				which = ("value"
 				         if placement.varint is not None
 				         or placement.radix is not None else "get")
-				return (f"{ident(self.prefix, struct.name, c_name(local), which)}"
-				        f"({held})")
+				return leaf(
+					f"{ident(self.prefix, struct.name, c_name(local), which)}"
+					f"({held})",
+					placement.scalar is not None and placement.scalar.signed)
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
 			# -- a plausible number nobody wrote, which is the shape 26.32
 			# rates worst. The value helper parses them.
 			if placement.radix is not None:
-				return (f"{ident(self.prefix, struct.name, c_name(local), 'value')}"
-				        f"({held})")
+				return leaf(
+					f"{ident(self.prefix, struct.name, c_name(local), 'value')}"
+					f"({held})",
+					placement.scalar is not None and placement.scalar.signed)
 			# A nested member has no accessor of this struct's own, and its
 			# offset is a constant here, so it is read where it sits.
 			assert placement.scalar is not None
-			return self._load_expression(placement.scalar, placement,
-			                             f"{held}.base")
+			return leaf(self._load_expression(placement.scalar, placement,
+			                                  f"{held}.base"),
+			            placement.scalar.signed)
 
 		return expand_calls(
 			over_fields([*by_local, *consts], source, read), c_spelling)
@@ -4676,10 +4706,12 @@ class Emitter:
 		# which is a length counted in units and about as common as a length
 		# gets.
 		if placement.size_expr is not None:
-			rendered = self._over_fields(struct, placement.size_expr, held)
+			# Bounded leaves, signed arithmetic, one clamp (14.2b).
+			rendered = self._over_fields(struct, placement.size_expr, held,
+			                             bounded=True)
 			each     = element_bytes(placement)
-			return (f"(uint32_t)({rendered})" if each == 1 else
-			        f"(uint32_t)({rendered}) * {each}u")
+			signed   = rendered if each == 1 else f"({rendered}) * {each}"
+			return f"situ_nonneg_u32({signed})"
 
 		if placement.kind == "opaque":
 			# An opaque region's size expression is already a byte count; there

@@ -393,6 +393,28 @@ def nul_len(data: memoryview | bytes, capacity: int) -> int:
 NO_BYTE: Final = -1
 
 
+#: The bound every leaf of a size expression is held to (14.2b).
+#:
+#: Python's integers do not overflow, so nothing here needs the bound for its
+#: own sake -- it is here so this backend agrees with the three that do. A
+#: varint a lying message set to 1.6e19 has to produce the same offset in all
+#: four, and the only way to get that is to bound the leaves identically.
+LEAF_MAX = 0x7FFFFFFF
+
+
+def leaf(value: int) -> int:
+	"""One leaf of a size expression, held to `LEAF_MAX`."""
+	return max(-LEAF_MAX, min(value, LEAF_MAX))
+
+
+def nonneg(value: int) -> int:
+	"""A computed length: negative reads as zero, and a result past `u32`
+	saturates rather than truncating (14.2b)."""
+	if value <= 0:
+		return 0
+	return 0xFFFFFFFF if value > 0xFFFFFFFF else value
+
+
 def advance(at: int, by: int, limit: int) -> int:
 	"""Advance an offset by a length the message chose, and stop at the end.
 

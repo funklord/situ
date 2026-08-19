@@ -2838,11 +2838,28 @@ class Emitter:
 		return lines
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
-			held: str) -> str:
+			held: str, cast: str = "usize", bounded: bool = False) -> str:
+		"""`cast` is `i64` and `bounded` true for a size expression (14.2b):
+		signed throughout, every leaf held to `LEAF_MAX`, one clamp at the
+		end. C's copy carries the reasoning."""
+		def leaf(text: str, signed: bool = False) -> str:
+			"""One read, cast and bounded together.
+
+			The cast has to be in the value's own domain: `as i64` on a
+			`u64` above 2^63 produces a negative, and the bound would then
+			clamp a huge length as though it were a negative one -- which
+			reads as zero and puts the next member inside the frame.
+			"""
+			if not bounded:
+				return f"({text} as {cast})"
+			domain = "i64" if signed else "u64"
+			helper = "leaf_i" if signed else "leaf_u"
+			return f"situ_rt::{helper}({text} as {domain})"
+
 		names = [entry.placement.name for entry in struct.entries
 		         if entry.placement.scalar is not None
 		         and "." not in entry.placement.path[len(struct.name) + 1:]]
-		# `as usize` on every read, and Rust is right to demand it. A length
+		# `as {cast}` on every read, and Rust is right to demand it. A length
 		# field is narrow -- `hdr_ext_len` is a u8 -- and `(len + 1) * 8` in
 		# u8 arithmetic is 255 + 1 = 0, then zero. C computes the same
 		# expression correctly only because integer promotion widens it to
@@ -2880,7 +2897,8 @@ class Emitter:
 			# where it sits parses ASCII as a binary integer, which is a
 			# plausible number nobody wrote.
 			if "." in name and held_at.radix is not None:
-				return f"({held}.{_ident(c_name(name))}_value() as usize)"
+				return leaf(f"{held}.{_ident(c_name(name))}_value()",
+				            held_at.scalar is not None and held_at.scalar.signed)
 			# A nested member has no accessor of this struct's own -- `at
 			# file.pixel_offset` in `examples/bmp` -- and its offset is a
 			# constant here, so it is read where it sits. Same spelling as
@@ -2900,14 +2918,17 @@ class Emitter:
 					raise UnknownName(name)
 				raw = self._raw_load(held_at, held_at.scalar,
 				                     at and self._unparen(at))
-				return f"({self._unparen(raw)} as usize)"
+				return leaf(f"{self._unparen(raw)}",
+				            held_at.scalar is not None and held_at.scalar.signed)
 			# A varint's own getter reports a truncated encoding; `_value` is
 			# the read that cannot fail, which is what the count form uses --
 			# and a text number's does too, which only the nested branch
 			# above knew.
 			if held_at.varint is not None or held_at.radix is not None:
-				return f"({held}.{_ident(c_name(name) + '_value')}() as usize)"
-			return f"({held}.{_ident(c_name(name))}() as usize)"
+				return leaf(f"{held}.{_ident(c_name(name) + '_value')}()",
+				            held_at.scalar is not None and held_at.scalar.signed)
+			return leaf(f"{held}.{_ident(c_name(name))}()",
+			            held_at.scalar is not None and held_at.scalar.signed)
 
 		return expand_calls(over_fields([*by_path, *consts], source, read),
 		                    rust_spelling)
@@ -4000,9 +4021,12 @@ class Emitter:
 			        else f"self.{_ident(base + '_span')}()")
 
 		if placement.size_expr is not None:
-			rendered = self._over_fields(struct, placement.size_expr, "self")
-			each     = element_bytes(placement)
-			return rendered if each == 1 else f"({rendered}) * {each}"
+			# Bounded leaves, signed arithmetic, one clamp (14.2b).
+			counted = self._over_fields(struct, placement.size_expr, "self",
+			                            cast="i64", bounded=True)
+			each    = element_bytes(placement)
+			signed  = counted if each == 1 else f"({counted}) * {each}"
+			return f"situ_rt::nonneg({signed})"
 
 		# A nested struct with no single size. Without this the member after
 		# it had no resolvable offset and was dropped from the module.

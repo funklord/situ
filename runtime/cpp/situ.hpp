@@ -155,6 +155,41 @@ protected:
 	situ_view_t raw_;
 };
 
+/* Size-expression arithmetic (14.2b). `situ_nonneg_u32`'s counterparts; see
+ * there for why a leaf is bounded and why the result saturates at both ends. */
+/* Two names rather than an overload pair: `leaf(uint8_t)` is ambiguous
+ * between them, and every narrow field promotes. The caller knows the sign
+ * from the schema, so it says which. */
+constexpr std::int64_t leaf_u(std::uint64_t value) noexcept
+{
+	if (value > static_cast<std::uint64_t>(SITU_LEAF_MAX)) {
+		return SITU_LEAF_MAX;
+	}
+	return static_cast<std::int64_t>(value);
+}
+
+constexpr std::int64_t leaf_i(std::int64_t value) noexcept
+{
+	if (value > SITU_LEAF_MAX) {
+		return SITU_LEAF_MAX;
+	}
+	if (value < -SITU_LEAF_MAX) {
+		return -SITU_LEAF_MAX;
+	}
+	return value;
+}
+
+constexpr std::uint32_t nonneg(std::int64_t value) noexcept
+{
+	if (value <= 0) {
+		return 0u;
+	}
+	if (value > static_cast<std::int64_t>(UINT32_MAX)) {
+		return UINT32_MAX;
+	}
+	return static_cast<std::uint32_t>(value);
+}
+
 }  /* namespace situ::rt */
 
 #endif /* SITU_HPP */

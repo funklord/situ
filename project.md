@@ -2893,33 +2893,48 @@ payload made it reachable because nothing had followed the options before.
 clamp to zero, refuse, or wrap. Situ's own rule is that ambiguity is an error
 (17.0), and three implementations disagreeing is the strongest form of it.
 
-**The holder has since settled it -- clamp to zero -- and a first attempt at
-implementing that found the trap the next one has to avoid.** Clamping is
-right for a length that is *negative* and wrong for one that has *overflowed*,
-and in C the two are the same bit pattern.
+**Settled: a negative computed length is zero.** And the implementation is
+not one clamp but a rule about where signed and unsigned meet, which took four
+attempts to state because each backend crossed that boundary somewhere
+different.
 
-`edges.situ`'s `varint_driver` is the case. Its `u16 d[n + 1]` is driven by a
-varint, and a message that lies can make `n` a nine-byte encoding worth
-1.6e19. `(n + 1) * 2` in `int64_t` overflows, wraps negative, and a clamp
-reads that as *zero* -- so the member after it lands at a small offset, well
-inside the frame, and C reads bytes that Python (arbitrary precision, so the
-value stays enormous and saturates at the frame) correctly refuses. The clamp
-turned an unreachable member into a readable one.
+**Bound every leaf, in the domain it was read in; do the arithmetic signed in
+64 bits; clamp once, saturating at both ends.**
 
-So the rule needs both halves: **a negative length is zero, and an overflowing
-one saturates high**, where the frame then clamps it. Bounding each leaf
-before the arithmetic is what makes that true, and it costs nothing
-observable, because any length at or past the view's limit already saturates.
+Each clause is there because leaving it out shipped a defect the differential
+caught:
 
-Two further notes for whoever takes it. The arithmetic must be signed
-*throughout*, not cast at the end: an unsigned getter or `align_up`'s `- 1u`
-makes the subexpression unsigned and it wraps before anything can look at its
-sign, which is true in C and C++ as well as Rust. And there is no write-path
-defect, though this section once said there was: C's setter guards with
-`situ_in_bounds` and no-ops, and its getter returns zero, exactly as Python
-does.
+- **In the domain it was read in.** `as i64` on a `u64` above 2^63 makes a
+  huge length indistinguishable from a negative one, so a varint a lying
+  message set to 1.6e19 clamped to *zero* and put the member after it a few
+  bytes in, well inside the frame, where it was read rather than refused. C,
+  C++ and Rust each needed two spellings -- `leaf_u` and `leaf_i` -- chosen
+  from the schema's signedness.
+- **Signed throughout, not cast at the end.** An unsigned getter, or
+  `align_up` emitting `- 1u`, makes the subexpression unsigned and it wraps
+  before anything can look at its sign.
+- **In 64 bits.** The bound is what keeps it there. `SITU_LEAF_MAX` is
+  `INT32_MAX`, and holding a *field* to it changes nothing observable,
+  because a length at or past the view's limit saturates against the frame
+  either way.
+- **Saturating at both ends.** Clamping the low end alone left
+  `(LEAF_MAX + 1) * 2` truncating to zero on the cast to `uint32_t` -- the
+  same failure one step along.
 
-Until it is done, TCP keeps a `u16` and this paragraph is the reason.
+All five implementations bound identically, including Python and the walker,
+which cannot overflow. Their bound is there so the four *agree*: a bound
+applied in three places and not the fourth is a disagreement waiting for a
+lying message, which is exactly how this was found.
+
+**`examples/tcp` is fully described as a result** -- `[self_as = 0]`,
+`prefix(tcp_pseudo_header)` and `payload[remaining]`, the three parts its
+checksum needs.
+
+Two corrections this section carried and should not carry again. There is no
+write-path defect: C's setter guards with `situ_in_bounds` and no-ops, and its
+getter returns zero, exactly as Python does -- that was read off a probe's
+output rather than the emitted code. And the disagreement was never about
+which offset terms were emitted; the terms matched all along.
 
 **Describing UDP uncovered a walker defect, and it was the walker's worst
 shape: `validate` answering OK for a message every backend refuses.**

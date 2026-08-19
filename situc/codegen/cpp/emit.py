@@ -1875,7 +1875,17 @@ class Emitter:
 			"\t}",
 		]
 
-	def _over_fields(self, struct: ResolvedStruct, source: str) -> str:
+	def _over_fields(self, struct: ResolvedStruct, source: str,
+			bounded: bool = False) -> str:
+		"""`bounded` holds every leaf to `SITU_LEAF_MAX` and widens it to
+		`std::int64_t`, which a size expression asks for. C's copy carries
+		the reasoning: signed throughout, and inside 64 bits."""
+		def leaf(text: str, signed: bool = False) -> str:
+			if not bounded:
+				return text
+			helper = "leaf_i" if signed else "leaf_u"
+			return f"::situ::rt::{helper}({text})"
+
 		# An enum-typed field's getter hands back an `enum class`, which has
 		# no implicit conversion -- `k() != 1u` does not compile. So an
 		# expression over one reads the backing bytes, which is what the
@@ -1911,9 +1921,11 @@ class Emitter:
 			# where it sits parses eight ASCII characters as a binary
 			# integer, which is a plausible number nobody wrote.
 				if held.radix is not None:
-					return f"{c_name(name)}_value()"
+					return leaf(f"{c_name(name)}_value()",
+					            held.scalar is not None and held.scalar.signed)
 				assert held.scalar is not None
-				return f"({self._load(held.scalar, held, None)})"
+				return leaf(f"({self._load(held.scalar, held, None)})",
+				            held.scalar.signed)
 			if held.type_name in self.enums and held.scalar is not None:
 				# The backing bytes, because the getter hands back an `enum
 				# class` and nothing compares that to a number. At a dynamic
@@ -1925,14 +1937,17 @@ class Emitter:
 				      else self._offset_expression(struct, held))
 				if held.offset_bits is None and at is None:
 					raise UnknownName(name)
-				return f"({self._load(held.scalar, held, at)})"
+				return leaf(f"({self._load(held.scalar, held, at)})",
+				            held.scalar.signed)
 			# A varint's own getter reports a truncated encoding; `_value` is
 			# the read that cannot fail, which is what the count form uses --
 			# and a text number's getter reports one too, which only the
 			# nested branch above knew about.
 			if held.varint is not None or held.radix is not None:
-				return f"{c_name(name)}_value()"
-			return f"{c_name(name)}()"
+				return leaf(f"{c_name(name)}_value()",
+				            held.scalar is not None and held.scalar.signed)
+			return leaf(f"{c_name(name)}()",
+			            held.scalar is not None and held.scalar.signed)
 
 		return expand_calls(over_fields([*by_name, *consts], source, read),
 		                    c_spelling)
@@ -2162,10 +2177,12 @@ class Emitter:
 			        else f"{name}_span()")
 
 		if placement.size_expr is not None:
-			rendered = (f"static_cast<std::uint32_t>("
-			            f"{self._over_fields(struct, placement.size_expr)})")
-			each     = element_bytes(placement)
-			return rendered if each == 1 else f"({rendered}) * {each}u"
+			# Bounded leaves, signed arithmetic, one clamp (14.2b).
+			counted = self._over_fields(struct, placement.size_expr,
+			                            bounded=True)
+			each    = element_bytes(placement)
+			signed  = counted if each == 1 else f"({counted}) * {each}"
+			return f"::situ::rt::nonneg({signed})"
 		# A delimited member's extent is not a closed form: it is wherever the
 		# delimiter turns out to be, and `_span()` is the member's own answer.
 		# The same call serves a byte array and a run of records -- one name

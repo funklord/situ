@@ -482,6 +482,58 @@ static inline uint32_t situ_min_u32(uint32_t a, uint32_t b)
 	return a < b ? a : b;
 }
 
+/* The bound every leaf of a size expression is held to (14.2b).
+ *
+ * A length at or past the view's limit saturates against the frame anyway, so
+ * holding a *field* to this changes nothing a caller can observe -- and it is
+ * what keeps the arithmetic that follows inside `int64_t`. Without it a varint
+ * a lying message set to 1.6e19 made `(n + 1) * 2` overflow, wrap negative,
+ * and read as *zero* once clamped: the member after it then landed a few bytes
+ * in, well inside the frame, and was read rather than refused. An overflow
+ * must saturate high, where the frame clamps it, and never collapse to zero.
+ */
+#define SITU_LEAF_MAX 0x7FFFFFFF
+
+/* One leaf of a size expression, held to `SITU_LEAF_MAX`. Two spellings
+ * because the sign matters: a `u64` varint above the bound is a huge length,
+ * and an `i16` below zero is a negative one, and casting the first to signed
+ * would turn it into the second. */
+static inline int64_t situ_leaf_u64(uint64_t value)
+{
+	if (value > (uint64_t)SITU_LEAF_MAX) {
+		return SITU_LEAF_MAX;
+	}
+	return (int64_t)value;
+}
+
+static inline int64_t situ_leaf_i64(int64_t value)
+{
+	if (value >  SITU_LEAF_MAX) { return  SITU_LEAF_MAX; }
+	if (value < -SITU_LEAF_MAX) { return -SITU_LEAF_MAX; }
+	return value;
+}
+
+/* A computed length, with a negative result read as zero (14.2b).
+ *
+ * Zero rather than a refusal: a member of negative length is a member with
+ * nothing in it, every backend can say that, and `validate` still refuses the
+ * message for the constraint that made it negative -- which is the error the
+ * reader wants, rather than one about arithmetic.
+ */
+static inline uint32_t situ_nonneg_u32(int64_t value)
+{
+	if (value <= 0) {
+		return 0u;
+	}
+	/* Saturating at the top as well, and this half was missed once: bounded
+	 * leaves keep the arithmetic inside `int64_t`, and the *result* can
+	 * still exceed `uint32_t` -- `(SITU_LEAF_MAX + 1) * 2` does. Casting
+	 * truncated it to zero, which put the member after it a few bytes in
+	 * rather than past the frame: the exact failure the bound was added to
+	 * prevent, one step further along. */
+	return value > (int64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)value;
+}
+
 /* How many bytes remain in a view from `at`. Saturating, and that is the whole
  * of it: `at` is arithmetic over length fields the message controls, so it can
  * exceed the limit whatever the schema says. `limit - at` in `uint32_t` then

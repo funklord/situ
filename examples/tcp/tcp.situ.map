@@ -8,22 +8,31 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct tcp_header size=20 mutate=Shifting repr=ValueConverted atomic=NonAtomic
-  tcp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  tcp_header.destination_port            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  tcp_header.sequence                    offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  tcp_header.acknowledgement             offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  tcp_header.data_offset                 offset=AbsoluteStatic(0x0C) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.<reserved0>                 offset=AbsoluteStatic(0x0C:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.cwr                         offset=AbsoluteStatic(0x0D) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.ece                         offset=AbsoluteStatic(0x0D:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.urgent                      offset=AbsoluteStatic(0x0D:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.ack                         offset=AbsoluteStatic(0x0D:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.push                        offset=AbsoluteStatic(0x0D:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.reset                       offset=AbsoluteStatic(0x0D:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.syn                         offset=AbsoluteStatic(0x0D:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.fin                         offset=AbsoluteStatic(0x0D:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
-  tcp_header.window                      offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  tcp_header.checksum                    offset=AbsoluteStatic(0x10) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  tcp_header.urgent_pointer              offset=AbsoluteStatic(0x12) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  tcp_header.options                     offset=AbsoluteStatic(0x14) size=Bounded(0, 40) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+struct tcp_header size=20 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.summed                      offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(checksum)
+  tcp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  tcp_header.destination_port            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  tcp_header.sequence                    offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  tcp_header.acknowledgement             offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  tcp_header.data_offset                 offset=AbsoluteStatic(0x0C) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.<reserved0>                 offset=AbsoluteStatic(0x0C:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.cwr                         offset=AbsoluteStatic(0x0D) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.ece                         offset=AbsoluteStatic(0x0D:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.urgent                      offset=AbsoluteStatic(0x0D:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.ack                         offset=AbsoluteStatic(0x0D:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.push                        offset=AbsoluteStatic(0x0D:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.reset                       offset=AbsoluteStatic(0x0D:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.syn                         offset=AbsoluteStatic(0x0D:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.fin                         offset=AbsoluteStatic(0x0D:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  tcp_header.window                      offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  tcp_header.checksum                    offset=AbsoluteStatic(0x10) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  tcp_header.urgent_pointer              offset=AbsoluteStatic(0x12) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  tcp_header.options                     offset=AbsoluteStatic(0x14) size=Bounded(0, 40) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(checksum)
+  tcp_header.payload                     offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(checksum)
+
+struct tcp_pseudo_header size=12 repr=ValueConverted
+  tcp_pseudo_header.source_address       offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  tcp_pseudo_header.destination_address  offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  tcp_pseudo_header.zero                 offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  tcp_pseudo_header.protocol             offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  tcp_pseudo_header.tcp_length           offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

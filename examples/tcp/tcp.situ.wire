@@ -13,7 +13,7 @@ bit_order msb_first
 endian big
 target buffer
 
-struct tcp_header size=20..60
+struct tcp_header size=20..
   @0x0000   2         u16        source_port  big
   @0x0002   2         u16        destination_port  big
   @0x0004   4         u32        sequence  big
@@ -29,6 +29,15 @@ struct tcp_header size=20..60
   @0x000d:6 1bit      bit        syn  msb_first
   @0x000d:7 1bit      bit        fin  msb_first
   @0x000e   2         u16        window  big
-  @0x0010   2         u16        checksum  big
+  @0x0010   2         u8         checksum
   @0x0012   2         u16        urgent_pointer  big
   @0x0014   0..40     u8         options
+  ~         0..       u8         payload  sized-by=remaining
+  checksum covers: tcp_pseudo_header(prefix) <reserved0> ack acknowledgement cwr data_offset destination_port ece fin options payload push reset sequence source_port summed syn urgent urgent_pointer window
+
+struct tcp_pseudo_header size=12
+  @0x0000   4         u32        source_address  big
+  @0x0004   4         u32        destination_address  big
+  @0x0008   1         u8         zero  must_be_zero
+  @0x0009   1         u8         protocol
+  @0x000a   2         u16        tcp_length  big

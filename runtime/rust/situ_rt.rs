@@ -616,3 +616,30 @@ pub fn varint_be_len(mut value: u64, max_bytes: usize, terminal_bits: u32) -> us
 	}
 	n
 }
+
+/// The bound every leaf of a size expression is held to (14.2b).
+pub const LEAF_MAX: i64 = 0x7FFF_FFFF;
+
+/// One leaf of a size expression, held to `LEAF_MAX`.
+///
+/// Two names rather than one, for C's reason: a `u64` above the bound is a
+/// huge length and an `i64` below zero is a negative one, and `as i64` on the
+/// first produces the second. The bound has to be applied in the domain the
+/// value was read in.
+#[must_use]
+pub fn leaf_u(value: u64) -> i64 {
+	if value > LEAF_MAX as u64 { LEAF_MAX } else { value as i64 }
+}
+
+#[must_use]
+pub fn leaf_i(value: i64) -> i64 {
+	value.clamp(-LEAF_MAX, LEAF_MAX)
+}
+
+/// A computed length: negative reads as zero, and a result past `u32`
+/// saturates rather than truncating. See `situ_nonneg_u32` for both halves.
+#[must_use]
+pub fn nonneg(value: i64) -> usize {
+	if value <= 0 { 0 } else if value > u32::MAX as i64 { u32::MAX as usize }
+	else { value as usize }
+}

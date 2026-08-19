@@ -203,6 +203,7 @@ class Emitter:
 			"\tadvance,",
 			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
+			"\tleaf, nonneg,",
 			*(["\tNATIVE_BIG,"] if self._has_native_order() else []),
 			"\tcompose, nul_len, open_gate, utf8_valid,",
 			*self._tlv_imports(),
@@ -3013,10 +3014,18 @@ class Emitter:
 		]
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
-			held: str) -> str:
+			held: str, bounded: bool = False) -> str:
+		"""`bounded` holds every leaf to `LEAF_MAX`, which a size expression
+		asks for (14.2b). Python's integers do not overflow, so this is here
+		to *agree* with the three backends that do rather than for its own
+		sake -- a bound applied in three places and not the fourth is a
+		disagreement waiting for a lying message."""
 		# Its own scalars and its nested structs': `at file.pixel_offset`
 		# names a field of a header nested in this struct, and the dotted
 		# path was emitted verbatim -- an attribute Python does not have.
+		def leaf(text: str) -> str:
+			return f"leaf({text})" if bounded else text
+
 		by_local = {local_name(struct, placement): placement
 		            for placement in readable_names(struct)}
 		# Constants too. A `const` is a compile-time value and the renderer
@@ -3038,13 +3047,13 @@ class Emitter:
 				suffix = ("_value"
 				          if placement.varint is not None
 				          or placement.radix is not None else "")
-				return f"{held}.{py_name(local)}{suffix}"
+				return leaf(f"{held}.{py_name(local)}{suffix}")
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
 			# -- a plausible number nobody wrote, which is the shape 26.32
 			# rates worst. The value helper parses them.
 			if placement.radix is not None:
-				return f"{held}.{py_name(local)}_value"
+				return leaf(f"{held}.{py_name(local)}_value")
 			# A nested member has no attribute of this struct's own, and its
 			# offset is a constant here, so it is read where it sits.
 			assert placement.scalar is not None
@@ -3750,9 +3759,12 @@ class Emitter:
 		# the member fell through to the scalar case and this backend read one
 		# byte and called it the field.
 		if placement.size_expr is not None:
-			rendered = self._over_fields(struct, placement.size_expr, "self")
-			each     = element_bytes(placement)
-			return rendered if each == 1 else f"({rendered}) * {each}"
+			# Bounded leaves and one clamp, matching the other three (14.2b).
+			counted = self._over_fields(struct, placement.size_expr, "self",
+			                            bounded=True)
+			each    = element_bytes(placement)
+			signed  = counted if each == 1 else f"({counted}) * {each}"
+			return f"nonneg({signed})"
 
 		# A nested struct with no single size, which the sum treated as zero
 		# bytes wide -- so whatever followed it was placed on top of it.

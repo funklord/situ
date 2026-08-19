@@ -170,8 +170,13 @@ def size_bits(view: View, index: int) -> int:
 	if placement.size_code != NONE:
 		count = _evaluate(view, placement.size_code,
 		                  offset_bits(view, index) // BITS_PER_BYTE)
-		if count < 0:
-			raise Refused("a computed size is negative")
+		# Negative reads as zero and an overflow saturates high (14.2b).
+		# The walker evaluates in Python, which does not overflow, so the
+		# bound is here to *agree* with the three backends that do rather
+		# than for its own sake: a lying varint has to produce the same
+		# offset in all four, and a bound applied everywhere but here is a
+		# disagreement waiting to happen.
+		count = min(max(count, 0), 0xFFFFFFFF)
 		# A counted run of *variable-length* elements. The count says how
 		# many, each element says how long it is, and there is no stride to
 		# multiply -- so the fallback below is wrong by exactly the factor

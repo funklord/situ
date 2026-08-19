@@ -516,10 +516,10 @@ def test_every_backend_walks_a_while_run(target: str) -> None:
 #: out rather than matched loosely, because the loose version passed on Rust
 #: while Rust emitted a one-byte scalar (invariant 26, again).
 SIZED_BY_EXPRESSION = {
-	"c":      "(situ_e_len_get(view) + 1) * 8 - 2",
-	"cpp":    "(len() + 1) * 8 - 2",
-	"python": "(self.len + 1) * 8 - 2",
-	"rust":   "((self.len() as usize) + 1) * 8 - 2",
+	"c":      "(situ_leaf_u64(situ_e_len_get(view)) + 1) * 8 - 2",
+	"cpp":    "(::situ::rt::leaf_u(len()) + 1) * 8 - 2",
+	"python": "(leaf(self.len) + 1) * 8 - 2",
+	"rust":   "(situ_rt::leaf_u(self.len() as u64) + 1) * 8 - 2",
 }
 
 
@@ -545,10 +545,10 @@ def test_no_backend_reads_an_expression_sized_member_as_a_scalar(
 SIZED_OPAQUE = "struct s { u8 n; opaque body[n + 1]; u16 tail; }\n"
 
 SIZED_OPAQUE_LENGTH = {
-	"c":      "(uint32_t)(situ_s_n_get(view) + 1)",
-	"cpp":    "static_cast<std::uint32_t>(n() + 1)",
-	"python": "advance(1, self.n + 1, self._len)",
-	"rust":   "situ_rt::advance(1, (self.n() as usize) + 1, self.bytes.len())",
+	"c":      "situ_nonneg_u32(situ_leaf_u64(situ_s_n_get(view)) + 1)",
+	"cpp":    "::situ::rt::nonneg(::situ::rt::leaf_u(n()) + 1)",
+	"python": "advance(1, nonneg(leaf(self.n) + 1), self._len)",
+	"rust":   "situ_rt::nonneg(situ_rt::leaf_u(self.n() as u64) + 1)",
 }
 
 
@@ -576,10 +576,10 @@ def test_no_backend_reads_a_sized_opaque_region_as_nothing(target: str) -> None:
 WIDE_ARITHMETIC = "struct s { u8 n; u32 d[n + 1]; u16 tail; }\n"
 
 WIDE_ARITHMETIC_LENGTH = {
-	"c":      "(uint32_t)(situ_s_n_get(view) + 1) * 4u",
-	"cpp":    "(static_cast<std::uint32_t>(n() + 1)) * 4u",
-	"python": "(self.n + 1) * 4",
-	"rust":   "((self.n() as usize) + 1) * 4",
+	"c":      "situ_nonneg_u32((situ_leaf_u64(situ_s_n_get(view)) + 1) * 4)",
+	"cpp":    "::situ::rt::nonneg((::situ::rt::leaf_u(n()) + 1) * 4)",
+	"python": "nonneg((leaf(self.n) + 1) * 4)",
+	"rust":   "situ_rt::nonneg((situ_rt::leaf_u(self.n() as u64) + 1) * 4)",
 }
 
 
@@ -659,10 +659,10 @@ VARINT_ARITHMETIC = (
 )
 
 VARINT_ARITHMETIC_READ = {
-	"c":      "situ_s_n_value(view) + 1",
-	"cpp":    "n_value() + 1",
-	"python": "self.n_value + 1",
-	"rust":   "(self.n_value() as usize) + 1",
+	"c":      "situ_leaf_u64(situ_s_n_value(view)) + 1",
+	"cpp":    "::situ::rt::leaf_u(n_value()) + 1",
+	"python": "leaf(self.n_value) + 1",
+	"rust":   "situ_rt::leaf_u(self.n_value() as u64) + 1",
 }
 
 
@@ -770,14 +770,24 @@ def test_the_rust_reads_are_widened() -> None:
 	"""`(len + 1) * 8` in u8 arithmetic is 255 + 1 = 0, then zero. C computes
 	it correctly only because integer promotion widens to `int` first, which
 	is a rule Rust does not have -- and a guarantee C stops giving above 16
-	bits."""
+	bits.
+
+	`as u64` rather than `as usize` in a *size* expression, and the domain is
+	the point rather than the width (14.2b): the leaf is bounded in the domain
+	it was read in, because `as i64` on a `u64` above 2^63 makes a huge length
+	indistinguishable from a negative one -- which then clamps to zero and
+	puts the member after it inside the frame instead of past it.
+	"""
 	schema   = parse_text(PREAMBLE + WHILE_RUN)
 	resolved = resolve(schema, solve(schema))
 	emit, _  = BACKENDS["rust"]
 
 	source = "\n".join(emit(schema, resolved, "unit").files().values())
 
-	assert "as usize) + 1" in source
+	assert "as u64) + 1" in source
+	# Still widened, which is what this test has always been about: the read
+	# must not stay in the field's own narrow type.
+	assert "self.len() + 1" not in source
 
 
 # -- a covered field of a nested struct (26.35) -----------------------------
