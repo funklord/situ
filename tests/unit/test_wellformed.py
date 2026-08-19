@@ -567,9 +567,7 @@ def test_every_attribute_is_accounted_for() -> None:
 	just removed. Failing here is not a bug -- it is the question "where is
 	this read?" arriving at the moment somebody can still answer it.
 	"""
-	placed = (wellformed.ACCESS_MODE_ATTRS
-	          | set(wellformed.STRUCT_ONLY_ATTRS)
-	          | {"equalize", "allow_unverified_read", "minimal"})
+	placed = set(wellformed.PLACED_ATTRS)
 	# Placed by rules that predate the table, in their own checks.
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries"}
 
@@ -585,3 +583,55 @@ def test_every_attribute_is_accounted_for() -> None:
 	# itself rather than a fact about the language.
 	assert not placed & wellformed.UNPLACED_ATTRS
 	assert not placed & set(wellformed.UNIMPLEMENTED_ATTRS)
+
+
+# The second batch. Each was settled by comparing the generated C *and* the
+# capability map with and against the attribute -- an attribute can be read
+# into one artifact and not the other, and a tool that inspected only the code
+# called `[non_canonical]` inert on a plain field when it sets the canonical
+# axis and a blame reason. `[trim]`, `[case_insensitive]` and
+# `[nul_terminated]` were spared the same way and stay unplaced.
+
+
+def test_a_reserved_policy_on_an_ordinary_field_is_refused() -> None:
+	"""`_reserved_policy` reads these from a `reserved` member."""
+	for name in ("preserve", "unknown", "must_be_one"):
+		text = rendered(BUFFER + "struct b { u16 x [%s]; }\n" % name)
+		assert "`reserved` member" in text
+
+
+def test_a_reserved_policy_on_a_reserved_member_is_accepted() -> None:
+	for name in ("preserve", "unknown", "must_be_one", "must_be_zero"):
+		parse_text(BUFFER + "struct b { u8 a; reserved u8 [%s]; }\n" % name,
+		           path="s.situ")
+
+
+def test_must_be_zero_is_left_alone() -> None:
+	"""It is `_reserved_policy`'s default, so writing it changes no byte --
+	and is still not meaningless, because it says out loud what the silence
+	already meant. Inert-by-default is not the same as unread, which is the
+	distinction that keeps it out of the table."""
+	assert "must_be_zero" not in wellformed.PLACED_ATTRS
+
+
+def test_encoding_on_a_lone_scalar_is_refused() -> None:
+	text = rendered(BUFFER + "struct b { u8 x [encoding = ascii]; }\n")
+	assert "byte array or a delimited run" in text
+
+
+def test_encoding_on_an_array_is_accepted() -> None:
+	parse_text(BUFFER + "struct b { u8 s[8] [encoding = ascii]; }\n",
+	           path="s.situ")
+
+
+def test_self_as_off_a_tag_is_refused() -> None:
+	text = rendered(BUFFER + "struct b { u16 x [self_as = 0]; }\n")
+	assert "`tag` or `checksum`" in text
+
+
+def test_volatile_on_a_member_is_refused() -> None:
+	"""A register *setting*, parsed from the register body. It is in the
+	attribute vocabulary for bracket disambiguation, which is not the same as
+	a member ever carrying one."""
+	text = rendered(BUFFER + "struct b { u16 x [volatile]; }\n")
+	assert "`register` body" in text

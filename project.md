@@ -8602,10 +8602,35 @@ Settled so far: the eleven SystemRDL access modes, which `layout._access_mode`
 reads only for a field of a `register` struct; `[equalize]`, read only from a
 `variant`; `[allow_straddle]` and `[allow_host_dependent]`, read only from a
 struct declaration; `[allow_unverified_read]`, read only from a `sealed`
-region; and `[minimal]`, read only where a radix is set. `[quoted]`,
+region; `[minimal]`, read only where a radix is set; `[preserve]`,
+`[unknown]` and `[must_be_one]`, which `_reserved_policy` reads from a
+`reserved` member; `[encoding]`, which needs an array to have text in;
+`[self_as]`, read from a tag or checksum; and `[volatile]`, which is a
+register *setting* and never a member attribute at all. `[quoted]`,
 `[escape]`, `[timeout_ms]` and `[retries]` already had placement rules of
-their own. The rest are unchecked, and that is now a list in the source rather
-than a paragraph here.
+their own. Twenty remain, listed in the source rather than described here.
+
+**The second batch needed a better instrument, and the first version of it was
+wrong.** Deciding a row means establishing that an attribute is inert in a
+position, and the obvious way to establish that is to generate with and
+without it and compare. Comparing the generated *C* alone called
+`[non_canonical]` inert on a plain field -- and it is not: it sets the
+canonical axis and carries a blame reason, neither of which reaches an
+accessor. Comparing the capability map as well spared `[trim]`,
+`[case_insensitive]` and `[nul_terminated]` from the same mistake, all three
+of which change the map on a scalar and would have been wrongly refused.
+
+**A tool that inspects one artifact answers for that artifact only**, which is
+`evidence.md`'s rule about knowing what a check checked, met in a place where
+the check was one I had just written.
+
+`[must_be_zero]` is the other shape worth naming. It is `_reserved_policy`'s
+default, so writing it on a `reserved` member changes no byte and the
+inertness test calls it inert *there as well as* on an ordinary field. It is
+not meaningless on a reserved member -- it says out loud what the silence
+already meant -- so it stays out of the table. **Inert-by-default is not the
+same as unread**, and no measurement of output can tell them apart; only
+reading the code that consumes it can.
 
 **It found a defect nobody was looking for.** `unparse` emitted no `until`
 clause at all and dropped the radix keyword, so

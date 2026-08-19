@@ -1274,8 +1274,42 @@ def _attribute_place(struct: ast.StructDecl,
 		return None if getattr(member, "radix", None) is not None else (
 			"a radix-encoded number, whose leading zeros it forbids")
 
+	# `_reserved_policy` reads these three, and reads them from a `reserved`
+	# member. `must_be_zero` is deliberately absent: it is that function's
+	# default, so writing it on a reserved member changes no byte and is still
+	# not meaningless -- it says out loud what the silence already meant.
+	if attr.name in ("preserve", "unknown", "must_be_one"):
+		return None if isinstance(member, ast.Reserved) else (
+			"a `reserved` member, whose policy it sets")
+
+	if attr.name == "encoding":
+		return None if getattr(member, "array", None) is not None else (
+			"a byte array or a delimited run -- a single scalar has no text "
+			"to have an encoding")
+
+	if attr.name == "self_as":
+		return None if isinstance(member, ast.TagField) else (
+			"a `tag` or `checksum`, saying what its own bytes read as while "
+			"it is computed")
+
+	# A register *setting*, parsed by `parse_register_setting` from the
+	# register body. It is in the attribute vocabulary so that bracket
+	# disambiguation does not change meaning, which is not the same as a
+	# member ever carrying one.
+	if attr.name == "volatile":
+		return ("a `register` body, beside `width` -- it is a setting rather "
+		        "than a member attribute")
+
 	return None
 
+
+#: Every attribute `_attribute_place` has a rule for. One source of truth, so
+#: that moving a name out of `UNPLACED_ATTRS` and forgetting to add it here is
+#: the exhaustiveness test failing rather than a silent gap.
+PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
+	"equalize", "allow_unverified_read", "minimal",
+	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
+}))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
 #: rather than a paragraph somewhere else. Adding one is a row in
@@ -1286,11 +1320,11 @@ def _attribute_place(struct: ast.StructDecl,
 #: `quoted`, `escape`, `timeout_ms` and `retries` are absent because
 #: `check_delimiters` and `_check_exchange_policy` already place them.
 UNPLACED_ATTRS = frozenset({
-	"bit_order", "bits", "case_insensitive", "covers", "encoding", "endian",
-	"max", "min", "must_be_one", "must_be_zero", "must_eq", "non_canonical",
-	"nonce", "nul_terminated", "on_read", "on_write", "preserve",
-	"require_aligned", "secret", "self_as", "since", "trim", "trusted",
-	"unknown", "version", "volatile",
+	"bit_order", "bits", "case_insensitive", "covers", "endian",
+	"max", "min", "must_be_zero", "must_eq", "non_canonical",
+	"nonce", "nul_terminated", "on_read", "on_write",
+	"require_aligned", "secret", "since", "trim", "trusted",
+	"version",
 })
 
 
