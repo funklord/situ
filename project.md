@@ -12886,12 +12886,34 @@ and `delete` are all legal `situ` identifiers and none of them is a legal C++
 class name; Rust's `match`, `type`, `move` and `ref` are the same hazard, and
 its emitter already has an `_ident` that escapes some of them.
 
-Not fixed here, because it is a front-end rule and this was a codegen change:
-the diagnostic belongs beside the identifier-flattening check, where it can
-name the struct and the language rather than leaving g++ to. What the incident
-argues is that the four-backend differential earns its cost -- the schema was
-valid, three backends were correct, and nothing but actually compiling the
-fourth would have said so.
+**Fixed since, and the remedy proposed above was the wrong one.** This
+paragraph said the answer was a front-end diagnostic naming the struct and the
+language. `situc/codegen/cpp/names.py` had already argued against exactly that,
+at the top of the file: refusing makes `class`, `operator`, `template` and
+`protected` reserved words in one backend and outlaws a struct for a reason
+that has nothing to do with its bytes -- and DNS has fields called `class` and
+`type`. The class moves instead and the schema keeps its name, which is
+decision 0025's argument and the mechanism that file exists to provide.
+
+So the fix is one condition. `class_name` renamed a class whose name a
+*member* had taken, and never consulted the keyword set that `bare_name` has
+used for members since 0025; it consults it now. The alias is the other half:
+`using class = class_;` is as illegal as the declaration it stood in for, so
+where the schema's name is a keyword there is no alias and a comment says why.
+A keyword is the one name a caller cannot write whatever situ emits, and C++
+is the only backend where that is true -- C prefixes every identifier, Rust
+takes `Class` from PascalCase and `r#match` for members, and Python already
+appends its own underscore.
+
+The measurement that scoped it is worth keeping, because the obvious framing
+was too broad: `struct class` compiles in C, parses in Python and compiles in
+Rust. Only C++ uses the schema's name verbatim as a type name, so only C++ was
+ever affected.
+
+What the incident argues is that the four-backend differential earns its cost
+-- the schema was valid, three backends were correct, and nothing but actually
+compiling the fourth would have said so. The test that holds it now is a
+compile rather than a string match, for the same reason.
 
 ---
 

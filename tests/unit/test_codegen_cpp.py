@@ -2496,3 +2496,51 @@ def test_the_affixes_match_the_emitter() -> None:
 
 	assert suffixes <= SUFFIXES, f"unlisted suffixes: {sorted(suffixes - SUFFIXES)}"
 	assert prefixes <= PREFIXES, f"unlisted prefixes: {sorted(prefixes - PREFIXES)}"
+
+
+# -- a struct named for a C++ keyword (26.116) ------------------------------
+#
+# `bare_name` has mangled a *member* called `class` or `operator` since
+# decision 0025, and the class itself went out verbatim: `struct class`
+# emitted `class class : public ::situ::rt::view` and g++ reported six errors
+# naming neither the schema nor situc. It was found by naming a test struct
+# `protected` and watching the four-backend differential fail to build.
+#
+# The remedy 26.116 first proposed was a front-end refusal, and `cpp/names.py`
+# already argues against exactly that: refusing makes `class` and `operator`
+# reserved words in one backend, and DNS has fields called both. The class
+# moves instead, which is what this file's whole rename mechanism is for.
+
+KEYWORD_STRUCT = "struct class { u8 x; }\n"
+
+
+def test_a_struct_named_for_a_keyword_moves() -> None:
+	header = emit(KEYWORD_STRUCT)
+	assert "class class_ : public" in header
+	assert "class class :" not in header
+
+
+def test_no_alias_is_emitted_for_a_keyword_name() -> None:
+	"""The alias exists so a caller may write the schema's name. A keyword is
+	the one name they cannot write, so `using class = class_;` would be as
+	illegal as the declaration it stood in for."""
+	header = emit(KEYWORD_STRUCT)
+	assert "using class =" not in header
+	assert "is a C++ keyword" in header
+
+
+def test_a_keyword_named_struct_compiles(tmp_path: Path) -> None:
+	"""The assertion that would have caught this in the first place: the
+	other three backends accept the schema, and only compiling the fourth
+	says whether it is legal."""
+	result = compiles(tmp_path, KEYWORD_STRUCT)
+	assert result.returncode == 0, result.stderr
+
+
+def test_the_other_spelling_is_still_refused() -> None:
+	"""`class` and `class_` in one schema reach one C++ name. Decision 0013's
+	gate has refused two constructs that land on one identifier since the day
+	it was written, and it covers this without knowing about keywords."""
+	with pytest.raises(SituError) as caught:
+		emit("struct class { u8 x; }\nstruct class_ { u8 y; }\n")
+	assert "`class_` is taken" in caught.value.diagnostic.render()

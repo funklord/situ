@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
-from situc.codegen.c.names import bare_name, c_name
+from situc.codegen.c.names import KEYWORDS, bare_name, c_name
 from situc.codegen.cpp.names import check_collisions, class_name, renamed
 from situc.codegen.doc import extractable
 from situc.diagnostics import Diagnostic
@@ -248,6 +248,24 @@ class Emitter:
 			return []
 
 		name = c_name(struct.name)
+
+		# No alias where the schema's name is a C++ keyword: `using class =
+		# class_;` is as illegal as the class declaration it was standing in
+		# for. The alias exists so a caller may write the schema's name, and a
+		# keyword is the one name they cannot write whatever situ emits.
+		if name in KEYWORDS:
+			return [
+				"",
+				f"/* The schema calls this `{name}`, which is a C++ keyword,"
+				" so the class",
+				f" * is `{class_name(struct)}` and there is no alias -- the"
+				" name the schema",
+				" * uses cannot be written in this language at all. Every"
+				" other backend",
+				" * keeps the schema's spelling; this is the one that cannot."
+				" */",
+			]
+
 		return [
 			"",
 			f"/* `{name}` is what the schema calls this, and what to write.",

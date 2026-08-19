@@ -36,7 +36,7 @@ emitter so a phase that adds an accessor shape cannot leave them behind.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.c.names import bare_name, c_name
+from situc.codegen.c.names import KEYWORDS, bare_name, c_name
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, Span
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import local_name
@@ -93,9 +93,23 @@ def member_names(struct: ResolvedStruct) -> set[str]:
 
 
 def class_name(struct: ResolvedStruct) -> str:
-	"""What to call the class. The schema's name, unless a member has it."""
+	"""What to call the class. The schema's name, unless something has it.
+
+	A member's name is one way to collide and a keyword is the other, and the
+	second was missed for as long as this file existed: `bare_name` has
+	mangled a *member* called `class` or `operator` since decision 0025, and
+	the class itself went out verbatim -- so `struct class` emitted
+	`class class : public ::situ::rt::view` and g++ reported six errors naming
+	neither the schema nor situc.
+
+	The same answer as the member case, for the same reason this file gives at
+	the top: the class moves and the schema keeps its name. Refusing would
+	make `class` and `operator` reserved words in one backend, and DNS has
+	fields called both.
+	"""
 	name = c_name(struct.name)
-	return f"{name}_" if name in member_names(struct) else name
+	collides = name in member_names(struct) or name in KEYWORDS
+	return f"{name}_" if collides else name
 
 
 def renamed(struct: ResolvedStruct) -> bool:
