@@ -436,7 +436,24 @@ def _ast_members(
 				held = getattr(arm, "member", None)
 				if held is not None:
 					walk(path, (held,), owner, counter)
-			walk(path, getattr(member, "members", ()), owner, counter)
+
+			# An `authenticated` region does not extend the path, because
+			# `layout.place_authenticated` does not either: its members sit
+			# at the offsets they would have had without it and keep the
+			# enclosing struct's namespace, which is why 5.3 addresses
+			# `Packet.hdr.seq` and not `Packet.authenticated.hdr.seq`. A
+			# `coded` or `sealed` region *is* a namespace and does extend it.
+			#
+			# Extending it here recorded `u.s.payload` for a placement whose
+			# path is `u.payload`, so the lookup below missed and the member
+			# got no size program. A counted run with no program measures
+			# zero, so a walk of `u8 payload[length - 8]` inside a covered
+			# region reported a malformed message as valid where every
+			# backend answered BOUNDS -- the walker's worst failure shape,
+			# and invisible until a covered region held a member whose
+			# bounds C would reject.
+			inner = prefix if isinstance(member, ast.Authenticated) else path
+			walk(inner, getattr(member, "members", ()), owner, counter)
 
 
 	for decl in schema.decls:

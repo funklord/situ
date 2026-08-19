@@ -77,7 +77,14 @@ def _scalars(image: Image, struct_index: int) -> list[int]:
 			continue			# an offset the message decides
 		if index in image.delimiters:
 			continue			# ends at a delimiter, so a byte run
-		if index in image.regions:
+		# Behind a *gate*, which is a `sealed` region and not any region.
+		# An `authenticated` one has no gate: its members sit where they
+		# would have sat anyway and are read directly, which is why 5.3
+		# addresses `Packet.hdr.seq`. Skipping them too left every field of
+		# `examples/icmp`'s `authenticated message` out of the listing, and
+		# `examples/udp`'s whole header once its checksum covered one.
+		if index in image.regions \
+				and image.region_flags.get(index, 0) & SEALED:
 			continue			# read through a gate, not directly
 		if placement.size_code != NONE or placement.array_count != NONE:
 			continue			# a run, not a scalar

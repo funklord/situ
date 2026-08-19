@@ -1029,8 +1029,8 @@ LIES = {
 	           "\tu8   unit_id;",
 	           "\tu8   unit_id;\n"
 	           "\tu16  length       [min = 2, max = 254]; // unit + PDU, 1 + 253 at most"),
-	"udp": ("\tu16  source_port;\n\tu16  destination_port;",
-	        "\tu16  destination_port;\n\tu16  source_port;"),
+	"udp": ("\t\tu16  source_port;\n\t\tu16  destination_port;",
+	        "\t\tu16  destination_port;\n\t\tu16  source_port;"),
 	"tcp": ("\tu32       sequence;\n\tu32       acknowledgement;",
 	        "\tu32       acknowledgement;\n\tu32       sequence;"),
 	"dns": ("\tu16           question_count;\n\tu16           answer_count;",

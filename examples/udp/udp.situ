@@ -8,17 +8,49 @@ target buffer;
 endian big;
 
 struct udp_header {
-	u16  source_port;
-	u16  destination_port;
-	u16  length  [min = 8];
-	u16  checksum;
+	// Everything the checksum runs over, which for UDP is the whole datagram
+	// -- header and payload both (RFC 768). The region is what lets the
+	// generated API say so: writing any byte in it marks the checksum stale.
+	authenticated summed {
+		u16  source_port;
+		u16  destination_port;
+		u16  length  [min = 8];
 
-	// The payload the length points at. UDP's own header does not describe
-	// it -- the port does -- so it is bytes, and the length counts the eight
-	// header bytes as well as the payload, which is why `[min = 8]` above is
-	// what makes this expression legal rather than decoration.
-	u8   payload[length - 8];
+		// Inside the region it covers, like ICMP's and for the same reason:
+		// the sum runs over these two bytes taken as zero. What differs is
+		// `prefix`, which adds twelve bytes that are not in the datagram at
+		// all -- see the note below.
+		checksum u8 checksum[2] covers(summed) prefix(udp_pseudo_header)
+			[self_as = 0];
+
+		// The payload the length points at. UDP's own header does not
+		// describe it -- the port does -- so it is bytes, and the length
+		// counts the eight header bytes as well as the payload, which is why
+		// `[min = 8]` above is what makes this expression legal rather than
+		// decoration. It is summed too, which is why it sits in the region.
+		u8   payload[length - 8];
+	}
 }
+
+// RFC 768's pseudo-header: the bytes the checksum runs over *before* the
+// datagram. Two of the four fields belong to the IP layer, which is why this
+// is a struct of its own and why the caller fills it in -- the kernel's
+// `csum_tcpudp_nofold` takes `saddr` and `daddr` as arguments for the same
+// reason. situ describes the layout and says how many bytes it is; what goes
+// in it comes from a layer this schema does not describe (14.2a).
+//
+// Declared after `udp_header` because the first struct in a file is the
+// message a driver acquires, and a pseudo-header is not a datagram.
+struct udp_pseudo_header {
+	u32  source_address;
+	u32  destination_address;
+	u8   zero        [must_be_zero];
+	u8   protocol;
+	u16  udp_length;
+}
+
+require size(udp_pseudo_header) == 12;
+require absolute_static(udp_pseudo_header);
 
 // `size(udp_header)` was `== 8` here until the payload was written, and a
 // struct with a payload has no single size -- which the diagnostic now says
@@ -30,23 +62,27 @@ require absolute_static(udp_header);
 require canonical(udp_header);
 require aligned(udp_header.length, 2);
 
-// Every field is freely mutable: nothing here is covered by a tag, and the
-// checksum is a plain `u16` -- which is the one thing in this header situ
-// cannot say, and it is not the reason `examples/icmp` gives.
+// The checksum is described, where it used to be a plain `u16` this schema
+// could say nothing about.
 //
-// ICMP's checksum covers its own message and nothing else, so `[self_as = 0]`
-// describes it exactly (14.2). UDP's covers a *pseudo-header* as well: the
-// source and destination addresses, the protocol number and the UDP length,
-// none of which are in this struct and two of which belong to the IP layer.
-// The kernel builds it in `csum_tcpudp_nofold` (lib/checksum.c:149), which
-// takes `saddr` and `daddr` as arguments precisely because they are not in
-// the datagram it is summing.
+// ICMP's covers its own message and nothing else, so `[self_as = 0]` alone
+// describes it (14.2). UDP's covers a *pseudo-header* as well -- the source
+// and destination addresses, the protocol number and the UDP length, two of
+// which belong to the IP layer. The kernel builds it in `csum_tcpudp_nofold`
+// (lib/checksum.c:149), which takes `saddr` and `daddr` as arguments
+// precisely because they are not in the datagram it is summing.
 //
-// Coverage in situ is over regions of *this* message. There is no way to name
-// bytes another schema owns, and inventing one would mean a schema that
-// cannot be checked against the bytes in front of it. `examples/tcp` carries
-// the same limitation for the same reason: two askers, and no design.
-require in_place(udp_header.checksum);
+// `prefix(...)` is how that is said (14.2a), and it does not pretend situ
+// owns those bytes: the pseudo-header is a struct of its own, the caller
+// fills it in, and the generated header says how many bytes to hand over and
+// gives the accessors to build them with. Computing the sum was always the
+// caller's (14.1); what situ adds is which bytes it is over.
+//
+// The checksum is `Immutable` now, where it used to be freely mutable, and
+// that is the change rather than a regression: a checksum is not the author's
+// to write, only a recompute's. The old assertion here was `in_place`, which
+// held precisely because situ knew nothing about the field.
+require immutable(udp_header.checksum);
 
 // The payload makes nothing after it static -- and there is nothing after it,
 // so UDP pays no price at all for being variable length. That is not an

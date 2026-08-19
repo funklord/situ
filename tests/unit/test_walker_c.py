@@ -296,13 +296,23 @@ def test_it_agrees_with_the_python_walker(tmp_path: Path) -> None:
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A
-	number here would be a wrong length that reads like a right one."""
+	number here would be a wrong length that reads like a right one.
+
+	The scalars ahead of it are the control: they are read, so the refusal
+	is about the payload rather than about the walk giving up. The checksum
+	between them is a two-byte run and `read_scalar` refuses a run whatever
+	the frame -- a checksum carries a length by construction, so there is no
+	spelling of it that is a scalar, and asserting otherwise would tie this
+	test to a shape `examples/udp` is free to change.
+	"""
 	blob = image_for(ROOT / "examples" / "udp" / "udp.situ")
 
 	answers = c_answers(tmp_path, blob, bytes.fromhex("1f90238200105f2a"))
 
 	assert answers[-1] == "refused"
-	assert all(one != "refused" for one in answers[:-1])
+	# The three scalars: ports and length, all inside the covered region and
+	# all readable, which is what says the walk reached them at all.
+	assert answers[:3] == ["8080", "9090", "16"]
 
 
 VARIABLE = """target buffer;

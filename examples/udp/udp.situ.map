@@ -8,9 +8,17 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct udp_header size=8 mutate=Shifting repr=ValueConverted
-  udp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
-  udp_header.destination_port            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  udp_header.length                      offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
-  udp_header.checksum                    offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
-  udp_header.payload                     offset=AbsoluteStatic(0x08) size=Bounded(0, 65527) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+struct udp_header size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  udp_header.summed                      offset=AbsoluteStatic(0x00) size=Bounded(8, 65535) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(checksum)
+  udp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  udp_header.destination_port            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  udp_header.length                      offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
+  udp_header.checksum                    offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  udp_header.payload                     offset=AbsoluteStatic(0x08) size=Bounded(0, 65527) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(checksum)
+
+struct udp_pseudo_header size=12 repr=ValueConverted
+  udp_pseudo_header.source_address       offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  udp_pseudo_header.destination_address  offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  udp_pseudo_header.zero                 offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  udp_pseudo_header.protocol             offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  udp_pseudo_header.udp_length           offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

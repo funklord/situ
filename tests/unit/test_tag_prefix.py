@@ -87,3 +87,48 @@ def test_a_struct_may_not_prefix_itself() -> None:
 	is either a no-op or a second pass over the same bytes."""
 	text = refusal(PSEUDO + COVERED % " prefix(msg)")
 	assert "names its own struct as its prefix" in text
+
+
+# -- the packer bug this uncovered ------------------------------------------
+
+
+COVERED_PAYLOAD = """struct u {
+	authenticated s {
+		u16 port;
+		u16 length [min = 8];
+		checksum u8 sum[2] covers(s) [self_as = 0];
+		u8 payload[length - 8];
+	}
+}
+"""
+
+
+def test_a_member_inside_a_region_keeps_its_size_program() -> None:
+	"""`layout.place_authenticated` does not extend the path -- its members
+	keep the enclosing struct's namespace (5.3) -- and `_ast_members` did,
+	recording `u.s.payload` for a placement whose path is `u.payload`. The
+	lookup missed, the member got no size program, and a counted run with no
+	program measures zero.
+
+	The consequence was the walker's worst failure shape: `validate` answered
+	OK for a message every backend refuses. It stayed invisible because no
+	covered region held a member whose bounds C would reject -- `examples/icmp`
+	has the same shape and its fields never had a program either.
+	"""
+	from situc import pack as packer
+	from walker.image import NONE, load
+	from walker import report
+
+	schema   = parse_text(PREAMBLE + COVERED_PAYLOAD)
+	resolved = resolve(schema, solve(schema))
+	blob, _  = packer.pack(schema, resolved, metadata=True)
+	image    = load(blob)
+
+	payload = image.placements[3]
+	assert payload.size_code != NONE, "the payload has no size program"
+
+	# And the answer it exists to give: a length of 0x2F20 in a ten-byte
+	# frame puts the payload past the end, which is BOUNDS and not OK.
+	listing = report.listing(image, bytes.fromhex("50202f2045540a0a802e"))
+	assert "validate 1" in listing
+	assert "validate 0" not in listing

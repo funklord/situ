@@ -297,7 +297,11 @@ def test_a_dissector_shows_the_fields_a_real_packet_holds(tmp_path: Path) -> Non
 		("udp_header.source_port",      0, 2, "1234"),
 		("udp_header.destination_port", 2, 2, "80"),
 		("udp_header.length",           4, 2, "24"),
-		("udp_header.checksum",         6, 2, "0"),
+		# Two bytes rather than the number `0`: the field is a `checksum`
+		# now and not a plain `u16` (14.2a), and a checksum carries a length
+		# by construction -- situ says which bytes it covers and never what
+		# they mean as an integer, so the dissector shows the bytes.
+		("udp_header.checksum",         6, 2, "0000"),
 	]
 
 

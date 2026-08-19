@@ -2851,42 +2851,41 @@ It is wire-visible, so it appears in the signature as
 prefix disagrees about the value while every member, offset and size is
 identical -- exactly the class of change that signature exists to catch.
 
-**Neither asker adopts it yet, for two different reasons, and both are worth
-knowing.**
+**`examples/udp` uses it and is fully described; `examples/tcp` cannot, and
+that is a different gap.**
 
-`examples/tcp` cannot, and that is a language gap. TCP's checksum also covers
-the segment payload, whose length lives in the IP layer -- so `tcp_header` does
-not know where its coverage *ends*. Naming a prefix would get the start right
-and leave the end wrong, which is worse than describing neither. The shape left
-over, for whoever designs it: **coverage running to an extent a different layer
-knows.** That is not this problem in another hat -- a prefix is bytes a caller
-hands over whole, and that is a length a caller would have to be asked for.
+UDP has a `length` field, so its payload is its own and the coverage closes:
+the pseudo-header is a struct beside the header, the checksum covers the whole
+datagram, and `require in_place(udp_header.checksum)` became
+`require immutable(...)` -- the field used to be freely mutable precisely
+because situ knew nothing about it.
 
-`examples/udp` *can* be described in full -- it has a `length` field, so its
-payload is its own -- and the change was written and then reverted, because it
-uncovers a walker defect that has nothing to do with coverage. Putting the
-payload inside the `authenticated` region the checksum covers makes the walker
-report a malformed message as valid:
+TCP's checksum also covers the segment payload, whose length lives in the IP
+layer, so `tcp_header` does not know where its coverage *ends*. Naming a prefix
+would get the start right and leave the end wrong, which is worse than
+describing neither, so TCP still declares a plain `u16` and says why. The shape
+left over, for whoever designs it: **coverage running to an extent a different
+layer knows.** That is not this problem in another hat -- a prefix is bytes a
+caller hands over whole, and that is a length a caller would have to be asked
+for.
 
-```
-authenticated s {
-	u16 port;  u16 length [min = 8];
-	checksum u8 sum[2] covers(s) [self_as = 0];
-	u8 payload[length - 8];         // inside:  walker says validate 0
-}                                       // outside: walker says validate 1
-```
+**Describing UDP uncovered a walker defect, and it was the walker's worst
+shape: `validate` answering OK for a message every backend refuses.**
 
-C answers `1` both ways, correctly: a `length` of 0x2F20 in a ten-byte frame
-puts the payload past the end. The walker's `_validate` breaks out of its walk
-on `Unplaceable` and returns OK, and something about a variable-extent member
-*inside* a region makes it unplaceable there and placeable one line further
-down. **`examples/icmp` has the same shape and has always had it** -- its
-`type` and `code` sit in an `authenticated` region and appear in no walker
-listing -- so this is not new and not `prefix`'s. It has been invisible because
-no covered region held a member whose bounds C would reject.
+`layout.place_authenticated` does not extend the path -- a region's members sit
+at the offsets they would have had without it and keep the enclosing struct's
+namespace, which is why 5.3 addresses `Packet.hdr.seq`. `pack._ast_members`
+*did* extend it, recording `u.s.payload` for a placement whose path is
+`u.payload`. The lookup missed, the member got no size program, and a counted
+run with no program measures zero -- so `u8 payload[length - 8]` inside a
+covered region read as empty and fitted any frame.
 
-So the feature is built and tested and no example uses it, which is the
-uncomfortable half of the report and the true one.
+It had nothing to do with coverage and everything to do with which construct
+opens a namespace. `examples/icmp` has the same shape and its `type` and `code`
+never had a size program either; the defect stayed invisible because no covered
+region had yet held a member whose bounds C would reject. That is the walker's
+value and its hazard in one: a second implementation catches what one cannot,
+and only where something makes the two disagree.
 
 ### 14.3 The doom principle as a stage gate
 
@@ -7477,12 +7476,12 @@ only when the field became covered and grew a second method after its property.
 Decision 0025 makes the same move in C++ for the same reason: rename the
 reference, not the name the schema chose.
 
-**What was open here is `prefix(...)`, and it is built** (14.2a): a checksum
-may cover a struct the message does not contain, and the generated header says
-how many bytes the caller supplies. Neither asker adopts it yet. `examples/tcp`
-cannot -- its coverage also *ends* somewhere the header cannot name -- and
-`examples/udp` can but uncovers a walker defect in doing so, which 14.2a
-records with its repro.
+**What was open here is `prefix(...)`, and it is built** (14.2a). `examples/udp`
+declares RFC 768's pseudo-header as a struct of its own and covers it, so its
+checksum is described where it used to be a plain `u16`. `examples/tcp` takes
+neither half: its coverage also *ends* somewhere the header cannot name, since
+the segment length is the IP layer's. Describing UDP uncovered a packer defect
+that made the walker call a malformed message valid, recorded in 14.2a.
 
 **And the frontier, re-derived rather than trusted.** Section 0 asks a reader
 to rebuild 26.31's list from the generated output instead of believing it, and
