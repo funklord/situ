@@ -3488,36 +3488,44 @@ editors, and CI can consume them without parsing prose.
 
 ---
 
-### 17.0a A name that should have come from an import
+### 17.0a `import`, and what it brings
 
-`import "other.situ";` parses, and resolution is not built. Two halves of an
-honest answer were already in place for *types*: `check_types_resolve` steps
-aside entirely when a schema imports, because the missing name may legitimately
-live in the imported file, and the solver names the gap when it later cannot
-lay the type out -- "import resolution is not implemented", rather than telling
-the author their type does not exist.
+`import "other.situ";` splices the named file's declarations into the
+importing one, before any whole-schema check runs. Four decisions, each taken
+because the alternative is an ambiguity rather than because it is tidier:
 
-A **codec** had neither half. `import "std/codecs.situ";` followed by a region
-naming a codec from it was told the codec was undeclared, at the line that used
-it, and advised to write `codec aes_gcm_128 { ... }` by hand: the import doing
-nothing, reported as the author's mistake, with a remedy that deletes the
-correct line and hand-copies a declaration.
+- **Relative to the importing file**, the way `#include "..."` is. There is no
+  search path, so which file an import names does not depend on how situc was
+  invoked -- a search path makes that a property of the invocation, which is
+  exactly what 17.0 refuses to leave open.
+- **Flat.** Nothing is renamed and nothing is qualified: an imported
+  `codec aes_gcm_128` is `aes_gcm_128` here. Two declarations reaching one
+  name are refused by `check_unique_declarations`, which has caught that since
+  it was written and needed nothing new to catch it across files.
+- **Transitive**, because a file's imports are expanded before its
+  declarations are handed back. A consumer cannot be asked to know what its
+  dependency needs, which is what makes a library of contracts usable at all.
+- **Once per compilation**, keyed on the resolved absolute path. A diamond --
+  two imports that both import a third -- contributes the third once. Without
+  that, a flat namespace would make every diamond a redefinition.
 
-Stepping aside is not available for a codec. Its properties are what the
-lattice reads, so a region whose codec is unknown cannot be placed at all and
-there is nothing to defer to. The note is the honest half, and it goes first,
-ahead of the workaround: a reader has to be able to tell "not built yet" from
-"you wrote it wrong". The `impl` lookup carries it too.
+A cycle stops rather than recursing: the second visit contributes nothing,
+which is the same mechanism the diamond uses and needs no separate rule.
 
-**Refusing `import` outright was the wrong instinct, and was written and
-reverted.** The reasoning was `UNIMPLEMENTED_ATTRS`': a schema that states what
-the build does not honour is worse than one that states nothing. It is wrong
-here because the directive is *not* inert -- three places read it, and what
-they do with it is step aside so that a name they cannot resolve is not called
-a typo. Refusing would have deleted that behaviour and failed the two tests
-that document it. The lesson is 26.60's, met from the other side: **a construct
-can look unread because the reading is a step somebody else's code declines to
-take.**
+A schema parsed from a *string* has no directory to resolve against, and says
+so rather than falling back to the working directory. That is why `parse` is
+split: `parse_decls` reads declarations, `imports.expand` splices, and
+`Parser.finish` runs the checks over the whole thing. Checking a file whose
+imported types have not arrived would refuse names that are about to exist.
+
+**Three workarounds went with it**, and they were the honest half of not
+having this. `check_types_resolve` stepped aside entirely when a schema
+imported, because a missing name might legitimately live in the imported file;
+the solver carried a note saying import resolution was not implemented; and
+the codec lookup carried the same note, added only days before. All three were
+dead the moment `expand` ran before the checks -- there is no `ImportDirective`
+left in the schema by then -- and dead code that claims to handle a case is
+worse than none.
 
 ## 18. The advisor
 
@@ -4298,6 +4306,9 @@ situ/
     __main__.py               so `python3 -m situc` works
     lexer.py
     parser.py
+    imports.py                `import` resolution: relative to the importing
+                              file, flat namespace, transitive, and once per
+                              compilation whatever the path taken to it
     ast.py
     unparse.py                an expression back to schema source, for the
                               places a fact has to survive as text: a `while`

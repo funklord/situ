@@ -188,29 +188,13 @@ def test_enum_used_as_a_field_type_resolves() -> None:
 	assert len(schema.structs()) == 1
 
 
-def test_type_resolution_is_skipped_when_a_file_imports() -> None:
-	"""The missing name may legitimately live in the imported file, and import
-	resolution does not exist yet."""
-	schema = parse_text('import "other.situ"; struct S { Elsewhere x; }')
-	assert len(schema.structs()) == 1
-
-
-def test_a_type_from_an_import_says_why_it_cannot_be_found() -> None:
-	"""Stepping aside above is only half an answer.
-
-	The solver has to have a layout, so it raises `unknown type` a moment
-	later -- and told the author their type does not exist, which is not what
-	went wrong: the type may be perfectly good and the resolution that would
-	find it is not built. The note is the difference between a diagnostic
-	that sends someone looking for a typo and one that names the gap.
-	"""
-	with pytest.raises(SituError) as caught:
-		solve(parse_text('target buffer;\nendian big;\n'
-		                 'import "other.situ"; struct s { elsewhere x; }'))
-
-	rendered = caught.value.diagnostic.render()
-	assert "unknown type `elsewhere`" in rendered
-	assert "import resolution is not implemented" in rendered
+def test_an_unknown_type_is_refused_even_where_a_file_imports() -> None:
+	"""Type resolution used to step aside entirely when a schema imported,
+	because the name might live in the imported file. Imports resolve now
+	(17.0a), so every name a schema can see is present by the time this runs
+	and an unknown one is a typo again."""
+	assert "unknown type `Elsewhere`" in rendered(
+		BUFFER + "struct S { Elsewhere x; }\n")
 
 
 def test_an_unknown_type_without_an_import_does_not_blame_one() -> None:
@@ -637,37 +621,17 @@ def test_volatile_on_a_member_is_refused() -> None:
 	assert "`register` body" in text
 
 
-# -- a codec that should have come from an import ---------------------------
-#
-# `check_types_resolve` steps aside when a schema imports, and the solver
-# names the gap when it cannot lay the type out. A codec had neither half.
-
-CODEC_USE = (BUFFER + "struct b {\n\tcoded body(aes_gcm_128) { u8 x; }\n}\n")
+# -- imports resolve (17.0a) -----------------------------------------------
 
 
-def test_an_unknown_codec_names_the_import_gap() -> None:
-	"""Before this, the author was told the codec was undeclared and advised
-	to write it out by hand: the import doing nothing, reported as their
-	mistake."""
-	text = rendered('import "std/codecs.situ";\n' + CODEC_USE)
-	assert "import resolution is not implemented" in text
-	# The gap first, the workaround second -- a reader has to be able to tell
-	# "not built yet" from "you wrote it wrong".
-	assert text.index("import resolution") < text.index("declare it with")
-
-
-def test_an_unknown_codec_without_an_import_says_nothing_about_imports() -> None:
-	"""The control. A schema with no import has an ordinary typo, and a note
-	about unimplemented resolution would send the reader somewhere useless."""
-	text = rendered(CODEC_USE)
+def test_an_unknown_codec_says_nothing_about_imports() -> None:
+	"""The note that named the import gap is gone with the gap: a codec that
+	is not declared is not declared, and an imported file's codecs are here
+	by the time this check runs."""
+	text = rendered(BUFFER + "struct b {\n\tcoded body(aes_gcm_128)"
+	                " { u8 x; }\n}\n")
 	assert "import resolution" not in text
 	assert "declare it with" in text
-
-
-def test_an_impl_naming_an_imported_codec_says_the_same() -> None:
-	text = rendered('import "std/codecs.situ";\n' + BUFFER
-	                + 'impl aes_gcm_128 extern "x";\nstruct b { u16 v; }\n')
-	assert "import resolution is not implemented" in text
 
 
 # The third batch, and the last that had rules to find. Sweeping all twenty

@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from situc import ast
-from situc.diagnostics import SituError
-from situc.parser import parse_text
+from situc.diagnostics import Source, SituError
+from situc.parser import parse_decls, parse_text
 
 
 def only_struct(source: str) -> ast.StructDecl:
@@ -56,7 +56,11 @@ def test_bit_order_directive(source: str, order: ast.BitOrder) -> None:
 
 
 def test_import_directive() -> None:
-	decl = parse_text('import "std/codecs.situ";').decls[0]
+	"""The directive parses. `parse_decls` rather than `parse_text`, because
+	`parse` expands imports now (17.0a) and a schema parsed from a string has
+	no directory to resolve one against -- which is a refusal of its own,
+	tested in `test_wellformed`."""
+	decl = parse_decls(Source("s.situ", 'import "std/codecs.situ";')).decls[0]
 	assert isinstance(decl, ast.ImportDirective)
 	assert decl.path == "std/codecs.situ"
 

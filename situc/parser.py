@@ -261,6 +261,16 @@ class Parser:
 					ast.ImplDecl(span, name, ast.ImplKind.EXTERN, None))
 				self._pending_extern = None
 
+		return schema
+
+	def finish(self, schema: ast.Schema) -> ast.Schema:
+		"""The passes that need a *whole* schema.
+
+		Separated from reading declarations so that `import` can splice in
+		another file's before any of them run: `wellformed.check` over a file
+		whose imported types have not arrived yet would refuse names that are
+		about to exist, and `namespaces.flatten` would flatten half a schema.
+		"""
 		namespaces.flatten(schema)
 		kernels.resolve_signatures(schema)
 		wellformed.check(schema)
@@ -2216,8 +2226,22 @@ class Parser:
 		                name.text, tuple(args))
 
 
-def parse(source: Source) -> ast.Schema:
+def parse_decls(source: Source) -> ast.Schema:
+	"""Declarations only: no whole-schema checks, and no imports expanded.
+
+	What `imports.expand` reads an imported file with, and what `parse` runs
+	before it finishes.
+	"""
 	return Parser(source).parse()
+
+
+def parse(source: Source) -> ast.Schema:
+	from situc import imports
+
+	parser = Parser(source)
+	schema = parser.parse()
+	imports.expand(schema, source)
+	return parser.finish(schema)
 
 
 def parse_text(text: str, path: str = "<input>") -> ast.Schema:

@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from situc.diagnostics import Source
 from situc.dump import dump
-from situc.parser import parse_text
+from situc.parser import parse_decls, parse_text
 from situc.unparse import unparse
 
 SCHEMAS = Path(__file__).resolve().parents[1] / "schemas"
@@ -56,6 +57,19 @@ def roundtrip(source: str) -> None:
 	assert dump(again) == dump(first)
 
 
+def roundtrip_decls(source: str) -> None:
+	"""Round-trip without expanding imports (17.0a).
+
+	`parse` resolves an `import` now, and a schema parsed from a string has
+	no directory to resolve one against. What these cases test is that the
+	*directive* survives being printed and read back, which is a question
+	about the parser and `unparse` rather than about the file system.
+	"""
+	first = parse_decls(Source("s.situ", source))
+	again = parse_decls(Source("s.situ", unparse(first)))
+	assert dump(again) == dump(first)
+
+
 def test_example_5_1_dump_is_exact() -> None:
 	assert dump(parse_text(EXAMPLE_5_1)) == EXPECTED_DUMP
 
@@ -83,7 +97,6 @@ def test_integer_bases_survive_a_round_trip() -> None:
 	"target buffer;",
 	"endian little;",
 	"bit_order lsb_first;",
-	'import "std/codecs.situ";',
 	"const N = 1 + 2 * 3;",
 	"const N = (1 + 2) * 3;",
 	"const N = a - (b - c);",
@@ -114,6 +127,16 @@ def test_constructs_round_trip(source: str) -> None:
 	roundtrip(source)
 
 
+@pytest.mark.parametrize("source", [
+	'import "std/codecs.situ";',
+	r'import "a\tb\\c";',
+])
+def test_an_import_directive_round_trips(source: str) -> None:
+	"""Including its escapes: a path is a string literal, and the printer has
+	to give back the bytes the lexer read."""
+	roundtrip_decls(source)
+
+
 def test_precedence_survives_a_round_trip() -> None:
 	"""Parenthesisation must be regenerated where it changes meaning."""
 	source = unparse(parse_text("const N = (1 + 2) * 3;"))
@@ -128,7 +151,3 @@ def test_redundant_parentheses_are_dropped() -> None:
 def test_left_associativity_survives_a_round_trip() -> None:
 	source = unparse(parse_text("const N = a - (b - c);"))
 	assert "a - (b - c)" in source
-
-
-def test_string_escapes_survive_a_round_trip() -> None:
-	roundtrip(r'import "a\tb\\c";')
