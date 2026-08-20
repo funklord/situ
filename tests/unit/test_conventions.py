@@ -3,9 +3,11 @@ suite, not only by `make lint`, so a violation fails CI wherever it enters."""
 
 from __future__ import annotations
 
+import io
 import re
 import shutil
 import subprocess
+import tokenize
 import sys
 from pathlib import Path
 
@@ -294,6 +296,135 @@ def test_section_22_and_pyproject_agree_on_the_floor() -> None:
 	spec = (ROOT / "project.md").read_text(encoding="utf-8")
 
 	assert f"Python {declared_floor()}+" in spec
+
+
+#: The f-string token types 3.12 introduced, resolved by name because 3.11
+#: does not have them -- and mypy runs at the declared floor, so naming them
+#: directly is an error there. That is this section's own subject arriving in
+#: its own code: the floor rule caught the check written to enforce the floor.
+#:
+#: `None` means the interpreter running the tests is 3.11 itself, where the
+#: tokenizer cannot produce a PEP 701 construct and the real-interpreter test
+#: below is the check. Exactly one of the two runs, by construction.
+_FSTRING_START  = getattr(tokenize, "FSTRING_START", None)
+_FSTRING_MIDDLE = getattr(tokenize, "FSTRING_MIDDLE", None)
+_FSTRING_END    = getattr(tokenize, "FSTRING_END", None)
+
+
+#: The three things PEP 701 legalised in 3.12. Every one is a *tokenizer*
+#: change, which is why `ast.parse(feature_version=(3, 11))` cannot see them --
+#: confirmed rather than taken on trust: it accepts a same-quote nesting and a
+#: split expression without complaint.
+def _pep_701(source: str) -> list[tuple[int, str]]:
+	"""Every f-string in `source` that only 3.12 and later can parse."""
+	found: list[tuple[int, str]] = []
+	stack: list[tuple[str, int, bool]] = []
+
+	for token in tokenize.generate_tokens(io.StringIO(source).readline):
+		if token.type == _FSTRING_START:
+			triple = token.string.endswith(("'''", '"""'))
+			quote  = token.string[-3:] if triple else token.string[-1]
+			stack.append((quote, token.start[0], triple))
+			continue
+
+		if token.type == _FSTRING_END:
+			quote, line, triple = stack.pop()
+			# A triple-quoted f-string spans lines in 3.11 too, so only a
+			# single-quoted one ending on another line says the *expression*
+			# was broken across them.
+			if not triple and token.end[0] != line:
+				found.append((line, "an f-string expression split across lines"))
+			continue
+
+		if not stack:
+			continue
+
+		if token.type == tokenize.STRING and any(
+				quote[0] in token.string for quote, _, _ in stack):
+			found.append((token.start[0],
+			              "a string reusing its f-string's quote character"))
+
+		# The *literal* part of an f-string may carry a backslash in 3.11 and
+		# the expression part may not. `FSTRING_MIDDLE` is the literal part, so
+		# excluding it is what keeps a backslash escape in ordinary text from
+		# being reported.
+		if token.type != _FSTRING_MIDDLE and "\\" in token.string:
+			found.append((token.start[0],
+			              "a backslash inside an f-string expression"))
+
+	return found
+
+
+def test_no_module_uses_an_f_string_the_floor_cannot_parse() -> None:
+	"""The floor check that runs on the machine the code is written on.
+
+	`test_every_module_parses_at_the_declared_floor` below is stronger and
+	runs a real interpreter -- where one is installed. It was not installed
+	here, and that is the exact condition its own docstring records as having
+	cost six phases: a PEP 701 f-string reached the C++ backend and nothing
+	noticed, "because the machine this was written on runs 3.13 and every test
+	passed there". A guard that only fires somewhere else did not fire.
+
+	So this one never skips. It cannot replace running 3.11 -- it knows three
+	constructs rather than the whole language -- but it closes the gap that
+	actually opened, and closes it where the code is authored.
+
+	The detector has a control beside it, because a scan reporting nothing
+	looks the same whether the tree is clean or the scan is broken.
+	"""
+	floor = declared_floor()
+	if tuple(int(part) for part in floor.split(".")) >= (3, 12):
+		pytest.skip(f"the floor is {floor}, where PEP 701 is available")
+	if _FSTRING_START is None:
+		pytest.skip("running on 3.11, where the interpreter is the check")
+
+	modules = [ROOT / "bin" / "situc",
+	           *sorted(ROOT.glob("situc/**/*.py")),
+	           *sorted(ROOT.glob("tools/*.py"))]
+
+	failed = []
+	for path in modules:
+		for line, why in _pep_701(path.read_text(encoding="utf-8")):
+			failed.append(f"{path.relative_to(ROOT)}:{line}: {why}")
+
+	assert failed == [], (
+		f"Python {floor} is the declared floor and cannot parse these:\n  "
+		+ "\n  ".join(failed))
+
+
+def test_the_f_string_detector_finds_what_it_claims_to() -> None:
+	"""The control, and the reason to trust the check's silence.
+
+	Every module in this tree is clean, so the check passes -- and would pass
+	just as loudly if the detector were broken. These samples separate the
+	two, and the legal half is the half that matters: a detector that refuses
+	valid code is worse than the silence it replaces. Three of the four legal
+	samples are shapes a naive version gets wrong -- a different quote inside
+	the expression, a backslash in the literal part, and triple quotes, which
+	may span lines in every version.
+	"""
+	bad = [
+		('x = f"{d["key"]}"\n',        "a string reusing"),
+		('x = f"{a +\n     b}"\n',     "split across lines"),
+		("x = f\"{'\\n'.join(y)}\"\n", "a backslash inside"),
+	]
+	good = [
+		"x = f\"{d['key']}\"\n",
+		'x = f"a\\nb {v}"\n',
+		'x = f"""\n{v}\n"""\n',
+		'x = f"{a}" f"{b}"\n',
+	]
+
+	if _FSTRING_START is None:
+		pytest.skip("running on 3.11, where the interpreter is the check")
+
+	for source, expected in bad:
+		found = _pep_701(source)
+		assert any(expected in why for _, why in found), \
+			f"missed {expected!r} in {source!r}"
+
+	for source in good:
+		assert _pep_701(source) == [], f"false positive on {source!r}"
 
 
 def test_every_module_parses_at_the_declared_floor() -> None:

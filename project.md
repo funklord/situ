@@ -13210,6 +13210,17 @@ the difference is a wrong answer nobody sees.**
    "move it three lines". Before writing the first, check that the feature
    is absent rather than the placement wrong.
 
+149. **A guard that skips where the fault is produced has not run.** The
+   Python floor check runs a real 3.11 and skips where none is installed --
+   and a machine with no 3.11 is a machine running something newer, which is
+   exactly what lets 3.12-only syntax be written in the first place. The
+   skip condition and the fault condition are the same condition, so the
+   guard is absent precisely where it is needed and present only where the
+   mistake cannot be made. Worse than a check that sometimes skips: one
+   whose skips are correlated with the thing it catches. Ask what the
+   environment that skips a check has in common with the environment that
+   breaks it.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -13465,6 +13476,66 @@ the input.
 `dissector.py`, failing three dissectors while `luac` passed all thirty-three;
 the `no_rmw` finding mutation-tested by removing `no_rmw;` from the register
 fixture, failing four tests.
+
+### 26.119 The floor check that skipped where the floor is broken
+
+`situc` declares Python 3.11, and `test_every_module_parses_at_the_declared
+_floor` runs a real 3.11 over every module to prove it. That test exists
+because the claim was false for six phases: one f-string in the C++ backend
+split an expression across lines, which is PEP 701 and therefore 3.12, and
+its own docstring names the reason nobody noticed -- "the machine this was
+written on runs 3.13 and every test passed there".
+
+**The same sentence describes this machine, so the guard was skipping.** It
+is honest about it and says so in the skip reason, which is how it was found
+at all rather than by another six phases. But being honest about a gap does
+not close it, and the shape here is worse than an ordinary conditional skip:
+the interpreter that makes the check skip is the interpreter that permits the
+syntax. A 3.13 machine cannot run the guard and can write the fault. That is
+invariant 149.
+
+**The cheap fix does not work, and this was confirmed rather than assumed.**
+`ast.parse(source, feature_version=(3, 11))` looks like the answer and
+accepts both a same-quote nesting and a split expression without complaint --
+PEP 701 is a tokenizer change and the flag does not reach the tokenizer. The
+existing test says so in a comment; checking it was a two-line script, and it
+is the sort of claim that decides whether the next hundred lines are needed.
+
+So the new check is a static scan on whatever interpreter is present, reading
+the 3.12 tokenizer's own `FSTRING_START`, `FSTRING_MIDDLE` and `FSTRING_END`
+to find the three constructs PEP 701 added: an expression split across lines,
+a string reusing its f-string's quote, and a backslash inside an expression.
+It never skips below a 3.12 floor, and skips with a reason above one, so it
+retires itself when the floor moves rather than becoming a rule nobody
+remembers the reason for.
+
+**And the floor caught the check written to enforce the floor.** The scan
+reads `FSTRING_START`, `FSTRING_MIDDLE` and `FSTRING_END`, which 3.12 added --
+so naming them directly is an `attr-defined` error under mypy, which runs at
+`python_version = "3.11"`. Three errors, in the file whose subject is that
+exact mistake. They are resolved by name now, and `None` means the tests are
+running on 3.11 itself, where the tokenizer cannot produce a PEP 701
+construct and the interpreter *is* the check. Exactly one of the two runs, by
+construction, which is better than the arrangement that prompted this: one
+that ran on neither.
+
+**It cannot replace running 3.11** -- it knows three constructs where the
+interpreter knows the language -- and it does not try to. The real-interpreter
+test stays and is still the stronger of the two wherever a 3.11 exists. What
+the static one adds is that the gap which actually opened is now closed on the
+machine where the code is written.
+
+**The tree is clean: zero of the three across all 80 modules.** Which is
+exactly the result a broken detector gives, so the control is the other half
+of the work. Three known-bad samples must be found and four known-good ones
+must not, and the good half is the half that matters: a detector that refuses
+valid code is worse than the silence it replaces. Three of the four are
+shapes a naive version gets wrong -- a *different* quote inside the
+expression, a backslash in the *literal* part rather than the expression, and
+triple quotes, which may span lines in every version. The check was then
+mutation-tested against a real module: `f"{d["k"]}"` in `situc/dump.py` fails
+it, naming the file, the line and the construct.
+
 
 ---
 
