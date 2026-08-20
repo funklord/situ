@@ -3538,3 +3538,41 @@ def test_the_offset_comes_first_in_the_text() -> None:
 	header, _ = emit(REMAINING_COVER)
 	assert header.index("situ_r_rest_offset(situ_view_t") < header.index(
 		"situ_r_sum_covered(situ_view_t")
+
+
+# -- a field that both drives a length and is covered by a tag --------------
+
+COVERED_DRIVER = """struct r {
+	authenticated s {
+		u16 count;
+		checksum u8 sum[2] covers(s) [self_as = 0];
+		u8  opts[count];
+	}
+}
+"""
+
+
+def test_a_covered_driver_gets_one_setter(tmp_path: Path) -> None:
+	"""Two emitters each owned a setter for this field and neither knew
+	about the other: `_shifting_setters` because it drives a length, and
+	`_covered_setters` because a tag covers it. Both emitted
+	`situ_r_count_set(situ_msg_t *, situ_view_t, uint16_t)` and the header
+	did not compile.
+
+	Neither is wrong on its own. A write that both moves later members and
+	leaves a tag stale needs one setter doing both, not two doing half each
+	-- invariant 34's shape, two places computing one thing.
+	"""
+	compile_generated(tmp_path, COVERED_DRIVER)
+
+
+def test_that_setter_does_both_jobs() -> None:
+	"""The half that a de-duplication could silently drop. Keeping either
+	setter alone compiles and loses an effect: without the touch a stale
+	view survives a write that changed a length, and without the mark the
+	tag is never reported stale."""
+	header, _ = emit(COVERED_DRIVER)
+	body = header[header.index("situ_r_count_set(situ_msg_t"):]
+	body = body[:body.index("\n}")]
+	assert "situ_msg_touch(msg);" in body
+	assert "situ_msg_mark_dirty(msg, SITU_R_SUM_DIRTY);" in body

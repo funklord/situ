@@ -2954,6 +2954,47 @@ region had yet held a member whose bounds C would reject. That is the walker's
 value and its hazard in one: a second implementation catches what one cannot,
 and only where something makes the two disagree.
 
+### 14.2c A field that drives a length and is covered
+
+Two emitters each owned a setter for such a field and neither knew about the
+other. `_shifting_setters` claims it because writing it moves later members,
+so the message's generation has to be bumped; `_covered_setters` claims it
+because a tag covers it, so the dirty bit has to be marked. Both emitted
+`situ_r_count_set(situ_msg_t *, situ_view_t, uint16_t)`, and the header did
+not compile:
+
+```
+struct r {
+	authenticated s {
+		u16 count;
+		checksum u8 sum[2] covers(s) [self_as = 0];
+		u8  opts[count];
+	}
+}
+```
+
+**Neither emitter is wrong.** A write that both moves later members and leaves
+a tag stale needs one setter doing both, not two doing half each -- invariant
+34's shape, two places computing one thing. The covered path yields to the
+shifting one, which marks the bit itself where the field is covered.
+
+The half a de-duplication could silently drop is worth naming, because keeping
+either setter alone compiles: without the touch a stale view survives a write
+that changed a length, and without the mark the tag is never reported stale.
+A test asserts both statements are in the surviving body.
+
+**Only C was affected**, checked rather than assumed. C++ takes no owner for a
+driver's setter, Rust relies on `&mut self`, and Python emits none at all, so
+none of them had a second setter to collide with. That the three invalidate a
+driver's write differently from C is a real difference and a separate
+question; it is not this defect.
+
+It reached no example because none combines the two: a covered field that also
+sizes an array. It was found while building a fixture for something else, and
+worked around at the time rather than reported -- which is the wrong instinct,
+since a schema that generates a header no compiler accepts is the failure this
+repository rates worst.
+
 ### 14.3 The doom principle as a stage gate
 
 A sealed region's interior schema is `stage = VerifyGated`. The generated API

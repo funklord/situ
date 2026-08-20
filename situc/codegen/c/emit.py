@@ -725,10 +725,19 @@ class Emitter:
 		# Scalars only. An array's bytes are reached through its pointer
 		# accessor, and a setter that wrote one element of it would be a worse
 		# API than the pointer plus an explicit mark.
+		# A field that drives a length is emitted by `_shifting_setters`,
+		# which marks the dirty bit itself where the field is also covered.
+		# Both used to claim it: `u16 count` covered by a tag and sizing
+		# `u8 opts[count]` got two `_set` definitions with one signature, and
+		# the header did not compile. Neither emitter is wrong on its own --
+		# a write that both moves later members and stales a tag needs one
+		# setter doing both, not two doing half each (invariant 34).
+		drives = set(self._drivers(struct))
 		covered = [entry for entry in struct.entries
 		           if entry.placement.covered_by
 		           and entry.placement.scalar is not None
 		           and entry.placement.kind == "field"
+		           and local_name(struct, entry.placement) not in drives
 		           # Not a field of an *element* of a run: it belongs to the
 		           # element type, and a setter here would write element zero
 		           # under the run's name. The getter beside it was removed
@@ -1053,6 +1062,14 @@ class Emitter:
 				self._value_base(struct, target.placement), "value",
 				offset=self._value_offset(target.placement))
 
+			# Both effects where the field is covered as well: the write
+			# moves what follows *and* leaves a tag stale, and a caller
+			# needs the message to say either.
+			stale = [f"\tsitu_msg_mark_dirty(msg, {bits});"] if (
+				bits := " | ".join(self._tag_bit(struct, tag)
+				                   for tag in target.placement.covered_by)
+			) else []
+
 			lines.extend([
 				f"static inline void "
 				f"{ident(self.prefix, struct.name, local, 'set')}"
@@ -1060,6 +1077,7 @@ class Emitter:
 				"{",
 				f"\t{store}",
 				"\tsitu_msg_touch(msg);",
+				*stale,
 				"}",
 			])
 
