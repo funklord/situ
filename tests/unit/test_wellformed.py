@@ -668,3 +668,47 @@ def test_an_impl_naming_an_imported_codec_says_the_same() -> None:
 	text = rendered('import "std/codecs.situ";\n' + BUFFER
 	                + 'impl aes_gcm_128 extern "x";\nstruct b { u16 v; }\n')
 	assert "import resolution is not implemented" in text
+
+
+# The third batch, and the last that had rules to find. Sweeping all twenty
+# remaining names through the two-artifact test settled most of them without a
+# rule: nine are read on a plain scalar, `bits` and `since` refuse for
+# themselves, `covers` is a clause rather than an attribute, and
+# `must_be_zero` and `require_aligned` are satisfied-by-default rather than
+# unread -- a check that passes looks exactly like one nothing runs.
+
+
+def test_bit_order_on_a_whole_byte_scalar_is_refused() -> None:
+	"""It decides how a *packed* field's bits sit in its byte. A whole-byte
+	scalar has `endian` for the question it does have."""
+	text = rendered(BUFFER + "struct b { u16 x [bit_order = lsb_first]; }\n")
+	assert "bit-packed field" in text
+	assert "`endian`" in text
+
+
+def test_bit_order_on_a_packed_field_is_accepted() -> None:
+	parse_text(BUFFER + "struct b { bit a [bit_order = lsb_first]; bit c;"
+	           " reserved u6; }\n", path="s.situ")
+
+
+def test_a_side_effect_outside_a_register_is_refused() -> None:
+	"""`on_read` and `on_write` are SystemRDL side effects, and a bus is what
+	makes a read an event at all."""
+	for name, value in (("on_read", "clear"), ("on_write", "trigger")):
+		text = rendered(BUFFER + "struct b { u16 x [%s = %s]; }\n"
+		                % (name, value))
+		assert "`register` struct" in text
+
+
+def test_a_side_effect_on_a_register_field_is_accepted() -> None:
+	parse_text("target mmio;\nendian big;\nbit_order msb_first;\n\n"
+	           "register r @ 0x00 {\n\twidth = 32;\n\taccess_width = 32;\n"
+	           "\tu8 f [ro, on_read = clear];\n\tu8 g;\n\tu16 h;\n}\n",
+	           path="s.situ")
+
+
+def test_version_on_a_member_is_refused() -> None:
+	"""`version` names the field a struct's `[since]` members are counted
+	against, and it is written on the struct: `struct s [version = v]`."""
+	text = rendered(BUFFER + "struct b { u16 x [version]; }\n")
+	assert "a struct, naming the field" in text

@@ -8866,6 +8866,41 @@ already meant -- so it stays out of the table. **Inert-by-default is not the
 same as unread**, and no measurement of output can tell them apart; only
 reading the code that consumes it can.
 
+**The third batch swept the remaining twenty at once, and most of them needed
+no rule.** Nine are read on a plain scalar and are correctly unrestricted:
+`min`, `max`, `must_eq`, `endian` and `secret` change the generated code, and
+`case_insensitive`, `non_canonical`, `nul_terminated` and `trim` change the
+capability map. `bits` and `since` refuse for themselves with their own
+diagnostics. `covers` is a clause rather than a member attribute. And
+`require_aligned` joins `must_be_zero` in the satisfied-by-default class: it
+raises on a bit-packed field or a dynamic offset and passes silently when the
+alignment holds, so a measurement of output cannot tell it from unread.
+
+Four had real rules and now carry them: `on_read` and `on_write` are SystemRDL
+side effects and need the bus that makes a read an event; `bit_order` decides
+how a *packed* field's bits sit in its byte, where a whole-byte scalar has
+`endian` for the question it does have; and `version` names the field a
+struct's `[since]` members count against, which is written on the struct.
+
+Twenty-six of forty-eight are placed now, four by rules that predate the
+table, two are unimplemented, and sixteen remain unplaced -- of which the
+sweep says most never will be, being genuinely read where they sit.
+
+**Two the sweep found unread, and they are a question rather than a row.**
+`[nonce]` is read by nothing: the only nonce anything consults is the sealed
+region's `nonce = ref` *argument*, and 14.1's table nevertheless lists a
+`nonce` attribute that "marks a field as a nonce for a codec". `[trusted]` is
+the same shape -- the only `trusted` in the compiler is a status string
+`capmap` prints for a tier-1 codec, not an attribute read from a schema.
+
+Both are in the parser's vocabulary for bracket disambiguation, which is not
+the same as either doing anything. `UNIMPLEMENTED_ATTRS` is the mechanism for
+exactly this and its rule is that accepting one silently is worse than
+refusing it. What stops that being a small change is that 14.1 *documents*
+`nonce` as meaningful, so refusing it is a change to the language's described
+surface rather than to an oversight -- and the document and the code
+disagreeing is the case that is raised rather than resolved.
+
 **It found a defect nobody was looking for.** `unparse` emitted no `until`
 clause at all and dropped the radix keyword, so
 

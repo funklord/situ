@@ -1245,6 +1245,8 @@ ACCESS_MODE_ATTRS = frozenset({
 STRUCT_ONLY_ATTRS = {
 	"allow_straddle":       "a struct, where a bit field may cross a byte",
 	"allow_host_dependent": "a struct, whose layout the host decides",
+	"version":              "a struct, naming the field its `[since]` members "
+	                        "are counted against",
 }
 
 
@@ -1262,6 +1264,26 @@ def _attribute_place(struct: ast.StructDecl,
 
 	if attr.name in STRUCT_ONLY_ATTRS:
 		return STRUCT_ONLY_ATTRS[attr.name]
+
+	# `[on_read = clear]` and `[on_write = trigger]` are SystemRDL side
+	# effects: `_read_effect` and `_side_effect` read them, and a bus is what
+	# makes a read or a write an event at all. Outside a register there is
+	# nothing to trigger.
+	if attr.name in ("on_read", "on_write"):
+		if struct.register is not None and isinstance(member, ast.Field):
+			return None
+		return ("a field of a `register` struct -- outside one a read is not "
+		        "an event that can have an effect")
+
+	# Bit order decides how a *packed* field's bits sit in its byte. A
+	# whole-byte scalar has `endian` for the question it does have, and
+	# nothing reads this on one.
+	if attr.name == "bit_order":
+		width = _declared_bits(member)
+		if width is None or width % 8:
+			return None
+		return ("a bit-packed field -- a whole-byte scalar's ordering is "
+		        "`endian`, not `bit_order`")
 
 	if attr.name == "equalize":
 		return None if isinstance(member, ast.Variant) else (
@@ -1310,6 +1332,7 @@ def _attribute_place(struct: ast.StructDecl,
 PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"equalize", "allow_unverified_read", "minimal",
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
+	"on_read", "on_write", "bit_order",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
@@ -1321,12 +1344,29 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 #: `quoted`, `escape`, `timeout_ms` and `retries` are absent because
 #: `check_delimiters` and `_check_exchange_policy` already place them.
 UNPLACED_ATTRS = frozenset({
-	"bit_order", "bits", "case_insensitive", "covers", "endian",
+	"bits", "case_insensitive", "covers", "endian",
 	"max", "min", "must_be_zero", "must_eq", "non_canonical",
-	"nonce", "nul_terminated", "on_read", "on_write",
+	"nonce", "nul_terminated",
 	"require_aligned", "secret", "since", "trim", "trusted",
-	"version",
 })
+
+
+def _declared_bits(member: ast.Member) -> int | None:
+	"""How many bits a member's declared type occupies, if it says.
+
+	Read from the spelling rather than from a placement, because this check
+	runs on the AST: `bit` is one, `u12` is twelve, and a name that is not a
+	width at all answers None. That is enough to tell a packed field from a
+	whole-byte one, which is all `bit_order` needs.
+	"""
+	ref = getattr(member, "type_ref", None)
+	name = getattr(ref, "name", None)
+	if name == "bit":
+		return 1
+	if isinstance(name, str) and len(name) > 1 and name[0] in "ui" \
+			and name[1:].isdigit():
+		return int(name[1:])
+	return None
 
 
 def check_attribute_places(schema: ast.Schema) -> None:
