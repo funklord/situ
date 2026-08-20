@@ -13182,6 +13182,17 @@ the difference is a wrong answer nobody sees.**
    comment is the only thing holding a rule, the next implementation will
    not read it.
 
+146. **A measurement in one position answers for that position only.**
+   26.60 settled `min`, `max`, `must_eq` and `endian` as "read on a plain
+   scalar, therefore correctly unrestricted". Both halves of that were
+   measured and the conclusion still did not follow: `[endian]` is inert on
+   a `u8`, which has no byte order, and inert on a struct-typed member,
+   which does not pass one inward; a bound is inert on an array, which has
+   no single value to bound. The generalisation from one position to every
+   position is the same error as generalising from one artifact to every
+   artifact, which the same section had already made and recorded. Sweep
+   the positions, not the names.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -13227,6 +13238,121 @@ What the incident argues is that the four-backend differential earns its cost
 -- the schema was valid, three backends were correct, and nothing but actually
 compiling the fourth would have said so. The test that holds it now is a
 compile rather than a string match, for the same reason.
+
+### 26.117 The attribute nobody declared, and the position nobody tried
+
+Two holes in the same wall, found by asking what the placement table does
+with a name it has never heard of. The answer was nothing:
+`_attribute_place` returns `None` for a name it has no row for, which is
+the identical answer it gives for a name that is correctly placed.
+
+**`[wibble = 16, pad_to = 4, utterly_made_up]` compiled.** All three on one
+plain field, and the emitted `a.h` and `a.c` were byte-identical to the
+schema with all three deleted -- measured rather than reasoned about,
+because "the generated code is byte-identical without it" is the exact
+criterion the placement diagnostic already quotes.
+
+**The other half of the language had it right all along.** An invented
+`require` predicate is refused -- "not a builtin", with the six builtins
+listed -- so a schema could not misspell a *predicate* and could misspell
+an *attribute* freely. The vocabulary to check against already existed as
+`parser.ATTRIBUTE_NAMES`, kept for bracket disambiguation and never
+consulted for validation, which is precisely why nothing was checking. The
+check now refuses an unknown name and suggests a near miss at one edit,
+reusing the `_nearest` helper the unknown-type diagnostic uses.
+
+**It found a defect in a worked example on its first run.** `examples/ble`
+carried `[default = pass]` on three fields. `default` is not an attribute
+at all -- it is a member of an *enum body*, `default = pass,` beside the
+enumerators -- so all three were dropped, and the three enums were
+`effective_default = error`. The schema's own comment says why that is
+wrong, cites `hci.h:743`, and states the intent exactly: the AD type
+registry has more entries than the example names, so an advertisement
+carrying an unnamed one must pass rather than be refused. The example did
+the opposite of what it documented, and had since it was written (26.36).
+Moving the three into the enum bodies is the whole fix.
+
+That is invariant 92 again -- ask which committed schema would fail if a
+construct broke -- with the twist that here no construct broke. A schema
+said something, nothing read it, and the prose next to it described the
+behaviour the author believed they had bought.
+
+**And the second hole was in the settled half of the table.** 26.60's third
+batch swept the remaining twenty by generating with and without each
+attribute *on a plain scalar*, and concluded that nine were "read on a
+plain scalar and correctly unrestricted". Sweeping five positions instead
+-- a `u8`, a `u16`, an array, a delimited run, a `reserved` member and a
+struct-typed member -- four of those nine turn out to have places after
+all:
+
+- **`[endian]`** is inert on a `u8`, which has no byte order to override;
+  on a delimited byte run; and on a `reserved u8`. The case worth a
+  diagnostic is the struct-typed member: `[endian = little]` on one looks
+  like it should reach the members inside and does not, because the inner
+  struct's scope was narrowed from its own declaration. 8.3 scopes endian
+  "per struct, and per field", and a struct-typed member is neither.
+- **`[min]`, `[max]` and `[must_eq]`** are inert on an array, which has no
+  single value for `validate` to compare, and on a delimited run, whose
+  size cap is the `max N` that follows `until` -- syntax rather than this
+  attribute.
+
+**The first version of that rule refused two committed schemas, and the
+exemption it was missing is the interesting part.** `decimal u32 magic[6]`
+is a six-character *number* with one value, not six numbers: the brackets
+are a width and the bound is read. cpio constrains its magic exactly that
+way and 26.113 cites the line. So the rule cannot key on the brackets --
+it keys on the radix, and a text number is exempt. 26.60 was caught by the
+same distinction from the other side, when its first draft keyed
+`[minimal]` on a radix *attribute* and refused `examples/http`, which
+carries the radix on the type keyword. The control test is what caught
+both.
+
+**Three names left `UNPLACED_ATTRS` without gaining a row**, because each
+already refuses a wrong position with a better diagnostic than this table
+could give -- each has the resolved layout to hand, and this check runs on
+the AST. `bits` refuses a non-BCD field from the solver, `since` from
+`check_versions`, and `require_aligned` from `resolve._check_alignment`.
+
+`require_aligned` is the one that would have been got wrong by measuring.
+On `u8 a` at offset zero the generated C is byte-identical with and
+without it -- which reads exactly like an unread attribute and is a check
+*passing*, since a byte is trivially byte-aligned. `evidence.md`'s rule
+about knowing what a check checked, arriving in the instrument rather than
+in the thing being measured, for the second time in this table's history.
+
+**`[covers]` is refused now**, joining `[nonce]` and `[trusted]` as the
+third spelling of something that is really a clause. `covers(a, b)` is
+parsed by `parse_covers` and read off the region node (14.1a); the
+attribute spelling is in the vocabulary for bracket disambiguation and is
+read by nothing, inert in all five positions.
+
+**Four stay unplaced deliberately, and there is now a sharper reason to
+look at them again.** `case_insensitive`, `nul_terminated`, `trim` and
+`must_be_zero` were spared in 26.60 on the grounds that they change the
+capability map even where they change no code. They do. But `[trim]` on a
+plain `u8` also adds `trim` to the **wire signature**, and nothing trims
+anything:
+
+    @0x0000   1         u8         a  trim
+
+The wire signature is what two implementations compare to agree they speak
+the same protocol. An entry there that no generated code enforces is not
+the same kind of harmless as an unread attribute -- it is a false claim in
+the document whose whole job is to be authoritative, which is arguably
+worse than being dropped. Whether "read into an artifact" should count as
+placement when the artifact is a *record* rather than an enforcement is a
+question about what the wire signature means, and it is left open rather
+than resolved by a table.
+
+**Of forty-eight attributes: thirty are placed by the table, seven by
+checks of their own, five are refused as unimplemented, and six remain
+unplaced** -- four of them by the decision above, and `secret` and
+`non_canonical` because they genuinely are read on any member.
+
+**Status:** all four groups sum to forty-eight, which the exhaustiveness
+test asserts; every one of the 33 committed schemas parses; the control
+test was mutation-checked by making the spelling check refuse `min`, and
+fails by name when it does.
 
 ---
 

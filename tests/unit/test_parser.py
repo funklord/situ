@@ -291,9 +291,13 @@ def test_bare_unknown_identifier_is_an_array_size() -> None:
 
 
 def test_array_and_attributes_together() -> None:
-	field = first_field("struct S { u8 buf[4] [must_eq = 0]; }")
+	"""A size in brackets, then an attribute list in brackets. The attribute
+	is `[encoding]` because this is a grammar test and the placement table
+	(26.117) refuses a bound on an array -- an array has no single value to
+	bound, while text is exactly what needs an array to be in."""
+	field = first_field('struct S { u8 buf[4] [encoding = ascii]; }')
 	assert field.array is not None
-	assert [attr.name for attr in field.attrs] == ["must_eq"]
+	assert [attr.name for attr in field.attrs] == ["encoding"]
 
 
 def test_struct_level_attributes() -> None:

@@ -41,6 +41,7 @@ enum advertising_event : u8 {
 	scan_ind        = 0x02,     // scannable undirected
 	nonconn_ind     = 0x03,     // non-connectable undirected
 	scan_rsp        = 0x04,     // response to a scan request
+	default         = pass,
 }
 
 // hci.h:2906. Whether the six address bytes are a public device address or a
@@ -57,6 +58,7 @@ enum address_kind : u8 {
 	random_device   = 0x01,
 	public_resolved = 0x02,
 	random_resolved = 0x03,
+	default         = pass,
 }
 
 // hci.h:743 onwards. The AD types this example names; the registry has more,
@@ -69,6 +71,7 @@ enum ad_type : u8 {
 	tx_power        = 0x0A,
 	service_data    = 0x16,
 	appearance      = 0x19,
+	default         = pass,
 }
 
 // One AD structure: a length, a type, and length-1 bytes of value.
@@ -85,7 +88,7 @@ struct ad_structure {
 	// is `[-1, 254]` and the compiler refuses the schema -- which is the
 	// right refusal, and asking why is what sends a reader to the parser.
 	u8       length  [min = 1];
-	ad_type  type  [default = pass];
+	ad_type  type;
 	u8       value[length - 1];
 }
 
@@ -96,8 +99,8 @@ struct ad_structure {
 // shape 26.27 is about, and getting it from the parser rather than the struct
 // is the difference between describing the format and describing the header.
 struct adv_report {
-	advertising_event  event_type    [default = pass];
-	address_kind       address_type  [default = pass];
+	advertising_event  event_type;
+	address_kind       address_type;
 
 	// Little-endian on the wire: `11:22:33:44:55:66` arrives as 66 55 44 33
 	// 22 11. Bytes rather than a u48, because an address is an identifier and

@@ -542,6 +542,55 @@ def test_a_delimited_radix_field_survives_a_reprint() -> None:
 	assert unparse(parse_text(once, path="s.situ")) == once
 
 
+def test_an_unknown_attribute_is_refused() -> None:
+	"""An attribute situ has never heard of was accepted and dropped.
+
+	The placement table settles where a *known* attribute may sit and says
+	nothing about one that does not exist: `_attribute_place` returns `None`
+	for a name it has no row for, which is the same answer it gives for a name
+	that is correctly placed. Measured before this check existed --
+	`[wibble = 16, pad_to = 4, utterly_made_up]` on a plain field compiled, and
+	the emitted C was byte-identical to the schema with all three deleted.
+
+	The other half of the language already refuses the same mistake: an
+	invented `require` predicate is rejected as "not a builtin" with the
+	builtins listed.
+	"""
+	text = rendered(BUFFER + "struct b { u8 a [wibble = 16]; }\n")
+	assert "unknown attribute `wibble`" in text
+	assert "byte-identical" in text
+
+
+def test_an_unknown_attribute_suggests_a_near_name() -> None:
+	"""A typo is the likely case, so the diagnostic names the near miss --
+	one edit only, since a wider search produces confident wrong suggestions."""
+	assert "`[min]` exists; did you mean that?" in rendered(
+		BUFFER + "struct b { u8 a [mi = 3]; }\n")
+
+
+def test_an_unknown_attribute_on_a_struct_is_refused() -> None:
+	"""Struct attributes are a separate list and were checked separately."""
+	assert "unknown attribute `wibble`" in rendered(
+		BUFFER + "struct b [wibble] { u8 a; }\n")
+
+
+def test_every_known_attribute_is_spelled_acceptably() -> None:
+	"""The control: the check must not refuse a name the parser accepts.
+
+	A vacuous version of the test above would pass just as loudly, so this
+	asserts the complement -- every name in `ATTRIBUTE_NAMES` survives the
+	spelling check, whatever the placement table then says about where it sits.
+	"""
+	for name in sorted(ATTRIBUTE_NAMES):
+		source = BUFFER + "struct b { u8 a [%s]; }\n" % name
+		try:
+			parse_text(source, path="s.situ")
+		except SituError as caught:
+			# Refused for its place, its value or being unimplemented is
+			# fine and expected -- refused for its *spelling* is not.
+			assert "unknown attribute" not in caught.diagnostic.render(), name
+
+
 def test_every_attribute_is_accounted_for() -> None:
 	"""A new attribute has to have its place decided, or say it has not.
 
@@ -552,8 +601,26 @@ def test_every_attribute_is_accounted_for() -> None:
 	this read?" arriving at the moment somebody can still answer it.
 	"""
 	placed = set(wellformed.PLACED_ATTRS)
-	# Placed by rules that predate the table, in their own checks.
-	elsewhere = {"quoted", "escape", "timeout_ms", "retries"}
+	# Placed by rules that predate the table, in their own checks. The last
+	# three were in `UNPLACED_ATTRS` and did not belong there: each already
+	# refuses a wrong position with a better diagnostic than this table could
+	# give, because each has the resolved layout to hand and this runs on the
+	# AST.
+	#
+	#   bits             `Solver._narrow_bcd` -- "`[bits]` is for a
+	#                    packed-decimal field, and `u8` is not one"
+	#   since            `check_versions` -- a versioned member with no
+	#                    version field on the struct
+	#   require_aligned  `resolve._check_alignment` -- refuses a bit-packed
+	#                    field, one with no static offset, and one that lands
+	#                    short of its natural boundary
+	#
+	# `require_aligned` is the one that would have been got wrong by measuring
+	# rather than reading: on `u8 a` at offset zero the generated C is
+	# byte-identical with and without it, which looks exactly like an
+	# unread attribute and is a check passing.
+	elsewhere = {"quoted", "escape", "timeout_ms", "retries",
+	             "bits", "since", "require_aligned"}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
 	         | set(wellformed.UNIMPLEMENTED_ATTRS))
@@ -588,6 +655,61 @@ def test_a_reserved_policy_on_a_reserved_member_is_accepted() -> None:
 	for name in ("preserve", "unknown", "must_be_one", "must_be_zero"):
 		parse_text(BUFFER + "struct b { u8 a; reserved u8 [%s]; }\n" % name,
 		           path="s.situ")
+
+
+# The third batch. `[covers]` joins `[nonce]` and `[trusted]` as a spelling of
+# something that is really a clause, and `[endian]`, `[min]`, `[max]` and
+# `[must_eq]` get places. Each was measured in five positions -- generated C
+# and capability map both -- before a rule was written for it.
+
+
+def test_the_covers_attribute_is_refused() -> None:
+	"""`covers(a, b)` is a clause on a `coded` region (14.1a). The attribute
+	spelling is in `ATTRIBUTE_NAMES` for bracket disambiguation only, and is
+	read by nothing -- the third of its kind after `nonce` and `trusted`."""
+	assert "`covers` is not implemented" in rendered(
+		BUFFER + "struct b { u8 a [covers = b]; u8 b; }\n")
+
+
+def test_endian_on_a_single_byte_is_refused() -> None:
+	"""A byte has no byte order, so nothing narrows and nothing is emitted."""
+	text = rendered(BUFFER + "struct b { u8 a [endian = little]; }\n")
+	assert "more than one byte" in text
+
+
+def test_endian_on_a_struct_member_is_refused() -> None:
+	"""The case worth having a diagnostic for: it looks like it should reach
+	the members inside and does not, because the inner struct's scope was
+	narrowed from its own declaration. 8.3 scopes `endian` per struct and per
+	field, and a struct-typed member is neither."""
+	assert "does not pass one inward" in rendered(
+		BUFFER + "struct i { u16 x; }\nstruct b { i a [endian = little]; }\n")
+
+
+def test_endian_on_a_wider_scalar_is_accepted() -> None:
+	"""The control. A table that refuses a valid schema is worse than the
+	silence it replaces -- including on an array, whose elements each have a
+	byte order."""
+	for decl in ("u16 a", "u16 a[4]", "u32 a"):
+		parse_text(BUFFER + "struct b { %s [endian = little]; }\n" % decl,
+		           path="s.situ")
+
+
+def test_a_bound_on_an_array_is_refused() -> None:
+	"""An array has no single value for `validate` to compare."""
+	for name in ("min = 1", "max = 4", "must_eq = 2"):
+		text = rendered(BUFFER + "struct b { u16 a[4] [%s]; }\n" % name)
+		assert "no single value to bound" in text
+
+
+def test_a_bound_on_a_text_number_is_accepted() -> None:
+	"""The control that matters, and the one the first version of the rule got
+	wrong. `decimal u32 magic[6]` is a six-character number with one value, so
+	the brackets are a width rather than a repeat -- cpio constrains its magic
+	exactly that way (26.113) and was refused until this exemption existed."""
+	parse_text(BUFFER + "struct b { decimal u32 a[6] [min = 70701, max = 70702]; }\n",
+	           path="s.situ")
+	parse_text(BUFFER + "struct b { u8 a [min = 1, max = 4]; }\n", path="s.situ")
 
 
 def test_must_be_zero_is_left_alone() -> None:

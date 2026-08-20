@@ -51,6 +51,7 @@ def check(schema: ast.Schema) -> None:
 	check_enum_members_are_spellable(schema)
 	check_unique_member_names(schema)
 	check_unique_attributes(schema)
+	check_attribute_names(schema)
 	check_types_resolve(schema)
 	check_variant_exhaustiveness(schema)
 	check_codec_bindings(schema)
@@ -1195,6 +1196,64 @@ def _check_member_attrs(members: tuple[ast.Member, ...]) -> None:
 		_check_member_attrs(nested(member))
 
 
+def check_attribute_names(schema: ast.Schema) -> None:
+	"""An attribute situ has never heard of is refused, not dropped.
+
+	The placement table (26.60) settles where a *known* attribute may sit, and
+	says nothing about one that does not exist: `_attribute_place` returns
+	`None` for a name it has no row for, which is the same answer it gives for
+	a name that is correctly placed. So `[wibble = 16]` compiled, and the
+	emitted C was byte-identical to the schema with it deleted -- measured on
+	three invented attributes at once, not inferred.
+
+	That is the failure 14.5 and 17.0 refuse everywhere else, and the other
+	half of the language already refuses it: `require utterly_made_up(s)` is
+	rejected as "not a builtin" with the six builtins listed. An attribute is
+	the same kind of claim and gets the same treatment.
+
+	The vocabulary is `ATTRIBUTE_NAMES`, which the parser already keeps -- for
+	bracket disambiguation rather than for validation, which is exactly why
+	nothing was checking spelling against it.
+	"""
+	from situc.parser import ATTRIBUTE_NAMES
+
+	for decl in schema.decls:
+		if isinstance(decl, ast.StructDecl):
+			_check_attr_names(decl.attrs, ATTRIBUTE_NAMES)
+			_check_member_attr_names(decl.members, ATTRIBUTE_NAMES)
+
+
+def _check_member_attr_names(members: tuple[ast.Member, ...],
+		known: frozenset[str]) -> None:
+	for member in members:
+		if isinstance(member, (ast.Field, ast.Reserved, ast.TagField)):
+			_check_attr_names(member.attrs, known)
+		_check_member_attr_names(nested(member), known)
+
+
+def _check_attr_names(attrs: tuple[ast.Attr, ...],
+		known: frozenset[str]) -> None:
+	for attr in attrs:
+		if attr.name in known:
+			continue
+
+		notes = ["nothing reads it, so the generated code is byte-identical "
+		         "to the schema without it",
+		         "a schema that states what the generated code does not "
+		         "enforce is worse than one stating nothing (project.md "
+		         "section 17.0)"]
+		near  = _nearest(attr.name, set(known))
+		if near is not None:
+			notes.insert(0, f"`[{near}]` exists; did you mean that?")
+
+		raise error(
+			f"unknown attribute `{attr.name}`",
+			attr.span,
+			label = "not an attribute situ knows",
+			notes = notes,
+		)
+
+
 #: Attribute names the parser accepts -- they are listed in ATTRIBUTE_NAMES so
 #: that bracket disambiguation does not change meaning as phases land -- but
 #: which nothing downstream reads yet. Accepting one silently is worse than
@@ -1225,6 +1284,14 @@ UNIMPLEMENTED_ATTRS: dict[str, str] = {
 	# prints for a tier-1 codec, derived from whether the codec has a
 	# binding. No schema ever set it, which is why it cost nothing to find.
 	"trusted": "a codec's trust is derived from its `impl`, and this "
+	           "attribute is read by nothing",
+	# The third of the same kind, and found the same way. `covers(a, b)` is a
+	# *clause* on a `coded` region (14.1a), parsed by `parse_covers` and read
+	# off the region node; the attribute spelling is in `ATTRIBUTE_NAMES` only
+	# so that bracket disambiguation stays stable, and nothing reads it. It
+	# was inert in all five positions measured -- generated C and capability
+	# map both.
+	"covers":  "coverage is named by `coded(...) covers(...)`, and this "
 	           "attribute is read by nothing",
 }
 
@@ -1338,6 +1405,45 @@ def _attribute_place(struct: ast.StructDecl,
 		return ("a `register` body, beside `width` -- it is a setting rather "
 		        "than a member attribute")
 
+	# `Scope.narrow` applies `[endian]` to a member's own scalar, and 8.3
+	# scopes it "per struct, and per field" -- a struct *directive* is
+	# `decl.attrs` and never reaches here. So the only member that has a byte
+	# order to override is one whose scalar has more than one byte: measured
+	# inert on `u8`, on a delimited `u8[]`, on a `reserved u8` and on a
+	# struct-typed member, and read on `u16` and on `u16[4]`.
+	#
+	# A struct-typed member is the one worth naming: `[endian = little]` on it
+	# looks like it should reach the members inside and does not, because the
+	# inner struct's scope was narrowed from its own declaration. Silently
+	# accepting that is how a schema ends up believing it swapped an interior
+	# it did not.
+	if attr.name == "endian":
+		width = _declared_bits(member)
+		if width is not None and width > 8:
+			return None
+		return ("a scalar of more than one byte -- a single byte has no byte "
+		        "order, and a struct-typed member does not pass one inward")
+
+	# A bound or an equality is a claim about *a value*, and the generated
+	# `validate` compares one. An array has no single value to compare and a
+	# delimited run's size cap is `until ... max N`, which is syntax rather
+	# than this attribute -- both measured inert.
+	if attr.name in ("min", "max", "must_eq"):
+		# A *text number* is the exception, and it is the whole reason this
+		# rule cannot key on the brackets alone: `decimal u32 magic[6]` is a
+		# six-character number with one value, not six numbers, so the
+		# brackets are a width and the bound is read. cpio constrains its
+		# magic exactly that way (26.113) and was refused by the first
+		# version of this rule.
+		if getattr(member, "radix", None) is not None:
+			return None
+		if getattr(member, "array", None) is not None:
+			return ("a scalar field -- an array has no single value to bound, "
+			        "and a size cap is spelled `max N` after `until`")
+		if getattr(member, "until", None) is not None:
+			return ("a scalar field -- a delimited run's cap is spelled "
+			        "`max N` after `until`, which is syntax rather than this")
+
 	return None
 
 
@@ -1347,7 +1453,7 @@ def _attribute_place(struct: ast.StructDecl,
 PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"equalize", "allow_unverified_read", "minimal",
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
-	"on_read", "on_write", "bit_order",
+	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
@@ -1359,10 +1465,8 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 #: `quoted`, `escape`, `timeout_ms` and `retries` are absent because
 #: `check_delimiters` and `_check_exchange_policy` already place them.
 UNPLACED_ATTRS = frozenset({
-	"bits", "case_insensitive", "covers", "endian",
-	"max", "min", "must_be_zero", "must_eq", "non_canonical",
-	"nul_terminated",
-	"require_aligned", "secret", "since", "trim",
+	"case_insensitive", "must_be_zero", "non_canonical", "nul_terminated",
+	"secret", "trim",
 })
 
 

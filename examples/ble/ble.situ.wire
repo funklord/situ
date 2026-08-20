@@ -12,13 +12,13 @@
 endian little
 target buffer
 
-enum advertising_event : u8 unknown=error
+enum advertising_event : u8 unknown=pass
   ind=0 direct_ind=1 scan_ind=2 nonconn_ind=3 scan_rsp=4
 
-enum address_kind : u8 unknown=error
+enum address_kind : u8 unknown=pass
   public_device=0 random_device=1 public_resolved=2 random_resolved=3
 
-enum ad_type : u8 unknown=error
+enum ad_type : u8 unknown=pass
   flags=1 uuid16_all=3 name_complete=9 tx_power=10 service_data=22 appearance=25
 
 struct ad_structure size=2..256

@@ -8,28 +8,28 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 
-struct ad_structure size=2 mutate=Shifting
+struct ad_structure size=2 mutate=Shifting canonical=NonCanonical
   ad_structure.length                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  ad_structure.type                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ad_structure.type                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   ad_structure.value                     offset=AbsoluteStatic(0x02) size=Bounded(0, 254) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
-struct adv_report size=10 mutate=Shifting address=Unstable atomic=NonAtomic
-  adv_report.event_type                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  adv_report.address_type                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+struct adv_report size=10 mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical
+  adv_report.event_type                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  adv_report.address_type                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   adv_report.address                     offset=AbsoluteStatic(0x02) size=Fixed(6) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
   adv_report.data_length                 offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   adv_report.data                        offset=AbsoluteStatic(0x09) size=Bounded(0, 31) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   adv_report.rssi                        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
-struct le_advertising_report size=4 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic
+struct le_advertising_report size=4 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical
   le_advertising_report.evt              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   le_advertising_report.plen             offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   le_advertising_report.subevent         offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
   le_advertising_report.num              offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   le_advertising_report.reports          offset=AbsoluteStatic(0x04) size=Bounded(0, 10455) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
-  le_advertising_report.reports[]        offset=FrameStatic(0x00) size=Bounded(10, 41) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
-  le_advertising_report.reports[].event_type offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  le_advertising_report.reports[].address_type offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  le_advertising_report.reports[]        offset=FrameStatic(0x00) size=Bounded(10, 41) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  le_advertising_report.reports[].event_type offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  le_advertising_report.reports[].address_type offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   le_advertising_report.reports[].address offset=FrameStatic(0x02) size=Fixed(6) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
   le_advertising_report.reports[].data_length offset=FrameStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   le_advertising_report.reports[].data   offset=FrameStatic(0x09) size=Bounded(0, 31) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
