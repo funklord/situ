@@ -13193,6 +13193,23 @@ the difference is a wrong answer nobody sees.**
    artifact, which the same section had already made and recorded. Sweep
    the positions, not the names.
 
+147. **A check run against a newer tool than it targets cannot enforce the
+   older one's limits.** `test_every_dissector_parses` runs `luac -p` over
+   every generated dissector, and the `luac` it finds is 5.4 -- while
+   decision 0021 targets the Lua 5.2 that older Wireshark bundles. Every
+   operator 0021 forbids is legal in 5.4, so the check passed on a
+   dissector emitting `//` and would have gone on passing. Where a
+   constraint names a version, the check has to name it too, or say in its
+   own words what it could not test.
+
+148. **Misplaced is not unimplemented, and the two diagnostics send an
+   author opposite ways.** `[no_rmw]` on a member said "read-modify-write
+   suppression is not honoured by this build" while `no_rmw;` in the
+   register body was honoured, tested, and load-bearing in four tests. One
+   message says "this feature does not exist, give up"; the other says
+   "move it three lines". Before writing the first, check that the feature
+   is absent rather than the placement wrong.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -13353,6 +13370,101 @@ unplaced** -- four of them by the decision above, and `secret` and
 test asserts; every one of the 33 committed schemas parses; the control
 test was mutation-checked by making the spelling check refuse `min`, and
 fails by name when it does.
+
+### 26.118 Three checks that could not have failed
+
+A sweep of what the test suite *skips* rather than what it runs, prompted by
+nothing more than reading the count. Two of the three findings are the same
+shape as 26.117's and the third is its mirror.
+
+**The skip list was not what it looked like.** Grepping skip reasons in the
+source says the suite is dominated by toolchain guards -- no compiler, no
+rustc, no Lua. Running it and reading `-rs` says otherwise: every toolchain
+is present on this machine, so none of those fire, and the real thirty-three
+are structural. The first measurement answered a question about the *source*
+and was quoted as an answer about the *run*. Invariant 146 one more time,
+and the cheap fix is that `-rs` exists.
+
+**`no_rmw` told authors a working feature did not exist.** It sat in
+`UNIMPLEMENTED_ATTRS` saying "read-modify-write suppression is not honoured
+by this build". The grammar makes it a register *setting* -- `no_rmw;` in the
+body, exactly like `volatile` -- and it is honoured: with it,
+`ctrl_reg.enable` is `mutate=RewriteRequired` and no single-bit setter is
+emitted; delete the line and neither holds, and `access_width` alone does not
+do it. Four tests in `test_registers` fail without it.
+
+So the compiler shipped a test proving the feature works beside a diagnostic
+telling authors it does not -- and the feature is 15.3's safety property,
+whose entire purpose is turning an unsafe read-modify-write into a compile
+error. `volatile` had the right diagnostic all along; `no_rmw` has it now,
+and the two share a rule.
+
+**Nothing was checking the Lua version decision 0021 exists to protect.**
+0021 keeps emitted Lua inside 5.2, which is why `align_up` is spelled with
+`math.floor` rather than `//`: Wireshark bundles 5.2 in older builds and a
+dissector that fails to load is worse than one that divides in floating
+point. `_UNSPELLABLE` guards *schema expressions* before translation and
+guards them well, but says nothing about the Lua the emitter writes around
+them.
+
+`test_every_dissector_parses` looked like the backstop and is not. It runs
+`luac -p`, and the `luac` here is 5.4, where `//`, `<<`, `>>`, `&`, `|` and
+`~` are all perfectly legal. Spelling the bit-packed field read as `//`
+instead of `math.floor` -- the exact regression 0021 names -- was measured:
+all thirty-three dissectors still passed `luac`, and the new static check
+failed the three that contain the expression. A check that cannot fail for
+the thing it exists to catch is worse than none.
+
+The new check is comment- and string-aware because it has to be, not
+defensively: across 33 dissectors and 7610 lines, every occurrence of those
+operators today is inside a comment quoting a schema expression the emitter
+*declined* to translate. Strings are blanked before comments, since a `--`
+inside a string starts no comment and stripping comments first would truncate
+the line and hide what followed -- a false negative in a check whose whole job
+is to notice.
+
+**And two schemas had never round-tripped a byte.** `test_owned` refuses to
+let a run where every draw was rejected count as a pass -- it skips and says
+so, which is why this was findable at all rather than being a green tick over
+nothing. `packet` and `tiff` were skipping with `round-tripped=0 refused=64`,
+so their owned decode and encode had never been exercised on an *accepted*
+message; only the reject path ran.
+
+Neither is reachable by pseudo-random bytes and the arithmetic says why.
+`tiff_header` wants one of two markers in 65536 and `[must_eq = 42]` after
+it, which is about 2^-31. `packet`'s `header` wants `version == 1`, one of
+three enum values and `length <= 1024`, which is about one in a million.
+
+**The two vector files are not worth the same, and the difference is stated
+in them.** `tiff` gets genuinely independent bytes: two "II" headers are the
+first eight bytes of real files shipped by matplotlib and reportlab, and the
+"MM" header was written by ImageMagick, with `tiffinfo` independently
+reporting "TIFF Directory at offset 0x68 (104)" -- the `ifd_offset` those
+bytes carry. That is the corroboration `arp.vectors` insists on, and it is
+the only vector here that exercises `endian_marker` resolving to other than
+the host's order.
+
+`packet` cannot have that. It is situ's own example, no other implementation
+exists, and 5.3 gives a schema rather than a byte listing -- so its bytes are
+laid out by reading the schema, and **a vector derived from the description
+cannot check the description.** What it does check is the property its test
+is named for: that `decode` and `encode` agree with *each other*. The owned
+decode copies into a fixed struct and the encode writes it back, and a
+dropped field, a mis-sized one or a byte-order disagreement fails the trip
+whatever the format is. That failure is internal, so an internally-derived
+input finds it. The file says so in its own header rather than sitting
+beside `arp.vectors` implying equal standing.
+
+Both were confirmed to drive their tests by corrupting them: `tiff` with
+`magic` 42 to 43 and `packet` with `version` 1 to 2, each returning
+`round-tripped=0 refused=3` -- three being the committed vectors rather than
+the sixty-four random draws, which is also how the count confirms the file is
+the input.
+
+**Status:** the Lua check mutation-tested by emitting `//` from
+`dissector.py`, failing three dissectors while `luac` passed all thirty-three;
+the `no_rmw` finding mutation-tested by removing `no_rmw;` from the register
+fixture, failing four tests.
 
 ---
 

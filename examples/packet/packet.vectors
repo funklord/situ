@@ -1,0 +1,38 @@
+# Vectors for the sealed-packet worked example, and a note on what they are
+# worth -- which is less than the other files in this directory, and the
+# difference is worth stating rather than leaving for a reader to assume.
+#
+# Every other `.vectors` here is laid out by somebody else's implementation:
+# ARP by glibc's <net/if_arp.h>, TIFF by libtiff, cpio and netlink by the
+# kernel. That independence is what lets those files test a real claim --
+# that situ's *description* of a format matches the format. This one cannot
+# make that claim. `packet` is situ's own example (project.md 5.3), no other
+# implementation exists, and 5.3 gives a schema rather than a byte listing,
+# so these eight bytes are laid out by reading the schema. A vector derived
+# from the description cannot check the description.
+#
+# What it does check is a different and real property, and the one the test
+# it feeds is named for: that `decode` and `encode` agree with each other.
+# The owned decode copies into a fixed C struct and the encode writes it back
+# out, and if either drops a field, mis-sizes one or disagrees about byte
+# order, these bytes do not survive the trip -- whatever the schema says the
+# format is. That failure is internal, so an internally-derived input finds it.
+#
+# Why random draws cannot: `version` is `[must_eq = 1]`, `type` admits three
+# of 256 values, and `length` is `[max = 1024]`, so a pseudo-random eight
+# bytes validates about once in a million. Sixty-four draws were sixty-four
+# refusals and the accept path had never run.
+#
+# `endian big`, so the two multi-byte fields are most-significant first.
+# Layout: version, type, length, seq.
+
+# A hello with no payload, sequence zero -- the smallest valid header.
+header hello_empty       01 01 00 00 00 00 00 00
+
+# A data message carrying the largest payload `[max = 1024]` permits, which
+# is the bound stated as bytes rather than as a comment.
+header data_max_length   01 02 04 00 00 00 00 01
+
+# A close at a sequence number that uses all four bytes, so a truncated or
+# byte-swapped `seq` cannot survive the round trip unnoticed.
+header close_high_seq    01 03 00 00 DE AD BE EF

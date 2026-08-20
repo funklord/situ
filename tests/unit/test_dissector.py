@@ -57,6 +57,88 @@ def code(text: str) -> str:
 	return "\n".join(line.split("--")[0] for line in text.splitlines())
 
 
+#: Operators Lua 5.3 introduced. None of them parses in 5.2 at all -- they are
+#: syntax errors rather than different meanings -- so any occurrence outside a
+#: comment or a string is a dissector older Wireshark cannot load.
+#:
+#: `~=` is excluded because it is 5.2's "not equal"; only a lone `~` is the
+#: 5.3 bitwise operator. A bare `/` is excluded deliberately: it is float
+#: division in every Lua and the emitter uses it inside `math.floor`, which is
+#: exactly the spelling decision 0021 asks for.
+_LUA_53_ONLY = re.compile(r"//|<<|>>|&|\||~(?!=)")
+
+
+def _without_strings_or_comments(text: str) -> str:
+	"""Lua source with string literals and comments blanked out.
+
+	Blanked rather than deleted, so reported line and column numbers still
+	line up with the file a reader will open.
+
+	Strings go first and comments second, because a `--` inside a string
+	starts no comment -- and stripping comments first would truncate the line
+	and hide anything after it, which is a false negative in a check whose
+	whole job is to notice something. Neither case occurs in the emitted Lua
+	today; the order costs nothing and stops that being load-bearing.
+	"""
+	out, i, n = [], 0, len(text)
+	while i < n:
+		ch = text[i]
+		if ch in "\"'":
+			quote = ch
+			out.append(" ")
+			i += 1
+			while i < n and text[i] != quote:
+				if text[i] == "\\":
+					out.append("  ")
+					i += 2
+					continue
+				out.append("\n" if text[i] == "\n" else " ")
+				i += 1
+			out.append(" ")
+			i += 1
+			continue
+		if text.startswith("--", i):
+			while i < n and text[i] != "\n":
+				out.append(" ")
+				i += 1
+			continue
+		out.append(ch)
+		i += 1
+	return "".join(out)
+
+
+@pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.stem)
+def test_no_dissector_uses_an_operator_lua_52_lacks(path: Path) -> None:
+	"""Decision 0021's constraint, which nothing was checking.
+
+	0021 targets the Lua 5.2 that older Wireshark bundles, and it is why
+	`align_up` is spelled with `math.floor` rather than `//`: a dissector
+	that fails to load is worse than one that divides in floating point.
+
+	`_UNSPELLABLE` in the generator guards *schema expressions* before they
+	are translated, and guards them well. It says nothing about the Lua the
+	emitter writes around them, so a hand-edit spelling `//` or `<<` in the
+	boilerplate would pass every test here: `test_every_dissector_parses`
+	runs `luac`, and the `luac` on this machine is 5.4, where all of these
+	are perfectly legal. A check that cannot fail for the thing it exists to
+	catch is worse than none, because it gets quoted afterwards as though it
+	had.
+
+	The measurement that scoped this: across 33 generated dissectors and
+	7610 lines, every occurrence of these operators is inside a comment
+	quoting a schema expression the emitter declined -- so the check is
+	comment-aware because it has to be, not defensively.
+	"""
+	source, resolved, _ = analyse(path)
+	lua  = generate(parse(source), resolved, path.stem)
+	bare = _without_strings_or_comments(lua)
+
+	found = sorted({match.group(0) for match in _LUA_53_ONLY.finditer(bare)})
+	assert found == [], (
+		f"{path.stem}.lua uses {found}, which Lua 5.2 cannot parse "
+		f"(decision 0021)")
+
+
 @pytest.mark.skipif(LUAC is None, reason="no Lua compiler")
 @pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.stem)
 def test_every_dissector_parses(path: Path, tmp_path: Path) -> None:

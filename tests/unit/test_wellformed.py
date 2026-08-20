@@ -663,6 +663,30 @@ def test_a_reserved_policy_on_a_reserved_member_is_accepted() -> None:
 # and capability map both -- before a rule was written for it.
 
 
+def test_no_rmw_as_a_member_attribute_is_refused_as_misplaced() -> None:
+	"""And not as unimplemented, which is what it used to say.
+
+	`no_rmw` is a register *setting* -- `no_rmw;` in the body, like
+	`volatile` -- and it is honoured: with it, `ctrl.enable` is
+	`mutate=RewriteRequired` and has no single-bit setter; without it neither
+	holds, which `test_a_partial_field_with_unsafe_reads_loses_its_setter`
+	asserts and four tests in `test_registers` fail without.
+
+	The old message was "read-modify-write suppression is not honoured by this
+	build", so the compiler shipped a test proving the feature works beside a
+	diagnostic telling authors it does not -- and sent them away from a safety
+	property whose purpose is making an unsafe read-modify-write a compile
+	error. Misplaced is not unimplemented.
+	"""
+	text = rendered(
+		"target mmio;\nendian little;\nbit_order lsb_first;\n\n"
+		"register r @ 0x00 {\n\twidth = 32;\n\taccess_width = 32;\n"
+		"\tbit enable [rw, no_rmw];\n\treserved u31 [preserve];\n}\n")
+	assert "`[no_rmw]` means nothing here" in text
+	assert "a `register` body" in text
+	assert "not implemented" not in text
+
+
 def test_the_covers_attribute_is_refused() -> None:
 	"""`covers(a, b)` is a clause on a `coded` region (14.1a). The attribute
 	spelling is in `ATTRIBUTE_NAMES` for bracket disambiguation only, and is

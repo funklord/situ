@@ -1269,7 +1269,6 @@ def _check_attr_names(attrs: tuple[ast.Attr, ...],
 #: the next run.
 UNIMPLEMENTED_ATTRS: dict[str, str] = {
 	"size":    "an explicit size is not honoured by this build",
-	"no_rmw":  "read-modify-write suppression is not honoured by this build",
 	# Found by sweeping the placement table's remaining names (26.60): both
 	# are in the parser's vocabulary and read by nothing at all.
 	#
@@ -1397,11 +1396,20 @@ def _attribute_place(struct: ast.StructDecl,
 			"a `tag` or `checksum`, saying what its own bytes read as while "
 			"it is computed")
 
-	# A register *setting*, parsed by `parse_register_setting` from the
-	# register body. It is in the attribute vocabulary so that bracket
+	# Register *settings*, parsed by `parse_register_setting` from the
+	# register body. Both are in the attribute vocabulary so that bracket
 	# disambiguation does not change meaning, which is not the same as a
 	# member ever carrying one.
-	if attr.name == "volatile":
+	#
+	# `no_rmw` was in `UNIMPLEMENTED_ATTRS` saying "read-modify-write
+	# suppression is not honoured by this build", and that was measurably
+	# false: with `no_rmw;` in the body `ctrl_reg.enable` is
+	# `mutate=RewriteRequired` and no single-bit setter is emitted, and
+	# without it neither holds -- `access_width` alone does not do it. So the
+	# feature is 15.3 working, and the message sent an author away from a
+	# safety property whose whole purpose is turning an unsafe
+	# read-modify-write into a compile error. Misplaced is not unimplemented.
+	if attr.name in ("volatile", "no_rmw"):
 		return ("a `register` body, beside `width` -- it is a setting rather "
 		        "than a member attribute")
 
@@ -1454,6 +1462,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"equalize", "allow_unverified_read", "minimal",
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
+	"no_rmw",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
