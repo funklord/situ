@@ -50,7 +50,7 @@ impl aead extern "my_aead";
 struct h { u8 v; u16 length; }
 struct s {
 	u8   hop;
-	authenticated { h hdr; u8 nonce[12] [nonce]; }
+	authenticated { h hdr; u8 nonce[12]; }
 	sealed(aead, nonce = nonce) {
 		u16  kind;
 		u8   body[hdr.length];
@@ -393,7 +393,7 @@ impl aes_gcm_128 extern "my_aes_gcm_128";
 struct h { u8 v; u16 length; }
 struct s {
 	u8   hop;
-	authenticated { h hdr; u8 nonce[12] [nonce]; }
+	authenticated { h hdr; u8 nonce[12]; }
 	sealed(aes_gcm_128, nonce = nonce) {
 		u16  inner_kind;
 		u8   session_key[16] [secret];

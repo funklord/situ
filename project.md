@@ -2614,7 +2614,7 @@ add-on. It is a first-class part of the capability system.
 | `authenticated { ... }` | plaintext, covered by a tag (AEAD associated data) |
 | `sealed(codec, nonce = ref) { ... }` | encrypted and covered by a tag |
 | `tag T[N] [covers(...)]` | authentication tag; coverage inferred if omitted |
-| `nonce` attribute | marks a field as a nonce for a codec |
+| `nonce = ref` argument | names the field a `sealed` region takes its nonce from |
 | `secret` attribute | marks a field as key material or plaintext secret |
 | `checksum T[N] [covers(...)]` | non-cryptographic integrity field (CRC); shares the entire tag mechanism |
 | `coded name(codec) [covers(...)]` | a transform, optionally over spans outside the region (14.1a) |
@@ -8896,10 +8896,18 @@ the same shape -- the only `trusted` in the compiler is a status string
 Both are in the parser's vocabulary for bracket disambiguation, which is not
 the same as either doing anything. `UNIMPLEMENTED_ATTRS` is the mechanism for
 exactly this and its rule is that accepting one silently is worse than
-refusing it. What stops that being a small change is that 14.1 *documents*
-`nonce` as meaningful, so refusing it is a change to the language's described
-surface rather than to an oversight -- and the document and the code
-disagreeing is the case that is raised rather than resolved.
+refusing it.
+
+**Both are refused now**, on the holder's instruction, and 14.1's table row
+went with them: it listed a `nonce` *attribute* where the thing that does the
+work is the `sealed(codec, nonce = ref)` *argument*. The row said the field
+was marked; nothing read the mark.
+
+`examples/packet` and `examples/keystore` each carried a `[nonce]`, and
+removing it changed not a byte of any backend's output nor a line of the
+capability map -- which is what made the refusal safe and is also the whole
+complaint. Two schemas stated something for years and no generated code ever
+asked.
 
 **It found a defect nobody was looking for.** `unparse` emitted no `until`
 clause at all and dropped the radix keyword, so

@@ -276,7 +276,7 @@ PLAIN = """codec plain {
 SEALING = """struct h { u8 v; u16 length; }
 struct s {
 	u8 hop;
-	authenticated { h hdr; u8 nonce[12] [nonce]; }
+	authenticated { h hdr; u8 nonce[12]; }
 	sealed(%s, nonce = nonce) { u16 inner; }
 	tag u8[16];
 }
@@ -712,3 +712,32 @@ def test_version_on_a_member_is_refused() -> None:
 	against, and it is written on the struct: `struct s [version = v]`."""
 	text = rendered(BUFFER + "struct b { u16 x [version]; }\n")
 	assert "a struct, naming the field" in text
+
+
+def test_a_nonce_attribute_is_refused() -> None:
+	"""The only nonce anything reads is a sealed region's `nonce = ref`
+	argument. `[nonce]` beside it said the same thing to nobody, and 14.1's
+	table listed it as though a mark were being made."""
+	text = rendered(BUFFER + "struct b { u8 n[12] [nonce]; }\n")
+	assert "`nonce` is not implemented" in text
+	assert "sealed(codec, nonce = field)" in text
+
+
+def test_a_trusted_attribute_is_refused() -> None:
+	"""A codec's trust is derived from whether it has an `impl`; the only
+	`trusted` in the compiler is a status string `capmap` prints."""
+	text = rendered(BUFFER + "struct b { u16 x [trusted]; }\n")
+	assert "`trusted` is not implemented" in text
+	assert "derived from its `impl`" in text
+
+
+def test_the_nonce_argument_still_works() -> None:
+	"""The control, and the point: refusing the attribute must not touch the
+	thing that actually names a nonce."""
+	parse_text(BUFFER + "codec aead {\n\tgranularity = byte;\n"
+	           "\tlength_preserving;\n\tseekable;\n\tauthenticated;\n"
+	           "\tinvertible;\n\tdeterministic;\n}\n"
+	           "impl aead extern \"x\";\n"
+	           "struct b {\n\tauthenticated a { u8 n[12]; }\n"
+	           "\tsealed s(aead, nonce = n) { u16 v; }\n"
+	           "\ttag u8[16] covers(a, s);\n}\n", path="s.situ")

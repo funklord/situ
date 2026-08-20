@@ -1169,7 +1169,7 @@ def test_a_sealed_region_pulls_in_no_crypto() -> None:
 	struct h { u8 v; u16 length; }
 	struct s {
 		u8   hop;
-		authenticated { h hdr; u8 nonce[12] [nonce]; }
+		authenticated { h hdr; u8 nonce[12]; }
 		sealed(aes_gcm_128, nonce = nonce) { u16 inner; }
 		tag  u8[16];
 	}

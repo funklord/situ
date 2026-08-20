@@ -55,7 +55,7 @@ def test_an_authenticated_region_is_not_a_member() -> None:
 	body = """struct h { u8 v; u8 w; }
 	struct s {
 		u8   hop;
-		authenticated { h hdr; u8 nonce[12] [nonce]; }
+		authenticated { h hdr; u8 nonce[12]; }
 		tag  u8[16];
 	}
 	"""
@@ -214,7 +214,7 @@ def test_a_region_is_not_a_field() -> None:
 	body = """struct h { u8 v; u16 length; }
 	struct s {
 		u8   hop;
-		authenticated { h hdr; u8 nonce[12] [nonce]; }
+		authenticated { h hdr; u8 nonce[12]; }
 		tag  u8[16];
 	}
 	"""

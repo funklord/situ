@@ -405,7 +405,7 @@ def test_a_covered_span_that_collapsed_is_caught(tmp_path: Path) -> None:
 		u8   hop;
 		authenticated {
 			h    hdr;
-			u8   nonce[12]  [nonce];
+			u8   nonce[12];
 		}
 		tag  u8[16];
 	}

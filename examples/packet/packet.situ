@@ -62,7 +62,7 @@ struct packet {
 
 	authenticated {
 		header  hdr;
-		u8      nonce[12]  [nonce];
+		u8      nonce[12];
 	}
 
 	sealed(aes_gcm_128, nonce = nonce) {

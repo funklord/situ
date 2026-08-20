@@ -1211,6 +1211,21 @@ def _check_member_attrs(members: tuple[ast.Member, ...]) -> None:
 UNIMPLEMENTED_ATTRS: dict[str, str] = {
 	"size":    "an explicit size is not honoured by this build",
 	"no_rmw":  "read-modify-write suppression is not honoured by this build",
+	# Found by sweeping the placement table's remaining names (26.60): both
+	# are in the parser's vocabulary and read by nothing at all.
+	#
+	# The only nonce anything consults is a sealed region's `nonce = ref`
+	# argument, which names the field and does the work. `[nonce]` beside it
+	# said the same thing to nobody -- `examples/packet` and
+	# `examples/keystore` both carried one, and removing it changed not a
+	# byte of any backend's output nor a line of the capability map.
+	"nonce":   "a nonce is named by `sealed(codec, nonce = field)`, and this "
+	           "attribute is read by nothing",
+	# And the only `trusted` in the compiler is a status string `capmap`
+	# prints for a tier-1 codec, derived from whether the codec has a
+	# binding. No schema ever set it, which is why it cost nothing to find.
+	"trusted": "a codec's trust is derived from its `impl`, and this "
+	           "attribute is read by nothing",
 }
 
 #: What `[encoding = ...]` may say. Section 8.6 names these two, and an
@@ -1346,8 +1361,8 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 UNPLACED_ATTRS = frozenset({
 	"bits", "case_insensitive", "covers", "endian",
 	"max", "min", "must_be_zero", "must_eq", "non_canonical",
-	"nonce", "nul_terminated",
-	"require_aligned", "secret", "since", "trim", "trusted",
+	"nul_terminated",
+	"require_aligned", "secret", "since", "trim",
 })
 
 
