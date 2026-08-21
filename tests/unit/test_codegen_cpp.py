@@ -66,7 +66,14 @@ PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 #: has had `-Werror` since phase 4 (see the top-level Makefile's WARNFLAGS) and
 #: the C++ checks were reading the same flags without the one that enforces
 #: them. Nothing in the tree warns today, which is the moment to fix it.
-WARNINGS = ["-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
+#: `-pedantic-errors` is the difference between asking for C++17 and being
+#: held to it. Without it the backend emitted `(const std::uint8_t[]){0x3A}`
+#: for every delimited scan -- a compound literal, which is C99 and only a GNU
+#: extension in C++ -- and three schemas' headers were not the C++17 section
+#: 22 claims while every compile here passed. gcc and clang both accept the
+#: extension silently; a conforming compiler in strict mode does not.
+WARNINGS = ["-std=c++17", "-pedantic-errors",
+	"-O1", "-Wall", "-Wextra", "-Wconversion",
 	"-Wsign-conversion", "-Werror", "-fno-exceptions", "-fno-rtti"]
 
 

@@ -19,7 +19,7 @@ LD		:= $(CC)
 endif
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-CFLAGS		?= -std=c11 -O2 -g $(WARNFLAGS)
+CFLAGS		?= -std=c11 -pedantic-errors -O2 -g $(WARNFLAGS)
 
 BUILD_DIR	?= build
 LIB		:= $(BUILD_DIR)/libsitu.a

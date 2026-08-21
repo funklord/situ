@@ -1044,16 +1044,39 @@ class Emitter:
 	# -- delimited members (section 8.6) --------------------------------
 
 	def _delimiter_array(self, placement: Placement) -> str:
-		"""The delimiter as a C++ initialiser list, inline at the call site.
+		"""The name of the local holding the delimiter bytes.
 
-		A `static constexpr` member would need an out-of-line definition
-		before C++17 and is a stored object either way; this is two bytes in
-		an argument, which the optimiser folds into the compare.
+		This used to be a compound literal written inline at the call site --
+		`(const std::uint8_t[]){0x3A}` -- on the reasoning that a `static
+		constexpr` member "would need an out-of-line definition before C++17".
+		Both halves were wrong. A compound literal is C99 and only a *GNU
+		extension* in C++: gcc under `-pedantic-errors` says "ISO C++ forbids
+		compound-literals" and clang says "compound literals are a
+		C99-specific feature", so every header with a delimited scan failed to
+		be the C++17 section 22 claims. And the objection did not apply anyway,
+		because a `static constexpr` data member is implicitly inline from
+		C++17, which is the standard this backend targets.
+
+		A function-local `static constexpr` is the conforming form and needs no
+		definition at any standard. `_delimiter_decl` emits it beside its use,
+		so the storage argument still holds: one array with static storage
+		duration per function, initialised at compile time.
 		"""
 		delim = placement.delimiter
 		assert delim is not None
-		return ("(const std::uint8_t[]){"
-		        + ", ".join(f"0x{byte:02X}" for byte in delim) + "}")
+		return "situ_delim_" + "".join(f"{byte:02x}" for byte in delim)
+
+	def _delimiter_decl(self, placement: Placement, indent: str) -> str:
+		"""The declaration `_delimiter_array` names, at `indent`.
+
+		`static` so it is not rebuilt on the stack each call, and `constexpr`
+		so the bytes are the compiler's rather than an initialiser that runs.
+		"""
+		delim = placement.delimiter
+		assert delim is not None
+		return (f"{indent}static constexpr std::uint8_t "
+		        f"{self._delimiter_array(placement)}[] = {{"
+		        + ", ".join(f"0x{byte:02X}" for byte in delim) + "};")
 
 	def _scan_expression(self, placement: Placement, data: str,
 			limit: str) -> str:
@@ -1126,6 +1149,7 @@ class Emitter:
 			f"\t[[nodiscard]] std::uint32_t {scan}_from(std::uint32_t at)"
 			" const noexcept",
 			"\t{",
+			self._delimiter_decl(placement, "\t\t"),
 			f"\t\treturn {self._scan_expression(placement, 'raw_.base + at', limit_at)};",
 			"\t}",
 			f"\t[[nodiscard]] std::uint32_t {scan}() const noexcept",
@@ -1471,6 +1495,7 @@ class Emitter:
 
 		def walk_from(base: str) -> list[str]:
 			return [
+			self._delimiter_decl(placement, "\t\t"),
 			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
 			"",
@@ -1752,6 +1777,7 @@ class Emitter:
 				"\t\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t\t}",
 				"",
+				self._delimiter_decl(placement, "\t\t\t"),
 				"\t\t\t/* The terminator only terminates where an element"
 				" would start.",
 				"\t\t\t * It belongs to this member, as a delimiter does. */",

@@ -17,7 +17,7 @@ LD		:= $(CC)
 endif
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-CFLAGS		?= -std=c11 -O2 -g $(WARNFLAGS)
+CFLAGS		?= -std=c11 -pedantic-errors -O2 -g $(WARNFLAGS)
 LDFLAGS		?=
 
 BUILD_DIR	?= build

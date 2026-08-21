@@ -13221,6 +13221,16 @@ the difference is a wrong answer nobody sees.**
    environment that skips a check has in common with the environment that
    breaks it.
 
+150. **Selecting a standard is not conforming to one.** `-std=c++17` chooses
+   the dialect and leaves the compiler free to accept its own extensions
+   without a word; `-pedantic-errors` is what makes the choice binding. The
+   C++ backend emitted a compound literal -- C99, and a GNU extension in
+   C++ -- for every delimited scan, and every compile in the tree passed
+   because every one of them asked for the standard and none enforced it.
+   The same distinction is why `luac` proves nothing about Lua 5.2 and why
+   a 3.13 interpreter proves nothing about the 3.11 floor. Where a version
+   is claimed, find the flag that makes the claim fail.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -13535,6 +13545,66 @@ expression, a backslash in the *literal* part rather than the expression, and
 triple quotes, which may span lines in every version. The check was then
 mutation-tested against a real module: `f"{d["k"]}"` in `situc/dump.py` fails
 it, naming the file, the line and the construct.
+
+
+### 26.120 The standard that was requested and never enforced
+
+Section 22 says "C++ (C++17) -- done". It was not. `_delimiter_array` in the
+C++ backend emitted
+
+    (const std::uint8_t[]){0x3A}
+
+for every delimited member, and a compound literal is C99. In C++ it is a GNU
+extension: under `-pedantic-errors` gcc says "ISO C++ forbids compound
+-literals" and clang says "compound literals are a C99-specific feature". So
+`http`, `smtp` and `edges` -- and any schema with an `until` -- produced
+headers that no conforming compiler in strict mode accepts, while gcc and
+clang both compiled them without a murmur because both implement the
+extension.
+
+**Every C++ compile in the tree asked for the standard and none enforced it.**
+Twenty-odd invocations across the Makefiles and the suite pass `-std=c++17` or
+`-std=c11`, and not one passed `-pedantic-errors`. That is the distinction in
+invariant 150, and it is the third member of a family this section has now
+collected: `luac` 5.4 cannot enforce Lua 5.2 (26.118), a 3.13 interpreter
+cannot enforce the 3.11 floor (26.119), and `-std=` alone cannot enforce a C
+or C++ standard.
+
+**The emitter's own reasoning had gone stale, which is why it looked
+deliberate.** The docstring rejected the alternative because "a `static
+constexpr` member would need an out-of-line definition before C++17 and is a
+stored object either way". Both halves fail: the compound literal was never
+ISO C++ regardless, and a `static constexpr` data member is *implicitly
+inline* from C++17 -- the very standard the backend targets -- so the
+objection describes a language version the project does not claim. A comment
+explaining why the non-conforming choice was made is what stops the next
+reader looking again.
+
+The fix is a function-local `static constexpr std::uint8_t` array emitted
+beside its use, which is conforming at every standard and keeps the property
+the docstring actually wanted: one array with static storage duration, built
+at compile time rather than on the stack per call.
+
+**What was measured, in the order it was measured.** C first, because the
+scope had to be bounded before anything was changed: all 33 generated C files
+and the shipped `runtime/c/situ.c` compile clean under
+`-std=c11 -pedantic-errors`, and compound literals are legal C11 anyway, so C
+was never affected. Then C++: 3 of 33 failed, all from the one emit site.
+After the fix, 33 of 33 pass under gcc, and clang agrees.
+
+**The flag is now on the checks that read the output**, rather than sprinkled
+through twenty driver compiles whose own code is not the subject:
+`test_every_schema_compiles` in the C++ suite, the generated-C Makefile, and
+the runtime's. The C++ test's docstring already argued that "every backend
+that emits a language with a compiler should be held to its compiler"; being
+held to its *standard* is the same argument one step further, and it is the
+step that was missing.
+
+**The proof is a matrix rather than a pass.** Old emitter with the old flags:
+33 pass, and the defect is invisible. Old emitter with `-pedantic-errors`:
+exactly 3 fail, naming the three schemas with delimited scans. New emitter
+with the new flag: 33 pass. The middle row is the one that matters -- it is
+the only evidence that the flag, rather than the fix, is what closes the hole.
 
 
 ---
