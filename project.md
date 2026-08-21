@@ -13231,6 +13231,17 @@ the difference is a wrong answer nobody sees.**
    a 3.13 interpreter proves nothing about the 3.11 floor. Where a version
    is claimed, find the flag that makes the claim fail.
 
+151. **A lesson learned by one gate is not learned by its sibling.** `mypy`
+   was widened three times to cover shipped Python the compiler's own tree
+   does not contain -- `runtime/python`, then `walker`, then `editor`,
+   the last "named on arrival rather than after the same lesson a third
+   time". The Python floor check named the identical three trees and
+   omitted the identical three, and nobody looked, because the fix had
+   been made and felt done. Invariant 145 said a lesson in one
+   *implementation* is invisible to the next; this is the same for two
+   gates over one question. When a gate's coverage is corrected, ask which
+   other gate asks about the same set.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -13605,6 +13616,64 @@ step that was missing.
 exactly 3 fail, naming the three schemas with delimited scans. New emitter
 with the new flag: 33 pass. The middle row is the one that matters -- it is
 the only evidence that the flag, rather than the fix, is what closes the hole.
+
+
+### 26.121 The floor the generated code was never held to
+
+Finishing what 26.119 started, and the sweep it belongs to. Four backends
+declare a language version in section 22 -- C11, C++17, Python 3.11+, Rust
+2021 -- and by the end of 26.120 two of them were enforced and one, Rust, had
+been all along: every `rustc` invocation in the tree passes
+`--edition 2021`. Python was the one left, and it was unenforced twice over.
+
+**The shipped modules nothing held to the floor.** Both floor checks read
+`bin/situc`, `situc/**` and `tools/*`. That leaves out `runtime/python`,
+`walker` and `editor` -- and the Makefile records `mypy` having exactly those
+three omissions and fixing them one at a time, in a comment that is worth
+reading in full because it names the shape:
+
+    The shipped Python runtime is checked too, and was not: `mypy situc
+    tools tests` reads the compiler and its suite, and `runtime/python` is
+    neither -- so the module every generated module imports was the one
+    nothing checked.
+
+`walker` was added "for the same reason", and `editor` "named on arrival
+rather than after the same lesson a third time". The floor check never got
+that widening, so the module every generated module imports was held to no
+declared version at all. That is invariant 151.
+
+**And the generated code, which is the claim's actual subject.** "Python
+(3.11+)" is a promise about *output* -- the modules a user runs -- and
+nothing asked them anything. Thirty-three modules and some nineteen thousand
+lines, verified only by being imported on whatever interpreter is present,
+which here is 3.13. The backend could emit 3.12 grammar and every test in the
+repository would pass.
+
+**Both measure clean, and that is the argument for doing it now.** Ninety-one
+shipped modules and thirty-three generated ones, zero findings between them.
+A check added while a tree is clean costs one commit; the same check added
+after a violation lands costs the violation as well, and 26.119's incident
+ran six phases.
+
+**One list, in one place.** `tests/unit/python_floor.py` holds the floor, the
+module list and the detector, because three checks now ask the same question
+and the way this goes wrong is that they stop agreeing -- which is precisely
+what happened between `mypy` and the floor check. Same rule as
+`every_schema.py` one directory over, and the same reason.
+
+**Two instruments, because each is blind where the other sees.**
+`ast.parse(feature_version=...)` catches grammar added since the floor and
+misses everything tokenizer-level; the PEP 701 scan catches exactly the
+tokenizer-level f-string changes and nothing else. `below_floor` runs both,
+and both now have controls: PEP 695 type parameters must be caught, `match`
+must not, since it arrived in 3.10 and is *below* the floor. A check keyed on
+"looks modern" fails that one.
+
+**Mutation-tested at both ends rather than trusted.** A same-quote f-string
+appended to `runtime/python/situ_runtime.py` fails the widened check by file
+and line -- which is the proof the three added trees are read rather than
+merely listed. The same construct appended to what the Python backend emits
+fails all thirty-three generated modules.
 
 
 ---

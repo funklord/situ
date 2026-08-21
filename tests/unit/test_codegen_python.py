@@ -24,6 +24,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
+import python_floor
 from every_schema import ROOT, SCHEMAS, ids
 
 RUNTIME = ROOT / "runtime"
@@ -1105,6 +1106,35 @@ def test_an_enum_discriminant_selects(tmp_path: Path) -> None:
 
 
 # -- every example, imported ------------------------------------------------
+
+
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_generated_module_parses_at_the_declared_floor(schema: Path) -> None:
+	"""Section 22 claims "Python (3.11+)", and that is a claim about *output*.
+
+	The floor checks in `test_conventions` read the modules this repository
+	ships. Generated code is neither shipped nor written by hand, so nothing
+	asked it at all -- 33 modules and some nineteen thousand lines, verified
+	only by being imported on whatever interpreter is present, which here is
+	3.13. The backend could emit 3.12 grammar and every test would pass.
+
+	`below_floor` is the same instrument the shipped modules get, and it is
+	two instruments because each is blind where the other sees: `ast.parse`
+	with `feature_version` catches grammar added since the floor and misses
+	everything tokenizer-level, while the PEP 701 scan catches exactly the
+	tokenizer-level f-string changes.
+	"""
+	if python_floor.floor_version() >= (3, 12):
+		pytest.skip("the floor is 3.12 or later")
+
+	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	resolved = resolve(parsed, solve(parsed))
+	module   = generate_py(parsed, resolved, schema.stem).module
+
+	failed = [f"{line}: {why}" for line, why in python_floor.below_floor(module)]
+	assert failed == [], (
+		f"generated {schema.stem}.py needs newer than the declared floor:\n  "
+		+ "\n  ".join(failed))
 
 
 @pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
