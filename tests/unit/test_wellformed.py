@@ -687,6 +687,83 @@ def test_no_rmw_as_a_member_attribute_is_refused_as_misplaced() -> None:
 	assert "not implemented" not in text
 
 
+# -- codec sizes, decision 0038 --------------------------------------------
+
+SIZED_AEAD = (BUFFER + "codec ae {\n\tauthenticated;\n\tlength_preserving;\n"
+        "\tinvertible;\n\ttag_bytes = 16;\n\tnonce_bytes = 12;\n}\n\n"
+        'impl ae extern "x";\n\n')
+
+
+def sealed(tag: str, nonce: str = "u8 nonce[12];") -> str:
+	return (SIZED_AEAD + "struct s {\n\t" + nonce +
+	        "\n\tsealed(ae, nonce = nonce) {\n\t\tu8 body[4];\n\t}\n\t"
+	        + tag + "\n}\n")
+
+
+def test_a_tag_matching_its_codec_is_accepted() -> None:
+	"""The control, and the case every committed schema is in."""
+	parse_text(sealed("tag u8[16];"), path="s.situ")
+
+
+def test_a_tag_narrower_than_its_codec_is_refused() -> None:
+	"""`tag u8[1]` used to compile beside a 16-byte AEAD, so a deliberate
+	truncation and a typo were the same text."""
+	text = rendered(sealed("tag u8[8];"))
+	assert "is 8 bytes and `ae` produces 16" in text
+	assert "`[truncated]`" in text
+
+
+def test_a_truncated_tag_is_accepted_when_it_says_so() -> None:
+	"""OSCORE uses eight bytes on constrained links, so truncation is a design
+	choice rather than an error -- which is why it is made sayable rather than
+	banned. The attribute is the author stating the loss is intended."""
+	parse_text(sealed("tag u8[8] [truncated];"), path="s.situ")
+
+
+def test_a_tag_wider_than_its_codec_is_refused_even_when_marked() -> None:
+	"""`[truncated]` excuses a *narrower* tag and nothing else. No spelling
+	gets more authentication out of a primitive than it produces, so there is
+	nothing an author could mean by the wider case."""
+	for tag in ("tag u8[32];", "tag u8[32] [truncated];"):
+		text = rendered(sealed(tag))
+		assert "is 32 bytes and `ae` produces 16" in text
+		assert "authenticate nothing" in text
+
+
+def test_a_nonce_of_the_wrong_width_is_refused() -> None:
+	"""No exemption either way: a nonce is an input rather than a result, so a
+	narrower one is a different nonce rather than a truncation of one."""
+	text = rendered(sealed("tag u8[16];", "u8 nonce[8];"))
+	assert "takes a 12-byte nonce" in text
+
+
+def test_a_codec_that_states_no_size_checks_nothing() -> None:
+	"""Silence claims nothing, which is already the rule for a declaration the
+	compiler cannot verify. An extern codec's implementation belongs to
+	somebody else, and an author who does not know its tag width must still be
+	able to declare the codec."""
+	quiet = (BUFFER + "codec ae {\n\tauthenticated;\n\tlength_preserving;\n"
+	         "\tinvertible;\n}\n\n" + 'impl ae extern "x";\n\n'
+	         "struct s {\n\tu8 nonce[12];\n"
+	         "\tsealed(ae, nonce = nonce) {\n\t\tu8 body[4];\n\t}\n"
+	         "\ttag u8[3];\n}\n")
+	parse_text(quiet, path="s.situ")
+
+
+def test_truncated_outside_a_tag_is_refused() -> None:
+	"""Its place, so it cannot sit where `check_codec_sizes` never reads it."""
+	assert "a `tag` or `checksum`" in rendered(
+		BUFFER + "struct b { u8 a [truncated]; }\n")
+
+
+def test_a_codec_size_must_be_a_literal() -> None:
+	"""A size the compiler cannot see is one it cannot check a field against,
+	and guessing would be worse than the silence 0038 permits."""
+	text = rendered(BUFFER + "codec ae {\n\tauthenticated;\n"
+	                "\ttag_bytes = 0;\n}\n")
+	assert "needs a literal byte count" in text
+
+
 def test_the_covers_attribute_is_refused() -> None:
 	"""`covers(a, b)` is a clause on a `coded` region (14.1a). The attribute
 	spelling is in `ATTRIBUTE_NAMES` for bracket disambiguation only, and is

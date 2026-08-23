@@ -60,6 +60,7 @@ def check(schema: ast.Schema) -> None:
 	check_coded_coverage(schema)
 	check_attribute_places(schema)
 	check_nonce_references(schema)
+	check_codec_sizes(schema)
 	check_registers(schema)
 	check_no_recursive_types(schema)
 	check_delimiters(schema)
@@ -1391,6 +1392,15 @@ def _attribute_place(struct: ast.StructDecl,
 			"a byte array or a delimited run -- a single scalar has no text "
 			"to have an encoding")
 
+	# A tag narrower than its codec produces, said out loud (0038). Only a
+	# `tag` or `checksum` has a width a codec has an opinion about, and
+	# `check_codec_sizes` reads it from nowhere else -- so anywhere else it
+	# would be the silent nothing 14.5 refuses.
+	if attr.name == "truncated":
+		return None if isinstance(member, ast.TagField) else (
+			"a `tag` or `checksum`, saying its width is deliberately less "
+			"than the one its codec produces")
+
 	if attr.name == "self_as":
 		return None if isinstance(member, ast.TagField) else (
 			"a `tag` or `checksum`, saying what its own bytes read as while "
@@ -1462,7 +1472,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"equalize", "allow_unverified_read", "minimal",
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
-	"no_rmw",
+	"no_rmw", "truncated",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
@@ -2124,6 +2134,140 @@ def check_nonce_references(schema: ast.Schema) -> None:
 					"region cannot be read without the key it helps derive",
 				],
 			)
+
+
+def _declared_byte_width(member: ast.Member) -> int | None:
+	"""How many bytes a member occupies, where the schema says so literally.
+
+	`None` where it does not: an array sized by an expression, a `[remaining]`
+	run, a type whose width is not in its name. A size the compiler cannot see
+	is one it cannot check a declared width against, and guessing would be
+	worse than the silence 0038 already permits.
+	"""
+	from situc.parser import evaluate_literal
+
+	bits = _declared_bits(member)
+	if bits is None or bits % 8:
+		return None
+
+	array = getattr(member, "array", None)
+	if array is None:
+		return bits // 8
+
+	count = evaluate_literal(array.size) if array.size is not None else None
+	if count is None or count < 0:
+		return None
+	return (bits // 8) * count
+
+
+def check_codec_sizes(schema: ast.Schema) -> None:
+	"""A declared tag or nonce is the width its codec says (decision 0038).
+
+	`tag u8[16]` beside `codec aes_gcm_128 { authenticated; ... }` had nothing
+	relating the sixteen to the codec, so `tag u8[1]` compiled and a
+	deliberate truncation read exactly like a typo. Truncation is real --
+	OSCORE uses eight bytes on constrained links -- so it is made sayable with
+	`[truncated]` rather than banned.
+
+	Silence on either side checks nothing: an extern codec's implementation is
+	somebody else's, and an author who does not know its tag width must still
+	be able to declare it.
+	"""
+	codecs = {decl.name: decl for decl in schema.codecs()}
+
+	for struct in schema.structs():
+		regions = auth_regions(struct.members)
+		by_name = {region.name: region for region in regions}
+
+		for tag in tag_fields(struct.members):
+			width = _declared_byte_width(tag)
+			if width is None:
+				continue
+			for name in coverage_of(tag, regions):
+				region = by_name.get(name)
+				codec  = codecs.get(getattr(region, "codec", "") or "")
+				if codec is not None and codec.tag_bytes is not None:
+					_check_tag_width(tag, width, codec)
+
+		for region in regions:
+			if not isinstance(region, ast.Sealed):
+				continue
+			codec = codecs.get(region.codec)
+			if codec is None or codec.nonce_bytes is None:
+				continue
+
+			reference = _argument(region.args, "nonce")
+			if reference is None:
+				continue
+			field = _nonce_field(struct, region, _reference_name(reference))
+			if field is None:
+				continue
+
+			width = _declared_byte_width(field)
+			if width is None or width == codec.nonce_bytes:
+				continue
+
+			# No exemption either way. A nonce is an *input* rather than a
+			# result, so a narrower one is not a truncation of anything -- it
+			# is simply a different nonce, and the primitive will read past it
+			# or pad it without either side saying so.
+			raise error(
+				f"`{field.name}` is {width} bytes and `{codec.name}` takes a "
+				f"{codec.nonce_bytes}-byte nonce",
+				field.span,
+				label = f"expected {codec.nonce_bytes} bytes",
+				notes = ["a nonce is an input rather than a result, so a "
+				         "different width is a different nonce rather than a "
+				         "truncation of one",
+				         "widen the field, or correct `nonce_bytes` on the "
+				         "codec (project.md section 14.8, decision 0038)"],
+			)
+
+
+def _nonce_field(struct: ast.StructDecl, region: ast.Member,
+		name: str | None) -> ast.Field | None:
+	if name is None:
+		return None
+	for field in _fields(_before(struct.members, region)):
+		if field.name == name:
+			return field
+	return None
+
+
+def _check_tag_width(tag: ast.TagField, width: int,
+		codec: ast.CodecDecl) -> None:
+	assert codec.tag_bytes is not None
+	if width == codec.tag_bytes:
+		return
+
+	truncated = any(attr.name == "truncated" for attr in tag.attrs)
+
+	if width > codec.tag_bytes:
+		# No exemption. Nothing an author could write makes a primitive
+		# produce more authentication than it produces.
+		raise error(
+			f"`{tag.name}` is {width} bytes and `{codec.name}` produces "
+			f"{codec.tag_bytes}",
+			tag.span,
+			label = f"wider than the tag `{codec.name}` produces",
+			notes = ["a tag cannot be wider than what computes it: the extra "
+			         "bytes would authenticate nothing",
+			         "narrow the field, or correct `tag_bytes` on the codec "
+			         "(decision 0038)"],
+		)
+
+	if not truncated:
+		raise error(
+			f"`{tag.name}` is {width} bytes and `{codec.name}` produces "
+			f"{codec.tag_bytes}",
+			tag.span,
+			label = "narrower than the tag it holds",
+			notes = ["a truncated tag is legitimate -- OSCORE uses eight "
+			         "bytes on constrained links -- so say so with "
+			         "`[truncated]` and this is accepted",
+			         "without it a deliberate truncation and a typo are the "
+			         "same text (decision 0038)"],
+		)
 
 
 def _argument(args: tuple[ast.Attr, ...], name: str) -> ast.Expr | None:

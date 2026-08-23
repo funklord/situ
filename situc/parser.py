@@ -48,6 +48,8 @@ class _CodecProperties:
 	has_kernel: bool		= False
 	kernel: ast.Kernel | None	= None
 	pipeline: tuple[str, ...]	= ()
+	tag_bytes: int | None		= None
+	nonce_bytes: int | None		= None
 
 	def build(self, span: Span, name: str) -> ast.CodecDecl:
 		return ast.CodecDecl(
@@ -67,6 +69,8 @@ class _CodecProperties:
 			has_kernel        = self.has_kernel,
 			kernel            = self.kernel,
 			pipeline          = self.pipeline,
+			tag_bytes         = self.tag_bytes,
+			nonce_bytes       = self.nonce_bytes,
 		)
 
 
@@ -134,6 +138,9 @@ ATTRIBUTE_NAMES = frozenset({
 	"secret", "nonce", "covers", "allow_unverified_read", "trusted",
 	# section 14.2: a checksum that covers its own bytes, taken as this
 	"self_as",
+	# decision 0038: a tag deliberately narrower than the one its codec
+	# produces, which OSCORE does on constrained links
+	"truncated",
 	# section 15.2: register access modes and side effects (phase 10)
 	"rw", "ro", "wo", "w1c", "w0c", "w1s", "w0s", "rc", "rs", "wo_once", "rsvd",
 	"on_read", "on_write", "volatile", "no_rmw",
@@ -733,6 +740,22 @@ class Parser:
 			self.expect_symbol("=", "after `kernel`")
 			properties.kernel = self.parse_kernel()
 			properties.has_kernel = True
+		elif token.text in ("tag_bytes", "nonce_bytes"):
+			# A size the primitive produces or requires (0038). Bytes, and the
+			# unit is in the name because a key would be bits where these are
+			# bytes -- a unit in the name cannot drift from a comment.
+			self.expect_symbol("=", f"after `{token.text}`")
+			where = self.current
+			value = evaluate_literal(self.parse_expr())
+			if value is None or value <= 0:
+				raise error(
+					f"`{token.text} = N` needs a literal byte count",
+					where.span,
+					label = "not a positive integer literal",
+					notes = ["a size the compiler cannot see is one it cannot "
+					         "check a field against (decision 0038)"],
+				)
+			setattr(properties, token.text, value)
 		elif token.text in ("systematic", "authenticated", "invertible",
 		                    "deterministic", "error_propagating"):
 			setattr(properties, token.text, not negated)

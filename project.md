@@ -2223,6 +2223,22 @@ codec deflate extern {
 | `invertible` | flag | inverse exists |
 | `deterministic` | flag | same input, same output, always |
 | `error_propagating` | flag | a corrupted input unit damages more than its own output unit |
+| `tag_bytes` | byte count | the authentication tag the primitive produces |
+| `nonce_bytes` | byte count | the nonce the primitive requires |
+
+The last two are sizes rather than shape, and they are the only two: decision
+0038 adds them because a schema declares a tag and a nonce as *fields*, so
+there is something concrete to check a stated size against. A key width is
+deliberately absent for the mirror reason -- no construct here names a key, so
+the setting would be read by nothing, which is the shape 26.60 and 26.117 spent
+two passes removing. Both are optional, and silence claims nothing.
+
+**They are not derivable from `expansion`**, which answers a different
+question: how the region's own extent changes. Where a codec appends its
+overhead the two coincide; where the tag is a separate field the codec is
+length-preserving, expansion is zero, and it says nothing about the tag beside
+it. An inference would be right for one spelling and silently wrong for the
+other.
 
 Three of these are new relative to the first draft and each was forced by a real
 codec class:
@@ -3122,7 +3138,7 @@ obligation from it, which is why nothing can catch the cases below.
 
 | what a schema may say today | what situ does with it |
 |---|---|
-| `tag u8[1]` -- an 8-bit authentication tag | accepted; advisor silent |
+| `tag u8[1]` -- an 8-bit authentication tag | refused where the codec states `tag_bytes` (0038); accepted where it does not |
 | `u8 n [nonce]` -- 256 distinct nonces | accepted; advisor silent |
 | `sealed(codec)` naming no nonce | accepted, and an omission looks the same |
 
@@ -3136,6 +3152,15 @@ that a truncated tag is legitimate rather than wrong -- OSCORE uses eight
 bytes on constrained links -- which is precisely why it needs to be *sayable*
 instead of banned: as it stands a deliberate truncation and a mistake are the
 same text.
+
+**Settled and built.**
+`docs/decisions/0038-codec-size-parameters.md` lets a codec declare
+`tag_bytes` and `nonce_bytes`; `check_codec_sizes` compares them against the
+tag and nonce fields a schema declares, and `[truncated]` is how a schema says
+a narrow tag is meant. A key width is deliberately absent, because no
+construct here names a key and the setting would be read by nothing. The three
+constructs below are unblocked by it rather than settled by it: each needs its
+own record.
 
 **Three more, each a construct real protocols need and this cannot express.**
 
@@ -13674,6 +13699,76 @@ appended to `runtime/python/situ_runtime.py` fails the widened check by file
 and line -- which is the proof the three added trees are read rather than
 merely listed. The same construct appended to what the Python backend emits
 fails all thirty-three generated modules.
+
+
+### 26.122 The tag whose width meant nothing
+
+Decision 0038, accepted and built. `examples/packet` declared
+`codec aes_gcm_128 { authenticated; length_preserving; ... }` and `tag u8[16]`
+beside it, and nothing related the sixteen to the codec. `tag u8[1]` compiled,
+and so did `tag u8[64]`.
+
+**The framing in 14.8 was not quite right, and the difference decided the
+design.** That section says the codec vocabulary has nothing about size.
+`expansion` carries a number -- it says how a region's own extent changes under
+the transform. Where a codec appends its overhead, `expansion = +16` *is* the
+tag; where the tag is a separate field, as in `packet`, the codec is
+length-preserving, expansion is zero, and it says nothing about the sixteen
+bytes beside it. So an inference from expansion would have been right for one
+spelling and silently wrong for the other, which is why the sizes are declared
+rather than derived.
+
+`std/codecs.situ` had a comment saying exactly this and drawing the opposite
+conclusion: "the tag is a separate field in the schema, which is why these
+signatures do not carry its size". The observation was right and the "which is
+why" did not follow.
+
+**Truncation is the reason this is a check rather than a ban.** OSCORE uses an
+eight-byte tag on constrained links, so a rule refusing narrow tags would
+refuse a real protocol rather than a mistake. `[truncated]` is the author
+saying the loss is intended, and it excuses a narrower tag only: a tag *wider*
+than its codec produces is refused with no exemption, since no spelling gets
+more authentication out of a primitive than it produces. A nonce mismatch is
+refused either way -- a nonce is an input rather than a result, so a narrow one
+is not a truncation of anything, it is a different nonce.
+
+**What was deliberately left out is the part worth recording.** `key_bits` is
+not added. No construct in this language names a key, so the setting would have
+had nothing in any schema to check against -- which is precisely the shape
+`[nonce]`, `[trusted]` and `[covers]` had, and which 26.60 and 26.117 spent two
+passes removing. Adding a fourth would have re-created the defect those passes
+existed to delete. The width goes in when the construct that gives it something
+to check does.
+
+That constraint also shaped the rest: both settings are optional, because an
+extern codec's implementation belongs to somebody else and an author who does
+not know its tag width must still be able to declare the codec. Silence claims
+nothing, which is the rule the codec accumulator already stated for a
+declaration the compiler cannot verify.
+
+**Units are in the names.** `tag_bytes`, not `tag`. `expansion = +16` carries
+no unit and gets away with it because expansion is only ever bytes; a tag and a
+nonce are bytes while a key is conventionally quoted in bits, so the moment a
+third setting arrives two units are in play. A unit in the name cannot drift
+from one in a comment.
+
+**Every committed schema already agreed, which is what the check is worth.**
+All 33 parse unchanged with the widths declared: the four authenticated codecs
+-- `aes_gcm_128` and `chacha20_poly1305` in `std/codecs.situ`, `aes_gcm_256` in
+`examples/keystore`, and `packet`'s own -- carry a 16-byte tag and a 12-byte
+nonce, from NIST SP 800-38D and RFC 8439 rather than from this compiler. The
+check confirms what the schemas said rather than correcting them, and narrowing
+`packet`'s tag to eight bytes now fails by file and line.
+
+**Attributes: forty-nine now**, with `[truncated]` placed on a tag or checksum
+and nowhere else, named in the table on arrival rather than after a sweep finds
+it unplaced. Thirty-two are placed by the table, seven by checks of their own,
+four are refused as unimplemented, and six remain unplaced.
+
+**What 0038 does not settle**, and says so: key selection -- DTLS's epoch,
+QUIC's key-phase bit, WireGuard's receiver index -- and conversation keys wider
+than 64 bits. Both are named in 14.8, both are unblocked by this, and neither
+follows from it. Each needs its own record.
 
 
 ---

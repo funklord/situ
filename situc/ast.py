@@ -1005,6 +1005,19 @@ class CodecDecl(Decl):
 	# `a |> b |> c`: the stages, in order. Properties compose pointwise and
 	# conservatively (section 13.4).
 	pipeline: tuple[str, ...]	= ()
+	# The sizes the primitive produces and requires, in bytes (decision 0038).
+	# `None` is "not stated" rather than zero: an extern codec's implementation
+	# belongs to somebody else, and an author who does not know its tag width
+	# must still be able to declare the codec. Where one is stated it is
+	# checked against the field the schema declares, and where it is not,
+	# nothing is checked and the schema is no worse off than before.
+	#
+	# Not derivable from `expansion`, which answers a different question. Where
+	# a codec appends its overhead the two coincide; where the tag is a
+	# separate field the codec is length-preserving, expansion is zero, and it
+	# says nothing about the tag beside it.
+	tag_bytes: int | None		= None
+	nonce_bytes: int | None		= None
 
 
 class ImplKind(Enum):

@@ -65,11 +65,19 @@ codec chacha20 {
 // ---------------------------------------------------------------------------
 // Authenticated encryption
 //
-// The ciphertext core is length-preserving and seekable; the tag is a separate
-// field in the schema, which is why these signatures do not carry its size.
+// The ciphertext core is length-preserving and seekable, and the tag is a
+// separate field in the schema -- so `expansion` is zero here and says nothing
+// about the tag beside it. `tag_bytes` and `nonce_bytes` are what say it
+// (decision 0038), and they are what let the compiler check a schema's
+// `tag u8[16]` against the primitive rather than take it on trust.
+//
+// Both are NIST SP 800-38D for GCM and RFC 8439 for ChaCha20-Poly1305: a
+// 16-byte tag and the 96-bit nonce both constructions are specified around.
 // ---------------------------------------------------------------------------
 
 codec aes_gcm_128 {
+	tag_bytes   = 16;
+	nonce_bytes = 12;
 	length_preserving;
 	seekable = linear;
 	granularity = byte;
@@ -79,6 +87,8 @@ codec aes_gcm_128 {
 }
 
 codec chacha20_poly1305 {
+	tag_bytes   = 16;
+	nonce_bytes = 12;
 	length_preserving;
 	seekable = linear;
 	granularity = byte;
