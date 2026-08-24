@@ -42,7 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
-	Check, arm_members, arm_of, classify_check, containment_order,
+	Check, arm_members, arm_of, classify_check, containment_order, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
 	is_own_member,
 	local_name, offset_plan,
@@ -4566,9 +4566,9 @@ class Emitter:
 				"\t}",
 			]
 
-		declared = self._length_expression(struct, placement)
+		declared = self._raw_length_expression(struct, placement)
 		base     = self._base_expression(struct, placement)
-		return [
+		lines = [
 			f"\t/* {placement.path}: the length the message declares has to fit",
 			"\t * the frame it is in. The accessor clamps; this is where a",
 			"\t * message that does not fit is called malformed. */",
@@ -4576,6 +4576,24 @@ class Emitter:
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 		]
+
+		# And against the pin, which the frame check does not cover: it
+		# compares with what is left in the *view*, and anything after this
+		# member makes that larger than the member itself (0039).
+		pinned = pinned_bytes(placement)
+		if pinned is not None:
+			lines += [
+				f"\t/* {placement.path}: and within the {pinned} bytes"
+				" `[size]` pins it to,",
+				"\t * which is a smaller bound than the frame and the one the"
+				" schema",
+				"\t * actually promised. */",
+				f"\tif (({declared}) > {pinned}u) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			]
+
+		return lines
 
 	def _fixed_extent(self, placement: Placement) -> int | None:
 		"""How many bytes this member occupies, where that is a constant.
@@ -4657,6 +4675,25 @@ class Emitter:
 		return chain
 
 	def _length_expression(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "view", running: str | None = None) -> str:
+		"""The length a caller sees, clamped to `[size = N]` where one is.
+
+		A pinned member holds N bytes whatever the length field says, so a
+		declared 127 inside a 16-byte pin is 16 here. `validate` wants the
+		raw value instead -- it reports the 127 as malformed -- and asks
+		`_raw_length_expression` for it.
+
+		The clamp lives here rather than at the accessor sites because
+		there are four of them per backend and the differential found the
+		one that was missed (0039).
+		"""
+		found = self._raw_length_expression(struct, placement, held, running)
+		pin   = pinned_bytes(placement)
+		if pin is None or found is None:
+			return found
+		return f"situ_min_u32({found}, {pin}u)"
+
+	def _raw_length_expression(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view", running: str | None = None) -> str:
 		"""How many bytes a variable-length member occupies, at runtime.
 
@@ -5283,12 +5320,19 @@ class Emitter:
 			#
 			# `validate` is where a malformed message is *reported*. This is
 			# what keeps the accessor safe for a caller who did not ask.
+			# Clamped to the pin as well as to the view. A pinned member
+			# holds N bytes whatever the length field says, so a declared 127
+			# inside a 16-byte pin is 16 here -- and `validate` is where the
+			# 127 is reported as malformed. Without this the accessor handed
+			# back a length reaching past the member into whatever follows,
+			# which the four-backend differential caught the moment a pinned
+			# member existed to catch it on (0039).
+			declared = self._length_expression(struct, placement, held)
 			lines.extend([
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'len')}({taken})",
 				"{",
-				f"\treturn situ_min_u32("
-				f"{self._length_expression(struct, placement, held)},",
+				f"\treturn situ_min_u32({declared},",
 				f"\t\tsitu_remaining_u32({held}.limit, "
 				f"{self._base_expression(struct, placement, gated=gate is not None)}));",
 				"}",

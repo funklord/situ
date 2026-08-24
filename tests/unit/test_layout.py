@@ -40,6 +40,57 @@ def rendered(body: str, preamble: str = PREAMBLE) -> str:
 	return caught.value.diagnostic.render()
 
 
+# -- a pinned footprint, decision 0039 -------------------------------------
+
+
+def test_a_pin_fixes_the_footprint_and_keeps_the_length() -> None:
+	"""The whole point of the construct, in one struct.
+
+	`body` occupies sixteen bytes whatever `used` says, so `trailer` after it
+	keeps an absolute offset -- which `u8 body[used]` alone would have cost
+	it. The length is untouched: `sized_by` still names `used`, which is why
+	the accessors needed no special case.
+	"""
+	placed = {p.name: p for p in
+	          layout("struct S { u8 used; u8 body[used] [size = 16]; u16 t; }")
+	          .structs["S"].placements}
+
+	assert placed["body"].size_bits == 16 * BITS_PER_BYTE
+	assert placed["body"].size_max_bits == 16 * BITS_PER_BYTE
+	assert placed["body"].pinned_bits == 16 * BITS_PER_BYTE
+	assert placed["body"].sized_by == "used"
+	# The member after it is the reason to pin at all.
+	assert placed["t"].offset_bits == 17 * BITS_PER_BYTE
+
+
+def test_without_the_pin_the_member_after_loses_its_offset() -> None:
+	"""The control that says the assertion above is measuring the pin rather
+	than something that was true anyway."""
+	placed = {p.name: p for p in
+	          layout("struct S { u8 used; u8 body[used]; u16 t; }")
+	          .structs["S"].placements}
+
+	assert placed["body"].pinned_bits is None
+	assert placed["body"].size_bits != placed["body"].size_max_bits
+	assert placed["t"].offset_bits is None
+
+
+def test_a_pin_below_the_members_minimum_is_refused() -> None:
+	"""A member whose expression cannot fit its pin describes a message that
+	could never validate, so the two halves are refused rather than one of
+	them silently winning."""
+	text = rendered("struct S { u8 n [min = 40]; u8 a[n] [size = 8]; }")
+	assert "pinned to 8 bytes" in text
+	assert "needs at least 40" in text
+
+
+def test_a_pin_must_be_a_positive_literal() -> None:
+	"""A footprint the compiler cannot see is one no offset after the member
+	can be computed from."""
+	assert "positive literal byte count" in rendered(
+		"struct S { u8 n; u8 a[n] [size = 0]; }")
+
+
 # -- byte-aligned scalars ---------------------------------------------------
 
 

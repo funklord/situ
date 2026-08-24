@@ -192,6 +192,13 @@ class Placement:
 	frame_relative: bool		= False
 	# The member whose value drives this one's size, for blame.
 	sized_by: str | None		= None
+	# `[size = N]` in bits (0039). The footprint is pinned to this, so
+	# `size_bits` and `size_max_bits` both carry it and members after this one
+	# keep their absolute offsets. The *length* is untouched: `sized_by` and
+	# `size_expr` still say how many bytes are meaningful, which is why the
+	# accessors need no special case -- `data_sized` asks about those two and
+	# never about the extent interval.
+	pinned_bits: int | None		= None
 	# Set when the field's type is a varint, which the propagation table reads
 	# to attach the right reasons.
 	varint: str | None		= None
@@ -1476,6 +1483,10 @@ class Solver:
 			if digits is not None:
 				total = Interval.point(digits * BITS_PER_BYTE)
 
+		pinned = self.pinned_extent(member, total)
+		if pinned is not None:
+			total = pinned
+
 		self.check_alignment(decl, member, scalar, cursor, element)
 		position = self.bit_position(scalar, local, cursor, element)
 
@@ -1491,6 +1502,7 @@ class Solver:
 			                  else cursor.lo if cursor.is_exact else None),
 			size_bits      = total.lo,
 			size_max_bits  = total.hi,
+			pinned_bits    = pinned.lo if pinned is not None else None,
 			scalar         = scalar,
 			endian         = local.endian,
 			bit_order      = local.bit_order,
@@ -2009,6 +2021,51 @@ class Solver:
 		# that is still unknown here is unknown everywhere.
 		raise error(f"unknown type `{type_ref.name}`", type_ref.span,
 		            label="not declared")
+
+	def pinned_extent(self, member: ast.Member,
+			total: Interval) -> Interval | None:
+		"""`[size = N]` as an extent, or None where the member has no pin.
+
+		The footprint becomes exactly N bytes and the extent expression goes
+		on saying how many of them are meaningful (0039). Where the schema
+		already committed to more than N, the pin is refused rather than
+		silently winning: a member whose expression can reach 200 bytes inside
+		a 64-byte pin describes a message that cannot validate, and refusing it
+		is 17.0's rule about a construct whose two halves disagree.
+		"""
+		from situc.parser import evaluate_literal
+
+		attr = next((one for one in getattr(member, "attrs", ())
+		             if one.name == "size"), None)
+		if attr is None or attr.value is None:
+			return None
+
+		value = evaluate_literal(attr.value)
+		if value is None or value <= 0:
+			raise error(
+				"`[size = N]` needs a positive literal byte count",
+				attr.span,
+				label = "not a positive integer literal",
+				notes = ["a footprint the compiler cannot see is one no offset "
+				         "after this member can be computed from "
+				         "(decision 0039)"],
+			)
+
+		pinned = value * BITS_PER_BYTE
+		if total.lo > pinned:
+			raise error(
+				f"`{getattr(member, 'name', '?')}` is pinned to {value} bytes "
+				f"and needs at least {total.lo // BITS_PER_BYTE}",
+				attr.span,
+				label = f"smaller than the member's own minimum",
+				notes = ["the extent expression says how much of the pinned "
+				         "footprint is meaningful, so a minimum above it is a "
+				         "message that could never validate",
+				         "widen the pin, or bound the length that drives it "
+				         "(decision 0039)"],
+			)
+
+		return Interval.point(pinned)
 
 	def array_extent(self, member: ast.Field | ast.Reserved, state: Walk,
 			last: bool) -> Interval:

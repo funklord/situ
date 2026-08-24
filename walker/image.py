@@ -38,6 +38,8 @@ MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 #: `image_placement.flags`
 OFFSET_KNOWN, FRAME_RELATIVE, SIZE_FIXED, FRAME_BASE_DYNAMIC = 1, 2, 4, 8
 SIGNED, MARKER_GOVERNED, IS_TAG = 16, 32, 64
+#: `[size = N]`: `size_max_bits` is a pin rather than a reachable bound.
+PINNED = 128
 
 BIG, LITTLE, NATIVE = 1, 2, 3
 
@@ -67,6 +69,10 @@ class Placement:
 	radix_digits: int
 	since: int
 	repeat_cap: int
+
+	@property
+	def pinned(self) -> bool:
+		return bool(self.flags & PINNED)
 
 	@property
 	def offset_known(self) -> bool:

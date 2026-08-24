@@ -42,6 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	pinned_bytes,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
 	decode_bound, decode_ratio,
@@ -62,6 +63,22 @@ from situc.types import ScalarType, lookup
 from situc.unparse import expr_to_source as unparse_expr
 
 WORD_WIDTHS = (8, 16, 32, 64)
+
+
+def _unwrapped(expr: str) -> str:
+	"""`(x)` as `x`, where the parentheses wrap the whole of it.
+
+	`(a) + (b)` is left alone: its first character is an open paren and its
+	last a close, and they are not a pair.
+	"""
+	if not (expr.startswith("(") and expr.endswith(")")):
+		return expr
+	depth = 0
+	for index, char in enumerate(expr):
+		depth += (char == "(") - (char == ")")
+		if depth == 0 and index != len(expr) - 1:
+			return expr
+	return expr[1:-1]
 
 
 @dataclass
@@ -3774,17 +3791,28 @@ class Emitter:
 				"\t\t}",
 			]
 
-		declared = self._length_expression(struct, placement)
+		declared = self._raw_length_expression(struct, placement)
 		start    = self._offset_expression(struct, placement)
 		if declared is None or start is None:
 			return []
-		return [
+		lines = [
 			f"\t\t// {placement.path}: the length the message declares has to",
 			"\t\t// fit the frame it is in.",
 			f"\t\tif self.bytes.len().saturating_sub({start}) < ({declared}) {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 		]
+		pinned = pinned_bytes(placement)
+		if pinned is not None:
+			lines += [
+				f"\t\t// and within the {pinned} bytes `[size]` pins it to,"
+				" which the",
+				"\t\t// frame check does not cover (0039).",
+				f"\t\tif ({declared}) > {pinned} {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+			]
+		return lines
 
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -3981,6 +4009,29 @@ class Emitter:
 		        f" / {rule.group_in}) * {rule.group_out}")
 
 	def _length_expression(self, struct: ResolvedStruct,
+			placement: Placement, running: str | None = None) -> str | None:
+		"""The length a caller sees, clamped to `[size = N]` where one is.
+
+		A pinned member holds N bytes whatever the length field says, so a
+		declared 127 inside a 16-byte pin is 16 here. `validate` wants the
+		raw value instead -- it reports the 127 as malformed -- and asks
+		`_raw_length_expression` for it.
+
+		The clamp lives here rather than at the accessor sites because
+		there are four of them per backend and the differential found the
+		one that was missed (0039).
+		"""
+		found = self._raw_length_expression(struct, placement, running)
+		pin   = pinned_bytes(placement)
+		if pin is None or found is None:
+			return found
+		# `-D unused-parens` is on, and the length expression usually arrives
+		# already parenthesised -- so wrapping it produced `min((x), 16)` and
+		# a denied lint. Strip one redundant outer pair, and only where it
+		# genuinely wraps the whole expression.
+		return f"core::cmp::min({_unwrapped(found)}, {pin})"
+
+	def _raw_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None) -> str | None:
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)

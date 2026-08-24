@@ -97,6 +97,11 @@ typedef struct {
 	uint8_t  flags;
 	uint32_t offset_bits;
 	uint32_t size_bits;
+	/* The upper bound, and a *pin* rather than a reachable bound where
+	 * SITU_WALK_PINNED is set. Read only for that case: a length is clamped
+	 * to a pin and never to an ordinary maximum, because the compiled
+	 * backends clamp to what is left in the view instead. */
+	uint32_t size_max_bits;
 	uint32_t element_bits;
 	uint32_t array_count;
 	uint32_t size_code;
@@ -123,6 +128,8 @@ typedef struct {
  * which is what a missing accessor looks like from outside. */
 #define SITU_WALK_OFFSET_KNOWN 0x01u
 #define SITU_WALK_SIGNED       0x10u
+/* `[size = N]` pinned this member's footprint (decision 0039). */
+#define SITU_WALK_PINNED       0x80u
 
 /* Bind an image. Every table it names is bounds-checked against the whole
  * before anything reads one, because the image is the least trusted input

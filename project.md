@@ -3502,11 +3502,20 @@ error: requirement not satisfied
 ```
 
 This block said `pin `opts` to a fixed size with [size = 1500]` for a long
-time, and the advisor said it too. `[size = N]` is in the parser's vocabulary
-and read by nothing: a reader who took the advice got a schema that compiled,
-changed nothing, and produced the same suggestion on the next run. It is
-refused now (`UNIMPLEMENTED_ATTRS`), and the advice names something the
-compiler implements -- see 26.60.
+time, and the advisor said it too, while `[size = N]` was in the parser's
+vocabulary and read by nothing: a reader who took the advice got a schema that
+compiled, changed nothing, and produced the same suggestion on the next run
+(26.60).
+
+Both halves are settled now and they were settled separately, which is the
+part worth keeping. The *advice* was wrong wherever the attribute stood: what
+reaches this branch is an unbounded scan, and what bounds a scan is `max N`.
+The *attribute* was not wrong, only undefined -- decision 0039 gives it a
+meaning, and it is the one this block originally reached for. `[size = N]`
+pins a member's footprint while its extent expression goes on saying how much
+of it is meaningful, so `opts` can be a fixed 1500 bytes with `hdr.length`
+still bounding its content and `recs` and `trailer` keeping their absolute
+offsets. See 26.123.
 
 Also emit machine-readable diagnostics (`--diagnostics=json`) so the advisor,
 editors, and CI can consume them without parsing prose.
@@ -13267,6 +13276,18 @@ the difference is a wrong answer nobody sees.**
    gates over one question. When a gate's coverage is corrected, ask which
    other gate asks about the same set.
 
+152. **A general rule that happens to fit is not the same as the rule.** The
+   walker needed a pinned member's length clamped, and `size_max_bits`
+   already held the pin -- so clamping every length to its maximum looked
+   like the same thing stated more generally, and cost nothing extra. It
+   broke `arp` and `ble` immediately: the compiled backends clamp a length
+   to what is left in the *view*, never to a declared bound, so the general
+   form disagreed with them everywhere a bound existed and was not a pin.
+   The flag that tells the two apart exists because the generalisation
+   failed, not because anybody foresaw it. When a narrower rule and a wider
+   one agree on the case in front of you, the wider one is a guess about
+   the cases that are not.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -13770,6 +13791,67 @@ QUIC's key-phase bit, WireGuard's receiver index -- and conversation keys wider
 than 64 bits. Both are named in 14.8, both are unblocked by this, and neither
 follows from it. Each needs its own record.
 
+
+### 26.123 The attribute that was parsed for eleven phases and read by none
+
+Decision 0039, accepted and built. `[size = N]` had been in
+`parser.ATTRIBUTE_NAMES` since the layout chapter and read by nothing;
+26.60 found it because the *advisor* was recommending it, refused it with
+`UNIMPLEMENTED_ATTRS`, and left the construct undefined. That was the honest
+holding position and not an answer, and it stayed the answer for two more
+sessions.
+
+**What the language could not say.** A fixed-footprint buffer whose meaningful
+content is a prefix of it. `u8 body[used]` keeps the relationship and costs
+every member after it its absolute offset; `u8 body[64]` keeps the offsets and
+forgets `used` entirely, so nothing checks `used <= 64` and the schema has
+stopped describing the format it started with. The author had to pick which
+half to throw away, and nothing recorded which.
+
+**The implementation was smaller than the design suggested, for one reason.**
+`data_sized` -- the shared decision about whether a member's extent comes from
+the data -- asks about `array_count` and `sized_by`, and never about the
+extent interval. So pinning the *footprint* while leaving those alone meant
+every accessor in four backends kept working unchanged: the length machinery
+was already reading the right thing. The layout gains `pinned_bits`, the
+extent becomes `Fixed(N)`, and members after it get their offsets back.
+
+**The differential earned its cost twice in one sitting.** Adding a pinned
+struct to `edges.situ` -- the file that exists to hold constructs no worked
+example has -- broke two tests immediately, and both were real:
+
+- **The four backends disagreed about a 28-byte buffer.** `validate` had the
+  pin check and the *accessor* did not, so a declared length of 127 inside a
+  16-byte pin came back as whatever each backend's own clamp allowed: 18 from
+  C, 91 from the walker. Both were wrong; the answer is 16. The clamp went
+  into `_length_expression` in each backend rather than at the accessor
+  sites, because there are four such sites per backend and the site that
+  matters is the one that gets missed.
+- **`validate` then needed the raw value back.** Clamping inside the shared
+  expression made the pin check read `min(declared, 16) > 16`, which is never
+  true -- a check that cannot fail, one commit after 26.118 spent a section on
+  exactly that. `_raw_length_expression` is the unclamped one and the check
+  asks for it by name.
+
+**And the walker cost an invariant.** The Python walker needed the same clamp,
+and `size_max_bits` already held the pin -- so clamping every length to its
+maximum looked like the same rule stated more generally. It broke `arp` and
+`ble` at once, because the compiled backends clamp to what is left in the view
+rather than to a declared bound. A `PINNED` flag in the image tells a pin from
+an ordinary maximum, and it uses a spare bit rather than a new field, so the
+format version did not move. That is invariant 152.
+
+The C walker got the same clamp without a test demanding it. It did not parse
+`size_max_bits` at all, and nothing exercised the pinned struct through it
+yet -- which is exactly the shape of invariant 145, a lesson recorded in one
+implementation being invisible to the next. Written in rather than waited for.
+
+**What the construct now costs a schema that uses it.** `edges.situ` carries
+one: `u8 body[used] [size = 16]` with `used [max = 16]`, and
+`require absolute_static(pinned.trailer)` holds -- which it could not have
+before. `validate` refuses a `used` above sixteen in all four backends and
+both walkers, and the accessor hands back at most sixteen bytes whatever the
+message claims.
 
 ---
 

@@ -167,6 +167,11 @@ struct packed_driver size=3..63
   @0x0001   0..60     u32        d  sized-by=n
   ~         2         u16        tail  big
 
+struct pinned size=19
+  @0x0000   1         u8         used  max=16
+  @0x0001   16        u8         body  big sized-by=used
+  @0x0011   2         u16        trailer  big
+
 struct placed size=7
   @0x0000   2         u16        first  big
   @0x0002   4         u32        second  big

@@ -103,6 +103,12 @@ MARKER_GOVERNED		= 1 << 5
 #: bytes or a value, and a walker with no way to tell rendered keystore's
 #: `tag` as a sixteen-byte run (26.82).
 IS_TAG			= 1 << 6
+#: The member's footprint is pinned by `[size = N]` (0039), so `size_max_bits`
+#: is that pin rather than an extent the expression could reach. A walker
+#: clamps a declared length to it, which is what the four backends do in their
+#: accessors; without the flag it cannot tell a pin from an ordinary bound, and
+#: clamping to every bound made it disagree with C about `arp`.
+PINNED			= 1 << 7
 
 #: `image_kind`, matching the enum in std/image.situ. A kind the walker does
 #: not know is an error there rather than a guess, which is why the schema
@@ -1409,6 +1415,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags |= SIZE_FIXED
 		if placement.frame_base_dynamic:
 			flags |= FRAME_BASE_DYNAMIC
+		if placement.pinned_bits is not None:
+			flags |= PINNED
 		if placement.scalar is not None and placement.scalar.signed:
 			flags |= SIGNED
 		if placement.marker is not None:

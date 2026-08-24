@@ -180,6 +180,11 @@ struct packed_driver size=3 mutate=Shifting address=Unstable repr=ValueConverted
   packed_driver.d                        offset=AbsoluteStatic(0x01) size=Bounded(0, 60) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
   packed_driver.tail                     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct pinned size=19 repr=ValueConverted atomic=NonAtomic
+  pinned.used                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  pinned.body                            offset=AbsoluteStatic(0x01) size=Fixed(16) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  pinned.trailer                         offset=AbsoluteStatic(0x11) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+
 struct placed size=7 repr=ValueConverted atomic=NonAtomic
   placed.first                           offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   placed.second                          offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic

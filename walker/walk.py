@@ -196,7 +196,20 @@ def size_bits(view: View, index: int) -> int:
 				"elements, which has no stride")
 		element = (placement.element_bits
 		           if placement.element_bits != NONE else BITS_PER_BYTE)
-		return count * element
+		width = count * element
+		# Clamped to a *pin* and to nothing else. `[size = N]` makes the
+		# member hold N bytes whatever the length field says, which is what
+		# the four backends clamp their accessors to (0039).
+		#
+		# Clamping to every `size_max_bits` instead looks equivalent and is
+		# not: C clamps a length to what is left in the *view* rather than to
+		# a declared maximum, so the general form disagreed with it about
+		# `arp` and `ble` the moment it was tried. The flag is what tells a
+		# pin from an ordinary bound, and it exists because that attempt
+		# failed rather than because the shape was foreseen.
+		if placement.pinned and placement.size_max_bits != NONE:
+			width = min(width, placement.size_max_bits)
+		return width
 	# A nested struct with no single size is as long as its own bytes turn
 	# out to be, and `placement.size_bits` is the *minimum* -- which for
 	# dnsname's `question.qname` is one byte, the length of a name holding

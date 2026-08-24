@@ -210,6 +210,7 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	out->flags        = at[3];
 	out->offset_bits  = u32_at(at + 4);
 	out->size_bits    = u32_at(at + 8);
+	out->size_max_bits = u32_at(at + 12);
 	out->element_bits = u32_at(at + 16);
 	out->array_count  = u32_at(at + 20);
 	out->size_code    = u32_at(at + 24);
@@ -948,7 +949,20 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 		return SITU_WALK_BOUNDS;
 	}
 
-	*out = (uint32_t)count * held.element_bits;
+	uint32_t width = (uint32_t)count * held.element_bits;
+
+	/* Clamped to a pin and to nothing else. `[size = N]` makes the member
+	 * hold N bytes whatever the length field says, which is what the four
+	 * backends clamp their accessors to (decision 0039). Clamping to every
+	 * maximum instead disagrees with C, which clamps to what is left in the
+	 * view rather than to a declared bound. */
+	if ((held.flags & SITU_WALK_PINNED) != 0u
+	    && held.size_max_bits != SITU_WALK_NONE
+	    && width > held.size_max_bits) {
+		width = held.size_max_bits;
+	}
+
+	*out = width;
 	return SITU_WALK_OK;
 }
 

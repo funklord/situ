@@ -45,6 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	pinned_bytes,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, containment_order,
 	covered_run,
@@ -2070,17 +2071,28 @@ class Emitter:
 				"\t\t}",
 			]
 
-		declared = self._length_expression(struct, placement)
+		declared = self._raw_length_expression(struct, placement)
 		start    = self._offset_expression(struct, placement)
 		if declared is None or start is None:
 			return []
-		return [
+		lines = [
 			f"\t\t/* {placement.path}: the length the message declares has to",
 			"\t\t * fit the frame it is in. */",
 			f"\t\tif (situ_remaining_u32(raw_.limit, {start}) < ({declared})) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 		]
+		pinned = pinned_bytes(placement)
+		if pinned is not None:
+			lines += [
+				f"\t\t/* and within the {pinned} bytes `[size]` pins it to,"
+				" which the",
+				"\t\t * frame check does not cover (0039). */",
+				f"\t\tif (({declared}) > {pinned}u) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
+		return lines
 
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2174,6 +2186,25 @@ class Emitter:
 		        f" / {rule.group_in}) * {rule.group_out}")
 
 	def _length_expression(self, struct: ResolvedStruct,
+			placement: Placement, running: str | None = None) -> str | None:
+		"""The length a caller sees, clamped to `[size = N]` where one is.
+
+		A pinned member holds N bytes whatever the length field says, so a
+		declared 127 inside a 16-byte pin is 16 here. `validate` wants the
+		raw value instead -- it reports the 127 as malformed -- and asks
+		`_raw_length_expression` for it.
+
+		The clamp lives here rather than at the accessor sites because
+		there are four of them per backend and the differential found the
+		one that was missed (0039).
+		"""
+		found = self._raw_length_expression(struct, placement, running)
+		pin   = pinned_bytes(placement)
+		if pin is None or found is None:
+			return found
+		return f"situ_min_u32({found}, {pin}u)"
+
+	def _raw_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
 		if placement.kind == "variant":

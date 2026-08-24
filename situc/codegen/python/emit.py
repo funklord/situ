@@ -40,6 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	pinned_bytes,
 	is_own_member,
 	Check, Member, arm_members, coded_spans, containment_order, covered_run,
 	data_sized,
@@ -3592,11 +3593,11 @@ class Emitter:
 				' frame")',
 			]
 
-		declared = self._length_expression(struct, placement)
+		declared = self._raw_length_expression(struct, placement)
 		start    = self._offset_expression(struct, placement)
 		if declared is None or start is None:
 			return []
-		return [
+		lines = [
 			f"\t\t# {placement.path}: the length the message declares has to",
 			"\t\t# fit the frame it is in.",
 			f"\t\tif self._len - ({start}) < ({declared}):",
@@ -3609,6 +3610,21 @@ class Emitter:
 			f'\t\t\traise BoundsError("{placement.path}: declared length'
 			' does not fit")',
 		]
+
+		# And within the pin, which the frame check does not cover: it
+		# compares with what is left in the buffer, and anything after this
+		# member makes that larger than the member itself (0039).
+		pinned = pinned_bytes(placement)
+		if pinned is not None:
+			lines += [
+				f"\t\t# {placement.path}: and within the {pinned} bytes"
+				" `[size]` pins it to.",
+				f"\t\tif ({declared}) > {pinned}:",
+				f'\t\t\traise BoundsError("{placement.path}: declared length'
+				f' exceeds its pinned {pinned} bytes")',
+			]
+
+		return lines
 
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -3737,6 +3753,25 @@ class Emitter:
 		        f" // {rule.group_in}) * {rule.group_out}")
 
 	def _length_expression(self, struct: ResolvedStruct,
+			placement: Placement, running: str | None = None) -> str | None:
+		"""The length a caller sees, clamped to `[size = N]` where one is.
+
+		A pinned member holds N bytes whatever the length field says, so a
+		declared 127 inside a 16-byte pin is 16 here. `validate` wants the
+		raw value instead -- it reports the 127 as malformed -- and asks
+		`_raw_length_expression` for it.
+
+		The clamp lives here rather than at the accessor sites because
+		there are four of them per backend and the differential found the
+		one that was missed (0039).
+		"""
+		found = self._raw_length_expression(struct, placement, running)
+		pin   = pinned_bytes(placement)
+		if pin is None or found is None:
+			return found
+		return f"min({found}, {pin})"
+
+	def _raw_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None) -> str | None:
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)

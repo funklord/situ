@@ -1269,7 +1269,6 @@ def _check_attr_names(attrs: tuple[ast.Attr, ...],
 #: schema that compiled, changed nothing, and produced the same suggestion on
 #: the next run.
 UNIMPLEMENTED_ATTRS: dict[str, str] = {
-	"size":    "an explicit size is not honoured by this build",
 	# Found by sweeping the placement table's remaining names (26.60): both
 	# are in the parser's vocabulary and read by nothing at all.
 	#
@@ -1392,6 +1391,31 @@ def _attribute_place(struct: ast.StructDecl,
 			"a byte array or a delimited run -- a single scalar has no text "
 			"to have an encoding")
 
+	# `[size = N]` pins a member's footprint while its extent expression keeps
+	# saying how much of it is meaningful (0039). Everything it is refused on
+	# is a member that already has an answer to "how many bytes is this":
+	# a scalar's is its type's, a literal array's is written in the brackets,
+	# `[remaining]` runs to the end of the frame, and `until` and `while` put
+	# the answer after the brackets rather than inside them. Two things saying
+	# one thing is the ambiguity 17.0 refuses, not a redundancy to tolerate.
+	if attr.name == "size":
+		array = getattr(member, "array", None)
+		if array is None:
+			return ("an array member -- a scalar's footprint is its type's, "
+			        "and there is nothing for a pin to disagree with")
+		if getattr(member, "until", None) is not None \
+				or getattr(member, "repeat", None) is not None:
+			return ("an array sized by an expression -- `until` and `while` "
+			        "already say where the member stops")
+		if array.size is None or isinstance(array.size, ast.Remaining):
+			return ("an array sized by an expression -- `[remaining]` runs to "
+			        "the end of the frame and says so")
+		from situc.parser import evaluate_literal
+		if evaluate_literal(array.size) is not None:
+			return ("an array sized by an expression -- a literal length is "
+			        "already a fixed footprint, so a pin either repeats it or "
+			        "contradicts it")
+
 	# A tag narrower than its codec produces, said out loud (0038). Only a
 	# `tag` or `checksum` has a width a codec has an opinion about, and
 	# `check_codec_sizes` reads it from nowhere else -- so anywhere else it
@@ -1472,7 +1496,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"equalize", "allow_unverified_read", "minimal",
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
-	"no_rmw", "truncated",
+	"no_rmw", "truncated", "size",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here

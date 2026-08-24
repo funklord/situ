@@ -759,3 +759,23 @@ struct scrambled {
 
 require size(scrambled) == 7;
 require absolute_static(scrambled);
+
+// A pinned footprint (decision 0039). `used` says how many of the sixteen
+// bytes are meaningful; the member occupies sixteen either way, which is what
+// lets `checksum` after it keep an absolute offset. Written here rather than
+// in an example because that is what this file is for: the constructs no
+// worked example happens to have are the ones a backend breaks on quietly.
+//
+// The two halves are what the construct exists to keep together. `u8 body[16]`
+// alone would fix the layout and forget `used`; `u8 body[used]` alone would
+// keep `used` and cost `checksum` its offset. Neither says what the format
+// does, and `validate` checks `used <= 16` only because the pin is here to be
+// checked against.
+struct pinned {
+	u8   used [max = 16];
+	u8   body[used] [size = 16];
+	u16  trailer;
+}
+
+require size(pinned) == 19;
+require absolute_static(pinned.trailer);

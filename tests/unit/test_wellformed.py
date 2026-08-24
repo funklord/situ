@@ -687,6 +687,29 @@ def test_no_rmw_as_a_member_attribute_is_refused_as_misplaced() -> None:
 	assert "not implemented" not in text
 
 
+# -- a pinned footprint, decision 0039 -------------------------------------
+
+
+def test_a_pin_needs_an_array_sized_by_an_expression() -> None:
+	"""Every refusal is a member that already answers "how many bytes is
+	this", and two things saying one thing is 17.0's ambiguity rather than a
+	redundancy to tolerate."""
+	CASES = [
+		("u8 a [size = 4];",                  "an array member"),
+		("u8 a[8] [size = 8];",               "a literal length"),
+		("u8 n; u8 a[remaining] [size = 8];", "`[remaining]` runs to"),
+		('u8 a[] until ":" [size = 8]; u8 b;', "already say where"),
+	]
+	for body, expected in CASES:
+		assert expected in rendered(BUFFER + "struct b { %s }\n" % body), body
+
+
+def test_a_pin_on_an_expression_sized_array_is_accepted() -> None:
+	"""The control. The pin is for exactly the member that has a length the
+	message chooses and a footprint the schema wants fixed."""
+	parse_text(BUFFER + "struct b { u8 n; u8 a[n] [size = 8]; }\n", path="s.situ")
+
+
 # -- codec sizes, decision 0038 --------------------------------------------
 
 SIZED_AEAD = (BUFFER + "codec ae {\n\tauthenticated;\n\tlength_preserving;\n"
