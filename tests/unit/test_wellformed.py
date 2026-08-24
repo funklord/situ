@@ -951,3 +951,55 @@ def test_the_nonce_argument_still_works() -> None:
 	           "struct b {\n\tauthenticated a { u8 n[12]; }\n"
 	           "\tsealed s(aead, nonce = n) { u16 v; }\n"
 	           "\ttag u8[16] covers(a, s);\n}\n", path="s.situ")
+
+
+# -- the argv exercise's two defects, 26.124 --------------------------------
+
+
+def test_a_string_in_a_run_condition_is_refused() -> None:
+	"""The front end accepted `while (text != "--")` and the C backend
+	emitted a comparison against the literal's address, calling a getter no
+	delimited member has -- generated code that does not compile. Found by
+	writing an argv schema whose run ends at `--`."""
+	text = rendered(
+		BUFFER + 'struct arg { u8 text[] until "\\0"; }\n'
+		'struct line { arg a[] while (text != "--") max 4; u8 z; }\n')
+	assert "a string is not one" in text
+	assert "_eq" in text
+
+
+def test_a_byte_run_in_a_run_condition_is_refused() -> None:
+	"""26.113's rule -- a byte run has no value -- met in the condition
+	language: `_find_member` found the field and nothing asked whether it
+	carries a value."""
+	text = rendered(
+		BUFFER + 'struct arg { u8 n; u8 text[] until "\\0"; }\n'
+		"struct line { arg a[] while (text != 0) max 4; u8 z; }\n")
+	assert "no value a condition can compare" in text
+
+
+def test_an_integer_run_condition_is_accepted() -> None:
+	"""The control: dnsname's shape, fields against numbers."""
+	parse_text(BUFFER + "struct el { u2 form; u6 rest; }\n"
+	           "struct run { el e[] while (form == 0 && rest != 0) max 8; }\n",
+	           path="s.situ")
+
+
+def test_located_on_a_variant_arm_member_is_refused() -> None:
+	"""Every backend places an arm member after the discriminant and none
+	consults `at` -- the C emitter hard-coded the offset with the expression
+	nowhere in it. Accepted and ignored is the silently-nothing shape, so it
+	is refused until arm re-addressing is a decision rather than a patch."""
+	text = rendered(
+		BUFFER + "struct e { u8 first;\n"
+		"\tvariant body switch (first) {\n"
+		"\t\tcase 0x2D: u8 option[remaining];\n"
+		"\t\tdefault:   u8 positional[remaining] at 0;\n\t}\n}\n")
+	assert "`at` on a variant arm member is not implemented" in text
+
+
+def test_located_outside_an_arm_is_untouched() -> None:
+	"""The control: a top-level located member is a working construct
+	(sqlite and bmp carry one) and the refusal must not reach it."""
+	parse_text(BUFFER + "struct s { u32 offset; u8 data[4] at offset; }\n",
+	           path="s.situ")

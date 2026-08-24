@@ -425,6 +425,19 @@ def check_repeats(schema: ast.Schema) -> None:
 			_check_one_repeat(struct, member, repeat, structs)
 
 
+def _strings_in(expr: ast.Expr) -> list[ast.StringLiteral]:
+	"""Every string literal in an expression, for refusing them by name."""
+	if isinstance(expr, ast.StringLiteral):
+		return [expr]
+	if isinstance(expr, ast.Binary):
+		return _strings_in(expr.left) + _strings_in(expr.right)
+	if isinstance(expr, ast.Unary):
+		return _strings_in(expr.operand)
+	if isinstance(expr, ast.Call):
+		return [one for arg in expr.args for one in _strings_in(arg)]
+	return []
+
+
 def _check_one_repeat(struct: ast.StructDecl, member: ast.Field | ast.Reserved,
 		repeat: ast.While, structs: Structs) -> None:
 	name = getattr(member, "name", "a reserved member")
@@ -460,9 +473,44 @@ def _check_one_repeat(struct: ast.StructDecl, member: ast.Field | ast.Reserved,
 			         "element has to have fields"],
 		)
 
+	# The condition compares *values*, and both gaps this closes were the
+	# same acceptance from two sides. A string literal in the predicate
+	# passed the front end and the C backend emitted a comparison against
+	# the literal's address, calling a getter no delimited member has --
+	# generated code that does not compile, found by writing an argv schema
+	# whose run ends at `--` (26.124). And a reference to a delimited run
+	# passed `_find_member`, though a byte run has no value to compare: that
+	# is 26.113's rule, met in the condition language.
+	for literal in _strings_in(repeat.predicate):
+		raise error(
+			"a run condition compares values, and a string is not one",
+			literal.span,
+			label = "no value to compare",
+			notes = ["a delimited member is bytes, not a value: comparing it "
+			         "to text is a job for the generated `_eq` helper, in "
+			         "code that walks the run (project.md 26.124)",
+			         "a condition may compare the element's integer fields "
+			         "against numbers"],
+		)
+
 	for path in paths_in(repeat.predicate):
 		field = path.rpartition(".")[2]
-		if _find_member(element, field) is None:
+		found = _find_member(element, field)
+		if found is not None and (
+				getattr(found, "until", None) is not None
+				or getattr(found, "array", None) is not None):
+			raise error(
+				f"`{field}` is a run of bytes, which has no value a "
+				"condition can compare",
+				repeat.span,
+				label = "not a single value",
+				notes = ["the condition is evaluated over the element's "
+				         "*values* -- its integer fields -- and a byte run "
+				         "is not one (project.md 26.113)",
+				         "end the run on a field that carries a value, or "
+				         "with `until` and a terminator element"],
+			)
+		if found is None:
 			raise error(
 				f"`{member.type_ref.name}` has no field `{field}`",
 				repeat.span,
@@ -2480,6 +2528,39 @@ def check_variant_exhaustiveness(schema: ast.Schema) -> None:
 	for struct in schema.structs():
 		for variant in _variants(struct.members):
 			_check_one_variant(variant, struct, enums)
+			for arm in variant.arms:
+				_check_arm_member_is_not_located(arm)
+
+
+def _check_arm_member_is_not_located(arm: ast.VariantArm) -> None:
+	"""`at expr` on an arm member is refused, because it was ignored.
+
+	Every backend's arm path resolves the member's offset by summing what
+	precedes it, and none consults `located` -- the C emitter hard-coded the
+	offset with the expression nowhere in it, and the other three matched.
+	The layout recorded the `at` faithfully, so a schema saying "the
+	positional's text starts at 0, dispatch byte included" parsed, did
+	nothing, and said nothing about doing nothing (26.124's argv exercise,
+	reaching for exactly that).
+
+	Refused rather than implemented, for now: an arm member re-addressed over
+	the discriminant is overlap, and overlap is a canonicity question that
+	deserves a decision rather than an emitter patch. The refusal converts
+	four silent wrongs into one loud one, and implementing later is additive.
+	"""
+	member = arm.member
+	if member is None or getattr(member, "located", None) is None:
+		return
+	raise error(
+		"`at` on a variant arm member is not implemented",
+		member.span,
+		label = "the arm's offset ignores it",
+		notes = ["every backend places an arm member after the discriminant "
+		         "and none consults `at`, so the schema would state what the "
+		         "generated code does not do (project.md 26.124)",
+		         "move the member out of the variant, or leave its offset to "
+		         "the arm"],
+	)
 
 
 def _variants(members: tuple[ast.Member, ...]) -> list[ast.Variant]:

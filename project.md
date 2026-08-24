@@ -14030,6 +14030,46 @@ the check's rendering ever diverge, the drift the constants exist to prevent
 has reached the compiler itself, and the canary says so.
 
 
+### 26.126 The two defects the argv exercise left behind
+
+Both were found by 26.124 and both were the silently-nothing shape; neither
+was the use case's problem. Fixed as refusals rather than features, which is
+the smaller honest move in each case, and each refusal names the construct
+that would implement it properly if a schema ever needs one.
+
+**A string in a run condition was accepted, and the C did not compile.**
+`while (text != "--")` passed the front end; the C backend emitted the
+comparison against the string literal's address, through a `_get` accessor a
+delimited member does not have. gcc's own diagnostic named the function the
+condition language never wired in -- "did you mean `situ_arg_text_eq`?" --
+and no committed schema compares text in a condition, so the per-schema
+compile gate could never have fired: invariant 92's blind spot, exactly
+where 26.118 found it for the Lua operators.
+
+The refusal closes both halves at the same door. A string literal anywhere
+in a `while` predicate is refused by name, and so is a reference to a
+delimited or array member -- `_find_member` used to confirm the field
+existed and nothing asked whether it carries a *value*, which is 26.113's
+rule ("does this construct have a value at all?") arriving in the condition
+language. The dnsname shape -- integer fields against numbers -- is the
+control, untouched.
+
+**`at` on a variant arm member was accepted and ignored by all four
+backends.** The layout recorded `located='0'` faithfully; every backend's
+arm path then resolved the offset by summing what precedes the member and
+consulted nothing else -- C hard-coded `offset = 1u` with the expression
+nowhere in it. A schema saying "the positional's text starts at 0, dispatch
+byte included" parsed, did nothing, and said nothing about doing nothing.
+
+Refused rather than implemented, deliberately: an arm member re-addressed
+over its own discriminant is *overlap*, and overlap is a canonicity
+question -- two names for one byte is 14.5's malleability concern in
+miniature -- that deserves a decision record, not an emitter patch. The
+refusal converts four silent wrongs into one loud one, and implementing
+later is additive. A top-level `located` member is a working construct and
+the control holds it untouched.
+
+
 ---
 
 ## 27. Questions, and how they were settled
