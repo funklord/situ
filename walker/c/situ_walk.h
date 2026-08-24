@@ -135,16 +135,16 @@ typedef struct {
  * before anything reads one, because the image is the least trusted input
  * this component has. */
 situ_walk_err situ_walk_open(situ_walk_image *out,
-	                             const uint8_t *image, uint32_t len);
+                                 const uint8_t *image, uint32_t len);
 
 /* How many members a struct has, and where they start. */
 situ_walk_err situ_walk_members(const situ_walk_image *image, uint32_t shape,
-	                                uint32_t *first, uint32_t *count);
+                                    uint32_t *first, uint32_t *count);
 
 /* One placement, decoded out of the table. */
 situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
-	                                     uint32_t index,
-	                                     situ_walk_placement *out);
+                                         uint32_t index,
+                                         situ_walk_placement *out);
 
 /* Decode one varint at `at`, answering the bytes it consumed and the value.
  *
@@ -159,9 +159,9 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
  * SITU_WALK_BOUNDS where the buffer ends mid-value, which is what the getter
  * does in every backend. */
 situ_walk_err situ_walk_varint(const situ_walk_image *image,
-	                               const uint8_t *message, uint32_t len,
-	                               uint32_t index, uint32_t at,
-	                               uint32_t *consumed, uint64_t *value);
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t index, uint32_t at,
+                                   uint32_t *consumed, uint64_t *value);
 
 /* Where a delimited member's content stops, and whether the delimiter was
  * there. `at` is the member's own byte offset.
@@ -177,18 +177,18 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
  * bytes in every format this targets, and a reader has to be able to check
  * it against the specification they are implementing. */
 situ_walk_err situ_walk_scan(const situ_walk_image *image,
-	                             const uint8_t *message, uint32_t len,
-	                             uint32_t index, uint32_t at,
-	                             uint32_t *content, int *terminated);
+                                 const uint8_t *message, uint32_t len,
+                                 uint32_t index, uint32_t at,
+                                 uint32_t *content, int *terminated);
 
 /* How wide a member is, in bits. A constant where the image knows one; a
  * `size_code` program otherwise, which is what `size = Bounded` costs.
  * SITU_WALK_UNSUPPORTED for a width this build cannot compute -- a `while`
  * run or a variant arm. */
 situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
-	                                  const uint8_t *message, uint32_t len,
-	                                  uint32_t shape, uint32_t index,
-	                                  uint32_t *out);
+                                      const uint8_t *message, uint32_t len,
+                                      uint32_t shape, uint32_t index,
+                                      uint32_t *out);
 
 /* Where a member starts, in bits from the message base.
  *
@@ -196,17 +196,17 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
  * summed -- which is the answer `offset = Dynamic` names, and the reason a
  * walk costs what the capability map says it costs. */
 situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
-	                                    const uint8_t *message, uint32_t len,
-	                                    uint32_t shape, uint32_t index,
-	                                    uint32_t *out);
+                                        const uint8_t *message, uint32_t len,
+                                        uint32_t shape, uint32_t index,
+                                        uint32_t *out);
 
 /* A member's value, from a message. Fixed offsets and widths up to 64 bits;
  * anything else answers SITU_WALK_UNSUPPORTED rather than a number, because
  * a wrong length is indistinguishable from a right one once it leaves. */
 situ_walk_err situ_walk_read(const situ_walk_image *image,
-	                             const uint8_t *message, uint32_t len,
-	                             uint32_t shape, uint32_t index,
-	                             uint64_t *out);
+                                 const uint8_t *message, uint32_t len,
+                                 uint32_t shape, uint32_t index,
+                                 uint64_t *out);
 
 /* How many elements a run holds: a declared count, or the `size_code`
  * program the message answers.
@@ -215,9 +215,9 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
  * run -- how many elements one holds is whichever first fails the predicate,
  * which is a walk this build does not have. */
 situ_walk_err situ_walk_count(const situ_walk_image *image,
-	                              const uint8_t *message, uint32_t len,
-	                              uint32_t shape, uint32_t index,
-	                              uint32_t *out);
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t *out);
 
 /* One element of a run, by index rather than by pointer.
  *
@@ -227,9 +227,9 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
  * function rather than two, a backend and its own run accessor having once
  * disagreed about exactly that. */
 situ_walk_err situ_walk_element(const situ_walk_image *image,
-	                               const uint8_t *message, uint32_t len,
-	                               uint32_t shape, uint32_t index,
-	                               uint32_t at, uint64_t *out);
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t index,
+                                   uint32_t at, uint64_t *out);
 
 /* A member's bytes: where they start in `message`, and how many.
  *
@@ -238,9 +238,9 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
  * member after it. Points into the caller's buffer and copies nothing: an
  * embedded walker in a fixed arena has nowhere to copy to. */
 situ_walk_err situ_walk_bytes(const situ_walk_image *image,
-	                              const uint8_t *message, uint32_t len,
-	                              uint32_t shape, uint32_t index,
-	                              const uint8_t **out, uint32_t *count);
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  const uint8_t **out, uint32_t *count);
 
 /* Is this message a well-formed instance of the struct?
  *
@@ -259,17 +259,17 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
  * cannot be told from a right one.
  */
 situ_walk_err situ_walk_validate(const situ_walk_image *image,
-	                                 const uint8_t *message, uint32_t len,
-	                                 uint32_t shape, situ_walk_err *verdict);
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, situ_walk_err *verdict);
 
 /* Evaluate a section 10 program. `field` reads a placement's value for the
  * expression, and is the only thing tying this to a message. */
 typedef situ_walk_err (*situ_walk_load)(void *ctx, uint32_t index,
-	                                        int64_t *out);
+                                            int64_t *out);
 
 situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
-	                             situ_walk_load load, void *ctx,
-	                             int64_t remaining, int64_t *out);
+                                 situ_walk_load load, void *ctx,
+                                 int64_t remaining, int64_t *out);
 
 #ifdef __cplusplus
 }
