@@ -13853,6 +13853,144 @@ before. `validate` refuses a `used` above sixteen in all four backends and
 both walkers, and the accessor hands back at most sixteen bytes whatever the
 message claims.
 
+### 26.124 An argument parser, as an evaluation of the text machinery
+
+An argv parser and emitter, tried as a use case rather than adopted: it is a
+text protocol with unusually sharp constraints, which makes it a good
+instrument for finding where the text features stop. Everything below was
+measured by writing schemas and running the output, not by reading the spec.
+
+**The wire format half works, and works well.** What `execve` actually
+carries -- NUL-terminated strings back to back, literally `/proc/pid/cmdline`
+-- is an eight-line schema:
+
+    struct arg     { u8 text[] until "\0" [encoding = utf8]; }
+    struct cmdline { arg args[] while (1) max 256; }
+
+The generated Python parsed this session's own `/proc/self/cmdline` exactly:
+three arguments, each recovered byte-for-byte, the run ending at buffer
+exhaustion with no phantom element. `key=value` splitting falls out of
+`until "=""` plus `[remaining]`, and the distinction an option parser
+genuinely needs -- `--verbose` against `--k=`, no value against empty value
+-- is already answerable: `key_terminated` is exactly that predicate. Text
+numbers in values work with real refusals (`retries=x` is a constraint
+error), and `[minimal]` is there for the leading-zero question. The
+capability map is honest about the write half: everything is
+`mutate=Shifting` and no setter pretends otherwise.
+
+**The grammar half finds three expressibility walls, and they are the use
+case's core.**
+
+- **Dispatch consumes; a text grammar needs it to keep.** An argv element is
+  `--` or `--long=v` or `-abc` or a bare word, and the discriminant is a
+  *prefix that the positional case owns*. A variant switches on a field, and
+  a field occupies bytes: `variant body switch (first)` classifies
+  correctly, and hands the positional arm `ello` where the message said
+  `hello`. There is no peek -- every dispatch is dispatch-and-consume. This
+  is the single blocker for option grammars, and for text protocols
+  generally: HTTP's request line against its header lines is the same shape.
+- **No mode switch.** `--` means "everything after me is positional
+  whatever it looks like": the *interpretation* of later elements depends on
+  an earlier element's content. A `while` condition can end a run on the
+  element just read, so termination may depend on the data; arm selection
+  may not. situ describes structure, not parser state, and an option
+  grammar is a state machine however small.
+- **The emitter half does not exist.** The ask was a parser *and emitter*,
+  and nothing generates composition for Shifting members: the edit rung is
+  owned *decode*, and a delimited member has no write surface in any
+  backend. Parsing `key=value\0` is done; building one is not offered.
+
+**And the exercise paid for itself in compiler defects, which is what an
+evaluation is for.** Two, both the silently-nothing shape:
+
+- **`at 0` on a variant arm member is accepted and ignored by all four
+  backends.** The C emits `offset = 1u` with the `at` expression nowhere in
+  it. Located members exist for exactly this kind of re-addressing, so the
+  natural spelling of "the positional's text includes the dispatch byte"
+  parses, does nothing, and says nothing about doing nothing.
+- **A `while` condition comparing text is accepted and emits C that does
+  not compile.** `while (text != "--")` passes the front end; the C backend
+  emits `situ_arg_text_get(element) != "--"` -- a getter that is not
+  generated for a delimited member, compared against a string literal's
+  address. gcc's own diagnostic names the fix: "did you mean
+  `situ_arg_text_eq`?" -- the runtime *has* string equality, and the
+  condition language never wired it in. No committed schema has a text
+  comparison in a `while`, so `test_every_schema_compiles` could never have
+  caught it: invariant 92, once more.
+
+Minor, recorded in passing: string literals know `\n \t \r \0 \\ \"` and no
+`\xNN`, so a delimiter outside that set cannot be spelled; and the Python
+variant comment claims its arms are reachable "above" where nothing was
+emitted, while C documents the same refusal with its reason -- the
+asymmetry is cosmetic, the C wording is the right one.
+
+#### Usefulness against manual parsing, quantified
+
+The question that decides adoption is not "can situ express argv" but "is a
+program better off", and it splits cleanly on where the bytes come from.
+Measured with two worked comparisons, both compiled and run.
+
+**In-process argument parsing -- the typical program -- situ loses outright,
+and would lose even with the walls down.** The decomposition says why. An
+argument parser does five jobs: tokenize, classify each token, map values to
+types, bind them to a config struct, and report errors. The kernel already
+did the first before `main` ran -- argv arrives pre-framed, so the transport
+layer situ handles well solves a problem the in-process case does not have.
+Jobs two and five are the three walls of the section above. What remains is
+value mapping, and the baseline for all five is 51 lines of plain
+`getopt_long` -- struct, defaults, a checked `strtol`, a string-to-enum map,
+error messages, libc only, compiles clean under the full warning set. The
+schema replaces zero of those lines today.
+
+Post-walls it would replace perhaps half, and the half it cannot reach is
+telling: `--color=auto|always|never` needs a string-valued enum, and enum
+members are integers -- `always = "always"` parses and is refused by the
+solver ("a string is not an integer expression", a real refusal, checked).
+GNU permutation -- options after positionals, which users of every GNU tool
+expect -- is a *behaviour* of the parse, not a property of the bytes, and a
+layout language has nowhere to say it. Abbreviation (`--verb` for
+`--verbose`) is the same kind. The competition is also not just getopt:
+argp and CLI11 generate `--help` from their tables, which is the one thing
+a schema could also do and getopt cannot.
+
+**Out-of-process reading -- another process's `/proc/pid/cmdline`, audit
+logs, container runtimes -- situ is genuinely competitive, and the measured
+result is the argument.** The manual reader is 23 lines of `memchr`
+arithmetic whose edge cases are the point: a kernel thread's empty file, a
+final argument the kernel truncated short of its NUL, an embedded empty
+argument. The situ side is the 8-line schema plus 14 user lines, and a
+differential harness ran both over all five edge shapes: they agree
+everywhere -- with the generated side having got truncation and
+embedded-empty right *by construction*, while the manual side needed its
+"harmless past-end" comment reasoned about. Costs, measured: 356 bytes of
+generated object against 225 manual, plus a 586-byte runtime shared across
+every schema in the program, plus a compiler in the build, plus one API burr
+-- `situ_msg_t` takes a mutable buffer, so a read-only caller casts.
+
+The tiebreakers are what the manual side cannot offer at any line count: the
+same schema drives the C daemon and the Python tooling that reads the same
+files, `gen-fuzz` emits a libFuzzer harness for the format, and `validate`
+distinguishes malformed from short. One format read from one language does
+not repay the setup; either axis at two or more starts to.
+
+**Emission loses to the language itself.** Building an argv for `exec` in C
+is an array of pointers -- the native representation *is* the format, and no
+generator improves on a braced initializer. The one case a generated
+emitter would win -- a spawner and spawnee under one schema, argv as a
+checked ABI across the exec boundary -- is exactly the emitter that does
+not exist (the wall above).
+
+**Verdict, against `build-and-commit.md`'s bar of materially better rather
+than tidier.** For parsing a program's own argv: not better at all -- use
+`getopt_long` or the project's C++ option library, and this is not expected
+to change, because half the gap is behavioural convention a layout language
+should not chase. For reading command lines as *data*: better where formats
+times languages exceeds one, on correctness-per-effort and on the shared
+schema, at a cost of a build dependency and a kilobyte. For emission:
+nothing to evaluate until the emitter exists. The argv exercise stays an
+instrument rather than a use case -- what it found (two defects, four
+walls) is worth more than what it would ship.
+
 ---
 
 ## 27. Questions, and how they were settled
