@@ -184,6 +184,55 @@ Settled exceptions:
   the design note beside it agree by construction rather than by
   coincidence.
 
+### Singular, unless somebody else standardised the plural
+
+**Prefer the singular for a directory this project names itself.** `helper/`
+rather than `helpers/`, `doc/` rather than `docs/`, `fixture/` rather than
+`fixtures/`. The name says what kind of thing lives there, not how many;
+one of them and forty of them go in the same place, and the directory
+should not have to be renamed when the count changes.
+
+**The exception is a name somebody else has already settled**, and that is
+a fact about a tool or an ecosystem rather than a preference. Measured in
+this workspace, it covers:
+
+- **Cargo** looks for `tests/`, `examples/` and `benches/` by those exact
+  names, and a workspace's members conventionally sit in `crates/`.
+  `cargo-fuzz` requires `fuzz_targets/`.
+- **GitHub** requires `.github/workflows/`.
+- **git** keeps `hooks/`, which is why `tools/hooks/` is spelled that way.
+
+Where a tool demands the name there is nothing to decide. Where the plural
+is merely widespread, name what it was measured against in the project's
+copy, so the next reader does not reopen it.
+
+**This rule does not reach the settled inventory.** Three canonical names in
+`harmonization.md` are plural -- `tools/`, `docs/` and `docs/decisions/` --
+and they stay until the copyright holder says otherwise, because renaming
+them is a cross-project rewrite rather than a spelling change. Measured
+before this was written: the decision records are cited by path 270 times in
+netcfgd and 95 times in situ, and `tools/` is named as a path 161 times in
+four projects alone, besides `sync.py`, every Makefile's hook target and the
+`~/.claude/tools/` the copies are spread from. An inventory entry is a name
+other things point at, which is exactly what makes it expensive and exactly
+what makes it worth having.
+
+Settled exceptions:
+
+- **Names a tool will not accept lowercased** -- `Makefile`,
+  `CMakeLists.txt`, `AndroidManifest.xml`, `Dockerfile`, `Cargo.toml`.
+- **Root files with an established convention** -- `README.md`, `LICENSE`,
+  `CHANGELOG.md`, `AUTHORS`, `VERSION`. The last is this workspace's own
+  rather than the wider world's, and is settled by use: thirteen of the
+  fourteen private projects track one, and a build reads it for the
+  package version and for whatever the program prints, so the number
+  lives in exactly one place. `claude-guidelines` is the one without it,
+  and it packages nothing.
+- **Package-system spellings** -- kebab-case where Cargo or Debian require
+  it. That is now the same spelling prose uses, so a crate directory and
+  the design note beside it agree by construction rather than by
+  coincidence.
+
 ## ASCII in source
 
 Source and comments are ASCII. Write `--` where prose would use an em dash,
