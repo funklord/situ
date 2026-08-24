@@ -1706,3 +1706,14 @@ def test_an_index_past_the_end_is_refused() -> None:
 	module = emit(WIDE)
 
 	assert "if index >= 4 {" in module
+
+
+def test_value_bounds_are_exported_as_assoc_consts() -> None:
+	"""`[min]`/`[max]` shared with hand-written callers (26.125)."""
+	source = emit("const CAP = 9216;\n"
+	              "struct s { u16 mtu [min = 576, max = CAP];"
+	              " i8 bias [min = -20]; u16 size [max = 100]; }")
+	assert "pub const MTU_VALUE_MIN: u16 = 576;" in source
+	assert "pub const MTU_VALUE_MAX: u16 = 9216;" in source
+	assert "pub const BIAS_VALUE_MIN: i8 = -20;" in source
+	assert "pub const SIZE_VALUE_MAX: u16 = 100;" in source

@@ -45,7 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	pinned_bytes,
+	declared_value_bounds, pinned_bytes,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, containment_order,
 	covered_run,
@@ -3843,7 +3843,31 @@ class Emitter:
 			"\t * of the frame rather than a store. */",
 		]
 
+	def _value_bounds(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[min]`/`[max]` as constants a caller can share (26.125). The
+		decision -- which fields, which domains, what folds -- is
+		`declared_value_bounds`; this is only C++'s spelling of it."""
+		low, high = declared_value_bounds(placement, self.resolved.layout.env)
+		if low is None and high is None:
+			return []
+		scalar = placement.scalar
+		assert scalar is not None
+		name  = bare_name(local_name(struct, placement))
+		ctype = self._ctype(scalar)
+		lines = [""]
+		if low is not None:
+			lines.append(f"\tstatic constexpr {ctype} {name}_value_min = {low};")
+		if high is not None:
+			lines.append(f"\tstatic constexpr {ctype} {name}_value_max = {high};")
+		return lines
+
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		bounds = self._value_bounds(struct, entry.placement) \
+			if entry.placement.kind == "field" else []
+		return bounds + self._member_body(struct, entry)
+
+	def _member_body(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 
 		# The order is `traverse.classify`'s rather than this file's: three

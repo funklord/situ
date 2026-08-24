@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -1959,3 +1960,36 @@ def test_a_marker_governs_a_member_behind_a_variable_one(
 	buf[0], buf[1] = 0x49, 0x49				# "II": little
 	held = module.s.at(module.Message(buf), 0, len(buf))
 	assert held.after == 0x3412
+
+
+def test_value_bounds_are_exported_as_class_constants() -> None:
+	"""`[min]`/`[max]` shared with hand-written callers (26.125)."""
+	source = emit("const CAP = 9216;\n"
+	              "struct s { u16 mtu [min = 576, max = CAP];"
+	              " i8 bias [min = -20]; u16 size [max = 100]; }")
+	assert "MTU_VALUE_MIN = 576" in source
+	assert "MTU_VALUE_MAX = 9216" in source
+	assert "BIAS_VALUE_MIN = -20" in source
+	assert "SIZE_VALUE_MAX = 100" in source
+
+
+def test_value_bounds_agree_with_validate(tmp_path: Path) -> None:
+	"""The exported constant and the emitted check are one fact, executably.
+
+	Both come from the same `[max]` today, so this is a canary rather than a
+	discovery: if the constant's folding and `validate`'s rendering ever
+	diverge -- one changed without the other -- a value at `VALUE_MAX` no
+	longer passes or one past it no longer fails, and the drift the constants
+	exist to prevent has reached the compiler itself."""
+	module = load(tmp_path, "struct s { u16 mtu [min = 576, max = 9216]; }")
+
+	def view(value: int) -> Any:
+		buf = value.to_bytes(2, "big")
+		return module.s.at(module.Message(buf))
+
+	view(module.s.MTU_VALUE_MAX).validate()
+	view(module.s.MTU_VALUE_MIN).validate()
+	with pytest.raises(module.ConstraintError):
+		view(module.s.MTU_VALUE_MAX + 1).validate()
+	with pytest.raises(module.ConstraintError):
+		view(module.s.MTU_VALUE_MIN - 1).validate()

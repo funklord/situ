@@ -42,7 +42,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
-	Check, arm_members, arm_of, classify_check, containment_order, pinned_bytes,
+	Check, arm_members, arm_of, classify_check, containment_order,
+	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
 	is_own_member,
 	local_name, offset_plan,
@@ -1123,6 +1124,42 @@ class Emitter:
 		# has no accessor of its own: the array field emits an indexed one.
 		if placement.kind == "element":
 			return []
+
+		lines_bounds = self._value_bounds(struct, placement)
+		if lines_bounds:
+			return lines_bounds + self._field_body(struct, entry)
+		return self._field_body(struct, entry)
+
+	def _value_bounds(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[min]`/`[max]` as macros a hand-written caller can share (26.125).
+
+		The bound was stated once in the schema, enforced in `validate`, and
+		reachable from nowhere else -- so code validating the same value
+		before it crosses this wire (a CLI flag, a config key) restated the
+		number and drifted. `VALUE_MIN`/`VALUE_MAX` rather than `MIN`/`MAX`,
+		both because it is the *value's* domain rather than the field's byte
+		size, and because a field named `size` would otherwise collide with
+		the struct's own `SIZE_MIN`.
+		"""
+		low, high = declared_value_bounds(placement, self.resolved.layout.env)
+		if low is None and high is None:
+			return []
+
+		scalar = placement.scalar
+		assert scalar is not None
+		suffix = "" if scalar.signed else "u"
+		base   = macro(self.prefix, struct.name,
+		               c_name(self._local(struct, placement)), "VALUE")
+		lines  = [""]
+		if low is not None:
+			lines.append(f"#define {base}_MIN {low}{suffix}")
+		if high is not None:
+			lines.append(f"#define {base}_MAX {high}{suffix}")
+		return lines
+
+	def _field_body(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		placement = entry.placement
 
 		# A nested struct's members are emitted under their own struct, so only
 		# the aggregate itself gets an accessor here. The interior of a sealed

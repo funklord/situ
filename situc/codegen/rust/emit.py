@@ -42,7 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	pinned_bytes,
+	declared_value_bounds, pinned_bytes,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
 	decode_bound, decode_ratio,
@@ -1876,6 +1876,30 @@ class Emitter:
 		return []
 
 	def _getter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		bounds = self._value_bounds(struct, entry.placement) \
+			if entry.placement.kind == "field" else []
+		return bounds + self._getter_body(struct, entry)
+
+	def _value_bounds(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[min]`/`[max]` as associated consts a caller can share (26.125).
+		The decision is `declared_value_bounds`; this is Rust's spelling."""
+		low, high = declared_value_bounds(placement, self.resolved.layout.env)
+		if low is None and high is None:
+			return []
+		scalar = placement.scalar
+		assert scalar is not None
+		name  = c_name(local_name(struct, placement)).upper()
+		width = self._rust_type_for_bits(scalar.bits)
+		rtype = width if not scalar.signed else "i" + width[1:]
+		lines = [""]
+		if low is not None:
+			lines.append(f"\tpub const {name}_VALUE_MIN: {rtype} = {low};")
+		if high is not None:
+			lines.append(f"\tpub const {name}_VALUE_MAX: {rtype} = {high};")
+		return lines
+
+	def _getter_body(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
 

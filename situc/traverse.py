@@ -23,6 +23,7 @@ from situc import ast
 from situc.ast import Schema
 from math import lcm
 
+from situc.expr import Env
 from situc.layout import BITS_PER_BYTE, Arm, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
@@ -1339,6 +1340,48 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		if not frameable(structs, element, seen | {struct.name}):
 			return False
 	return True
+
+
+def declared_value_bounds(placement: Placement,
+		env: Env) -> tuple[int | None, int | None]:
+	"""`[min]` and `[max]` folded to integers, for export as constants.
+
+	The bounds are already stated once, formally, and enforced in `validate`
+	-- and were reachable from nowhere else, so hand-written code validating
+	the same value (a CLI flag that fills this field, a config key) restated
+	the number and drifted. Exporting them is the single-source rule applied
+	to the value domain (26.125).
+
+	One decision, four spellings: each backend renders what this returns and
+	none re-derives it. Only integer-domain scalars answer -- an unsigned or
+	signed integer, a bit run, or a text number, where the schema's bound and
+	the getter's value are the same number. Fixed point and BCD are excluded
+	because the getter's value is scaled or decoded, so exporting the raw
+	bound would hand a caller a constant in the wrong domain -- worse than
+	none.
+
+	A bound that does not fold (it references a field, say) is skipped rather
+	than refused: `validate` still enforces it, and a constant that cannot be
+	computed at compile time is not a constant.
+	"""
+	from situc.expr import evaluate
+	from situc.types import ScalarKind
+
+	if placement.kind != "field":
+		return (None, None)
+	scalar = placement.scalar
+	if scalar is None or scalar.kind not in (
+			ScalarKind.UINT, ScalarKind.SINT, ScalarKind.BIT):
+		return (None, None)
+
+	found: dict[str, int] = {}
+	for attr in placement.attrs:
+		if attr.name in ("min", "max") and attr.value is not None:
+			try:
+				found[attr.name] = evaluate(attr.value, env)
+			except Exception:
+				continue
+	return (found.get("min"), found.get("max"))
 
 
 def pinned_bytes(placement: Placement) -> int | None:

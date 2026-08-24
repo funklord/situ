@@ -2551,3 +2551,30 @@ def test_the_other_spelling_is_still_refused() -> None:
 	with pytest.raises(SituError) as caught:
 		emit("struct class { u8 x; }\nstruct class_ { u8 y; }\n")
 	assert "`class_` is taken" in caught.value.diagnostic.render()
+
+
+def test_value_bounds_are_exported_as_constexpr() -> None:
+	"""`[min]`/`[max]` as constants a caller can share (26.125).
+
+	The bound was stated once in the schema, enforced in `validate`, and
+	reachable from nowhere else -- so hand-written code validating the same
+	value before it crosses this wire restated the number and drifted.
+	`value_min`/`value_max` rather than `min`/`max` because it is the value's
+	domain, not the field's byte size, and because a field named `size` must
+	not collide with the struct's own size constants -- which is why that
+	field is in the fixture."""
+	source = emit("const CAP = 9216;\n"
+	              "struct s { u16 mtu [min = 576, max = CAP];"
+	              " i8 bias [min = -20]; u16 size [max = 100]; }")
+	assert "static constexpr std::uint16_t mtu_value_min = 576;" in source
+	assert "static constexpr std::uint16_t mtu_value_max = 9216;" in source
+	assert "static constexpr std::int8_t bias_value_min = -20;" in source
+	assert "static constexpr std::uint16_t size_value_max = 100;" in source
+	assert "bias_value_max" not in source
+
+
+def test_value_bounds_stay_out_of_the_wrong_domains() -> None:
+	"""Fixed point is excluded: the getter's value is scaled, so the raw
+	bound would be a constant in the wrong domain -- worse than none."""
+	source = emit("struct s { q8_8 trim [max = 100]; u8 pad; }")
+	assert "value_max" not in source

@@ -13991,6 +13991,45 @@ nothing to evaluate until the emitter exists. The argv exercise stays an
 instrument rather than a use case -- what it found (two defects, four
 walls) is worth more than what it would ship.
 
+### 26.125 The bound that was stated once and readable nowhere
+
+The argv evaluation (26.124) ended with one item that was situ's to build
+rather than a sibling formalism's: a field's `[min]` and `[max]` are stated
+once in the schema and enforced in `validate`, and were reachable from
+nowhere else -- so hand-written code validating the same value before it
+crosses the wire (a CLI flag that fills a `u16 mtu [min = 576, max = 9216]`,
+a config key, a sanity check at an API boundary) restated the number and
+drifted from it. Exporting them is the single-source rule applied to the
+value domain.
+
+**One decision, four spellings.** `declared_value_bounds` in the decision
+layer answers which fields export and what the numbers are -- bounds folded
+through the schema's constants, so `max = CAP` exports 9216 -- and each
+backend only renders: a `#define` in C, a typed `static constexpr` in C++, a
+class attribute in Python, a `pub const` in Rust.
+
+**The name is `VALUE_MIN`/`VALUE_MAX`, and the fixture keeps a field named
+`size` to hold the reason.** `SITU_S_SIZE_MIN` is already the struct's
+byte-size macro, and a field named `size` is common; the VALUE spelling is
+both collision-free there and semantically the truer name -- it is the
+value's domain, not the field's width.
+
+**What is excluded is half the design.** Fixed point and BCD are out because
+the getter's value is scaled or decoded, so a raw bound would be a constant
+in the wrong domain -- worse than none. A bound that does not fold (one that
+references a field) is skipped rather than refused: `validate` still
+enforces it, and the absence is discoverable -- code using the macro fails
+to compile -- rather than silently wrong.
+
+**The agreement is held executably, and mutation-tested.** The constant and
+the `validate` check derive from the same attribute today, which makes the
+test a canary rather than a discovery: the generated Python module's own
+`MTU_VALUE_MAX` drives its own `validate` at all four boundary values, and
+shifting the emitted constant by one fails it. If the constant's folding and
+the check's rendering ever diverge, the drift the constants exist to prevent
+has reached the compiler itself, and the canary says so.
+
+
 ---
 
 ## 27. Questions, and how they were settled

@@ -40,7 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	pinned_bytes,
+	declared_value_bounds, pinned_bytes,
 	is_own_member,
 	Check, Member, arm_members, coded_spans, containment_order, covered_run,
 	data_sized,
@@ -2047,6 +2047,26 @@ class Emitter:
 		]
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		bounds = self._value_bounds(struct, entry.placement) \
+			if entry.placement.kind == "field" else []
+		return bounds + self._member_body(struct, entry)
+
+	def _value_bounds(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[min]`/`[max]` as class constants a caller can share (26.125).
+		The decision is `declared_value_bounds`; this is Python's spelling."""
+		low, high = declared_value_bounds(placement, self.resolved.layout.env)
+		if low is None and high is None:
+			return []
+		name  = py_name(local_name(struct, placement)).replace(".", "_").upper()
+		lines = [""]
+		if low is not None:
+			lines.append(f"\t{name}_VALUE_MIN = {low}")
+		if high is not None:
+			lines.append(f"\t{name}_VALUE_MAX = {high}")
+		return lines
+
+	def _member_body(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 
 		kind = classify(struct, placement, self.structs)

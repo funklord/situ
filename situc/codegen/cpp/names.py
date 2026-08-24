@@ -69,6 +69,10 @@ SUFFIXES = frozenset({
 	"next", "of_host", "offset", "raw_len", "read", "self_span", "span",
 	"span_from", "spans", "t",
 	"terminated", "terminated_from", "valid", "value",
+	# The exported value domain (26.125): a member named x makes x_value_min
+	# and x_value_max class constants, so a schema field of either name would
+	# collide with them the same way x_len collides with a getter.
+	"value_min", "value_max",
 })
 
 
