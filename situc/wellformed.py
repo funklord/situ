@@ -2172,8 +2172,19 @@ def check_nonce_references(schema: ast.Schema) -> None:
 	A nonce read from inside the region it seeds is unusable: the decoder needs
 	it before it can decode anything. This is the same rule as the discriminant
 	of a variant, for the same reason.
+
+	And one nonce field may not feed two sealed regions. 14.8 has claimed
+	that refusal since the survey was written, and it was never implemented
+	(26.127): a schema with two regions sealed under one nonce built in every
+	backend. Under one key, a repeated nonce is the worst failure an AEAD
+	has -- GCM gives up the authentication key, not just the two plaintexts
+	-- and with key selection not yet expressible (14.8), one field feeding
+	two regions is that failure written into the format. When a `key = ...`
+	argument exists, regions under provably distinct keys are the case that
+	relaxes this.
 	"""
 	for struct in schema.structs():
+		fed: dict[str, ast.Member] = {}
 		for region in auth_regions(struct.members):
 			if not isinstance(region, ast.Sealed):
 				continue
@@ -2193,6 +2204,22 @@ def check_nonce_references(schema: ast.Schema) -> None:
 
 			available = [field.name for field in _fields(_before(struct.members, region))]
 			if name in available:
+				earlier = fed.get(name)
+				if earlier is not None:
+					raise error(
+						f"`{name}` seeds two sealed regions",
+						region.span,
+						label = "sealed with the same nonce",
+						notes = [
+							"under one key, a repeated nonce is the worst "
+							"failure an AEAD has: GCM yields the "
+							"authentication key, not just the plaintexts",
+							"give each region its own nonce field; a key "
+							"per region is not yet expressible "
+							"(project.md section 14.8)",
+						],
+					)
+				fed[name] = region
 				continue
 
 			raise error(

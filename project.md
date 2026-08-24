@@ -13288,6 +13288,16 @@ the difference is a wrong answer nobody sees.**
    one agree on the case in front of you, the wider one is a guess about
    the cases that are not.
 
+153. **A claim inside a measured survey is not itself measured.** 14.8 opens
+   its strong half with "measured by writing schemas rather than by reading
+   the section", and one of the six claims under that banner -- "one nonce
+   field feeding two sealed regions is refused" -- was never true: the check
+   did not exist in the commit that featured the crypto model, nor in any
+   since, and the two-region schema built cleanly in every backend. Five
+   verified claims lent the sixth their method's credibility. A list's
+   preamble asserts a method; each entry still has to have been through it,
+   and the one that was not is indistinguishable on the page.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -14068,6 +14078,41 @@ miniature -- that deserves a decision record, not an emitter patch. The
 refusal converts four silent wrongs into one loud one, and implementing
 later is additive. A top-level `located` member is a working construct and
 the control holds it untouched.
+
+
+### 26.127 The refusal the survey promised
+
+Preparing the key-selection record meant reading what `nonce = field`
+actually does, and the answer reshaped the plan twice. First: it is consumed
+by `wellformed` alone -- no backend, no capability map, no wire signature
+reads it -- so its entire value is its checks, which sizes `key = field`
+honestly at "checks plus records, no ABI change". Second: one of those
+checks did not exist.
+
+**14.8 claims "one nonce field feeding two sealed regions is refused, which
+is real nonce-reuse reasoning", and it was never implemented.** Not in
+`situc: feature the cryptographic model`, not in anything after it. A schema
+sealing two regions under one nonce field parsed, solved, and built in every
+backend -- checked through the full pipeline, not just the front end. The
+survey's banner says "measured by writing schemas"; this entry was not, and
+that is invariant 153.
+
+The check exists now, in `check_nonce_references` where the ordering rule
+already lives: two sealed regions of one struct naming the same nonce field
+refuse, with the reason in the diagnostic -- under one key, a repeated nonce
+is the worst failure an AEAD has, GCM yielding the authentication key rather
+than merely the two plaintexts. The same field name in two structs stays
+legal, two structs being two messages.
+
+**The refusal is deliberately unconditional, and the relaxation belongs to
+the record that prompted this.** Nonce reuse under provably distinct keys is
+legitimate -- an epoch bump resets the counter, which is half of why key
+selection exists in every protocol that outlives one key -- but situ cannot
+yet say "these two regions use different keys", so there is nothing a schema
+could write to earn the exemption. When `key = field` lands (the 14.8
+follow-on this session set out to draft), regions under distinct selectors
+are the case that loosens this check, and the check is where that decision
+will be enforced rather than documented.
 
 
 ---

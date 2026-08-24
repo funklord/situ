@@ -1003,3 +1003,41 @@ def test_located_outside_an_arm_is_untouched() -> None:
 	(sqlite and bmp carry one) and the refusal must not reach it."""
 	parse_text(BUFFER + "struct s { u32 offset; u8 data[4] at offset; }\n",
 	           path="s.situ")
+
+
+# -- nonce reuse, the check 14.8 claimed and never had (26.127) -------------
+
+
+SEALING_AEAD = (BUFFER + "codec ae {\n\tauthenticated;\n\tlength_preserving;\n"
+                "\tinvertible;\n}\n\n" + 'impl ae extern "x";\n\n')
+
+
+def test_one_nonce_feeding_two_sealed_regions_is_refused() -> None:
+	"""14.8 has claimed this refusal since the survey was written -- "one
+	nonce field feeding two sealed regions is refused, which is real
+	nonce-reuse reasoning" -- and it was never implemented: the schema below
+	built in every backend. Under one key a repeated nonce is the worst
+	failure an AEAD has; GCM yields the authentication key."""
+	text = rendered(SEALING_AEAD +
+	                "struct s {\n\tu8 n[12];\n"
+	                "\tsealed one(ae, nonce = n) { u8 a[4]; }\n"
+	                "\tsealed two(ae, nonce = n) { u8 b[4]; }\n"
+	                "\ttag u8[16];\n}\n")
+	assert "`n` seeds two sealed regions" in text
+	assert "authentication key" in text
+
+
+def test_distinct_nonces_for_distinct_regions_are_accepted() -> None:
+	"""The control, and the remedy the diagnostic names."""
+	parse_text(SEALING_AEAD +
+	           "struct s {\n\tu8 n[12];\n\tu8 m[12];\n"
+	           "\tsealed one(ae, nonce = n) { u8 a[4]; }\n"
+	           "\tsealed two(ae, nonce = m) { u8 b[4]; }\n"
+	           "\ttag u8[16];\n}\n", path="s.situ")
+
+
+def test_the_same_nonce_name_in_two_structs_is_fine() -> None:
+	"""Two structs are two messages; their fields are different fields."""
+	one = ("struct %s {\n\tu8 n[12];\n"
+	       "\tsealed one(ae, nonce = n) { u8 a[4]; }\n\ttag u8[16];\n}\n")
+	parse_text(SEALING_AEAD + one % "s" + one % "t", path="s.situ")
