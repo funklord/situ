@@ -278,7 +278,7 @@ class Placement:
 	#: `until "\r\n"`: the member ends at the first occurrence of these bytes,
 	#: found by scanning rather than computed. Everything after it has
 	#: `offset = Scanned` rather than `Dynamic` -- a search that can fail,
-	#: not an addition that cannot (docs/decisions/0020-delimited-data.md).
+	#: not an addition that cannot (doc/decision/0020-delimited-data.md).
 	delimiter: bytes | None		= None
 	#: How the delimiter is made inert inside the content, where a protocol
 	#: admits it there. Both cost `canonical = NonCanonical`, because two byte
@@ -618,7 +618,7 @@ class Walk:
 	# `cause` because it is a strictly stronger claim: a dynamic offset is
 	# arithmetic over values already read and cannot fail, while reaching a
 	# member past a scan means searching, and the delimiter may not be there
-	# (docs/decisions/0020-delimited-data.md).
+	# (doc/decision/0020-delimited-data.md).
 	scan: tuple[str, Span] | None = None
 	# Fields that exist only after a transform has run. Recorded so a reference
 	# to one gets the decidability diagnostic of section 13.3 rather than a
@@ -2383,7 +2383,7 @@ def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
 	# stage that appends parity followed by one that expands scales the parity
 	# too. The form stays the ratio, because the form is what decides whether
 	# interior positions survive, and the addend rides along in the arithmetic
-	# (docs/decisions/0016-composed-expansion.md).
+	# (doc/decision/0016-composed-expansion.md).
 	assert codec.ratio is not None
 	numerator, denominator = codec.ratio
 	added = codec.expansion_add * BITS_PER_BYTE
@@ -2658,7 +2658,7 @@ def _delimiter_byte(member: ast.Field | ast.Reserved, name: str) -> int | None:
 	One byte, not a string: quoting is a state toggle and escaping applies to
 	the byte after, and neither generalises to a sequence without becoming a
 	grammar. A schema that needs more than this needs a parser, which is the
-	line docs/decisions/0020-delimited-data.md draws.
+	line doc/decision/0020-delimited-data.md draws.
 	"""
 	if member.until is None:
 		return None

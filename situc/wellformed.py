@@ -202,7 +202,7 @@ def _check_identity(region: ast.Tlv) -> None:
 	one could. The wrong choice here is undetectable at runtime -- an accessor
 	matching a wire type where a field number was meant finds an item, just not
 	that one -- which is what invariant 9 refuses to take a silent default on.
-	See docs/decisions/0023-tlv-tag-identity.md.
+	See doc/decision/0023-tlv-tag-identity.md.
 	"""
 	names = [part.name for part in region.tag_decode]
 
@@ -1094,7 +1094,7 @@ def check_unique_declarations(schema: ast.Schema) -> None:
 def check_const_names_do_not_shadow_attributes(schema: ast.Schema) -> None:
 	"""A constant may not be named after an attribute.
 
-	This closes the hole left open by docs/decisions/0006-bracket-disambiguation.md.
+	This closes the hole left open by doc/decision/0006-bracket-disambiguation.md.
 	`[` introduces either an array size or an attribute list, and a lone
 	identifier is read as an attribute when it is in the attribute vocabulary.
 	So `const max = 4;` would make `u8 buf[max];` parse as a scalar carrying the
@@ -1117,7 +1117,7 @@ def check_const_names_do_not_shadow_attributes(schema: ast.Schema) -> None:
 				notes = [
 					f"`[{decl.name}]` after a field would read as an attribute, "
 					"not as an array size",
-					"rename the constant (docs/decisions/0006-bracket-disambiguation.md)",
+					"rename the constant (doc/decision/0006-bracket-disambiguation.md)",
 				],
 			)
 
@@ -1162,7 +1162,7 @@ CPP_KEYWORDS = frozenset({
 def check_enum_members_are_spellable(schema: ast.Schema) -> None:
 	"""An enum member's name has to be an identifier in every backend.
 
-	Found by writing `examples/ble`, whose address types are `public` and
+	Found by writing `example/ble`, whose address types are `public` and
 	`random` in the kernel's own constants: C++ emitted
 	`enum class address_kind { public = 0, ... }` and the header did not
 	compile, with nothing said at generation time (26.36). Section 17.0's rule
@@ -1322,8 +1322,8 @@ UNIMPLEMENTED_ATTRS: dict[str, str] = {
 	#
 	# The only nonce anything consults is a sealed region's `nonce = ref`
 	# argument, which names the field and does the work. `[nonce]` beside it
-	# said the same thing to nobody -- `examples/packet` and
-	# `examples/keystore` both carried one, and removing it changed not a
+	# said the same thing to nobody -- `example/packet` and
+	# `example/keystore` both carried one, and removing it changed not a
 	# byte of any backend's output nor a line of the capability map.
 	"nonce":   "a nonce is named by `sealed(codec, nonce = field)`, and this "
 	           "attribute is read by nothing",
@@ -2140,7 +2140,7 @@ def _check_coverage_is_disjoint_or_nested(
 	Two tags whose coverage overlaps without one containing the other have no
 	defensible recomputation order -- each covers bytes the other has yet to
 	write. Nested coverage does have one, and
-	docs/decisions/0011-nested-tag-coverage.md fixes it as innermost first.
+	doc/decision/0011-nested-tag-coverage.md fixes it as innermost first.
 	"""
 	for index, (tag, covers) in enumerate(spread):
 		for other_tag, other in spread[:index]:

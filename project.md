@@ -36,18 +36,18 @@ Rules for the implementer:
    code looks complete.
 3. **Syntax in this document is a v0 proposal.** Where a construct's surface
    syntax is marked OPEN, choose something consistent with the rest and record
-   the decision in `docs/decisions/`. Do not silently invent semantics.
+   the decision in `doc/decision/`. Do not silently invent semantics.
 4. **When something in this document is ambiguous or contradictory, stop and
    ask.** Do not resolve ambiguity by guessing; a wrong guess about capability
    propagation is expensive to unwind later.
-5. Everything in `docs/decisions/` is append-only. One file per decision,
+5. Everything in `doc/decision/` is append-only. One file per decision,
    numbered, with the alternatives considered.
 6. **Where this document can be checked against the code, it is.** Five things
    here are held to the implementation by a test that fails when they drift:
 
    | Section | Checked by |
    |---|---|
-   | 7, via `docs/grammar.ebnf` | `test_grammar_sync` |
+   | 7, via `doc/grammar.ebnf` | `test_grammar_sync` |
    | 11.3, the propagation table | `test_the_spec_table_matches_the_rows` |
    | 21, the CLI surface | `test_the_cli_section_lists_every_command` |
    | 23, the repository layout | `test_the_layout_section_lists_every_compiler_module` |
@@ -98,7 +98,7 @@ a buffer the caller owns, and the default -- up to `drive`, a send and receive
 loop carrying the schema's own correlation and timing contract. A schema may
 describe more of a protocol than a given consumer wants generated, and none of
 the upper rungs is emitted unless asked for. See
-`docs/decisions/0032-the-layer-ladder.md`.
+`doc/decision/0032-the-layer-ladder.md`.
 
 Three properties distinguish it from everything in Section 3:
 
@@ -145,7 +145,7 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   and was read as covering it.
 
   Open, and enumerated in
-  `docs/decisions/0031-where-allocation-is-unavoidable.md`: a `coded` region
+  `doc/decision/0031-where-allocation-is-unavoidable.md`: a `coded` region
   whose `expansion = unbounded` cannot report its output extent without
   decompressing, so it is the one case no measure-then-allocate pass can
   serve. Whether it earns a caller-supplied allocator is undecided.
@@ -155,7 +155,7 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
   layout image and a separate program that walks one is a late-stage feature
-  (26.33), decided in `docs/decisions/0026-runtime-image-and-interpreter.md`
+  (26.33), decided in `doc/decision/0026-runtime-image-and-interpreter.md`
   and kept out of this compiler for the reason recorded there -- these
   invariants keep exactly one master.
 - **No behaviour the schema did not state.** A `.situ` file describes the
@@ -170,7 +170,7 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   states no policy the generated code has none -- absent, not guessed, exactly
   as a missing setter is absent rather than silently unsafe. A deployment may
   override a declared **value** at `situc` invocation; it can never introduce
-  a **shape**. See `docs/decisions/0032-the-layer-ladder.md`.
+  a **shape**. See `doc/decision/0032-the-layer-ladder.md`.
 
   How much of that description becomes code is the consumer's, not the
   schema's: `situc build --layer` defaults to `view`, which emits none of the
@@ -370,7 +370,7 @@ require verify_gated(packet.sealed);           // no parse before verify
 The regions and the tag are unnamed here, which means they take their keyword
 as their name -- which is what lets `require verify_gated(packet.sealed)`
 resolve. A struct with two regions of a kind names them:
-`docs/decisions/0010-region-and-tag-names.md`.
+`doc/decision/0010-region-and-tag-names.md`.
 
 ---
 
@@ -407,7 +407,7 @@ decl          = const_decl | enum_decl | struct_decl | codec_decl
 (* One level; nesting is rejected naming its phase. A declaration inside is
    named `outer::header`, and an unqualified reference within the same
    namespace resolves there and nowhere else.
-   docs/decisions/0012-namespaces.md *)
+   doc/decision/0012-namespaces.md *)
 namespace_decl = "namespace" ident "{" { decl } "}" ;
 
 (* Section 15.2. A register lowers to a struct carrying its bus facts; a
@@ -491,7 +491,7 @@ known_attr    = "name" "=" ident
 
 (* Section 9.3. `base` says what an offset in the table is measured from.
    Absent means the region itself, which is the only choice bounded by the
-   region's own extent -- see docs/decisions/0024-index-offset-base.md. *)
+   region's own extent -- see doc/decision/0024-index-offset-base.md. *)
 index_args    = index_arg { "," index_arg } ;
 index_arg     = "base" "=" ( "region" | "message" | ident )
               | attr ;
@@ -512,7 +512,7 @@ index_arg     = "base" "=" ( "region" | "message" | ident )
 
    A `const` whose name collides with an attribute name is rejected at its
    declaration, which kills the residual ambiguity at the source rather than at
-   each use. See docs/decisions/0006-bracket-disambiguation.md. *)
+   each use. See doc/decision/0006-bracket-disambiguation.md. *)
 
 type_ref      = scalar_type | ident ;
 scalar_type   = uint | sint | float | bitfield | "bool" | "byte" ;
@@ -543,7 +543,7 @@ path          = ident { "." ident } ;
    The attribute list is the exchange's retransmission and timing contract
    (26.98), on the relation because the relation already identifies the
    exchange. Stated whole or not at all.
-   docs/decisions/0030-cross-message-relations.md *)
+   doc/decision/0030-cross-message-relations.md *)
 relation_decl = "relation" ident "(" param "," param ")" [ attrs ]
                 "{" { must } "}" ;
 param         = ident ":" qualified ;
@@ -568,7 +568,7 @@ must          = "must" expr ";" ;
 - A bit-packed width above 8 bits cannot fit inside one byte at any offset, so
   it always straddles and therefore always needs `[allow_straddle]`
   (Section 8.2). That is the intended gate: the cost is reported rather than the
-  width being refused. See `docs/decisions/0005-integer-widths.md`.
+  width being refused. See `doc/decision/0005-integer-widths.md`.
 - **Fixed point**: `q<int>_<frac>` signed, `uq<int>_<frac>` unsigned. `q16_16`
   is 32 bits, sixteen of them fractional; `q1_15` is the audio convention. The
   width is the sum, so the bit-packing rule above applies unchanged -- `q4_4`
@@ -585,7 +585,7 @@ must          = "must" expr ";" ;
   error: every other type carries its width in its name, and `bcd<d>` names
   digits, which is why it is the one that can be narrowed. Section 8.2's
   packing rules apply to the result unchanged
-  (`docs/decisions/0027-narrowed-packed-decimal.md`).
+  (`doc/decision/0027-narrowed-packed-decimal.md`).
 - Both cost `repr = ValueConverted`, for different reasons the map states: a
   fixed-point field's stored integer is the value scaled by a power of two, and
   a BCD field's nibbles are digits. Neither generates floating point -- the
@@ -684,7 +684,7 @@ finished" while the members *around* it went on being generated confidently.
 A gap that is declared in one place and silently wrong in another is worse than
 either. What kept it invisible is that no example used a varint field: protobuf
 declares `pb_varint` as a tlv `tag_type`, which the walk reads without ever
-placing a member. `examples/sqlite` is what asked for it (9.3).
+placing a member. `example/sqlite` is what asked for it (9.3).
 
 **The other three backends had the same hole and a different bottom.** A varint
 classified as `Member.NOTHING` -- it has no `scalar`, so it fell past every
@@ -703,7 +703,7 @@ answered on its own and answered wrongly. There is a `Member.VARINT` now.
 Each reads one in its own idiom: an `err` and an out-parameter in C++, a
 `Result<u64>` in Rust, a property that raises in Python. All four refuse a
 truncated value, refuse a padded one where `minimal` is declared, and decode
-`zigzag` as signed. Checked against the cells in `examples/sqlite/vectors.txt`,
+`zigzag` as signed. Checked against the cells in `example/sqlite/vectors.txt`,
 whose varints are one byte each -- where `leb128` and SQLite's encoding agree,
 and nowhere above 127.
 
@@ -1102,7 +1102,7 @@ is the encoded form and the decode is the caller's.
 What stays out is a grammar: alternation, repetition and rule references.
 A parse tree has no offsets to be static about, and the capability map would
 have nothing to say about one. See
-`docs/decisions/0020-delimited-data.md`.
+`doc/decision/0020-delimited-data.md`.
 
 ### 8.6.6 A run that ends on a condition
 
@@ -1256,7 +1256,7 @@ measured from the region cannot name a byte outside it, so the region's own
 extent bounds it and a malformed table is caught by the check that is there
 anyway; the other two can name anything in the message. The safe option is
 silent and the unsafe option is loud. See
-`docs/decisions/0024-index-offset-base.md`.
+`doc/decision/0024-index-offset-base.md`.
 
 A member named by `base` must be declared before the region -- the rule a size
 expression follows, and for the same reason: the base has to be readable when
@@ -1307,7 +1307,7 @@ any byte in the message, because nothing about the region says an element is
 inside it. That is section 9.8's argument for `at expr`, and an index table is
 the same shape with a table in front of it.
 
-**The worked example is `examples/sqlite`**, and finding one took longer than
+**The worked example is `example/sqlite`**, and finding one took longer than
 building the construct. Bare offset tables are rare: the common shape in the
 wild is a table of *records* -- an offset and a length side by side -- which is
 an array of structs and not this. A SQLite b-tree page is the real thing. Its
@@ -1455,7 +1455,7 @@ situ made of a dispatch rather than leaving a reader to re-read the schema.
 
 Which decoded part a `known` key matches is declared with `tag_identity`, and
 required exactly where more than one answer is possible -- see
-`docs/decisions/0023-tlv-tag-identity.md`. Every candidate yields a walk that
+`doc/decision/0023-tlv-tag-identity.md`. Every candidate yields a walk that
 runs and returns *an* item, so a guess here is wrong in the way invariant 9
 exists to refuse: undetectably.
 
@@ -1471,7 +1471,7 @@ of this section. `runtime/c/situ.h` carried a `situ_tlv_iter_t` with `tag >> 3`,
 `tag & 0x7` and protobuf's four wire types written into it: a description of
 one format, in the runtime, beside the schema language whose purpose is to
 describe formats. Generated code never called it. Its only caller was
-`tests/generated/test_protobuf.c`, which hand-wrote a dispatch over field
+`test/generated/test_protobuf.c`, which hand-wrote a dispatch over field
 numbers it `#define`d itself -- numbers the `known` map already declares.
 
 Three descriptions of the protobuf wire format in one tree, and the schema's
@@ -1934,7 +1934,7 @@ argument.
 DNS name compression is the case that forced this. A name is a run of labels,
 each a length byte and that many text bytes, ended by a zero -- and a label
 whose top two bits are `11` is instead a pointer to a name earlier in the same
-message. Every construct in `examples/dnsname/dnsname.situ` is canonical taken
+message. Every construct in `example/dnsname/dnsname.situ` is canonical taken
 alone: a `u2`, a `u6`, a byte run, a `while`. And the format still admits many
 encodings of one name, because the redundancy is not inside the name at all --
 it is between the name and bytes elsewhere in the message that no per-member
@@ -2124,7 +2124,7 @@ Two consequences worth stating plainly:
   cache-timing channel. The trust that makes tier 1 weaker on properties is
   what makes it the right tier for timing: a supplier can state what situ
   cannot derive. See 14.3 and
-  `docs/decisions/0019-sealing-requires-authentication.md`.
+  `doc/decision/0019-sealing-requires-authentication.md`.
 - **Tier-2 codecs cannot lie.** Properties derived from a kernel description are
   sound by construction. Prefer tier 2 wherever a codec is expressible.
 
@@ -2250,7 +2250,7 @@ group is filled out rather than truncated. The group follows from the ratio --
 symbols -- rather than being declared, because the two numbers are not
 independent. base64 and base32 are the cases; base16 is not, because four bits
 divide a byte and the question never arises. See
-`docs/decisions/0018-padded-expansion.md`.
+`doc/decision/0018-padded-expansion.md`.
 
 **`expansion = ratio_exact(a,b)`** replaces the earlier blanket `ratio`. An
 exact integer ratio -- Manchester at 2:1, 4b5b at 5:4, 8b10b at 10:8 -- means
@@ -2311,7 +2311,7 @@ argument for writing it down at all. `gen-codec-tests` had been emitting
 `situ_codec_<codec>_encode` since phase 7 -- a name the accessors did not
 call, the spec did not name, and no `impl` bound. So the harness could not be
 linked against any implementation this repository produces, and had never once
-been run (26.35, `docs/decisions/0028-the-tier-one-codec-abi.md`).
+been run (26.35, `doc/decision/0028-the-tier-one-codec-abi.md`).
 
 ### 13.2b The scattered form, for a transform that covers spans
 
@@ -2485,7 +2485,7 @@ That last one needs the vocabulary above widened, and this example is what
 shows it: Reed-Solomon appends 32 bytes and Manchester then doubles all of it,
 which is `ratio_exact(2, 1)` *and* `+64` at once. A composed signature may
 carry both; a hand-written one still gives one form
-(`docs/decisions/0016-composed-expansion.md`).
+(`doc/decision/0016-composed-expansion.md`).
 
 **What is generated, and what a decoder is handed.** All six families emit an
 implementation, and the twenty codecs in `std/kernels.situ` do so without a
@@ -2644,7 +2644,7 @@ is an error (it makes recomputation order ambiguous).
 Nested coverage recomputes **innermost first**, which is the only order that
 terminates: an outer tag covers the inner tag's own bytes, so writing the inner
 one afterwards would leave the outer one stale again
-(`docs/decisions/0011-nested-tag-coverage.md`).
+(`doc/decision/0011-nested-tag-coverage.md`).
 
 A region no tag covers is an error. `authenticated { }` states that these bytes
 are covered; with no tag in the struct that statement is false, and a construct
@@ -2867,7 +2867,7 @@ It is wire-visible, so it appears in the signature as
 prefix disagrees about the value while every member, offset and size is
 identical -- exactly the class of change that signature exists to catch.
 
-**`examples/udp` uses it and is fully described. `examples/tcp` still does
+**`example/udp` uses it and is fully described. `example/tcp` still does
 not, and the reason has changed twice.**
 
 UDP has a `length` field, so its payload is its own and the coverage closes:
@@ -2882,7 +2882,7 @@ wrong.** `remaining` means to the end of the enclosing frame, and the frame is
 the view the caller acquired -- so a caller who knows the segment length
 acquires a view of it and the coverage closes exactly. The claim reasoned about
 what the *schema* knows when the question is what the *view* carries, and
-`examples/message` had been sizing its trailer that way the whole time. It was
+`example/message` had been sizing its trailer that way the whole time. It was
 disproved in one build, by checking the gap was real before designing for it.
 
 Writing it uncovered two defects instead, one fixed and one open.
@@ -2942,7 +2942,7 @@ which cannot overflow. Their bound is there so the four *agree*: a bound
 applied in three places and not the fourth is a disagreement waiting for a
 lying message, which is exactly how this was found.
 
-**`examples/tcp` is fully described as a result** -- `[self_as = 0]`,
+**`example/tcp` is fully described as a result** -- `[self_as = 0]`,
 `prefix(tcp_pseudo_header)` and `payload[remaining]`, the three parts its
 checksum needs.
 
@@ -2964,7 +2964,7 @@ run with no program measures zero -- so `u8 payload[length - 8]` inside a
 covered region read as empty and fitted any frame.
 
 It had nothing to do with coverage and everything to do with which construct
-opens a namespace. `examples/icmp` has the same shape and its `type` and `code`
+opens a namespace. `example/icmp` has the same shape and its `type` and `code`
 never had a size program either; the defect stayed invisible because no covered
 region had yet held a member whose bounds C would reject. That is the walker's
 value and its hazard in one: a second implementation catches what one cannot,
@@ -3037,7 +3037,7 @@ diagnostic names the way out.
   declines rather than pretending, so the timing properties are the supplier's
   to state. This is the same position decision 0017 takes on codecs generally.
 
-`docs/decisions/0019-sealing-requires-authentication.md`. The second refusal is
+`doc/decision/0019-sealing-requires-authentication.md`. The second refusal is
 reachable only through a pipeline, since no kernel derives `authenticated`, and
 the case it catches is encrypt-then-code: `sealed(aead |> rs)` would otherwise
 emit a table-driven Reed-Solomon over sealed plaintext.
@@ -3154,7 +3154,7 @@ instead of banned: as it stands a deliberate truncation and a mistake are the
 same text.
 
 **Settled and built.**
-`docs/decisions/0038-codec-size-parameters.md` lets a codec declare
+`doc/decision/0038-codec-size-parameters.md` lets a codec declare
 `tag_bytes` and `nonce_bytes`; `check_codec_sizes` compares them against the
 tag and nonce fields a schema declares, and `[truncated]` is how a schema says
 a narrow tag is meant. A key width is deliberately absent, because no
@@ -3168,7 +3168,7 @@ own record.
   QUIC a key-phase bit, WireGuard a receiver index.
   `sealed(codec, nonce = n, key = epoch)` names the field whose value
   selects the region's key, with the nonce's ordering rule for the nonce's
-  reason, and `examples/dtls` is the worked case. Like the nonce argument
+  reason, and `example/dtls` is the worked case. Like the nonce argument
   it reaches no backend yet: its value is its checks and its sayability,
   and whether both belong in the capability map and wire signature stays
   with 26.117's open question.
@@ -3220,7 +3220,7 @@ default -- an omitted clause infers every region for a tag and means "only
 myself" for a transform, because there is a sensible default for what a tag
 authenticates and none for what a transform reaches.
 
-**Ordering is settled too** (14.1b, `docs/decisions/0037-transform-and-tag-
+**Ordering is settled too** (14.1b, `doc/decision/0037-transform-and-tag-
 order.md`). A transform covering bytes a tag covers must say whether the tag
 sees its input or its output, and the answer decides the generated signature:
 under `before` the accessor takes the message and marks the tag dirty, so the
@@ -3975,7 +3975,7 @@ four that are each nearly correct. Every other backend binds the C
 implementation through its own FFI. A per-language plugin slot exists for a
 native implementation where somebody eventually wants one, and is empty:
 `impl crc32 derived for rust;`. See
-`docs/decisions/0017-codec-implementation-sourcing.md`, which also records what
+`doc/decision/0017-codec-implementation-sourcing.md`, which also records what
 this costs -- generated Rust, C++ and Python that uses a codec links the C
 runtime, so "vendors trivially with no dependencies" stays true of situ's
 output only for the C target.
@@ -4021,7 +4021,7 @@ keeps them clear of the accessor namespace.
 Two constructs whose paths flatten to one C identifier are an error naming
 both, because the flattening is not injective -- `A.b_c` and `A_b.c` reach the
 same name -- and the alternative is a redefinition error in generated code with
-no schema location in it (`docs/decisions/0013-identifier-conventions.md`).
+no schema location in it (`doc/decision/0013-identifier-conventions.md`).
 
 Principles:
 
@@ -4070,7 +4070,7 @@ Principles:
   emits is `static inline` in the header and costs nothing when unused -- 31 to 40 functions per schema
   across the worked examples. What is left is `validate`, which is out-of-line
   because it is large, and those *do* survive into a binary that never calls
-  them: measured at four symbols and 648 bytes on `examples/message`. situ has
+  them: measured at four symbols and 648 bytes on `example/message`. situ has
   no way to fix this from the generator side and had never said so.
 
 ### 20.3 Additional generated artifacts
@@ -4084,7 +4084,7 @@ value:
 | capability conformance | `situc gen-checks` | schema alone -> cmocka test cases holding the accessors to what the map claims, and every layer rung the schema reaches to what that rung promises; a map the generated code contradicts is worse than no map |
 | fuzz harness | `situc gen-fuzz` | libFuzzer/AFL entry point per parseable struct; parse safety is the top risk in a protocol parser |
 | byte-layout diagram | `situc doc --format=ascii` | RFC-style packet diagrams straight from the schema; what protocol documentation always needs |
-| Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff. Lua rather than a C plugin, for the ABI reason in `docs/decisions/0021-dissector-language.md` |
+| Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff. Lua rather than a C plugin, for the ABI reason in `doc/decision/0021-dissector-language.md` |
 | wire signature | `situc wire` | Section 19.3 |
 | capability map | `situc map` | Section 18.1 |
 
@@ -4229,7 +4229,7 @@ promise.
 | test mutation | by hand, at the point of writing | a probe that walks generated code is run once against a deliberately wrong expectation, to find out whether it is a test or a compile check. Three of mine were the latter -- `-fsyntax-only`, a `main` nobody executed, an `assert!` in an unrun binary -- and each passed identically before and after the fix it was written for (invariant 35) |
 | the emitted Lua | lua5.4 | parsed for every schema, and four dissected: a UDP header, an IPv4 header with its bit-packed first row, a DNS name walked label by label, and an HTTP request line found by scanning. Offsets and values are compared against the layout the accessors come from |
 | one list of schemas | pytest | five places answered "which schemas are there" and each had its own glob. They read one list now, except where a narrower one is deliberate and says so |
-| every schema is built | pytest | `tests/generated/Makefile` names the schemas it compiles, checks and fuzzes, by hand, and it is the third answer in this repository to "which schemas are there". A schema left out of it is one whose generated C nothing in the build ever runs -- the shape that let `edges.situ` go unbuilt in C++ for weeks |
+| every schema is built | pytest | `test/generated/Makefile` names the schemas it compiles, checks and fuzzes, by hand, and it is the third answer in this repository to "which schemas are there". A schema left out of it is one whose generated C nothing in the build ever runs -- the shape that let `edges.situ` go unbuilt in C++ for weeks |
 | the emitted C and C++ comments | doxygen | run over every schema's headers in both languages, and its XML read back: the capability vector must arrive against the accessor it describes, and a reason for an accessor that does *not* exist must not be attached to whatever declaration follows it |
 
 **Every artifact is now run the way its consumer runs it.** The language server
@@ -4245,7 +4245,7 @@ back.
 it: no Wireshark runs here, so nothing proves Wireshark *accepts* a generated
 plugin. Everything short of that now happens -- `luac -p` parses every
 dissector this repository can generate, and four of them are executed over real
-packet bytes through the Wireshark stub in `tests/lua/dissect.lua`, which
+packet bytes through the Wireshark stub in `test/lua/dissect.lua`, which
 reports what each dissector showed and where. And the aarch64 big-endian target
 is compile-only; only the little-endian one runs under emulation.
 
@@ -4264,7 +4264,7 @@ rule working; `cross-test` prints `skipped (...)` and exits zero, the same
 choice. `make typecheck` refuses to run at all. That is not the inconsistency
 it looks like. A skipped test still reports honestly on what it did not do,
 whereas an unresolvable import makes the module `Any` -- so mypy would check
-`tests/unit/oracles.py` against nothing and call it clean, which is a vacuous
+`test/unit/oracles.py` against nothing and call it clean, which is a vacuous
 pass rather than a declined one, and the one failure mode this project treats
 as worse than a red result.
 
@@ -4335,8 +4335,8 @@ situ/
   bin/
     situc                     the command: a launcher that finds its own
                               package, in the tree or under an install prefix
-  docs/
-    decisions/                append-only numbered decision records
+  doc/
+    decision/                append-only numbered decision records
     grammar.ebnf              extracted, kept in sync with Section 7
     capability-axes.md        normative axis definitions
   situc/                      the compiler; Python 3.11+, stdlib only, mypy strict
@@ -4487,7 +4487,7 @@ situ/
                               either -- the whole space is minutes -- and
                               `test_composed_schemas` runs a fixed sample of
                               it on every commit (26.50)
-  tests/
+  test/
     unit/                     compiler tests (pytest), one file per module
     generated/                cmocka tests over generated C
     cross/                    behavioural checks on aarch64 under emulation
@@ -4497,10 +4497,10 @@ situ/
     lua/                      a stub of the Wireshark API, big enough to run a
                               generated dissector over real bytes and report
                               what it showed (26.14)
-    schemas/                  header.situ, the three in Section 5, and
+    schema/                  header.situ, the three in Section 5, and
                               edges.situ -- constructs no protocol here uses,
                               which exists so their generated code runs at all
-  examples/                   one directory per protocol, name matching its
+  example/                   one directory per protocol, name matching its
                               `.situ` file, each with at least one `require`.
                               A `<name>.vectors` beside a schema is bytes
                               some other implementation wrote, and `gen-tests`
@@ -4515,7 +4515,7 @@ land.
 
 ### 23.1 Decision records
 
-Append-only, in `docs/decisions/`. A decision goes here when the reasoning
+Append-only, in `doc/decision/`. A decision goes here when the reasoning
 would otherwise be lost -- when the obvious reading of this document is not
 what the code does, or when an alternative was rejected for a reason worth
 keeping. They are referenced from the sections they bear on; this is the index.
@@ -4558,7 +4558,7 @@ things under a prefix.
 
 That sentence was here for a long time before either half of it was true of
 CMake: `git log --all` had never seen a `CMakeLists.txt`, and nothing checked.
-`tests/unit/test_cmake.py` is the check now, and it holds the three claims
+`test/unit/test_cmake.py` is the check now, and it holds the three claims
 worth holding -- the top-level build installs what `make install` installs, the
 runtime builds standalone the way every sub-project here must, and
 `situ_generate()` turns a schema into a library target in a consuming project,
@@ -4653,7 +4653,7 @@ own `/usr`.
 
 The version is read from `situc/__init__.py`, which is also what `situc
 --version` prints, so a package and the binary inside it cannot disagree.
-`tests/unit/test_packaging.py` holds the control files to the tree without
+`test/unit/test_packaging.py` holds the control files to the tree without
 building anything; `lintian` is clean on both packages.
 
 **`DEB_MAINTAINER` defaults to a placeholder, and a real build must pass
@@ -4731,13 +4731,13 @@ a numbered section 26 entry with its invariants -- and for nothing else.
   lands in `build/`, which is skipped, and before that in string literals,
   which are excluded so section 17's golden texts keep their gutter. So
   `style_gate.check_text` takes text rather than a path, and
-  `tests/unit/test_generated_sources_follow_the_conventions.py` runs it over
+  `test/unit/test_generated_sources_follow_the_conventions.py` runs it over
   what every schema generates in all four languages plus the checks, the fuzz
   harness and the dissector (26.58).
 - **No autoformatter.** `black` and `ruff format` rewrite tabs to spaces
   unconditionally and cannot be configured out of it, so `tools/style_gate.py`
   under `make style` is the enforcement instead. See
-  `docs/decisions/0003-source-formatting.md`.
+  `doc/decision/0003-source-formatting.md`.
 - Lowercase filenames unless there is a reason otherwise, and `snake_case` over
   `camelCase` in every language.
 - Every module has a docstring stating its single responsibility. If a module
@@ -4746,12 +4746,12 @@ a numbered section 26 entry with its invariants -- and for nothing else.
   are both first-class and may be mixed; nothing in the compiler reads casing.
   What the compiler does check is that two constructs never generate the same C
   identifier, which is a property of flattening a path rather than of how
-  either name is spelled (`docs/decisions/0013-identifier-conventions.md`).
-  `examples/telemetry/` is snake_case throughout, as the working proof. C++
+  either name is spelled (`doc/decision/0013-identifier-conventions.md`).
+  `example/telemetry/` is snake_case throughout, as the working proof. C++
   adds one rule of its own -- a member may not be called what its class is
   called, which `struct option { u8 option; }` reaches without trying -- and
   that backend renames the class and aliases the schema's name to it rather
-  than refusing the schema (`docs/decisions/0025-cpp-class-and-member-names.md`).
+  than refusing the schema (`doc/decision/0025-cpp-class-and-member-names.md`).
 - **A member named for a target language's keyword keeps its name; the
   emitter moves.** `int`, `class`, `type` and `lambda` are all words some
   backend cannot spell, and all four are what specifications actually call
@@ -4785,7 +4785,7 @@ the drift the rule exists to prevent:
 | `std:` | the standard codec and kernel schemas |
 | `build:` | the Makefile and the CMake entry point |
 | `packaging:` | the Debian packaging |
-| `examples/<name>:` | one worked protocol, named: `examples/mqtt:` |
+| `example/<name>:` | one worked protocol, named: `example/mqtt:` |
 | `examples:` | more than one of them in the same change |
 | `runtime:` | a runtime, where it is the point rather than a backend |
 | `README:` | the front page |
@@ -4843,7 +4843,7 @@ Decision 0032 puts six rungs on one axis chosen at `situc build --layer`;
 -- `--owned` emits a fixed-size decode and refuses variable-length members.
 26.95 through 26.98 schedule rungs 3 to 6, and 26.99 finishes rung 2 against
 the enumeration in
-`docs/decisions/0031-where-allocation-is-unavoidable.md`. The numbering is a
+`doc/decision/0031-where-allocation-is-unavoidable.md`. The numbering is a
 log rather than a running order: nothing in 26.95 through 26.98 waits for
 26.99, because emitting a lower rung's files is not the same as needing its
 emitter written first.
@@ -4880,10 +4880,10 @@ any of the above:
 Every one of those numbers is a floor rather than a target, and every one of
 them was stale when somebody last looked: the first said 1280 and the third
 said 20, which is what a hand-maintained count does between the day it is
-written and the day it is read. `tests/unit/every_schema.py` is where the third
+written and the day it is read. `test/unit/every_schema.py` is where the third
 one comes from, and running the suite is where the first one does. The generated
 checks are derived from the schemas, so adding an example adds coverage without
-anybody writing a test. Diagnostics are snapshot-tested in `tests/golden/`,
+anybody writing a test. Diagnostics are snapshot-tested in `test/golden/`,
 because section 17 makes message quality the product rather than a finish: a
 regression in the exact text of a blame chain fails the build.
 
@@ -4897,13 +4897,13 @@ independent of each other. Do not implement ahead of the plan.
 - Repo layout per Section 23; CMake and Make both building an empty target.
 - pytest and mypy strict running in CI; cmocka wired up and running one trivial
   test over hand-written C.
-- `docs/decisions/0001-implementation-language.md` recording the Python choice.
+- `doc/decision/0001-implementation-language.md` recording the Python choice.
 
 **Acceptance:** `make test` and `cmake --build . --target test` both pass with
 zero warnings on host and aarch64 cross.
 
 Delivered with GNU Make only; CMake is deferred and recorded in
-`docs/decisions/0002-build-system.md`, so the acceptance criterion above stands
+`doc/decision/0002-build-system.md`, so the acceptance criterion above stands
 against `make test` alone until CMake lands.
 
 ### 26.1 Phase 1: front end, static subset
@@ -4969,7 +4969,7 @@ verified by disassembly rather than assumed; `gen-tests` and `gen-fuzz` derive
 from the layout rather than a hand-maintained list.
 
 One caveat to carry forward, recorded in
-`docs/decisions/0007-aarch64-testing.md`: the big-endian aarch64 build is
+`doc/decision/0007-aarch64-testing.md`: the big-endian aarch64 build is
 compile-only, because no big-endian glibc is available. That is sound only
 while every multi-byte access is explicit byte indexing rather than a cast. A
 `memcpy` fast path for `MemoryIdentical` fields -- the obvious future
@@ -4998,7 +4998,7 @@ passes.
 
 ### 26.5 Phase 5: expressions and dynamic layout
 
-**Status: complete.** `examples/message/` reproduces the 11.4 map exactly.
+**Status: complete.** `example/message/` reproduces the 11.4 map exactly.
 
 Expression language with interval arithmetic. Counted arrays, length-driven
 sizes, `remaining`. Frame detection and frame-relative staticness. Views,
@@ -5046,7 +5046,7 @@ the capability system is real.
 **Status: complete.** `situc gen-codec-tests` output was checked against four
 deliberately lying implementations. `coded(C) { ... }` is the general transform
 region this table needed and this document did not name;
-`docs/decisions/0009-coded-regions.md` records why, and phase 8's `sealed`
+`doc/decision/0009-coded-regions.md` records why, and phase 8's `sealed`
 becomes `coded` plus authentication rather than a second mechanism.
 
 The property held throughout: **the lattice reads property signatures and
@@ -5083,9 +5083,9 @@ is what "unrepresentable rather than discouraged" has to mean in C. Both halves
 are tested, the compile-refusal one by compiling the attempt and requiring it
 to fail.
 
-Two decisions came out of it: `docs/decisions/0010-region-and-tag-names.md` for
+Two decisions came out of it: `doc/decision/0010-region-and-tag-names.md` for
 the surface syntax the grammar left out, and
-`docs/decisions/0011-nested-tag-coverage.md`, which resolves open question 2.
+`doc/decision/0011-nested-tag-coverage.md`, which resolves open question 2.
 
 Two things this phase found in earlier work, both fixed here: a region
 placement was counted twice in the offset arithmetic of anything after it, and
@@ -5134,7 +5134,7 @@ demonstrate. Only the backend knows it is emitting bus transactions, in
 `situc/codegen/c/mmio.py`.
 
 Three things the section did not spell out and the implementation had to
-decide, all recorded in `docs/decisions/0015-register-access-modes.md`:
+decide, all recorded in `doc/decision/0015-register-access-modes.md`:
 
 - **A field getter takes a word, never the register.** A read is an event, so
   it happens once and is decoded as many times as there are fields. An API that
@@ -5187,7 +5187,7 @@ claiming an error propagation a block code does not have.
 
 Composing the section 13.4 example needed the expansion vocabulary widened --
 `rs |> interleave |> manchester` is a ratio *and* an addend, which 13.2 offers
-only as alternatives. See `docs/decisions/0016-composed-expansion.md`.
+only as alternatives. See `doc/decision/0016-composed-expansion.md`.
 
 Generate codec implementations from kernel descriptions and derive property
 signatures from them (Section 13.4). Because the property signature is the only
@@ -5314,7 +5314,7 @@ checksum.
 
 Two mutations survived because no schema reached the code at all -- signed
 bit-packed fields and arrays of converted scalars were generated and had never
-run. `tests/schemas/edges.situ` exists to reach them; it describes no protocol.
+run. `test/schema/edges.situ` exists to reach them; it describes no protocol.
 
 A struct with no bounded size got no checks at all, which left the offset
 functions -- the whole reason such a struct is unbounded -- checked by nothing.
@@ -5342,7 +5342,7 @@ assert, and the emitted file says so.
 reserved-field and tag-mask paths showed both surviving, not because the checks
 were weak but because nothing in the tree exercised them: `must_be_one` was
 supported and unused, and `DIRTY_MASK` only means anything with more than one
-tag in a struct. Adding both to `tests/schemas/edges.situ` made the gaps
+tag in a struct. Adding both to `test/schema/edges.situ` made the gaps
 visible, and closing them turned up two real defects.
 
 Reserved fields had no generated check at all -- section 8.8 calls them
@@ -5375,7 +5375,7 @@ extensible and it was: both landed by adding kinds to `situc/types.py` and a
 row each to the propagation table, with no parser change at all. That is
 invariant 1 working as intended.
 
-`examples/rtc/rtc.situ` is the worked example, and it is the honest one -- a
+`example/rtc/rtc.situ` is the worked example, and it is the honest one -- a
 real-time clock holds BCD because the part drives a display, and its
 calibration is fixed point because the correction is fractional and the part
 has no FPU. Asking `memory_identical` of the trim field produces a blame chain
@@ -5407,7 +5407,7 @@ the outermost struct rather than an inner one.
 **Executed now, against a stub rather than against Wireshark.** The tests read
 the emitted text -- valid identifiers, and every `tvb(first, count)` a span some
 member actually occupies -- and then run it: `luac -p` parses every dissector,
-and `tests/lua/dissect.lua` stubs the twenty-odd Wireshark calls a generated
+and `test/lua/dissect.lua` stubs the twenty-odd Wireshark calls a generated
 dissector makes and reports what one *showed*, field by field, at absolute
 offsets. Four are run over real packets and their rows compared with the layout.
 
@@ -5419,7 +5419,7 @@ worse than one that fails to load.
 diagrams and a field reference, in plain text or markdown. The diagrams come
 from the same placements the accessors are generated from, which is the whole
 argument for generating them: a drawn diagram is a second description of the
-layout, and second descriptions drift. `situc doc examples/udp/udp.situ`
+layout, and second descriptions drift. `situc doc example/udp/udp.situ`
 reproduces RFC 768, and the IPv4 header reproduces RFC 791 including its
 bit-packed first row.
 
@@ -5479,7 +5479,7 @@ of base64 input produces four characters rather than the two an exact ratio
 predicts. `ratio_padded(a, b)` says `ceil(input / group) * group_out`, where
 the group follows from the ratio rather than being declared -- `lcm(8, b)`
 bits, which is three bytes for base64 and five for base32. See
-`docs/decisions/0018-padded-expansion.md`, which also records why no
+`doc/decision/0018-padded-expansion.md`, which also records why no
 propagation row changed.
 
 The encoders were written against Python's `base64` module and agree with it at
@@ -5499,7 +5499,7 @@ so nothing after it moves. Section 8.6 records what follows -- a `_len()`
 accessor, a validator that demands the terminator, and `NonCanonical` on the
 canonical axis, since the bytes past the terminator are not part of the value.
 
-`tests/schemas/edges.situ` carries a struct using both text attributes, because
+`test/schema/edges.situ` carries a struct using both text attributes, because
 no protocol in the tree does and generated code that never runs is the thing
 that file exists to prevent.
 
@@ -5810,7 +5810,7 @@ four recompute emitters over one shared expression walk, and five artifacts
 that describe a field and each had to learn the word "derived".
 
 Every bug in it was a disagreement rather than a crash, which is why
-`tests/unit/test_invariants.py` compares the backends instead of reading each.
+`test/unit/test_invariants.py` compares the backends instead of reading each.
 
 ### 26.21 Text protocols
 
@@ -5822,7 +5822,7 @@ rather than deleted, because what a position got wrong is the useful part.
 It was wrong on the facts. Every axis says something about a delimited field,
 and two of them -- `canonical` and `access` -- say more about text than about
 binary. The machinery was already in the tree, firing for a construct of the
-same shape. `docs/decisions/0020-delimited-data.md` has the evidence and takes
+same shape. `doc/decision/0020-delimited-data.md` has the evidence and takes
 the decision; 8.6.1 is the language.
 
 What the old position got right is kept: situ is not becoming a parser
@@ -5997,7 +5997,7 @@ And what it did not get: situ describes a compressed name and walks one, and
 does not follow the pointer. Resolving one means re-entering the parser at an
 arbitrary earlier offset with a cycle check and a budget, which is control flow
 rather than layout. Naming that boundary precisely is the difference between a
-limit and a shrug -- the earlier `examples/dns/dns.situ` had claimed situ could
+limit and a shrug -- the earlier `example/dns/dns.situ` had claimed situ could
 not describe DNS names "statically at all", which was wrong by a wide margin.
 
 ### 26.25 The dissector reads the same layout
@@ -6028,7 +6028,7 @@ C's; Python spells three of them in words and Lua spells four, and both need
 of the difficulty, so it is written once (`names.translate_operators`) rather
 than got right twice.
 
-Why Lua at all is `docs/decisions/0021-dissector-language.md`, written because
+Why Lua at all is `doc/decision/0021-dissector-language.md`, written because
 the question was asked and nothing answered it: no build step and no ABI to
 match, against a Wireshark whose plugin ABI moves between minor releases, for
 an artifact meant to be committed beside the schema.
@@ -6123,7 +6123,7 @@ it for a bounded time. Two things came out of the first three-second pass.
 
 **One harness was empty and had always been.** `gen-fuzz` filtered its struct
 list on `size_bytes > 0`, and a bare `tlv` region has a minimum size of zero,
-so `examples/protobuf` -- the schema whose whole purpose is the construct
+so `example/protobuf` -- the schema whose whole purpose is the construct
 nothing else in the tree has -- got an `LLVMFuzzerTestOneInput` with `(void)
 data; (void) size; return 0;` in it. It compiled, it passed the smoke run, and
 libFuzzer reported sixteen million executions at coverage 1. The `tlv` walk is
@@ -6131,7 +6131,7 @@ also the most attacker-facing loop this language generates: the tag, the wire
 type and the length are all varints the message chooses. It is walked now, and
 coverage went from 1 to 52.
 
-**And `examples/packet` reads out of bounds.** Three seconds in, on
+**And `example/packet` reads out of bounds.** Three seconds in, on
 `01 ff ff ff ...`: `hdr.length` is `0xffff`, `packet.tag` sits after the sealed
 region that field sizes, and `situ_packet_tag_offset` returns `24 + 22 +
 65535`. `situ_packet_tag_ptr` hands back `view.base + 65581` without checking
@@ -6175,7 +6175,7 @@ say about a member, so adding the bounds question silently removed every
 member can be both outside the frame and constrained, and four copies of one
 early return is the shape 26.32 is about.
 
-Each backend carries the same probe, over `examples/packet` rather than a
+Each backend carries the same probe, over `example/packet` rather than a
 schema written for it: a thousand-byte body declared in a seventy-byte frame --
 inside the schema's own `[max = 1024]`, so it is the offset that fails rather
 than the cap -- comes back empty and malformed, and an eight-byte one still
@@ -6214,14 +6214,14 @@ Three more disagreements came out in the first run:
 
 - **Rust and Python resolved a dynamic offset without saturating.** The fix
   above had reached the expression form in both and the *statement* form in
-  neither, so `examples/message` with a hostile `rec_count` put `trailer` a
+  neither, so `example/message` with a hostile `rec_count` put `trailer` a
   quarter of a megabyte into a kilobyte slice, and Rust panicked. An
   incomplete fix looks exactly like a complete one from inside the backend
   that has it.
 - **Python called an unrecognised variant discriminant a constraint failure**
   where the other three call it a version error. Those are opposite remedies:
   one says the message is malformed, the other that it is newer than this code
-  (19.4), and `examples/dnsname`'s reserved label form is where a receiver
+  (19.4), and `example/dnsname`'s reserved label form is where a receiver
   meets it.
 - **Python called a declared length that does not fit a constraint failure**
   too, where the other three report bounds. The message is claiming bytes that
@@ -6260,7 +6260,7 @@ decision (0017).
 A variant's arms went in after those and found nothing, which is also a result:
 three shapes -- an out-parameter and an error in C and C++, a `Result` in Rust,
 a property that raises in Python -- agree about which arm a discriminant
-selects, including the reserved forms of `examples/dnsname`'s label, where a
+selects, including the reserved forms of `example/dnsname`'s label, where a
 hostile name is made.
 That accessor is the number every length in the struct is derived from, so it
 was the one thing a Python caller could not ask for without reaching into a
@@ -6462,7 +6462,7 @@ one does not show what the construct is for.
 A hundred thousand reads of every member, fastest of three runs, on a 12th-gen
 i7 with gcc 14.2, rustc 1.85 and CPython 3.13.
 
-`examples/http`'s request line -- three members, 1215 bytes:
+`example/http`'s request line -- three members, 1215 bytes:
 
 | | per-call offsets | offset cache | |
 |---|---|---|---|
@@ -6497,7 +6497,7 @@ At eight members it is between 2.4x and 3.7x, across runs and across the four
 languages, which is what the construct is for: the per-member offset is quadratic in how many members precede it, and
 the cache is that sum once. Nothing in this repository has eight delimited
 members, so that case is written in the benchmark rather than taken from
-`examples/` -- and saying so is the point. 26.32's rule is that a construct
+`example/` -- and saying so is the point. 26.32's rule is that a construct
 verified on a schema written for its own test is verified on that schema, and
 what this measures on a worked example is the first table.
 
@@ -6540,7 +6540,7 @@ trusting this list to have aged well.
 and the header said so and stopped. All four walk one now (9.3) -- a count, the
 offset an entry holds, and a view over the element it reaches.
 
-`tlv` was here too, and was the sharper case of it: `examples/protobuf`'s
+`tlv` was here too, and was the sharper case of it: `example/protobuf`'s
 `proto_message.fields` got no accessor anywhere, so section 9.7 could argue
 situ must be able to describe protobuf while situ described it without being
 able to read it. All four walk one now (9.5), against the same protoc vectors.
@@ -6549,7 +6549,7 @@ able to read it. All four walk one now (9.5), against the same protoc vectors.
 
 The last of them was a member placed after a `coded` or `sealed` region: only C
 computed such a region's length, so the three could place nothing after one and
-`examples/packet`'s tag reported that its offset could not be resolved. The
+`example/packet`'s tag reported that its offset could not be resolved. The
 rule is `traverse.region_extent` now -- the interior's fixed bytes, the members
 contributing a runtime length, and the codec's expansion resolved to numbers so
 that four backends do not each reimplement `ratio_padded`'s rounding. All four
@@ -6657,7 +6657,7 @@ safe half and the silence is not: what the port is worth is as much in what it
 finds in C as in what it adds to the other three.
 
 **Every kernel family generates.** This page said two of them did not, and
-that `examples/smtp`'s dot-stuffed body was the one real coded region in the
+that `example/smtp`'s dot-stuffed body was the one real coded region in the
 tree and the one that could not be decoded. None of it was true by the time
 anyone read it back: all six families dispatch, and all twenty codecs in
 `std/kernels.situ` emit an implementation with no refusal among them.
@@ -6671,7 +6671,7 @@ This entry is the reason section 0 says to re-derive this list from the
 generated output rather than trust it. It was written when it was right, and
 the work that made it wrong did not think to come back here.
 
-**`tests/schemas/edges.situ` compiles in C++.** It had not since delimited
+**`test/schema/edges.situ` compiles in C++.** It had not since delimited
 members landed, for a reason C++ adds on top of decision 0013: a class's own
 name is declared inside the class, so no member may take it. `struct framed`
 gets the framing method every view gets, and a class `framed` declaring
@@ -6682,10 +6682,10 @@ rule covers `struct option { u8 option; u8 length; }`, which needs no unlucky
 name at all -- a TLV-shaped protocol produces it without trying.
 
 The half worth keeping is why nobody saw it. All four compile checks globbed
-`examples/`, and `edges.situ` lives in `tests/schemas/`, the directory that
+`example/`, and `edges.situ` lives in `test/schema/`, the directory that
 exists to carry the constructs the worked examples do not have. They read every
 schema in the repository now, from the list the two agreement checks above
-already read -- one list, in `tests/unit/every_schema.py`, rather than six. A
+already read -- one list, in `test/unit/every_schema.py`, rather than six. A
 check that skips the file written to be awkward is a check on the easy cases,
 and this one was skipping it in four languages at once.
 
@@ -6695,7 +6695,7 @@ a gap rather than a trade -- and found a worse one next to it.
 `required` answers "is a whole message here, and if not how many bytes?" over a
 prefix of a stream. It declined a run of records, honestly: the walk the
 accessors use stops at the end of the run and at the end of the arrived bytes
-alike, and nothing it emits tells those apart. So `examples/http`'s header block
+alike, and nothing it emits tells those apart. So `example/http`'s header block
 could not be framed, which is a real limit on a real format.
 
 The walk cannot tell them apart. The *element* can: asking each one's own
@@ -6743,7 +6743,7 @@ reason for an accessor that does *not* exist has to stay unattached.
 Lua found the third by removing an argument rather than by failing. Section 22
 named one semantic dependency riding on never executing the dissector: the
 `a and b or c` idiom for a conditional length, "correct *because* zero is
-truthy in Lua". Executed against `examples/dnsname`, the root label -- `form =
+truthy in Lua". Executed against `example/dnsname`, the root label -- `form =
 0, rest = 0`, the byte that ends every DNS name -- walks correctly. It also
 turns out not to need Lua's truthiness: when the matched arm's length is zero
 the fallback chain evaluates to zero as well, so the idiom is safe for a
@@ -6893,9 +6893,9 @@ from trusting the list.
 **The rule this leaves.** A construct verified on a schema written for its own
 test is verified on that schema. The tag machinery was checked against a frame
 whose members are all fixed-size and recorded as closing an entry that named
-`examples/packet`, where the tag sits after a variable-length sealed region and
+`example/packet`, where the tag sits after a variable-length sealed region and
 did not resolve in any of the three. The worked example is the claim. That is
-also why `examples/sqlite` exists: `indexed` had no real format behind it, and
+also why `example/sqlite` exists: `indexed` had no real format behind it, and
 finding one -- a SQLite b-tree page, whose cell pointers are in key order while
 the cells fill the page backwards -- took longer than building the construct
 and asked for two things the language did not have.
@@ -6991,9 +6991,9 @@ read by a person. Running it found, in one week:
   every class in every header was extracted by nothing. And `<reserved0>`, the
   compiler's own label for an unnamed field, is markup to a documentation tool.
 - **libFuzzer with ASan, rather than eight bytes from `/dev/urandom`.** Three
-  seconds in: `examples/protobuf`'s harness was empty and always had been --
+  seconds in: `example/protobuf`'s harness was empty and always had been --
   sixteen million executions at coverage 1, which is what nothing looks like
-  from outside -- and `examples/packet` read 65 kB past a 62-byte view, at an
+  from outside -- and `example/packet` read 65 kB past a 62-byte view, at an
   offset the message itself declares.
 - **`situc` run on the Python version it declares as its floor.** It did not
   start.
@@ -7042,10 +7042,10 @@ section 0 asks for a worked example as well as a check.
 
 **The rest was drift.** Five separate lists of which schemas exist, one per
 test, converging by hand; a committed `a.out`; a generated build not held to the
-tree. One list now, in `tests/unit/every_schema.py`, and a check that the build
+tree. One list now, in `test/unit/every_schema.py`, and a check that the build
 tracks it.
 
-**What is open, and why one of them stayed open.** `examples/ble` -- a radio
+**What is open, and why one of them stayed open.** `example/ble` -- a radio
 frame this project has a real use for -- is deliberately unwritten. 26.32's rule
 is that the worked example is the claim, and field constants recalled rather
 than verified would make it a false one. It waits on a citable source, named in
@@ -7073,9 +7073,9 @@ picked by whatever was convenient when it was written:
 | the differential drivers | uniform bytes, uniform length | four alphabets, mostly short frames |
 | the drivers again | reads only | reads and writes, including a covered write |
 | the dissector suite | four schemas somebody picked | all twenty-five, over bytes |
-| the committed map and wire | `examples/` | every schema the repository builds |
+| the committed map and wire | `example/` | every schema the repository builds |
 | the CLI tests | some command on some schema | every command on every schema |
-| `gen-tests` | one schema, in `tests/schemas/` | any schema, by the same list |
+| `gen-tests` | one schema, in `test/schema/` | any schema, by the same list |
 | `gen-codec-tests` | an ABI nothing else used | the ABI an `impl` binds, and run |
 | mypy | the compiler and its suite | the shipped runtime and the emitted modules |
 
@@ -7165,7 +7165,7 @@ been emitting property tests since phase 7 against `situ_codec_<codec>_encode`
 `impl` bound. So the harness could not be linked against any implementation this
 repository produces, and had never been run. It attacks the symbol
 `impl x extern "my_x"` binds now, three backends call it for a tier-1 region's
-decode, and `tests/generated/codec_impl.c` supplies a `my_doubling` -- each byte
+decode, and `test/generated/codec_impl.c` supplies a `my_doubling` -- each byte
 becomes two of itself -- so that four declared properties are checked against a
 running implementation. Break it and the matching test fails, which is the first
 evidence the harness attacks anything.
@@ -7182,11 +7182,11 @@ implementation wrote, with the implementation named:
 | `ntp` | lwIP's `struct sntp_msg` and `sntp_initialize_request()` |
 | `rtc` | U-Boot's `bin2bcd` and `drivers/rtc/ds1307.c` |
 
-Two of them disagreed with the schema on arrival. `examples/rtc` claimed the
+Two of them disagreed with the schema on arrival. `example/rtc` claimed the
 DS1307's byte order and the part puts the weekday at 0x03, so every register
 after it was one along -- it is the register file now, control bits included.
 And writing a test for the `[minimal]` fix meant writing an HTTP status line,
-which `examples/http` could not read: `max 3` on a three-digit code caps the
+which `example/http` could not read: `max 3` on a three-digit code caps the
 whole member with its delimiter (8.6.1), so the scan ran out at the third digit
 and `reason` came back with the space still on the front. Every backend agreed
 with the schema; the schema said something other than what its author meant.
@@ -7226,7 +7226,7 @@ reader knows it was measured rather than skipped:
 
 #### What is open after 26.35
 
-- **`examples/telemetry` has never seen a message**, and cannot in the sense the
+- **`example/telemetry` has never seen a message**, and cannot in the sense the
   other four now have: it is situ's own format, so a vector for it is a round
   trip through the compiler that produced it. Recorded rather than papered over
   with one.
@@ -7236,7 +7236,7 @@ reader knows it was measured rather than skipped:
 - Beyond those: the two shapes the differential check cannot ask about (26.31)
   and 26.33's runtime image, which stays deliberately late -- the image's shape
   depends on which consumer is primary and no consumer exists yet to be one.
-  `examples/ble` was here and is written (26.36).
+  `example/ble` was here and is written (26.36).
 
 **Status:** 2595 unit tests, 7 skipped; generated C compiled and run on the host
 and under aarch64 emulation; every dissector executed; both codec harnesses run
@@ -7244,7 +7244,7 @@ against implementations; `make fuzz` clean at thirty seconds a harness.
 
 ### 26.36 The example that needed a construct
 
-Three commits, and the middle one is the point. 26.35 left `examples/ble`
+Three commits, and the middle one is the point. 26.35 left `example/ble`
 unwritten because 26.32 makes a worked example a claim and a recalled constant
 a false one, and the source it waited on turned out to be on this machine: the
 Linux Bluetooth stack, cited by file and line.
@@ -7320,7 +7320,7 @@ decision anybody made: a fact about which protocols somebody happened to write
 up. What that sample hid was a *language* whose arithmetic did not compile in
 four target languages and whose intervals were unsound in four operators.
 
-The example that pressed it is `examples/netlink`, and it is the first schema
+The example that pressed it is `example/netlink`, and it is the first schema
 here whose wire byte order is the host's.
 
 **Host order, which two backends were guessing at.** `endian native` read every
@@ -7401,7 +7401,7 @@ consequences are worse than the duplication:
   Python. Rust returned early on a count of None and emitted nothing at all,
   which invariant 27 rates below the crash.
 - `declares_its_own_length` said no, so invariant 41's check was never emitted
-  for one: `u8 data[(len + 1) * 8 - 2]` -- the shape `examples/ipv6ext` is made
+  for one: `u8 data[(len + 1) * 8 - 2]` -- the shape `example/ipv6ext` is made
   of -- could declare two kilobytes inside a forty-byte frame and `validate`
   returned OK in all four backends.
 - `doc` printed "0 bytes" for the same member. Three constructs above it in the
@@ -7445,7 +7445,7 @@ above:
 
 #### And the sample it left behind
 
-`tests/schemas/edges.situ` exists so that no construct's generated code has
+`test/schema/edges.situ` exists so that no construct's generated code has
 only ever been compiled, and the expression language was the hole in it.
 `struct arithmetic` now calls all ten operators and both of `min`/`max` in
 sizes the C suite builds and `gen-checks` executes. It found three more things
@@ -7463,7 +7463,7 @@ attribute list and reported "expected `]`" at the open parenthesis.
 Carried forward and re-derived rather than copied. The first two are unchanged
 from 26.35; the last two are this fold's.
 
-- **`examples/telemetry` has never seen a message**, and cannot in the sense
+- **`example/telemetry` has never seen a message**, and cannot in the sense
   the other six have: it is situ's own format, so a vector for it is a round
   trip through the compiler that produced it. Recorded rather than papered over
   with one.
@@ -7503,7 +7503,7 @@ every example written since -- `http`, `ble`, `netlink` -- does the whole job.
 A reader comparing them would conclude the language could not do in 2026 what
 it demonstrably does two directories along.
 
-The examples/README convention for this is `// STATUS: needs phase N.`, and a
+The example/README convention for this is `// STATUS: needs phase N.`, and a
 test enforces it for any example carrying that marker. None of these six used
 that spelling, so the check that exists for exactly this drift never saw them.
 There is nothing clever to add: the notes are written out now, and the phases
@@ -7616,7 +7616,7 @@ the tag's own bytes are. The bytes stay in the buffer, because generated code
 never allocates (invariant 4), so there is no copy-with-a-hole to hand out and
 substituting the filler is three lines in the caller's loop.
 
-That loop is written once, in `tests/generated/test_icmp.c`, and checked against
+That loop is written once, in `test/generated/test_icmp.c`, and checked against
 a number this repository did not compute: the bytes are an echo reply read off
 an `IPPROTO_ICMP` socket, so the checksum in them is the kernel's own. A span
 off by two bytes, or a hole in the wrong place, yields a plausible number that
@@ -7650,9 +7650,9 @@ only when the field became covered and grew a second method after its property.
 Decision 0025 makes the same move in C++ for the same reason: rename the
 reference, not the name the schema chose.
 
-**What was open here is `prefix(...)`, and it is built** (14.2a). `examples/udp`
+**What was open here is `prefix(...)`, and it is built** (14.2a). `example/udp`
 declares RFC 768's pseudo-header as a struct of its own and covers it, so its
-checksum is described where it used to be a plain `u16`. `examples/tcp` does not yet,
+checksum is described where it used to be a plain `u16`. `example/tcp` does not yet,
 though not for the reason recorded: `payload[remaining]` closes its coverage,
 and what stops it is three backends disagreeing about a negative computed
 length. Describing UDP uncovered a packer defect that made the walker call a
@@ -7669,7 +7669,7 @@ independent form of the same statement, and it is recorded because a
 measurement that finds nothing is a different thing from not looking.
 
 Two of the four backends *run* the new construct rather than being read for
-it. `tests/generated/test_icmp.c` computes RFC 1071 in C and
+it. `test/generated/test_icmp.c` computes RFC 1071 in C and
 `test_self_covering_checksum.py` does it again through the generated Python,
 both against the kernel's number. C++ and Rust are asserted to emit the names
 and are not executed, which invariant 22 rates as the weaker thing -- said here
@@ -7687,7 +7687,7 @@ something, and this one was chosen by measurement rather than by taste. Every
 construct the language offers, against every schema in the repository: `hex`
 had no users at all. `namespace`, `[equalize]`, `[escape]`, `[unknown]` and
 `[allow_unverified_read]` have none either, and several more are used only by
-`tests/schemas/edges.situ` -- which is to say by no real protocol.
+`test/schema/edges.situ` -- which is to say by no real protocol.
 
 `hex` is the one a real format uses everywhere. A cpio `newc` header is
 thirteen eight-digit hexadecimal numbers in a row, and one of them is the
@@ -7739,7 +7739,7 @@ ends at an entry whose *name* is "TRAILER!!!" (init/initramfs.c:374), and
 situ's `while` tests an expression over the element just read -- arithmetic
 over numbers, with no comparison against a byte string in it. So the entry is
 described completely and the archive is a caller's loop, which is
-`examples/dnsname`'s shape: the boundary is the view model rather than a gap
+`example/dnsname`'s shape: the boundary is the view model rather than a gap
 in the layout.
 
 **Status:** 2729 unit tests, 7 skipped; generated C compiled and run on the
@@ -7750,9 +7750,9 @@ examples carrying bytes an independent implementation wrote.
 
 26.40 chose its example by surveying every construct the language offers
 against every schema in the repository, and the survey named more than one
-unused thing. This is the rest of them: five in `tests/schemas/edges.situ`,
+unused thing. This is the rest of them: five in `test/schema/edges.situ`,
 which exists to say exactly this, and eight register access modes in
-`examples/registers`, where the vocabulary they are borrowed from lives.
+`example/registers`, where the vocabulary they are borrowed from lives.
 
 The result is worth stating plainly because it cuts both ways. **Two of the
 thirteen were wrong. Eleven were right.** The eleven are not a waste: the only
@@ -7824,7 +7824,7 @@ candidates, and reading them took an hour.
   other form, and the Size column beside it already said six bytes.
 - **`doc` put a byte order on things that have none.** The test was the
   member's *total* width, so a two-byte marker, a four-byte address and a
-  110-byte nested struct all carried one. `examples/bmp`'s signature is the
+  110-byte nested struct all carried one. `example/bmp`'s signature is the
   sharpest case: its own comment says it is bytes rather than a `u16` so that
   its value does not depend on byte order, and the document said it did.
 - **The dissector read a text number as an array of its scalar**, declaring
@@ -7880,7 +7880,7 @@ name.
 value a BCD field can hold -- answered "all nines" from the digit count alone.
 Decision 0027 exists because a register puts a control bit above packed
 decimal: `bcd2 [bits = 7]` has three bits for its tens digit, so it stops at
-79. Every narrowed field in `examples/rtc` was wrong: seconds and minutes said
+79. Every narrowed field in `example/rtc` was wrong: seconds and minutes said
 99 for 79, hours 99 for 39, month 99 for 19, weekday 9 for 7.
 
 It is not a document bug. It reaches a `_MAX` macro in the generated header, a
@@ -7890,7 +7890,7 @@ silently. The document is where it was *visible*, because the document is the
 one artifact that states a field's range in a sentence a person reads.
 
 Nothing had asked. The only schema with a narrowed BCD field is
-`examples/rtc`, and the only thing that reads its maximum is a caller.
+`example/rtc`, and the only thing that reads its maximum is a caller.
 
 **Which is the argument, restated.** The reason to read the artifact nothing
 compiles is not that it is the buggiest. It is that it says in prose what
@@ -7920,7 +7920,7 @@ names the member to stop before now.
 
 **The yield.** It counted every dynamic member behind the mover. Whatever
 follows the *next* variable-length member sits after a variable extent either
-way, so it cannot gain whatever moves: `examples/message` promised two members
+way, so it cannot gain whatever moves: `example/message` promised two members
 would return to `AbsoluteStatic` and delivered one. Counting only what gains
 also deleted a suggestion that promised nothing at all -- moving `recs` past a
 `[remaining]` tail, which is both illegal and pointless.
@@ -7958,12 +7958,12 @@ actually deciding about, and now the sentence says so.
 
 **A cost used as a rank.** `weight` orders the catalogue, and
 `equalize-variant-arms` handed it the padding: the more absurd the
-equalization, the higher it sorted. `examples/netlink`'s `default: opaque` arm
+equalization, the higher it sorted. `example/netlink`'s `default: opaque` arm
 prices at four gigabytes and outranked every genuinely useful suggestion in
 the file. It is ranked by what it buys now, and what it buys is measured
 rather than asserted -- because the old line asserted it wrongly. "Members
 after the variant keep absolute offsets" printed as "0 member(s)" for
-`examples/dnsname`, a change stated to be worthless; taking it makes `label` a
+`example/dnsname`, a change stated to be worthless; taking it makes `label` a
 fixed 64 bytes, which is the whole reason to pay 62 of padding.
 
 **And a placeholder in the output.** `_arm_name` knew one of the forms an arm
@@ -8015,7 +8015,7 @@ declined; `&&` and `||` are not among them, and the first version of the guard
 matched their halves and silently declined every run walk in the repository.
 
 26.37 recorded that no schema here has a bare `/`. That was true of
-`examples/`, and false of `tests/schemas/edges.situ`, which has one of every
+`example/`, and false of `test/schema/edges.situ`, which has one of every
 operator on that list -- which is what it is for. Nothing had ever reached
 them, because every member sized by arithmetic was being declined for a
 different reason. **A boundary that nothing can reach is not a boundary that
@@ -8052,7 +8052,7 @@ alongside it, in seven places across the four, was never touched.
 **A fixed-width text number driving a length.** An expression over a text
 driver names `<field>_value`, the read that cannot fail, and only the
 delimited and nested forms of a text number emitted it. Every text driver in
-`examples/` is one of those two.
+`example/` is one of those two.
 
 **A varint driving a size written as arithmetic.** `readable_names` is the one
 list of what an expression may name and it asks for a scalar, which a varint
@@ -8075,7 +8075,7 @@ last are the same sentence: a question with two spellings, answered for one.
 Scalar and varint. In every case the first was found by a real schema, fixed,
 and written up; the second was never asked, because no schema here has it.
 
-That is the argument for writing schemas nobody wrote. `tests/schemas/edges.situ`
+That is the argument for writing schemas nobody wrote. `test/schema/edges.situ`
 already exists for exactly this and its header says so -- "a construct the
 language offers and nothing exercises is a construct whose generated code has
 never run". What it collected were constructs. What this fold adds is
@@ -8095,7 +8095,7 @@ generated text. No committed schema had any of them, and that sentence is in
 the commit message as the *point* -- each is an ordinary thing to write and
 nothing here had written one.
 
-So this fold begins by writing them down, in `tests/schemas/edges.situ`, which
+So this fold begins by writing them down, in `test/schema/edges.situ`, which
 is the file whose header says a construct nothing exercises is a construct
 whose generated code has never run. Three structs, no compiler changes, and
 `make test-c` stopped building: `gen-fuzz` emitted `situ_packed_driver_d_ptr`
@@ -8155,7 +8155,7 @@ an array and the other a scalar.
 
 **Status:** 2790 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; the four backends compared over
-`tests/schemas/edges.situ` on the shapes above; the new stride check falsified
+`test/schema/edges.situ` on the shapes above; the new stride check falsified
 by widening the emitted stride and watching it fail.
 
 ### 26.48 The constructs that had never met a run
@@ -8165,7 +8165,7 @@ same run to the constructs it had never been written beside: a nested struct,
 a variant arm, and a byte-order marker. Three probe schemas, and two of the
 three produced something no backend should emit.
 
-**A marker at a dynamic offset crashed the compiler.** `examples/tiff` is the
+**A marker at a dynamic offset crashed the compiler.** `example/tiff` is the
 only `endian_marker` in the tree and it is a header of constant offsets, so
 the marker-conditional load had never been asked for a member behind a
 variable-length one. C's asks the placement for its constant offset while
@@ -8204,7 +8204,7 @@ in all four, agreed. The sweep is only evidence when it says both.
 
 **Status:** 2804 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; five probe schemas built and run through
-all four backends, three of them now in `tests/schemas/edges.situ`.
+all four backends, three of them now in `test/schema/edges.situ`.
 
 ### 26.49 An offset the message decides, in the places that assumed otherwise
 
@@ -8274,7 +8274,7 @@ a construct added two folds ago fell out.
 
 **Status:** 2819 unit tests, 7 skipped; generated C compiled and run on the
 host and under aarch64 emulation; six probe schemas through all four
-backends, three of them now in `tests/schemas/edges.situ`.
+backends, three of them now in `test/schema/edges.situ`.
 
 ### 26.50 The sweep, as machinery rather than as an afternoon
 
@@ -8285,7 +8285,7 @@ backends, run them, diff. That is a person doing a machine's job, and the
 method's own record says so -- the shapes that found things were never the
 ones anybody would have picked, they were the ones nobody had.
 
-So the method is machinery now. `tests/unit/compose.py` enumerates the space
+So the method is machinery now. `test/unit/compose.py` enumerates the space
 along five axes, each a question a backend's emitters branch on:
 
 | axis | values |
@@ -8296,11 +8296,11 @@ along five axes, each a question a backend's emitters branch on:
 | what precedes it | nothing, a variable-length run, a delimiter |
 | where it sits | the frame, a nested struct, `authenticated`, `sealed`, an arm |
 
-1350 cells. `tests/unit/probe.py` runs one through every oracle there is --
+1350 cells. `test/unit/probe.py` runs one through every oracle there is --
 the compiler must not fall over, each backend must compile what it emitted,
 the four must agree over sixteen hostile buffers, and the dissector must
 survive its own schema's bytes. `tools/sweep.py` walks as much of it as you
-ask for; `tests/unit/test_composed_schemas.py` runs a fixed sample on every
+ask for; `test/unit/test_composed_schemas.py` runs a fixed sample on every
 commit.
 
 **A refusal is a pass**, and this is the part that makes the whole thing
@@ -8656,7 +8656,7 @@ over random buffers, now with three variants on a bit.
 
 ### 26.57 Modbus, and the arm nobody selected
 
-The oldest protocol in `examples/` and the one most likely to be behind a
+The oldest protocol in `example/` and the one most likely to be behind a
 physical thing that moves. What it adds that the others do not is a shape:
 **the same field means two layouts, and which one is in front of you is not
 in the bytes.** Function code 03 is four bytes of address and count going one
@@ -8852,7 +8852,7 @@ two names that need it.
 
 **And the advice now names something the compiler implements.** What reaches
 that branch is an unbounded *scan* -- `u8 name[] until "\r\n"` with no cap --
-and what bounds a scan is `max N`, which `examples/smtp` has carried since it
+and what bounds a scan is `max N`, which `example/smtp` has carried since it
 was written. So the advisor was not only recommending a no-op, it was
 recommending the wrong kind of thing for the member that reaches it. No
 committed schema reaches that branch, which is why nobody had read the
@@ -8877,7 +8877,7 @@ from the output that it did nothing.
 inferred from its name, because an over-restrictive table refuses valid
 schemas and that is worse than the silence it replaces. Each rule has a
 control test beside it holding the accepting half. The first draft keyed
-`[minimal]` on a `radix` *attribute* and refused `examples/http`, whose
+`[minimal]` on a `radix` *attribute* and refused `example/http`, whose
 `decimal u16 code` carries the radix on the type keyword instead; the control
 is what caught it.
 
@@ -8952,7 +8952,7 @@ went with them: it listed a `nonce` *attribute* where the thing that does the
 work is the `sealed(codec, nonce = ref)` *argument*. The row said the field
 was marked; nothing read the mark.
 
-`examples/packet` and `examples/keystore` each carried a `[nonce]`, and
+`example/packet` and `example/keystore` each carried a `[nonce]`, and
 removing it changed not a byte of any backend's output nor a line of the
 capability map -- which is what made the refusal safe and is also the whole
 complaint. Two schemas stated something for years and no generated code ever
@@ -8989,7 +8989,7 @@ direction and agree with each other forever, and nothing about a green suite
 distinguishes that from being right. An independent implementation is wrong in
 a *different* direction, so disagreement becomes visible.
 
-`examples/protobuf/user.proto` has been carrying the argument since it was
+`example/protobuf/user.proto` has been carrying the argument since it was
 written -- "a description that agrees only with its own compiler has
 demonstrated nothing" -- and the practice had not followed it anywhere else.
 
@@ -9032,7 +9032,7 @@ is no `tshark` on this machine, so eight network examples have no independent
 witness here and the run says so. Silence and success read identically
 otherwise, which is the whole subject of this fold one level up.
 
-**Where this came from.** `suggestions/apt-emerge.md`, written by a project
+**Where this came from.** `suggestion/apt-emerge.md`, written by a project
 that evaluated situ and said no. Its two most valuable suites are differential
 -- against `dpkg --compare-versions` and against `diff3` -- and both found
 bugs that hand-written expectations had not. A verdict of "not for us" that
@@ -9161,7 +9161,7 @@ which is what a Modbus TCP connection carries.
 
 That second difference is the one worth having. Every other oracle hands both
 sides a single object and asks what is in it. This one makes both sides find
-where each frame *stops*, and `examples/modbus/modbus.situ` already names that
+where each frame *stops*, and `example/modbus/modbus.situ` already names that
 as the arithmetic implementations get wrong: `length` counts the unit
 identifier and the PDU but not itself or the three fields ahead of it, so the
 next frame starts at `6 + length`. situ and pymodbus agree on all four
@@ -9258,7 +9258,7 @@ them -- `beerssh`, and by their own description `fuzzypickles` and `netcfgd`
 > the program invented for itself, of the order of five fields, with a
 > version byte and an encrypted tail.
 
-They are right about the inventory. All 27 directories under `examples/` are
+They are right about the inventory. All 27 directories under `example/` are
 public formats somebody else specified -- ARP, DNS, SQLite, MQTT, protobuf --
 or exercises named for the capability they demonstrate. Not one is an
 application's own record.
@@ -9272,7 +9272,7 @@ put it best: an example at the floor would let a reader conclude **no**
 quickly and for the right reason, which is worth more than one more public
 format.
 
-`examples/keystore` is that shape. Four fields, a version byte, a sealed
+`example/keystore` is that shape. Four fields, a version byte, a sealed
 tail, and prose that says plainly that hand-rolled it is twenty-five lines of
 `offset += N` which work -- a project with exactly this and nothing else
 should write those lines.
@@ -10103,7 +10103,7 @@ outlaw `struct option { u8 option; }` for a reason that has nothing to do with
 its bytes". `base` and `bytes` are ordinary field names and the same argument
 holds, so the schema keeps them and the emitters moved.
 
-**`tests/schemas/edges.situ` carries the case now**, which is where it belongs
+**`test/schema/edges.situ` carries the case now**, which is where it belongs
 by 26.27's argument: the worked examples do not have these names and were
 never going to. Adding one schema found both, and a schema written to be
 awkward is cheaper than a schema written to be useful.
@@ -10344,7 +10344,7 @@ two of them were about the runner.
 **`make typecheck` needs the differential oracles installed.** The tests that
 use `pymodbus` and `paho-mqtt` skip without them, which is the pattern
 everything toolchain-dependent here follows -- and `mypy --strict` does not
-skip. It reads `tests/unit/oracles.py` whether or not those tests run,
+skip. It reads `test/unit/oracles.py` whether or not those tests run,
 `disallow_any_unimported` is on, and an unresolvable import is an error. So
 `make check` depends on two protocol libraries nothing documented, and the
 machine it was written on had them.
@@ -10728,7 +10728,7 @@ Four more, and every one of them was found rather than expected.
 
 **A member of fixed size at a dynamic offset was never bounds-checked.**
 The check that acquired the view answered for the struct, not for a member
-whose offset is a sum of lengths the message chose -- `examples/packet`'s
+whose offset is a sum of lengths the message chose -- `example/packet`'s
 tag is sixteen fixed bytes and was 65 kilobytes past a 62-byte view. C
 emits exactly this from exactly this pair of facts, and both are flags the
 image already carried, so it is the walk's own arithmetic rather than a
@@ -10855,7 +10855,7 @@ deferred is a construct nothing in the tree writes.
 hand-rolled dpkg-deb build's inputs. Debhelper replaced that build the day
 after it was written and the two files sat unread for months, so removing
 them was right. The removal commit says "nothing has referenced either
-since", and the search behind that sentence did not include `tests/`, where
+since", and the search behind that sentence did not include `test/`, where
 `test_packaging.py` had been reading both since they were written. Eight
 tests started failing with `FileNotFoundError`, and master was red until
 somebody looked.
@@ -11171,7 +11171,7 @@ underneath, and is not the state machine.
 
 **The step function returns the next deadline, and the vtable is
 completion-shaped.** Both are decided in
-`docs/decisions/0033-drivers-are-a-third-axis.md` and both belong to this
+`doc/decision/0033-drivers-are-a-third-axis.md` and both belong to this
 phase rather than to any driver. Every multiplexing facility takes a timeout
 and only the state machine knows when it next needs waking, so without the
 deadline each driver invents a polling interval and the timing contract stops
@@ -11238,7 +11238,7 @@ on the ladder is second, and nothing in 26.95 through 26.98 waits for it.
 
 `--owned` (26.69) emits a fixed-size C struct and a decode that copies into
 it, which is case A of the enumeration in
-`docs/decisions/0031-where-allocation-is-unavoidable.md`. It refuses a
+`doc/decision/0031-where-allocation-is-unavoidable.md`. It refuses a
 variable-length member, and the refusal is worth quoting because this phase is
 what answers it: "a pointer reintroduces exactly the lifetime the caller was
 escaping, and an array of the worst case is a decision about memory nobody
@@ -11898,10 +11898,10 @@ the one failure this component exists to avoid.
 
 The six rungs were built, in four backends, and **no schema in the repository
 declared a relation.** Rungs 3 to 6 existed only in the fixtures inside
-`tests/unit/test_relations.py`, which put them outside every mechanism section
+`test/unit/test_relations.py`, which put them outside every mechanism section
 22 calls the highest-value coverage: the example sweep, the generated cmocka
 suites, the fuzz harnesses and the four-backend differential had none of them
-ever been pointed at one. `examples/dns` carries the exchange now -- RFC 1035
+ever been pointed at one. `example/dns` carries the exchange now -- RFC 1035
 makes ID and OPCODE the match and asks for a retry interval of two to five
 seconds, so none of it is invented -- and the capability map gained
 `layers: floor=view reach=drive`, which makes a schema's reach up the ladder a
@@ -11911,7 +11911,7 @@ reviewable line rather than a property nobody would notice changing.
 compiled by anything, and the moment the checks suite included it, it did not
 compile: `framed_structs` returned every struct that was not a register, while
 `traverse.frameable` answers whether a whole one can be recognised in a prefix
-of a stream. Four structs in `tests/schemas/edges.situ` got a reader built out
+of a stream. Four structs in `test/schema/edges.situ` got a reader built out
 of a `_required` only a frameable struct has, and a variable-extent view was
 passed three arguments where it takes four. Both had shipped. This is the third
 time this repository has paid for "generating is not compiling", after the
@@ -11941,7 +11941,7 @@ that the mutation landed.
 
 **What is not covered, and why it is not a gap.** Rung 6 has no schema-derived
 suite: `drive` owns I/O, and a cmocka suite built out of buffers cannot execute
-it. It is driven from `tests/unit/test_relations.py` in three backends instead,
+it. It is driven from `test/unit/test_relations.py` in three backends instead,
 each given its clock as a parameter. The generated build stops at `converse`
 and says so, because a boundary that is not written down is read as an
 oversight by whoever finds it next.
@@ -12012,7 +12012,7 @@ the difference is a wrong answer nobody sees.**
    The generator and the target are different machines on every cross build, so
    a decision taken here that belongs there is correct only by coincidence and
    silent when it is not. Byte order is the instance that got this wrong
-   (`docs/decisions/0014-positional-directives.md`); it will not be the last.
+   (`doc/decision/0014-positional-directives.md`); it will not be the last.
 9. Ambiguity is an error (17.0). Situ never guesses and never takes a silent
    default where the wrong choice is undetectable at runtime. Where a default
    does exist, the safe option is silent and the unsafe option is loud.
@@ -12044,7 +12044,7 @@ the difference is a wrong answer nobody sees.**
    The question was adjacent to the bug rather than about it. A settled
    question is worth the read regardless of how it settles.
 15. **A new construct lands in a schema the suite compiles, in the same
-   commit.** `tests/schemas/edges.situ` exists to say this and its own header
+   commit.** `test/schema/edges.situ` exists to say this and its own header
    says it -- "a construct the language offers and nothing exercises is a
    construct whose generated code has never run" -- and the commit that added
    invariants did not follow it. The generated C contained a macro name with a
@@ -12407,7 +12407,7 @@ the difference is a wrong answer nobody sees.**
    the notes say.
 49. **A construct is verified on the schema it was verified on.** The tag
    machinery was checked against a frame whose members are all fixed size and
-   recorded as closing an entry that named `examples/packet`, where the tag
+   recorded as closing an entry that named `example/packet`, where the tag
    sits after a variable-length sealed region and resolved in none of the
    three backends. A schema written for a test exercises what the test author
    thought of. The worked example is the claim, and it is the one to run.
@@ -13370,7 +13370,7 @@ consulted for validation, which is precisely why nothing was checking. The
 check now refuses an unknown name and suggests a near miss at one edit,
 reusing the `_nearest` helper the unknown-type diagnostic uses.
 
-**It found a defect in a worked example on its first run.** `examples/ble`
+**It found a defect in a worked example on its first run.** `example/ble`
 carried `[default = pass]` on three fields. `default` is not an attribute
 at all -- it is a member of an *enum body*, `default = pass,` beside the
 enumerators -- so all three were dropped, and the three enums were
@@ -13412,7 +13412,7 @@ are a width and the bound is read. cpio constrains its magic exactly that
 way and 26.113 cites the line. So the rule cannot key on the brackets --
 it keys on the radix, and a text number is exempt. 26.60 was caught by the
 same distinction from the other side, when its first draft keyed
-`[minimal]` on a radix *attribute* and refused `examples/http`, which
+`[minimal]` on a radix *attribute* and refused `example/http`, which
 carries the radix on the type keyword. The control test is what caught
 both.
 
@@ -13715,7 +13715,7 @@ A check added while a tree is clean costs one commit; the same check added
 after a violation lands costs the violation as well, and 26.119's incident
 ran six phases.
 
-**One list, in one place.** `tests/unit/python_floor.py` holds the floor, the
+**One list, in one place.** `test/unit/python_floor.py` holds the floor, the
 module list and the detector, because three checks now ask the same question
 and the way this goes wrong is that they stop agreeing -- which is precisely
 what happened between `mypy` and the floor check. Same rule as
@@ -13738,7 +13738,7 @@ fails all thirty-three generated modules.
 
 ### 26.122 The tag whose width meant nothing
 
-Decision 0038, accepted and built. `examples/packet` declared
+Decision 0038, accepted and built. `example/packet` declared
 `codec aes_gcm_128 { authenticated; length_preserving; ... }` and `tag u8[16]`
 beside it, and nothing related the sixteen to the codec. `tag u8[1]` compiled,
 and so did `tag u8[64]`.
@@ -13790,7 +13790,7 @@ from one in a comment.
 **Every committed schema already agreed, which is what the check is worth.**
 All 33 parse unchanged with the widths declared: the four authenticated codecs
 -- `aes_gcm_128` and `chacha20_poly1305` in `std/codecs.situ`, `aes_gcm_256` in
-`examples/keystore`, and `packet`'s own -- carry a 16-byte tag and a 12-byte
+`example/keystore`, and `packet`'s own -- carry a 16-byte tag and a 12-byte
 nonce, from NIST SP 800-38D and RFC 8439 rather than from this compiler. The
 check confirms what the schemas said rather than correcting them, and narrowing
 `packet`'s tag to eight bytes now fails by file and line.
@@ -14156,7 +14156,7 @@ was accepted with the argument read by nothing -- the acceptance 26.117
 closed for attributes, one construct over. A sealed region's arguments are
 `nonce` and `key` now, and anything else is refused naming both.
 
-**`examples/dtls` is the worked case, and its nonce is the reason it
+**`example/dtls` is the worked case, and its nonce is the reason it
 earns the directory.** RFC 5288 builds the 12-byte GCM nonce as a 4-byte
 out-of-band salt concatenated with the 8-byte explicit part on the wire.
 `nonce = explicit` names the on-wire half; declaring `nonce_bytes = 12` on
@@ -14205,13 +14205,13 @@ about it.
    The stronger argument runs the other way. `canonical` exists to say that
    several byte sequences encode one value, and text is where that is most
    often true. The axis was built for this and had never met the case it fits
-   best. See 8.6.1 and `docs/decisions/0020-delimited-data.md`.
+   best. See 8.6.1 and `doc/decision/0020-delimited-data.md`.
 2. ~~**Multiple tags with nested coverage.**~~ **RESOLVED.** Nested coverage is
    permitted and recomputes innermost first, which is the only order that
    terminates: an outer tag covers the inner tag's own bytes, so writing the
    inner one afterwards would leave the outer one stale again. Innermost is
    narrowest, since coverage is disjoint or nested by 14.1, so the sizes of two
-   coverage sets order them. `docs/decisions/0011-nested-tag-coverage.md`.
+   coverage sets order them. `doc/decision/0011-nested-tag-coverage.md`.
 3. ~~**Cross-field invariants.**~~ **RESOLVED: the obligation goes where
    coverage already puts it.** The question was where the maintenance
    obligation lives in the generated API, and the tag machinery had already
@@ -14238,7 +14238,7 @@ about it.
    `view.limit - used` and both terms are already available. The consequence to
    hold onto: a sub-view of a variable-length region must be acquired with the
    region's *maximum* extent, or a grow-in-place fails its own bounds check.
-   `docs/decisions/0008-slack-tracking.md`.
+   `doc/decision/0008-slack-tracking.md`.
 5. ~~**Bit-level offsets in the pin syntax.**~~ **RESOLVED: no.** The guess
    was "probably yes for registers", and building the registers showed
    otherwise. A register's fields are declared in order with their widths, and
@@ -14257,13 +14257,13 @@ about it.
    `u12` is legal; because it cannot fit inside one byte it always straddles,
    and the straddle rule of Section 8.2 does the gating rather than a width
    restriction. Section 8.1 amended to state the rule once instead of twice.
-   `docs/decisions/0005-integer-widths.md`.
+   `doc/decision/0005-integer-widths.md`.
 7. ~~**Whether `native` endian should be permitted at all.**~~ **RESOLVED.**
    Split into two constructs (Section 8.3): `endian native` for genuinely
    host-order formats, gated behind `[allow_host_dependent]` and non-canonical;
    and `endian_marker` for runtime-resolved byte order, which is
    `CanonicalGiven(marker)` and costs nothing on the offset or size axes.
-   `docs/decisions/0014-positional-directives.md` carries the harder half of
+   `doc/decision/0014-positional-directives.md` carries the harder half of
    it: `native` is resolved by the *C* compiler, not by situc, because the
    machine running the generator is not the machine running the output.
 8. ~~**Compact-versus-mutable tension.**~~ **NOT A QUESTION, and it should
@@ -14292,7 +14292,7 @@ about it.
    the pipeline keeps a computable position. What the composition *did* need
    was a wider vocabulary rather than weaker rules: the addend and the ratio
    have to travel together, since parity appended before a doubling gets
-   doubled. `docs/decisions/0016-composed-expansion.md`.
+   doubled. `doc/decision/0016-composed-expansion.md`.
 10. ~~**Bit phase in the public API.**~~ **RESOLVED: forbidden at the
    surface**, which was the option the question guessed at. A struct whose
    size is not a whole number of bytes gets no accessors in any backend, and
@@ -14316,7 +14316,7 @@ about it.
    So a codec with a `derived` implementation may not seal a region. Sealing
    takes a tier-1 `extern` implementation, where the timing properties are the
    supplier's to state -- the same move decision 0017 makes about codecs
-   generally. `docs/decisions/0019-sealing-requires-authentication.md`.
+   generally. `doc/decision/0019-sealing-requires-authentication.md`.
 12. ~~**`systematic` and authentication interaction.**~~ **RESOLVED: the
    ordering was already explicit, and the real gap was elsewhere.** Both
    orders are expressible and neither is inferred, because a pipeline says
@@ -14328,7 +14328,7 @@ about it.
    nothing. `sealed(crc32)` built, and the stage gate would have handed out
    the interior on a `verified` flag nothing had checked. A codec must declare
    `authenticated` before it may seal.
-   `docs/decisions/0019-sealing-requires-authentication.md` carries both
+   `doc/decision/0019-sealing-requires-authentication.md` carries both
    refusals, since this question and 11 turned out to be the same one asked
    from different ends.
 ## 28. Glossary

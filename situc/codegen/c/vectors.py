@@ -305,7 +305,7 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 	A scalar compares as a number; a byte run compares as bytes. The second
 	was not expressible at all, so a format that is mostly addresses -- ARP is
 	twenty of its twenty-eight bytes -- could state almost nothing about
-	itself, and the one marker in `examples/bmp` had to be checked by hand
+	itself, and the one marker in `example/bmp` had to be checked by hand
 	beside the generated suite (26.35).
 	"""
 	nested = _nested_of(resolved, case.struct, path)
@@ -331,7 +331,7 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 		# so it takes an out-parameter and returns a code, and calling it as a
 		# plain getter does not compile. No vector had ever named one: the two
 		# schemas with text numbers, `http` and `smtp`, have no `.vectors`
-		# file, and `examples/cpio` is thirteen of them in a row.
+		# file, and `example/cpio` is thirteen of them in a row.
 		found = resolved.find(f"{case.struct}.{path}")
 		if found is not None and found.placement.radix is not None:
 			scalar = found.placement.scalar

@@ -89,7 +89,7 @@ class ScalarType:
 		a byte boundary.
 
 		Section 8.1 states the rule twice and the two statements disagree about
-		widths like u48. Resolved in docs/decisions/0005-integer-widths.md in
+		widths like u48. Resolved in doc/decision/0005-integer-widths.md in
 		favour of the operational form: a width that is a whole number of bytes
 		is a byte-aligned scalar, everything else packs.
 		"""

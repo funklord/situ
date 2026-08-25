@@ -1995,7 +1995,7 @@ class Emitter:
 			# Nested *or* the struct's own. Restricting this to nested
 			# members assumed the fixed-width form beside it emitted its own
 			# `_value`, and it does not: `decimal u32 n[4]; u16 d[n]` named a
-			# property nothing defined. Every text driver in `examples/` is
+			# property nothing defined. Every text driver in `example/` is
 			# either delimited or nested, which are the two forms that had it.
 			scalar = placement.scalar
 			if scalar is None or placement.array_count is None:
@@ -3660,7 +3660,7 @@ class Emitter:
 		failure, which tells a receiver the message is malformed where the
 		other three tell it the message is newer than this code -- opposite
 		remedies for the same bytes (19.4). Found by handing random buffers to
-		all four and diffing what they said about `examples/dnsname`, whose
+		all four and diffing what they said about `example/dnsname`, whose
 		label form `2` is the reserved encoding.
 		"""
 		values = matched_values(placement)

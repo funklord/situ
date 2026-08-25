@@ -25,7 +25,7 @@ LAYERS = ("view", "edit", "relate", "frame", "converse", "drive")
 def unbounded_codecs(schema: ast.Schema) -> set[str]:
 	"""Codecs whose output extent cannot be known without transforming.
 
-	Case E of `docs/decisions/0031-where-allocation-is-unavoidable.md`, and
+	Case E of `doc/decision/0031-where-allocation-is-unavoidable.md`, and
 	the only one of the five that leaves no choice: there is no
 	measure-then-allocate pass, because the measure pass *is* the work.
 	"""

@@ -1,5 +1,5 @@
 // The packed layout image that `situc pack` emits (project.md 26.33,
-// docs/decisions/0026-runtime-image-and-interpreter.md).
+// doc/decision/0026-runtime-image-and-interpreter.md).
 //
 // WHY THIS FILE IS A SCHEMA. Decision 0026 rejected a hand-rolled image with
 // a hand-rolled parser, on the grounds that it would be the only artifact in

@@ -77,7 +77,7 @@ jobs:
       # else's implementation of two protocols this tree describes -- and
       # they are not optional to `make check` even though the tests that use
       # them skip without them. `mypy --strict` with
-      # `disallow_any_unimported` reads `tests/unit/oracles.py` whether or
+      # `disallow_any_unimported` reads `test/unit/oracles.py` whether or
       # not those tests run, and an import it cannot resolve is an error. So
       # the typecheck depends on them, which was invisible until a machine
       # without them tried it: that is what the first CI run found.

@@ -12,7 +12,7 @@ took it away and what to change to get it back. The absence is derived,
 explained, and assertable in the schema itself.
 
 ```
-$ situc explain examples/http/http.situ request_line.version
+$ situc explain example/http/http.situ request_line.version
 request_line.version
   size       Bounded(2, 16)  <- weakened
   offset     Scanned  <- weakened
@@ -38,7 +38,7 @@ vector supports.
 A schema is the format, not a description of a language's objects:
 
 ```situ
-// examples/udp/udp.situ, abridged. RFC 768.
+// example/udp/udp.situ, abridged. RFC 768.
 target buffer;
 endian big;
 
@@ -85,9 +85,9 @@ much of it you take*.
 ```sh
 git clone <this repository> && cd situ
 make                                    # build the C runtime
-./bin/situc build --target c --out /tmp/gen examples/udp/udp.situ
-./bin/situc map examples/udp/udp.situ
-./bin/situc doc examples/udp/udp.situ   # RFC-style byte diagrams
+./bin/situc build --target c --out /tmp/gen example/udp/udp.situ
+./bin/situc map example/udp/udp.situ
+./bin/situc doc example/udp/udp.situ   # RFC-style byte diagrams
 ```
 
 `situc` needs Python 3.11 or later and nothing else -- no third-party packages,
@@ -156,7 +156,7 @@ table says what each one adds:
 | `converse` | match a reply to its request | may it hold messages between calls? | **ships** |
 | `drive` | send, receive, retransmit, time out | may it own I/O? | **ships** |
 
-`docs/decisions/0032-the-layer-ladder.md` is the reasoning, and writing it
+`doc/decision/0032-the-layer-ladder.md` is the reasoning, and writing it
 down before the rungs existed is the point: "should situ do X" stops being
 asked once per adopter and becomes "at which rung does X live".
 
@@ -166,7 +166,7 @@ variable-length member because "a pointer reintroduces exactly the lifetime
 the caller was escaping, and an array of the worst case is a decision about
 memory nobody asked for". Both stop being true once the caller supplies the
 backing, which is what `_edit.h` adds -- measure, then decode into storage
-you hand it. `docs/decisions/0031-where-allocation-is-unavoidable.md`
+you hand it. `doc/decision/0031-where-allocation-is-unavoidable.md`
 enumerates the five cases and `project.md` 26.99 says which shape serves
 each.
 
@@ -220,7 +220,7 @@ deadline nobody wrote down.
 
 ## The language
 
-`docs/grammar.ebnf` is the extracted grammar and section 7 of `project.md` is
+`doc/grammar.ebnf` is the extracted grammar and section 7 of `project.md` is
 the authority; what follows is the working vocabulary.
 
 **Directives** set how the rest of the file is read:
@@ -360,7 +360,7 @@ predicts almost nothing.
 
 **Below all four, write the twenty lines.** A single private record, read in
 one language by one program that never mutates it, is twenty-five lines of
-`offset += N` and they work. `examples/keystore` is deliberately that shape,
+`offset += N` and they work. `example/keystore` is deliberately that shape,
 so you can see the floor rather than infer it -- and it shows what changes the
 answer, which is the version bump re-laying the bytes and the sealed body
 nothing may read before the tag verifies.
@@ -475,12 +475,12 @@ which `black` and `ruff format` cannot be configured to leave alone, so
 
 ```
 project.md        the specification, and the authority on intent
-docs/decisions/   append-only decision records, numbered, with alternatives
-docs/grammar.ebnf extracted from section 7, held in sync by a test
+doc/decision/   append-only decision records, numbered, with alternatives
+doc/grammar.ebnf extracted from section 7, held in sync by a test
 situc/            the compiler: Python 3.11+, standard library only, mypy strict
 runtime/          one runtime per backend, each thin; the arithmetic lives in C
-examples/         one directory per protocol, each with at least one `require`
-tests/            unit, generated-C, cross-architecture, golden diagnostics,
+example/         one directory per protocol, each with at least one `require`
+test/            unit, generated-C, cross-architecture, golden diagnostics,
                   a Wireshark stub, and the schemas written to be awkward
 tools/            the style gate, the commit-msg hook, the benchmark, the sweep
 ```
@@ -525,7 +525,7 @@ caller may consult.
 
 ## Reading further
 
-`man situc` is the command reference and `docs/grammar.ebnf` is the grammar.
+`man situc` is the command reference and `doc/grammar.ebnf` is the grammar.
 Beyond those, `project.md` is long and is meant to be. Useful entry points:
 
 - **Section 11**, the capability lattice: the core of the project. Every other
@@ -536,7 +536,7 @@ Beyond those, `project.md` is long and is meant to be. Useful entry points:
 - **Section 0**, on how the document is kept honest: seven claims in it are
   held to the code by tests that fail when they drift. Every one was added
   after finding drift, and each found more than expected.
-- `examples/README.md` for what each worked example is there to prove.
+- `example/README.md` for what each worked example is there to prove.
 
 The examples are the schemas to read first: `udp` for the smallest complete
 one, `ipv4` for bit packing, `dns` and `dnsname` for a variant and a walk,

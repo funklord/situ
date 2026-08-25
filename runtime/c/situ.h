@@ -554,7 +554,7 @@ static inline uint32_t situ_remaining_u32(uint32_t limit, uint32_t at)
  * keeps a *length* inside the frame; this keeps an *offset* there. A member
  * placed after a variable-length region has an offset that is the sum of what
  * precedes it, and one of those terms is a field an attacker fills in: for
- * `examples/packet`, `hdr.length = 0xffff` puts the tag 65581 bytes into a
+ * `example/packet`, `hdr.length = 0xffff` puts the tag 65581 bytes into a
  * 62-byte view, and the accessor handed back that pointer.
  *
  * Saturating rather than wrapping, and that is the point: `at + by` in
@@ -563,7 +563,7 @@ static inline uint32_t situ_remaining_u32(uint32_t limit, uint32_t at)
  * clamped offset is wrong in a way `validate` can report; a wrapped one is
  * wrong in a way nothing can see.
  *
- * Found by fuzzing `examples/packet` under an address sanitizer, three seconds
+ * Found by fuzzing `example/packet` under an address sanitizer, three seconds
  * into the first run that was fuzzing rather than eight random inputs. */
 static inline uint32_t situ_advance_u32(uint32_t at, uint32_t by, uint32_t limit)
 {

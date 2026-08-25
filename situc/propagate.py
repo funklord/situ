@@ -538,7 +538,7 @@ def _indexes_outside_the_region(context: Context) -> bool:
 	this same struct, so an element is still inside the frame and the check at
 	the frame boundary still covers it -- it reaches outside the *region* and
 	not outside the frame, which is a weaker statement than this axis makes.
-	`examples/sqlite` is what made the distinction concrete: a cell pointer is
+	`example/sqlite` is what made the distinction concrete: a cell pointer is
 	measured from the start of the page, which is a member of the page.
 	"""
 	table = context.placement.index_table

@@ -1,0 +1,781 @@
+// Constructs the example protocols happen not to use.
+//
+// Mutation testing found these by the only symptom they have: a deliberate bug
+// in the generator for each one changed nothing that any test compiled, because
+// no schema in the tree reached the code path at all. A construct the language
+// offers and nothing exercises is a construct whose generated code has never
+// run, so this file exists to reach them rather than to describe a protocol.
+//
+// Each member notes what it is here to keep honest.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct edges [allow_straddle] {
+	// A signed bit-packed field. Every signed field in the examples is a whole
+	// number of bytes, so `situ_sign_extend` on the bit-packed path was emitted
+	// and never executed: dropping it entirely left the suite green.
+	i5   trim;
+	u3   scale;
+
+	// A signed field spanning a byte boundary, where the sign bit and the low
+	// bits come from different bytes.
+	i12  offset;
+	u4   channel;
+
+	// Elements wider than a byte, which are ValueConverted and therefore
+	// reached by index rather than by pointer. The stride in that accessor was
+	// free to drift by any amount.
+	u16  samples[4];
+
+	// The same, signed, so element addressing and sign extension are exercised
+	// together rather than one masking the other.
+	i32  deltas[2];
+}
+
+require size(edges) == 19;
+require in_place(edges.trim);
+require in_place(edges.channel);
+
+// Two tags in one struct, which is what makes a per-struct dirty mask mean
+// anything. With one tag the mask equals that tag's own bit, so nothing needs
+// it and nothing noticed when a deliberate off-by-one made it wrong.
+//
+// Also the only `must_be_one` in the tree. `must_be_zero` is the default and
+// every example uses it; the other policy shares its code path and had never
+// executed.
+struct two_tags {
+	u8  hop;
+
+	authenticated inner {
+		u8        kind;
+		reserved  u4  [must_be_one];
+		u4        flags;
+	}
+	tag u8[16] covers(inner);
+
+	authenticated outer {
+		u16  sequence;
+	}
+	checksum u8[2] covers(outer);
+}
+
+require size(two_tags) == 23;
+
+// Text with the two attributes section 8.6 offers, which no protocol here uses
+// and which were both parsed and dropped on the floor until they were not.
+//
+// `nul_terminated` reads the declared size as the capacity: the field is
+// sixteen bytes whatever it holds, and the content runs to the first zero. So
+// the bytes past the terminator are not part of the value, two buffers
+// differing only there mean the same thing, and the field is NonCanonical --
+// which the capability map says out loud rather than leaving to be discovered.
+struct labelled {
+	u8  name[16]  [nul_terminated, encoding = utf8];
+	u8  code[4]   [encoding = ascii];
+	u16 sequence;
+}
+
+require size(labelled) == 22;
+require in_place(labelled.sequence);
+
+// Recorded rather than required: the trailing bytes are the cost of a
+// capacity-sized string, and the remedy would be to zero them on write and
+// demand it on parse.
+assert canonical(labelled.name);
+
+// A derived field, in a struct that also carries a tag.
+//
+// Both kinds of obligation share one dirty word (section 16.1), and nothing
+// else in the tree carries both, so the two numberings were free to disagree
+// and did: the C backend counted invariants after its tags, the Python backend
+// numbered from a list of tags alone and fell back to bit 0 for anything else,
+// which is the tag's bit.
+//
+// `a` and `b` are scalars on purpose. The first invariant written derived from
+// a nested struct and an array, neither of which gets a setter, so the covered
+// setter path -- the one that pastes a `covered_by` entry into an identifier --
+// was never reached. It emitted `SITU_S_INVARIANT TOTAL_DIRTY`, a macro name
+// with a space in it, and no test compiled it.
+struct derived {
+	u16  total;
+	u8   a;
+	u32  b;
+
+	authenticated body {
+		u16  sequence;
+	}
+	tag u8[4] covers(body);
+}
+
+require size(derived) == 13;
+invariant derived.total == size(derived.a) + size(derived.b);
+
+// Delimiter-framed members, and a frame that mixes them with placed ones.
+//
+// The construct section 8.6.1 adds. Here rather than in an example protocol
+// because the point is the *mixture*: `magic` keeps a static offset, `count`
+// is an ordinary big-endian u16 that has lost one, and the map has to say so.
+//
+// `version` is capped and `label` is not, which is the difference between
+// Bounded and Unbounded and between Pure and EffectOnRead on the same
+// construct.
+struct framed {
+	u8   magic[4];
+	u8   version[] until "\r\n" max 16;
+	u8   label[]   until "\0";
+	u16  count;
+}
+
+// A delimiter the content may contain, which is the other half of 8.6.1 and
+// the only thing in the tree that is NonCanonical for that reason.
+struct quoted_row {
+	u8  field[] until "," [quoted = "\""];
+	u8  rest[remaining];
+}
+
+// A text number driving a binary payload: the shape that motivated section
+// 8.6.1 in the first place, and the only place in the tree where an array's
+// length comes from digits rather than bits. Loading it as an integer read
+// the ASCII: "10" came out as 0x3130, which is the kind of wrong that
+// produces a plausible number.
+struct texty {
+	decimal  u16  count until "\r\n" max 8;
+	u8            body[count];
+}
+
+// A run of records ending where a terminator stands in for one. The only
+// construct in the tree where the delimiter is *not* looked for anywhere: a
+// CRLF inside a header line belongs to that line, and treating this as a
+// delimited byte array found the first one and stopped there.
+struct kv {
+	u8  key[]   until ": ";
+	u8  value[] until "\r\n";
+}
+
+struct kv_block {
+	kv  entries[] until "\r\n";
+	u8  payload[remaining];
+}
+
+// Optional whitespace and a case-insensitive token: the two attributes that
+// separate what a delimited member *frames* from what it *means*. `value`
+// spans its whitespace -- members partition their struct exactly -- and
+// carries only what is left of it.
+struct messy {
+	u8  name[]  until ":"    [case_insensitive];
+	u8  value[] until "\r\n" [trim];
+}
+
+// One file, three versions of one protocol. `[since]` is append-only by
+// construction -- the compiler refuses a member that arrives before one
+// declared earlier -- so every member keeps a static offset and what varies
+// is only whether the bytes are there at all.
+struct versioned [version = ver] {
+	u8   ver;
+	u16  length;
+	u32  flags [since = 2];
+	u16  extra [since = 3];
+}
+
+// ...and a constraint on one of them, which is a different question. A
+// versioned member's getter takes an out-parameter and returns an error --
+// there is no value to return when the field is not there -- and `validate`
+// was written against the ordinary getter, so two backends emitted code that
+// did not compile and the other two checked a member the message does not
+// carry. Nothing had ever put an attribute on a versioned member: the struct
+// above has three of them and not one between them.
+enum dialect : u8 {
+	plain    = 1,
+	extended = 2,
+	default  = error,
+}
+
+struct constrained [version = rev] {
+	u8       rev;
+	u16      magic  [since = 2, must_eq = 0x1234];
+	dialect  how    [since = 3];
+	u8       pad    [since = 3, must_be_zero];
+}
+
+// A run that ends after the element failing a test, and an element sized by
+// arithmetic over one of its own fields.
+//
+// Here so the walk is fuzzed and cross-tested, which is where a termination
+// bug in it would show: every guard in that loop exists because an adversary
+// picks the bytes.
+struct link {
+	u8  kind;
+	u8  units;
+	u8  body[(units + 1) * 4 - 2];
+}
+
+struct linked {
+	link  chain[] while (kind == 0x11 || kind == 0x22) max 6;
+	u8    tail[remaining];
+}
+
+// A run walked over a *fixed-size* element. Every other run here walks a
+// variable one, which is what `extent_parts` was written for -- it answers
+// None for a fixed struct, correctly, because the extent is the size. Three
+// backends read that None as "cannot measure", emitted no walk, and went on
+// emitting the members after the run, whose offsets call the span function
+// they had declined to write.
+struct beat {
+	u8  kind;
+	u8  payload;
+}
+
+struct beats {
+	beat  pulse[] while (kind == 0x33) max 6;
+	u16   after;
+}
+
+// A *counted* run of variable-length elements: the count says how many, and
+// each element says how long it is. There is no stride to multiply and no
+// span function, so the run is walked and nothing here returns the total --
+// which is why `after` below has no accessor in any of the four backends.
+//
+// Here because C used to answer: it fell through to the counted-array branch
+// and multiplied the count by an element width of one, so whatever followed
+// such a run was placed `count` *bytes* past its start. A plausible number,
+// which is the failure this repository rates worst.
+struct segment {
+	u8  length;
+	u8  body[length];
+}
+
+struct segments {
+	u8       count;
+	segment  parts[count];
+	u16      after;
+}
+
+// A coded region whose interior the *data* sizes, which is the shape nothing
+// in this repository had.
+//
+// Every coded region here and in `example/` is either fixed inside or ends at
+// a delimiter, and those are the two paths the emitters had. This is the third:
+// the region's extent is its interior's extent put through the codec's
+// expansion, and the interior is `u8 content[n]`. All four backends returned
+// the region's *minimum* -- zero bytes -- with a pointer at the right place and
+// no refusal, so the wire bytes of a non-empty region were unreachable in every
+// language at once (26.35).
+//
+// `ratio_exact(2, 1)` because a codec that doubles makes the arithmetic
+// visible: a two-byte interior is four bytes of region, and a length that
+// forgot the ratio would still look plausible.
+codec doubling {
+	expansion = ratio_exact(2, 1);
+	granularity = byte;
+	seekable = linear;
+	invertible;
+	deterministic;
+}
+
+impl doubling extern "my_doubling";
+
+struct coded_run {
+	u8  n;
+	coded body(doubling) {
+		u8 content[n];
+	}
+	u8  trailer;
+}
+
+// Every operator a size expression can carry.
+//
+// A measurement rather than a hunch: across every schema this repository
+// builds, the only operators that ever reached a backend's expression renderer
+// were `+`, `-` and `*`, and the only builtin was none at all. That is a fact
+// about which protocols somebody wrote up, not about the language -- and the
+// two things it hid were a compile error in four target languages and a
+// division that returned a float in one of them (26.37).
+//
+// `[min = 1]` on the driver is what makes `/` and `%` legal at all: a divisor
+// whose range includes zero is refused, which is the compiler doing its job.
+struct arithmetic {
+	u8   units  [min = 1, max = 4];
+
+	u8   halved[units / 2 + 1];		// integer division, not 2.5
+	u8   modulo[units % 3 + 1];		// not monotone; its own interval rule
+	u8   shifted[units << 1];
+	u8   dropped[units >> 1 | 1];		// bitwise or, on a shifted range
+	u8   masked[(units & 3) + 1];
+	u8   flipped[(units ^ 1) + 1];
+	u8   clamped[min(units, 3)];		// an attribute name, being called
+	u8   raised[max(units, 2)];
+	u8   padded[align_up(units, 4) - units + 1];
+
+	u16  tail;
+}
+
+require absolute_static(arithmetic.units);
+
+// The constructs the survey found with no users at all.
+//
+// Every one of these is in the grammar, in project.md, and in no schema --
+// which by this file's own header is a construct whose generated code has
+// never run. Two of the register modes were wrong when a schema finally used
+// them (26.41); these five were not, and that is worth recording rather than
+// assuming, since the only way to tell was to write them.
+
+// One level of namespacing (decision 0012). Nesting is refused, and the
+// separator is `::` because a dot is already a path.
+namespace wire {
+	struct framed_body {
+		u8   kind;
+		u16  length;
+	}
+}
+
+// A delimiter the content may contain, made inert by an escape byte (8.6.1).
+// `quoted` above is the other half of the same question; nothing had ever
+// written this one.
+struct escaped_run {
+	u8  field[] until "," max 64 [escape = "\\"];
+	u8  rest[remaining];
+}
+
+// The fourth reserved policy (8.8). `must_be_zero` and `must_be_one` are
+// checked, `preserve` is copied, and `unknown` is the one that says the bits
+// mean nothing this schema knows -- so nothing is checked and nothing is
+// promised, which is a different statement from `preserve`.
+struct unknown_reserved {
+	u8        version;
+	reserved  u8   [unknown];
+	u16       tail;
+}
+
+// `[equalize]` pads every arm to the largest, which is what buys back the
+// offset axis for everything after the variant (17.0). Without it `tail` is
+// Dynamic; with it the struct has one size and `tail` is at 9.
+struct equalized {
+	arm_kind  which;
+	variant body switch (which) [equalize] {
+		case arm_kind.first:  u8  tiny[2];
+		case arm_kind.second: u8  big[8];
+	}
+	u16  tail;
+}
+
+require size(equalized) == 11;
+require absolute_static(equalized.tail);
+
+enum arm_kind : u8 {
+	first  = 0x11,
+	second = 0x22,
+	default = error,
+}
+
+// `[allow_unverified_read]` waives the stage gate of 14.3: the interior is
+// reachable without a verification token. It is the one construct in this
+// language whose whole purpose is to give up a guarantee, so a schema that
+// uses it should have to write it down -- which is what this is.
+codec sealing_aead {
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+impl sealing_aead extern "my_sealing_aead";
+
+struct unverified {
+	u8  hop;
+	sealed body(sealing_aead) [allow_unverified_read] {
+		u16  seq;
+	}
+	tag u8  mac[16] covers(body);
+}
+
+// The combinations, which are not constructs and are where the defects are.
+//
+// Everything above this line is a *construct* nothing exercised. These three
+// are pairs of constructs that are each covered several times over, put next
+// to each other: the neighbour is what the code branches on, so a question
+// with two spellings gets answered for whichever spelling a real protocol
+// happened to write (26.46, invariant 69).
+//
+// They were found by construction and fixed against unit tests over generated
+// text, which is three backends inspected and one executed (invariant 22).
+// Here they reach every artifact this file reaches: four compilers, the
+// random-bytes differ, the dissector, `doc`, the fuzz harness and the checks.
+
+// A packed pair before a member the data sizes.
+//
+// `hi` and `n` are a nibble each: one byte together and zero apart. Every
+// offset sum in the four backends divided each preceding member by eight and
+// added the quotients, so the pair contributed nothing and everything after
+// `d` read one byte early -- the last byte of the array and the first of
+// `tail`. `extent_parts` states that arithmetic in its own docstring, having
+// been fixed there for the *extent*; the accumulation beside it was never
+// told, in seven places across the four backends.
+struct packed_driver {
+	u4   hi;
+	u4   n;
+	u32  d[n];
+	u16  tail;
+}
+
+// A fixed-width text number driving a length, named from the struct that
+// declares it.
+//
+// An expression over a text driver names `<field>_value`, the read that
+// cannot fail, and only the delimited and nested forms of a text number
+// emitted one -- `texty` above is delimited, and `example/cpio` reaches its
+// driver through a nested header. So `decimal u32 n[4]; u16 d[n]` named a
+// function nothing defined: C that does not compile, and a Python
+// `AttributeError` on every accessor after the driver.
+struct text_driver {
+	decimal u32  n[4]  [max = 4];
+	u16          d[n];
+	u16          tail;
+}
+
+// A varint driving a size written as arithmetic.
+//
+// `readable_names` is the one list of what an expression may name and it
+// asked for a scalar, which a varint has not -- so `n` in `d[n + 1]` reached
+// the generated code as a bare identifier. The count form `d[n]` beside it,
+// which `example/sqlite` writes, has known about varint drivers since they
+// were added.
+varint_type edge_varint {
+	encoding  = be128;
+	max_bits  = 64;
+	max_bytes = 9;
+}
+
+struct varint_driver {
+	edge_varint  n;
+	u16          d[n + 1];
+	u16          tail;
+}
+
+// A run of values the message counts, whose elements are wider than a byte.
+//
+// `edges.samples[4]` at the top of this file is the same array with its count
+// in the schema, and every backend refuses to hand back its bytes -- three of
+// them in a generated comment saying why: the element is ValueConverted, so
+// the bytes are not the values. With the count in the *message* all three
+// handed back exactly that, a `memoryview`, a `bytes` and a `&[u8]`, and a
+// caller who cast one read host byte order for a schema that names its own.
+//
+// C did index it, and did not bound the index: `n` is the message's number,
+// so element 99 of a frame that holds eight bytes was read four hundred bytes
+// past the end (invariant 41).
+//
+// Two spellings, because they were two answers. `a` names a count and `b`
+// computes one, and the computed form reached C's *scalar* branch: one getter,
+// no index, no length, and every element after the first unreachable in the
+// only backend that decoded any of them. `b` is signed so that indexing and
+// sign extension are exercised together rather than one masking the other.
+struct wide_run {
+	u8   n  [max = 4];
+	u16  a[n];
+	i32  b[n + 1];
+	u16  tail;
+}
+
+// The same run as a variant arm, and the arm nothing reached into.
+//
+// An arm may be a scalar, a byte run or a struct, and every backend emits
+// those. A run of *values* -- an element wider than a byte, counted by the
+// schema or by the message -- was declined by all four: C and C++ said so in
+// the generated file, Python and Rust said nothing at all, which is the floor
+// invariant 27 sets and below it. Nothing composes these two constructs, so
+// nothing asked.
+//
+// The differ asked, and asked wrongly: it read the arm as a scalar and named
+// a getter taking no index, so the driver for a schema shaped like this did
+// not compile.
+struct arm_run {
+	arm_shape  which;
+	u8         n [max = 3];
+	variant body switch (which) {
+		case arm_shape.counted: u16  wide[n];
+		case arm_shape.fixed:   i16  pinned[3];
+		case arm_shape.bytes:   u8   raw[n];
+	}
+}
+
+enum arm_shape : u8 {
+	counted = 0x11,
+	fixed   = 0x22,
+	bytes   = 0x33,
+	default = error,
+}
+
+// A member whose byte order the message decides, behind a member whose length
+// it decides.
+//
+// `example/tiff` is the only marker in the tree and it is a header of
+// constant offsets, so the marker-conditional load had never been asked for a
+// dynamic one: C crashed on the assertion inside `offset_bytes` -- an internal
+// error where section 17 asks for a diagram and a remedy -- and Rust emitted
+// `self.as_ref().as_ref()` in the setter, because the rewrite that moves a
+// read onto the immutable view rewrote an `as_ref()` the store had already
+// put there (invariant 53).
+endian_marker edge_order : u16 {
+	little = 0x4949,
+	big    = 0x4D4D,
+}
+
+struct marked [endian = from(edge_order)] {
+	endian_marker  edge_order;
+	u8             n [max = 4];
+	u8             pad[n];
+	u16            after;
+	u16            samples[n];
+}
+
+// A nested struct behind a variable-length member.
+//
+// A header, a variable-length field, and another header: about as ordinary as
+// a protocol gets, and no schema in this repository had one. C emitted it from
+// the start; the other three asked the placement for a constant offset and
+// crashed the compiler on the assertion inside `offset_bytes`.
+struct beacon {
+	u16  seq;
+	u8   flags;
+}
+
+struct framed_tail {
+	u8       n [max = 4];
+	u8       pad[n];
+	beacon   head;
+	u16      tail;
+}
+
+// The same nested struct, covered by a tag, so its fields get the flattened
+// setter that marks the bit.
+//
+// Two things live here. The covered setter wrote at the parent's base plus a
+// *frame-relative* offset -- `head.seq` over the top of `n` -- because the
+// nested copy of a member behind a variable-length one measures from the
+// nested struct rather than from the frame. And the tag's covered span, and
+// `validate`'s bounds check, both named an offset function for an
+// `authenticated` region that gets none: the region owns no bytes, so where
+// it sits behind a variable-length member the generated C did not compile.
+struct covered_tail {
+	u8  n [max = 4];
+	u8  pad[n];
+	authenticated body {
+		beacon  head;
+	}
+	tag u8 mac[4] covers(body);
+}
+
+// A sealed region whose interior the data sizes.
+//
+// `vals` is a run of values wider than a byte, which is the construct 26.47
+// added -- and inside a gate it was the one accessor family emitted without
+// one, so every element of a sealed `u16 x[4]` was readable in C without the
+// verification token 14.3 exists to demand. `trailer` sits behind `vals`, so
+// its offset is the message's: three backends dropped it and C read it
+// seventeen bytes past where it is, because what precedes a member inside a
+// region is what precedes the region, and the walk was over the struct's own
+// members and never stopped.
+struct sealed_run {
+	u8  n [max = 4];
+	sealed body(sealing_aead) {
+		u16  vals[n];
+		u16  trailer;
+	}
+	tag u8  seal_mac[16] covers(body);
+}
+
+// Members named what the generated code needs (26.80). `base`, `limit` and
+// `raw` are methods on the C++ view; `bytes` is a property on the Python one
+// and the builtin its annotations use. Each produced code that would not
+// compile, from a schema three other backends accepted, and decision 0013's
+// identifier gate saw none of them because it asks only about flattened C
+// identifiers. Here so that the next such name is caught by a build rather
+// than by somebody adding a schema.
+struct shadowing {
+	u32  base;
+	u32  limit;
+	u32  raw;
+	u8   bytes[4];
+	u32  str;
+}
+
+// Members named for a keyword, which is the other half of the same gap.
+// `base` and `bytes` above are names in use and were fixed by spelling the
+// emitted code differently; these cannot be spelled at all -- `std::uint32_t
+// int() const` is not C++ and `uint32_t int;` is not C -- so the *name*
+// moves, one trailing underscore, and the schema keeps its own.
+//
+// Six words across four languages, because no one language has them all:
+// `int` and `short` are C and C++, `class` is C++ and Python both, `type`
+// and `match` are Rust, and `lambda` is Python. Rust needs no mangling for
+// any of it -- `r#type` is what raw identifiers are for -- which is why the
+// struct has to carry words from more than one list to exercise more than
+// one answer.
+//
+// These are not contrived names. DNS calls a field CLASS and half the
+// protocols in this tree have a `type`; a rule against them would be situ
+// declining to describe a format for a reason that has nothing to do with
+// its bytes.
+struct keywords {
+	u32  int;
+	u16  short;
+	u8   class;
+	u8   type;
+	u8   match;
+	u8   lambda;
+}
+
+// A delimited text number carrying a declared range, which is two constructs
+// the tree had separately and never together.
+//
+// `validate` checked the digits and dropped the range. The branch that
+// handles a delimited member returns before the one that emits `[min]` and
+// `[max]`, in all four backends and in the packer -- so `999` passed
+// `[min = 200, max = 599]` everywhere while `12x` was correctly refused: the
+// parse enforced, the bound not. Nothing here wrote the combination, which
+// is exactly how the fixed-width form's missing checks stayed hidden until
+// cpio's magic was looked at.
+struct ranged_code {
+	decimal u32  code[] until " " max 4  [min = 200, max = 599];
+	u8           rest[remaining];
+}
+
+// A `positional` block, which the grammar has had since the beginning and no
+// schema in the tree wrote. Section 4 calls mixed paradigms in one schema a
+// feature and says positional layout is what makes canonical encoding a
+// structural property rather than a convention -- a claim with no schema
+// behind it until here.
+//
+// The block is the point rather than what is in it: members inside one are
+// laid out by their order at a fixed offset, which is what the default
+// already does for a plain struct, so a generator can drop the construct
+// entirely and every test still passes. That is the shape this file exists
+// to catch -- the mutation has nowhere to show up unless something reaches
+// the code path at all.
+//
+// The trailing member is outside the block on purpose. A block that held the
+// whole struct would be indistinguishable from no block, and the offsets
+// after it are what say the block ended where it said it did.
+struct placed {
+	positional {
+		u16 first;
+		u32 second;
+	}
+
+	u8  after;
+}
+
+require size(placed) == 7;
+require absolute_static(placed);
+require in_place(placed.after);
+
+// A `coded` region whose transform reaches outside itself: section 14.1a.
+//
+// Header protection is the case the clause exists for -- QUIC masks the first
+// byte and the packet number under one operation. Here the two spans are
+// adjacent, which is the half that can be emitted: the codec ABI of 13.2a
+// takes one pointer and one length, so a coverage with a gap in it has no
+// single range to hand over and the backends refuse it instead.
+//
+// It is here rather than in an example because no protocol in the tree masks
+// a header, and a clause nothing reaches is a clause whose generated code has
+// never run -- which is what this file is for. The mutation it keeps honest:
+// dropping the widening emits the region's own pointer, and every schema
+// without a `covers` clause still passes.
+//
+// The codec is `extern` deliberately. A derived one cannot reach the clause
+// at all: every length-preserving kernel family computes no ratio, and the
+// derived decode accessor is emitted only where a ratio sizes the output.
+codec masking {
+	granularity = byte;
+	length_preserving;      // required by 14.1a: a covered span is already placed
+	seekable;
+	invertible;
+	deterministic;
+}
+
+impl masking extern "app_header_mask";
+
+struct hp_packet {
+	u8 first;
+	coded pn(masking) covers(first) { u8 number; }
+	u32 rest;
+}
+
+require size(hp_packet) == 6;
+require absolute_static(hp_packet);
+
+// And the split coverage, which is what widening the ABI bought (13.2b).
+//
+// This is QUIC's header protection in miniature: the mask covers the first
+// byte and the packet number, and the connection id sits between them. Until
+// the ABI took a list of spans this schema could be written and checked and
+// not emitted, because a codec handed one pointer and one length has nowhere
+// to be told about the second span.
+//
+// `cid` is deliberately in the gap and deliberately not covered. If the
+// generated span list ever collapses into one run from `first` to `number`,
+// the transform would run over three bytes that no schema asked it to touch
+// -- so the count in the generated code is the thing to read.
+struct hp_split {
+	u8 first;
+	u32 cid;
+	coded pn(masking) covers(first) { u8 number; }
+	u32 rest;
+}
+
+require size(hp_split) == 10;
+require absolute_static(hp_split);
+
+// A length-preserving *derived* codec over a region, which emitted no decode
+// accessor at all until the ratio gate learned to read `decode_ratio`.
+//
+// The gap was two mistakes stacked. `decodes_here` admitted only `table` and
+// named `stuffing` families, on a docstring that named Hamming's nibble-in,
+// byte-out interface as the reason and then generalised it to "the other
+// families" -- but `permutation` and `shift_register` emit exactly the same
+// `(in, len, out) -> count` shape as `table`. And behind that, the emitters
+// read `codec.ratio` directly, which a length-preserving kernel does not
+// compute: there is nothing for a ratio to say when the answer is the same
+// size as the question.
+//
+// So the buffer size was never the unknown. It is the encoded length exactly,
+// and the accessor is emitted with `1:1` now.
+codec scramble {
+	kernel = shift_register(taps = 0x8810, width = 16, seed = 0xFFFF,
+	                        unit = stream, feedback = input);
+}
+
+impl scramble derived;
+
+struct scrambled {
+	u8    head;
+	coded body(scramble) { u8 payload[4]; }
+	u16   tail;
+}
+
+require size(scrambled) == 7;
+require absolute_static(scrambled);
+
+// A pinned footprint (decision 0039). `used` says how many of the sixteen
+// bytes are meaningful; the member occupies sixteen either way, which is what
+// lets `checksum` after it keep an absolute offset. Written here rather than
+// in an example because that is what this file is for: the constructs no
+// worked example happens to have are the ones a backend breaks on quietly.
+//
+// The two halves are what the construct exists to keep together. `u8 body[16]`
+// alone would fix the layout and forget `used`; `u8 body[used]` alone would
+// keep `used` and cost `checksum` its offset. Neither says what the format
+// does, and `validate` checks `used <= 16` only because the pin is here to be
+// checked against.
+struct pinned {
+	u8   used [max = 16];
+	u8   body[used] [size = 16];
+	u16  trailer;
+}
+
+require size(pinned) == 19;
+require absolute_static(pinned.trailer);

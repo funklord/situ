@@ -81,8 +81,8 @@ def _scalars(image: Image, struct_index: int) -> list[int]:
 		# An `authenticated` one has no gate: its members sit where they
 		# would have sat anyway and are read directly, which is why 5.3
 		# addresses `Packet.hdr.seq`. Skipping them too left every field of
-		# `examples/icmp`'s `authenticated message` out of the listing, and
-		# `examples/udp`'s whole header once its checksum covered one.
+		# `example/icmp`'s `authenticated message` out of the listing, and
+		# `example/udp`'s whole header once its checksum covered one.
 		if index in image.regions \
 				and image.region_flags.get(index, 0) & SEALED:
 			continue			# read through a gate, not directly
@@ -568,7 +568,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 
 		# A member of *fixed* size at a *dynamic* offset. Its offset is a
 		# sum of lengths the message chose, so the bounds check that
-		# acquired the view never answered for it: `examples/packet`'s tag
+		# acquired the view never answered for it: `example/packet`'s tag
 		# is sixteen fixed bytes and was 65 kilobytes past a 62-byte view.
 		# Both facts are flags the image already carries, so this is the
 		# walk's own arithmetic rather than a constraint the packer emits

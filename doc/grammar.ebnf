@@ -1,0 +1,241 @@
+(* situ grammar, v0.
+ *
+ * Extracted from project.md section 7 and kept in sync with it. Where the two
+ * disagree, project.md is authoritative and this file is the bug.
+ *
+ * Alternatives are tab-indented rather than column-aligned, because no tab
+ * width is prescribed in this project and column alignment would not survive
+ * one (doc/decision/0003-source-formatting.md).
+ *
+ * Every production below parses. Some used to carry a PHASE n marker, meaning
+ * the front end would refuse them with a "not yet implemented" diagnostic
+ * naming that phase; phases 0 through 14 are complete and the parser's table
+ * of refused constructs is empty, so the markers named nothing and are gone.
+ * Two restrictions survive, and both are noted where they apply: a nested
+ * `namespace`, and a nested qualified name.
+ *)
+
+schema		= { directive | decl } ;
+
+directive	= "target" target_kind ";"
+	| "endian" endian ";"
+	| "bit_order" bitorder ";"
+	| "strictness" "=" strictness ";"
+	| "import" string ";" ;
+
+target_kind	= "buffer" | "mmio" ;
+endian		= "big" | "little" | "native" ;
+bitorder	= "msb_first" | "lsb_first" ;
+strictness	= "strict" | "lenient" ;
+
+(* One level only; nesting is rejected naming its phase. See
+ * doc/decision/0012-namespaces.md. *)
+namespace_decl	= "namespace" ident "{" { decl } "}" ;
+
+(* A register lowers to a struct carrying its bus facts; `register_block`
+ * declares the settings once and disappears. See section 15.2. *)
+register_decl	= "register" ident [ "@" number ] "{" { reg_setting | member } "}" ;
+register_block_decl = "register_block" ident "{" { reg_setting | register_decl } "}" ;
+reg_setting	= ( "width" | "access_width" ) "=" number ";"
+	| ( "volatile" | "no_rmw" ) ";" ;
+qualified	= [ ident "::" ] ident ;
+
+decl		= namespace_decl
+	| const_decl
+	| enum_decl
+	| struct_decl
+	| endian_marker_decl
+	| codec_decl
+	| register_decl
+	| register_block_decl
+	| requirement
+	| invariant
+	| relation_decl ;
+
+const_decl	= "const" ident "=" expr ";" ;
+
+enum_decl	= "enum" ident ":" scalar_type "{" enum_body "}" ;
+enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
+
+struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
+
+member		= field | reserved | marker_field | block | variant | tag_field ;
+
+field		= [ radix ] type_ref ident [ array_spec ] [ until | repeat ]
+		  [ located ] [ pin ] [ attrs ] ";" ;
+(* `at expr` places the member where the data says, measured from the start of
+ * the message. Distinct from `pin`, which asserts the offset the solver
+ * computed and places nothing -- section 9.8. *)
+located		= "at" expr ;
+repeat		= "while" "(" expr ")" [ "max" expr ] ;	(* section 8.6.6 *)
+radix		= "decimal" | "hex" ;		(* section 8.6.2 *)
+reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
+(* The name is optional and defaults to the keyword, so an unnamed tag is
+ * `tag` and an unnamed sealed region is `sealed` -- which is what lets
+ * `require verify_gated(Packet.sealed)` resolve in example 5.3. See
+ * doc/decision/0010-region-and-tag-names.md. *)
+(* `[self_as = N]` says what the tag's own bytes read as while the algorithm
+ * runs, and is what lets a checksum sit inside the region it covers: RFC 1071
+ * defines the Internet checksum over the header including the checksum field,
+ * taken as zero. Without it, a tag inside its own coverage is an error. *)
+tag_field	= ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
+		  [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
+
+block		= "positional" "{" { member } "}"
+	| "authenticated" [ ident ] [ attrs ] "{" { member } "}"
+	| "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
+	| "coded" ident "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
+	| "indexed" "(" index_args ")" "{" { member } "}"
+	| "opaque" ident "[" size_expr "]" [ attrs ] ";"
+	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
+
+variant		= "variant" ident "switch" "(" expr ")" "{"
+		{ "case" expr ":" member }
+		[ "default" ":" ( member | "error" | "opaque" ) ]
+	"}" ;
+
+(* array_spec and attrs both open with "[", so this grammar is ambiguous as
+ * written: `u8 x [foo];` is either an array of `foo` elements or a scalar
+ * carrying the flag `foo`. Resolved by the closed attribute vocabulary in
+ * doc/decision/0006-bracket-disambiguation.md -- a bracket group is attrs
+ * when it holds "=" or "," at depth 1, or a lone known attribute name that is
+ * not immediately followed by "(" -- `min` and `max` are attribute names and
+ * expression builtins both. *)
+array_spec	= "[" [ size_expr ] "]" ;
+size_expr	= expr | "remaining" ;
+
+(* Section 8.6.1. Where a member ends when no length says so. The
+ * delimiter is a string literal rather than an expression: it would
+ * otherwise have to be evaluated against the data it is being looked for
+ * in. `max` bounds the scan. *)
+until		= "until" string [ "max" expr ] ;
+pin		= "@" expr ;
+
+attrs		= "[" attr { "," attr } "]" ;
+attr		= ident [ "=" expr ] ;
+
+type_ref	= scalar_type | ident ;
+scalar_type	= uint | sint | float | bitfield | "bool" | "byte" ;
+uint		= "u" digits ;		(* u1..u64, non-power-of-2 allowed *)
+sint		= "i" digits ;
+float		= "f16" | "f32" | "f64" ;
+bitfield	= "bit" ;		(* single bit; uN < 8 also bit-packed *)
+
+codec_decl	= "codec" ident "{" { codec_prop ";" } "}" ;
+codec_prop	= "length_preserving"
+	| "expansion" "=" ( "+" digits | "unbounded" | ratio )
+	| "granularity" "=" ( "byte" | "block" "(" digits ")" | "stream" )
+	| [ "not" ] "seekable"
+	| "authenticated" | "invertible" | "deterministic"
+	| "kernel" "=" kernel ;
+
+(* Section 13.4. A kernel derives both the signature and the implementation,
+ * which is the whole difference between the two codec tiers. *)
+kernel		= kernel_family [ "(" [ attr { "," attr } ] ")" ] ;
+kernel_family	= "table" | "polynomial" | "linear_block"
+	| "shift_register" | "permutation" | "stuffing" ;
+
+(* Properties compose pointwise and conservatively. *)
+pipeline_decl	= "codec" ident "=" stage { "|>" stage } ";" ;
+stage		= ident [ "(" { ? any ? } ")" ] ;
+
+requirement	= ( "require" | "assert" ) capability_expr ";" ;
+
+(* One field, and what it derives from. The left side is a path rather than an
+ * expression: an invariant says which field situ maintains, and an equality
+ * nobody maintains is what `require` already is. See section 16.1. *)
+invariant	= "invariant" path "==" expr ";" ;
+path		= ident { "." ident } ;
+
+(* A pure predicate over two messages, in temporal order -- the first
+ * parameter is the message seen first, which is what lets a dissector say
+ * "response to frame N" without a second declaration. `must` and not
+ * `require`: section 16 gives `require` to the build-time gate and this is
+ * checked at run time against two views.
+ *
+ * The attribute list is the exchange's retransmission and timing contract
+ * (26.98), on the relation because the relation already identifies the
+ * exchange. Stated whole or not at all.
+ *
+ * See doc/decision/0030-cross-message-relations.md. *)
+relation_decl	= "relation" ident "(" param "," param ")" [ attrs ]
+		  "{" { must } "}" ;
+param		= ident ":" qualified ;
+must		= "must" expr ";" ;
+
+
+(* --------------------------------------------------------------------------
+ * Helper and item-grammar productions.
+ *
+ * This section was written to make a gap visible: productions project.md
+ * described somewhere other than section 7, carrying surface syntax taken
+ * from the worked examples and "not yet normative; each needs a decision
+ * record before its phase". The phases came and went. Twelve of these are in
+ * section 7 now and are normative -- the `tlv` item grammar and the `indexed`
+ * arguments, both with the decision records they were waiting for -- and a
+ * thirteenth, `register_decl`, was a pre-phase-10 sketch that contradicted
+ * the one section 7 carries and is deleted rather than reconciled.
+ *
+ * What is left is of two kinds: declarations section 7 has still not absorbed
+ * (`varint_decl`, `endian_marker_decl`, `impl_decl`), and the small
+ * productions section 7 uses without ever defining (`ident`, `digits`,
+ * `ratio`, `ref_list`). Neither kind is pending on anything.
+ * -------------------------------------------------------------------------- *)
+
+(* Section 8.1.1 *)
+varint_decl	= "varint_type" ident "{" { varint_prop ";" } "}" ;
+varint_prop	= "encoding" "=" ident
+	| "transform" "=" ident
+	| "max_bits" "=" digits
+	| "minimal" ;
+
+(* Section 8.3. Exactly two members, named `little` and `big`: naming them
+ * anything else would leave the compiler guessing which is which, and a wrong
+ * guess here is undetectable at runtime. The backing type must be a whole
+ * number of bytes, because the marker is read before its own byte order is
+ * known. *)
+endian_marker_decl = "endian_marker" ident ":" scalar_type "{"
+	"little" "=" expr ","
+	"big" "=" expr [ "," ]
+"}" ;
+
+(* A struct declares the marker's storage, and scopes itself to it. *)
+marker_field	= "endian_marker" ident [ attrs ] ";" ;
+endian_from	= "endian" "=" "from" "(" ident ")" ;
+
+(* Section 13.1. The signature and its implementation are separate
+ * declarations, which is what makes a built-in algorithm replaceable. *)
+impl_decl	= "impl" ident ( "derived" | "extern" string ) ";" ;
+
+(* A tlv region's item grammar (section 9.5). *)
+tlv_args	= tlv_arg { "," tlv_arg } ;
+tlv_arg		= "tag_decode" "=" tag_decode
+	| "tag_identity" "=" ident
+	| "value_size" "=" value_size
+	| "known"      "=" known_tags
+	| attr ;
+tag_decode	= "{" tag_part { "," tag_part } "}" ;
+tag_part	= ident "=" expr ;
+value_size	= "switch" "(" ident ")" "{" value_case { "," value_case } "}" ;
+value_case	= ( "case" digits | "default" ) ":" value_rule ;
+value_rule	= digits | "self_delimiting" | "prefixed" "(" ident ")" | "error" ;
+known_tags	= "{" known_tag { "," known_tag } "}" ;
+known_tag	= digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
+known_attr	= "name" "=" ident
+	| "wire" "=" digits
+	| "type" "=" ident [ "[" "]" ] ;
+
+(* Referenced by the productions above but never given in section 7. *)
+ref_list	= ident { "," ident } ;
+codec_args	= ident { "," attr } ;
+(* Section 9.3. `base` says what an offset is measured from; absent means the
+ * region itself, which is the only choice bounded by the region's own extent.
+ * See doc/decision/0024-index-offset-base.md. *)
+index_args	= index_arg { "," index_arg } ;
+index_arg	= "base" "=" ( "region" | "message" | ident )
+	| attr ;
+capability_expr	= ident "(" expr { "," expr } ")" | expr ;
+ratio		= "ratio_exact" "(" digits "," digits ")"
+	| "ratio_bounded" "(" digits "," digits ")" ;
+ident		= letter { letter | digit | "_" } ;
+digits		= digit { digit | "_" } ;

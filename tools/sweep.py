@@ -3,8 +3,8 @@
 26.47 through 26.49 were found by writing schemas nobody wrote: two constructs
 that compose badly, put next to each other, generated four times and executed.
 Twenty defects, one hand-written schema at a time. This runs that method over
-the space instead of over whatever occurred to somebody -- `tests/unit/compose`
-enumerates it, `tests/unit/sweep` runs one cell, and this walks as much of it
+the space instead of over whatever occurred to somebody -- `test/unit/compose`
+enumerates it, `test/unit/sweep` runs one cell, and this walks as much of it
 as you ask for and reports what came back.
 
     python3 tools/sweep.py                 # a sample, seeded and reproducible
@@ -22,7 +22,7 @@ the whole space take about as long as a `make test` rather than about an hour.
 
 Not part of `make test`, for the reason `tools/bench.py` is not: the whole
 space is a long run, and what belongs in CI is a fixed sample of it, which
-`tests/unit/test_composed_schemas.py` is.
+`test/unit/test_composed_schemas.py` is.
 
 **A refusal is a pass.** Most of this space is illegal -- a bit-packed field
 at a dynamic offset, `[remaining]` with a member after it, a run of varints --
@@ -46,7 +46,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "tests" / "unit"))
+sys.path.insert(0, str(ROOT / "test" / "unit"))
 
 from compose import Case, cases				# noqa: E402
 from probe import Outcome, run				# noqa: E402

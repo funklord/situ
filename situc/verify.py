@@ -14,7 +14,7 @@ disagreeing from the day the schema was written.
 
 The corpus is the arbiter. Bytes the other implementation emitted are the
 only thing in the arrangement that is not somebody's opinion about the
-format -- which is the same argument `tests/unit/oracles.py` makes, one layer
+format -- which is the same argument `test/unit/oracles.py` makes, one layer
 out and available to a project that generates nothing.
 
 Nothing is written to disk and nothing is compiled. The Python accessors are

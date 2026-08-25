@@ -1,0 +1,39 @@
+# situ wire signature v0
+# schema: register.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+bit_order lsb_first
+endian little
+target mmio
+
+struct ctrl_reg size=4
+  @0x0000   1bit      bit        enable  lsb_first
+  @0x0000:1 1bit      bit        start  lsb_first
+  @0x0000:2 3bit      u3         mode  lsb_first
+  @0x0000:5 1bit      bit        busy  lsb_first
+  @0x0000:6 1bit      bit        error  lsb_first
+  @0x0000:7 25bit     u25        <reserved0>  little lsb_first
+
+struct irq_reg size=4
+  @0x0000   1bit      bit        pending  lsb_first
+  @0x0000:1 1bit      bit        armed  lsb_first
+  @0x0000:2 1bit      bit        mask_enable  lsb_first
+  @0x0000:3 1bit      bit        mask_disable  lsb_first
+  @0x0000:4 1bit      bit        drain  lsb_first
+  @0x0000:5 1bit      bit        lock  lsb_first
+  @0x0000:6 2bit      u2         spare  lsb_first
+  @0x0001   3         u24        fifo  little
+
+struct status_reg size=4
+  @0x0000   1bit      bit        ready  lsb_first
+  @0x0000:1 1bit      bit        fifo_empty  lsb_first
+  @0x0000:2 1bit      bit        fifo_full  lsb_first
+  @0x0000:3 1         u8         fill_level
+  @0x0001:3 21bit     u21        <reserved0>  little lsb_first

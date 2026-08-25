@@ -76,7 +76,7 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	# An invariant is a declaration like any other and this dumper did not
 	# know it, so `situc dump-ast` -- a debugging aid, and phase 1's own
 	# deliverable -- died with a Python traceback on any schema carrying one.
-	# `tests/schemas/edges.situ` has carried one since invariants landed, and
+	# `test/schema/edges.situ` has carried one since invariants landed, and
 	# nothing ran the subcommand over it (26.35).
 	if isinstance(decl, ast.Invariant):
 		return [_indent(depth,

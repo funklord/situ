@@ -13,7 +13,7 @@ which is where this copy departs from the source and why.
 
 `project.md` section 25 states the three rules in brief and points here for
 the detail. The decisions behind several of them are recorded in
-`docs/decisions/`, which is append-only: where a rule here has a decision
+`doc/decision/`, which is append-only: where a rule here has a decision
 file, that file is the reasoning and this is the summary.
 
 ## The three rules
@@ -382,7 +382,7 @@ assumed. `make lint` cannot see it -- it lands in `build/`, which the lint
 skips, and before that in Python string literals, which are excluded so
 section 17's golden diagnostics keep their space gutter. So
 `style_gate.check_text` takes text rather than a path, and
-`tests/unit/test_generated_sources_follow_the_conventions.py` runs it over
+`test/unit/test_generated_sources_follow_the_conventions.py` runs it over
 what every schema generates in all four languages, plus the checks, the fuzz
 harness and the dissector (project.md 26.58).
 
@@ -419,18 +419,18 @@ guessed at.
   nothing in the compiler reads casing. What the compiler checks is that two
   constructs never generate the same C identifier -- a property of flattening
   a path, not of spelling
-  (`docs/decisions/0013-identifier-conventions.md`). `examples/telemetry/` is
+  (`doc/decision/0013-identifier-conventions.md`). `example/telemetry/` is
   `snake_case` throughout as the working proof.
 - The C++ backend adds one rule of its own: a member may not be called what
   its class is called, which `struct option { u8 option; }` reaches without
   trying. The backend renames the class and aliases the schema's name to it
   rather than refusing the schema
-  (`docs/decisions/0025-cpp-class-and-member-names.md`).
+  (`doc/decision/0025-cpp-class-and-member-names.md`).
 
 ## Which files the indent rule reaches
 
 `.py`, `.c`, `.h`, `.cpp`, `.hpp`, `.rs`, `.situ`, `.ebnf`, `.lua`, plus
-`Makefile` and `bin/situc`. `docs/decisions/0003-source-formatting.md` has
+`Makefile` and `bin/situc`. `doc/decision/0003-source-formatting.md` has
 the reasoning, including the verification that Python accepts tabs-then-spaces
 at every tab width.
 
@@ -520,7 +520,7 @@ is the expensive error.
 
 - **`~/.claude/guidelines/code-style.md`** -- the source this file copies.
 - **`project.md` section 25** -- the same rules in brief.
-- **`docs/decisions/0003-source-formatting.md`** -- why tabs in Python, and
+- **`doc/decision/0003-source-formatting.md`** -- why tabs in Python, and
   why no autoformatter.
-- **`docs/decisions/0013-identifier-conventions.md`**,
+- **`doc/decision/0013-identifier-conventions.md`**,
   **`0025-cpp-class-and-member-names.md`** -- schema identifier rules.

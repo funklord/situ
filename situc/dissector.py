@@ -883,7 +883,7 @@ _CONSTS: dict[str, int] = {}
 #:         arithmetic for that reason; an expression is no different.
 #:
 #: 26.37 recorded that no schema in this repository has a bare `/`. It was true
-#: of `examples/`, and `tests/schemas/edges.situ` has one in every operator on
+#: of `example/`, and `test/schema/edges.situ` has one in every operator on
 #: this list -- which is what it is for. Nothing reached them, because until
 #: now every member sized by arithmetic was declined for a different reason.
 #: `&&` and `||` are not on it: `translate_operators` renders those as `and`

@@ -1310,7 +1310,7 @@ class Emitter:
 			# `<struct>_<field>_value` whichever form the driver takes, so
 			# `decimal u32 n[4]; u16 d[n]` called a function nothing defined
 			# -- generated C that does not compile, in a shape no schema here
-			# has: every text driver in `examples/` is either delimited or a
+			# has: every text driver in `example/` is either delimited or a
 			# member of a nested struct, and those are the two cases that got
 			# this helper.
 			lines.extend(self._text_value_helper(struct, placement))
@@ -2591,7 +2591,7 @@ class Emitter:
 		which is the argument that makes every constant-offset access
 		unchecked. A member placed after a variable-length region is not
 		covered by it -- its offset is a sum of lengths the message chose, and
-		`examples/packet` put its tag 65 kilobytes past a 62-byte view.
+		`example/packet` put its tag 65 kilobytes past a 62-byte view.
 
 		The offset is already clamped to the view (`situ_advance_u32`), so
 		what remains to ask is whether the member *fits* there. It is the same
@@ -4420,7 +4420,7 @@ class Emitter:
 			f"\tuint32_t offset = {constant}u;",
 		]
 		# Saturating, because a term is a length the message chose: `hdr.length
-		# = 0xffff` put `examples/packet`'s tag 65581 bytes into a 62-byte view
+		# = 0xffff` put `example/packet`'s tag 65581 bytes into a 62-byte view
 		# and the accessor handed that pointer back, which an address sanitizer
 		# stopped three seconds into the first real fuzz run. A wide length
 		# field is worse than out of range -- `offset + by` in `uint32_t` wraps
@@ -4577,7 +4577,7 @@ class Emitter:
 		# *placed* after a variable-length region has an offset that is a sum
 		# of lengths the message chose, so "does the frame contain it" is a
 		# question the acquiring bounds check did not answer for it either.
-		# `examples/packet`'s tag is sixteen fixed bytes and was 65 kilobytes
+		# `example/packet`'s tag is sixteen fixed bytes and was 65 kilobytes
 		# past a 62-byte view.
 		if not declares_its_own_length(placement):
 			extent = self._fixed_extent(placement)

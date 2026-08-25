@@ -246,7 +246,7 @@ def _reordering_gain(members: list[Resolved],
 
 	And moving it does not make everything behind it static. Only the members
 	up to and including the *next* variable-length one gain: whatever follows
-	that one is placed after a variable extent either way. `examples/message`
+	that one is placed after a variable extent either way. `example/message`
 	is the case -- the advisor promised two and delivered one.
 	"""
 	# Two separate questions, and answering them in one pass conflated them:
@@ -335,7 +335,7 @@ def _find_unbounded_regions(resolved: ResolvedSchema) -> list[Suggestion]:
 			#
 			# What reaches this branch with no driver is an unbounded scan,
 			# and what bounds a scan is `max N` -- the cap in the `until`
-			# clause that `examples/smtp` has been carrying since it was
+			# clause that `example/smtp` has been carrying since it was
 			# written.
 			driver = placement.sized_by
 			if driver == "remaining":
@@ -399,7 +399,7 @@ def _find_variant_equalization(resolved: ResolvedSchema) -> list[Suggestion]:
 				# What it buys, not what it costs. `weight` orders the
 				# catalogue and this rule handed it the padding, so the most
 				# expensive equalization in a schema sorted above the
-				# cheapest -- and `examples/netlink`, whose `default: opaque`
+				# cheapest -- and `example/netlink`, whose `default: opaque`
 				# arm prices at four gigabytes, sorted above every genuinely
 				# useful suggestion in the file.
 				weight  = behind + (1 if encloses else 0),
@@ -420,7 +420,7 @@ def _behind(struct: ResolvedStruct,
 
 	The second is not implied by the first. A variant that is the last member
 	has nothing behind it and equalizing it still buys something -- it is what
-	makes `examples/dnsname`'s `label` a fixed 64 bytes -- but only when every
+	makes `example/dnsname`'s `label` a fixed 64 bytes -- but only when every
 	other member of the struct is already fixed. Measured rather than promised.
 	"""
 	members = [entry.placement for entry in own_entries(struct)]

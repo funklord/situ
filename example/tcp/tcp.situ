@@ -1,0 +1,131 @@
+// TCP header (RFC 793 and RFC 3168), fixed portion.
+//
+// The instructive contrast with ipv4: TCP packs just as many flags into bits,
+// but every group lands on a byte boundary, so this schema needs no
+// [allow_straddle] and every flag write is a single-byte read-modify-write
+// rather than a two-byte one.
+//
+// That is a real property of the wire format, not of the schema. Reading the
+// two examples side by side is the point.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct tcp_header {
+	// Everything the checksum runs over, which for TCP is the whole segment
+	// -- header, options and payload (RFC 793). The region is what lets the
+	// generated API say so: writing any byte in it marks the checksum stale.
+	authenticated summed {
+		u16       source_port;
+		u16       destination_port;
+		u32       sequence;
+		u32       acknowledgement;
+
+		// One byte: header length in 32-bit words, then four unused bits.
+		u4        data_offset  [min = 5];
+		reserved  u4           [must_be_zero];
+
+		// One byte, one bit per flag.
+		bit       cwr;
+		bit       ece;
+		bit       urgent;
+		bit       ack;
+		bit       push;
+		bit       reset;
+		bit       syn;
+		bit       fin;
+
+		u16       window        @ 0x0E;
+
+		// Inside the region it covers, like ICMP's and UDP's: the sum runs
+		// over these two bytes taken as zero. `prefix` adds the twelve that
+		// are not in the segment at all -- see the note below.
+		checksum  u8 checksum[2] covers(summed) prefix(tcp_pseudo_header)
+			[self_as = 0];
+
+		u16       urgent_pointer;
+
+		// `data_offset` counts 32-bit words including the twenty fixed
+		// bytes, so the options are `(data_offset - 5) * 4` bytes -- the
+		// same shape as an IPv6 extension header's, and the reason
+		// `[min = 5]` above is what makes the subtraction legal rather than
+		// a note about sensible values. A message that lies makes it
+		// negative, which reads as zero rather than as a length (14.2b).
+		u8        options[(data_offset - 5) * 4];
+
+		// The segment text, which the checksum also covers. TCP carries no
+		// length of its own -- the segment length is the IP layer's -- and
+		// `remaining` is how that is said: to the end of the enclosing
+		// frame, which is the view the caller acquired. A caller who knows
+		// the segment length acquires a view of it and the coverage closes
+		// exactly. `example/message` sizes its trailer the same way.
+		u8        payload[remaining];
+	}
+}
+
+// RFC 793's pseudo-header: the bytes the checksum runs over *before* the
+// segment. Two of the four fields belong to the IP layer, which is why this
+// is a struct of its own and why the caller fills it in -- the kernel's
+// `csum_tcpudp_nofold` takes `saddr` and `daddr` as arguments for the same
+// reason. situ describes the layout and says how many bytes it is; what goes
+// in it comes from a layer this schema does not describe (14.2a).
+//
+// Declared after `tcp_header` because the first struct in a file is the
+// message a driver acquires, and a pseudo-header is not a segment.
+struct tcp_pseudo_header {
+	u32       source_address;
+	u32       destination_address;
+	u8        zero          [must_be_zero];
+	u8        protocol;
+	u16       tcp_length;
+}
+
+require size(tcp_pseudo_header) == 12;
+require absolute_static(tcp_pseudo_header);
+
+require offset(tcp_header.options) == 20;
+require absolute_static(tcp_header);
+// `in_place_dirty` rather than `in_place`: the flag is still written where it
+// sits, and it is covered by the checksum now, so writing it marks the sum
+// stale. `example/icmp` says the same about its covered fields.
+require in_place_dirty(tcp_header.syn);
+require aligned(tcp_header.sequence, 4);
+
+// THE CHECKSUM, and the three things it takes to say it.
+//
+// TCP's covers the segment *and* a pseudo-header: the source and destination
+// addresses, the protocol number and the segment length, none of which are in
+// this struct and two of which belong to the IP layer. The kernel builds that
+// in `csum_tcpudp_nofold` (lib/checksum.c:149), which takes `saddr` and
+// `daddr` as arguments precisely because they are not in the segment.
+//
+// `[self_as = 0]` says the checksum's own two bytes, which the sum runs over
+// as zero (14.2), and `example/icmp` uses that alone. `prefix(...)` says the
+// pseudo-header (14.2a): a struct of its own, filled in by the caller, with
+// the generated header stating how many bytes. And `payload[remaining]` says
+// where the coverage *ends*.
+//
+// That last one was recorded as a gap situ could not express -- "coverage
+// running to an extent a different layer knows" -- and it was never a gap.
+// `remaining` means to the end of the enclosing frame, and the frame is the
+// view the caller acquired: a caller who knows the segment length from the IP
+// header acquires a view of it, and the coverage closes exactly. The note
+// claiming otherwise reasoned about what the *schema* knows when the question
+// is what the *view* carries. `example/message` had been sizing its trailer
+// this way the whole time.
+
+// A bit field is never atomic: setting one flag is a read-modify-write of the
+// containing byte, so two threads setting different flags can lose one of
+// them. Stated here so the schema records it.
+assert atomic(tcp_header.syn);
+
+// Where TCP stops being randomly addressable, and it is the options that do
+// it rather than the bit packing above them. Each option is a kind, a length
+// and a value, so their interior is a `tlv` region -- described here as bytes
+// because the one thing a `tlv` needs is a rule for the tags it does not know,
+// and TCP's is "skip it by its length", which two of the four defined options
+// (End of Option List and No-Operation) do not follow: they are one byte with
+// no length at all. A region whose skip rule has two exceptions is a region
+// situ would describe by lying about it.
+assert absolute_static(tcp_header.options);

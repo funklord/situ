@@ -1454,7 +1454,7 @@ class Emitter:
 
 		# The same enum problem `_over_fields` has, in the other rewriter:
 		# `next_header == 43` over an `enum class` does not compile, and
-		# `examples/ipv6ext` is exactly that. Two rewriters, one rule.
+		# `example/ipv6ext` is exactly that. Two rewriters, one rule.
 		by_name = {entry.placement.name: entry.placement
 		           for entry in element.entries}
 
@@ -1929,7 +1929,7 @@ class Emitter:
 		# member of the same name won -- entries are in layout order and the
 		# deeper one comes last -- and the dotted paths themselves were left
 		# unrewritten, which in C++ is a member function call
-		# (`at file.pixel_offset`, in `examples/bmp`).
+		# (`at file.pixel_offset`, in `example/bmp`).
 		by_name = {local_name(struct, placement): placement
 		           for placement in readable_names(struct)}
 		# Constants too. A `const` is a compile-time value and the renderer
@@ -1995,7 +1995,7 @@ class Emitter:
 			# Nested *or* the struct's own. Restricting this to nested
 			# members assumed the fixed-width form beside it emitted its own
 			# `_value`, and it does not: `decimal u32 n[4]; u16 d[n]` named a
-			# helper nothing defined. Every text driver in `examples/` is
+			# helper nothing defined. Every text driver in `example/` is
 			# either delimited or nested, which are the two forms that had it.
 			if scalar is None or placement.array_count is None:
 				continue
@@ -2029,7 +2029,7 @@ class Emitter:
 		None where the question does not arise: a statically placed member is
 		inside the frame by the bounds check that acquired the view (20.2). A
 		member placed after a variable-length region is not, and
-		`examples/packet` put its tag 65 kilobytes past a 62-byte one.
+		`example/packet` put its tag 65 kilobytes past a 62-byte one.
 		"""
 		if placement.offset_bits is not None:
 			return None
@@ -2159,7 +2159,7 @@ class Emitter:
 		being the transform's output.
 
 		Only C had this, so the other three could place nothing after such a
-		region: `examples/packet`'s tag sits after the sealed region and
+		region: `example/packet`'s tag sits after the sealed region and
 		reported that its offset could not be resolved.
 		"""
 		rule = region_extent(struct, region,

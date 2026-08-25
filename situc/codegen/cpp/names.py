@@ -12,7 +12,7 @@ protocol produces without trying. C flattens the whole path into
 `situ_option_option` and never meets the rule; `impl option { fn option }` and
 `class option: def option` are both fine. This is the one place where a schema
 three backends accept is rejected by the fourth's *compiler*, and
-`tests/schemas/edges.situ` carried one for weeks in the file whose whole
+`test/schema/edges.situ` carried one for weeks in the file whose whole
 purpose is awkward shapes (26.31).
 
 Refusing such a schema was the other option and it is the worse one: it makes

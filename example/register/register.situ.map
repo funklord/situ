@@ -1,0 +1,34 @@
+# situ capability map v1
+# schema: register.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+register ctrl_reg @ 0x00 access_width=32 no_rmw size=4 mutate=Immutable repr=ValueConverted atomic=NonAtomic effect=EffectOnWrite
+  ctrl_reg.enable                        offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=RewriteRequired
+  ctrl_reg.start                         offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=RewriteRequired effect=EffectOnWrite
+  ctrl_reg.mode                          offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=RewriteRequired
+  ctrl_reg.busy                          offset=AbsoluteStatic(0x00:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  ctrl_reg.error                         offset=AbsoluteStatic(0x00:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=RewriteRequired
+  ctrl_reg.<reserved0>                   offset=AbsoluteStatic(0x00:7) size=Fixed(25bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
+register irq_reg @ 0x08 access_width=32 size=4 mutate=Immutable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
+  irq_reg.pending                        offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable effect=EffectOnRead
+  irq_reg.armed                          offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable effect=EffectOnRead
+  irq_reg.mask_enable                    offset=AbsoluteStatic(0x00:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  irq_reg.mask_disable                   offset=AbsoluteStatic(0x00:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  irq_reg.drain                          offset=AbsoluteStatic(0x00:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  irq_reg.lock                           offset=AbsoluteStatic(0x00:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  irq_reg.spare                          offset=AbsoluteStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  irq_reg.fifo                           offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Immutable effect=EffectOnRead
+
+register status_reg @ 0x04 access_width=32 size=4 mutate=Immutable repr=ValueConverted atomic=NonAtomic
+  status_reg.ready                       offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  status_reg.fifo_empty                  offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  status_reg.fifo_full                   offset=AbsoluteStatic(0x00:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  status_reg.fill_level                  offset=AbsoluteStatic(0x00:3) size=Fixed(1) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  status_reg.<reserved0>                 offset=AbsoluteStatic(0x01:3) size=Fixed(21bit) align=Unaligned repr=ValueConverted atomic=NonAtomic

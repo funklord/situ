@@ -589,7 +589,7 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	# bare references: `u8 value[length - 1]` has a `size_expr` and no
 	# `sized_by`, so `length` was left at zero and the span check came out as
 	# "bytes 2..1" -- an empty range whose loop never ran and whose assertion
-	# therefore failed. `examples/ble`'s AD structure is the shape (26.36).
+	# therefore failed. `example/ble`'s AD structure is the shape (26.36).
 	named = {placement.sized_by for placement in members
 	         if placement.sized_by and placement.sized_by != "remaining"}
 	for placement in members:
@@ -773,7 +773,7 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 			# How many there are depends on the bytes, and this instance is
 			# zeroed -- so whether there is even *one* depends on what the
 			# condition makes of a zeroed element. Every `while` run in the
-			# tree yielded one until `examples/netlink`, whose condition is
+			# tree yielded one until `example/netlink`, whose condition is
 			# `nla_len >= 4`: a zeroed attribute declares a length of zero,
 			# which is not an attribute, and the run is empty.
 			#
@@ -1274,7 +1274,7 @@ def _round_trip_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	# So does a field that decides where a later member starts: writing it
 	# moves them, so the setter bumps the message generation (12.3) and takes
 	# two more arguments than this writes. No schema in the tree had a driver
-	# whose own struct was checked here until `examples/ble` arrived with
+	# whose own struct was checked here until `example/ble` arrived with
 	# `num`, and the suite did not compile (26.36).
 	if any(other.placement.sized_by == local_name(struct, placement)
 	       for other in struct.entries):

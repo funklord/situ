@@ -14,7 +14,7 @@ quadratic in how many there are and the cache is that sum once.
 Two cases, because the first is the one a reader assumes and it is not where
 the win is:
 
-  * `examples/http`'s request line, three members, which is the example the
+  * `example/http`'s request line, three members, which is the example the
     emitters' own comments cite. The cache saves nothing there, and why is
     worth knowing: resolving the offsets scans the target, and then reading
     the members scans it again. Three members leaves the quadratic nothing to
@@ -102,9 +102,9 @@ def record_source() -> str:
 
 CASES = (
 	Case(
-		title   = "examples/http's request line, three members",
+		title   = "example/http's request line, three members",
 		stem    = "http",
-		source  = (ROOT / "examples" / "http" / "http.situ").read_text(
+		source  = (ROOT / "example" / "http" / "http.situ").read_text(
 			encoding="ascii"),
 		struct  = "request_line",
 		members = ("method", "target", "version"),

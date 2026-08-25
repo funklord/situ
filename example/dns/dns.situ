@@ -1,0 +1,98 @@
+// DNS message header (RFC 1035).
+//
+// Twelve bytes of header, in front of a body this file does not describe.
+//
+// It used to say situ "cannot describe [DNS names] statically at all", which
+// was too strong and is now demonstrably so: `example/dnsname` describes one
+// completely -- every label, both forms of the first byte, the two
+// terminators, and the pointer's value. What situ does not do is *follow* the
+// pointer, which is a much smaller claim and a different one.
+//
+// A gap declared larger than it is sends a reader designing around a limit
+// that is not there (invariant 12), and this one stood for as long as nobody
+// tried. See `example/dnsname` for what the boundary actually is.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+enum opcode : u4 {
+	query  = 0,
+	iquery = 1,
+	status = 2,
+	notify = 4,
+	update = 5,
+}
+
+enum response_code : u4 {
+	no_error        = 0,
+	format_error    = 1,
+	server_failure  = 2,
+	name_error      = 3,
+	not_implemented = 4,
+	refused         = 5,
+}
+
+struct dns_header {
+	u16           id;
+
+	// One byte: response flag, opcode, three one-bit flags.
+	bit           is_response;
+	opcode        opcode;
+	bit           authoritative;
+	bit           truncated;
+	bit           recursion_desired;
+
+	// One byte: the recursion flag, three unused bits, the response code.
+	bit           recursion_available;
+	reserved      u3    [must_be_zero];
+	response_code  response_code;
+
+	u16           question_count;
+	u16           answer_count;
+	u16           authority_count;
+	u16           additional_count;
+}
+
+require size(dns_header) == 12;
+require absolute_static(dns_header);
+
+// Both packed bytes are exactly eight bits wide, so nothing straddles and no
+// [allow_straddle] is needed. The 4-bit enums sit inside one byte each.
+require in_place(dns_header.response_code);
+require in_place(dns_header.answer_count);
+
+// The reserved bits are rejected on parse rather than preserved. Section 14.5
+// is deliberate about this: every ignored bit is a malleability surface, and
+// DNS responses are a well-known covert channel.
+require canonical(dns_header);
+
+// What pairs a reply with its query, and what to do when one does not
+// arrive. RFC 1035 section 4.1.1 says a response carries the ID of the query
+// it answers and repeats its OPCODE, so those two equalities are the whole
+// conversation key -- and stating them here states them once, rather than in
+// each endpoint where the two could drift apart.
+//
+// The retransmission policy is the resolver side of section 4.2.1, which
+// asks for a retry interval in the 2-to-5 second range. Five seconds and two
+// retries is the conservative end of that; both endpoints must agree on it,
+// which is why it is schema rather than a flag (decision 0032).
+//
+// QR is deliberately absent. `must reply.is_response == 1` names only one of
+// the two messages, and the compiler refuses it with the reason: a rule about
+// a single message belongs on the member or beside the schema, where it is
+// checked whenever that message is validated, rather than only when somebody
+// evaluates a pair. The refusal is the layer boundary doing its job.
+relation reply_to(query: dns_header, reply: dns_header) [timeout_ms = 5000, retries = 2] {
+	must reply.id     == query.id;
+	must reply.opcode == query.opcode;
+}
+
+// OUT OF SCOPE HERE, and described next door. A DNS name is a chain of
+// length-prefixed labels which may terminate in a two-byte pointer to an
+// earlier offset in the same message. `example/dnsname` writes that chain out
+// and walks it: the labels are a run ending at the root, and the pointer is a
+// variant arm. What it does not do is *follow* the pointer, because resolving
+// one means following a pointer graph and section 2 rules out object graphs
+// and cyclic references at any phase. The boundary is the view model rather
+// than a gap, which is the sentence that example exists to earn.

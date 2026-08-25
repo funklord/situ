@@ -32,7 +32,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	# which cost nothing while no register schema was fuzzed.
 	# `size_bytes > 0` was here too, and it dropped the one schema whose
 	# whole point is a construct nothing else in the tree has:
-	# `examples/protobuf` is a bare `tlv` region, so its minimum size is zero
+	# `example/protobuf` is a bare `tlv` region, so its minimum size is zero
 	# and it was filtered out of fuzzing entirely. The harness still compiled,
 	# still ran under the smoke test, and exercised nothing -- 16 million
 	# executions at coverage 1, which is what an empty `LLVMFuzzerTestOneInput`

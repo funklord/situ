@@ -195,7 +195,7 @@ def data_sized(placement: Placement) -> bool:
 	length check of invariant 41 was never emitted for one: `u8 data[(len + 1)
 	* 8 - 2]` could claim two kilobytes inside a forty-byte frame and
 	`validate` returned OK, in all four backends, for the shape
-	`examples/ipv6ext` is built out of.
+	`example/ipv6ext` is built out of.
 
 	`array_count` is the honest question for "did the schema decide this":
 	`sized_by` also names a compile-time constant, and `x[remaining]` sets it
@@ -1252,7 +1252,7 @@ def is_counted_run(structs: dict[str, ResolvedStruct],
 	Not an `indexed` region, which also carries a count and a variable
 	element and is not walked at all: its elements are reached through an
 	offset table, and `index_entry_bytes` is what says how long *it* is.
-	`examples/sqlite` is that shape, and calling it a counted run asked for a
+	`example/sqlite` is that shape, and calling it a counted run asked for a
 	span function the indexed path does not emit.
 
 	`T x[n + 1]` too. The count is a count however it is written, and asking
@@ -1418,7 +1418,7 @@ def declares_its_own_length(placement: Placement) -> bool:
 
 	Through `data_sized`, which is the fix for what this asked before: only
 	`sized_by`, so a length written as arithmetic -- `u8 data[(len + 1) * 8 -
-	2]`, the shape `examples/ipv6ext` is made of -- was not a length the
+	2]`, the shape `example/ipv6ext` is made of -- was not a length the
 	message declares as far as this was concerned, and no backend emitted the
 	check for one.
 	"""

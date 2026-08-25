@@ -158,7 +158,7 @@ class Until(Node):
 	inside the content after all. Without one of them the content simply may
 	not contain the delimiter, which is not a restriction situ invented --
 	content that did would be unrepresentable, since writing it back would
-	produce different framing. See docs/decisions/0020-delimited-data.md.
+	produce different framing. See doc/decision/0020-delimited-data.md.
 
 	`cap` bounds the scan. A delimiter that is not there makes an unbounded
 	read on a buffer whose end is the only thing stopping it, and an embedded
@@ -543,7 +543,7 @@ class Tlv(Member):
 	#: The tags this schema names, in the order written.
 	known: tuple[KnownTag, ...]	= ()
 	#: `tag_identity = field`: which decoded part a `known` key matches.
-	#: See docs/decisions/0023-tlv-tag-identity.md. None where it was not
+	#: See doc/decision/0023-tlv-tag-identity.md. None where it was not
 	#: written, which `identity_part` resolves and `wellformed` refuses where
 	#: it cannot be.
 	identity: str | None		= None
@@ -586,7 +586,7 @@ class Coded(Member):
 
 	The general form. `sealed` (phase 8) is this plus authentication: a codec
 	over a region is a transform question, and encryption is one instance of it
-	rather than the only one. See docs/decisions/0009-coded-regions.md.
+	rather than the only one. See doc/decision/0009-coded-regions.md.
 	"""
 
 	span: Span
@@ -767,7 +767,7 @@ class ImportDirective(Decl):
 
 @dataclass(frozen=True)
 class NamespaceDecl(Decl):
-	"""`namespace outer { ... }` (docs/decisions/0012-namespaces.md).
+	"""`namespace outer { ... }` (doc/decision/0012-namespaces.md).
 
 	A namespace scopes type names and nothing else. It is not a struct: a
 	struct is a byte layout, so wrapping declarations in one would change the

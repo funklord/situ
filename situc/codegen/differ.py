@@ -7,7 +7,7 @@ Rust into a panic and Python into a silent clamp, and a frame shorter than the
 minimum was a view in two backends and an error in the other two (26.27). Four
 answers to one question, in the one place nothing was asking.
 
-`tests/unit/test_backends_agree_under_random_bytes.py` asked it for one schema
+`test/unit/test_backends_agree_under_random_bytes.py` asked it for one schema
 with four hand-written drivers. This derives them, so the question is asked of
 every schema in the repository and of every construct the probe list below
 covers.
@@ -548,7 +548,7 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 	The reachability is the question. Every backend refuses the arm that is
 	not present -- an error in three languages and an exception in the fourth
 	-- and what has to agree is *which* arm each of them says is there, for a
-	discriminant the message chose. `examples/dnsname`'s label is the one
+	discriminant the message chose. `example/dnsname`'s label is the one
 	variant in the tree, and its reserved forms are what a hostile name is
 	made of.
 	"""

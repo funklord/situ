@@ -1,0 +1,34 @@
+# Golden vectors for the TIFF worked example.
+#
+# Laid out by libtiff and by matplotlib's and reportlab's committed test data,
+# never by situ -- a description that agrees only with its own compiler has
+# demonstrated nothing. The two "II" headers are the first eight bytes of real
+# files shipped by other projects; the "MM" header was written by ImageMagick
+# with `-endian MSB`, which is libtiff underneath.
+#
+#   magick -size 4x4 xc:red -compress none -endian MSB big.tif
+#
+# The big-endian case is the one worth having, because it is the only vector
+# here that exercises `endian_marker` resolving to anything but the host's
+# order, and because a second tool confirms the reading rather than situ doing
+# it: `tiffinfo` reports "TIFF Directory at offset 0x68 (104)" for that file,
+# which is the `ifd_offset` these bytes carry.
+#
+# Why random draws cannot reach this struct, and why the file exists: the
+# marker admits exactly two of 65536 values and `magic` is `[must_eq = 42]`,
+# so a pseudo-random eight bytes validates with probability about 2^-31. Sixty
+# four draws were sixty four refusals, the owned round-trip skipped, and the
+# accept path had never run.
+#
+# Field order is `byte_order`, `magic`, `ifd_offset` -- and the last two are
+# read in whichever order the first two named, which is the whole point of the
+# construct.
+
+# matplotlib baseline_images/test_image/uint16.tif -- II, IFD at 8.
+tiff_header little_ifd_at_8    49 49 2A 00 08 00 00 00
+
+# python3-reportlab test/test-cross.tiff -- II, IFD at 20.
+tiff_header little_ifd_at_20   49 49 2A 00 14 00 00 00
+
+# ImageMagick -endian MSB -- MM, IFD at 104, confirmed by tiffinfo.
+tiff_header big_ifd_at_104     4D 4D 00 2A 00 00 00 68

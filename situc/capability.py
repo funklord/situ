@@ -41,7 +41,7 @@ class Axis(Enum):
 # `stage` is the one axis that increases rather than weakens, so it is listed
 # in the direction of less usable and treated uniformly with the rest.
 #
-# `auth` is not ordered: it is a set-valued tag identity (docs/capability-axes).
+# `auth` is not ordered: it is a set-valued tag identity (doc/capability-axes).
 # Meet still needs a direction, and Covered is the more constrained of the two,
 # since mutating covered bytes marks a tag dirty. Where both sides are Covered
 # the parameters are unioned rather than picked between -- see SET_VALUED.

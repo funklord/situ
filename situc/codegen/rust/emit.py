@@ -2844,7 +2844,7 @@ class Emitter:
 			# Nested *or* the struct's own. Restricting this to nested
 			# members assumed the fixed-width form beside it emitted its own
 			# `_value`, and it does not: `decimal u32 n[4]; u16 d[n]` named a
-			# helper nothing defined. Every text driver in `examples/` is
+			# helper nothing defined. Every text driver in `example/` is
 			# either delimited or nested, which are the two forms that had it.
 			if scalar is None or placement.array_count is None:
 				continue
@@ -2941,7 +2941,7 @@ class Emitter:
 				return leaf(f"{held}.{_ident(c_name(name))}_value()",
 				            held_at.scalar is not None and held_at.scalar.signed)
 			# A nested member has no accessor of this struct's own -- `at
-			# file.pixel_offset` in `examples/bmp` -- and its offset is a
+			# file.pixel_offset` in `example/bmp` -- and its offset is a
 			# constant here, so it is read where it sits. Same spelling as
 			# the enum case below, which needs the bytes for its own reason.
 			if "." in name or (held_at.type_name in self.enums
@@ -3995,7 +3995,7 @@ class Emitter:
 			if length is None:
 				return None
 			# Saturating, like the expression form. This one was left plain
-			# when that was fixed, so `examples/message` with a hostile
+			# when that was fixed, so `example/message` with a hostile
 			# `rec_count` resolved `trailer` a quarter of a megabyte into a
 			# kilobyte slice and panicked -- found by the differential test,
 			# which is what an incomplete fix looks like from outside.
@@ -4776,7 +4776,7 @@ class Emitter:
 		# A scalar at a *dynamic* offset is writable too, and this backend
 		# emitted nothing at all for one -- no setter and no note, so a field
 		# the capability map calls `mutate = InPlaceFixed` could be read here
-		# and not written. `examples/dnsname`'s `question.qtype` sits after a
+		# and not written. `example/dnsname`'s `question.qtype` sits after a
 		# name and is the case; the other three have had the setter since
 		# 26.27, and each does nothing where the member does not fit (26.35).
 		if placement.offset_bits is None:
@@ -4885,7 +4885,7 @@ class Emitter:
 		# because every other setter site needs one, and this rewrote that into
 		# `self.as_ref().as_ref()`. A marker-governed member behind a
 		# variable-length one is the only shape that reaches both, and no
-		# schema here has one -- `examples/tiff` is a header of constant
+		# schema here has one -- `example/tiff` is a header of constant
 		# offsets.
 		def reading(text: str) -> str:
 			return re.sub(r"self\.(?!as_ref\(\))(?!bytes\b)",

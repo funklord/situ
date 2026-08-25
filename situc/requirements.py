@@ -259,7 +259,7 @@ def _discharge_no_alloc(requirement: ast.Requirement, path: str,
 			notes    = [
 				detail,
 				"that is case E of "
-				"docs/decisions/0031-where-allocation-is-unavoidable.md, and "
+				"doc/decision/0031-where-allocation-is-unavoidable.md, and "
 				"the one case no measure-then-allocate pass serves",
 				"build it at `--layer edit`, or move the region out of what "
 				"this requirement covers",

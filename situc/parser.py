@@ -102,7 +102,7 @@ class _RegisterDefaults:
 
 # The attribute vocabulary is closed and fixed by the language, which is what
 # makes `[` decidable: see disambiguate_bracket and
-# docs/decisions/0006-bracket-disambiguation.md. Names for later phases are
+# doc/decision/0006-bracket-disambiguation.md. Names for later phases are
 # listed now so the disambiguation does not change meaning as phases land.
 ATTRIBUTE_NAMES = frozenset({
 	# section 8.2 - 8.6: layout and representation
@@ -499,7 +499,7 @@ class Parser:
 		declarations before it, and `endian` already answers that question the
 		other way -- the last one wins, file-wide. Braces make the scope visible
 		instead of arguable, and they are what the word means to anyone who has
-		met C++. See docs/decisions/0012-namespaces.md.
+		met C++. See doc/decision/0012-namespaces.md.
 		"""
 		start = self.advance()
 		name  = self.expect_ident("a namespace name")
@@ -1262,7 +1262,7 @@ class Parser:
 		The name is optional and defaults to the keyword, which is what makes
 		`covers(authenticated)` and the map entry addressable in the common case
 		of one such region per struct. See
-		docs/decisions/0010-region-and-tag-names.md.
+		doc/decision/0010-region-and-tag-names.md.
 		"""
 		start = self.advance()
 		name  = self.optional_region_name("authenticated")
@@ -1955,7 +1955,7 @@ class Parser:
 				token.span,
 				label = "invalid scalar width",
 				notes = ["integer widths run from 1 to 64 "
-				         "(docs/decisions/0005-integer-widths.md)"],
+				         "(doc/decision/0005-integer-widths.md)"],
 			) from exc
 
 		return ast.TypeRef(token.span, token.text, scalar)
@@ -1965,7 +1965,7 @@ class Parser:
 
 		Both constructs open with `[` (project.md section 7), so the choice has
 		to be made by looking inside. See
-		docs/decisions/0006-bracket-disambiguation.md.
+		doc/decision/0006-bracket-disambiguation.md.
 		"""
 		if not self.current.is_symbol("["):
 			return False

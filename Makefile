@@ -1,6 +1,6 @@
 # situ -- top-level build
 #
-# Sub-projects (runtime/c, tests/generated) are self-contained and are never
+# Sub-projects (runtime/c, test/generated) are self-contained and are never
 # handed an include file from here. Configuration reaches them through the
 # environment only, which is what keeps them independently usable: cd into
 # runtime/c and `make` works with its own defaults.
@@ -96,7 +96,7 @@ test: test-py test-c
 # happened on a machine that had built once, which is every machine this ran
 # on until there was CI (26.87).
 test-py: runtime
-	$(PYTHON) -m pytest tests -q -rs
+	$(PYTHON) -m pytest test -q -rs
 
 # The shipped Python runtime is checked too, and was not: `mypy situc tools
 # tests` reads the compiler and its suite, and `runtime/python` is neither --
@@ -142,7 +142,7 @@ typecheck:
 			echo "typecheck: (\`make test\` skips these oracles instead; 22)" >&2; \
 			exit 1; }; \
 	done
-	$(PYTHON) -m mypy situc walker editor tools tests
+	$(PYTHON) -m mypy situc walker editor tools test
 	$(PYTHON) -m mypy --strict runtime/python
 
 # `style` replaced `lint_conventions.py`, and this target kept invoking the
@@ -169,16 +169,16 @@ $(BUILD_DIR)/situ-walk-c: walker/c/situ_walk.c walker/c/main.c walker/c/situ_wal
 		$(LDFLAGS) -o $@
 
 test-c: runtime
-	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' test
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' test
 
 # Not part of `test`: minutes rather than seconds, and a compiler `test` does
 # not need. FUZZ_SECONDS is per harness.
 fuzz:
-	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz
 
 # aarch64 has a cross compiler here but no cmocka build and no emulator, so
 # the cross target compiles the runtime warning-clean and stops there.
-# See docs/decisions/0004-aarch64-compile-only.md.
+# See doc/decision/0004-aarch64-compile-only.md.
 #
 # CROSS_COMPILE goes on the command line, not the environment, so that it
 # outranks anything this level exported.
@@ -188,9 +188,9 @@ cross:
 
 # Behavioural, not just warning-clean: the generated accessors are run on
 # aarch64 under emulation, and compiled big endian with a static assertion on
-# the byte-order marker. See docs/decisions/0007-cross-architecture-testing.md.
+# the byte-order marker. See doc/decision/0007-cross-architecture-testing.md.
 cross-test:
-	@$(MAKE) --no-print-directory -C tests/cross BUILD_DIR='$(BUILD_DIR)/cross' check
+	@$(MAKE) --no-print-directory -C test/cross BUILD_DIR='$(BUILD_DIR)/cross' check
 
 # situc is a Python program with no dependencies, so installing it is copying
 # the package and a launcher that finds it. Section 24 requires it to run from
@@ -341,20 +341,20 @@ deb-check: deb
 	@for deb in '$(DEB_DIR)'/*.deb; do dpkg-deb -x "$$deb" '$(DEB_DIR)/root'; done
 	@'$(DEB_DIR)/root/usr/bin/situc' --version
 	@cd '$(DEB_DIR)/root' && ./usr/bin/situc build --target c \
-		'$(CURDIR)/examples/modbus/modbus.situ' --out . >/dev/null
+		'$(CURDIR)/example/modbus/modbus.situ' --out . >/dev/null
 	@$(CC) -std=c11 $(WARNFLAGS) -c '$(DEB_DIR)/root/modbus.c' \
 		-I'$(DEB_DIR)/root/usr/include' -o '$(DEB_DIR)/root/modbus.o'
 	@# `verify` runs the accessors in memory, so it needs the Python runtime
 	@# the package installs beside the module. It was missing at first, and
 	@# nothing noticed until it was run from a scratch root.
 	@'$(DEB_DIR)/root/usr/bin/situc' verify \
-		'$(CURDIR)/examples/arp/arp.situ' '$(CURDIR)/examples/arp/arp.vectors'
+		'$(CURDIR)/example/arp/arp.situ' '$(CURDIR)/example/arp/arp.vectors'
 	@echo 'deb-check: the installed situc built a schema against the installed runtime'
 
 clean:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime' clean
-	@$(MAKE) --no-print-directory -C tests/generated BUILD_DIR='$(BUILD_DIR)/tests' clean
-	@$(MAKE) --no-print-directory -C tests/cross BUILD_DIR='$(BUILD_DIR)/cross' clean
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' clean
+	@$(MAKE) --no-print-directory -C test/cross BUILD_DIR='$(BUILD_DIR)/cross' clean
 	rm -rf '$(BUILD_ROOT)'
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 	rm -rf .mypy_cache .pytest_cache

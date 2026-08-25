@@ -546,7 +546,7 @@ def _compose_expansion(decl: ast.CodecDecl, stages: list[ast.CodecDecl]
 	# The form stays the ratio even where an addend rides along: the form is
 	# what decides whether interior positions stay computable, and appended
 	# parity does not move the data in front of it
-	# (docs/decisions/0016-composed-expansion.md).
+	# (doc/decision/0016-composed-expansion.md).
 	form = (ast.Expansion.RATIO_BOUNDED if bounded
 	        else ast.Expansion.RATIO_EXACT)
 	return form, _reduce(numerator, denominator), added

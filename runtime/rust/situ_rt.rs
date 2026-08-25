@@ -146,7 +146,7 @@ impl Dirty {
 /// Advance an offset by a length the message chose, and stop at the end.
 ///
 /// A member placed after a variable-length region has an offset that is a sum
-/// of lengths an attacker fills in: `examples/packet` with `hdr.length =
+/// of lengths an attacker fills in: `example/packet` with `hdr.length =
 /// 0xffff` puts its tag 65581 bytes into a 62-byte message. Rust's answer to
 /// the slice that follows is a panic, which in a `no_std` build is an abort --
 /// a denial of service rather than a mitigation (26.27).
@@ -237,7 +237,7 @@ pub fn write_le(bytes: &mut [u8], at: usize, width: usize, value: u64) {
 ///
 /// This backend had neither, and read every `native` field big-endian --
 /// silently, on every little-endian host. Nothing noticed because no schema in
-/// the repository used host order until `examples/netlink`.
+/// the repository used host order until `example/netlink`.
 #[inline]
 pub fn read_ne(bytes: &[u8], at: usize, width: usize) -> u64 {
 	if cfg!(target_endian = "big") {

@@ -419,7 +419,7 @@ def advance(at: int, by: int, limit: int) -> int:
 	"""Advance an offset by a length the message chose, and stop at the end.
 
 	A member placed after a variable-length region has an offset that is a sum
-	of lengths an attacker fills in: `examples/packet` with `hdr.length =
+	of lengths an attacker fills in: `example/packet` with `hdr.length =
 	0xffff` puts its tag 65581 bytes into a 62-byte message. Python cannot read
 	out of bounds -- a `memoryview` slice past the end is short rather than
 	unsafe -- so what this buys here is not safety but *agreement*: the four
