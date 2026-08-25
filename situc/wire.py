@@ -190,6 +190,14 @@ def _constraints(placement: Placement) -> list[str]:
 		facts.append(f"varint={placement.varint}")
 	if placement.codec is not None:
 		facts.append(f"codec={placement.codec}")
+	# Which field seeds the nonce and which selects the key (0040) is what
+	# the region's bytes *mean* -- a receiver that disagrees about either
+	# cannot interoperate -- and both are enforced, which is this file's
+	# admission test (0041).
+	if placement.sealed_nonce is not None:
+		facts.append(f"nonce={placement.sealed_nonce}")
+	if placement.sealed_key is not None:
+		facts.append(f"key={placement.sealed_key}")
 
 	facts.extend(_attribute_facts(placement))
 	return facts
@@ -556,6 +564,7 @@ def _compare_member(struct: str, index: int, was: str | None,
 INTERPRETATION = (
 	"big", "little", "native", "msb_first", "lsb_first",
 	"radix=", "sized-by=", "varint=", "codec=", "encoding=",
+	"nonce=", "key=",
 	"endian-from=", "quote=", "escape=", "trim", "fold-case",
 	"nul_terminated",
 )

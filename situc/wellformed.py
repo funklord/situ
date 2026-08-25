@@ -1495,6 +1495,32 @@ def _attribute_place(struct: ast.StructDecl,
 		return ("a `register` body, beside `width` -- it is a setting rather "
 		        "than a member attribute")
 
+	# The four 26.60 held out of the table, placed by 0041. Each was "read
+	# into the map" somewhere and inert in the generated code elsewhere --
+	# and the wire signature carried the fact wherever the attribute stood,
+	# so a `[trim]` on a plain `u8` promised a peer bytes nothing trims.
+	# Every signature line is enforced or absent; these rules are what make
+	# the unplaced-but-recorded state unreachable.
+	if attr.name in ("trim", "case_insensitive"):
+		if getattr(member, "until", None) is not None:
+			return None
+		return ("a delimited member -- trimming and case folding happen "
+		        "where text is scanned and compared, and nothing else "
+		        "reads either")
+
+	if attr.name == "nul_terminated":
+		array = getattr(member, "array", None)
+		if array is not None and getattr(member, "until", None) is None:
+			return None
+		return ("a counted byte array -- the terminator sits inside a field "
+		        "whose extent something else already decides (8.6)")
+
+	if attr.name == "must_be_zero":
+		if isinstance(member, ast.Reserved):
+			return None
+		return ("a `reserved` member, whose policy it states out loud -- on "
+		        "an ordinary field the enforced spelling is `[must_eq = 0]`")
+
 	# `Scope.narrow` applies `[endian]` to a member's own scalar, and 8.3
 	# scopes it "per struct, and per field" -- a struct *directive* is
 	# `decl.attrs` and never reaches here. So the only member that has a byte
@@ -1544,7 +1570,8 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"equalize", "allow_unverified_read", "minimal",
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
-	"no_rmw", "truncated", "size",
+	"no_rmw", "truncated", "size", "trim", "case_insensitive",
+	"nul_terminated", "must_be_zero",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
@@ -1555,9 +1582,11 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 #:
 #: `quoted`, `escape`, `timeout_ms` and `retries` are absent because
 #: `check_delimiters` and `_check_exchange_policy` already place them.
+#: Read in any position, so there is no wrong place to refuse: `secret`
+#: suppresses accessors and zeroizes wherever it stands, and `non_canonical`
+#: sets the canonical axis on anything. The table closed at these two (0041).
 UNPLACED_ATTRS = frozenset({
-	"case_insensitive", "must_be_zero", "non_canonical", "nul_terminated",
-	"secret", "trim",
+	"non_canonical", "secret",
 })
 
 

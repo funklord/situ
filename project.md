@@ -14166,6 +14166,57 @@ claims nothing", met by the protocol that shows why the setting had to be
 optional.
 
 
+### 26.129 The signature keeps only kept promises
+
+Decision 0041, accepted and built. The wire signature's charter -- "every
+line here is a promise to a receiver that is already deployed and cannot be
+recompiled" -- is enforced in both directions now: the four attributes 26.60
+held out of the placement table have places, and the two enforced
+associations 0040 left unrecorded are on the region lines they describe.
+
+**The four placements, by 26.60's method.** `trim` and `case_insensitive`
+sit on a delimited member, where text is scanned and compared;
+`nul_terminated` on a counted byte array, where something else already
+decides the extent; `must_be_zero` on a `reserved` member, where saying the
+default out loud stays legal and not meaningless. Everywhere else each was
+inert in every backend while the signature carried the fact. The unplaced
+set closes at `secret` and `non_canonical`, both genuinely read in any
+position -- the table 26.60 opened is finished.
+
+**The sweep found tcp's defect three times, not once.** 0041's draft named
+`tcp_pseudo_header.zero [must_be_zero]` -- a wire line promising a check the
+generated `validate` never made. Refusing the placement then caught
+`udp_pseudo_header.zero` and edges' versioned `pad` carrying the same false
+claim. All three now say `[must_eq = 0]`, which `validate` enforces, and
+their signatures changed from an unenforced fact to an enforced one -- the
+wire diff a reviewer should want to see, three times over.
+
+**`nonce=` and `key=` are on the sealed region's signature line**, carried
+through a `Placement` field the way `sized_by` is, because which field
+seeds the nonce and which selects the key is what those bytes mean and a
+receiver that disagrees about either cannot interoperate. packet and
+keystore gained `nonce=nonce`; dtls gained `nonce=explicit key=epoch`. The
+capability map is untouched: it prices capability, and neither association
+changes an axis.
+
+**Enforcement has a measurable price, and the suite billed it at once.**
+The moment `[must_eq = 0]` was real, the owned round-trip for tcp and udp
+stopped reaching its accept path -- a pseudo-random byte is zero once in
+256 draws, and 64 draws were 64 refusals, so the suite skipped with "needs
+committed vectors" exactly as it did for packet and tiff. Both have
+vectors now, laid out from RFC 9293's and RFC 768's field lists over
+TEST-NET addresses rather than by situ. A check that begins to bite is a
+corpus that stops arriving by accident; the vectors are what keep the
+accept path exercised on purpose.
+
+**In passing: the singular-directory pass had two stragglers.** The suite
+did not collect on master -- two `sys.path` inserts still said `tools/`, so
+`import style_gate` failed before a single test ran. The pass's own claim
+was "each project's gates run against the result", and the gate that would
+have said otherwise was the one broken. Fixed here because nothing lands
+over a suite that cannot collect.
+
+
 ---
 
 ## 27. Questions, and how they were settled

@@ -37,7 +37,7 @@ from situc.resolve import resolve
 
 from every_schema import ROOT, SCHEMAS, ids
 
-sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tool"))
 
 import style_gate  # noqa: E402
 

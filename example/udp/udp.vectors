@@ -1,0 +1,13 @@
+# Golden vectors for the UDP pseudo-header, RFC 768's checksum prefix.
+#
+# Same provenance discipline as tcp.vectors next door: bytes laid out from
+# the RFC's field list -- addresses, a zero byte, protocol 17, and the UDP
+# length including its own 8-byte header. TEST-NET addresses (RFC 5737).
+# The zero byte is `[must_eq = 0]` since 0041, which is what made random
+# draws stop reaching the accept path and this file necessary.
+
+# 192.0.2.1 -> 198.51.100.7, a DNS-sized 40-byte datagram.
+udp_pseudo_header dns_sized   C0 00 02 01 C6 33 64 07 00 11 00 28
+
+# The minimum legal datagram: bare 8-byte header, no payload.
+udp_pseudo_header bare_header C6 33 64 07 C0 00 02 01 00 11 00 08

@@ -249,6 +249,13 @@ class Placement:
 	# this: a tag covers a region, and a member is covered when one of the
 	# regions it sits in is (section 14.1).
 	regions: tuple[str, ...]	= ()
+	# The fields a sealed region's arguments name (0040), as source text.
+	# On the region's own placement, so the wire signature can state them:
+	# which field seeds the nonce and which selects the key is what those
+	# bytes *mean*, a receiver that disagrees about either cannot
+	# interoperate, and both are enforced by wellformed's checks (0041).
+	sealed_nonce: str | None	= None
+	sealed_key: str | None		= None
 	# Set on a member inside a sealed region, naming it. What makes the
 	# interior VerifyGated -- the stage gate of section 14.3.
 	sealed_by: str | None		= None
@@ -839,6 +846,8 @@ class Solver:
 			span          = region.span,
 			attrs         = region.attrs,
 			codec         = region.codec,
+			sealed_nonce  = _region_argument(region, "nonce"),
+			sealed_key    = _region_argument(region, "key"),
 			# `getattr`, because `sealed` shares this function and has no
 			# `covers` clause of its own -- same reason as `until` above.
 			coded_covers  = tuple(getattr(region, "covers", ())),
@@ -2636,6 +2645,16 @@ def _expression_source(size: ast.Expr | None) -> str | None:
 		return None
 
 	return expr_to_source(size)
+
+
+def _region_argument(region: ast.Member, name: str) -> str | None:
+	"""A sealed region's `nonce = ...` or `key = ...`, as source text."""
+	from situc.unparse import expr_to_source
+
+	for arg in getattr(region, "args", ()):
+		if arg.name == name and arg.value is not None:
+			return expr_to_source(arg.value)
+	return None
 
 
 def _located_source(member: ast.Field | ast.Reserved) -> str | None:

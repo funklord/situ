@@ -836,12 +836,35 @@ def test_a_bound_on_a_text_number_is_accepted() -> None:
 	parse_text(BUFFER + "struct b { u8 a [min = 1, max = 4]; }\n", path="s.situ")
 
 
-def test_must_be_zero_is_left_alone() -> None:
-	"""It is `_reserved_policy`'s default, so writing it changes no byte --
-	and is still not meaningless, because it says out loud what the silence
-	already meant. Inert-by-default is not the same as unread, which is the
-	distinction that keeps it out of the table."""
-	assert "must_be_zero" not in wellformed.PLACED_ATTRS
+def test_must_be_zero_is_placed_on_reserved_members() -> None:
+	"""26.60 kept this out of the table -- inert-by-default is not the same
+	as unread -- and 0041 placed it after all, because the distinction had a
+	second half nobody measured: on an *ordinary* field it is read by
+	nothing anywhere, while the wire signature still carried the claim.
+	`tcp_pseudo_header.zero [must_be_zero]` promised every peer a check the
+	generated `validate` did not make. On a reserved member it still says
+	the default out loud, which stays legal; on a field the enforced
+	spelling is `[must_eq = 0]`, which is what tcp says now."""
+	assert "must_be_zero" in wellformed.PLACED_ATTRS
+	text = rendered(BUFFER + "struct b { u8 zero [must_be_zero]; }\n")
+	assert "`[must_eq = 0]`" in text
+	parse_text(BUFFER + "struct b { u8 a; reserved u8 [must_be_zero]; }\n",
+	           path="s.situ")
+
+
+def test_the_four_held_attributes_are_placed() -> None:
+	"""0041's other three, each refused where every backend ignores it and
+	accepted where its consumer reads it. The unplaced set closes at the two
+	attributes genuinely read in any position."""
+	for body, expected in [
+			("u8 a [trim];",             "a delimited member"),
+			("u8 a[4] [case_insensitive];", "a delimited member"),
+			("u8 a [nul_terminated];",   "a counted byte array")]:
+		assert expected in rendered(BUFFER + "struct b { %s }\n" % body), body
+
+	parse_text(BUFFER + 'struct b { u8 a[] until ":" [trim, case_insensitive];'
+	           " u8 n; u8 c[n] [nul_terminated]; }\n", path="s.situ")
+	assert wellformed.UNPLACED_ATTRS == frozenset({"secret", "non_canonical"})
 
 
 def test_encoding_on_a_lone_scalar_is_refused() -> None:

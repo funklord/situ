@@ -62,7 +62,7 @@ help:
 	@echo '  test-c     build and run the C tests only'
 	@echo '  check      everything: style, types, tests, cross'
 	@echo '  style      indentation, ASCII and whitespace, plus project.md'
-	@echo '  typecheck  mypy strict over situc, tools and tests'
+	@echo '  typecheck  mypy strict over situc, tool and test'
 	@echo '  lint       alias for style-source'
 	@echo '  hooks      install the commit-message hook from tool/hooks/'
 	@echo '  walk       the walker over an image: bin/situ-walk'
@@ -142,7 +142,7 @@ typecheck:
 			echo "typecheck: (\`make test\` skips these oracles instead; 22)" >&2; \
 			exit 1; }; \
 	done
-	$(PYTHON) -m mypy situc walker editor tools test
+	$(PYTHON) -m mypy situc walker editor tool test
 	$(PYTHON) -m mypy --strict runtime/python
 
 # `style` replaced `lint_conventions.py`, and this target kept invoking the

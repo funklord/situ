@@ -44,7 +44,11 @@ struct udp_header {
 struct udp_pseudo_header {
 	u32  source_address;
 	u32  destination_address;
-	u8   zero        [must_be_zero];
+	// `[must_eq = 0]` and not `[must_be_zero]`: on an ordinary field the
+	// latter was read by nothing while the wire signature carried the
+	// claim (0041). Same correction as tcp's pseudo-header, found by the
+	// same sweep.
+	u8   zero        [must_eq = 0];
 	u8   protocol;
 	u16  udp_length;
 }

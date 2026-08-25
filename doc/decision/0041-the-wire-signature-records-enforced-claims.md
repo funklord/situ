@@ -1,6 +1,6 @@
 # 0041: every wire-signature line is enforced, and enforced contract is a line
 
-Status: proposed
+Status: accepted
 Date: 2026-08-25
 Phase: after 0040
 

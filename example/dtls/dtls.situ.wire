@@ -22,6 +22,6 @@ struct record size=37..16421
   @0x0005   6         u8         sequence  big
   @0x000b   2         u16        length  big min=24 max=16408
   @0x000d   8         u8         explicit  big
-  @0x0015   0..16384  aes_128_gcm sealed  codec=aes_128_gcm
+  @0x0015   0..16384  aes_128_gcm sealed  codec=aes_128_gcm nonce=explicit key=epoch
   ~         16        u8         tag
   tag covers: sealed fragment

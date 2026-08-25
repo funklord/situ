@@ -38,6 +38,6 @@ struct tcp_header size=20..
 struct tcp_pseudo_header size=12
   @0x0000   4         u32        source_address  big
   @0x0004   4         u32        destination_address  big
-  @0x0008   1         u8         zero  must_be_zero
+  @0x0008   1         u8         zero  must_eq=0
   @0x0009   1         u8         protocol
   @0x000a   2         u16        tcp_length  big

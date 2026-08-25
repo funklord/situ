@@ -76,7 +76,12 @@ struct tcp_header {
 struct tcp_pseudo_header {
 	u32       source_address;
 	u32       destination_address;
-	u8        zero          [must_be_zero];
+	// The enforced spelling. This carried [must_be_zero], which on an
+	// ordinary field was read by nothing: the wire signature promised
+	// must_be_zero to every peer while the generated validate checked
+	// nothing (0041's worked case, found in this tree). must_eq is the
+	// constraint validate enforces.
+	u8        zero          [must_eq = 0];
 	u8        protocol;
 	u16       tcp_length;
 }

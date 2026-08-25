@@ -26,6 +26,6 @@ struct packet size=62..1086
   @0x0001   3         u8         <reserved0>  big
   @0x0004   8         header     hdr  big
   @0x000c   12        u8         nonce  big
-  @0x0018   22..1046  aes_gcm_128 sealed  codec=aes_gcm_128
+  @0x0018   22..1046  aes_gcm_128 sealed  codec=aes_gcm_128 nonce=nonce
   ~         16        u8         tag
   tag covers: authenticated hdr length seq type version nonce sealed body inner_kind inner_seq session_key

@@ -1,0 +1,20 @@
+# Golden vectors for the TCP pseudo-header.
+#
+# The layout is RFC 9293 section 3.1's checksum pseudo-header, and these
+# bytes are laid out from its field list rather than by situ: source and
+# destination address, one zero byte, the protocol number (6 for TCP,
+# /etc/protocols and RFC 790), and the TCP segment length. The addresses
+# are TEST-NET-1 and TEST-NET-2 (RFC 5737), reserved for exactly this use.
+#
+# Why random draws cannot reach the struct, and why this file exists: the
+# zero byte is `[must_eq = 0]` -- enforced since 0041 replaced the inert
+# `[must_be_zero]` spelling, which is also why the owned round-trip
+# started skipping the moment the claim became real. A pseudo-random byte
+# is zero once in 256 draws, and 64 draws were 64 refusals.
+
+# 192.0.2.1 -> 198.51.100.7, protocol 6, a 20-byte bare segment.
+tcp_pseudo_header bare_segment    C0 00 02 01 C6 33 64 07 00 06 00 14
+
+# 198.51.100.7 -> 192.0.2.1, the reply direction, 1460 bytes of payload
+# behind a 20-byte header: length 0x05C8.
+tcp_pseudo_header full_mss_reply  C6 33 64 07 C0 00 02 01 00 06 05 C8
