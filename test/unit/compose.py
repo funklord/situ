@@ -27,7 +27,7 @@ on:
 The cross product is larger than anything that can run in CI, and most of it
 is not interesting: the point is not to run every cell but to have the cells
 *enumerated*, so a sample is a sample of something known rather than of
-whatever somebody thought of. `tools/sweep.py` runs a slice as long as you
+whatever somebody thought of. `tool/sweep.py` runs a slice as long as you
 like; `test_composed_schemas` runs a fixed sample of it on every commit.
 
 **A schema the compiler refuses is a pass.** Most of this space is illegal --

@@ -64,7 +64,7 @@ help:
 	@echo '  style      indentation, ASCII and whitespace, plus project.md'
 	@echo '  typecheck  mypy strict over situc, tools and tests'
 	@echo '  lint       alias for style-source'
-	@echo '  hooks      install the commit-message hook from tools/hooks/'
+	@echo '  hooks      install the commit-message hook from tool/hooks/'
 	@echo '  walk       the walker over an image: bin/situ-walk'
 	@echo '  walk-c     build the embedded walker: situ-walk-c (0035)'
 	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
@@ -156,7 +156,7 @@ lint: style-source
 # Not part of `test`, and not a threshold. A wall-clock number belongs to the
 # machine that took it (26.30), so this reports and asserts nothing.
 bench:
-	$(PYTHON) tools/bench.py
+	$(PYTHON) tool/bench.py
 
 # The embedded walker (0035): the one 0026 was argued from, and the one a
 # device links. Built with the same warnings as the generated code, because
@@ -360,18 +360,18 @@ clean:
 	rm -rf .mypy_cache .pytest_cache
 
 # The shared style gate: one tool, copied verbatim from
-# ~/.claude/tools/style_gate.py into every private project. It refuses to
+# ~/.claude/tool/style_gate.py into every private project. It refuses to
 # run against a collapsed file list, so a pass means it actually looked.
 style: style-source style-docs
 
 style-source:
-	$(PYTHON) tools/style_gate.py check
+	$(PYTHON) tool/style_gate.py check
 
 # project.md is authoritative, so it is held to the tree: a heading
 # that appears twice means whichever one you find, the other is the
 # one with the answer.
 style-docs:
-	$(PYTHON) tools/style_gate.py docs
+	$(PYTHON) tool/style_gate.py docs
 
 # The clean ladder, matching the sibling projects. `clean` already removes
 # the build root; `veryclean` adds the packaging output, `distclean` the
@@ -404,5 +404,5 @@ distclean: veryclean
 # a fresh clone.
 hooks:
 	@test -d .git || { echo "hooks: not a git repository" >&2; exit 1; }
-	@install -m 0755 tools/hooks/commit-msg .git/hooks/commit-msg
-	@echo "hooks: commit-msg installed from tools/hooks/"
+	@install -m 0755 tool/hooks/commit-msg .git/hooks/commit-msg
+	@echo "hooks: commit-msg installed from tool/hooks/"

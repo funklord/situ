@@ -4297,7 +4297,7 @@ agree -- which is the same shape as a schema left out of the generated
 Makefile, one row above.
 
 
-**Performance is measured and never asserted.** `tools/bench.py` builds a
+**Performance is measured and never asserted.** `tool/bench.py` builds a
 driver in each backend and reports what the offset cache of 26.30 costs and
 saves; nothing in the suite holds a wall-clock number, because a threshold
 loose enough to pass on every machine holds nothing and a tight one fails on
@@ -4468,7 +4468,7 @@ situ/
     vm.py                     the section 10 bytecode, evaluated
     walk.py                   offsets, sizes and reads over a buffer
     report.py                 the differ's listing, for the fifth column
-  tools/
+  tool/
     style_gate.py             the formatting enforcer; `make style`, and
                               `make lint` as an alias. Copied verbatim from
                               the shared source, so a fix belongs there
@@ -4735,7 +4735,7 @@ a numbered section 26 entry with its invariants -- and for nothing else.
   what every schema generates in all four languages plus the checks, the fuzz
   harness and the dissector (26.58).
 - **No autoformatter.** `black` and `ruff format` rewrite tabs to spaces
-  unconditionally and cannot be configured out of it, so `tools/style_gate.py`
+  unconditionally and cannot be configured out of it, so `tool/style_gate.py`
   under `make style` is the enforcement instead. See
   `doc/decision/0003-source-formatting.md`.
 - Lowercase filenames unless there is a reason otherwise, and `snake_case` over
@@ -6360,7 +6360,7 @@ Measured, the build included in both cases:
 **Those two rows are C's, and for a long time they were the whole of the
 evidence.** The other three backends grew the second accessor family after the
 measurements were taken, so this page claimed a cost in four languages and had
-numbers for one. `tools/bench.py` exists to close that, and this is what it
+numbers for one. `tool/bench.py` exists to close that, and this is what it
 answers -- for the case where the cache can help at all, an eight-field record
 with seven dynamic offsets:
 
@@ -6453,7 +6453,7 @@ found, and it was there before any of this work began.
 
 **Four languages, and the cache is not always the win.** Every number above is
 C's, taken before the other three had the family at all -- the last claim on
-these pages with nothing behind it. `tools/bench.py` is what closes that: it
+these pages with nothing behind it. `tool/bench.py` is what closes that: it
 generates the accessors through the CLI a user would run, builds a driver in
 each of the four languages, and reports what one pass over a message costs
 with the per-member offsets and with the cache. Two cases, because the obvious
@@ -6819,7 +6819,7 @@ had to say about a member, so the new check displaced every constraint check on
 a dynamically placed field.
 
 The entry before that was 26.30's measurements, and closing it took a tool
-rather than a paragraph: `tools/bench.py` builds a driver in all four
+rather than a paragraph: `tool/bench.py` builds a driver in all four
 languages and reports what the offset cache costs and what it saves. What
 replaces the entry is a caveat rather than a claim. The numbers are one
 machine's, which is why they are recorded with the machine beside them and why
@@ -8299,7 +8299,7 @@ along five axes, each a question a backend's emitters branch on:
 1350 cells. `test/unit/probe.py` runs one through every oracle there is --
 the compiler must not fall over, each backend must compile what it emitted,
 the four must agree over sixteen hostile buffers, and the dissector must
-survive its own schema's bytes. `tools/sweep.py` walks as much of it as you
+survive its own schema's bytes. `tool/sweep.py` walks as much of it as you
 ask for; `test/unit/test_composed_schemas.py` runs a fixed sample on every
 commit.
 
@@ -8417,7 +8417,7 @@ with no failures; `KNOWN` empty.
 ### 26.52 The whole space, once
 
 26.51 ended on two draws of a hundred cells with nothing in them, which is
-evidence and is not the same as having run the space. `tools/sweep.py --all`
+evidence and is not the same as having run the space. `tool/sweep.py --all`
 is 1350 cells; six shards of it take about as long as `make test` rather than
 about an hour, which is what the `--shard` flag is for. Strided rather than
 blocked: the cells are enumerated in a fixed order, so a block of them shares
@@ -9369,18 +9369,18 @@ honest description is a wire contract with teeth, not a parser.
 
 ### 26.68 The gate that did not pass the gate
 
-`tools/lint_conventions.py` became `tools/style_gate.py`, one tool shared
+`tool/lint_conventions.py` became `tool/style_gate.py`, one tool shared
 verbatim across the seven private projects instead of three that had grown
 apart. Two things were wrong with the arrival and neither was in the gate's
 own subject matter.
 
 **It failed this project's type checking.** `make typecheck` runs mypy strict
-over `tools/`, and the gate produced eighteen errors there -- a config dict
+over `tool/`, and the gate produced eighteen errors there -- a config dict
 with no type parameters, two untyped functions, an unannotated brace stack,
 and an optional import a checker read as always present. So the file that
 decides whether the tree conforms was the one file in the tree that did not.
 
-Not exempt by decision, either: nobody chose to exclude `tools/`, it simply
+Not exempt by decision, either: nobody chose to exclude `tool/`, it simply
 had not been looked at. The fix is annotation rather than exclusion, and
 that is the whole of the position -- **a gate is not exempt from the tree it
 gates**, and excluding it would have been the cheaper repair and the wrong
@@ -9858,7 +9858,7 @@ a thing anyone could decide about.
 
 **The remedy needed no code**, which is the part worth writing down.
 `tempfile.mkdtemp` resolves through `tempfile.gettempdir()`, which honours
-`TMPDIR`, so `TMPDIR=$HOME/.cache/situ-sweep python3 tools/sweep.py --all`
+`TMPDIR`, so `TMPDIR=$HOME/.cache/situ-sweep python3 tool/sweep.py --all`
 already builds somewhere private and off the shared tmpfs. The knob was
 always there; what was missing was knowing the instrument had a shared,
 volatile floor at all. That is 26.45's shape a second time in two folds --
@@ -9896,7 +9896,7 @@ The history was reformatted to 25.1 in one pass, 313 commits to 311. The
 reformat is not what is worth an entry; what measuring first turned up is.
 
 **The written convention and the enforced convention were different sizes.**
-`tools/hooks/commit-msg` checks two things -- generator attribution, and a
+`tool/hooks/commit-msg` checks two things -- generator attribution, and a
 subject over 75 columns -- and the standing rule has at least six. So the
 four nobody mechanised drifted for the entire history without one complaint
 from the tooling: 237 of 313 subjects carried no subsystem at all, 2330 body
@@ -9907,14 +9907,14 @@ right.
 
 **The documented-path check reads five paths in a ten-thousand-line
 document.** `make style` reports "project.md says nothing twice and names no
-missing file" while section 23 declared `tools/lint_conventions.py`, renamed
+missing file" while section 23 declared `tool/lint_conventions.py`, renamed
 to `style_gate.py` back in 26.68 and gone from the tree since. The gate is
 not wrong: `doc_paths` deliberately reads backticked paths in *table rows*,
 which is exactly what took its false-positive rate to zero across every
 project that carries it. But section 23 is a fenced indentation listing, so
 **the one place this document declares the whole tree is the one place the
 check cannot look.** Of its 74 checkable entries 73 were accurate, one named
-a deleted file, and `tools/style_gate.py` and `tools/hooks/commit-msg` were
+a deleted file, and `tool/style_gate.py` and `tool/hooks/commit-msg` were
 missing from it altogether -- a listing that had drifted precisely where
 nothing read it.
 
@@ -13687,7 +13687,7 @@ been all along: every `rustc` invocation in the tree passes
 `--edition 2021`. Python was the one left, and it was unenforced twice over.
 
 **The shipped modules nothing held to the floor.** Both floor checks read
-`bin/situc`, `situc/**` and `tools/*`. That leaves out `runtime/python`,
+`bin/situc`, `situc/**` and `tool/*`. That leaves out `runtime/python`,
 `walker` and `editor` -- and the Makefile records `mypy` having exactly those
 three omissions and fixing them one at a time, in a comment that is worth
 reading in full because it names the shape:

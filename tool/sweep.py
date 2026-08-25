@@ -7,12 +7,12 @@ the space instead of over whatever occurred to somebody -- `test/unit/compose`
 enumerates it, `test/unit/sweep` runs one cell, and this walks as much of it
 as you ask for and reports what came back.
 
-    python3 tools/sweep.py                 # a sample, seeded and reproducible
-    python3 tools/sweep.py --all           # every cell; minutes, not seconds
-    python3 tools/sweep.py --limit 200 --seed 7
-    python3 tools/sweep.py --only sealed   # cells whose name contains this
-    python3 tools/sweep.py --verbose       # print the refusals too
-    python3 tools/sweep.py --all --shard 0/6   # one slice, for running six
+    python3 tool/sweep.py                 # a sample, seeded and reproducible
+    python3 tool/sweep.py --all           # every cell; minutes, not seconds
+    python3 tool/sweep.py --limit 200 --seed 7
+    python3 tool/sweep.py --only sealed   # cells whose name contains this
+    python3 tool/sweep.py --verbose       # print the refusals too
+    python3 tool/sweep.py --all --shard 0/6   # one slice, for running six
                                                # of these at once
 
 Sharding is strided rather than blocked: the cells are enumerated in a fixed
@@ -20,7 +20,7 @@ order, so a block of them shares an axis value, and one shard would compile
 every `sealed` cell while another compiled every `frame` one. Six shards over
 the whole space take about as long as a `make test` rather than about an hour.
 
-Not part of `make test`, for the reason `tools/bench.py` is not: the whole
+Not part of `make test`, for the reason `tool/bench.py` is not: the whole
 space is a long run, and what belongs in CI is a fixed sample of it, which
 `test/unit/test_composed_schemas.py` is.
 

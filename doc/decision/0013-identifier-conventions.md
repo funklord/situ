@@ -10,9 +10,9 @@ Nothing in the compiler has ever keyed off identifier casing -- no `isupper`
 anywhere in `situc/` -- but the examples were written PascalCase for types and
 snake_case for everything else, taken from project.md's own examples
 (`Header`, `Packet`, `MsgType`) rather than chosen. Section 25 says nothing
-about it, and the style gate cannot check it: `tools/style_gate.py` is a text
+about it, and the style gate cannot check it: `tool/style_gate.py` is a text
 checker with no parser, so it cannot tell a type name from a field name. (The
-gate was `tools/lint_conventions.py` when this was written; it was replaced in
+gate was `tool/lint_conventions.py` when this was written; it was replaced in
 26.68, and the limitation is the same one -- casing is a question about the
 AST, and neither tool reads one.)
 

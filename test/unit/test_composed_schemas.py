@@ -2,7 +2,7 @@
 
 `test/unit/compose.py` enumerates the compositions of constructs this
 language admits -- a driver, a form, an element, what precedes it, where it
-sits -- and `tools/sweep.py` runs as much of that space as you ask for. This
+sits -- and `tool/sweep.py` runs as much of that space as you ask for. This
 runs a fixed sample of it, so the method that found 26.47 through 26.49 keeps
 running without anybody choosing what to try.
 
@@ -16,7 +16,7 @@ test said so by failing.
 A cell that fails here is a real finding: a traceback out of the compiler,
 generated code that will not build, or four backends that build and disagree.
 A *refusal* is a pass -- most of the composition space is illegal and a
-diagnostic is the right answer to all of it. `python3 tools/sweep.py --only
+diagnostic is the right answer to all of it. `python3 tool/sweep.py --only
 <fragment>` reproduces one; `--all` walks the whole space.
 """
 

@@ -30,7 +30,7 @@ property of the machine that took it, so a threshold here would either be loose
 enough to hold nothing or tight enough to fail on somebody else's laptop. It is
 a thing you run, and 26.30 says what ran it.
 
-    python3 tools/bench.py [--iterations N]
+    python3 tool/bench.py [--iterations N]
 
 A missing toolchain is reported rather than skipped: a table with a row quietly
 absent reads as a backend that has no offset cache.

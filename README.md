@@ -427,7 +427,7 @@ make test       # pytest and the generated C
 make check      # everything before a commit: style, types, test, aarch64
 make bench      # what the offset cache costs and saves, in all four backends
 make fuzz       # every generated harness, under libFuzzer and ASan
-make hooks      # install the commit-message hook from tools/hooks/
+make hooks      # install the commit-message hook from tool/hooks/
 make help       # everything else
 ```
 
@@ -468,7 +468,7 @@ skipping: they build and run the generated C directly.
 
 There is no autoformatter. Tabs carry indent level and spaces carry alignment,
 which `black` and `ruff format` cannot be configured to leave alone, so
-`tools/style_gate.py` under `make style` is the enforcement instead
+`tool/style_gate.py` under `make style` is the enforcement instead
 (decision 0003). `make lint` is kept as an alias for it.
 
 ## Layout
@@ -482,7 +482,7 @@ runtime/          one runtime per backend, each thin; the arithmetic lives in C
 example/         one directory per protocol, each with at least one `require`
 test/            unit, generated-C, cross-architecture, golden diagnostics,
                   a Wireshark stub, and the schemas written to be awkward
-tools/            the style gate, the commit-msg hook, the benchmark, the sweep
+tool/            the style gate, the commit-msg hook, the benchmark, the sweep
 ```
 
 ## Status

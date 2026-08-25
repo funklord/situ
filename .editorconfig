@@ -1,6 +1,6 @@
 # project.md section 25: tabs carry structural indent, spaces carry alignment
 # within a level. No tab width is prescribed anywhere; the viewer decides.
-# Enforced by tools/lint_conventions.py, since no autoformatter supports this.
+# Enforced by tool/lint_conventions.py, since no autoformatter supports this.
 
 root = true
 

@@ -35,11 +35,11 @@ spaces unconditionally and neither has an option to preserve them, so adopting
 either would silently revert this decision on every save. `pycodestyle` would
 also have to have W191 disabled.
 
-Enforcement is therefore `tools/style_gate.py`, run by `make style`, with
+Enforcement is therefore `tool/style_gate.py`, run by `make style`, with
 `make lint` kept as an alias. It checks ASCII-only content, tab indentation,
 no space-before-tab, no trailing whitespace, and a final newline.
 
-The enforcing tool was `tools/lint_conventions.py` when this was decided. It
+The enforcing tool was `tool/lint_conventions.py` when this was decided. It
 was replaced in 26.68 by the shared style gate, copied verbatim from one
 source into every project rather than maintained here. That is a change of
 mechanism, not of decision: the rule, the two exemptions below and the ban on

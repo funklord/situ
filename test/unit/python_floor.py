@@ -13,7 +13,7 @@ one nothing checked"; `walker` was added "for the same reason"; and `editor`
 was "named on arrival rather than after the same lesson a third time".
 
 The floor check never got that widening. It read `bin/situc`, `situc/**` and
-`tools/*` -- the same three trees, with the same three omissions -- so
+`tool/*` -- the same three trees, with the same three omissions -- so
 `runtime/python`, `walker` and `editor` were shipped Python held to no
 declared floor at all. Naming the list once is what stops a fourth.
 """
@@ -50,7 +50,7 @@ def shipped_modules() -> list[Path]:
 	"""
 	return [ROOT / "bin" / "situc",
 	        *sorted(ROOT.glob("situc/**/*.py")),
-	        *sorted(ROOT.glob("tools/*.py")),
+	        *sorted(ROOT.glob("tool/*.py")),
 	        *sorted(ROOT.glob("runtime/python/**/*.py")),
 	        *sorted(ROOT.glob("walker/**/*.py")),
 	        *sorted(ROOT.glob("editor/**/*.py"))]
