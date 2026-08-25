@@ -1,0 +1,27 @@
+# situ wire signature v0
+# schema: dtls.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+enum content_type : u8 unknown=error
+  change_cipher_spec=20 alert=21 handshake=22 application_data=23
+
+struct record size=37..16421
+  @0x0000   1         content_type type
+  @0x0001   2         u16        version  big must_eq=0xFEFD
+  @0x0003   2         u16        epoch  big
+  @0x0005   6         u8         sequence  big
+  @0x000b   2         u16        length  big min=24 max=16408
+  @0x000d   8         u8         explicit  big
+  @0x0015   0..16384  aes_128_gcm sealed  codec=aes_128_gcm
+  ~         16        u8         tag
+  tag covers: sealed fragment

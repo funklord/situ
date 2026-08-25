@@ -1,0 +1,69 @@
+// A DTLS 1.2 record under AES-GCM, as RFC 6347 frames it and RFC 5288
+// encrypts it.
+//
+// WHY THIS ONE. It is the smallest protocol that outlives a key, and the
+// construct it needed is `key = epoch` (decision 0040): a handshake bumps
+// the epoch, the epoch says which key a record is under, and until 0040
+// that fact was not sayable -- 14.8 listed key selection first among the
+// constructs real protocols need and situ could not express.
+//
+// The epoch is parsed before the sealed region, which is 0040's ordering
+// rule doing its work: the decoder picks the key before it decodes anything
+// the key decrypts. It sits outside the region and inside the tag's
+// coverage -- DTLS authenticates its epoch as additional data, which is
+// what makes a flipped epoch a failed tag rather than a decryption under
+// the wrong key.
+//
+// THE NONCE IS SPLIT, AND THE CODEC SAYS NOTHING ABOUT ITS WIDTH. RFC 5288
+// builds the 12-byte GCM nonce as a 4-byte salt from the key block -- out
+// of band, never on the wire -- concatenated with the 8-byte explicit part
+// carried here. `nonce = explicit` names the on-wire half; declaring
+// `nonce_bytes = 12` on the codec would then refuse the 8-byte field, and
+// declaring 8 would misstate the primitive. Silence claims nothing (0038),
+// and this is the case that shows why the setting is optional.
+
+target buffer;
+endian big;
+
+codec aes_128_gcm {
+	tag_bytes = 16;              // NIST SP 800-38D; RFC 5288 does not truncate
+	length_preserving;           // the tag is a separate field, below
+	seekable = linear;
+	granularity = byte;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+impl aes_128_gcm extern "dtls_record_open";
+
+enum content_type : u8 {
+	change_cipher_spec = 20,
+	alert              = 21,
+	handshake          = 22,
+	application_data   = 23,
+}
+
+struct record {
+	content_type  type;
+	u16           version   [must_eq = 0xFEFD];   // DTLS 1.2, RFC 6347 4.1
+	u16           epoch;
+	u8            sequence[6];
+
+	// Counts everything after itself: the explicit nonce, the ciphertext,
+	// and the tag. RFC 6347 caps a record at 2^14 plus the AEAD expansion.
+	u16           length    [min = 24, max = 16408];
+
+	// The on-wire half of the nonce. RFC 6347 4.1.2.1 leaves its contents
+	// to the sender and suggests epoch || sequence; the schema states only
+	// where it sits, because that is all the format guarantees.
+	u8            explicit[8];
+
+	sealed(aes_128_gcm, nonce = explicit, key = epoch) {
+		u8  fragment[length - 24];
+	}
+
+	tag u8[16];
+}
+
+require verify_gated(record.sealed);

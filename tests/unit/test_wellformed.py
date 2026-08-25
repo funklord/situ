@@ -1041,3 +1041,53 @@ def test_the_same_nonce_name_in_two_structs_is_fine() -> None:
 	one = ("struct %s {\n\tu8 n[12];\n"
 	       "\tsealed one(ae, nonce = n) { u8 a[4]; }\n\ttag u8[16];\n}\n")
 	parse_text(SEALING_AEAD + one % "s" + one % "t", path="s.situ")
+
+
+# -- key selection, decision 0040 -------------------------------------------
+
+
+def test_a_key_selector_is_accepted_with_and_without_a_nonce() -> None:
+	"""`key = field` names the field whose value selects the region's key --
+	DTLS's epoch, QUIC's key-phase bit, WireGuard's receiver index."""
+	parse_text(SEALING_AEAD +
+	           "struct s {\n\tu16 epoch;\n\tu8 n[12];\n"
+	           "\tsealed one(ae, nonce = n, key = epoch) { u8 a[4]; }\n"
+	           "\ttag u8[16];\n}\n", path="s.situ")
+	parse_text(SEALING_AEAD +
+	           "struct s {\n\tu16 epoch;\n"
+	           "\tsealed one(ae, key = epoch) { u8 a[4]; }\n"
+	           "\ttag u8[16];\n}\n", path="s.situ")
+
+
+def test_a_key_selector_gets_the_nonce_ordering_rule() -> None:
+	"""The key is picked before anything it decrypts is decoded, so the
+	selector has to be parsed strictly earlier -- the nonce's rule, for the
+	nonce's reason."""
+	text = rendered(SEALING_AEAD +
+	                "struct s {\n\tu8 n[12];\n"
+	                "\tsealed one(ae, nonce = n, key = late) { u8 a[4]; }\n"
+	                "\tu16 late;\n\ttag u8[16];\n}\n")
+	assert "unknown key selector field `late`" in text
+
+
+def test_a_key_selector_must_carry_a_value() -> None:
+	"""26.113's rule, met here as it was in run conditions: a byte run has
+	no value to select by. QUIC's key-phase *bit* is the case that must
+	pass, and does -- `bit` is integer-domain."""
+	text = rendered(SEALING_AEAD +
+	                'struct s {\n\tu8 r[] until "\\0";\n\tu8 n[12];\n'
+	                "\tsealed one(ae, nonce = n, key = r) { u8 a[4]; }\n"
+	                "\ttag u8[16];\n}\n")
+	assert "no value to select by" in text
+
+
+def test_an_unknown_region_argument_is_refused() -> None:
+	"""`sealed(ae, wibble = x)` was accepted with the argument read by
+	nothing -- the same silence 26.117 closed for attributes, one construct
+	over. The vocabulary is `nonce` and `key`, stated in the diagnostic."""
+	text = rendered(SEALING_AEAD +
+	                "struct s {\n\tu8 n[12];\n"
+	                "\tsealed one(ae, wibble = n) { u8 a[4]; }\n"
+	                "\ttag u8[16];\n}\n")
+	assert "`wibble` is not an argument a sealed region takes" in text
+	assert "`key = field`" in text

@@ -53,7 +53,7 @@ SCHEMAS		:= tests/schemas/header.situ tests/schemas/edges.situ \
 		   tests/schemas/lenient.situ \
 		   examples/arp/arp.situ examples/ble/ble.situ examples/bmp/bmp.situ \
 		   examples/cpio/cpio.situ \
-		   examples/dns/dns.situ examples/dnsname/dnsname.situ examples/ethernet/ethernet.situ examples/http/http.situ \
+		   examples/dns/dns.situ examples/dnsname/dnsname.situ examples/dtls/dtls.situ examples/ethernet/ethernet.situ examples/http/http.situ \
 		   examples/icmp/icmp.situ examples/ipv6ext/ipv6ext.situ examples/ipv4/ipv4.situ \
 		   examples/message/message.situ examples/modbus/modbus.situ \
 		   examples/keystore/keystore.situ \

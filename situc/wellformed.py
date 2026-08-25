@@ -2177,17 +2177,39 @@ def check_nonce_references(schema: ast.Schema) -> None:
 	that refusal since the survey was written, and it was never implemented
 	(26.127): a schema with two regions sealed under one nonce built in every
 	backend. Under one key, a repeated nonce is the worst failure an AEAD
-	has -- GCM gives up the authentication key, not just the two plaintexts
-	-- and with key selection not yet expressible (14.8), one field feeding
-	two regions is that failure written into the format. When a `key = ...`
-	argument exists, regions under provably distinct keys are the case that
-	relaxes this.
+	has -- GCM gives up the authentication key, not just the two plaintexts.
+
+	`key = ref` (0040) names the field whose value selects the region's key,
+	and gets the nonce's ordering check for the nonce's reason: the key has
+	to be picked before anything it decrypts is decoded. It does *not* relax
+	the reuse refusal -- two regions naming one selector field see one value
+	and so one key, and two different fields can still hold one value, so
+	distinctness of key is not a structural fact (0040's context has the
+	full argument).
+
+	The argument vocabulary is checked here too. `sealed(ae, wibble = x)`
+	was accepted with the argument read by nothing -- the same silence
+	26.117 closed for attributes, one construct over.
 	"""
 	for struct in schema.structs():
 		fed: dict[str, ast.Member] = {}
 		for region in auth_regions(struct.members):
 			if not isinstance(region, ast.Sealed):
 				continue
+
+			for arg in region.args:
+				if arg.name not in ("nonce", "key"):
+					raise error(
+						f"`{arg.name}` is not an argument a sealed region "
+						"takes",
+						arg.span,
+						label = "read by nothing",
+						notes = ["a sealed region takes `nonce = field` and "
+						         "`key = field` (0040); anything else would "
+						         "state what the generated code does not do"],
+					)
+
+			_check_key_selector(struct, region)
 
 			reference = _argument(region.args, "nonce")
 			if reference is None:
@@ -2233,6 +2255,55 @@ def check_nonce_references(schema: ast.Schema) -> None:
 					"region cannot be read without the key it helps derive",
 				],
 			)
+
+
+def _check_key_selector(struct: ast.StructDecl, region: ast.Member) -> None:
+	"""`key = ref` names the field whose value selects the region's key (0040).
+
+	The selector gets the nonce's ordering rule for the nonce's reason -- the
+	key is picked before anything it decrypts is decoded -- and must carry a
+	*value*: an integer-domain field, so QUIC's key-phase bit passes and a
+	delimited byte run does not (26.113's rule, met here as it was in run
+	conditions).
+	"""
+	reference = _argument(getattr(region, "args", ()), "key")
+	if reference is None:
+		return
+
+	name = _reference_name(reference)
+	if name is None:
+		raise error(
+			"a key selector must name a field",
+			reference.span,
+			label = "expected a field name",
+			notes = ["`key = epoch` or `key = hdr.key_phase`"],
+		)
+
+	earlier = _fields(_before(struct.members, region))
+	found   = next((field for field in earlier if field.name == name), None)
+	if found is None:
+		raise error(
+			f"unknown key selector field `{name}`",
+			reference.span,
+			label = "not a field declared before this region",
+			notes = [
+				f"fields available here: "
+				f"{', '.join(f.name for f in earlier) or 'none'}",
+				"the key is picked before anything it decrypts is decoded, "
+				"so the selector has to be parsed strictly earlier",
+			],
+		)
+
+	if getattr(found, "until", None) is not None \
+			or getattr(found, "array", None) is not None:
+		raise error(
+			f"`{name}` is a run of bytes, which has no value to select by",
+			reference.span,
+			label = "not a single value",
+			notes = ["a selector is compared and dispatched on, so it has to "
+			         "carry a value: an integer field, a bit, an enum",
+			         "a byte run has no value (project.md 26.113)"],
+		)
 
 
 def _declared_byte_width(member: ast.Member) -> int | None:

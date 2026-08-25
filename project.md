@@ -3164,10 +3164,14 @@ own record.
 
 **Three more, each a construct real protocols need and this cannot express.**
 
-- **Key selection.** DTLS carries a 16-bit epoch, QUIC a key-phase bit,
-  WireGuard a receiver index. Every protocol that outlives one key needs to
-  say "this field selects which key", and there is no vocabulary for it --
-  zero occurrences of epoch, key phase or key id in this document.
+- **Key selection -- expressible now (0040).** DTLS carries a 16-bit epoch,
+  QUIC a key-phase bit, WireGuard a receiver index.
+  `sealed(codec, nonce = n, key = epoch)` names the field whose value
+  selects the region's key, with the nonce's ordering rule for the nonce's
+  reason, and `examples/dtls` is the worked case. Like the nonce argument
+  it reaches no backend yet: its value is its checks and its sayability,
+  and whether both belong in the capability map and wire signature stays
+  with 26.117's open question.
 - **Out-of-band material.** A nonce or key supplied by the caller rather than
   carried in the message cannot be distinguished from one left out by
   accident, because both spell the same thing.
@@ -14113,6 +14117,53 @@ could write to earn the exemption. When `key = field` lands (the 14.8
 follow-on this session set out to draft), regions under distinct selectors
 are the case that loosens this check, and the check is where that decision
 will be enforced rather than documented.
+
+
+### 26.128 The field that says which key
+
+Decision 0040, accepted and built. `sealed(codec, nonce = n, key = epoch)`
+names the field whose value selects the region's key -- the construct 14.8
+listed first among what real protocols need and situ could not say, and
+0038 unblocked without settling.
+
+**Sized by what the nonce argument turned out to be.** 26.127's reading --
+`nonce = field` is consumed by `wellformed` alone -- fixed the honest scope
+before any design: checks plus sayability, no ABI change, no backend
+touched. The selector gets the nonce's ordering rule for the nonce's reason
+(the key is picked before anything it decrypts is decoded), must carry a
+value (26.113's rule, so QUIC's key-phase bit passes and a byte run does
+not), and reaches no committed artifact yet -- whether nonce and key belong
+in the capability map and wire signature is 26.117's open question,
+answered once when it is answered.
+
+**The relaxation 26.127 anticipated does not happen, and the record says
+why rather than leaving the change of mind implicit.** Two regions naming
+one selector field see one value, so one key; two regions naming different
+fields can still hold one value. Distinctness of key is not a structural
+fact, and the nonce-reuse refusal stays unconditional. DTLS's rekey case --
+old-key and new-key records in one datagram -- is two messages, which situ
+already frames as two structs.
+
+**No coverage requirement on the selector, because a real protocol refuses
+it.** DTLS authenticates its epoch and QUIC its key-phase bit, and
+requiring that would have been the obvious rule -- but WireGuard's receiver
+index is deliberately outside the AEAD: it routes, it is not trusted.
+Where the selector sits is the layout's to record; whether an
+unauthenticated selector is acceptable is the protocol's threat model.
+
+**The vocabulary gap came out in the same pass.** `sealed(ae, wibble = x)`
+was accepted with the argument read by nothing -- the acceptance 26.117
+closed for attributes, one construct over. A sealed region's arguments are
+`nonce` and `key` now, and anything else is refused naming both.
+
+**`examples/dtls` is the worked case, and its nonce is the reason it
+earns the directory.** RFC 5288 builds the 12-byte GCM nonce as a 4-byte
+out-of-band salt concatenated with the 8-byte explicit part on the wire.
+`nonce = explicit` names the on-wire half; declaring `nonce_bytes = 12` on
+the codec would refuse the 8-byte field, and declaring 8 would misstate
+the primitive. The codec stays silent on the width -- 0038's "silence
+claims nothing", met by the protocol that shows why the setting had to be
+optional.
 
 
 ---

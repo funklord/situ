@@ -1,0 +1,24 @@
+# situ capability map v1
+# schema: dtls.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec aes_128_gcm trusted length_preserving seekable=linear granularity=byte authenticated invertible deterministic
+
+struct record size=37 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated auth=Covered(tag)
+  record.type                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  record.version                         offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.epoch                           offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.sequence                        offset=AbsoluteStatic(0x05) size=Fixed(6) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  record.length                          offset=AbsoluteStatic(0x0B) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.explicit                        offset=AbsoluteStatic(0x0D) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  record.sealed                          offset=AbsoluteStatic(0x15) size=Bounded(0, 16384) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(tag)
+  record.sealed.fragment                 offset=AbsoluteStatic(0x15) size=Bounded(0, 16384) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting stage=VerifyGated auth=Covered(tag)
+  record.tag                             offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
