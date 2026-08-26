@@ -5,10 +5,14 @@ section 10 program, places a fixed or located member, decodes a varint, scans
 for a delimiter, parses a text number, walks a counted or `while` run,
 measures a variant and answers `validate`, reads endian markers, tags,
 versioned members and sealed-region gates -- all held to the Python walker by
-a differential test. What is left is the rest of a region: authenticated
-regions, and a sealed region's interior runs and `[secret]` members. The
-table below is the work and each row this build does not render is refused by
-name rather than guessed.
+a differential test. Every probe the Python fifth column makes, the C walker
+now answers. What is marked `neither` in the table below -- authenticated
+regions, a sealed region's interior runs and its `[secret]` members -- is
+outside the differential by design: `report._gates`/`_gated` decline them
+too (a `[secret]` member has no debug accessor by 14.6, an interior run is
+spelled four ways nothing has compared), so there is nothing to hold two
+readers to. Each row this build does not render is refused by name rather
+than guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -72,7 +76,7 @@ layer over the image; placing one field needs most of this:
 | `while` runs | however many elements pass the predicate | **done** |
 | variants | the extent of the arm the discriminant selects | **done** |
 | sealed gates | the gate verdict and the plain scalars inside, read through it | **done** |
-| the rest of a region | authenticated regions, interior runs, `[secret]` members | `report.py` |
+| the rest of a region | authenticated regions, interior runs, `[secret]` members | neither |
 | endian markers | whether the field, read big-endian, is the `little` sentinel | **done** |
 | tags | whether the tag's span is inside the frame (`present=`) | **done** |
 | versioned members | a `[since]` field, gated on the message's own version | **done** |
