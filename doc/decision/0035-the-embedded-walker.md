@@ -70,8 +70,9 @@ layer over the image; placing one field needs most of this:
 | `while` runs | however many elements pass the predicate | **done** |
 | variants | the extent of the arm the discriminant selects | **done** |
 | regions | a gate's interior, read through `authenticated` or `sealed` | `report.py` |
+| endian markers | whether the field, read big-endian, is the `little` sentinel | **done** |
 | `validate` | constraints, enums, nested structs, the span checks | **done** |
-| the rest of the probes | tags, markers, versioned members, gated regions | `report.py` |
+| the rest of the probes | tags, versioned members, gated regions | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
 device is that section 10's language is total -- no calls, no recursion, no
@@ -416,3 +417,21 @@ and 38 against 46" -- and the C walker made it again from a clean start,
 which is what a second implementation is for. It was invisible until a schema
 with a `[remaining]` tail met the validator, because nothing else asks a size
 program for a length it can be wrong about by exactly the offset.
+
+## Amendment, 2026-08-26: the endian marker, read in the order it is about
+
+The first of the "rest of the probes" the table left to `report.py` is built:
+`situ_walk_marker` answers whether a marker's field, read big-endian, equals
+the `little` sentinel the schema gave it. The image gains a markers section
+in the C loader -- one row per marker, keyed by placement, carrying the `i64`
+sentinel `situc/pack.py` writes -- and the probe reads the field big-endian
+whatever it turns out to say, because the marker is what decides the message's
+byte order and so cannot be read in the order it is about. That rule is the
+Python walker's and the generated code's already; the C walker keeps it too.
+
+A non-marker member answers `SITU_WALK_UNSUPPORTED`, which the differential
+reads as a refusal, so the two walkers' lists line up member for member --
+`little=1` where the marker says little, `little=0` where it does not, and a
+refusal everywhere else. Held to `report._members` over an `II`/`MM` marker
+by `test_walker_c.py`. Tags, versioned-member probes and the gated regions
+are what is still `report.py` alone.

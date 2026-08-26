@@ -9,6 +9,7 @@
 #define TAG_ARMS       5u
 #define TAG_DELIMITERS 6u
 #define TAG_VARINTS    9u
+#define TAG_MARKERS    14u
 #define TAG_CONSTRAINTS 15u
 #define TAG_ENUM_VALUES 16u
 
@@ -27,6 +28,7 @@
 #define ARM_READS       21u
 #define CONSTRAINT_READS 13u
 #define ENUM_VALUE_READS 12u
+#define MARKER_READS    16u	/* `<IqI`: placement, i64 sentinel, pad */
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -165,6 +167,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->enum_values       = image + offset;
 			out->enum_value_count  = items;
 			out->enum_value_stride = stride;
+		} else if (kind == TAG_MARKERS) {
+			if (stride < MARKER_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->markers       = image + offset;
+			out->marker_count  = items;
+			out->marker_stride = stride;
 		} else if (kind == TAG_DELIMITERS) {
 			if (stride < DELIMITER_READS) {
 				return SITU_WALK_MALFORMED;
@@ -1887,6 +1896,73 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
 
 	*out   = message + start;
 	*count = width;
+	return SITU_WALK_OK;
+}
+
+/* `image_kind`: a placement's `kind` byte. A marker is 2, from the packer's
+ * `field 0, reserved 1, marker 2, region 3`. */
+#define KIND_MARKER 2u
+
+situ_walk_err situ_walk_marker(const situ_walk_image *image,
+                               const uint8_t *message, uint32_t len,
+                               uint32_t shape, uint32_t index,
+                               uint32_t *little)
+{
+	situ_walk_placement placement;
+	situ_walk_err err = situ_walk_placement_at(image, index, &placement);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (placement.kind != KIND_MARKER) {
+		return SITU_WALK_UNSUPPORTED;	/* not an endian marker */
+	}
+
+	/* The `little` sentinel this marker's field is compared against. The
+	 * markers table is keyed by placement; a marker with no row is an image
+	 * that carries the member and not the question, which this build cannot
+	 * answer rather than answer wrongly. */
+	int64_t sentinel = 0;
+	int     found    = 0;
+	for (uint32_t i = 0u; i < image->marker_count; i++) {
+		const uint8_t *row = image->markers + i * image->marker_stride;
+		if (u32_at(row) == index) {
+			sentinel = i64_at(row + 4);
+			found    = 1;
+			break;
+		}
+	}
+	if (!found) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	uint32_t start = 0u;
+	uint32_t width = 0u;
+	err = situ_walk_offset_bits(image, message, len, shape, index, &start);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	err = situ_walk_size_bits(image, message, len, shape, index, &width);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (start % 8u || width % 8u || width == 0u || width > 64u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	start /= 8u;
+	width /= 8u;
+	if (start > len || width > len - start) {
+		return SITU_WALK_BOUNDS;	/* the frame does not reach the marker */
+	}
+
+	/* Read big-endian, whatever the marker turns out to say: the marker is
+	 * what decides byte order, so it cannot be read in the order it is
+	 * about -- the same rule the generated code and the Python walker keep. */
+	uint64_t held = 0u;
+	for (uint32_t b = 0u; b < width; b++) {
+		held = (held << 8) | message[start + b];
+	}
+	*little = (held == (uint64_t)sentinel) ? 1u : 0u;
 	return SITU_WALK_OK;
 }
 

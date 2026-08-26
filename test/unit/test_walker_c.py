@@ -29,7 +29,8 @@ from situc.diagnostics import Source
 from walker.image import load
 from walker import report, walk
 from walker.image import NONE, Image
-from walker.walk import Refused, Unplaceable, acquire, read_scalar, size_bits
+from walker.walk import (Refused, Unplaceable, acquire, offset_bits,
+                         read_scalar, size_bits)
 
 COMPILER = shutil.which("cc") or shutil.which("gcc")
 WALKER   = ROOT / "walker" / "c"
@@ -170,6 +171,17 @@ WIDTHS = """uint32_t bits = 0;
 			printf("refused\\n");
 		}"""
 
+#: An endian marker's verdict: whether its field, read big-endian, equals the
+#: `little` sentinel. A non-marker member refuses, which is the same shape as
+#: every other probe -- what this build declines is part of what it says.
+MARKERS = """uint32_t little = 0;
+		if (situ_walk_marker(&image, msg, len, shape, first + i, &little)
+				== SITU_WALK_OK) {
+			printf("little=%u\\n", little);
+		} else {
+			printf("refused\\n");
+		}"""
+
 
 def image_for(path: Path) -> bytes:
 	source   = Source(str(path), path.read_text(encoding="ascii"))
@@ -232,6 +244,38 @@ def c_widths(tmp_path: Path, blob: bytes, message: bytes,
 	return _drive(tmp_path, blob, message, WIDTHS, shape)
 
 
+def c_markers(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, MARKERS, shape)
+
+
+def python_markers(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
+	"""The marker verdict, spelled the Python walker's way (report._members).
+
+	Read big-endian whatever the marker says -- it decides the byte order, so
+	it cannot be read in the order it is about -- and compared against the
+	`little` sentinel. A non-marker member refuses, matching the C driver's
+	UNSUPPORTED, so the two lists line up member for member.
+	"""
+	image = load(blob)
+	view  = acquire(image, message, shape)
+	found = []
+	for index in image.members(image.structs[shape]):
+		if index not in image.markers:
+			found.append("refused")
+			continue
+		try:
+			start = view.at + offset_bits(view, index) // 8
+			width = size_bits(view, index) // 8
+			if start + width > view.limit:
+				raise Refused("the frame does not reach the marker")
+			held = int.from_bytes(view.buffer[start:start + width], "big")
+			found.append(f"little={1 if held == image.markers[index] else 0}")
+		except (Refused, Unplaceable):
+			found.append("refused")
+	return found
+
+
 def c_elements(tmp_path: Path, blob: bytes, message: bytes,
 		shape: int = 0) -> list[str]:
 	return _drive(tmp_path, blob, message, ELEMENTS, shape)
@@ -290,6 +334,44 @@ def test_it_agrees_with_the_python_walker(tmp_path: Path) -> None:
 	message = bytes.fromhex("1f90238200105f2a")
 
 	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+
+
+_MARKER_SCHEMA = """target buffer;
+
+endian_marker order : u16 {
+	little = 0x4949,
+	big    = 0x4D4D,
+}
+
+struct m [endian = from(order)] {
+	endian_marker  order;
+	u16            x;
+}
+"""
+
+
+def _inline_image(text: str) -> bytes:
+	source   = Source("marker.situ", text)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	return pack(schema, resolved)[0]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_an_endian_marker(tmp_path: Path) -> None:
+	"""The marker decides the message's byte order, so both walkers read it
+	big-endian and ask whether it equals the `little` sentinel -- the one
+	probe whose answer cannot depend on the answer. A non-marker member
+	refuses in both, which is part of what agreement means (0035)."""
+	blob = _inline_image(_MARKER_SCHEMA)
+
+	little = bytes.fromhex("49490500")	# order = II, then x
+	big    = bytes.fromhex("4d4d0500")	# order = MM
+
+	assert c_markers(tmp_path, blob, little) == python_markers(blob, little)
+	assert c_markers(tmp_path, blob, little) == ["little=1", "refused"]
+	assert c_markers(tmp_path, blob, big) == python_markers(blob, big)
+	assert c_markers(tmp_path, blob, big) == ["little=0", "refused"]
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")

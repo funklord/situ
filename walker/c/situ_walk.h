@@ -88,6 +88,12 @@ typedef struct {
 	const uint8_t *enum_values;
 	uint32_t       enum_value_count;
 	uint32_t       enum_value_stride;
+
+	/* One row per endian marker: the `little` sentinel its field is read
+	 * big-endian and compared against (decision 0035). */
+	const uint8_t *markers;
+	uint32_t       marker_count;
+	uint32_t       marker_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */
@@ -244,6 +250,18 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
                                   const uint8_t *message, uint32_t len,
                                   uint32_t shape, uint32_t index,
                                   const uint8_t **out, uint32_t *count);
+
+/* An endian marker's verdict: whether its field, read big-endian, equals the
+ * `little` sentinel the schema gave it -- 1 for little, 0 otherwise.
+ *
+ * The marker is what decides the message's byte order, so it is read in the
+ * one order that does not depend on the answer -- big-endian, whatever it
+ * turns out to say. SITU_WALK_UNSUPPORTED for a member that is not a marker,
+ * SITU_WALK_BOUNDS where the frame does not reach it. */
+situ_walk_err situ_walk_marker(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t index,
+                                   uint32_t *little);
 
 /* Is this message a well-formed instance of the struct?
  *
