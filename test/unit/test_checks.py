@@ -417,6 +417,25 @@ def test_a_covered_span_that_collapsed_is_caught(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_run_length_that_stops_clamping_is_caught(tmp_path: Path) -> None:
+	"""A byte run whose count the message chooses had no generated check at
+	all, and it is the exact shape section 26 records costing a 65-kilobyte
+	over-read: `u8 data[n]` handed back a pointer at the frame base beside the
+	full declared length, so a reader who skipped validation ran past a short
+	frame. The accessor clamps to what remains; dropping the clamp -- here by
+	returning the field's raw claim -- left every other check in the suite
+	green, which is what the differential-oracle ask (`suggestion/apt-emerge.md`)
+	is about: break the generator, watch the generated suite go red."""
+	result = build(tmp_path, "struct s { u8 n; u8 data[n]; u8 tail; }",
+		corrupt=(
+			"return situ_min_u32((uint32_t)((uint8_t)(view.base)[0u]),",
+			"return ((uint32_t)((uint8_t)(view.base)[0u]) + 0u * (uint32_t)0 +"))
+
+	assert result.returncode != 0, "a dropped run-length clamp went unnoticed"
+	assert "length_is_clamped_to_the_frame" in result.stdout
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
 def test_a_reserved_field_that_stops_being_enforced_is_caught(tmp_path: Path) -> None:
 	"""Section 8.8: reserved bits are malleability control, not pedantry. A
 	receiver that ignores them lets a sender vary bytes the format calls fixed,

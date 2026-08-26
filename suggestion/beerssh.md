@@ -127,3 +127,14 @@ answer without a trial. The README argues its case from what it does when it
 *cannot* generate something, which is a strong argument to somebody already
 holding a complicated format, and no help at all in deciding whether the
 format you have is complicated enough.
+
+> **Answered -- the README carries it now, under "Is your format worth a
+> schema?", written from the evaluations rather than from this side.** The
+> floor is stated as the four things that decide it -- a second
+> implementation, a versioning promise, holding a buffer and writing back,
+> danger -- with "below all four, write the twenty lines" said in exactly
+> those words, and `example/keystore` kept deliberately at the floor so it
+> can be seen rather than inferred. Your 24 lines of `blob.mid` are one of
+> the two honest no-verdicts that section cites, and the argv evaluation
+> (26.124) later measured the same floor from the other direction: one
+> format in one language does not repay the setup.

@@ -1540,7 +1540,16 @@ def _run_element_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	scalar    = placement.scalar
 
 	if scalar is None or not indexed_elements(placement):
-		return		# a byte run is a pointer and a length, not an index
+		# A byte run is a pointer and a length, not an index -- but the
+		# length still clamps to what the frame holds, which was the last
+		# thing here with no check. `u8 data[n]` with an over-large `n`
+		# handed back a pointer at the frame base beside a length the message
+		# chose, so a reader ran kilobytes past a short frame; the accessor
+		# clamps, and `validate` reports. Nothing exercised either, and
+		# dropping the clamp (poisoning its `remaining` bound) left the whole
+		# suite green.
+		_run_length_clamp_check(suite, struct, entry, prefix, extent)
+		return
 	if placement.offset_bits is None or placement.offset_bits % BITS_PER_BYTE:
 		return
 	if placement.endian is ast.Endian.NATIVE:
@@ -1602,6 +1611,69 @@ def _run_element_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		 " * until the driver says there is -- and asking for the count back is",
 		 " * half the check: a stride that drifted moves the elements, and a",
 		 " * count that forgot the element width invents them. */"])
+
+
+def _run_length_clamp_check(suite: Suite, struct: ResolvedStruct,
+		entry: Resolved, prefix: str, extent: int) -> None:
+	"""A byte run's `_len` must clamp to the frame, not to the field's claim.
+
+	Only where the count can be written from here -- a plain scalar driver at
+	a byte-aligned constant offset, the same restriction the element check
+	has. The driver is set to a value larger than the frame could hold, and
+	the length is required to come back no larger than what remains after the
+	run's start. That is what a dropped clamp fails: without it `_len` returns
+	the field's full claim.
+	"""
+	placement = entry.placement
+	if placement.sealed_by is not None and not placement.unverified_ok:
+		return
+	if placement.offset_bits is None or placement.offset_bits % BITS_PER_BYTE:
+		return
+
+	# Only a byte run has a `_len` at all. A counted run of *struct* elements
+	# reaches here too -- `indexed_elements` is false for both -- and it has a
+	# `_span`, not a `_len`, so a check naming `_len` did not compile. Its
+	# offsets are a record-run's, held by the element-stride check instead.
+	scalar = placement.scalar
+	if scalar is None or scalar.bits != BITS_PER_BYTE:
+		return
+
+	driver = _writable_driver(struct, placement)
+	if driver is None or driver.scalar is None:
+		return
+
+	start = placement.offset_bits // BITS_PER_BYTE
+	# The largest value the driver can hold, so the claim always exceeds the
+	# frame whatever its width.
+	claim = (1 << driver.scalar.bits) - 1
+	counted = _placed_bytes(driver.offset_bits or 0, driver.scalar.bits, claim,
+	                        driver.endian, driver.bit_order, False)
+	if counted is None:
+		return
+
+	local = c_name(placement.path[len(struct.name) + 1:])
+	length = ident(prefix, struct.name, local, "len")
+
+	body = [*_acquire(struct, prefix, extent), ""]
+	body.append(f"	/* {driver.path} claims the largest count it can hold,"
+	            " which the frame cannot satisfy. */")
+	body.extend(f"	buf[{byte}u] = {counted[byte]:#04x}u;"
+	            for byte in sorted(counted))
+	body.extend([
+		"",
+		"	/* The length is what the frame holds from the run's start, not",
+		"	 * what the field claimed. A dropped clamp returns the claim. */",
+		f"	assert_true({length}(view) <= (uint32_t)(sizeof buf - {start}u));",
+	])
+
+	suite.add(
+		f"check_{c_name(placement.path)}_length_is_clamped_to_the_frame",
+		body,
+		[f"/* {placement.path}: the message's own length, held to the frame.",
+		 " *",
+		 " * A length a message chooses is not one the frame is known to",
+		 " * contain, so the accessor clamps it; the clamp is what keeps a",
+		 " * reader who skipped validation from running past the buffer. */"])
 
 
 def _writable_driver(struct: ResolvedStruct, placement: Placement) -> Placement | None:

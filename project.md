@@ -14437,6 +14437,58 @@ the honest half exercised could pass vacuously; the liar is what proves the
 flips reach the verifier.
 
 
+### 26.132 The floor stated, and the clamp that was checked by nothing
+
+Two consumer asks, and the second turned into a defect the way these do.
+
+**beerssh wanted the adoption floor stated, and it already was** -- the
+README's "Is your format worth a schema?" gives the four things that decide
+it and says "below all four, write the twenty lines" in those words, with
+`example/keystore` kept at the floor to be seen rather than inferred. Their
+24 lines of `blob.mid` are one of the two no-verdicts it cites, and 26.124's
+argv evaluation measured the same floor from the other side: one format in
+one language does not repay the setup. The answer went back into the file
+that asked. `apt-emerge`'s stale reason-1 -- no single-file Python -- was
+marked closed the same way, `--single-file` having shipped in 26.70.
+
+**apt-emerge's differential-oracle ask names the suite's own method, so
+applying it honestly found a gap.** Break the generator on purpose and the
+generated suite must go red; `test_checks` already does exactly that for a
+shifted offset, a collapsed coverage span, a loosened reserved policy. A
+byte run whose count the message chooses -- `u8 data[n]` -- had no generated
+check at all. That is the shape section 26 records at its most expensive: the
+accessor handed back a pointer at the frame base beside the field's full
+declared length, so a reader who skipped validation ran kilobytes past a
+short frame. The accessor clamps to what the frame holds; nothing exercised
+the clamp, and dropping it (returning the raw claim) left every other check
+in the suite green.
+
+**And the guard is a byte run exactly, which a first cut got wrong.** The
+branch a byte run reaches -- `indexed_elements` false -- is reached by a
+counted run of *struct* elements too, and those have a `_span` and no
+`_len`; emitting the length check for one named a function nothing defined,
+and `edges`' `segment parts[count]` is that shape. The check requires an
+8-bit scalar element now. It is the same lesson `_run_element_check` beside
+it already carried, met from the other side.
+
+**The check compares against `remaining`, not against the buffer, which is
+what makes it bite.** The first version asserted the length was no larger
+than `sizeof buf` minus the run's start -- and the generator sizes that
+buffer from the driver's own maximum, so the claim fit the buffer and the
+assertion held whether the clamp worked or not. A check whose bound is
+downstream of the thing it is checking cannot fail; the fix asserts the
+length equals `situ_remaining_u32` computed the same way the accessor
+should, so a dropped clamp diverges however the frame was sized. The
+mutation test fails by name when the clamp goes, which is the evidence the
+first version could not have given.
+
+The full oracle apt-emerge describes -- generate tests against an
+independent implementation, the way its `vercmp` runs every pair through
+`dpkg --compare-versions` -- is the larger piece and stays open. This is the
+generator-mutation half, which was the cheaper and is the one their own
+method most directly asked for.
+
+
 ---
 
 ## 27. Questions, and how they were settled

@@ -40,6 +40,12 @@ imports only. The runtime is already `enum`/`sys`/`typing` and nothing else,
 so the output would stay stdlib-clean; what is missing is the inlining and
 the dead-code trim.
 
+> **Built, as suggested: `--single-file` (26.70).** The generated module
+> inlines the parts of the runtime the schema reaches and imports only the
+> standard library, which is your CI gate's shape exactly. Reason 2 stands
+> and the verdict with it -- this note is so the file does not keep
+> reporting a gap that closed.
+
 This is worth more than it looks. Single-file-by-constraint is not rare in
 exactly situ's problem space: recovery tools, installers, initramfs helpers
 and embedded agents all parse binary formats *and* have a hard "one file, no
@@ -163,6 +169,17 @@ Related, and cheap. Break the generator deliberately -- shift one field's
 offset by a byte, drop a bounds check -- and confirm the generated suite goes
 **red**. If any generated test still passes, that test is not testing what
 its name says.
+
+> **This is now the suite's own method, and it caught a real gap doing it
+> (26.132).** `test_checks` breaks the generator on purpose -- a shifted
+> offset, a collapsed span, a dropped bound -- and asserts the generated
+> suite goes red; a byte run whose count the message chooses had no check at
+> all, the exact shape section 26 records costing a 65-kilobyte over-read, and
+> dropping its length clamp left everything green. It has a check now, and a
+> mutation test that fails by name when the clamp goes. The full
+> differential-against-an-independent-implementation oracle you describe below
+> is the larger piece and still open; this is the generator-mutation half of
+> it, which was the cheaper and is now standing.
 
 This is not a hypothetical worry. Two tests written *in this project this
 week* asserted nothing, and both looked completely reasonable: one exercised
