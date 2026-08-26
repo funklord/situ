@@ -13,6 +13,7 @@
 #define TAG_MARKERS    14u
 #define TAG_CONSTRAINTS 15u
 #define TAG_ENUM_VALUES 16u
+#define TAG_VERSIONS   17u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
@@ -31,6 +32,7 @@
 #define ENUM_VALUE_READS 12u
 #define MARKER_READS    16u	/* `<IqI`: placement, i64 sentinel, pad */
 #define REGION_READS    13u	/* `<IIIB3x`: placement, owner, codec, flags */
+#define VERSION_READS    8u	/* `<II`: shape, version-field placement */
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -183,6 +185,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->regions       = image + offset;
 			out->region_count  = items;
 			out->region_stride = stride;
+		} else if (kind == TAG_VERSIONS) {
+			if (stride < VERSION_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->versions       = image + offset;
+			out->version_count  = items;
+			out->version_stride = stride;
 		} else if (kind == TAG_DELIMITERS) {
 			if (stride < DELIMITER_READS) {
 				return SITU_WALK_MALFORMED;
@@ -1604,12 +1613,47 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		}
 
 		/* A `[since]` member is there only in a message whose own version
-		 * reaches it, which is a rule this build does not have -- and a
-		 * field that is not there is not a field that is wrong, so guessing
-		 * would answer for bytes the message never claimed to carry. */
-		if (u16_at(image->placements + index * image->placement_stride + 44)
-		                != 0u) {
-			return SITU_WALK_UNSUPPORTED;
+		 * reaches it. `[since]` is append-only, so a member the version
+		 * excludes shifts nothing after it and is simply not placed or
+		 * checked -- reading it would answer for bytes the message never
+		 * claimed to carry. The version field is named per shape in the
+		 * versions table; read it, and skip the member where the message's
+		 * version is below the member's `since`. */
+		const uint8_t *prow = image->placements
+		                      + index * image->placement_stride;
+		const uint16_t since = u16_at(prow + 44u);
+		if (since != 0u) {
+			uint32_t carries = SITU_WALK_NONE;
+			for (uint32_t v = 0u; v < image->version_count; v++) {
+				const uint8_t *row = image->versions
+				                     + v * image->version_stride;
+				if (u32_at(row) == shape) {
+					carries = u32_at(row + 4);
+					break;
+				}
+			}
+			/* A `[since]` member in a shape the image gives no version
+			 * field is one this build cannot answer rather than answer
+			 * wrongly -- the Python walk treats a missing version the same
+			 * way. */
+			if (carries == SITU_WALK_NONE) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			uint64_t version = 0u;
+			err = situ_walk_read(image, message, len, shape, carries,
+			                     &version);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				/* The frame does not reach the version field: BOUNDS, as
+				 * the Python walk answers when the read is refused. */
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+			if (version < since) {
+				continue;	/* this version does not carry the member */
+			}
 		}
 
 		/* One nested member, not a run of them and not a variant: a run gets
@@ -1643,7 +1687,15 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
-		if (at / 8u > len || (wide + 7u) / 8u > len - at / 8u) {
+		/* The frame has to reach the member -- but only where its offset is
+		 * dynamic, which is `report._validate`'s rule (`fixed and not
+		 * offset_known`) and the generated backends'. A member at a *static*
+		 * offset is either within the struct's own minimum, already checked
+		 * on entry, or a `[since]` member the version admits: the packer, the
+		 * Python walk and every backend leave that one unchecked, so a second
+		 * reader that flagged it would be the one out of six that disagreed. */
+		if ((held.flags & SITU_WALK_OFFSET_KNOWN) == 0u
+		                && (at / 8u > len || (wide + 7u) / 8u > len - at / 8u)) {
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}

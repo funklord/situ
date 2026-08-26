@@ -3,10 +3,12 @@
 Status: accepted, and largely built. `walker/c/` reads an image, evaluates a
 section 10 program, places a fixed or located member, decodes a varint, scans
 for a delimiter, parses a text number, walks a counted or `while` run,
-measures a variant and answers `validate` -- held to the Python walker by a
-differential test. Regions and the remaining probes are what is left; the
-table below is the work and each row this build does not render is refused
-by name rather than guessed.
+measures a variant and answers `validate`, reads endian markers, tags,
+versioned members and sealed-region gates -- all held to the Python walker by
+a differential test. What is left is the rest of a region: authenticated
+regions, and a sealed region's interior runs and `[secret]` members. The
+table below is the work and each row this build does not render is refused by
+name rather than guessed.
 Date: 2026-08-10
 Phase: unscheduled
 
@@ -73,8 +75,8 @@ layer over the image; placing one field needs most of this:
 | the rest of a region | authenticated regions, interior runs, `[secret]` members | `report.py` |
 | endian markers | whether the field, read big-endian, is the `little` sentinel | **done** |
 | tags | whether the tag's span is inside the frame (`present=`) | **done** |
+| versioned members | a `[since]` field, gated on the message's own version | **done** |
 | `validate` | constraints, enums, nested structs, the span checks | **done** |
-| the rest of the probes | versioned members, gated regions | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
 device is that section 10's language is total -- no calls, no recursion, no
@@ -470,3 +472,27 @@ enumerated -- `situ_walk_gated` returns only the scalars, because a run inside
 a gate is spelled several ways no differential has yet compared and a
 `[secret]` member has no debug accessor by design (14.6). Versioned-member
 probes and those interior-run cases are what is still `report.py` alone.
+
+## Amendment, 2026-08-26: versioned members, and a bounds check that was too eager
+
+`situ_walk_validate` used to refuse any struct with a `[since]` member. It
+reads the version now: the VERSIONS section names, per shape, the placement
+that carries `[version = ...]`, so the walk reads that field and skips a
+`[since]` member the message's version does not reach -- append-only, so a
+skipped member shifts nothing after it. A `[since]` member in a shape the
+image gives no version field stays unanswerable rather than guessed.
+
+The differential found the subtle half, exactly as a second reader is meant
+to. A message that claims version two but is cut short of the field version
+two adds is **well-formed** to `report._validate` and to all four generated
+backends -- a `[since]` member at a *static* offset is not frame-checked,
+only the struct's own minimum is, on entry. The C walk was frame-checking
+every member and so answered BOUNDS where the other five answered OK: one
+reader out of six disagreeing. The per-member frame check now fires only for
+a member at a *dynamic* offset, which is `report._validate`'s own rule
+(`fixed and not offset_known`); a static member is covered by the minimum or,
+for a `[since]` field, deliberately unchecked. Held to the Python walk over
+`edges`' `constrained [version = rev]`, whose `[since]` members carry
+`must_eq` and an enum check, so the gate has to gate: a v1 message whose later
+bytes would fail `magic`'s `must_eq` is well-formed, because at version one
+there is no `magic` to check.

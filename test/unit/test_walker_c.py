@@ -518,6 +518,40 @@ def test_they_agree_about_a_sealed_gate_and_its_interior(
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_versioned_member(tmp_path: Path) -> None:
+	"""A `[since]` member is there only in a message whose own version reaches
+	it, and `validate` reads that version first and skips the member below it
+	(0035). This build used to refuse every struct carrying one; now it reads
+	the version field the packer names per shape and gates on it, member for
+	member with the Python walk.
+
+	`edges`' `constrained [version = rev]` is the case, shape 11: `rev` at byte
+	zero, then `magic [since = 2, must_eq = 0x1234]`, `how [since = 3]` and
+	`pad [since = 3, must_eq = 0]`. The endianness is `edges`' own, big. The
+	gate has to *gate*: a v1 message whose later bytes would fail `magic`'s
+	`must_eq` is well-formed, because at version one there is no `magic` to
+	check -- and a walker that read it anyway would answer CONSTRAINT for a
+	field the message never claimed to carry.
+	"""
+	blob = image_for(ROOT / "test" / "schema" / "edges.situ")
+
+	# (message, expected verdict): 0 OK, 2 CONSTRAINT.
+	cases = [
+		(bytes.fromhex("01"),           "0"),  # v1: magic/how/pad all excluded
+		(bytes.fromhex("01ffff"),       "0"),  # v1: bad `magic` bytes, but it is excluded
+		(bytes.fromhex("02ffff"),       "2"),  # v2: `magic` included and wrong
+		(bytes.fromhex("021234"),       "0"),  # v2: `magic` = 0x1234
+		(bytes.fromhex("0312340100"),   "0"),  # v3: magic ok, how=plain, pad=0
+		(bytes.fromhex("03123401ff"),   "2"),  # v3: `pad` must be zero
+		(bytes.fromhex("0312340900"),   "2"),  # v3: `how` is not a known dialect
+	]
+	for message, want in cases:
+		verdict = c_verdict(tmp_path, blob, message, shape=11)
+		assert verdict == python_verdict(blob, message, shape=11), message.hex()
+		assert verdict == want, message.hex()
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A

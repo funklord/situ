@@ -103,6 +103,13 @@ typedef struct {
 	const uint8_t *regions;
 	uint32_t       region_count;
 	uint32_t       region_stride;
+
+	/* One row per struct that carries a `[version]` field: the placement
+	 * index of that field, which a `[since]` member is gated on. Keyed by
+	 * shape (decision 0035). */
+	const uint8_t *versions;
+	uint32_t       version_count;
+	uint32_t       version_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */
