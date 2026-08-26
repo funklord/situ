@@ -1,11 +1,13 @@
 # 0033: drivers are a third axis, and the vtable is completion-shaped
 
-Status: accepted, and three readiness/no-multiplexer drivers are built --
-`--driver epoll`, `--driver poll` and `--driver blocking`, all C-only over
-`--layer drive` (see the amendments below). The taxonomy and the two shape
-calls were decided here; the copyright holder then asked for these built.
+Status: accepted, and four drivers are built -- `--driver epoll`, `poll` and
+`blocking` (readiness and no-multiplexer) and `--driver io_uring` (completion,
+the one the vtable was shaped for), all C-only over `--layer drive` (see the
+amendments below). The taxonomy and the two shape calls were decided here;
+the copyright holder then asked for these built.
 Date: 2026-08-08
-Phase: 26.98 gains the deadline return; epoll/poll/blocking built 2026-08-26
+Phase: 26.98 gains the deadline return; epoll/poll/blocking/io_uring built
+2026-08-26
 
 ## Context
 
@@ -268,3 +270,51 @@ socketpair by its own test: retransmit-then-correlate, and expire after the
 retry budget. (The three share the send-only submit, the `now_ms` clock and
 the header boilerplate verbatim; a shared-helper refactor is the obvious
 follow-up once `io_uring`'s completion loop shows what genuinely differs.)
+
+## Amendment, 2026-08-26: io_uring, the shape proven not assumed
+
+`--driver io_uring` is built, and it is the one that matters most to this
+record: the vtable was made completion-shaped from the first driver on the
+argument that a readiness loop implements completion trivially while the
+reverse is impossible. Building a completion driver is what turns that
+argument from a claim into a fact, and it held -- the same `situ_io_t` submit
+vtable and the same `step`/`on_message` machine drive io_uring with no change
+to the core, exactly as the readiness three do.
+
+**Raw, not liburing.** The generated code speaks io_uring through
+`<linux/io_uring.h>` and the two syscalls directly -- `io_uring_setup` and
+`io_uring_enter` -- with the SQ/CQ rings `mmap`ed, so it depends only on the
+kernel uapi header. That is what makes it self-contained and testable where
+`liburing` is not installed. Ring indices are published release / read
+acquire so the kernel never sees a half-written sqe; registered buffers are a
+latency optimization deliberately not taken, ordinary buffers keeping the
+code the shape a reader already knows.
+
+**The completion mapping.** `submit` preps an `IORING_OP_SEND` and enters
+fire-and-forget -- its completion is reaped and discarded, a lost send being
+what the retry budget resends. The loop keeps exactly one `IORING_OP_RECV` in
+flight and waits for a completion with a timeout equal to `step`'s next
+deadline, carried as a `__kernel_timespec` through `io_uring_enter`'s
+`IORING_ENTER_EXT_ARG` (kernel 5.11+; the box is 6.12). `ETIME` from the
+enter is the timeout, and the loop re-`step`s to retransmit.
+
+**The in-flight-buffer question, and why it still does not arise.** This is
+the driver 0033 said would force that open question. It did not force a new
+answer: the drive layer's existing stance -- an in-flight buffer is not
+*viewed* -- holds under completion too. The recv buffer handed to the kernel
+is not viewed until its cqe arrives, and the send bytes are the caller's
+retransmit buffer, never viewed, so 12.3 has nothing to invalidate across a
+submit. Registered buffers would sharpen it (they pin the memory in the
+kernel for the ring's life, which is a rung-2 backing question); ordinary
+buffers do not, which is the second reason this build uses them.
+
+**One API difference, forced by the model.** A completion ring must exist
+before the first `submit`, and the first submit happens inside `drive_send`,
+before the loop. So the io_uring ctx carries the ring, and the caller runs
+`situ_io_uring_setup(&ctx, fd)` before `_init`, then
+`situ_io_uring_<relation>_run(&ctx, &drive, ...)`, then
+`situ_io_uring_teardown(&ctx)` -- where the readiness drivers took a bare fd.
+That is the ceremony 0033 said completion puts into the simple cases, living
+in the driver where it was meant to, written once. The generator is
+`situc/codegen/c/io_uring.py`; held to the same socketpair test as the
+others.

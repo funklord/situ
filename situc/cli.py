@@ -47,6 +47,7 @@ DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 	"epoll": ("c",),
 	"poll": ("c",),
 	"blocking": ("c",),
+	"io_uring": ("c",),
 }
 DRIVERS = tuple(DRIVER_BACKENDS)
 
@@ -644,10 +645,11 @@ def cmd_build(args: argparse.Namespace) -> int:
 		# Only the selected driver is imported: each is a separate module and
 		# a new one is added by writing `situc/codegen/c/<name>.py`, adding it
 		# to DRIVER_BACKENDS, and one branch here.
-		from situc.codegen.c import blocking, epoll, poll
+		from situc.codegen.c import blocking, epoll, io_uring, poll
 
 		parsed = parse(source)
-		driver = {"epoll": epoll, "poll": poll, "blocking": blocking}
+		driver = {"epoll": epoll, "poll": poll, "blocking": blocking,
+		          "io_uring": io_uring}
 		files.update(driver[args.driver].generate(
 			parsed, resolved, args.schema.stem, args.prefix))
 
