@@ -45,6 +45,8 @@ FUTURE_LAYERS: dict[str, str] = {
 #: unavailable pair is refused naming both. `epoll` is a Linux C event loop.
 DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 	"epoll": ("c",),
+	"poll": ("c",),
+	"blocking": ("c",),
 }
 DRIVERS = tuple(DRIVER_BACKENDS)
 
@@ -633,16 +635,21 @@ def cmd_build(args: argparse.Namespace) -> int:
 			print(f"situc: no driver for relation `{name}`: {why}",
 			      file=sys.stderr)
 
-	if args.driver == "epoll":
-		from situc.codegen.c import epoll
-
+	if args.driver is not None:
 		# A relation that states a policy but carries no fittable key got its
-		# refusal from the drive block above -- `--driver epoll` requires
-		# `--layer drive`, so it always ran, and the epoll artifact skips
-		# exactly the same relations. Re-reporting would be one message twice.
+		# refusal from the drive block above -- a driver requires `--layer
+		# drive`, so it always ran, and the driver artifact skips exactly the
+		# same relations. Re-reporting would be one message twice.
+		#
+		# Only the selected driver is imported: each is a separate module and
+		# a new one is added by writing `situc/codegen/c/<name>.py`, adding it
+		# to DRIVER_BACKENDS, and one branch here.
+		from situc.codegen.c import blocking, epoll, poll
+
 		parsed = parse(source)
-		files.update(epoll.generate(parsed, resolved, args.schema.stem,
-		                            args.prefix))
+		driver = {"epoll": epoll, "poll": poll, "blocking": blocking}
+		files.update(driver[args.driver].generate(
+			parsed, resolved, args.schema.stem, args.prefix))
 
 	args.out.mkdir(parents=True, exist_ok=True)
 	for name, text in files.items():

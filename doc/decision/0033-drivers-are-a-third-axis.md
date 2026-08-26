@@ -1,12 +1,11 @@
 # 0033: drivers are a third axis, and the vtable is completion-shaped
 
-Status: accepted, and the first driver is built -- `--driver epoll`, C-only,
-over `--layer drive` (see the amendment below). The taxonomy and the two
-shape calls were decided here; which drivers ship past the first, and in what
-order, is still the holder's to say.
+Status: accepted, and three readiness/no-multiplexer drivers are built --
+`--driver epoll`, `--driver poll` and `--driver blocking`, all C-only over
+`--layer drive` (see the amendments below). The taxonomy and the two shape
+calls were decided here; the copyright holder then asked for these built.
 Date: 2026-08-08
-Phase: 26.98 gains the deadline return; epoll built 2026-08-26, the rest
-unscheduled
+Phase: 26.98 gains the deadline return; epoll/poll/blocking built 2026-08-26
 
 ## Context
 
@@ -239,3 +238,33 @@ reply, and expires after the retry budget when nothing answers.
 The "which to build" order above reasoned from the facilities and put
 `blocking` and `poll` first; epoll was built first because it is the eighty
 lines this record opened with, and the one the copyright holder asked for.
+
+## Amendment, 2026-08-26: poll and blocking, the same shape
+
+`--driver poll` and `--driver blocking` join epoll. They are the same
+additive artifact and the same division of labour -- the loop owns the
+socket, the clock and the timer; the state machine owns everything else and
+reaches I/O only through the submit vtable -- differing only in how the loop
+waits for the deadline `step` returns.
+
+`poll` is the readiness sibling of epoll, POSIX rather than Linux and with no
+`FD_SETSIZE` ceiling: it has no persistent registration, so the loop builds a
+one-entry `struct pollfd` each turn and passes the wrap-safe deadline as the
+`poll` timeout. Everything else -- the send-only submit, the recv-and-dispatch
+block, `TRUNCATED`-means-done -- is epoll's, so it is the smallest real
+multiplexer 0033 named.
+
+`blocking` is the proof the machine drives with nothing beyond `read` and
+`write`. With no multiplexer to wait on, the deadline becomes the socket's
+`SO_RCVTIMEO`, reset each turn, so a blocking `recv` wakes on a datagram or
+when the next retransmission is due, whichever is first. A zero difference is
+floored to a poll rather than a block-forever. It is 0033's `blocking` case,
+the one that needs no OS facility at all.
+
+Both are C generators beside `epoll.py` -- `situc/codegen/c/poll.py` and
+`blocking.py` -- gated on the same `driven()` test, refused on a non-C target
+naming both and without `--layer drive`. Each is held to an AF_UNIX datagram
+socketpair by its own test: retransmit-then-correlate, and expire after the
+retry budget. (The three share the send-only submit, the `now_ms` clock and
+the header boilerplate verbatim; a shared-helper refactor is the obvious
+follow-up once `io_uring`'s completion loop shows what genuinely differs.)
