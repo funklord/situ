@@ -203,6 +203,35 @@ TAGS = """situ_walk_placement held;
 			printf("present=0\\n");
 		}"""
 
+#: A sealed region's gate, and the interior it opens. The gate's own verdict
+#: does not depend on the bytes -- situ guards them, the caller runs the
+#: cipher -- so `refused=1 opened=1` is constant; what is worth comparing is
+#: the scalars *inside*, the half a tag exists to protect, read through the
+#: gate. A non-gate member refuses, so the two walkers line up.
+GATES = """uint32_t opened = 0, refused = 0;
+		if (situ_walk_gate(&image, first + i, &opened, &refused)
+				!= SITU_WALK_OK) {
+			printf("refused\\n");
+			continue;
+		}
+		printf("refused=%u opened=%u\\n", refused, opened);
+		uint32_t ord = 0, inside = 0;
+		while (situ_walk_gated(&image, first + i, ord, &inside)
+				== SITU_WALK_OK) {
+			uint64_t value = 0;
+			situ_walk_placement ih;
+			if (situ_walk_placement_at(&image, inside, &ih) != SITU_WALK_OK) {
+				return 1;
+			}
+			if (situ_walk_read(&image, msg, len, shape, inside, &value)
+					== SITU_WALK_OK) {
+				show(&ih, value, "\\n");
+			} else {
+				printf("refused\\n");
+			}
+			ord++;
+		}"""
+
 
 def image_for(path: Path) -> bytes:
 	source   = Source(str(path), path.read_text(encoding="ascii"))
@@ -292,6 +321,35 @@ def python_tags(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 			found.append("present=1")
 		except (Refused, Unplaceable):
 			found.append("present=0")
+	return found
+
+
+def c_gates(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, GATES, shape)
+
+
+def python_gates(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
+	"""A sealed gate and its interior, the Python walker's way (report._gates
+	and report._gated). The gate verdict is constant -- `refused=1 opened=1`,
+	the claim every backend keeps -- and the interior scalars are read through
+	it. A non-gate member refuses, so the two walkers line up member for
+	member with the interior scalars spliced in after their gate."""
+	image = load(blob)
+	view  = acquire(image, message, shape)
+	gates = set(report._gates(image, shape))
+	found = []
+	for index in image.members(image.structs[shape]):
+		if index not in gates:
+			found.append("refused")
+			continue
+		found.append("refused=1")
+		found.append("opened=1")
+		for inside in report._gated(image, index):
+			try:
+				found.append(str(read_scalar(view, inside)))
+			except (Refused, Unplaceable):
+				found.append("refused")
 	return found
 
 
@@ -437,6 +495,26 @@ def test_they_agree_whether_a_tag_is_present(tmp_path: Path) -> None:
 	assert c_tags(tmp_path, blob, short, shape=1) == python_tags(blob, short, 1)
 	assert "present=1" in c_tags(tmp_path, blob, whole, shape=1)
 	assert "present=0" in c_tags(tmp_path, blob, short, shape=1)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_sealed_gate_and_its_interior(
+		tmp_path: Path) -> None:
+	"""A sealed region's gate answers `refused=1 opened=1` -- situ guards the
+	bytes and the caller runs the cipher, so the verdict does not depend on
+	the bytes -- and its interior scalars are read through the gate, the half
+	a tag protects. Both walkers agree member for member, the interior spliced
+	in after the gate, and every non-gate member refuses (0035, 14.3).
+
+	`packet`'s `sealed(aes_gcm_128, ...)` region is struct 1's fifth member;
+	`inner_kind` (u16) and `inner_seq` (u32) sit at its start."""
+	blob    = image_for(ROOT / "example" / "packet" / "packet.situ")
+	message = bytes(range(48))		# reaches the region interior and the tag
+
+	assert (c_gates(tmp_path, blob, message, shape=1)
+	        == python_gates(blob, message, 1))
+	got = c_gates(tmp_path, blob, message, shape=1)
+	assert "refused=1" in got and "opened=1" in got
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")

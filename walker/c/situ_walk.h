@@ -94,6 +94,15 @@ typedef struct {
 	const uint8_t *markers;
 	uint32_t       marker_count;
 	uint32_t       marker_stride;
+
+	/* One row per member inside an `authenticated` or `sealed` region, and
+	 * one for each region member itself: the region it sits in and that
+	 * region's flags (bit 0 sealed, bit 1 `[allow_unverified_read]`). A
+	 * region names itself, so a gate's interior is every member whose owner
+	 * is the gate (decision 0035). */
+	const uint8_t *regions;
+	uint32_t       region_count;
+	uint32_t       region_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */
@@ -267,6 +276,33 @@ situ_walk_err situ_walk_marker(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t index,
                                    uint32_t *little);
+
+/* A sealed region's gate, and whether this build can open it (decision
+ * 0035, 14.3). `*opened` and `*refused` are both 1 for a gate this build
+ * answers: situ guards the bytes and admits a verification that would pass,
+ * refuses one that would fail -- the caller runs the cipher, so the answer
+ * does not depend on the bytes and is comparable without running anybody's.
+ *
+ * SITU_WALK_UNSUPPORTED for a member that is not a sealed region, or one the
+ * schema waived with `[allow_unverified_read]` -- then there is no gate to
+ * open, and the differential skips it rather than name an `_open` no backend
+ * emits. */
+situ_walk_err situ_walk_gate(const situ_walk_image *image, uint32_t index,
+                                 uint32_t *opened, uint32_t *refused);
+
+/* The `ordinal`-th plain scalar inside sealed region `gate`, by placement
+ * index, so a caller can read the interior a tag exists to protect through
+ * the gate `situ_walk_gate` opened. Read it with `situ_walk_read`.
+ *
+ * Only the scalars: a `[secret]` member has no debug accessor by design
+ * (14.6) and a run inside a gate is spelled several ways not yet compared,
+ * so both are skipped -- the same subset `report._gated` renders.
+ *
+ * SITU_WALK_UNSUPPORTED where `gate` is not a sealed region; SITU_WALK_BOUNDS
+ * where `ordinal` is past the last interior scalar, which is how a caller
+ * loops until it runs out. */
+situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
+                                  uint32_t ordinal, uint32_t *out_index);
 
 /* Is this message a well-formed instance of the struct?
  *

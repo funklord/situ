@@ -69,7 +69,8 @@ layer over the image; placing one field needs most of this:
 | run walking | counted and message-sized runs | **done** |
 | `while` runs | however many elements pass the predicate | **done** |
 | variants | the extent of the arm the discriminant selects | **done** |
-| regions | a gate's interior, read through `authenticated` or `sealed` | `report.py` |
+| sealed gates | the gate verdict and the plain scalars inside, read through it | **done** |
+| the rest of a region | authenticated regions, interior runs, `[secret]` members | `report.py` |
 | endian markers | whether the field, read big-endian, is the `little` sentinel | **done** |
 | tags | whether the tag's span is inside the frame (`present=`) | **done** |
 | `validate` | constraints, enums, nested structs, the span checks | **done** |
@@ -442,3 +443,30 @@ span is inside the frame, which is exactly what `situ_walk_bytes` answers, so
 the flag `SITU_WALK_IS_TAG` is exposed and the caller reads presence off that
 byte-range accessor. Held over `ipv4_header`'s `header_checksum` -- present in
 a whole header, absent in one cut short of byte ten.
+
+## Amendment, 2026-08-26: the sealed gate, and the interior it opens
+
+The largest of the remaining rows, and it lands as the largest correct slice
+rather than the whole: **sealed** gates. The C loader gains a regions section
+-- one row per member inside a region and one for each region member itself,
+`<IIIB3x` (placement, owner, codec, flags), the same `situc/pack.py` writes.
+`situ_walk_gate` answers `refused=1 opened=1` for a region that is sealed and
+not `[allow_unverified_read]`, which is the gate's whole comparable claim: it
+does not depend on the bytes, because situ guards the bytes and the caller
+runs the cipher, so a walker can answer it without running anybody's. That
+verdict alone is constant and so cannot disagree; the half worth comparing is
+the interior, so `situ_walk_gated` enumerates the plain scalars a region owns
+-- the exact subset `report._gated` renders -- and the caller reads each
+through the gate with `situ_walk_read`. Held over `packet`'s
+`sealed(aes_gcm_128, ...)` region and its `inner_kind`/`inner_seq` by
+`test_walker_c.py`, the interior spliced in after the gate and every non-gate
+member refusing.
+
+What is refused by name, deliberately: an `authenticated` region is not a
+gate and answers `UNSUPPORTED`; a waived (`[allow_unverified_read]`) one has
+no gate to open, which the differential skips as `report._gates` does; and a
+region's interior *runs*, its `[secret]` members and its byte arrays are not
+enumerated -- `situ_walk_gated` returns only the scalars, because a run inside
+a gate is spelled several ways no differential has yet compared and a
+`[secret]` member has no debug accessor by design (14.6). Versioned-member
+probes and those interior-run cases are what is still `report.py` alone.

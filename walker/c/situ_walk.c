@@ -8,6 +8,7 @@
 #define TAG_CODE       3u
 #define TAG_ARMS       5u
 #define TAG_DELIMITERS 6u
+#define TAG_REGIONS    7u
 #define TAG_VARINTS    9u
 #define TAG_MARKERS    14u
 #define TAG_CONSTRAINTS 15u
@@ -29,6 +30,7 @@
 #define CONSTRAINT_READS 13u
 #define ENUM_VALUE_READS 12u
 #define MARKER_READS    16u	/* `<IqI`: placement, i64 sentinel, pad */
+#define REGION_READS    13u	/* `<IIIB3x`: placement, owner, codec, flags */
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -174,6 +176,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->markers       = image + offset;
 			out->marker_count  = items;
 			out->marker_stride = stride;
+		} else if (kind == TAG_REGIONS) {
+			if (stride < REGION_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->regions       = image + offset;
+			out->region_count  = items;
+			out->region_stride = stride;
 		} else if (kind == TAG_DELIMITERS) {
 			if (stride < DELIMITER_READS) {
 				return SITU_WALK_MALFORMED;
@@ -1964,6 +1973,102 @@ situ_walk_err situ_walk_marker(const situ_walk_image *image,
 	}
 	*little = (held == (uint64_t)sentinel) ? 1u : 0u;
 	return SITU_WALK_OK;
+}
+
+/* `image_kind`: a region is 3, from the packer's `field 0, reserved 1,
+ * marker 2, region 3`. */
+#define KIND_REGION 3u
+
+/* The region record for a member, or NULL. `<IIIB3x` -- placement, owner,
+ * codec, flags -- keyed by placement, so this is the same linear scan the
+ * marker probe makes over its own table. A member inside a region has one,
+ * and so does a region member itself: a region names itself, so its owner
+ * is the region and a gate's interior is every member whose owner is it. */
+static const uint8_t *region_row(const situ_walk_image *image, uint32_t index)
+{
+	for (uint32_t i = 0u; i < image->region_count; i++) {
+		const uint8_t *row = image->regions + i * image->region_stride;
+		if (u32_at(row) == index) {
+			return row;
+		}
+	}
+	return NULL;
+}
+
+situ_walk_err situ_walk_gate(const situ_walk_image *image, uint32_t index,
+                             uint32_t *opened, uint32_t *refused)
+{
+	situ_walk_placement placement;
+	situ_walk_err err = situ_walk_placement_at(image, index, &placement);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (placement.kind != KIND_REGION) {
+		return SITU_WALK_UNSUPPORTED;	/* not a region member */
+	}
+
+	const uint8_t *row = region_row(image, index);
+	if (row == NULL) {
+		return SITU_WALK_UNSUPPORTED;	/* the image carries no gate for it */
+	}
+	/* Bit 0 sealed, bit 1 `[allow_unverified_read]`. An `authenticated`
+	 * region is not a gate, and a waived one has no gate to open -- both are
+	 * refused rather than answered, which is what `report._gates` does. */
+	const uint8_t flags = row[12];
+	if ((flags & 1u) == 0u || (flags & 2u) != 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	*opened  = 1u;
+	*refused = 1u;
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
+                              uint32_t ordinal, uint32_t *out_index)
+{
+	situ_walk_placement gate_placement;
+	situ_walk_err err = situ_walk_placement_at(image, gate, &gate_placement);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (gate_placement.kind != KIND_REGION) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	uint32_t seen = 0u;
+	for (uint32_t index = 0u; index < image->placement_count; index++) {
+		if (index == gate) {
+			continue;
+		}
+		const uint8_t *row = region_row(image, index);
+		if (row == NULL || u32_at(row + 4) != gate) {
+			continue;		/* not owned by this gate */
+		}
+		situ_walk_placement held;
+		if (situ_walk_placement_at(image, index, &held) != SITU_WALK_OK) {
+			return SITU_WALK_MALFORMED;
+		}
+		/* Only plain scalars, the subset `report._gated` renders: a run, a
+		 * `[secret]` array with no accessor, a delimited field and a text
+		 * number are each spelled a way this comparison does not cover. */
+		if (held.kind != 0u			/* FIELD */
+		    || (held.flags & SITU_WALK_IS_TAG) != 0u
+		    || held.array_count != SITU_WALK_NONE
+		    || held.size_code != SITU_WALK_NONE
+		    || held.radix != 0u
+		    || held.element_bits == SITU_WALK_NONE
+		    || held.element_bits > 64u
+		    || delimiter_rules(image, index) != NULL) {
+			continue;
+		}
+		if (seen == ordinal) {
+			*out_index = index;
+			return SITU_WALK_OK;
+		}
+		seen++;
+	}
+	return SITU_WALK_BOUNDS;		/* ordinal past the last interior scalar */
 }
 
 /* -- the expression evaluator ------------------------------------------- */
