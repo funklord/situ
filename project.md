@@ -14489,6 +14489,65 @@ generator-mutation half, which was the cheaper and is the one their own
 method most directly asked for.
 
 
+### 26.133 The session, folded
+
+26.117 through 26.132 are one session's log, and a reader should not have to
+read sixteen entries to learn what it settled. Decisions 0038 through 0044
+and invariants 146 through 153 carry the durable part; this names the shape.
+
+**One thing kept happening, and it is the session's whole lesson: a check
+that could not fail, or a claim that was never measured, reads exactly like
+one that works.** Nearly every finding was that shape.
+
+- **The version-claim family** (118, 119, 120, 121; invariants 147-151). A
+  language version is declared and the check meant to enforce it cannot.
+  `luac` is 5.4 and cannot refuse the Lua 5.2 decision 0021 protects; the
+  Python floor check runs a real 3.11 and skips on the 3.13 the code is
+  written on; `-std=c++17` selects a dialect and `-pedantic-errors` is what
+  makes it binding, so the C++ backend emitted a compound literal for
+  years; and the generated Python was held to no floor at all. Four
+  versions, one mistake: selecting a standard is not conforming to one, and
+  a guard that skips where the fault is produced has not run.
+- **The crypto survey's promises** (122, 127, 128, 130; decisions 0038,
+  0040, 0042). 14.8 listed the constructs real protocols need and situ
+  could not express, and the list is empty now -- codec tag and nonce sizes
+  (0038), key selection (0040), conversation keys wider than a word (0042).
+  On the way, the survey's own flagship claim -- "one nonce field feeding
+  two sealed regions is refused" -- turned out never to have been
+  implemented (127, invariant 153): a claim inside a measured survey is not
+  itself measured. Each construct's refusal, kept or added, rested on the
+  same argument: an exact bytes comparison, never a digest, because a
+  collision in the pairing layer is a silently wrong pairing.
+- **The wire signature made honest in both directions** (129, 131;
+  decision 0041). A line a deployed receiver relies on is a promise, so a
+  recorded-but-unenforced fact is a false one -- `[trim]` on a plain `u8`
+  in the signature over bytes nothing trims. The four held attributes got
+  places, the enforced associations got recorded, and the sweep found the
+  same false-claim shape in three committed schemas' `must_be_zero`.
+- **The consumers, answered** (124, 125, 126, 131, 132). The `suggestion/`
+  directory was the backlog: six evaluations from the other private
+  projects, asks with reproductions attached. The argv exercise (124) was
+  an instrument rather than a use case -- it found two silently-nothing
+  defects and stated where situ stops for a grammar -- and its one
+  buildable idea became value-domain constants (125). fuzznet's timing
+  division, netcfgd's version contract and `gen-tamper`, apt-emerge's
+  generator-mutation check, beerssh's floor, hydra's four: each answered in
+  the file that asked, because the directory is correspondence.
+
+**What is settled and what is proposed.** 0038 through 0042 are accepted and
+built; 0043 (`pad_to`) and 0044 (utf16 encoding) are proposed, each because
+it carries a wire-visible fork a consumer raised and did not have to resolve.
+The attribute placement table (opened at 26.60) is closed: every attribute
+is placed, read everywhere, or refused. 14.8's unexpressible list is empty.
+
+**The instrument that earned its keep, again.** The four-backend differential
+and the mutation-tested checks are what caught the wrong diagnoses -- a
+paren-balanced clamp drop that a first check could not fail, a byte-run guard
+that fired on a record run and did not compile, a constant that fit the
+buffer it was checked against. The session's method was the session's
+subject: a check is not evidence until it has been watched failing.
+
+
 ---
 
 ## 27. Questions, and how they were settled
