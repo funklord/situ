@@ -36,20 +36,13 @@ this one does not.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen.c import driver
 from situc.codegen.c.drive import driven
 from situc.codegen.c.names import ident, macro
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
 __all__ = ["generate"]
-
-
-def _reply_view(relation: ast.Relation, resolved: ResolvedSchema,
-		prefix: str) -> tuple[str, bool]:
-	"""The reply message's view accessor, and whether it is the fixed form."""
-	reply = relation.params[1]
-	struct = resolved.structs[reply.type_name]
-	return ident(prefix, reply.type_name, "view"), struct.layout.is_fixed_size
 
 
 def _shared(prefix: str) -> list[str]:
@@ -224,7 +217,7 @@ def _run(relation: ast.Relation, resolved: ResolvedSchema,
 	enter   = ident(prefix, "io_uring", "enter")
 	step    = f"{drive}_step"
 	on_msg  = f"{drive}_on_message"
-	view_fn, fixed = _reply_view(relation, resolved, prefix)
+	view_fn, fixed = driver.reply_view(relation, resolved, prefix)
 
 	acquire = (f"{view_fn}(&msg, 0u, &reply)" if fixed
 	           else f"{view_fn}(&msg, 0u, (uint32_t)cres, &reply)")
