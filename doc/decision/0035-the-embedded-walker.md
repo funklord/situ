@@ -71,8 +71,9 @@ layer over the image; placing one field needs most of this:
 | variants | the extent of the arm the discriminant selects | **done** |
 | regions | a gate's interior, read through `authenticated` or `sealed` | `report.py` |
 | endian markers | whether the field, read big-endian, is the `little` sentinel | **done** |
+| tags | whether the tag's span is inside the frame (`present=`) | **done** |
 | `validate` | constraints, enums, nested structs, the span checks | **done** |
-| the rest of the probes | tags, versioned members, gated regions | `report.py` |
+| the rest of the probes | versioned members, gated regions | `report.py` |
 
 **The bound is the argument.** 0026's case for shipping an evaluator to a
 device is that section 10's language is total -- no calls, no recursion, no
@@ -433,5 +434,11 @@ A non-marker member answers `SITU_WALK_UNSUPPORTED`, which the differential
 reads as a refusal, so the two walkers' lists line up member for member --
 `little=1` where the marker says little, `little=0` where it does not, and a
 refusal everywhere else. Held to `report._members` over an `II`/`MM` marker
-by `test_walker_c.py`. Tags, versioned-member probes and the gated regions
-are what is still `report.py` alone.
+by `test_walker_c.py`. Versioned-member probes and the gated regions are what
+is still `report.py` alone.
+
+The tag probe needs no new walker function: a tag's `present=` is whether its
+span is inside the frame, which is exactly what `situ_walk_bytes` answers, so
+the flag `SITU_WALK_IS_TAG` is exposed and the caller reads presence off that
+byte-range accessor. Held over `ipv4_header`'s `header_checksum` -- present in
+a whole header, absent in one cut short of byte ten.

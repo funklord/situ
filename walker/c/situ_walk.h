@@ -137,6 +137,11 @@ typedef struct {
  * which is what a missing accessor looks like from outside. */
 #define SITU_WALK_OFFSET_KNOWN 0x01u
 #define SITU_WALK_SIGNED       0x10u
+/* A `tag` or `checksum` member (decision 0035). A caller asks `present=`
+ * of it rather than for a value -- `situ_walk_bytes` answers, since its
+ * question is exactly whether the tag's span is inside the frame. The
+ * caller runs the algorithm; the walker only says the bytes are there. */
+#define SITU_WALK_IS_TAG       0x40u
 /* `[size = N]` pinned this member's footprint (decision 0039). */
 #define SITU_WALK_PINNED       0x80u
 

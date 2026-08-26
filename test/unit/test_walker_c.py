@@ -30,7 +30,7 @@ from walker.image import load
 from walker import report, walk
 from walker.image import NONE, Image
 from walker.walk import (Refused, Unplaceable, acquire, offset_bits,
-                         read_scalar, size_bits)
+                         read_bytes, read_scalar, size_bits)
 
 COMPILER = shutil.which("cc") or shutil.which("gcc")
 WALKER   = ROOT / "walker" / "c"
@@ -182,6 +182,27 @@ MARKERS = """uint32_t little = 0;
 			printf("refused\\n");
 		}"""
 
+#: A tag's presence: whether its span is inside the frame. The caller runs
+#: the verification algorithm; the walker only says the bytes are there, which
+#: is exactly what `situ_walk_bytes` answers. A non-tag member refuses, so the
+#: two walkers' lists line up member for member.
+TAGS = """situ_walk_placement held;
+		if (situ_walk_placement_at(&image, first + i, &held) != SITU_WALK_OK) {
+			return 1;
+		}
+		if ((held.flags & SITU_WALK_IS_TAG) == 0u) {
+			printf("refused\\n");
+			continue;
+		}
+		const uint8_t *at = NULL;
+		uint32_t       n  = 0;
+		if (situ_walk_bytes(&image, msg, len, shape, first + i, &at, &n)
+				== SITU_WALK_OK) {
+			printf("present=1\\n");
+		} else {
+			printf("present=0\\n");
+		}"""
+
 
 def image_for(path: Path) -> bytes:
 	source   = Source(str(path), path.read_text(encoding="ascii"))
@@ -247,6 +268,31 @@ def c_widths(tmp_path: Path, blob: bytes, message: bytes,
 def c_markers(tmp_path: Path, blob: bytes, message: bytes,
 		shape: int = 0) -> list[str]:
 	return _drive(tmp_path, blob, message, MARKERS, shape)
+
+
+def c_tags(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, TAGS, shape)
+
+
+def python_tags(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
+	"""A tag's presence, spelled the Python walker's way (report._members):
+	`read_bytes` succeeds where the span is in the frame. A non-tag member
+	refuses, matching the C driver, so the two lists line up member for
+	member."""
+	image = load(blob)
+	view  = acquire(image, message, shape)
+	found = []
+	for index in image.members(image.structs[shape]):
+		if not image.placements[index].is_tag:
+			found.append("refused")
+			continue
+		try:
+			read_bytes(view, index)
+			found.append("present=1")
+		except (Refused, Unplaceable):
+			found.append("present=0")
+	return found
 
 
 def python_markers(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
@@ -372,6 +418,25 @@ def test_they_agree_about_an_endian_marker(tmp_path: Path) -> None:
 	assert c_markers(tmp_path, blob, little) == ["little=1", "refused"]
 	assert c_markers(tmp_path, blob, big) == python_markers(blob, big)
 	assert c_markers(tmp_path, blob, big) == ["little=0", "refused"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_whether_a_tag_is_present(tmp_path: Path) -> None:
+	"""A tag's presence is whether its span is inside the frame -- the caller
+	runs the verification, the walker only says the bytes are there. Both read
+	that from the same place, so a whole header answers `present=1` and one cut
+	short of the checksum answers `present=0`, member for member (0035).
+
+	`ipv4_header`'s `header_checksum` sits at byte 10 (two bytes) and is the
+	tag; the shape is struct 1."""
+	blob  = image_for(ROOT / "example" / "ipv4" / "ipv4.situ")
+	whole = bytes(range(20))		# reaches the checksum at 10..11
+	short = bytes(range(6))			# stops before it
+
+	assert c_tags(tmp_path, blob, whole, shape=1) == python_tags(blob, whole, 1)
+	assert c_tags(tmp_path, blob, short, shape=1) == python_tags(blob, short, 1)
+	assert "present=1" in c_tags(tmp_path, blob, whole, shape=1)
+	assert "present=0" in c_tags(tmp_path, blob, short, shape=1)
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
