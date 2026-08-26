@@ -955,6 +955,56 @@ static inline int situ_utf8_valid(const uint8_t *data, uint32_t len)
 	return 1;
 }
 
+/* UTF-16 (decision 0044). The code unit's byte order is the encoding's, not
+ * the field's, so LE and BE are separate names and separate validators; the
+ * shared core takes the order. A lone surrogate -- a high or low half with no
+ * partner -- decodes to no character and is the UTF-16 analogue of utf8's
+ * overlong form (section 8.8), so it is rejected the same way. */
+static inline int situ_utf16_valid(const uint8_t *data, uint32_t len, int big)
+{
+	uint32_t i = 0;
+
+	if ((len & 1u) != 0u) {
+		return 0;	/* an odd byte count is not whole code units */
+	}
+	while (i < len) {
+		const uint32_t hi   = big ? data[i] : data[i + 1u];
+		const uint32_t lo   = big ? data[i + 1u] : data[i];
+		const uint32_t unit = (hi << 8) | lo;
+
+		if (unit >= 0xD800u && unit <= 0xDBFFu) {
+			/* A high surrogate needs a low one right after it. */
+			uint32_t low;
+
+			if (i + 4u > len) {
+				return 0;	/* no room for the pair */
+			}
+			low = big ? (uint32_t)((data[i + 2u] << 8) | data[i + 3u])
+			          : (uint32_t)((data[i + 3u] << 8) | data[i + 2u]);
+			if (low < 0xDC00u || low > 0xDFFFu) {
+				return 0;	/* a high surrogate not followed by a low one */
+			}
+			i += 4u;
+			continue;
+		}
+		if (unit >= 0xDC00u && unit <= 0xDFFFu) {
+			return 0;	/* a low surrogate with no high one before it */
+		}
+		i += 2u;
+	}
+	return 1;
+}
+
+static inline int situ_utf16le_valid(const uint8_t *data, uint32_t len)
+{
+	return situ_utf16_valid(data, len, 0);
+}
+
+static inline int situ_utf16be_valid(const uint8_t *data, uint32_t len)
+{
+	return situ_utf16_valid(data, len, 1);
+}
+
 /* ------------------------------------------------------------------------
  * Checksums (section 26.15)
  *

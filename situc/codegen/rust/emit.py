@@ -3263,7 +3263,7 @@ class Emitter:
 		named = next((attr for attr in placement.attrs
 		              if attr.name == "encoding"), None)
 		spelling = getattr(named.value, "name", None) if named else None
-		if spelling in ("ascii", "utf8"):
+		if spelling in ("ascii", "utf8", "utf16le", "utf16be"):
 			lines.extend([
 				f"\t\tif !situ_rt::{spelling}_valid("
 				f"self.{_ident(f'{base}_raw')}()) {{",
@@ -5187,10 +5187,16 @@ class Emitter:
 		if placement.kind == "reserved":
 			return self._reserved_checks(struct, placement)
 
-		count = placement.array_count
-		if count is None or placement.scalar is None:
+		if placement.scalar is None:
 			return checks
+		# utf16's code unit is two bytes, so a `u16` run is validated over a
+		# byte slice of the message rather than the parsed values (0044). A
+		# plain `u16` run carries no encoding and emits nothing.
 		if placement.scalar.bits != BITS_PER_BYTE:
+			return self._utf16_checks(struct, placement, placement.scalar)
+
+		count = placement.array_count
+		if count is None:
 			return checks
 
 		for attr in placement.attrs:
@@ -5209,6 +5215,49 @@ class Emitter:
 					"\t\t}",
 				])
 		return checks
+
+	def _utf16_checks(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""`[encoding = utf16le|be]` over a `u16` run's bytes.
+
+		The same message slice `_reserved_checks` reads: the byte length is
+		the code unit count times two -- a literal for a fixed run, the shared
+		length expression for a message-sized one (0044) -- clamped to the
+		frame the way every other run is, from a static offset the check
+		requires.
+		"""
+		encoding = next((attr for attr in placement.attrs
+		                 if attr.name == "encoding"), None)
+		if encoding is None or placement.offset_bits is None:
+			return []
+		named = getattr(encoding.value, "name", None)
+		if named not in ("utf16le", "utf16be"):
+			return []
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+
+		width = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			count: str | None = str(placement.array_count * width)
+		elif data_sized(placement):
+			count = self._length_expression(struct, placement)
+			if count is None:
+				return []
+		else:
+			return []
+		return [
+			f"\t\t// {placement.path} [encoding = {named}]",
+			"\t\t{",
+			f"\t\t\tlet at = {start};",
+			f"\t\t\tlet n = {count};",
+			"\t\t\tlet end = core::cmp::min(at + n, self.bytes.len());",
+			f"\t\t\tif !situ_rt::{named}_valid("
+			"&self.bytes[core::cmp::min(at, end)..end]) {",
+			"\t\t\t\treturn Err(Error::Constraint);",
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	# -- types ---------------------------------------------------------
 

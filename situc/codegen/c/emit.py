@@ -1111,8 +1111,13 @@ class Emitter:
 			return lines
 		# A pointer *is* the write path for a byte run, and the map says
 		# `Shifting` because the run's length moves what follows rather than
-		# because the bytes are unreachable.
-		if any("_ptr(" in line or "No accessor" in line for line in lines):
+		# because the bytes are unreachable. A ValueConverted run has no
+		# pointer but is still read through its indexed getter, so it is
+		# read-accessible-but-unwritable the same way -- and said so about
+		# nobody until a `u16` utf16 run was the only unwritable member in a
+		# schema (0044). Its own "No pointer accessor" note is the signal.
+		if any("_ptr(" in line or "No accessor" in line
+		       or "No pointer accessor" in line for line in lines):
 			refusal = self._setter_refusal(entry)
 			return lines if refusal is None else lines + ["", *refusal]
 
@@ -5968,7 +5973,7 @@ class Emitter:
 		named = next((attr for attr in placement.attrs
 		              if attr.name == "encoding"), None)
 		spelling = getattr(named.value, "name", None) if named else None
-		if spelling in ("ascii", "utf8"):
+		if spelling in ("ascii", "utf8", "utf16le", "utf16be"):
 			lines.extend([
 				"",
 				f"\t/* {placement.path} [encoding = {spelling}] */",
@@ -6318,10 +6323,19 @@ class Emitter:
 		# terminator went unchecked -- in the one backend that had had the
 		# check longest. The other three emit both and disagreed with C about
 		# `edges.labelled` for as long as the attribute pair has existed.
-		if scalar is not None and placement.array_count is not None:
+		# A data-sized run at a static offset carries its encoding too: a
+		# `u16 data[length]` Pickle string states that `length` counts code
+		# units, and an encoding nobody checks is worse than none (0044).
+		# `nul_terminated` stays on the fixed-count path -- its capacity is
+		# the declared count, which a message-sized run does not have.
+		if scalar is not None and (placement.array_count is not None
+				or (data_sized(placement)
+				    and _has_attr(placement.attrs, "encoding")
+				    and placement.offset_bits is not None)):
 			attributed = [
 				*(self._nul_check(struct, placement, scalar)
-				  if _has_attr(placement.attrs, "nul_terminated") else []),
+				  if _has_attr(placement.attrs, "nul_terminated")
+				  and placement.array_count is not None else []),
 				*(self._encoding_check(struct, placement, scalar)
 				  if _has_attr(placement.attrs, "encoding") else []),
 			]
@@ -6596,18 +6610,26 @@ class Emitter:
 		                 if attr.name == "encoding"), None)
 		if encoding is None or placement.offset_bits is None:
 			return []
-		if scalar.bits != BITS_PER_BYTE:
+		if scalar.bits % BITS_PER_BYTE != 0:
 			return []
 
 		named = getattr(encoding.value, "name", None)
-		if named not in ("ascii", "utf8"):
+		if named not in ("ascii", "utf8", "utf16le", "utf16be"):
 			return []
 
-		count = placement.array_count or 0
+		# The validator scans bytes, so the count is bytes: a `u8` run is its
+		# element count, a `u16` utf16 run is twice it. A message-sized run
+		# reads its length the same way every other member after it does; the
+		# expression already multiplies by the element width (0044).
+		width = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			count = f"{placement.array_count * width}u"
+		else:
+			count = self._length_expression(struct, placement)
 		return [
 			f"\t/* {placement.path} [encoding = {named}] */",
 			f"\tif (!situ_{named}_valid((view.base) + {placement.offset_bytes}u,"
-			f" {count}u)) {{",
+			f" {count})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 		]

@@ -60,7 +60,8 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/mqtt/mqtt.situ \
 		   example/netlink/netlink.situ \
 		   example/ntp/ntp.situ \
-		   example/packet/packet.situ example/protobuf/protobuf.situ \
+		   example/packet/packet.situ example/pickle/pickle.situ \
+		   example/protobuf/protobuf.situ \
 		   example/register/register.situ example/rtc/rtc.situ example/smtp/smtp.situ \
 		   example/sqlite/sqlite.situ \
 		   example/tcp/tcp.situ \

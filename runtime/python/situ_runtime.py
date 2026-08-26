@@ -382,6 +382,27 @@ def ascii_valid(data: memoryview | bytes) -> bool:
 	return all(byte <= 0x7F for byte in bytes(data))
 
 
+def utf16le_valid(data: memoryview | bytes) -> bool:
+	"""UTF-16LE, as strict as the utf8 check beside it (decision 0044): an odd
+	byte count or a lone surrogate decodes to no character, and Python's strict
+	decoder refuses exactly that set."""
+	try:
+		bytes(data).decode("utf-16-le")
+	except UnicodeDecodeError:
+		return False
+	return True
+
+
+def utf16be_valid(data: memoryview | bytes) -> bool:
+	"""UTF-16BE; see `utf16le_valid`. The order is the encoding's, not the
+	field's, which is why the two are separate names."""
+	try:
+		bytes(data).decode("utf-16-be")
+	except UnicodeDecodeError:
+		return False
+	return True
+
+
 def nul_len(data: memoryview | bytes, capacity: int) -> int:
 	"""Content length of a nul-terminated field, bounded by its capacity."""
 	raw = bytes(data)[:capacity]

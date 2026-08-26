@@ -1347,9 +1347,11 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_ENCODED_AS     12u
 #define CHECK_ZERO_RUN       13u
 
-/* `[encoding = ...]`, as the packer numbers it. */
-#define ENCODING_ASCII 0
-#define ENCODING_UTF8  1
+/* `[encoding = ...]`, as the packer numbers it (pack.ENCODING_CODE). */
+#define ENCODING_ASCII    0
+#define ENCODING_UTF8     1
+#define ENCODING_UTF16LE  2
+#define ENCODING_UTF16BE  3
 
 /* Whether a span is well-formed UTF-8: no overlong form, no surrogate half,
  * nothing past U+10FFFF, no truncated sequence, no bad continuation byte.
@@ -1407,6 +1409,45 @@ static int utf8_valid(const uint8_t *data, uint32_t len)
 		}
 
 		i += extra + 1u;
+	}
+	return 1;
+}
+
+/* UTF-16, the walker's own copy for the same reason as utf8_valid above: it
+ * links nothing. `big` picks the byte order, which is the encoding's and not
+ * the field's (0044). A lone surrogate -- a high or low half with no partner
+ * -- decodes to no character and is rejected the way an overlong utf8 form is.
+ */
+static int utf16_valid(const uint8_t *data, uint32_t len, int big)
+{
+	uint32_t i = 0u;
+
+	if ((len & 1u) != 0u) {
+		return 0;	/* an odd byte count is not whole code units */
+	}
+	while (i < len) {
+		const uint32_t hi   = big ? data[i] : data[i + 1u];
+		const uint32_t lo   = big ? data[i + 1u] : data[i];
+		const uint32_t unit = (hi << 8) | lo;
+
+		if (unit >= 0xd800u && unit <= 0xdbffu) {
+			uint32_t low;
+
+			if (i + 4u > len) {
+				return 0;	/* no room for the low half */
+			}
+			low = big ? (uint32_t)((data[i + 2u] << 8) | data[i + 3u])
+			          : (uint32_t)((data[i + 3u] << 8) | data[i + 2u]);
+			if (low < 0xdc00u || low > 0xdfffu) {
+				return 0;	/* a high surrogate not followed by a low one */
+			}
+			i += 4u;
+			continue;
+		}
+		if (unit >= 0xdc00u && unit <= 0xdfffu) {
+			return 0;	/* a low surrogate with no high one before it */
+		}
+		i += 2u;
 	}
 	return 1;
 }
@@ -1683,14 +1724,20 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 							}
 						}
 					} else if (kind == CHECK_ENCODED_AS) {
-						if (i64_at(row + 4) == ENCODING_ASCII) {
+						const int64_t how = i64_at(row + 4);
+
+						if (how == ENCODING_ASCII) {
 							for (uint32_t d = 0u; d < content; d++) {
 								if (data[d] > 0x7fu) {
 									bad = 1;
 								}
 							}
-						} else if (i64_at(row + 4) == ENCODING_UTF8) {
+						} else if (how == ENCODING_UTF8) {
 							bad = !utf8_valid(data, content);
+						} else if (how == ENCODING_UTF16LE) {
+							bad = !utf16_valid(data, content, 0);
+						} else if (how == ENCODING_UTF16BE) {
+							bad = !utf16_valid(data, content, 1);
 						} else {
 							return SITU_WALK_UNSUPPORTED;
 						}

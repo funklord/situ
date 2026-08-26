@@ -209,6 +209,8 @@ class Emitter:
 			"\tleaf, nonneg,",
 			*(["\tNATIVE_BIG,"] if self._has_native_order() else []),
 			*(["\talign_up,"] if self._has_pad() else []),
+			*(["\tutf16le_valid,"] if self._uses_utf16()[0] else []),
+			*(["\tutf16be_valid,"] if self._uses_utf16()[1] else []),
 			"\tcompose, nul_len, open_gate, utf8_valid,",
 			*self._tlv_imports(),
 			*self._delimited_imports(),
@@ -753,6 +755,17 @@ class Emitter:
 		return any(entry.placement.pad_to is not None
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries)
+
+	def _uses_utf16(self) -> tuple[bool, bool]:
+		"""Whether any `[encoding]` names utf16le or utf16be (0044), each
+		imported only where used for `_delimited_imports`' reason -- an unused
+		import is a warning every caller's linter would raise (invariant 23)."""
+		names = {getattr(attr.value, "name", None)
+		         for struct in self.resolved.structs.values()
+		         for entry in struct.entries
+		         for attr in entry.placement.attrs
+		         if attr.name == "encoding"}
+		return ("utf16le" in names, "utf16be" in names)
 
 	def _has_native_order(self) -> bool:
 		"""Whether anything here is `endian native` (8.3).
@@ -2047,10 +2060,22 @@ class Emitter:
 			return lines
 		if any("mutate is" in line or "setter" in line for line in lines):
 			return lines
-		if not any("memoryview" in line for line in lines):
+		# A ValueConverted run has no memoryview but is read through its
+		# indexed getter, so it is read-accessible-but-unwritable the same way
+		# a byte run is -- and said so about nobody until a `u16` utf16 run was
+		# the only unwritable member in a schema (0044).
+		wide_run = any("would not be the values" in line for line in lines)
+		if not (any("memoryview" in line for line in lines) or wide_run):
 			return lines
 
 		name = py_name(local_name(struct, entry.placement))
+		if wide_run and not any("memoryview" in line for line in lines):
+			return lines + [
+				"",
+				f"\t# No {name} setter: mutate is {mutate.render()}. The indexed",
+				"\t# getter above reads it; making room for more elements is a",
+				"\t# rewrite of the frame rather than a store.",
+			]
 		return lines + [
 			"",
 			f"\t# No {name} setter: mutate is {mutate.render()}. The bytes",
@@ -3997,7 +4022,7 @@ class Emitter:
 		named = next((attr for attr in placement.attrs
 		              if attr.name == "encoding"), None)
 		spelling = getattr(named.value, "name", None) if named else None
-		if spelling in ("ascii", "utf8"):
+		if spelling in ("ascii", "utf8", "utf16le", "utf16be"):
 			lines.extend([
 				f"\t\tif not {spelling}_valid(self.{name}_raw):",
 				"\t\t\traise ConstraintError(",
@@ -4325,11 +4350,20 @@ class Emitter:
 
 	def _array_check(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType | None, name: str) -> list[str]:
-		if scalar is None or scalar.bits != BITS_PER_BYTE:
+		if scalar is None:
 			return []
 
 		if placement.kind == "reserved":
+			if scalar.bits != BITS_PER_BYTE:
+				return []
 			return self._reserved_check(struct, placement)
+
+		# utf16's code unit is two bytes, so a `u16` run is validated over a
+		# byte slice of the message rather than the parsed values (0044). A
+		# plain `u16` run carries no encoding and emits nothing.
+		if scalar.bits != BITS_PER_BYTE:
+			return self._utf16_check(struct, placement, scalar)
+
 		if placement.sized_by is not None:
 			return []
 
@@ -4352,6 +4386,44 @@ class Emitter:
 					f"\"{placement.path} has no terminator\")",
 				])
 		return lines
+
+	def _utf16_check(self, struct: ResolvedStruct, placement: Placement,
+			scalar: ScalarType) -> list[str]:
+		"""`[encoding = utf16le|be]` over a `u16` run's bytes.
+
+		The same message slice and length arithmetic `_reserved_check` uses:
+		the byte length is the code unit count times two -- a literal for a
+		fixed run, the shared length expression for a message-sized one
+		(0044) -- read from a static offset the encoding check requires.
+		"""
+		encoding = next((attr for attr in placement.attrs
+		                 if attr.name == "encoding"), None)
+		if encoding is None or placement.offset_bits is None:
+			return []
+		named = getattr(encoding.value, "name", None)
+		if named not in ("utf16le", "utf16be"):
+			return []
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+
+		width = scalar.bits // BITS_PER_BYTE
+		if placement.array_count is not None:
+			count = str(placement.array_count * width)
+		elif data_sized(placement):
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return []
+			count = length
+		else:
+			return []
+		return [
+			"\t\tself._check()",
+			f"\t\tat, n = self._at + ({start}), ({count})",
+			f"\t\tif not {named}_valid(self._msg.buffer[at:at + n]):",
+			"\t\t\traise ConstraintError(",
+			f"\t\t\t\t\"{placement.path} is not {named}\")",
+		]
 
 	# -- gates ---------------------------------------------------------
 

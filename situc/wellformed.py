@@ -59,6 +59,7 @@ def check(schema: ast.Schema) -> None:
 	check_tag_prefixes(schema)
 	check_coded_coverage(schema)
 	check_attribute_places(schema)
+	check_encoding_element_width(schema)
 	check_nonce_references(schema)
 	check_codec_sizes(schema)
 	check_registers(schema)
@@ -1342,10 +1343,13 @@ UNIMPLEMENTED_ATTRS: dict[str, str] = {
 	           "attribute is read by nothing",
 }
 
-#: What `[encoding = ...]` may say. Section 8.6 names these two, and an
-#: unknown one is refused rather than ignored: a schema declaring `utf16` and
-#: getting no check would be worse off than one declaring nothing.
-TEXT_ENCODINGS = frozenset({"ascii", "utf8"})
+#: What `[encoding = ...]` may say. Section 8.6 names `ascii` and `utf8`;
+#: decision 0044 adds `utf16le` and `utf16be`, which name their code unit's
+#: byte order rather than inheriting it from the field's `endian` scope. An
+#: unknown one is refused rather than ignored: a schema declaring an encoding
+#: and getting no check would be worse off than one declaring nothing, which
+#: is also why bare `utf16` is refused -- it does not say the order.
+TEXT_ENCODINGS = frozenset({"ascii", "utf8", "utf16le", "utf16be"})
 
 
 #: Attributes whose *place* has been established, by reading what reads them.
@@ -1608,6 +1612,51 @@ def _declared_bits(member: ast.Member) -> int | None:
 	return None
 
 
+#: The element width each encoding is checked over, in bits. utf16's code
+#: unit is two bytes, so `[encoding = utf16le]` on a `u8` run would validate
+#: something other than what the schema means -- and a check that fires over
+#: the wrong element is worse than none (0044). ascii and utf8 read one byte
+#: at a time and keep the 8-bit element they always had.
+ENCODING_ELEMENT_BITS: dict[str, int] = {
+	"ascii": 8, "utf8": 8, "utf16le": 16, "utf16be": 16,
+}
+
+
+def check_encoding_element_width(schema: ast.Schema) -> None:
+	"""`[encoding]` has to name the width its element actually is.
+
+	The encoding is a claim checked over the run's bytes, and utf16 reads two
+	at a time. A `u8` run declared `utf16le` reads one byte per code unit and
+	validates nothing the schema means; refusing it is the 17.0 rule -- a
+	claim the generated code cannot test is worse than no claim.
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			encoding = next((attr for attr in getattr(member, "attrs", ())
+			                 if attr.name == "encoding"), None)
+			if encoding is None:
+				continue
+			named = getattr(encoding.value, "name", None)
+			want = ENCODING_ELEMENT_BITS.get(named) if named else None
+			if want is None:
+				continue		# an unknown name is caught by the name check
+			have = _declared_bits(member)
+			if have is None or have == want:
+				continue
+			raise error(
+				f"`{named}` is a {want}-bit encoding on a {have}-bit element",
+				encoding.span,
+				label = f"expected a u{want} run",
+				notes = [
+					f"`{named}` reads {want // 8}-byte code units, so it "
+					f"validates a `u{want}` run and not a `u{have}` one",
+					"the encoding is a claim checked over the bytes, not a "
+					"shorthand that changes them: declare the element the "
+					"width the encoding reads",
+				],
+			)
+
+
 def check_attribute_places(schema: ast.Schema) -> None:
 	"""An attribute has to sit where something reads it (14.5, 17.0)."""
 	for struct in schema.structs():
@@ -1657,15 +1706,26 @@ def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:
 		if attr.name == "encoding":
 			named = getattr(attr.value, "name", None)
 			if named not in TEXT_ENCODINGS:
+				# `utf16` alone names no byte order, and a default would be a
+				# guess about somebody's wire format that a byte-swapped
+				# string passes silently (0044). The two named forms cost one
+				# word and remove the question, so the message points at them
+				# rather than merely refusing.
+				notes = [
+					"section 8.6 names `ascii` and `utf8`; decision 0044 adds "
+					"`utf16le` and `utf16be`",
+					"an encoding nobody checks is worse than none declared: "
+					"the schema would claim something the code never tests",
+				]
+				if named == "utf16":
+					notes.insert(0, "`utf16` does not say the byte order: write "
+					              "`utf16le` or `utf16be`, which name it where "
+					              "the reader is looking")
 				raise error(
 					f"`{named}` is not an encoding situ validates",
 					attr.span,
 					label = "unknown encoding",
-					notes = [
-						"section 8.6 names `ascii` and `utf8`",
-						"an encoding nobody checks is worse than none declared: "
-						"the schema would claim something the code never tests",
-					],
+					notes = notes,
 				)
 
 

@@ -14585,6 +14585,49 @@ bug in an unrelated struct -- a false lead that cost a diagnosis. A dedicated
 including the `u8`-driven zero-pad case on purpose rather than by a lucky
 draw, which is what makes the differential's pass mean something.
 
+### 26.135 utf16, and the byte view a wide run never had
+
+Decision 0044, accepted and built: `[encoding = utf16le]` and
+`[encoding = utf16be]` join `ascii` and `utf8`. `base::Pickle` writes a
+UTF-16 string as `u32 length; u16 data[length]`, and the count is the point
+-- for UTF-16 it counts *code units*, not bytes, and nothing on the wire says
+which, which is why the consumer's hand-written reader carries an overflow
+guard. The attribute states that `length` is code units, which no other
+construct says. **Bare `utf16` is refused**: a text encoding's byte order is
+a property of the text, not inherited from the field's `endian` scope, and a
+default would be a guess a byte-swapped string passes silently. The strict
+validator refuses a lone surrogate the way the utf8 check refuses an overlong
+form (8.8) -- decoded through each language's own UTF-16 decoder rather than a
+hand-rolled state machine, the same way utf8 already was.
+
+**The real work was not the encoding -- it was that a `u16` run had no byte
+view.** Every backend emits a byte-span accessor only for a `u8` run; a
+`u16[length]` run is ValueConverted, read through an indexed getter, with no
+pointer to hand a validator. So the encoding check reads the message bytes at
+the run's static offset directly -- `view.base + offset` with a byte length
+of `count * 2` (a literal for a fixed run, the same length expression every
+member after a variable one already computes) -- rather than through an
+accessor that does not exist. The image carries the encoding as a code
+(`pack.ENCODING_CODE`: ascii 0, utf8 1, utf16le 2, utf16be 3) that both
+walkers read, and the C walker keeps its own standalone `utf16_valid` for the
+reason it keeps its own `utf8_valid`: it links nothing.
+
+**Two gaps the first wide run in an example surfaced, both older than this
+record.** `pad_to` had no `unparse` case -- `padded.situ` lives in
+`test/schema/`, which the round-trip test does not cover, so the pickle
+example was the first to round-trip a `Pad`. And a ValueConverted run that is
+unwritable said nothing about why: three backends keyed their "no setter"
+note on the byte-span accessor a wide run does not have, so a `u16` run that
+was the *only* unwritable member in a schema left the explanation empty. Both
+are the shape 26.35 names -- an absent operation that does not say why it is
+absent -- and both were invisible until a schema exercised them.
+
+**The example is the Pickle string itself.** `example/pickle/pickle.situ` is
+`u32 length; u16 data[length] [encoding = utf16le]`, drawn against by the
+four-backend differential and both walkers: random `u16` draws are full of
+lone surrogates, so the pass means all six agree on which byte sequences are
+UTF-16 and which are not.
+
 
 ---
 

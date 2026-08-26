@@ -339,6 +339,9 @@ def member_to_source(member: ast.Member) -> str:
 		        f"{_array_to_source(member.array)}{_covers_to_source(member.covers)}"
 		        f"{_attrs_to_source(member.attrs)};")
 
+	if isinstance(member, ast.Pad):
+		return f"pad_to({member.to}){_attrs_to_source(member.attrs)};"
+
 	raise TypeError(f"cannot unparse {type(member).__name__}")
 
 

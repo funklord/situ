@@ -1,0 +1,25 @@
+// base::Pickle -- Chromium's IPC serialization, and the format the ask in
+// suggestion/hydra.md came from. A string field is a 32-bit count followed by
+// that many code units.
+//
+// The count is the field this record exists for. For a UTF-16 string it counts
+// CODE UNITS, not bytes -- and nothing on the wire says which, so a
+// hand-written reader carries an overflow guard precisely because a length in
+// this format sometimes means characters and sometimes bytes (decision 0044).
+// `[encoding = utf16le]` on a `u16[length]` run states that `length` is code
+// units, which no other construct can say, and the generated validator refuses
+// a lone surrogate the way the utf8 check refuses an overlong form (8.8).
+//
+// base::Pickle on the platforms it ships on is UTF-16LE, and the schema says
+// so rather than inheriting the order from an `endian` directive three lines
+// up: a text encoding is a property of the text, not of the field's scope.
+
+target buffer;
+endian little;
+
+struct pickle_wstring {
+	u32  length;
+	u16  data[length]  [encoding = utf16le];
+}
+
+require absolute_static(pickle_wstring.length);

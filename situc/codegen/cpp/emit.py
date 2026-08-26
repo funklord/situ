@@ -3844,10 +3844,23 @@ class Emitter:
 			return lines
 		if any("mutate is" in line or "No setter" in line for line in lines):
 			return lines
-		if not any("::situ::rt::bytes" in line or "const_bytes" in line
-		           for line in lines):
+		byte_span = any("::situ::rt::bytes" in line or "const_bytes" in line
+		                for line in lines)
+		# A ValueConverted run has no span but is read through its indexed
+		# getter, so it is read-accessible-but-unwritable the same way a byte
+		# run is -- and said so about nobody until a `u16` utf16 run was the
+		# only unwritable member in a schema (0044).
+		wide_run = any("would not be the values" in line for line in lines)
+		if not (byte_span or wide_run):
 			return lines
 
+		if wide_run and not byte_span:
+			return lines + [
+				"",
+				f"\t/* No setter: mutate is {mutate.render()}. The indexed",
+				"\t * getter above reads it; making room for more elements is a",
+				"\t * rewrite of the frame rather than a store. */",
+			]
 		return lines + [
 			"",
 			f"\t/* No setter: mutate is {mutate.render()}. The span above is",
@@ -5111,7 +5124,7 @@ class Emitter:
 		named = next((attr for attr in placement.attrs
 		              if attr.name == "encoding"), None)
 		spelling = getattr(named.value, "name", None) if named else None
-		if spelling in ("ascii", "utf8"):
+		if spelling in ("ascii", "utf8", "utf16le", "utf16be"):
 			lines.extend([
 				f"\t\t/* {placement.path} [encoding = {spelling}] */",
 				f"\t\tif (!situ_{spelling}_valid(raw_.base + {name}_offset(),"
@@ -5545,15 +5558,20 @@ class Emitter:
 
 	def _array_checks(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:
+		if placement.kind == "reserved":
+			if scalar.bits != BITS_PER_BYTE:
+				return []
+			return self._reserved_checks(struct, placement)
+
+		# utf16's code unit is two bytes, so a `u16` run is validated over a
+		# byte view taken here rather than through the u8-only span accessor
+		# (0044). A plain `u16` run carries no encoding and emits nothing.
 		if scalar.bits != BITS_PER_BYTE:
-			return []
+			return self._utf16_check(struct, placement)
 
 		name  = bare_name(local_name(struct, placement))
 		count = placement.array_count or 0
 		lines: list[str] = []
-
-		if placement.kind == "reserved":
-			return self._reserved_checks(struct, placement)
 
 		for attr in placement.attrs:
 			if attr.name == "encoding":
@@ -5574,6 +5592,41 @@ class Emitter:
 					"\t\t}",
 				])
 		return lines
+
+	def _utf16_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[encoding = utf16le|be]` over a `u16` run's bytes.
+
+		The validator scans bytes, so the byte length is the code unit count
+		times two -- for a fixed run a literal, for a message-sized one the
+		same length expression every member after a variable one reads (0044).
+		The run must sit at a static offset for the byte pointer to be a
+		constant here, which is the encoding check's condition anyway.
+		"""
+		encoding = next((attr for attr in placement.attrs
+		                 if attr.name == "encoding"), None)
+		if encoding is None or placement.offset_bits is None:
+			return []
+		named = getattr(encoding.value, "name", None)
+		if named not in ("utf16le", "utf16be"):
+			return []
+
+		if placement.array_count is not None:
+			count = f"{placement.array_count * 2}"
+		elif data_sized(placement):
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return []
+			count = length
+		else:
+			return []
+		return [
+			f"\t\t/* {placement.path} [encoding = {named}] */",
+			f"\t\tif (!situ_{named}_valid(raw_.base + {placement.offset_bytes}u,"
+			f" {count})) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		]
 
 	# -- helpers -------------------------------------------------------
 

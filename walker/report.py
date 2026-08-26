@@ -698,14 +698,16 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 					if any(one > 0x7F for one in data):
 						return ERR_CONSTRAINT
 					continue
-				# Decoded rather than re-implemented. `situ_utf8_valid`
-				# refuses an overlong form, a surrogate half, anything
-				# past U+10FFFF, a truncated sequence and a bad
-				# continuation byte -- which is exactly the set Python's
-				# strict decoder refuses, so restating the state machine
-				# here would be a second chance to get it wrong.
+				# Decoded rather than re-implemented. Each runtime validator
+				# -- `situ_utf8_valid`, `situ_utf16le_valid`,
+				# `situ_utf16be_valid` -- refuses exactly the set Python's
+				# strict decoder does: an overlong form or surrogate half for
+				# utf8, a lone surrogate or odd byte count for utf16 (0044).
+				# Restating the state machine here would be a second chance to
+				# get it wrong. The codes match `pack.ENCODING_CODE`.
+				codec = {1: "utf-8", 2: "utf-16-le", 3: "utf-16-be"}[against]
 				try:
-					data.decode("utf-8")
+					data.decode(codec)
 				except UnicodeDecodeError:
 					return ERR_CONSTRAINT
 

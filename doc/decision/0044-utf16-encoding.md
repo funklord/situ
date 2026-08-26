@@ -1,6 +1,6 @@
 # 0044: `[encoding = utf16]` states code units and endianness
 
-Status: proposed
+Status: accepted
 Date: 2026-08-26
 Phase: after 0043
 

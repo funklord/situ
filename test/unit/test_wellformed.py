@@ -229,10 +229,42 @@ def test_recursion_survives_the_other_checks() -> None:
 def test_an_encoding_situ_cannot_check_is_refused() -> None:
 	"""`ascii` and `utf8` are validated; anything else would be a claim the
 	generated code never tests, which is worse than declaring nothing."""
-	message = rendered("struct s { u8 name[8] [encoding = utf16]; }")
+	message = rendered("struct s { u8 name[8] [encoding = zzz]; }")
 
 	assert "not an encoding situ validates" in message
 	assert "`ascii` and `utf8`" in message
+
+
+def test_bare_utf16_is_refused_and_names_the_two_orders() -> None:
+	"""`utf16` alone does not say the byte order, and a default would be a
+	guess a byte-swapped string passes silently (0044). The message points at
+	the two named forms rather than merely refusing."""
+	message = rendered("struct s { u16 name[8] [encoding = utf16]; }")
+
+	assert "not an encoding situ validates" in message
+	assert "utf16le" in message and "utf16be" in message
+
+
+def test_utf16_on_an_eight_bit_element_is_refused() -> None:
+	"""utf16 reads two-byte code units, so it validates a `u16` run and not a
+	`u8` one; a check over the wrong element is worse than none (0044)."""
+	message = rendered(BUFFER + "struct b { u8 s[8] [encoding = utf16le]; }\n")
+
+	assert "16-bit encoding on a 8-bit element" in message
+	assert "u16" in message
+
+
+def test_utf8_on_a_sixteen_bit_element_is_refused() -> None:
+	"""The mirror: ascii and utf8 read one byte at a time, so a `u16` run
+	declaring one validates something other than the schema means."""
+	message = rendered(BUFFER + "struct b { u16 s[8] [encoding = utf8]; }\n")
+
+	assert "8-bit encoding on a 16-bit element" in message
+
+
+def test_utf16le_on_a_sixteen_bit_run_is_accepted() -> None:
+	parse_text(BUFFER + "struct b { u16 s[8] [encoding = utf16le]; }\n",
+	           path="s.situ")
 
 
 # -- what may seal (decision 0019) -------------------------------------------

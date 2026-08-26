@@ -488,6 +488,54 @@ pub fn utf8_valid(bytes: &[u8]) -> bool {
 	core::str::from_utf8(bytes).is_ok()
 }
 
+/// UTF-16 (decision 0044). The code unit's byte order is the encoding's, not
+/// the field's, so LE and BE are separate entry points over a shared core. A
+/// lone surrogate -- a high or low half with no partner -- decodes to no
+/// character and is rejected the way utf8's overlong form is (section 8.8).
+#[inline]
+fn utf16_valid(bytes: &[u8], big: bool) -> bool {
+	if bytes.len() % 2 != 0 {
+		return false;
+	}
+	let unit = |i: usize| -> u32 {
+		let (hi, lo) = if big {
+			(bytes[i], bytes[i + 1])
+		} else {
+			(bytes[i + 1], bytes[i])
+		};
+		((hi as u32) << 8) | (lo as u32)
+	};
+	let mut i = 0;
+	while i < bytes.len() {
+		let u = unit(i);
+		if (0xD800..=0xDBFF).contains(&u) {
+			if i + 4 > bytes.len() {
+				return false;
+			}
+			let low = unit(i + 2);
+			if !(0xDC00..=0xDFFF).contains(&low) {
+				return false;
+			}
+			i += 4;
+		} else if (0xDC00..=0xDFFF).contains(&u) {
+			return false;
+		} else {
+			i += 2;
+		}
+	}
+	true
+}
+
+#[inline]
+pub fn utf16le_valid(bytes: &[u8]) -> bool {
+	utf16_valid(bytes, false)
+}
+
+#[inline]
+pub fn utf16be_valid(bytes: &[u8]) -> bool {
+	utf16_valid(bytes, true)
+}
+
 #[inline]
 pub fn bcd_decode(packed: u64, digits: usize) -> u64 {
 	let mut value = 0u64;

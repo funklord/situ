@@ -56,6 +56,14 @@ INDEX_BYTES	= 16
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
+
+#: The `against` value an ENCODED_AS (kind 12) constraint carries per encoding
+#: name -- the image's contract with both walkers, which read the same codes
+#: (walker/report.py and walker/c/situ_walk.c). ascii and utf8 predate 0044
+#: and keep 0 and 1; utf16le and utf16be name their byte order and are 2 and 3.
+ENCODING_CODE: dict[str, int] = {
+	"ascii": 0, "utf8": 1, "utf16le": 2, "utf16be": 3,
+}
 VERSION_BYTES		= 8
 RELATION_BYTES		= 24
 RELATION_MUST_BYTES	= 8
@@ -1055,13 +1063,34 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						 if a.name == "encoding"), None)
 					if encoding is not None:
 						spelling = getattr(encoding.value, "name", None)
-						if spelling not in ("ascii", "utf8"):
+						code = (ENCODING_CODE.get(spelling)
+						        if spelling is not None else None)
+						if code is None:
 							whole = False
 							continue
 						constraints_blob += _struct.pack(
-							"<IqBxxx", at,
-							0 if spelling == "ascii" else 1, 12)
+							"<IqBxxx", at, code, 12)
 					continue
+				# A data-sized run at a static offset still carries its
+				# encoding (0044): a `u16 data[length]` states that `length`
+				# counts code units, and the walker sizes the run from the
+				# image and scans it. Unlike the fixed-count branch above,
+				# this does not `continue` -- the fits-frame check below still
+				# applies to a length the message chose.
+				encoding = next(
+					(a for a in placement.attrs
+					 if a.name == "encoding"), None)
+				if encoding is not None \
+						and placement.offset_bits is not None \
+						and traverse.data_sized(placement):
+					spelling = getattr(encoding.value, "name", None)
+					code = (ENCODING_CODE.get(spelling)
+					        if spelling is not None else None)
+					if code is None:
+						whole = False
+						continue
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, code, 12)
 				# A length the message declares has to fit the frame, and
 				# that is the only check a plain run carries. `remaining`
 				# is what is left by definition and a `while` run stops at
@@ -1120,11 +1149,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				                if a.name == "encoding"), None)
 				if spelled is not None:
 					how = getattr(spelled.value, "name", None)
-					if how not in ("ascii", "utf8"):
+					code = ENCODING_CODE.get(how) if how is not None else None
+					if code is None:
 						whole = False
 						continue
 					constraints_blob += _struct.pack(
-						"<IqBxxx", at, 0 if how == "ascii" else 1, 12)
+						"<IqBxxx", at, code, 12)
 
 				# In C's order, which is the answer and not just the
 				# verdict: the terminator first, then the spelling, then
