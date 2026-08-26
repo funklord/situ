@@ -165,6 +165,15 @@ timing, that would matter more to us than any feature in this file. Today we
 assume the extern codec owns that and we own the comparison; a sentence
 confirming the division would be worth having.
 
+> **Answered, in 14.6.** Your assumption is confirmed by reading the emitted
+> code rather than the intent: the generated code never computes or compares
+> a tag anywhere -- `_open()` takes the caller's *verdict* as a parameter,
+> and the one `== tag` in any backend compares a TLV wire-tag number. What
+> situ generates is the geometry (covered span, self span, `self_as`); the
+> primitive and its constant-time comparison are yours. 14.6 now says so in
+> normative text, and says a future generated comparison would be a decision
+> record rather than a drive-by.
+
 ---
 
 # Addendum, 2026-08-08: situ is taking on full protocol handling

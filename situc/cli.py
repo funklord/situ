@@ -103,6 +103,12 @@ def build_parser() -> argparse.ArgumentParser:
 	codec_cmd.add_argument("--out", type=Path, default=Path("."))
 	codec_cmd.add_argument("--prefix", default="situ")
 
+	tamper_cmd = sub.add_parser(
+		"gen-tamper", help="generate the harness that watches a tag's gate refuse")
+	tamper_cmd.add_argument("schema", type=Path)
+	tamper_cmd.add_argument("--out", type=Path, default=Path("."))
+	tamper_cmd.add_argument("--prefix", default="situ")
+
 	proto_cmd = sub.add_parser(
 		"import-proto", help="import a .proto as a description of its wire format")
 	proto_cmd.add_argument("proto", type=Path)
@@ -628,6 +634,35 @@ def cmd_gen_tests(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_gen_tamper(args: argparse.Namespace) -> int:
+	"""Emit the harness that demonstrates the gate refuses (26.131).
+
+	A gate nobody has watched fail is not evidence. The verifier is the
+	caller's; the geometry -- which bytes must matter and which must not --
+	is the schema's, and generating the flips from it is what keeps the
+	demonstration honest as coverage changes.
+	"""
+	from situc.codegen.c import tamper
+
+	source   = read_source(args.schema)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	name     = args.schema.stem
+	files    = tamper.generate(schema, resolved, name, args.prefix)
+
+	if not files:
+		print(f"situc: {args.schema} carries no tag; nothing to tamper with",
+		      file=sys.stderr)
+		return 0
+
+	args.out.mkdir(parents=True, exist_ok=True)
+	for filename, text in files.items():
+		target = args.out / filename
+		target.write_text(text, encoding="ascii")
+		print(f"situc: wrote {target}", file=sys.stderr)
+	return 0
+
+
 def cmd_gen_codec_tests(args: argparse.Namespace) -> int:
 	"""Emit the tests that would falsify a lying signature (section 13.1).
 
@@ -973,6 +1008,7 @@ def main(argv: list[str] | None = None) -> int:
 		"import-proto": cmd_import_proto,
 		"gen-tests": cmd_gen_tests,
 		"gen-codec-tests": cmd_gen_codec_tests,
+		"gen-tamper": cmd_gen_tamper,
 		"explain":  cmd_explain,
 		"doc":      cmd_doc,
 		"gen-dissector": cmd_gen_dissector,

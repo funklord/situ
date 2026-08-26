@@ -118,6 +118,10 @@ Property tests from codec signatures.
 .B gen-derived
 Implementations from kernel descriptions.
 .TP
+.B gen-tamper
+The harness that watches a tag's gate refuse: every covered byte flipped,
+the caller's verifier required to notice each one.
+.TP
 .B import-proto
 Import a
 .I .proto

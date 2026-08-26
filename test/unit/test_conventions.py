@@ -25,7 +25,11 @@ CFG  = style_gate.load_config(ROOT)
 
 def test_tree_follows_conventions() -> None:
 	problems = []
-	for path in style_gate.discover(ROOT, CFG):
+	# `discover` returns the kept list and the raw population it was
+	# filtered from; the count exists for the collapse floor and is not
+	# this test's business.
+	files, _ = style_gate.discover(ROOT, CFG)
+	for path in files:
 		problems.extend(style_gate.check_file(path, ROOT, CFG))
 
 	assert not problems, "\n" + "\n".join(str(problem) for problem in problems)
