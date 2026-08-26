@@ -38,6 +38,16 @@ FUTURE_COMMANDS: dict[str, int] = {}
 FUTURE_LAYERS: dict[str, str] = {
 }
 
+#: The driver axis (decision 0033): an additive artifact that pumps the rung-6
+#: state machine, selected by `--driver`. A driver crosses the backend axis
+#: and not every cell is meaningful -- `--driver epoll --target python` is a
+#: worse asyncio -- so each names the backends it is available for, and an
+#: unavailable pair is refused naming both. `epoll` is a Linux C event loop.
+DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
+	"epoll": ("c",),
+}
+DRIVERS = tuple(DRIVER_BACKENDS)
+
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
@@ -90,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                            "emits everything below it: `view` is accessors "
 	                            "over bytes the caller owns, `relate` adds a "
 	                            "predicate per relation (decision 0032)")
+	build_cmd.add_argument("--driver", choices=DRIVERS, default=None,
+	                       help="also emit a driver that pumps the rung-6 state "
+	                            "machine, an additive artifact over the same "
+	                            "schema: `epoll` adds `<name>_epoll.c`, a Linux "
+	                            "event loop over `--layer drive` (decision 0033)")
 
 	tests_cmd = sub.add_parser("gen-tests", help="generate golden-vector tests")
 	tests_cmd.add_argument("schema", type=Path)
@@ -488,6 +503,22 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"Python return them by value, and C++ has no view-only accessor "
 			f"a caller cannot copy.")
 
+	if args.driver is not None and args.target not in DRIVER_BACKENDS[args.driver]:
+		available = " or ".join(DRIVER_BACKENDS[args.driver])
+		raise SystemExit(
+			f"situc: --driver {args.driver} is available for {available} and "
+			f"--target is {args.target}. A driver crosses the backend axis and "
+			f"not every cell is meaningful -- {args.driver} on {args.target} "
+			f"is a worse fit for a facility that backend already has natively "
+			f"(decision 0033).")
+
+	if args.driver is not None and args.layer != "drive":
+		raise SystemExit(
+			f"situc: --driver {args.driver} pumps the rung-6 state machine, "
+			f"which is emitted at --layer drive, and --layer is {args.layer}. "
+			f"The driver adds `<name>_{args.driver}.c` over the drive layer "
+			f"rather than pulling it in, so ask for both (decision 0033).")
+
 	# The layer boundary, made real. A construct whose output extent cannot be
 	# known without transforming it has nowhere to put the result at rung 1,
 	# so asking for it there is refused rather than emitted wrong.
@@ -601,6 +632,17 @@ def cmd_build(args: argparse.Namespace) -> int:
 		for name, why in drive.refusals(parsed, resolved):
 			print(f"situc: no driver for relation `{name}`: {why}",
 			      file=sys.stderr)
+
+	if args.driver == "epoll":
+		from situc.codegen.c import epoll
+
+		# A relation that states a policy but carries no fittable key got its
+		# refusal from the drive block above -- `--driver epoll` requires
+		# `--layer drive`, so it always ran, and the epoll artifact skips
+		# exactly the same relations. Re-reporting would be one message twice.
+		parsed = parse(source)
+		files.update(epoll.generate(parsed, resolved, args.schema.stem,
+		                            args.prefix))
 
 	args.out.mkdir(parents=True, exist_ok=True)
 	for name, text in files.items():

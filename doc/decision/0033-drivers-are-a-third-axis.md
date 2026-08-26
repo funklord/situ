@@ -1,9 +1,12 @@
 # 0033: drivers are a third axis, and the vtable is completion-shaped
 
-Status: accepted. The taxonomy and the two shape calls are decided; which
-drivers ship, and in what order, is not.
+Status: accepted, and the first driver is built -- `--driver epoll`, C-only,
+over `--layer drive` (see the amendment below). The taxonomy and the two
+shape calls were decided here; which drivers ship past the first, and in what
+order, is still the holder's to say.
 Date: 2026-08-08
-Phase: 26.98 gains the deadline return; the drivers themselves are unscheduled
+Phase: 26.98 gains the deadline return; epoll built 2026-08-26, the rest
+unscheduled
 
 ## Context
 
@@ -200,3 +203,39 @@ contract.
   scaffolding but the first driver written.
 - The interaction between in-flight buffers and the view model is open, and
   reaches rung 2.
+
+## Amendment, 2026-08-26: epoll, the first driver built
+
+`--driver epoll` is built, C-only, over `--layer drive`. It is the additive
+artifact this record named -- `gen-dissector`'s relationship to the accessors
+-- adding `<name>_epoll.h` and `<name>_epoll.c` and changing nothing else,
+gated on the same `driven()` test the drive layer uses, so it emits nothing
+where no exchange states a policy. The generator is `situc/codegen/c/epoll.py`.
+
+The loop is the division of labour 26.98 was built for: it owns the socket,
+the clock (`CLOCK_MONOTONIC`) and the timer arithmetic; the state machine owns
+retransmission, correlation and expiry and reaches I/O only through the
+`situ_io_t` submit vtable. `step`'s next deadline is the `epoll_wait` timeout,
+a wrap-safe signed difference so a wrapping monotonic clock is harmless, and
+`step` answering `SITU_ERR_TRUNCATED` -- nothing in flight -- is the loop's
+clean exit. It is level-triggered (one recv per wakeup) and datagram-oriented
+(one recv is one message; a stream is rung 4's `_frame.h`, a different
+driver's concern), and its submit swallows `EAGAIN` as a dropped datagram the
+retry budget recovers.
+
+The in-flight-buffer question this record left open does not arise for epoll:
+readiness is the syscall-when-ready model, so no buffer is handed to a kernel
+across a submit. That is the drive layer's existing stance -- it holds the
+bytes to retransmit, not a view -- and epoll keeps it. A completion driver,
+`io_uring` or IOCP, will still have to answer it; that is why the vtable was
+shaped for completion from the first driver.
+
+`--driver epoll --target python` is refused naming both, per the availability
+rule; `--driver epoll` without `--layer drive` is refused too, since the
+driver adds files over the drive layer rather than pulling it in. Held to a
+socketpair by `test_epoll_driver.py`: the loop retransmits then correlates the
+reply, and expires after the retry budget when nothing answers.
+
+The "which to build" order above reasoned from the facilities and put
+`blocking` and `poll` first; epoll was built first because it is the eighty
+lines this record opened with, and the one the copyright holder asked for.
