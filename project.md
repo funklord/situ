@@ -3211,6 +3211,74 @@ So the whole of QUIC's byte zero -- the protected bits, the two-bit packet
 number length, and a packet number sized by that decoded field -- compiles
 today.
 
+#### A specimen from fuzzypickles, signalled 2026-08-26: a seal chosen by a flag
+
+**Sent because a real payload is about to be decided about, and the question is
+whether situ describes it or the hand-written codec moves as-is.** fuzznet is
+weighing whether to take fuzzypickles' log relay, whose 145-line payload codec
+is the piece nobody wants to hand-carry twice. This is that wire format, from
+`core/src/log_relay_internal.h` at fuzzypickles `4e66b5a`, transcribed rather
+than paraphrased:
+
+    header, 4 bytes:  version u8 (= 1) | cmd u8 | sub_type u8 | mode u8
+
+    sub_type = QUERY (1):  origin_host_pubkey[32] || since_seq u64 BE
+    sub_type = LINES (2):  origin_host_pubkey[32] || entry_count u8 ||
+                           repeated { seq u64 BE, line_len u16 BE, line[] }
+
+    mode = PLAINTEXT:  the payload above, as named
+    mode = ENCRYPTED:  nonce[24] || ciphertext || mac[16] wrapping it
+
+**Three of the four things it does are plainly covered**, and they are said
+first so the question below is not mistaken for a list of gaps. The `sub_type`
+arm is 9.6's `variant` over an already-parsed field, discriminant before
+variant in layout order, exactly as written. One arm is fixed at 40 bytes and
+the other is a length-prefixed repetition, so the variant makes what follows
+dynamic and the advisor would say so. And nothing sizes a member outside the
+region from a field inside it, which is where 13.3 bites.
+
+**The fourth is the question: `mode` decides whether the payload is sealed at
+all.** Not which key, not which algorithm -- whether the same bytes appear
+plainly or wrapped in `nonce || ct || mac`. Every example in 14.1 seals
+unconditionally; this is a `sealed` region whose existence is switched by a
+sibling field parsed three bytes earlier.
+
+**Two shapes it could be, and they are not equivalent:**
+
+- **A `variant` over `mode` whose arms are "the payload" and "a sealed region
+  containing the payload".** Expressible with what 9.6 and 14.1 already have,
+  and it states the interior twice -- which is exactly the duplication a schema
+  language exists to remove, and two statements of one layout is the failure
+  mode 26.95's relation work is about elsewhere.
+- **A conditional seal -- one interior, sealed when a predicate over an earlier
+  field holds.** No construct in 14.1 says this, and a search of this document
+  for "conditional seal" returned nothing before this entry was written --
+  which is worth saying that way, because the same search now finds this
+  paragraph.
+
+**The doom principle is what makes it more than spelling.** 14.3 makes a sealed
+interior VerifyGated with no API to view it unverified, and that is the
+property worth keeping. A conditional seal has to gate on the *runtime* value
+of `mode`, so the generated API either exposes an interior that was never
+verified when `mode` said PLAINTEXT, or forces the caller through a check that
+does nothing in that case. Which of those situ should emit is a design
+question, and it is the reason this is signalled rather than filed as a
+feature request.
+
+**Worth knowing before answering: the flag is vestigial in practice.** The
+source says of `mode` that it is "Always ENCRYPTED in practice -- a
+`trusted_network=1` sibling is the only case PLAINTEXT is legal". So the cheapest answer may be that the
+schema should not describe the choice at all, and the protocol should drop it.
+**That is fuzznet's and fuzzypickles' decision, not situ's**, and it is
+recorded here because a language question raised by a protocol that could
+simply stop asking it is one worth checking before building for.
+
+**No answer is wanted here today.** The consumer decision this came from --
+move the codec verbatim with its command id parameterised, or describe it --
+is fuzznet's, and it is recorded in that project's `project.md` under the
+2026-08-26 entries. This is the specimen, in case situ would rather find out
+now than after somebody hand-carries a second copy.
+
 **What blocked it was contiguity, and that is closed.** A `coded` region now
 takes a `covers` clause (14.1a) and reaches its codec through the scattered
 ABI (13.2b) -- in place, over a list of spans. QUIC's mask covers byte zero
