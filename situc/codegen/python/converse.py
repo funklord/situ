@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.python.emit import py_name
-from situc.relation import Read, Refused, Side, key_sides
+from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate", "refusals"]
@@ -27,7 +27,7 @@ def refusals(schema: ast.Schema,
 	found = []
 	for relation in schema.relations():
 		try:
-			key_sides(relation, resolved)
+			key_layout(relation, resolved)
 		except Refused as why:
 			found.append((relation.name, str(why)))
 	return found
@@ -42,10 +42,34 @@ def _key(sides: Side, view: str) -> list[str]:
 				lines.append(f"\t\tkey = (key << {width}) | "
 				             f"{source}.{py_name(step.member)}"
 				             f"\t# {step.path}")
-			else:
+			elif isinstance(step, SubView):
 				local = f"_{py_name(step.member)}"
 				lines.append(f"\t\t{local} = {source}.{py_name(step.member)}")
 				source = local
+	return lines
+
+
+def _key_bytes(sides: Side, view: str) -> list[str]:
+	"""The exact-bytes key (0042), Python's spelling: parts in declaration
+	order, scalars big-endian at ceil(width/8) bytes, byte arrays verbatim.
+	A `bytes` keys a dict exactly as an int does."""
+	lines = ["\t\tparts = []"]
+	for chain, width in sides:
+		source = view
+		for step in chain:
+			if isinstance(step, ReadBytes):
+				lines.append(f"\t\tparts.append(bytes({source}."
+				             f"{py_name(step.member)}))\t# {step.path}")
+			elif isinstance(step, Read):
+				count = (width + 7) // 8
+				lines.append(f"\t\tparts.append(int({source}."
+				             f"{py_name(step.member)}).to_bytes({count}, "
+				             f"\"big\"))\t# {step.path}")
+			elif isinstance(step, SubView):
+				local = f"_{py_name(step.member)}"
+				lines.append(f"\t\t{local} = {source}.{py_name(step.member)}")
+				source = local
+	lines.append('\t\tkey = b"".join(parts)')
 	return lines
 
 
@@ -54,7 +78,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	ready = []
 	for relation in schema.relations():
 		try:
-			ready.append((relation, key_sides(relation, resolved)))
+			ready.append((relation, key_layout(relation, resolved)))
 		except Refused:
 			continue
 	if not ready:
@@ -76,7 +100,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
-	for relation, (request, response) in ready:
+	for relation, layout in ready:
+		request, response = layout.request, layout.response
 		name = py_name(relation.name)
 		first, second = relation.params
 		lines += [
@@ -95,12 +120,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			"\tdef __init__(self, cap: int) -> None:",
 			"\t\tself._cap  = cap",
-			"\t\tself._live: dict[int, int] = {}",
+			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
+			 "int] = {}"),
 			"",
 			f"\tdef record(self, {first.name}: "
 			f"{py_name(first.type_name)}, id: int) -> None:",
 			f'\t\t"""Remember `{first.name}`. Raises BoundsError when full."""',
-			*_key(request, first.name),
+			*(_key(request, first.name) if layout.packed
+			  else _key_bytes(request, first.name)),
 			"",
 			"\t\tif key not in self._live and len(self._live) >= self._cap:",
 			"\t\t\traise BoundsError(",
@@ -115,7 +142,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			"\t\treturned. A duplicate or late reply names an exchange that",
 			'\t\tis over, and raises ConstraintError."""',
-			*_key(response, second.name),
+			*(_key(response, second.name) if layout.packed
+			  else _key_bytes(response, second.name)),
 			"",
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",

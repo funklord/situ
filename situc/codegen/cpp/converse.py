@@ -11,7 +11,7 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
-from situc.relation import Read, Refused, Side, key_sides
+from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate", "refusals"]
@@ -22,7 +22,7 @@ def refusals(schema: ast.Schema,
 	found = []
 	for relation in schema.relations():
 		try:
-			key_sides(relation, resolved)
+			key_layout(relation, resolved)
 		except Refused as why:
 			found.append((relation.name, str(why)))
 	return found
@@ -38,7 +38,7 @@ def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
 				             f"static_cast<std::uint64_t>("
 				             f"{source}.{c_name(step.member)}());"
 				             f"\t/* {step.path} */")
-			else:
+			elif isinstance(step, SubView):
 				held  = class_name(resolved.structs[step.into])
 				local = f"held_{c_name(step.member)}"
 				lines += [
@@ -52,12 +52,65 @@ def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
 	return lines
 
 
+def _key_bytes(sides: Side, view: str, resolved: ResolvedSchema,
+		total: int) -> list[str]:
+	"""The exact-bytes key (0042), C++'s spelling: byte loops rather than
+	<cstring>, because this runtime is deliberately freestanding."""
+	lines = [f"\t\tstd::uint8_t key[{total}u];",
+	         "\t\tstd::uint32_t at = 0u;"]
+	for chain, width in sides:
+		source = view
+		for step in chain:
+			if isinstance(step, ReadBytes):
+				count = width // 8
+				lines += [
+					f"\t\tconst ::situ::rt::bytes b_{step.target} = "
+					f"{source}.{c_name(step.member)}();\t/* {step.path} */",
+					f"\t\tfor (std::uint32_t b = 0u; b < {count}u; b++) {{",
+					f"\t\t\tkey[at + b] = b_{step.target}[b];",
+					"\t\t}",
+					f"\t\tat += {count}u;",
+				]
+			elif isinstance(step, Read):
+				count = (width + 7) // 8
+				lines += [
+					f"\t\tconst std::uint64_t v_{step.target} = "
+					f"static_cast<std::uint64_t>("
+					f"{source}.{c_name(step.member)}());\t/* {step.path} */",
+					f"\t\tfor (std::uint32_t b = 0u; b < {count}u; b++) {{",
+					f"\t\t\tkey[at + b] = static_cast<std::uint8_t>("
+					f"v_{step.target} >> (8u * ({count}u - 1u - b)));",
+					"\t\t}",
+					f"\t\tat += {count}u;",
+				]
+			elif isinstance(step, SubView):
+				held  = class_name(resolved.structs[step.into])
+				local = f"held_{c_name(step.member)}"
+				lines += [
+					f"\t\t::situ::{held} {local};",
+					f"\t\tif ({source}.{c_name(step.member)}({local}) != "
+					"::situ::rt::err::ok) {",
+					"\t\t\treturn ::situ::rt::err::bounds;",
+					"\t\t}",
+				]
+				source = local
+	lines.append("\t\t(void)at;")
+	return lines
+
+
+def _key_equal(total: int) -> str:
+	"""`slot.key == key`, spelled for a byte array without <cstring>."""
+	return (f"[&]() {{ for (std::uint32_t b = 0u; b < {total}u; b++) "
+	        "{ if (slots_[i].key[b] != key[b]) return false; } "
+	        "return true; }()")
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str) -> dict[str, str]:
 	ready = []
 	for relation in schema.relations():
 		try:
-			ready.append((relation, key_sides(relation, resolved)))
+			ready.append((relation, key_layout(relation, resolved)))
 		except Refused:
 			continue
 	if not ready:
@@ -83,7 +136,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
-	for relation, (request, response) in ready:
+	for relation, layout in ready:
+		request, response = layout.request, layout.response
 		name  = f"{c_name(relation.name)}_table"
 		first, second = relation.params
 		req   = class_name(resolved.structs[first.type_name])
@@ -101,7 +155,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"class {name} {{",
 			"public:",
 			"\tstruct slot {",
-			"\t\tstd::uint64_t key;",
+			("\t\tstd::uint64_t key;" if layout.packed
+			 else f"\t\tstd::uint8_t  key[{layout.total_bytes}u];"),
 			"\t\tstd::uint32_t id;",
 			"\t\tbool          live;",
 			"\t};",
@@ -118,11 +173,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"&{first.name},",
 			"\t                                     std::uint32_t id) noexcept",
 			"\t{",
-			*_key(request, first.name, resolved),
+			*(_key(request, first.name, resolved) if layout.packed else
+			  _key_bytes(request, first.name, resolved, layout.total_bytes)),
 			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			"\t\t\tif (!slots_[i].live) {",
-			"\t\t\t\tslots_[i] = slot{key, id, true};",
+			*(["\t\t\t\tslots_[i] = slot{key, id, true};"] if layout.packed else [
+			  f"\t\t\t\tfor (std::uint32_t b = 0u; b < {layout.total_bytes}u; b++) {{",
+			  "\t\t\t\t\tslots_[i].key[b] = key[b];",
+			  "\t\t\t\t}",
+			  "\t\t\t\tslots_[i].id   = id;",
+			  "\t\t\t\tslots_[i].live = true;"]),
 			"\t\t\t\treturn ::situ::rt::err::ok;",
 			"\t\t\t}",
 			"\t\t}",
@@ -133,10 +194,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"&{second.name},",
 			"\t                                   std::uint32_t &id) noexcept",
 			"\t{",
-			*_key(response, second.name, resolved),
+			*(_key(response, second.name, resolved) if layout.packed else
+			  _key_bytes(response, second.name, resolved, layout.total_bytes)),
 			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
-			"\t\t\tif (slots_[i].live && slots_[i].key == key) {",
+			("\t\t\tif (slots_[i].live && slots_[i].key == key) {"
+			 if layout.packed else
+			 f"\t\t\tif (slots_[i].live && {_key_equal(layout.total_bytes)}) {{"),
 			"\t\t\t\tid = slots_[i].id;",
 			"\t\t\t\tslots_[i].live = false;",
 			"\t\t\t\treturn ::situ::rt::err::ok;",

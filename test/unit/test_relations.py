@@ -1104,29 +1104,51 @@ def test_matching_forgets_so_a_duplicate_reply_is_refused() -> None:
 	assert "return SITU_ERR_CONSTRAINT;" in header
 
 
-def test_a_key_wider_than_a_packed_word_is_refused() -> None:
-	"""The case with a wrong answer and no symptom.
+def test_a_key_wider_than_a_packed_word_is_exact_bytes() -> None:
+	"""What 0042 changed, held as the test that used to refuse it.
 
-	Two exchanges whose keys collided after truncation would be matched to
-	each other, and nothing at run time would say so. Refused with the sum,
-	as `relate` refuses a comparison that has no correct spelling.
+	A 128-bit key was refused here for the collision argument -- truncation
+	or hashing would match two exchanges to each other with no symptom. The
+	argument never said the key must be small; it said the key must be
+	exact, and a wider key is exact bytes now: `uint8_t key[16]` in the
+	slot and `memcmp` in the match, while the small relation beside it
+	keeps the packed word byte-for-byte.
 	"""
 	schema = parse_text(
 		"target buffer;\nendian big;\n\n"
 		"struct wf {\n\tu64 a;\n\tu64 b;\n\tu16 small;\n}\n\n"
-		"relation too_wide(p: wf, q: wf) {\n\tmust q.a == p.a;\n"
+		"relation wide_now(p: wf, q: wf) {\n\tmust q.a == p.a;\n"
 		"\tmust q.b == p.b;\n}\n\n"
 		"relation fits(p: wf, q: wf) {\n\tmust q.small == p.small;\n}\n")
 	resolved = resolve(schema, solve(schema))
 
-	names = dict(converse.refusals(schema, resolved))
+	assert dict(converse.refusals(schema, resolved)) == {}
 
-	assert "128 bits" in names["too_wide"]
-	assert "matched to each other" in names["too_wide"]
-	# And one bad relation does not take the others with it.
-	assert "fits" not in names
-	assert "situ_conv_fits_record" in converse.generate(schema, resolved, "t")[
-		"t_converse.h"]
+	header = converse.generate(schema, resolved, "t")["t_converse.h"]
+	assert "uint8_t  key[16u];" in header
+	assert "memcmp(table->slots[i].key, key, 16u) == 0" in header
+	assert "#include <string.h>" in header
+	# The packed relation is untouched beside it, which is the
+	# no-regression half: same word, same compare, no memcmp reached.
+	assert "uint64_t key;" in header
+	assert "table->slots[i].key == key" in header
+
+
+def test_a_key_past_the_ceiling_is_refused_with_the_reason() -> None:
+	"""The ceiling is 32 bytes -- a named number covering every identifier
+	14.8 lists -- and past it the refusal keeps the collision argument:
+	hashing down would make two exchanges that collided indistinguishable.
+	A key that outgrows it moves the ceiling by its own record."""
+	schema = parse_text(
+		"target buffer;\nendian big;\n\n"
+		"struct wf {\n\tu8 huge[40];\n\tu8 kind;\n}\n\n"
+		"relation vast(p: wf, q: wf) {\n\tmust q.huge == p.huge;\n}\n")
+	resolved = resolve(schema, solve(schema))
+
+	reason = dict(converse.refusals(schema, resolved))["vast"]
+	assert "40 bytes" in reason and "ceiling is 32" in reason
+	assert "indistinguishable" in reason
+	assert len(reason) < 300, f"{len(reason)} bytes of diagnostic"
 
 
 def test_a_relation_with_no_equality_gets_no_table() -> None:
@@ -2899,7 +2921,7 @@ int main(void)
 	assert ran.returncode == 0, f"the array predicate answered wrongly at step {ran.returncode}"
 
 
-def test_the_array_key_refusal_quotes_the_schema_not_the_ast() -> None:
+def test_the_array_key_is_admitted_and_quotes_no_ast() -> None:
 	"""A diagnostic nobody can read is the same as no diagnostic.
 
 	`ast.Expr` stringifies to its dataclass repr, and a `Span` holds the
@@ -2910,13 +2932,15 @@ def test_the_array_key_refusal_quotes_the_schema_not_the_ast() -> None:
 	by fuzznet checking the claim the message was making.
 	"""
 	schema, resolved = analysed(KEYED_ARRAY)
-	reason = dict(converse.refusals(schema, resolved))["same_message"]
 
-	assert "response.payload  == request.payload" in reason
-	assert "Span(" not in reason and "Source(" not in reason
-	# The bound is what makes this a test rather than a wish: the failing
-	# version was seventeen times the schema it described.
-	assert len(reason) < 300, f"{len(reason)} bytes of diagnostic"
+	# The refusal this test once read is gone: an array in the key is the
+	# construct 0042 admits, so the relation gets a table rather than a
+	# reason. The readability property the test held -- a diagnostic under
+	# 300 bytes quoting no AST -- moved to the ceiling refusal, and is
+	# asserted there.
+	assert "same_message" not in dict(converse.refusals(schema, resolved))
+	header = converse.generate(schema, resolved, "unit")["unit_converse.h"]
+	assert "memcmp" in header and "Span(" not in header
 
 
 def test_the_python_driver_retransmits_on_the_clock_it_is_given(
@@ -2974,3 +2998,124 @@ assert len(sent) == 2, "the deadline passed and nothing was resent"
 
 assert driver.on_message(view) == 7, "the driver returned somebody else's handle"
 """
+
+
+def test_a_wide_key_matches_exactly_and_runs(tmp_path: Path) -> None:
+	"""Run, not read: the exact-bytes key (0042) through the generated
+	Python table. A 12-byte key -- a u64 beside a 4-byte array -- records
+	and matches on the exact bytes, and a single differing payload byte is
+	a refusal rather than a near-match. The one-byte difference is the
+	whole point: a digest could not promise it, which is why the module
+	refuses hashing at any width.
+	"""
+	schema, resolved = analysed(KEYED_ARRAY)
+
+	for name, text in generate_py(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in converse_py.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	(tmp_path / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding="ascii"), encoding="ascii")
+	(tmp_path / "run.py").write_text(_PY_WIDE_KEY, encoding="ascii")
+
+	ran = subprocess.run(["python3", str(tmp_path / "run.py")],
+	                     capture_output=True, text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+_PY_WIDE_KEY = """import sys
+
+sys.path.insert(0, ".")
+
+import t
+import t_converse
+from situ_runtime import Message, ConstraintError
+
+
+def frame(wide, payload):
+	buf = wide.to_bytes(8, "big") + payload + bytes(
+		t.frame.SIZE_BYTES - 8 - len(payload))
+	return t.frame.at(Message(buf))
+
+
+table = t_converse.same_message_table(4)
+table.record(frame(0xDEADBEEF00112233, b"abcd"), 7)
+
+assert table.take(frame(0xDEADBEEF00112233, b"abcd")) == 7
+
+table.record(frame(0xDEADBEEF00112233, b"abcd"), 8)
+try:
+	table.take(frame(0xDEADBEEF00112233, b"abcX"))
+	raise SystemExit("a one-byte difference matched")
+except ConstraintError:
+	pass
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_wide_key_table_matches_exactly_in_c(tmp_path: Path) -> None:
+	"""The C twin of the Python run above: `uint8_t key[12]`, filled from
+	the getters and compared by memcmp, matching the exact bytes and
+	refusing a one-byte difference. Run, not read."""
+	schema, resolved = analysed(KEYED_ARRAY)
+
+	for name, text in generate_c(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+	for name, text in converse.generate(schema, resolved, "t").items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "main.c").write_text("""#include <string.h>
+#include "t_converse.h"
+
+static situ_view_t frame_of(uint8_t *buf, situ_msg_t *msg,
+                            uint64_t wide, const char *payload)
+{
+	situ_view_t view;
+
+	memset(buf, 0, 64);
+	for (unsigned b = 0; b < 8; b++) {
+		buf[b] = (uint8_t)(wide >> (8 * (7 - b)));
+	}
+	memcpy(buf + 8, payload, 4);
+	situ_msg_init(msg, buf, 64u);
+	if (situ_frame_view(msg, 0, &view) != SITU_OK) {
+		view.base = 0;
+	}
+	return view;
+}
+
+int main(void)
+{
+	uint8_t a[64], b[64], c[64];
+	situ_msg_t ma, mb, mc;
+	situ_conv_same_message_slot_t slots[4];
+	situ_conv_same_message_t table;
+	uint32_t id = 0;
+
+	situ_conv_same_message_init(&table, slots, 4u);
+
+	situ_view_t va = frame_of(a, &ma, 0xDEADBEEF00112233u, "abcd");
+	situ_view_t vb = frame_of(b, &mb, 0xDEADBEEF00112233u, "abcd");
+	situ_view_t vc = frame_of(c, &mc, 0xDEADBEEF00112233u, "abcX");
+	if (va.base == 0 || vb.base == 0 || vc.base == 0) return 1;
+
+	if (situ_conv_same_message_record(&table, va, 7u) != SITU_OK) return 2;
+	if (situ_conv_same_message_match(&table, vc, &id) != SITU_ERR_CONSTRAINT)
+		return 3;	/* one byte differs: no match */
+	if (situ_conv_same_message_match(&table, vb, &id) != SITU_OK) return 4;
+	if (id != 7u) return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	built = subprocess.run(
+		[COMPILER or "cc", *WARNINGS, f"-I{tmp_path}", f"-I{RUNTIME}",
+		 str(tmp_path / "main.c"), str(tmp_path / "t.c"),
+		 str(RUNTIME / "situ.c"),
+		 "-o", str(tmp_path / "run")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True, text=True)
+	assert ran.returncode == 0, f"the wide key answered wrongly at step {ran.returncode}"

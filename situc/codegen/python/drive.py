@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.python.emit import py_name
-from situc.relation import Read, Refused, Side, key_sides
+from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate"]
@@ -36,10 +36,32 @@ def _key(sides: Side, view: str) -> list[str]:
 			if isinstance(step, Read):
 				lines.append(f"\t\tkey = (key << {width}) | "
 				             f"{source}.{py_name(step.member)}")
-			else:
+			elif isinstance(step, SubView):
 				local = f"_{py_name(step.member)}"
 				lines.append(f"\t\t{local} = {source}.{py_name(step.member)}")
 				source = local
+	return lines
+
+
+def _key_bytes(sides: Side, view: str) -> list[str]:
+	"""The exact-bytes key (0042); see the converse twin for the layout."""
+	lines = ["\t\tparts = []"]
+	for chain, width in sides:
+		source = view
+		for step in chain:
+			if isinstance(step, ReadBytes):
+				lines.append(f"\t\tparts.append(bytes({source}."
+				             f"{py_name(step.member)}))\t# {step.path}")
+			elif isinstance(step, Read):
+				count = (width + 7) // 8
+				lines.append(f"\t\tparts.append(int({source}."
+				             f"{py_name(step.member)}).to_bytes({count}, "
+				             f"\"big\"))\t# {step.path}")
+			elif isinstance(step, SubView):
+				local = f"_{py_name(step.member)}"
+				lines.append(f"\t\t{local} = {source}.{py_name(step.member)}")
+				source = local
+	lines.append('\t\tkey = b"".join(parts)')
 	return lines
 
 
@@ -51,7 +73,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		if policy is None:
 			continue
 		try:
-			ready.append((relation, policy, key_sides(relation, resolved)))
+			ready.append((relation, policy, key_layout(relation, resolved)))
 		except Refused:
 			continue
 	if not ready:
@@ -74,7 +96,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
-	for relation, (timeout, retries), (request, response) in ready:
+	for relation, (timeout, retries), layout in ready:
+		request, response = layout.request, layout.response
 		name = py_name(relation.name)
 		first, second = relation.params
 		lines += [
@@ -99,11 +122,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tself._cap     = cap",
 			"\t\tself._timeout = timeout_ms",
 			"\t\tself._retries = retries",
-			"\t\tself._live: dict[int, list[object]] = {}",
+			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
+			 "list[object]] = {}"),
 			"",
 			f"\tdef send(self, {first.name}: {py_name(first.type_name)},",
 			"\t         data: bytes, id: int, now_ms: int) -> None:",
-			*_key(request, first.name),
+			*(_key(request, first.name) if layout.packed
+			  else _key_bytes(request, first.name)),
 			"",
 			"\t\tif key not in self._live and len(self._live) >= self._cap:",
 			"\t\t\traise BoundsError(",
@@ -115,7 +140,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"\tdef on_message(self, {second.name}: "
 			f"{py_name(second.type_name)}) -> int:",
-			*_key(response, second.name),
+			*(_key(response, second.name) if layout.packed
+			  else _key_bytes(response, second.name)),
 			"",
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",

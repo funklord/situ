@@ -32,7 +32,7 @@ better than pretending it was solved.
 from __future__ import annotations
 
 from situc import ast
-from situc.relation import key_sides
+from situc.relation import key_layout
 from situc.codegen.c.names import ident, macro
 from situc.relation import Refused
 from situc.resolve import ResolvedSchema
@@ -65,7 +65,7 @@ def driven(schema: ast.Schema,
 		if policy is None:
 			continue
 		try:
-			key_sides(relation, resolved)
+			key_layout(relation, resolved)
 		except Refused:
 			continue
 		ready.append((relation, policy))
@@ -80,7 +80,7 @@ def refusals(schema: ast.Schema,
 		if policy_of(relation) is None:
 			continue
 		try:
-			key_sides(relation, resolved)
+			key_layout(relation, resolved)
 		except Refused as why:
 			found.append((relation.name, str(why)))
 	return found

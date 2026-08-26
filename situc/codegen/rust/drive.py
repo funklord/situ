@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.rust.emit import _ident, _pascal
-from situc.relation import Read, Refused, Side, key_sides
+from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate"]
@@ -39,6 +39,39 @@ def _policy(relation: ast.Relation) -> tuple[int, int] | None:
 	return (found["timeout_ms"], found["retries"]) if len(found) == 2 else None
 
 
+def _key_bytes(sides: Side, view: str, indent: str,
+		total: int) -> list[str]:
+	"""The exact-bytes key (0042); see the converse twin for the layout."""
+	lines = [f"{indent}let mut key = [0u8; {total}];",
+	         f"{indent}let mut at = 0usize;"]
+	for chain, width in sides:
+		source = view
+		for step in chain:
+			if isinstance(step, ReadBytes):
+				count = width // 8
+				lines += [
+					f"{indent}key[at..at + {count}].copy_from_slice("
+					f"{source}.{_ident(step.member)}());\t// {step.path}",
+					f"{indent}at += {count};",
+				]
+			elif isinstance(step, Read):
+				count = (width + 7) // 8
+				lines += [
+					f"{indent}let v = u64::from({source}."
+					f"{_ident(step.member)}());\t// {step.path}",
+					f"{indent}for b in 0..{count} {{",
+					f"{indent}\tkey[at + b] = (v >> (8 * ({count} - 1 - b))) as u8;",
+					f"{indent}}}",
+					f"{indent}at += {count};",
+				]
+			elif isinstance(step, SubView):
+				lines.append(f"{indent}let {_ident(step.member)} = "
+				             f"{source}.{_ident(step.member)}()?;")
+				source = _ident(step.member)
+	lines.append(f"{indent}let _ = at;")
+	return lines
+
+
 def _key(sides: Side, view: str, indent: str) -> list[str]:
 	lines = [f"{indent}let mut key: u64 = 0;"]
 	for chain, width in sides:
@@ -47,7 +80,7 @@ def _key(sides: Side, view: str, indent: str) -> list[str]:
 			if isinstance(step, Read):
 				lines.append(f"{indent}key = (key << {width}) | "
 				             f"u64::from({source}.{_ident(step.member)}());")
-			else:
+			elif isinstance(step, SubView):
 				lines.append(f"{indent}let {_ident(step.member)} = "
 				             f"{source}.{_ident(step.member)}()?;")
 				source = _ident(step.member)
@@ -62,7 +95,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		if policy is None:
 			continue
 		try:
-			ready.append((relation, policy, key_sides(relation, resolved)))
+			ready.append((relation, policy, key_layout(relation, resolved)))
 		except Refused:
 			continue
 	if not ready:
@@ -87,7 +120,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
-	for relation, (timeout, retries), (request, response) in ready:
+	for relation, (timeout, retries), layout in ready:
+		request, response = layout.request, layout.response
 		held = _pascal(relation.name)
 		first, second = relation.params
 		req  = _pascal(first.type_name)
@@ -104,7 +138,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"#[derive(Clone, Copy)]",
 			f"pub struct {held}Slot<'a> {{",
 			"\tbytes: &'a [u8],",
-			"\tkey: u64,",
+			("\tkey: u64," if layout.packed
+			 else f"\tkey: [u8; {layout.total_bytes}],"),
 			"\tid: u32,",
 			"\tdeadline_ms: u32,",
 			"\tleft: u32,",
@@ -113,7 +148,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"impl Default for {held}Slot<'_> {{",
 			"\tfn default() -> Self {",
-			"\t\tSelf { bytes: &[], key: 0, id: 0, deadline_ms: 0,",
+			("\t\tSelf { bytes: &[], key: 0, id: 0, deadline_ms: 0,"
+			 if layout.packed else
+			 f"\t\tSelf {{ bytes: &[], key: [0u8; {layout.total_bytes}], "
+			 "id: 0, deadline_ms: 0,"),
 			"\t\t       left: 0, live: false }",
 			"\t}",
 			"}",
@@ -141,7 +179,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t/// Send `{first.name}` and remember it until it is answered.",
 			f"\tpub fn send(&mut self, {first.name}: &{req}, bytes: &'a [u8],",
 			"\t            id: u32, now_ms: u32) -> Result<()> {",
-			*_key(request, first.name, "\t\t"),
+			*(_key(request, first.name, "\t\t") if layout.packed
+			  else _key_bytes(request, first.name, "\t\t", layout.total_bytes)),
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif !slot.live {",
@@ -160,7 +199,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// something outstanding.",
 			f"\tpub fn on_message(&mut self, {second.name}: &{resp})"
 			" -> Result<u32> {",
-			*_key(response, second.name, "\t\t"),
+			*(_key(response, second.name, "\t\t") if layout.packed
+			  else _key_bytes(response, second.name, "\t\t", layout.total_bytes)),
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif slot.live && slot.key == key {",

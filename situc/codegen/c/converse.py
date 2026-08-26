@@ -27,7 +27,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.c.names import ident, macro
-from situc.relation import KEY_BITS, Read, Refused, Side, key_sides
+from situc.relation import (KeyLayout, Read, ReadBytes, Refused,
+                            Side, key_layout)
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate", "refusals"]
@@ -56,13 +57,55 @@ def _key(sides: Side, view: str, prefix: str) -> list[str]:
 	return lines
 
 
+def _key_bytes(sides: Side, view: str, prefix: str,
+		total: int) -> list[str]:
+	"""The exact-bytes key (0042): parts in declaration order, a scalar part
+	as big-endian ceil(width/8) bytes, a bytes part verbatim. The layout is
+	the language's; this is only C's spelling of it."""
+	lines = [f"\tuint8_t key[{total}u];", "\tuint32_t at = 0u;"]
+	for chain, width in sides:
+		source = view
+		for step in chain:
+			target = f"situ_k{step.target}"
+			if isinstance(step, ReadBytes):
+				pointer = ident(prefix, step.struct, step.member, "ptr")
+				lines += [
+					f"\tmemcpy(&key[at], {pointer}({source}), "
+					f"{width // 8}u);\t/* {step.path} */",
+					f"\tat += {width // 8}u;",
+				]
+			elif isinstance(step, Read):
+				count = (width + 7) // 8
+				getter = ident(prefix, step.struct, step.member, "get")
+				lines += [
+					f"\tconst uint64_t {target} = (uint64_t)"
+					f"{getter}({source});\t/* {step.path} */",
+					f"\tfor (uint32_t b = 0u; b < {count}u; b++) {{",
+					f"\t\tkey[at + b] = (uint8_t)({target} >> "
+					f"(8u * ({count}u - 1u - b)));",
+					"\t}",
+					f"\tat += {count}u;",
+				]
+			else:
+				accessor = ident(prefix, step.struct, step.member, "view")
+				lines += [
+					f"\tsitu_view_t {target};",
+					f"\tif ({accessor}({source}, &{target}) != SITU_OK) {{",
+					"\t\treturn SITU_ERR_BOUNDS;",
+					"\t}",
+				]
+				source = target
+	lines.append("\t(void)at;")
+	return lines
+
+
 def refusals(schema: ast.Schema,
 		resolved: ResolvedSchema) -> list[tuple[str, str]]:
 	"""Every relation that gets no table, and why."""
 	found = []
 	for relation in schema.relations():
 		try:
-			key_sides(relation, resolved)
+			key_layout(relation, resolved)
 		except Refused as why:
 			found.append((relation.name, str(why)))
 	return found
@@ -70,7 +113,8 @@ def refusals(schema: ast.Schema,
 
 def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		prefix: str) -> list[str]:
-	request, response = key_sides(relation, resolved)
+	layout = key_layout(relation, resolved)
+	request, response = layout.request, layout.response
 	name  = ident(prefix, "conv", relation.name)
 	first, second = relation.params
 
@@ -81,7 +125,8 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		" * SITU_ERR_BOUNDS rather than evicting an exchange you still wanted.",
 		" */",
 		"typedef struct {",
-		"\tuint64_t key;",
+		("\tuint64_t key;" if layout.packed
+		 else f"\tuint8_t  key[{layout.total_bytes}u];"),
 		"\tuint32_t id;\t/* your handle for the request */",
 		"\tuint8_t  live;",
 		f"}} {name}_slot_t;",
@@ -106,11 +151,13 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		f"                                       situ_view_t {first.name},",
 		"                                       uint32_t id)",
 		"{",
-		*_key(request, first.name, prefix),
+		*(_key(request, first.name, prefix) if layout.packed
+		  else _key_bytes(request, first.name, prefix, layout.total_bytes)),
 		"",
 		"\tfor (uint32_t i = 0u; i < table->cap; i++) {",
 		"\t\tif (table->slots[i].live == 0u) {",
-		"\t\t\ttable->slots[i].key  = key;",
+		("\t\t\ttable->slots[i].key  = key;" if layout.packed else
+		 f"\t\t\tmemcpy(table->slots[i].key, key, {layout.total_bytes}u);"),
 		"\t\t\ttable->slots[i].id   = id;",
 		"\t\t\ttable->slots[i].live = 1u;",
 		"\t\t\treturn SITU_OK;",
@@ -130,10 +177,14 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		f"                                      situ_view_t {second.name},",
 		"                                      uint32_t *id)",
 		"{",
-		*_key(response, second.name, prefix),
+		*(_key(response, second.name, prefix) if layout.packed
+		  else _key_bytes(response, second.name, prefix, layout.total_bytes)),
 		"",
 		"\tfor (uint32_t i = 0u; i < table->cap; i++) {",
-		"\t\tif (table->slots[i].live != 0u && table->slots[i].key == key) {",
+		("\t\tif (table->slots[i].live != 0u && table->slots[i].key == key) {"
+		 if layout.packed else
+		 f"\t\tif (table->slots[i].live != 0u && "
+		 f"memcmp(table->slots[i].key, key, {layout.total_bytes}u) == 0) {{"),
 		"\t\t\t*id = table->slots[i].id;",
 		"\t\t\ttable->slots[i].live = 0u;",
 		"\t\t\treturn SITU_OK;",
@@ -149,9 +200,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> dict[str, str]:
 	"""The conversation header, or nothing where no relation carries a key."""
 	ready = []
+	needs_string_h = False
 	for relation in schema.relations():
 		try:
+			layout = key_layout(relation, resolved)
 			ready.append(_table(relation, resolved, prefix))
+			needs_string_h = needs_string_h or not layout.packed
 		except Refused:
 			continue
 
@@ -178,7 +232,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"",
 		"#include \"situ.h\"",
 		f"#include \"{basename}.h\"",
-		"",
+		*(["#include <string.h>", ""] if needs_string_h else [""]),
 		"#ifdef __cplusplus",
 		"extern \"C\" {",
 		"#endif",

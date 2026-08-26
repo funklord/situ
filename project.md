@@ -3175,12 +3175,16 @@ own record.
 - **Out-of-band material.** A nonce or key supplied by the caller rather than
   carried in the message cannot be distinguished from one left out by
   accident, because both spell the same thing.
-- **A conversation key of more than 64 bits** (26.95, `KEY_BITS`). TLS session
-  identifiers are 32 bytes, QUIC connection identifiers up to 20, and
-  WireGuard and Noise identify a peer by a 32-byte public key. A tool that can
-  only correlate on eight bytes cannot describe the correlation those
-  protocols perform. What a key should be when it exceeds a word is a question
-  about collisions rather than about codegen, and is not answered here.
+- **A conversation key of more than 64 bits -- expressible now (0042).** TLS
+  session identifiers are 32 bytes, QUIC connection identifiers up to 20, and
+  WireGuard and Noise identify a peer by a 32-byte public key. The collision
+  question was the answer's shape: the old refusal existed because a
+  truncated or hashed key silently matches two exchanges to each other, and
+  that argument never said the key must be small -- it said the key must be
+  *exact*. A key is the exact bytes of the compared fields now, packed into
+  one word where it fits (byte-identical to what fitted before) and a
+  byte string up to `KEY_MAX_BYTES = 32` where it does not, compared with
+  `memcmp` and never hashed at any width. 26.130 carries the build.
 
 **And one that is specified and unbuilt.** 14.7 gives `pad_to(n)` and
 `pad_random(min, max)` for traffic-analysis resistance; the parser refuses
@@ -14215,6 +14219,57 @@ did not collect on master -- two `sys.path` inserts still said `tools/`, so
 was "each project's gates run against the result", and the gate that would
 have said otherwise was the one broken. Fixed here because nothing lands
 over a suite that cannot collect.
+
+
+### 26.130 The key that was never allowed to be wrong, made wider
+
+Decision 0042, accepted and built: a conversation key is the exact bytes of
+the fields a relation compares, at the width the relation declares, up to 32
+bytes. 14.8's last unexpressible construct falls, and the section's list --
+tag widths, key selection, wide keys -- is empty.
+
+**The old refusal's argument is the design, kept.** `relation.py` refused a
+key past one word and any byte-array part with the collision argument spelled
+two ways: truncation or hashing silently matches two exchanges to each other,
+in the layer whose one job is pairing. That argument never said the key must
+be small; it said the key must be exact. Width was the cheap representation,
+not the principle. So the wide key is not a digest at any width -- it is the
+bytes, laid out part by part in declaration order, scalars big-endian at
+ceil(width/8) bytes, arrays verbatim, and the layout is the language's so
+four backends cannot disagree about it.
+
+**The packed word survives untouched, which is the no-regression half.** A
+relation whose scalar key fits 64 bits keeps today's representation and
+today's generated code -- dns's converse header is byte-identical, asserted
+against the emitted text rather than assumed. The two spellings sit in one
+table type per relation, chosen at compile time; the caller-allocated slots
+stay statically sized either way, and the wide key's cost lands in the type
+the caller already sizes.
+
+**Run, not read, in the two backends that can be run here.** The Python and
+C tables both record a 12-byte key -- a u64 beside a 4-byte array -- match
+it on the exact bytes, and refuse a single differing payload byte; the C++
+and Rust tables compile under their full warning sets. The one-byte refusal
+is the property a digest could not promise, which is why the hashing refusal
+is now unreachable rather than merely enforced.
+
+**The ceiling refusal keeps the old diagnostic's virtues.** Past 32 bytes
+the message names the width, the ceiling, and the collision reason in under
+300 characters -- the readability bound the old array refusal was tested
+for, moved to the refusal that remains. The ceiling is a named number
+covering every identifier 14.8 lists, and it moves the way `KEY_BITS` just
+did: by its own record.
+
+**One deviation from the record's consequences, on purpose.** 0042 sketched
+a Noise-style worked example earning a directory. Grounding it found no
+small protocol that honestly carries the construct: WireGuard matches a
+response by a *u32* receiver index (packed, not wide), Noise sessions hang
+off Diffie-Hellman state rather than echoed bytes, and TLS 1.2's session id
+-- the one true 32-byte echo -- is length-prefixed, which is the
+variable-width case 0042 deliberately refuses. A fake protocol would
+demonstrate nothing (the vectors files' own rule), so the construct is held
+by executable tests over the relation fixtures instead, and the example
+directory waits for a protocol that earns it.
 
 
 ---

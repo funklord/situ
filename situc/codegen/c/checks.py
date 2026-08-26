@@ -34,7 +34,7 @@ from situc.codegen.c import frame
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
-from situc.relation import Refused, conversation_key, key_sides
+from situc.relation import Refused, conversation_key, key_layout
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	Obligation, data_sized, enclosing_arm, has_computable_extent,
@@ -284,7 +284,7 @@ def _converse_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 		# table that was not emitted. Asking the same function is what keeps
 		# the two from drifting apart.
 		try:
-			key_sides(relation, resolved)
+			key_layout(relation, resolved)
 		except Refused:
 			suite.skip(f"conversation {name}", "carries no key a table can be "
 			           "built on, which is what the backend refuses too")

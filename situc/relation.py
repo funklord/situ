@@ -507,9 +507,18 @@ def conversation_key(relation: ast.Relation) -> list[tuple[str, str]]:
 	return pairs
 
 
-#: Bits a packed key may occupy. One `uint64_t`, and see the module docstring
-#: for why a wider one is refused rather than truncated.
+#: Bits a *packed* key may occupy: one `uint64_t`, today's spelling, kept
+#: byte-identical for every relation that fits it (0042). Wider keys and keys
+#: with byte-string parts are exact bytes instead -- never a digest, because a
+#: collision is a silently wrong pairing in the pairing layer.
 KEY_BITS = 64
+
+#: The ceiling on an exact-bytes key. A named number rather than a principle:
+#: it covers every identifier 14.8 names -- TLS session ids at 32, Noise and
+#: WireGuard static keys at 32, QUIC connection ids at 20 -- and it exists so
+#: a schema cannot draft a kilobyte of payload into the slot table. A protocol
+#: that outgrows it moves it the way 0042 moved KEY_BITS: by its own record.
+KEY_MAX_BYTES = 32
 
 
 def keykey_width(resolved: ResolvedSchema, bind: Read) -> int:
@@ -521,11 +530,30 @@ def keykey_width(resolved: ResolvedSchema, bind: Read) -> int:
 	return 0
 
 
-#: A key is read out of scalars, so a step in one is never a `ReadBytes`.
-#: Saying so in the type is what stops each backend's `converse` and
-#: `drive` having to ask.
-KeyStep = SubView | Read
+#: A key part ends in a `Read` for a scalar or a `ReadBytes` for an exact
+#: byte string (0042); the `SubView`s before it are the walk that gets there.
+#: A backend asks `isinstance` of the last step, which it already did for the
+#: first two kinds.
+KeyStep = SubView | Read | ReadBytes
 Side = list[tuple[list[KeyStep], int]]
+
+
+@dataclass(frozen=True)
+class KeyLayout:
+	"""How a relation's conversation key is represented (0042).
+
+	`packed` is today's spelling -- every part a scalar, 64 bits or fewer,
+	shift-packed into one word -- and a relation that fit yesterday keeps
+	byte-identical generated code. Anything else is the exact bytes: parts
+	in declaration order, a scalar part as ceil(width/8) bytes big-endian, a
+	bytes part as its own bytes. One layout, four spellings; the sequence of
+	bytes is the language's so the backends cannot disagree about it.
+	"""
+
+	packed: bool
+	total_bytes: int
+	request: Side
+	response: Side
 
 
 def key_width(resolved: ResolvedSchema, bind: Read) -> int:
@@ -538,8 +566,8 @@ def key_width(resolved: ResolvedSchema, bind: Read) -> int:
 	return 0
 
 
-def key_sides(relation: ast.Relation,
-		resolved: ResolvedSchema) -> tuple[Side, Side]:
+def key_layout(relation: ast.Relation,
+		resolved: ResolvedSchema) -> KeyLayout:
 	"""The reads that build each side's key, in declaration order.
 
 	Taken from the plan rather than resolved again here, so the accessors a
@@ -553,22 +581,33 @@ def key_sides(relation: ast.Relation,
 	request: Side = []
 	response: Side = []
 	total = 0
+	any_bytes = False
 
 	for constraint, must in zip(plan(relation, resolved), relation.body):
 		if constraint.bytes_equal is not None:
-			# `span.text()` and not the node. An `ast.Expr` stringifies to its
-			# dataclass repr, and a `Span` holds the `Source`, which holds the
-			# whole file -- so interpolating one embeds the schema in the
-			# message, once per operand. A 138-byte schema produced a 2436-byte
-			# diagnostic and a real one produced 212kB, in which the reason was
-			# findable by grep and not by reading. A diagnostic nobody can read
-			# is the same as no diagnostic, which is the fault this very
-			# refusal was written to fix one layer up.
-			raise Refused(
-				f"its key includes `{must.expr.span.text()}`, which compares "
-				f"{constraint.bytes_equal.length} bytes; a packed key holds "
-				f"{KEY_BITS // 8}, and hashing one would make two exchanges "
-				f"that collided indistinguishable")
+			if constraint.bytes_equal.negated:
+				# `!=` over byte strings is a constraint, not an identity:
+				# nothing about "these differ" says which exchange this is.
+				continue
+
+			byte_reads = [bind for bind in constraint.bindings
+			              if isinstance(bind, ReadBytes)]
+			if len(byte_reads) != 2:
+				continue
+
+			for bind in byte_reads:
+				chain: list[KeyStep] = [
+					step for step in constraint.bindings
+					if isinstance(step, (SubView, Read, ReadBytes))
+					and (step.path == bind.path
+					     or bind.path.startswith(step.path + "."))]
+				side: tuple[list[KeyStep], int] = (chain, bind.length * 8)
+				(request if bind.path.split(".")[0] == first
+				 else response).append(side)
+
+			total += byte_reads[0].length * 8
+			any_bytes = True
+			continue
 
 		expr = must.expr
 		if not isinstance(expr, ast.Binary) or expr.op != "==":
@@ -578,21 +617,25 @@ def key_sides(relation: ast.Relation,
 		if len(reads) != 2:
 			continue
 
-		for bind in reads:
+		for read in reads:
 			chain = [step for step in constraint.bindings
 			         if isinstance(step, (SubView, Read))
-			         and (step.path == bind.path
-			              or bind.path.startswith(step.path + "."))]
-			side = (chain, key_width(resolved, bind))
-			(request if bind.path.split(".")[0] == first else response).append(side)
+			         and (step.path == read.path
+			              or read.path.startswith(step.path + "."))]
+			side = (chain, key_width(resolved, read))
+			(request if read.path.split(".")[0] == first else response).append(side)
 
 		total += key_width(resolved, reads[0])
 
-	if total > KEY_BITS:
-		raise Refused(f"its key is {total} bits and a packed one holds "
-		              f"{KEY_BITS}; two exchanges that collided would be "
-		              f"matched to each other")
+	total_bytes = (total + 7) // 8
+	if total_bytes > KEY_MAX_BYTES:
+		raise Refused(f"its key is {total_bytes} bytes and the ceiling is "
+		              f"{KEY_MAX_BYTES}; hashing it down would make two "
+		              f"exchanges that collided indistinguishable, so a key "
+		              f"this wide moves the ceiling by its own record (0042)")
 	if not request or len(request) != len(response):
 		raise Refused("its key does not read one field from each message")
 
-	return request, response
+	return KeyLayout(packed=not any_bytes and total <= KEY_BITS,
+	                 total_bytes=total_bytes,
+	                 request=request, response=response)
