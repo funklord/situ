@@ -414,6 +414,14 @@ text files a reviewer can read.
   Python allocates because its data model gives it no other spelling, bounded
   by the schema's own `max`.
 - No recursive types: size and capability computation would not terminate.
+- No transformed payloads. A field whose bytes must be *decompressed,
+  decrypted or unescaped* before they mean anything is not a layout, and
+  situ describes the layout around it, not the transform. A codec names an
+  extern implementation and situ checks the contract; a decompressor that
+  writes into a different buffer with overlapping copies -- LZ4, zlib -- is
+  the caller's, because its output is not a view over its input and it must
+  allocate. This follows from the no-allocation rule above rather than being
+  a separate one.
 - No behaviour the schema did not state. Situ describes conversations where a
   schema says so, and generates the machinery only when `--layer` asks for it,
   but it never supplies a fact nobody declared -- no default timeout, no

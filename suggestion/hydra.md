@@ -63,6 +63,15 @@ carry the intent, and the map could then say *padding* rather than
 `<reserved0>`. The current spelling is not wrong; it is the one place in the
 two schemas where I had to re-read what I had written to be sure it was right.
 
+> **In flight as decision 0043.** Section 8.4 already specifies
+> `pad_to(n)` -- "explicit padding to the next multiple of n" -- so this is
+> a construct to build rather than invent, and the map would label it
+> padding as you ask. What the record settles is the one thing 8.4's wording
+> leaves open: whether `pad_to(4)` aligns the *absolute* offset or pads the
+> *preceding run's own length* to a multiple. In `base::Pickle` they
+> coincide because every field is 4-aligned; in general they do not, and it
+> is a wire-visible choice, so it gets a record before code.
+
 ### 2. A UTF-16 element type, or a way to say the count is not bytes
 
 `u8 data[length * 2]` is the honest layout and loses the fact that this is
@@ -76,6 +85,14 @@ This matters more than it looks: the whole reason hydra's reader has the
 overflow guard is that a length field in this format sometimes counts
 characters and sometimes counts bytes, and nothing in the format distinguishes
 them. A schema that can state which is which is documenting the trap.
+
+> **In flight as decision 0044.** `[encoding = utf16]` on a `u16` run is the
+> shape, and the record settles the fork you did not have to: UTF-16 has a
+> byte order, and a validity check has to reject a lone surrogate the way
+> the utf8 check rejects an overlong form. The count-in-characters-vs-bytes
+> trap you name is the argument for it -- a schema that says `[encoding =
+> utf16]` on a `u16[length]` run states that `length` counts code units, not
+> bytes, which is the distinction the format itself omits.
 
 ### 3. Say that encoded payloads are out of scope, next to the other exclusions
 
@@ -96,6 +113,11 @@ The existing exclusions are phrased as principles ("no wire format of its own",
 decompressor must allocate or be handed an output buffer, and its output is
 not a view over its input.
 
+> **Added, under "What it will not do": "No transformed payloads."** Phrased
+> as following from the no-allocation rule, exactly as you framed it -- a
+> decompressor writes into a different buffer with overlapping copies, so its
+> output is not a view over its input. LZ4 is named as the case.
+
 ### 4. The sized-run syntax is the one thing a newcomer gets wrong
 
 My first schema said `u8 body[] count (size - 1);`, on the assumption that a
@@ -110,6 +132,12 @@ unexpected token is one of the plausible guesses (`count`, `len`, `length`,
 `u8 options[(data_offset - 5) * 4]` in tcp, `u8 data[header.filesize]` in cpio
 -- but the README's own snippets are all fixed-size structs, so the first place
 a reader looks does not contain the form they need.
+
+> **Fixed.** `u8 body[] count (n)` -- and `len`, `length`, `size` -- now
+> reports "a run is sized inside its brackets, not with `count`", with the
+> fix `name[expr]` and a pointer to `until`/`while` for the by-content forms.
+> A field genuinely named `count` is untouched; the trigger is the word in
+> terminator position.
 
 ### 5. What adoption actually costs a CMake/Qt project, and what would lower it
 

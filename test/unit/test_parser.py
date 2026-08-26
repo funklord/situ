@@ -712,3 +712,23 @@ def test_indexed_holds_exactly_one_element_declaration() -> None:
 	with pytest.raises(SituError, match="exactly one element declaration"):
 		parse_text("struct R { u32 id; } struct S { u16 n; "
 		           "indexed(offset_type = u16, count = n) { R a[]; R b[]; } }")
+
+
+def test_a_run_sized_with_count_names_the_fix() -> None:
+	"""suggestion/hydra.md: the first schema written against situ said
+	`u8 body[] count (n)`, on the guess that a counted run is spelled like
+	`until`/`while`. The bare "expected `;`" said where and not what; this
+	names the four guessed words and the fix -- the length goes in the
+	brackets."""
+	for word in ("count", "len", "length", "size"):
+		src = ("target buffer;\nendian big;\n\n"
+		       "struct s { u16 n; u8 body[] %s (n); }\n" % word)
+		with pytest.raises(SituError, match="sized inside its brackets"):
+			parse_text(src, path="s.situ")
+
+
+def test_a_field_named_like_a_sizing_word_is_fine() -> None:
+	"""The trigger is the word in terminator position, not a field of that
+	name: `u8 count;` and a run driven by it stay legal."""
+	parse_text("target buffer;\nendian big;\n\n"
+	           "struct s { u8 count; u8 data[count]; }\n", path="s.situ")

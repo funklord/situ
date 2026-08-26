@@ -1839,9 +1839,44 @@ class Parser:
 		located  = self.parse_located()
 		pin      = self.parse_pin()
 		attrs    = self.parse_attrs()
-		self.expect_symbol(";", "after the field declaration")
+		self._expect_field_terminator(array)
 		return ast.Field(self.span_from(start), name.text, type_ref, array, pin,
 		                 attrs, until, repeat, located=located)
+
+	#: The words a newcomer reaches for to size a run, none of which situ
+	#: uses: the length goes inside the brackets. `suggestion/hydra.md` -- the
+	#: first schema written against situ tripped on exactly this, and the
+	#: bare "expected `;`" said where without saying what.
+	_SIZING_GUESSES = frozenset({"count", "len", "length", "size"})
+
+	def _expect_field_terminator(self, array: ast.ArraySpec | None) -> None:
+		"""`;`, with a nudge when the next token is a guessed run-length word.
+
+		`u8 body[] count (n)` is the shape: an empty `[]` followed by one of
+		the words other languages spell a counted run with. Situ puts the
+		length in the brackets -- `u8 body[n]` -- so the fix is to move it,
+		and the diagnostic says so rather than only naming the semicolon.
+		"""
+		if self.current.is_symbol(";"):
+			self.advance()
+			return
+		if self.current.kind is TokenKind.IDENT \
+				and self.current.text in self._SIZING_GUESSES:
+			empty = array is not None and array.size is None
+			hint  = ("a run's length goes inside the brackets: `name[expr]`"
+			         if empty else
+			         "a run's length goes inside the brackets, and this field "
+			         "already has some: write `name[expr]`")
+			raise error(
+				f"a run is sized inside its brackets, not with `"
+				f"{self.current.text}`",
+				self.current.span,
+				label = f"situ has no `{self.current.text}` here",
+				notes = [hint,
+				         "`until` and `while` end a run by content; a length "
+				         "is `name[expr]` (section 8.4)"],
+			)
+		self.expect_symbol(";", "after the field declaration")
 
 	def parse_located(self) -> ast.Expr | None:
 		"""`at hdr.pixel_offset` -- where the data says this member sits.
