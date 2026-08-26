@@ -54,6 +54,7 @@ from situc.traverse import (
 	is_run,
 	local_name,
 	element_bytes, is_counted_run, matched_values, obligation,
+	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members,
 )
@@ -207,6 +208,7 @@ class Emitter:
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
 			"\tleaf, nonneg,",
 			*(["\tNATIVE_BIG,"] if self._has_native_order() else []),
+			*(["\talign_up,"] if self._has_pad() else []),
 			"\tcompose, nul_len, open_gate, utf8_valid,",
 			*self._tlv_imports(),
 			*self._delimited_imports(),
@@ -742,6 +744,13 @@ class Emitter:
 		avoid.
 		"""
 		return any(entry.placement.kind == "marker"
+		           for struct in self.resolved.structs.values()
+		           for entry in struct.entries)
+
+	def _has_pad(self) -> bool:
+		"""Whether any placement is `pad_to(n)` padding (0043), so the import
+		is added only where the generated code uses it."""
+		return any(entry.placement.pad_to is not None
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries)
 
@@ -1448,6 +1457,8 @@ class Emitter:
 				assert step.placement is not None
 				name = py_name(local_name(struct, step.placement))
 				steps.append(f'\t\tfound["{name}"] = at')
+			elif step.kind == "align":
+				steps.append(f"\t\tat = align_up(at, {step.size}, self._len)")
 			elif step.placement is None:
 				steps.append(f"\t\tat += {step.size}")
 			else:
@@ -3550,10 +3561,14 @@ class Emitter:
 			return None
 
 		constant = sum(part for part in parts if isinstance(part, int))
-		terms: list[str] = []
+		terms: list[str | tuple[str, int]] = []
 
 		for other in parts:
 			if isinstance(other, int):
+				continue
+			pad = pad_alignment(other)
+			if pad is not None:
+				terms.append(("align", pad))
 				continue
 			length = self._length_expression(struct, other)
 			if length is None:
@@ -3570,7 +3585,10 @@ class Emitter:
 		# things (26.27).
 		folded = str(constant)
 		for term in terms:
-			folded = f"advance({folded}, {term}, self._len)"
+			if isinstance(term, tuple):
+				folded = f"align_up({folded}, {term[1]}, self._len)"
+			else:
+				folded = f"advance({folded}, {term}, self._len)"
 		return folded
 
 	def _fits(self, struct: ResolvedStruct, placement: Placement,
@@ -4282,7 +4300,10 @@ class Emitter:
 			        " where the reserved bytes are."]
 
 		width = scalar.bits // BITS_PER_BYTE
-		if placement.array_count is not None:
+		pad   = pad_alignment(placement)
+		if pad is not None and placement.offset_bits is None:
+			count = f"align_up(({start}), {pad}, self._len) - ({start})"
+		elif placement.array_count is not None:
 			count = str(placement.array_count * width)
 		elif data_sized(placement):
 			length = self._length_expression(struct, placement)

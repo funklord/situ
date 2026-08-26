@@ -21,7 +21,7 @@
  * entry here would be read past. `fits` bounds the *table*, which leaves
  * exactly this hole at the last row of it. */
 #define STRUCT_READS     8u
-#define PLACEMENT_READS 48u
+#define PLACEMENT_READS 50u
 #define VARINT_READS    11u
 #define DELIMITER_READS 32u
 #define ARM_READS       21u
@@ -74,7 +74,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 2u) {
+	if (u16_at(image + 4) != 3u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {
@@ -220,6 +220,7 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	out->radix        = at[40];
 	out->radix_digits = u16_at(at + 42);
 	out->repeat_cap   = u16_at(at + 46);
+	out->pad_to       = u16_at(at + 48);
 	return SITU_WALK_OK;
 }
 
@@ -807,6 +808,21 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 		return err;
 	}
 
+	/* `pad_to(n)`: align_up(offset, n) - offset, in bits (decision 0043).
+	 * The offset is the sum of what precedes this pad, which offset_bits
+	 * already knows. */
+	if (held.pad_to != 0u) {
+		uint32_t off  = 0u;
+		const uint32_t unit = (uint32_t)held.pad_to * 8u;
+
+		err = situ_walk_offset_bits(image, message, len, shape, index, &off);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = ((off + unit - 1u) / unit) * unit - off;
+		return SITU_WALK_OK;
+	}
+
 	/* A variant's extent is the arm the discriminant selects. Before the
 	 * branches below, as `walk.py` has it: an arm is not a member of the
 	 * struct holding the variant, and asking the chain to place one walks
@@ -1035,6 +1051,14 @@ static situ_walk_err offset_bits_deep(const situ_walk_image *image,
 		}
 		/* A located member joins no offset chain: it says where it is. */
 		if (earlier.located_code != SITU_WALK_NONE) {
+			continue;
+		}
+
+		/* `pad_to(n)` advances the total to the next multiple, not by a
+		 * fixed size (decision 0043). */
+		if (earlier.pad_to != 0u) {
+			const uint32_t unit = (uint32_t)earlier.pad_to * 8u;
+			total = ((total + unit - 1u) / unit) * unit;
 			continue;
 		}
 

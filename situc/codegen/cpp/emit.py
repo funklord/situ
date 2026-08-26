@@ -60,6 +60,7 @@ from situc.traverse import (
 	is_run,
 	local_name,
 	element_bytes, is_counted_run, matched_values, obligation,
+	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members,
 )
@@ -987,10 +988,14 @@ class Emitter:
 			return None
 
 		constant = sum(part for part in parts if isinstance(part, int))
-		terms: list[str] = []
+		terms: list[str | tuple[str, int]] = []
 
 		for other in parts:
 			if isinstance(other, int):
+				continue
+			pad = pad_alignment(other)
+			if pad is not None:
+				terms.append(("align", pad))
 				continue
 			length = self._length_expression(struct, other)
 			if length is None:
@@ -1007,7 +1012,10 @@ class Emitter:
 		# function rather than a second one that agrees today.
 		folded = str(constant)
 		for term in terms:
-			folded = f"situ_advance_u32({folded}, {term}, raw_.limit)"
+			if isinstance(term, tuple):
+				folded = f"situ_align_up_u32({folded}, {term[1]}, raw_.limit)"
+			else:
+				folded = f"situ_advance_u32({folded}, {term}, raw_.limit)"
 		return folded
 
 	def _offset_body(self, struct: ResolvedStruct,
@@ -1032,6 +1040,10 @@ class Emitter:
 			if isinstance(other, int):
 				if other:
 					lines.append(f"\t\tat += {other};")
+				continue
+			pad = pad_alignment(other)
+			if pad is not None:
+				lines.append(f"\t\tat = situ_align_up_u32(at, {pad}, raw_.limit);")
 				continue
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
@@ -5502,8 +5514,11 @@ class Emitter:
 			        " where the reserved bytes are. */"]
 
 		width = scalar.bits // BITS_PER_BYTE
-		if placement.array_count is not None:
-			count: str | None = str(placement.array_count * width)
+		pad   = pad_alignment(placement)
+		if pad is not None and placement.offset_bits is None:
+			count: str | None = f"situ_align_up_u32(at, {pad}, raw_.limit) - at"
+		elif placement.array_count is not None:
+			count = str(placement.array_count * width)
 		elif data_sized(placement):
 			count = self._length_expression(struct, placement)
 			if count is None:

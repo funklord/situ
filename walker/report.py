@@ -709,6 +709,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 				except UnicodeDecodeError:
 					return ERR_CONSTRAINT
 
+
 		value_checks = [pair for pair in held
 		                if pair[0] not in (FITS_FRAME, TERMINATED,
 		                                   ARM_SELECTED, DIGITS_VALID,

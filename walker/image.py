@@ -18,7 +18,7 @@ import struct as _struct
 from dataclasses import dataclass, field
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 2
+FORMAT_VERSION	= 3
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
@@ -69,6 +69,7 @@ class Placement:
 	radix_digits: int
 	since: int
 	repeat_cap: int
+	pad_to: int
 
 	@property
 	def pinned(self) -> bool:
@@ -252,7 +253,7 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			base = at + i * stride
 			kind, endian, bit_order, pflags = _struct.unpack_from(
 				"<BBBB", blob, base)
-			rest = _struct.unpack_from("<IIIIIIIIIBBHHH", blob, base + 4)
+			rest = _struct.unpack_from("<IIIIIIIIIBBHHHH", blob, base + 4)
 			image.placements.append(Placement(kind, endian, bit_order,
 			                                  pflags, *rest))
 	if CODE in found:

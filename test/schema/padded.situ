@@ -1,0 +1,49 @@
+// `pad_to(n)`: explicit padding to the next multiple of n bytes, from the
+// message base (section 8.4, decision 0043). The construct base::Pickle,
+// cpio and most RPC framings write by hand as
+//
+//     reserved u8 [align_up(length, 4) - length];
+//
+// spelled once, with the map labelling it `<pad>` rather than `<reserved0>`
+// and the wire signature carrying `pad-to=4` -- contract, because a peer that
+// pads to a different multiple disagrees about where the next field starts.
+//
+// Its own file rather than a case in `edges.situ`, so the four-backend
+// differential draws its buffers against exactly this shape. The dynamic
+// case is the one that matters: `data` is a variable run, and the pad carries
+// the offset to a multiple of four so `trailer` lands aligned whatever `n`
+// was.
+
+target buffer;
+endian big;
+
+struct pickle_string {
+	u16  used;
+	u8   data[used];
+	pad_to(4);
+	u16  trailer;
+}
+
+// A static pad too, which folds to a constant: `one` at offset 1 pads three
+// bytes to reach four, and `word` lands at four with no runtime arithmetic.
+struct aligned_header {
+	u8   one;
+	pad_to(4);
+	u32  word;
+}
+
+// A u8-driven variant of the dynamic case. The u8 count reaches a byte
+// where `1 + n` is already a multiple of four (n = 3, 7, 11 ...), so the pad
+// is *zero* bytes -- and that is the case a first cut got wrong: Rust's
+// one-byte-reserved fast path checked a byte the empty pad does not own,
+// disagreeing with the other three. Kept so the differential exercises the
+// zero-pad path on purpose rather than by a lucky draw (26.134).
+struct byte_run {
+	u8   n;
+	u8   data[n];
+	pad_to(4);
+	u16  trailer;
+}
+
+require size(aligned_header) == 8;
+require absolute_static(aligned_header.word);

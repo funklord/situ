@@ -170,6 +170,10 @@ def _constraints(placement: Placement) -> list[str]:
 		facts.append(f"endian-from={placement.marker}")
 	if placement.sized_by is not None:
 		facts.append(f"sized-by={placement.sized_by}")
+	# The alignment a pad promises (0043): a peer that pads to a different
+	# multiple disagrees about where the next field starts, so it is contract.
+	if placement.pad_to is not None:
+		facts.append(f"pad-to={placement.pad_to}")
 	if placement.radix is not None:
 		facts.append(f"radix={placement.radix}")
 	if placement.radix_minimal:
@@ -564,7 +568,7 @@ def _compare_member(struct: str, index: int, was: str | None,
 INTERPRETATION = (
 	"big", "little", "native", "msb_first", "lsb_first",
 	"radix=", "sized-by=", "varint=", "codec=", "encoding=",
-	"nonce=", "key=",
+	"nonce=", "key=", "pad-to=",
 	"endian-from=", "quote=", "escape=", "trim", "fold-case",
 	"nul_terminated",
 )

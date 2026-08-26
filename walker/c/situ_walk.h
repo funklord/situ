@@ -116,6 +116,9 @@ typedef struct {
 	/* `max` on a `while` run: the ceiling the schema put on how many
 	 * elements one may hold, and zero where it stated none. */
 	uint16_t repeat_cap;
+	/* `pad_to(n)` alignment in bytes, 0 where the member is not padding
+	 * (decision 0043). */
+	uint16_t pad_to;
 } situ_walk_placement;
 
 /* Bits of `situ_walk_placement.flags` a caller needs.

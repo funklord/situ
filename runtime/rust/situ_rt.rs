@@ -160,6 +160,15 @@ pub fn advance(at: usize, by: usize, limit: usize) -> usize {
 	at + if by < room { by } else { room }
 }
 
+/// `pad_to(n)` (decision 0043): the next multiple of n, clamped to the view
+/// the way `advance` is, so an aligned offset past a short message is a
+/// `validate` failure rather than a panic on the slice that follows.
+pub fn align_up(at: usize, n: usize, limit: usize) -> usize {
+	let pad = (n - at % n) % n;
+
+	advance(at, pad, limit)
+}
+
 /// Zero where the bytes are not all there, which is what the C runtime's
 /// accessors answer and what `advance` above exists to make necessary.
 ///

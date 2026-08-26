@@ -1130,6 +1130,8 @@ class Parser:
 				return self.parse_marker_field()
 			if token.text == "reserved":
 				return self.parse_reserved()
+			if token.text == "pad_to":
+				return self.parse_pad()
 			if token.text == "positional":
 				return self.parse_positional()
 			if token.text == "variant":
@@ -1757,6 +1759,30 @@ class Parser:
 
 		member = self.parse_member()
 		return ast.VariantArm(self.span_from(start), value, member)
+
+	def parse_pad(self) -> ast.Pad:
+		"""`pad_to(4);` -- padding to the next multiple of four bytes (0043).
+
+		The count is a literal: the padding is computed from it at layout
+		time, and a value the compiler cannot see is one no offset after the
+		pad can be computed from.
+		"""
+		start = self.advance()
+		self.expect_symbol("(", "before the alignment")
+		where = self.current
+		value = evaluate_literal(self.parse_expr())
+		self.expect_symbol(")", "after the alignment")
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after `pad_to`")
+		if value is None or value <= 0:
+			raise error(
+				"`pad_to(n)` needs a positive literal alignment",
+				where.span,
+				label = "not a positive integer literal",
+				notes = ["`pad_to(4)` pads to the next multiple of four bytes "
+				         "(section 8.4)"],
+			)
+		return ast.Pad(self.span_from(start), value, attrs)
 
 	def parse_reserved(self) -> ast.Reserved:
 		start    = self.advance()

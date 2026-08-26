@@ -99,6 +99,13 @@ def offset_bits(view: View, index: int) -> int:
 		earlier = view.image.placements[before]
 		if earlier.located_code != NONE:
 			continue		# a located member joins no offset chain
+		if earlier.pad_to:
+			# `pad_to(n)` advances the total to the next multiple, not by a
+			# fixed size (0043) -- the same align every backend's offset
+			# function does, spelled in bits here.
+			unit = earlier.pad_to * BITS_PER_BYTE
+			total = ((total + unit - 1) // unit) * unit
+			continue
 		total += size_bits(view, before)
 	raise Refused(f"placement {index} is not a member of this struct")
 
@@ -114,6 +121,12 @@ def size_bits(view: View, index: int) -> int:
 	than merely short.
 	"""
 	placement = view.image.placements[index]
+	if placement.pad_to:
+		# `align_up(offset, n) - offset` (0043), in bits. The offset is the
+		# sum of what precedes this pad, which `offset_bits` already knows.
+		unit = placement.pad_to * BITS_PER_BYTE
+		off  = offset_bits(view, index)
+		return ((off + unit - 1) // unit) * unit - off
 	if placement.repeat_code != NONE and placement.type_struct != NONE:
 		# A `while` run's extent is however far the walk got. Falling
 		# through to the record's `size_bits` gave the *minimum* -- one

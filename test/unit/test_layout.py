@@ -642,3 +642,44 @@ def test_a_width_with_no_value_is_refused() -> None:
 	text = rendered("struct S { bcd2 x [bits]; }")
 
 	assert "`[bits]` needs a width" in text
+
+
+# -- pad_to, decision 0043 --------------------------------------------------
+
+
+def test_a_static_pad_folds_to_a_constant() -> None:
+	"""`pad_to(4)` after a one-byte field is three bytes, and the field after
+	it lands aligned with no runtime arithmetic."""
+	placed = {p.name: p for p in
+	          layout("struct S { u8 one; pad_to(4); u32 word; }")
+	          .structs["S"].placements}
+	assert placed["<pad>"].size_bits == 3 * BITS_PER_BYTE
+	assert placed["<pad>"].pad_to == 4
+	assert placed["word"].offset_bits == 4 * BITS_PER_BYTE
+
+
+def test_an_aligned_pad_is_zero_bytes() -> None:
+	"""A pad where the cursor already sits on the boundary is empty."""
+	placed = {p.name: p for p in
+	          layout("struct S { u32 a; pad_to(4); u8 b; }")
+	          .structs["S"].placements}
+	assert placed["<pad>"].size_bits == 0
+
+
+def test_a_dynamic_pad_is_bounded_and_makes_what_follows_dynamic() -> None:
+	"""After a variable run the pad is 0..n-1 bytes, and the member after it
+	is aligned but dynamic -- an aligned sum of lengths is still a sum."""
+	placed = {p.name: p for p in
+	          layout("struct S { u8 n; u8 data[n]; pad_to(4); u16 t; }")
+	          .structs["S"].placements}
+	assert placed["<pad>"].size_bits == 0
+	assert placed["<pad>"].size_max_bits == 3 * BITS_PER_BYTE
+	assert placed["<pad>"].offset_bits is None
+	assert placed["t"].offset_bits is None
+
+
+def test_pad_to_needs_a_positive_literal() -> None:
+	assert "positive literal alignment" in rendered(
+		"struct S { u8 a; pad_to(0); u8 b; }")
+	assert "positive literal alignment" in rendered(
+		"struct S { u8 n; u8 a; pad_to(n); u8 b; }")

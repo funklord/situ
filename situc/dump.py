@@ -202,6 +202,11 @@ def _member(member: ast.Member, depth: int) -> list[str]:
 		lines.extend(_attrs(member.attrs, depth + 1))
 		return lines
 
+	if isinstance(member, ast.Pad):
+		lines = [_indent(depth, f"pad_to({member.to})")]
+		lines.extend(_attrs(member.attrs, depth + 1))
+		return lines
+
 	if isinstance(member, ast.Coded):
 		lines = [_indent(depth, f"coded {member.name} codec={member.codec}")]
 		lines.extend(_attrs(member.attrs, depth + 1))

@@ -56,6 +56,7 @@ from situc.traverse import (
 	is_run,
 	local_name,
 	element_bytes, is_counted_run, matched_values, obligation,
+	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members,
 )
@@ -934,6 +935,9 @@ class Emitter:
 				assert step.placement is not None
 				steps.append(f"\t\t\t{_ident(c_name(local_name(struct, step.placement)))}"
 				             ": at,")
+			elif step.kind == "align":
+				steps.append(f"\t\tat = situ_rt::align_up(at, {step.size}, "
+				             "self.bytes.len());")
 			elif step.placement is None:
 				steps.append(f"\t\tat += {step.size};")
 			else:
@@ -952,6 +956,9 @@ class Emitter:
 				local = _ident(c_name(local_name(struct, step.placement)))
 				body.append(f"\t\tlet {local} = at;")
 				captured.append(local)
+			elif step.kind == "align":
+				body.append(f"\t\tat = situ_rt::align_up(at, {step.size}, "
+				            "self.bytes.len());")
 			elif step.placement is None:
 				body.append(f"\t\tat += {step.size};")
 			else:
@@ -3634,10 +3641,14 @@ class Emitter:
 			return None
 
 		constant = sum(part for part in parts if isinstance(part, int))
-		terms: list[str] = []
+		terms: list[str | tuple[str, int]] = []
 
 		for other in parts:
 			if isinstance(other, int):
+				continue
+			pad = pad_alignment(other)
+			if pad is not None:
+				terms.append(("align", pad))
 				continue
 			length = self._length_expression(struct, other)
 			if length is None:
@@ -3655,8 +3666,12 @@ class Emitter:
 		for term in terms:
 			# `_unparen`, because `-D warnings` rejects a parenthesised
 			# argument and a length expression arrives wrapped.
-			folded = (f"situ_rt::advance({folded}, {self._unparen(term)},"
-			          " self.bytes.len())")
+			if isinstance(term, tuple):
+				folded = (f"situ_rt::align_up({folded}, {term[1]},"
+				          " self.bytes.len())")
+			else:
+				folded = (f"situ_rt::advance({folded}, {self._unparen(term)},"
+				          " self.bytes.len())")
 		return folded
 
 	def _fits(self, struct: ResolvedStruct, placement: Placement,
@@ -5025,6 +5040,15 @@ class Emitter:
 				continue
 
 			if check is Check.RESERVED:
+				# A pad is a *run* of 0..n-1 bytes, not a single scalar
+				# (0043); the scalar read below would check one byte where
+				# the pad is empty, which is C++ and Python already route
+				# through `_reserved_checks`. Rust's fast path for a
+				# one-byte reserved is the odd one out, so send a pad the
+				# long way.
+				if pad_alignment(placement) is not None:
+					checks.extend(self._reserved_checks(struct, placement))
+					continue
 				policy = _reserved_policy(placement.attrs)
 				if policy in ("must_be_zero", "must_be_one"):
 					want = 0 if policy == "must_be_zero" else (1 << scalar.bits) - 1
@@ -5125,8 +5149,16 @@ class Emitter:
 			        " where the reserved bytes are."]
 
 		width = scalar.bits // BITS_PER_BYTE
-		if placement.array_count is not None:
-			count: str | None = str(placement.array_count * width)
+		pad   = pad_alignment(placement)
+		if pad is not None and placement.offset_bits is None:
+			# `-D unused-parens` rejects a parenthesised call argument, and
+			# `start` arrives parenthesised; strip it for the align argument
+			# and keep the subtraction readable.
+			bare = self._unparen(start)
+			count: str | None = (f"situ_rt::align_up({bare}, {pad}, "
+			                     f"self.bytes.len()) - {start}")
+		elif placement.array_count is not None:
+			count = str(placement.array_count * width)
 		elif data_sized(placement):
 			count = self._length_expression(struct, placement)
 			if count is None:

@@ -199,6 +199,12 @@ class Placement:
 	# accessors need no special case -- `data_sized` asks about those two and
 	# never about the extent interval.
 	pinned_bits: int | None		= None
+	# `pad_to(n)` alignment in bytes (0043). The member is padding to the next
+	# multiple of n from the message base; its length is a constant where the
+	# offset is static and `align_up(offset, n) - offset` where it is not, so
+	# a backend reads this rather than a `size_expr`. `kind` is "reserved", so
+	# the must_be_zero validation applies unchanged.
+	pad_to: int | None		= None
 	# Set when the field's type is a varint, which the propagation table reads
 	# to attach the right reasons.
 	varint: str | None		= None
@@ -739,6 +745,8 @@ class Solver:
 				self.place_indexed(decl, member, scope, layout, prefix, state)
 			elif isinstance(member, ast.MarkerField):
 				self.place_marker(decl, member, scope, layout, prefix, state)
+			elif isinstance(member, ast.Pad):
+				self.place_pad(member, scope, layout, prefix, state)
 			elif isinstance(member, (ast.Field, ast.Reserved)):
 				last = index == len(members) - 1
 				self.place_one(decl, member, scope, layout, prefix, state, last)
@@ -780,6 +788,56 @@ class Solver:
 		if state.cause is None and bits.hi != bits.lo:
 			state.cause = (member.name, member.span, _render_extent(bits))
 
+		state.cursor = cursor.advance(bits)
+
+	def place_pad(self, member: ast.Pad, scope: Scope,
+			layout: StructLayout, prefix: str, state: Walk) -> None:
+		"""`pad_to(n)` -- padding to the next multiple of n bytes (0043)."""
+		cursor = state.cursor
+		unit   = member.to * BITS_PER_BYTE
+
+		if cursor.is_exact:
+			# The offset is known, so the padding is a constant: how many
+			# bytes carry the cursor to the next multiple of n.
+			pad  = (-cursor.lo) % unit
+			bits = Interval(pad, pad)
+			offset = cursor.lo
+		else:
+			# The offset is a runtime sum of lengths, so the padding is too --
+			# 0 to n-1 bytes, resolved by the same offset function every
+			# member after a variable one already gets.
+			bits = Interval(0, unit - BITS_PER_BYTE)
+			offset = None
+
+		# Padding is `must_be_zero` unless the schema says `[preserve]`,
+		# because a sender varying it varies bytes the format calls fixed
+		# (8.8). The policy rides on the placement as an ordinary reserved
+		# attribute, so the existing validation needs no pad special case.
+		names = {attr.name for attr in member.attrs}
+		if "preserve" in names or "unknown" in names:
+			policy = member.attrs
+		else:
+			policy = (*member.attrs,
+			          ast.Attr(member.span, "must_be_zero", None))
+
+		layout.placements.append(Placement(
+			path          = f"{prefix}.<pad>",
+			name          = "<pad>",
+			kind          = "reserved",
+			type_name     = "u8",
+			offset_bits   = offset,
+			size_bits     = bits.lo,
+			size_max_bits = bits.hi,
+			scalar        = lookup("u8"),
+			endian        = None,
+			bit_order     = scope.bit_order,
+			span          = member.span,
+			attrs         = policy,
+			pad_to        = member.to,
+			dynamic_cause      = state.cause[0] if state.cause else None,
+			dynamic_cause_span = state.cause[1] if state.cause else None,
+			dynamic_cause_size = state.cause[2] if state.cause else None,
+		))
 		state.cursor = cursor.advance(bits)
 
 	def place_coded(self, decl: ast.StructDecl, region: ast.Coded | ast.Sealed,

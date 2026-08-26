@@ -1,6 +1,6 @@
 # 0043: pad_to(n) aligns the absolute offset, and is padding in the map
 
-Status: proposed
+Status: accepted
 Date: 2026-08-26
 Phase: after 0042
 

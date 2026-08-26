@@ -609,7 +609,8 @@ class OffsetStep:
 
 	`kind` is "record" -- this member's offset is the running total -- or
 	"advance", which moves the total on by `size` bytes where that is a
-	constant and by `placement`'s own length where it is not.
+	constant and by `placement`'s own length where it is not, or "align",
+	which moves it to the next multiple of `size` (0043).
 	"""
 
 	kind: str
@@ -654,6 +655,17 @@ def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 		if held.path in dynamic:
 			flush()
 			steps.append(OffsetStep("record", held))
+		pad = pad_alignment(held)
+		if pad is not None:
+			# A pad advances the running total to the next multiple, not by a
+			# fixed size (0043). A *static* pad has a fixed `size_bits` and
+			# takes the constant path below; only a dynamic one aligns.
+			if held.offset_bits is not None:
+				pending += held.size_bits // BITS_PER_BYTE
+				continue
+			flush()
+			steps.append(OffsetStep("align", held, size=pad))
+			continue
 		if held.is_fixed_size:
 			pending += held.size_bits // BITS_PER_BYTE
 			continue
@@ -1382,6 +1394,17 @@ def declared_value_bounds(placement: Placement,
 			except Exception:
 				continue
 	return (found.get("min"), found.get("max"))
+
+
+def pad_alignment(placement: Placement) -> int | None:
+	"""`pad_to(n)`'s n, or None where the member is not padding (0043).
+
+	The decision layer answers this once so the offset sum and the length
+	accessor spell one rule: a pad member advances the running offset to the
+	next multiple of n rather than by a fixed size, and its own length is the
+	distance covered.
+	"""
+	return placement.pad_to
 
 
 def pinned_bytes(placement: Placement) -> int | None:

@@ -14548,6 +14548,44 @@ buffer it was checked against. The session's method was the session's
 subject: a check is not evidence until it has been watched failing.
 
 
+### 26.134 pad_to, built across the stack
+
+Decision 0043, accepted and built: `pad_to(n)` pads to the next multiple of
+n bytes, the construct section 8.4 specified and the parser had always
+refused. `base::Pickle`, cpio and most RPC framings write it by hand as
+`reserved u8 [align_up(length, 4) - length];`; it is one member now, the map
+labels it `<pad>` rather than `<reserved0>`, and the wire signature carries
+`pad-to=n` because a peer padding to a different multiple disagrees about
+where the next field starts.
+
+**The size is the solver's, not the schema's.** A static pad folds to a
+constant; a dynamic one -- after a variable run -- is `align_up(offset, n) -
+offset`, computed by the same offset function every member after a variable
+one already gets. The reserved must_be_zero validation is reused wholesale:
+padding is `reserved` bytes with a computed length, so the only new emission
+is that a pad advances the running offset to a multiple rather than by a
+fixed size. `situ_align_up_u32` joins `situ_advance_u32` in each runtime, the
+image gains a `pad_to` field (format version 3), and both walkers align the
+same way.
+
+**The four-backend differential earned its keep, and the bug it caught is the
+lesson.** A pad added to `edges.situ` surfaced a validation disagreement --
+and it was not the pre-existing struct it first appeared to be, but the pad
+itself: with `u8 n` where `1 + n` is already a multiple of four, the pad is
+*zero* bytes, and Rust's fast path for a one-byte reserved read checked a
+byte the empty pad does not own. C, C++ and Python routed the pad through
+their run-validation and agreed; Rust's scalar shortcut was the odd one out.
+The pad is a *run* of 0..n-1 bytes and classifies as one now, so Rust takes
+the same path as the others.
+
+**Its own schema file, not a case in edges.** Adding the pad to `edges.situ`
+changed that schema's pseudo-random draws and the failure first read as a
+bug in an unrelated struct -- a false lead that cost a diagnosis. A dedicated
+`test/schema/padded.situ` draws its buffers against exactly the pad shapes,
+including the `u8`-driven zero-pad case on purpose rather than by a lucky
+draw, which is what makes the differential's pass mean something.
+
+
 ---
 
 ## 27. Questions, and how they were settled

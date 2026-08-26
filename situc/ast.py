@@ -276,6 +276,21 @@ class Reserved(Member):
 
 
 @dataclass(frozen=True)
+class Pad(Member):
+	"""`pad_to(4);` -- explicit padding to the next multiple of n bytes,
+	measured from the message base (section 8.4, decision 0043).
+
+	Its size is the solver's, not the schema's: `align_up(offset, n) - offset`,
+	a constant where the offset is static and a computed length where it is
+	not. Padding is `must_be_zero` unless `[preserve]`, because a sender that
+	varies it varies bytes the format calls fixed (8.8)."""
+
+	span: Span
+	to: int
+	attrs: tuple[Attr, ...]		= ()
+
+
+@dataclass(frozen=True)
 class VariantArm(Node):
 	"""One `case` of a variant, or its `default`.
 

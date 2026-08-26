@@ -40,12 +40,12 @@ from situc.relation import plan as plan_relation
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 2
+FORMAT_VERSION	= 3
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
 STRUCT_BYTES	= 16
-PLACEMENT_BYTES	= 48
+PLACEMENT_BYTES	= 50
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 32
 REGION_BYTES	= 16
@@ -916,6 +916,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					constraints_blob += _struct.pack(
 						"<IqBxxx", at, (1 << placement.size_bits) - 1, 4)
 					continue
+				# A pad is a reserved *run* -- 0..n-1 bytes the message
+				# sizes -- not a scalar. The scalar `must_be_zero` reads a
+				# fixed byte and would check one the empty pad does not own;
+				# the run form (13) scans exactly the aligned span both
+				# walkers already compute from `size_bits`.
+				if placement.pad_to is not None:
+					constraints_blob += _struct.pack("<IqBxxx", at, 0, 13)
+					continue
 				constraints_blob += _struct.pack("<IqBxxx", at, 0, 3)
 				continue
 			# A fixed-width text number, whose digits are a check of their
@@ -1434,7 +1442,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags,
 		)
 		placements_blob += _struct.pack(
-			"<IIIIIIIIIBBHHH",
+			"<IIIIIIIIIBBHHHH",
 			_u32(placement.offset_bits),
 			_u32(placement.size_bits),
 			_u32(placement.size_max_bits),
@@ -1449,6 +1457,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			min(placement.array_count or 0, 0xFFFF) if placement.radix else 0,
 			min(placement.since or 0, 0xFFFF),
 			min(placement.repeat_cap or 0, 0xFFFF),
+			min(placement.pad_to or 0, 0xFFFF),
 		)
 	sections[1] = (SECTION_PLACEMENTS, bytes(placements_blob), PLACEMENT_BYTES)
 

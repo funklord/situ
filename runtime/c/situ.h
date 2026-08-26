@@ -572,6 +572,19 @@ static inline uint32_t situ_advance_u32(uint32_t at, uint32_t by, uint32_t limit
 	return at + (by < room ? by : room);
 }
 
+/* `pad_to(n)` (decision 0043): advance `at` to the next multiple of `n`,
+ * clamped to the view. The padding is `align_up(at, n) - at`; a member after
+ * a pad starts on an n-byte boundary from the message base. Clamped for the
+ * same reason `situ_advance_u32` is: `at` is a sum of lengths the message
+ * chose, so the aligned offset may sit past a short frame, and `validate`
+ * reports that rather than the accessor running off the end. */
+static inline uint32_t situ_align_up_u32(uint32_t at, uint32_t n, uint32_t limit)
+{
+	const uint32_t pad = (n - (at % n)) % n;
+
+	return situ_advance_u32(at, pad, limit);
+}
+
 /* Delimited members (section 8.6.1).
  *
  * `situ_scan` returns the offset of the first occurrence of `delim` within

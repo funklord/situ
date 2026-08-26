@@ -431,6 +431,14 @@ def advance(at: int, by: int, limit: int) -> int:
 	return at + (by if by < room else room)
 
 
+def align_up(at: int, n: int, limit: int) -> int:
+	"""`pad_to(n)` (decision 0043): the next multiple of n, clamped to the
+	view the way `advance` is -- the aligned offset may sit past a short
+	message, and `validate` reports that rather than a short slice hiding it."""
+	pad = (n - at % n) % n
+	return advance(at, pad, limit)
+
+
 def scan(data: memoryview | bytes, limit: int, delim: bytes,
 		quote: int = NO_BYTE, escape: int = NO_BYTE) -> int:
 	"""Where a delimited member's content stops (section 8.6.1).

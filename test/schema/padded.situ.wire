@@ -1,0 +1,30 @@
+# situ wire signature v0
+# schema: padded.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+
+endian big
+target buffer
+
+struct aligned_header size=8
+  @0x0000   1         u8         one
+  @0x0001   3         u8         <pad>  pad-to=4 must_be_zero
+  @0x0004   4         u32        word  big
+
+struct byte_run size=3..261
+  @0x0000   1         u8         n
+  @0x0001   0..255    u8         data  sized-by=n
+  ~         0..3      u8         <pad>  pad-to=4 must_be_zero
+  ~         2         u16        trailer  big
+
+struct pickle_string size=4..65542
+  @0x0000   2         u16        used  big
+  @0x0002   0..65535  u8         data  sized-by=used
+  ~         0..3      u8         <pad>  pad-to=4 must_be_zero
+  ~         2         u16        trailer  big

@@ -55,7 +55,7 @@ from situc.traverse import (
 	extent_parts, extern_symbol, frameable,
 	element_bytes, has_computable_extent, index_entry_bytes,
 	indexed_elements, is_run, walk_order,
-	is_counted_run, matched_values, preceding_parts,
+	is_counted_run, matched_values, pad_alignment, preceding_parts,
 	obligation, obligations,
 	own_members,
 )
@@ -2713,7 +2713,7 @@ class Emitter:
 			return []
 		constant, variable = parts
 
-		terms: list[str] = []
+		terms: list[str | tuple[str, int]] = []
 		for placement in variable:
 			if not self._has_length(struct, placement):
 				return []
@@ -4394,7 +4394,7 @@ class Emitter:
 			leading += part
 
 		constant = leading
-		terms    = []
+		terms: list[str | tuple[str, int]] = []
 		seen     = 0
 
 		for other in parts:
@@ -4402,6 +4402,13 @@ class Emitter:
 				seen += other
 				if seen > leading:
 					terms.append(str(other) + "u")
+				continue
+			pad = pad_alignment(other)
+			if pad is not None:
+				# A pad advances the sum to the next multiple, not by a
+				# fixed length (0043). Marked so the emit loop below aligns
+				# instead of adding.
+				terms.append(("align", pad))
 				continue
 			if not self._has_length(struct, other):
 				return self._unresolvable_offset(placement, other)
@@ -4429,8 +4436,12 @@ class Emitter:
 		# bytes, which nothing downstream can detect. So every term stops at
 		# the view, and `validate` reports the message as malformed (26.27).
 		for term in terms:
-			lines.append(f"\toffset = situ_advance_u32(offset, ({term}),"
-			             " view.limit);")
+			if isinstance(term, tuple):
+				lines.append(f"\toffset = situ_align_up_u32(offset, {term[1]}u,"
+				             " view.limit);")
+			else:
+				lines.append(f"\toffset = situ_advance_u32(offset, ({term}),"
+				             " view.limit);")
 
 		if not terms:
 			lines.append("\t(void)view;")
@@ -6624,7 +6635,15 @@ class Emitter:
 		expect = "0u" if policy == "must_be_zero" else "0xFFu"
 		base   = self._base_expression(struct, placement)
 		width  = scalar.bits // BITS_PER_BYTE
-		if placement.array_count is not None:
+		pad    = pad_alignment(placement)
+		if pad is not None:
+			# The padding is `align_up(at, n) - at`, computed the same way
+			# the offset function advances the running sum (0043). A static
+			# pad has a fixed `size_bits` and falls to the constant path
+			# below; only a dynamic one reaches here.
+			count = f"situ_align_up_u32(at, {pad}u, view.limit) - at"
+			shown = f" (pad_to {pad})"
+		elif placement.array_count is not None:
 			count = f"{placement.array_count * width}u"
 			shown = f"[{placement.array_count}]"
 		elif data_sized(placement):
