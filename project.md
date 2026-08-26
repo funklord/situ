@@ -3203,10 +3203,13 @@ own record.
   byte string up to `KEY_MAX_BYTES = 32` where it does not, compared with
   `memcmp` and never hashed at any width. 26.130 carries the build.
 
-**And one that is specified and unbuilt.** 14.7 gives `pad_to(n)` and
-`pad_random(min, max)` for traffic-analysis resistance; the parser refuses
-both. Length hiding is not a detail for a protocol whose threat model
-includes an observer.
+**And one now half-built.** 14.7 gives `pad_to(n)` and `pad_random(min,
+max)` for traffic-analysis resistance. `pad_to(n)` is built (0043): the
+alignment padding the parser used to refuse, one member now, `<pad>` in the
+map and `pad-to=n` in the wire signature. `pad_random(min, max)` stays
+refused and deferred -- length hiding rather than alignment, which 0043
+holds out as a different thing, and not a detail for a protocol whose threat
+model includes an observer.
 
 **The question this survey opened as unknown, now measured -- and the first
 measurement of it was wrong.** It reported that QUIC-style header protection
