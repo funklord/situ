@@ -152,6 +152,30 @@ padding buys less; check the `repr` column before paying for it" -- would stop
 the trade being inherited unexamined. `advise` could say it too, since it has
 both facts already.
 
+> **Taken in `advise`, which is the half that reaches every schema rather
+> than the one that is read.** `fill-alignment-holes` is the rule that
+> *recommends* the trade -- "reorder to put this on its natural boundary" --
+> so the caveat belongs on the advice being given, at the moment it is given.
+> Its yield now reads "... an aligned access ... -- though on a little-endian
+> host this big-endian field is read through a swap whatever the offset, so
+> the value is never the memory and alignment buys much less than it appears
+> to; check the `repr` column before spending bytes on it."
+>
+> Qualifying the existing suggestion rather than adding a new one is
+> deliberate: a rule that fired on reserved bytes wherever it found them
+> would speak about padding a specification mandates, which situ cannot tell
+> from padding somebody chose. This one speaks only where situ has already
+> decided to recommend the trade.
+>
+> **One correction to your phrasing, which cost a wrong first attempt.** You
+> wrote that in a big-endian schema on a little-endian host every one of
+> those fields is `repr=ValueConverted`, which is true -- but keying the
+> caveat on `repr` attaches it to *every* finding the rule makes, because an
+> unaligned scalar is `ValueConverted` for being unaligned. Measured: it
+> fired identically on a little-endian schema, where the reorder does buy
+> the access. The declared byte order is what distinguishes the case, and
+> the test asserts both directions.
+
 **4. The capability map found a design question on its first run**, before any
 implementation existed to be attached to. The frame carries 96 bytes of fixed
 overhead, of which a capability identifier and a nonce are 56 -- and seeing

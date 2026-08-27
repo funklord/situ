@@ -221,6 +221,46 @@ def test_an_alignment_hole_is_free_to_fill() -> None:
 	assert "already spends 3 bytes on reserved padding" in found[0].detail
 
 
+#: The same struct read two ways. A multi-byte scalar sitting off its
+#: boundary is what the alignment rule fires on, and the byte order is what
+#: decides whether reordering it buys anything.
+MISALIGNED = """struct s {
+	u8       flag;
+	u32      counter;
+	reserved u8[3];
+	u16      seq;
+}
+"""
+
+
+def test_the_alignment_trade_names_the_byte_order_that_undoes_it() -> None:
+	"""On a little-endian host a big-endian scalar is read through a swap
+	whatever the offset, so the value is never the memory and reordering it
+	buys much less than the suggestion implies. `suggestion/fuzznet.md` made
+	the point about `example/packet`, whose three reserved bytes are widely
+	copied precisely because the example is good.
+
+	Keyed on the declared byte order, and not on `repr`: an unaligned scalar
+	is `ValueConverted` *because* it is unaligned, so keying on that attached
+	the caveat to every finding this rule makes -- including the
+	little-endian ones, where the reorder does buy the access. It was
+	measured firing on both before it was keyed on the order instead.
+	"""
+	big = advise.suggest(build(MISALIGNED))
+	swapped = [item for item in big if item.rule == "fill-alignment-holes"]
+	assert swapped, [item.rule for item in big]
+	assert "read through a swap" in swapped[0].yields
+
+	little = advise.suggest(
+		resolve(parse_text("endian little;\n" + MISALIGNED),
+		        solve(parse_text("endian little;\n" + MISALIGNED))))
+	native = [item for item in little if item.rule == "fill-alignment-holes"]
+	assert native, [item.rule for item in little]
+	assert "read through a swap" not in native[0].yields, (
+		"a little-endian field is the memory, so the reorder does buy the "
+		"aligned access and the caveat must not appear")
+
+
 def test_a_tlv_region_is_offered_the_positional_trade() -> None:
 	found = only("struct s { tlv opts (tag_type = u8); }", "tlv-to-positional")
 	assert "O(1) access" in found.yields

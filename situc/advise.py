@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from situc import ast
 from situc.capability import Axis
 from situc.diagnostics import Span
 from situc.layout import BITS_PER_BYTE, Placement
@@ -490,6 +491,34 @@ def _find_alignment_holes(resolved: ResolvedSchema) -> list[Suggestion]:
 			if (width - at % width) % width > padding:
 				continue
 
+			# What alignment buys depends on whether the value is the
+			# memory. A `ValueConverted` field -- a big-endian scalar read on
+			# a little-endian host, say -- cannot be pointed at, and every
+			# access is a read-swap-write whichever boundary it sits on, so
+			# the offset decides much less than it appears to. Saying so is
+			# the same fix as the recomputation price above: the suggestion
+			# is not wrong, its condition was invisible, and a reader who
+			# does not know it pays reserved bytes for a gain the repr column
+			# already ruled out (suggestion/fuzznet.md).
+			#
+			# `repr` alone cannot say it: an unaligned scalar is
+			# ValueConverted *because* it is unaligned, so keying on that
+			# would attach the caveat to every finding this rule makes,
+			# including the little-endian ones where the reorder does buy
+			# the access. Measured before the fix -- it fired on both. What
+			# distinguishes the case is the declared byte order.
+			swapped = (scalar.bits > BITS_PER_BYTE
+			           and placement.endian is ast.Endian.BIG)
+			bought = ("an aligned access, which faults on some targets and "
+			          "is split on others when it is not")
+			if swapped:
+				bought += (" -- though on a little-endian host this "
+				           "big-endian field is read through a swap whatever "
+				           "the offset, so the value is never the memory and "
+				           "alignment buys much less than it appears to; "
+				           "check the `repr` column before spending bytes "
+				           "on it")
+
 			found.append(Suggestion(
 				rule    = "fill-alignment-holes",
 				subject = placement.path,
@@ -500,8 +529,7 @@ def _find_alignment_holes(resolved: ResolvedSchema) -> list[Suggestion]:
 				           f"{_bytes(padding)} on reserved padding"),
 				cost    = Cost(basis="the padding bytes are already spent, and "
 				               "every deployed peer reads the old order"),
-				yields  = "an aligned access, which faults on some targets and "
-				          "is split on others when it is not",
+				yields  = bought,
 				rank    = 4,
 				weight  = scalar.bits // BITS_PER_BYTE,
 			))
