@@ -199,3 +199,38 @@ def test_the_report_names_what_did_not_run(
 		      f"{', '.join(skipped)}")
 
 	assert ran or skipped
+
+
+def test_the_oracles_scratch_goes_away(tmp_path: Path) -> None:
+	"""A run must leave no scratch directory behind, and the count is the
+	assertion rather than the presence of a cleanup call.
+
+	`oracles.py` used `tempfile.mkdtemp` with no `rmtree`, no `finally` and
+	no `TemporaryDirectory`, and the three entry points that take no
+	`tmp_path` to hand down leaked one directory each per run: 1591 of them
+	accumulated over a fortnight, under a green suite. A cleanup that
+	removes nothing looks exactly like one with nothing to remove, so what
+	is checked here is what the run *left*, not what the source appears to
+	do.
+
+	A subprocess, because the directory goes when the interpreter does:
+	inside one run the scratch is still legitimately present. The child
+	prints the path it made and exits; a path that still exists after that
+	is a leak.
+	"""
+	child = tmp_path / "child.py"
+	child.write_text(
+		"import sys\n"
+		f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+		"import oracles\n"
+		"print(oracles._scratch('oracle-'))\n",
+		encoding="ascii")
+
+	ran = subprocess.run([sys.executable, str(child)],
+	                     capture_output=True, text=True, timeout=120)
+	assert ran.returncode == 0, ran.stderr
+
+	made = Path(ran.stdout.strip())
+	assert made.name.startswith("oracle-"), ran.stdout
+	assert not made.exists(), (
+		f"{made} outlived the process that made it: the scratch leaks")
