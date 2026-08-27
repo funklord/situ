@@ -571,6 +571,30 @@ walked into it the same way.
 If a flag existed that made "declared but not generated" a refusal, we would
 turn it on. We are not asking for the default to change.
 
+> **Built: `situc build --refuse-ungenerated`.** Opt-in, and the default is
+> exactly where you left it -- a notice and exit 0, because such a schema is
+> not wrong and refusing it would stop one that is otherwise fine. With the
+> flag it exits non-zero, names each relation and repeats the reason, and
+> writes nothing: a build that is going to fail should not leave half an
+> answer for the next reader to trust.
+>
+> **What it counts is narrower than "every notice", and the difference is
+> the whole of the design.** situ already reports several kinds of "you
+> asked and got nothing", and the obvious implementation makes all of them
+> fatal. Measured, that refuses `example/packet` and `test/schema/edges.situ`
+> -- one refusal and eight between them, every one of the form *no owned form
+> for X*. That is a fact about a shape the data decides, where the schema
+> declared nothing that then vanished; folding it in would fail two schemas
+> that are entirely fine and teach whoever enabled the flag to turn it off
+> again.
+>
+> So it counts relations only -- no predicate, no conversation table, no
+> driver -- which is your case exactly: a construct the author wrote, that
+> was validated, that appears in the committed contract, and that compiles
+> to nothing. The three tests that hold it there include the discriminating
+> one: `packet` and `edges` must still build **with** the flag, and the
+> naive version was watched failing it.
+
 ## 2. No owned form where the size is data-decided
 
     struct m {

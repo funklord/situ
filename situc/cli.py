@@ -112,6 +112,14 @@ def build_parser() -> argparse.ArgumentParser:
 	                            "emits everything below it: `view` is accessors "
 	                            "over bytes the caller owns, `relate` adds a "
 	                            "predicate per relation (decision 0032)")
+	build_cmd.add_argument("--refuse-ungenerated", action="store_true",
+	                       help="exit non-zero where a relation the schema "
+	                            "declares reaches no generated code. A notice "
+	                            "and exit 0 by default, because such a schema "
+	                            "is not wrong -- but a declaration that "
+	                            "compiles to nothing is worth failing a build "
+	                            "over where a project wants it to "
+	                            "(suggestion/fuzznet.md)")
 	build_cmd.add_argument("--driver", choices=DRIVERS, default=None,
 	                       help="also emit a driver that pumps the rung-6 state "
 	                            "machine, an additive artifact over the same "
@@ -502,6 +510,20 @@ def cmd_build(args: argparse.Namespace) -> int:
 	files: dict[str, str]
 	warnings: list[Diagnostic]
 
+	#: Relations the schema declares that reach no generated code, gathered
+	#: as each rung reports them. A notice and exit 0 by default -- such a
+	#: schema is not wrong, and refusing it would stop one that is otherwise
+	#: fine -- but `--refuse-ungenerated` makes it a failure, because a
+	#: declaration that is validated, appears in the committed contract and
+	#: compiles to nothing is exactly the shape a consumer walked into
+	#: twice (suggestion/fuzznet.md).
+	#:
+	#: Only relations. "No owned form for X" is a fact about a shape the
+	#: data decides rather than a declaration that vanished -- the schema
+	#: asked for nothing there -- and folding it in would refuse
+	#: `example/packet` and `edges`, which are fine.
+	ungenerated: list[tuple[str, str]] = []
+
 	if args.single_file and args.target != "python":
 		raise SystemExit(
 			f"situc: --single-file inlines the Python runtime and --target is "
@@ -621,7 +643,12 @@ def cmd_build(args: argparse.Namespace) -> int:
 			      file=sys.stderr)
 
 	if args.layer in ("relate", "frame", "converse", "drive"):
+		from situc import relation as relation_module
+
 		files.update(_relate(parse(source), resolved, args))
+		# `_relate` has already printed these; this only counts them.
+		for name, _why in relation_module.refusals(parse(source), resolved):
+			ungenerated.append((name, "predicate"))
 
 	if args.layer in ("frame", "converse", "drive"):
 		files.update(_frame(parse(source), resolved, args))
@@ -634,6 +661,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 		for name, why in converse.refusals(parsed, resolved):
 			print(f"situc: no conversation table for `{name}`: {why}",
 			      file=sys.stderr)
+			ungenerated.append((name, "conversation table"))
 
 	if args.layer == "drive":
 		from situc.codegen.c import drive
@@ -650,6 +678,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 		for name, why in drive.refusals(parsed, resolved):
 			print(f"situc: no driver for relation `{name}`: {why}",
 			      file=sys.stderr)
+			ungenerated.append((name, "driver"))
 
 	if args.driver is not None:
 		# A relation that states a policy but carries no fittable key got its
@@ -691,6 +720,17 @@ def cmd_build(args: argparse.Namespace) -> int:
 			          "io_uring": io_uring}
 			files.update(driver[args.driver].generate(
 				parsed, resolved, args.schema.stem, args.prefix))
+
+	if args.refuse_ungenerated and ungenerated:
+		listed = "\n".join(f"  {name}: no {what}"
+		                   for name, what in ungenerated)
+		raise SystemExit(
+			f"situc: --refuse-ungenerated, and {len(ungenerated)} "
+			f"declaration(s) reach no generated code:\n{listed}\n"
+			f"situc: each is a relation this schema declares, validated and "
+			f"carried in the committed contract, that compiles to nothing. "
+			f"Drop it, or fix what stops it generating -- the reason is "
+			f"printed above each.")
 
 	args.out.mkdir(parents=True, exist_ok=True)
 	for name, text in files.items():

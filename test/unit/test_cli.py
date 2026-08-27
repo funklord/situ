@@ -9,6 +9,7 @@ import argparse
 
 import pytest
 
+from every_schema import ROOT
 from every_schema import SCHEMAS as ALL_SCHEMAS
 from every_schema import ids
 from situc.cli import build_parser, main
@@ -432,3 +433,72 @@ def test_every_subcommand_runs_on_every_schema(
 		argv += ["--out", str(tmp_path)]
 
 	assert main(argv) == 0
+
+
+#: A relation that is validated, carried in the committed contract, and
+#: generates nothing: two arrays ordered with `>=`, where a key answers only
+#: equality. This is the shape `suggestion/fuzznet.md` walked into twice.
+UNGENERATED = """target buffer;
+endian big;
+
+struct msg {
+	u8  tag[8];
+	u16 seq;
+}
+
+relation answers(query: msg, reply: msg) {
+	must reply.tag >= query.tag;
+}
+"""
+
+
+def test_an_ungenerated_relation_is_a_notice_by_default(
+		tmp_path: Path) -> None:
+	"""The default does not move. Such a schema is not wrong -- refusing it
+	would stop one that is otherwise fine -- so it stays a notice and a
+	zero exit, which is what the asker explicitly did not want changed."""
+	schema = tmp_path / "u.situ"
+	schema.write_text(UNGENERATED, encoding="ascii")
+
+	assert main(["build", str(schema), "--target", "c", "--layer", "relate",
+	             "--out", str(tmp_path / "out")]) == 0
+
+
+def test_refuse_ungenerated_fails_on_a_relation_that_emits_nothing(
+		tmp_path: Path) -> None:
+	"""And with the flag it is a failure, naming the relation.
+
+	A declaration that is validated, appears in the contract and compiles to
+	nothing leaves its only evidence on stdout during a build, which is how
+	one consumer shipped past it twice.
+	"""
+	schema = tmp_path / "u.situ"
+	schema.write_text(UNGENERATED, encoding="ascii")
+
+	out = tmp_path / "out"
+	with pytest.raises(SystemExit) as refused:
+		main(["build", str(schema), "--target", "c", "--layer", "relate",
+		      "--refuse-ungenerated", "--out", str(out)])
+
+	assert "answers" in str(refused.value)
+	assert "no predicate" in str(refused.value)
+	# Nothing on disk: a build that is going to fail must not leave half an
+	# answer behind for the next reader to trust.
+	assert not out.exists() or not list(out.iterdir())
+
+
+@pytest.mark.parametrize("schema", ["example/packet/packet.situ",
+                                    "test/schema/edges.situ"])
+def test_refuse_ungenerated_does_not_refuse_a_shape_that_has_no_owned_form(
+		schema: str, tmp_path: Path) -> None:
+	"""The discriminating case, and the one a naive flag gets wrong.
+
+	`packet` reports one refusal and `edges` eight, all of them "no owned
+	form for X" -- a fact about a shape the data decides, where the schema
+	declared nothing that then vanished. Folding those into the flag would
+	refuse two schemas that are entirely fine, so what it counts is
+	relations only: no predicate, no conversation table, no driver.
+	"""
+	assert main(["build", str(ROOT / schema), "--target", "c",
+	             "--layer", "drive", "--refuse-ungenerated",
+	             "--out", str(tmp_path / "out")]) == 0
