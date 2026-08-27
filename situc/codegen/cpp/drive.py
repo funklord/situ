@@ -170,9 +170,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tbool          live;",
 			"\t};",
 			"",
-			f"\t{name}(slot *slots, std::uint32_t cap, ::situ::io &sink,",
+			# `store`, not `slots`: Qt defines `slots` as an empty macro, so a
+			# parameter of that name vanishes in any translation unit that has
+			# included a Qt header -- `slots_(slots)` becomes `slots_()`, a
+			# null the constructor then writes through, and it compiles clean
+			# under -Wall -Wextra. Measured: a segfault at construction. The
+			# member keeps its trailing underscore and is unaffected.
+			f"\t{name}(slot *store, std::uint32_t cap, ::situ::io &sink,",
 			"\t       std::uint32_t timeout_ms, std::uint32_t retries) noexcept",
-			"\t\t: slots_(slots), cap_(cap), io_(sink),",
+			"\t\t: slots_(store), cap_(cap), io_(sink),",
 			"\t\t  timeout_ms_(timeout_ms), retries_(retries)",
 			"\t{",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",

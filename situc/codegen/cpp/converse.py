@@ -162,8 +162,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tbool          live;",
 			"\t};",
 			"",
-			f"\t{name}(slot *slots, std::uint32_t cap) noexcept",
-			"\t\t: slots_(slots), cap_(cap)",
+			# `store`, not `slots`: Qt defines `slots` as an empty macro, so
+			# the parameter would vanish in a Qt translation unit and
+			# `slots_(slots)` become `slots_()` -- a null the constructor
+			# writes through, compiling clean. See `cpp/drive.py`.
+			f"\t{name}(slot *store, std::uint32_t cap) noexcept",
+			"\t\t: slots_(store), cap_(cap)",
 			"\t{",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			"\t\t\tslots_[i].live = false;",
