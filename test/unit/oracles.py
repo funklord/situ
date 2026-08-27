@@ -406,9 +406,34 @@ def eth_corpus(tmp: Path) -> bytes:
 	return _randpkt(tmp, "arp").read_bytes()
 
 
+#: Scratch directories this process made, kept alive so that each one's
+#: finalizer runs when the interpreter exits.
+#:
+#: `tempfile.mkdtemp` leaves the directory behind for ever, and the three
+#: oracle entry points that take no `tmp_path` -- `eth_situ`, `arp_situ` and
+#: the TCP reader -- called it on every run. Measured before this was fixed:
+#: 1591 `/tmp/oracle-*` directories, the oldest a fortnight old, each holding
+#: one `read.pcap`. Small on disk and unbounded in count, which is the shape
+#: that goes unnoticed until an inode table or a full `/` makes it somebody's
+#: afternoon.
+#:
+#: A `TemporaryDirectory` rather than a sweep over a glob at exit: it removes
+#: the directory *this* process created and nothing that merely looks like
+#: it, which is the difference between vouching for a name and vouching for a
+#: pattern. A concurrent run's scratch is not ours to delete.
+_SCRATCH: list[tempfile.TemporaryDirectory[str]] = []
+
+
+def _scratch(prefix: str) -> Path:
+	"""A directory that goes away when this process does."""
+	made = tempfile.TemporaryDirectory(prefix=prefix)
+	_SCRATCH.append(made)
+	return Path(made.name)
+
+
 def _capture(corpus: bytes, tmp: Path | None = None) -> Path:
 	"""The capture on disk, because tshark reads files rather than stdin."""
-	where = Path(tempfile.mkdtemp(prefix="oracle-")) if tmp is None else tmp
+	where = _scratch("oracle-") if tmp is None else tmp
 	path  = where / "read.pcap"
 	path.write_bytes(corpus)
 	return path
@@ -832,7 +857,7 @@ def mqtt_corpus(tmp: Path) -> bytes:
 
 
 def _mqtt_pcap(corpus: bytes, tmp: Path | None = None) -> Path:
-	where = Path(tempfile.mkdtemp(prefix="mqtt-")) if tmp is None else tmp
+	where = _scratch("mqtt-") if tmp is None else tmp
 	text  = where / "mqtt.txt"
 	text.write_bytes(corpus)
 	made = where / "mqtt.pcap"
