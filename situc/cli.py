@@ -56,6 +56,7 @@ DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 	"io_uring": ("c",),
 	"qt": ("cpp",),
 	"asyncio": ("python",),
+	"tokio": ("rust",),
 }
 DRIVERS = tuple(DRIVER_BACKENDS)
 
@@ -527,7 +528,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 		# `.c` beside its header, a C++ one is a header alone, and a Python
 		# one is a module.
 		suffix = {"c": "c", "cpp": "hpp",
-		          "python": "py"}[DRIVER_BACKENDS[args.driver][0]]
+		          "python": "py",
+		          "rust": "rs"}[DRIVER_BACKENDS[args.driver][0]]
 		raise SystemExit(
 			f"situc: --driver {args.driver} pumps the rung-6 state machine, "
 			f"which is emitted at --layer drive, and --layer is {args.layer}. "
@@ -674,6 +676,11 @@ def cmd_build(args: argparse.Namespace) -> int:
 			from situc.codegen.python import asyncio_driver
 
 			files.update({"asyncio": asyncio_driver}[args.driver].generate(
+				parsed, resolved, args.schema.stem))
+		elif args.target == "rust":
+			from situc.codegen.rust import tokio_driver
+
+			files.update({"tokio": tokio_driver}[args.driver].generate(
 				parsed, resolved, args.schema.stem))
 		else:
 			from situc.codegen.c import (blocking, epoll, io_uring, poll,

@@ -1,12 +1,12 @@
 # 0033: drivers are a third axis, and the vtable is completion-shaped
 
-Status: accepted, and seven drivers are built. Six are C over `--layer
-drive` -- `--driver epoll`, `poll`, `select`, `ppoll` and `blocking`
-(readiness and no-multiplexer) and `--driver io_uring` (completion, the one
-the vtable was shaped for) -- and `--driver qt` is the first host runtime and
-the first cell that is not C. See the amendments below. The taxonomy and the
-two shape calls were decided here; the copyright holder then asked for these
-built.
+Status: accepted, and nine drivers are built across all four backends. Six
+are C over `--layer drive` -- `--driver epoll`, `poll`, `select`, `ppoll`
+and `blocking` (readiness and no-multiplexer) and `--driver io_uring`
+(completion, the one the vtable was shaped for) -- and three are host
+runtimes: `qt` in C++, `asyncio` in Python, `tokio` in Rust. See the
+amendments below. The taxonomy and the two shape calls were decided here;
+the copyright holder then asked for these built.
 Date: 2026-08-08
 Phase: 26.98 gains the deadline return; epoll/poll/blocking/io_uring built
 2026-08-26
@@ -424,3 +424,61 @@ budget, with a watchdog so a loop that never completes fails rather than
 hangs. The generator is `situc/codegen/cpp/qt.py`, emitting one
 `<name>_qt.hpp` -- the C++ backend's one-file convention, which the driver
 axis had not met before.
+
+## Amendment, 2026-08-27: asyncio and tokio, and what a runtime may return
+
+The other two host runtimes this record named are built: `--driver asyncio`
+in Python and `--driver tokio` in Rust. With `qt` they complete the axis
+across all four backends, and between them they settle the question the qt
+amendment left open.
+
+**A host runtime may return its outcome, and two of the three do.** Qt
+delivers completion by callback, and that was read at the time as what a
+host runtime does. It is not -- it is what *Qt* does, because a C++ function
+that installs a notifier has no way to return something that has not
+happened. A coroutine and an `async fn` are precisely the runtime's way of
+saying "finishes later and yields a value", so `await run_...` carries the
+outcome in both, and only the per-event reports -- a reply correlated, a
+batch expired -- stay callbacks, because no single return value can carry
+events that happen *during* an exchange. The rule is the axis's own: the
+driver takes the shape its runtime already has.
+
+**asyncio waits with `add_reader` and a future, not `sock_recv`.** The
+deadline has to race the datagram, and a `sock_recv` can only be raced by
+cancelling it -- which can consume a datagram it then drops. A future the
+reader resolves is cancellable with nothing in flight to lose.
+
+**tokio cost two real bugs, and both were worth the price.** The first is
+recorded in its own right: Rust's `step` dropped the expiry count on the
+call that gives up on the last exchange, which C and Python both report, and
+Python has carried a named regression test for since the same defect was
+found there. Rust was the third backend with it.
+
+The second is the more interesting, because it was invisible until measured.
+The driver first sent with `tokio::net::UdpSocket::try_send`, which looks
+like the non-blocking send a synchronous `submit` needs. It is not:
+`try_send` answers `WouldBlock` from tokio's own readiness bookkeeping
+*without attempting the syscall*, and that readiness is re-armed only by the
+runtime, which cannot run while a synchronous callback holds the thread.
+Since `step` spends a retry before it calls `submit`, a swallowed
+`WouldBlock` costs the datagram and its retransmission together: an exchange
+that should have sent three sent two and then expired, about one run in six.
+The sink sends through a std socket sharing the descriptor now, so the real
+`send(2)` runs and EAGAIN means what it means everywhere else -- the kernel
+buffer is genuinely full, which is the case the retry budget exists for.
+
+**That bug is the reason this amendment can be trusted.** It was reported
+green with the failures blamed on machine load; twelve runs on an idle box
+said otherwise, and the fix for the expiry count is what made the remaining
+failure legible enough to diagnose. Twenty runs pass now. A driver whose
+test is intermittent is worse than no driver, because the next person learns
+to re-run it.
+
+**One defect stays pinned rather than patched.** The Rust key builders emit
+`u64::from(view.member())` for a relation keyed on an enum field, and an
+enum accessor answers `Option<Enum>`, so such a schema does not compile --
+which includes `example/dns`, the only worked example stating a policy. The
+key wants the raw numeric value, as C reads it, and that is a codegen
+decision rather than a driver's to make. It is an `xfail(strict=True)` in
+`test_tokio_driver.py`, so it fails the moment it is fixed. The pin for the
+expiry count did exactly that and has been retired.
