@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1717,3 +1718,138 @@ def test_value_bounds_are_exported_as_assoc_consts() -> None:
 	assert "pub const MTU_VALUE_MAX: u16 = 9216;" in source
 	assert "pub const BIAS_VALUE_MIN: i8 = -20;" in source
 	assert "pub const SIZE_VALUE_MAX: u16 = 100;" in source
+
+
+# -- a relation keyed on an enum field (26.97) ------------------------------
+
+#: A key whose second component is an enum member. `kind` names 0 and 1, so
+#: 7 is a value the schema admits and does not name -- which is the case the
+#: whole fix is about.
+#:
+#: `bit_order` is not decoration: a `u4` is sub-byte and the compiler refuses
+#: a schema that does not say which end it counts from. The pin this replaces
+#: omitted it, so its build failed at *generation* and the compile it was
+#: written to watch never ran -- it was red for the wrong reason, which is the
+#: vacuous pass wearing an xfail.
+ENUM_KEY = """target buffer;
+endian big;
+bit_order msb_first;
+
+enum kind : u4 {
+	ask = 0,
+	answer = 1,
+}
+
+struct tagged {
+	u16   id;
+	kind  what;
+	u4    rest;
+}
+
+relation reply_to(query: tagged, reply: tagged)
+		[timeout_ms = 150, retries = 2] {
+	must reply.id == query.id;
+	must reply.what == query.what;
+}
+"""
+
+
+def test_the_key_builders_do_not_cast_an_enum_option() -> None:
+	"""An enum getter answers `Option<T>`, and nothing casts that to a number.
+
+	`relate`, `converse` and `drive` all reduce a key -- and a `must`
+	comparing two enum fields -- to `u64`. Reading them through the ordinary
+	getter emitted `u64::from(view.what())` and `view.what() as u64`, neither
+	of which exists for an `Option`, so a schema keyed on an enum did not
+	compile in Rust at all. `example/dns` keys on `opcode` and was exactly
+	that shape.
+
+	The read goes through `_bits`, which hands back the raw number. That is
+	what the other three backends key on, and it is the only answer that
+	correlates a message whose enum field holds a value no member names:
+	mapping such a value to a named member's number would collide the two.
+	"""
+	from situc.codegen.rust import converse as converse_rs
+	from situc.codegen.rust import drive as drive_rs
+	from situc.codegen.rust import relate as relate_rs
+
+	schema   = parse_text(ENUM_KEY)
+	resolved = resolve(schema, solve(schema))
+
+	emitted = [relate_rs.generate(schema, resolved, "unit")["unit_relate.rs"],
+	           converse_rs.generate(schema, resolved, "unit")["unit_converse.rs"],
+	           drive_rs.generate(schema, resolved, "unit")["unit_drive.rs"]]
+
+	for module in emitted:
+		assert "what_bits()" in module, module
+		assert "u64::from(query.what())" not in module, module
+		assert "u64::from(reply.what())" not in module, module
+		assert "query.what() as u64" not in module, module
+		assert "reply.what() as u64" not in module, module
+		# The plain getter still reads the id, which is not an enum.
+		assert "id_bits()" not in module, module
+
+
+def test_a_bound_naming_an_enum_sibling_compiles(tmp_path: Path) -> None:
+	"""The same cast, reached by a different road.
+
+	`[max = kind]` renders the sibling as `self.kind() as i64`, and an enum
+	getter answers `Option<T>`, so the shape did not compile either. Found by
+	sweeping the backend for every site that reads a field *as a number*
+	rather than by the relation work that started it -- the key builders were
+	two of three, not three of three.
+	"""
+	source = emit("enum k : u8 { a = 0, b = 1 }\n"
+	              "struct s { k kind; u8 n [max = kind]; }")
+
+	assert "self.kind_bits() as i64" in source, source
+	assert "self.kind() as i64" not in source, source
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_bound_naming_an_enum_sibling_builds(tmp_path: Path) -> None:
+	result = build(tmp_path, "enum k : u8 { a = 0, b = 1 }\n"
+	               "struct s { k kind; u8 n [max = kind]; }")
+
+	assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_relation_keyed_on_an_enum_compiles(tmp_path: Path) -> None:
+	"""And the whole drive layer builds, which is what the key is for.
+
+	Every rung from `relate` up reads the key, so this compiles the top one
+	and gets the three below it for free. Before the `_bits` accessor this
+	failed with two `E0605`s -- `non-primitive cast: Option<Kind> as u64` --
+	and `example/dns`, the one worked example stating a retransmission
+	policy, could not be built for Rust at any rung above `view`.
+	"""
+	schema = tmp_path / "tagged.situ"
+	schema.write_text(ENUM_KEY, encoding="ascii")
+
+	gen = tmp_path / "gen"
+	built = subprocess.run(
+		[sys.executable, "-m", "situc.cli", "build", str(schema),
+		 "--target", "rust", "--layer", "drive", "--out", str(gen)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	src = tmp_path / "src"
+	src.mkdir()
+	for part in gen.glob("*.rs"):
+		(src / part.name).write_text(part.read_text(encoding="ascii"),
+		                             encoding="ascii")
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "lib.rs").write_text(
+		"pub mod situ_rt;\n" + "".join(
+			f"pub mod {part.stem};\n" for part in sorted(gen.glob("*.rs"))),
+		encoding="ascii")
+
+	assert RUSTC is not None
+	compiled = subprocess.run(
+		[RUSTC, "--edition", "2021", "--crate-type", "lib",
+		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr

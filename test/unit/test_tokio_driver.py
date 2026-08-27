@@ -31,7 +31,6 @@ import pytest
 from every_schema import ROOT
 
 CARGO   = shutil.which("cargo")
-RUSTC   = shutil.which("rustc")
 RUNTIME = ROOT / "runtime" / "rust" / "situ_rt.rs"
 
 #: An exchange whose key is a plain integer. `dns`'s `reply_to` keys on
@@ -240,83 +239,13 @@ def test_tokio_requires_the_drive_layer(tmp_path: Path) -> None:
 	assert "tokio" in refused.stderr and "drive" in refused.stderr
 
 
-# -- a defect this driver found, pinned rather than worked around ----------
+# -- the two defects this driver found, both fixed -------------------------
 #
-# It found two. The other -- Rust's `step` dropping the expiry count on the
-# call that gives up on the last exchange -- is fixed, and its regression
-# test lives beside C's and Python's in `test_relations.py`, which is where
-# a claim about all three backends belongs. This pin flipped to XPASS the
-# moment the fix landed, which is what `strict=True` is for.
-
-
-ENUM_KEY = """target buffer;
-endian big;
-
-enum kind : u4 {
-\task = 0,
-\tanswer = 1,
-}
-
-struct tagged {
-\tu16   id;
-\tkind  what;
-\tu4    rest;
-}
-
-relation reply_to(query: tagged, reply: tagged)
-\t\t[timeout_ms = 150, retries = 2] {
-\tmust reply.id == query.id;
-\tmust reply.what == query.what;
-}
-"""
-
-
-@pytest.mark.xfail(strict=True, reason="the Rust key builders emit "
-                   "`u64::from(view.member())` for an enum field, whose "
-                   "accessor returns `Option<Enum>`")
-@pytest.mark.skipif(RUSTC is None, reason="no rustc")
-def test_the_rust_key_compiles_for_an_enum_field(tmp_path: Path) -> None:
-	"""A relation keyed on an enum-typed field does not compile in Rust.
-
-	`relate`, `converse` and `drive` all build the conversation key with
-	`u64::from(view.member())`, and an enum member's accessor returns
-	`Option<Enum>` because section 8.7 hands back the unknown case rather
-	than inventing a variant. `u64: From<Option<Enum>>` does not exist, and
-	`relate` writes `as u64` on the same value, which is a non-primitive
-	cast. `example/dns`'s own `reply_to` keys on `opcode` and hits this, so
-	the Rust drive layer cannot be built for the one worked example that
-	states a retransmission policy.
-
-	The key needs the raw numeric value, which is what C reads; the fix is a
-	backend decision (a raw accessor, or reading the bits at the key site)
-	rather than something a driver can paper over, so it is pinned here.
-	"""
-	schema = tmp_path / "tagged.situ"
-	schema.write_text(ENUM_KEY, encoding="ascii")
-
-	gen = tmp_path / "gen"
-	built = subprocess.run(
-		[sys.executable, "-m", "situc.cli", "build", str(schema),
-		 "--target", "rust", "--layer", "drive", "--out", str(gen)],
-		cwd=ROOT, capture_output=True, text=True)
-	assert built.returncode == 0, built.stderr
-
-	src = tmp_path / "src"
-	src.mkdir()
-	for part in gen.glob("*.rs"):
-		(src / part.name).write_text(part.read_text(encoding="ascii"),
-		                             encoding="ascii")
-	(src / "situ_rt.rs").write_text(
-		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
-		encoding="ascii")
-	(src / "lib.rs").write_text(
-		"pub mod situ_rt;\n" + "".join(
-			f"pub mod {part.stem};\n" for part in sorted(gen.glob("*.rs"))),
-		encoding="ascii")
-
-	assert RUSTC is not None
-	compiled = subprocess.run(
-		[RUSTC, "--edition", "2021", "--crate-type", "lib",
-		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
-		capture_output=True, text=True)
-	assert compiled.returncode == 0, compiled.stderr
+# Neither is pinned here any more, and each left by the same door. Rust's
+# `step` dropped the expiry count on the call that gives up on the last
+# exchange; its regression test lives beside C's and Python's in
+# `test_relations.py`, which is where a claim about all three backends
+# belongs. The Rust key builders cast an enum field's `Option<Enum>`, so a
+# relation keyed on one did not compile at all; that is a claim about Rust
+# codegen and its tests live in `test_codegen_rust.py`. Both pins flipped to
+# XPASS the moment their fix landed, which is what `strict=True` is for.

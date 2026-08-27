@@ -13,7 +13,7 @@ decision, made in `situc.relation`, arriving for a different reason.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.rust.emit import _ident, _pascal
+from situc.codegen.rust.emit import _ident, _pascal, numeric_accessor
 from situc.relation import (Constraint, Read, ReadBytes, SubView, plans,
                             refusals, render)
 from situc.resolve import ResolvedSchema
@@ -41,7 +41,8 @@ def signature(relation: ast.Relation) -> str:
 	return f"pub fn rel_{_ident(relation.name)}({params}) -> Result<()>"
 
 
-def _binding(bind: SubView | Read | ReadBytes, cast: str) -> list[str]:
+def _binding(bind: SubView | Read | ReadBytes, cast: str,
+		resolved: ResolvedSchema) -> list[str]:
 	source = _source(bind.source)
 	target = _local(bind.target)
 
@@ -55,11 +56,17 @@ def _binding(bind: SubView | Read | ReadBytes, cast: str) -> list[str]:
 		return [f"\t\tlet {target} = {source}.{_member(bind.member)}();"
 		        f"\t// {bind.path}"]
 
-	return [f"\t\tlet {target} = {source}.{_member(bind.member)}() as {cast};"
+	# `_bits` where the member is an enum: its getter answers `Option<T>`,
+	# and `Option<T> as u64` is not a cast Rust has -- so `must reply.opcode
+	# == query.opcode` did not compile. The comparison is between numbers,
+	# which is what the schema wrote.
+	read = numeric_accessor(resolved, bind.struct, bind.member)
+	return [f"\t\tlet {target} = {source}.{read}() as {cast};"
 	        f"\t// {bind.path}"]
 
 
-def _body(constraints: list[Constraint]) -> list[str]:
+def _body(constraints: list[Constraint],
+		resolved: ResolvedSchema) -> list[str]:
 	lines: list[str] = []
 
 	for constraint in constraints:
@@ -67,7 +74,7 @@ def _body(constraints: list[Constraint]) -> list[str]:
 		block: list[str] = []
 
 		for bind in constraint.bindings:
-			block += _binding(bind, cast)
+			block += _binding(bind, cast, resolved)
 
 		if constraint.bytes_equal is not None:
 			same = constraint.bytes_equal
@@ -127,7 +134,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"/// is the message seen first.",
 			signature(relation),
 			"{",
-			*_body(constraints),
+			*_body(constraints, resolved),
 			"\tOk(())",
 			"}",
 			"",

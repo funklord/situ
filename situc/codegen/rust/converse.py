@@ -17,7 +17,7 @@ into it, and the design would have had to change rather than be translated.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.rust.emit import _ident, _pascal
+from situc.codegen.rust.emit import _ident, _pascal, numeric_accessor
 from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
 from situc.resolve import ResolvedSchema
 from situc import __version__
@@ -36,14 +36,18 @@ def refusals(schema: ast.Schema,
 	return found
 
 
-def _key(sides: Side, view: str) -> list[str]:
+def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
 	lines = ["\t\tlet mut key: u64 = 0;"]
 	for chain, width in sides:
 		source = view
 		for step in chain:
 			if isinstance(step, Read):
+				# `_bits` where the member is an enum: its getter answers
+				# `Option<T>` and `u64::from` has no such impl, so a relation
+				# keyed on one did not compile at all.
+				read = numeric_accessor(resolved, step.struct, step.member)
 				lines.append(f"\t\tkey = (key << {width}) | "
-				             f"u64::from({source}.{_ident(step.member)}());"
+				             f"u64::from({source}.{read}());"
 				             f"\t// {step.path}")
 			elif isinstance(step, SubView):
 				lines.append(f"\t\tlet {_ident(step.member)} = "
@@ -52,7 +56,8 @@ def _key(sides: Side, view: str) -> list[str]:
 	return lines
 
 
-def _key_bytes(sides: Side, view: str, total: int) -> list[str]:
+def _key_bytes(sides: Side, view: str, total: int,
+		resolved: ResolvedSchema) -> list[str]:
 	"""The exact-bytes key (0042), Rust's spelling. `[u8; N]` copies and
 	compares by value, so the slot needs no other change."""
 	lines = [f"\t\tlet mut key = [0u8; {total}];",
@@ -69,9 +74,10 @@ def _key_bytes(sides: Side, view: str, total: int) -> list[str]:
 				]
 			elif isinstance(step, Read):
 				count = (width + 7) // 8
+				read = numeric_accessor(resolved, step.struct, step.member)
 				lines += [
 					f"\t\tlet v = u64::from({source}."
-					f"{_ident(step.member)}());\t// {step.path}",
+					f"{read}());\t// {step.path}",
 					f"\t\tfor b in 0..{count} {{",
 					f"\t\t\tkey[at + b] = (v >> (8 * ({count} - 1 - b))) as u8;",
 					"\t\t}",
@@ -142,8 +148,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t/// Remember `{first.name}` under its key.",
 			f"\tpub fn record(&mut self, {first.name}: &"
 			f"{_pascal(first.type_name)}, id: u32) -> Result<()> {{",
-			*(_key(request, first.name) if layout.packed
-			  else _key_bytes(request, first.name, layout.total_bytes)),
+			*(_key(request, first.name, resolved) if layout.packed
+			  else _key_bytes(request, first.name, layout.total_bytes,
+			                  resolved)),
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif !slot.live {",
@@ -161,8 +168,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// duplicate reply answers `Error::Constraint`.",
 			f"\tpub fn take(&mut self, {second.name}: &"
 			f"{_pascal(second.type_name)}) -> Result<u32> {{",
-			*(_key(response, second.name) if layout.packed
-			  else _key_bytes(response, second.name, layout.total_bytes)),
+			*(_key(response, second.name, resolved) if layout.packed
+			  else _key_bytes(response, second.name, layout.total_bytes,
+			                  resolved)),
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif slot.live && slot.key == key {",

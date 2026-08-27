@@ -23,7 +23,7 @@ leaking through.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.rust.emit import _ident, _pascal
+from situc.codegen.rust.emit import _ident, _pascal, numeric_accessor
 from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
 from situc.resolve import ResolvedSchema
 from situc import __version__
@@ -41,7 +41,7 @@ def _policy(relation: ast.Relation) -> tuple[int, int] | None:
 
 
 def _key_bytes(sides: Side, view: str, indent: str,
-		total: int) -> list[str]:
+		total: int, resolved: ResolvedSchema) -> list[str]:
 	"""The exact-bytes key (0042); see the converse twin for the layout."""
 	lines = [f"{indent}let mut key = [0u8; {total}];",
 	         f"{indent}let mut at = 0usize;"]
@@ -57,9 +57,10 @@ def _key_bytes(sides: Side, view: str, indent: str,
 				]
 			elif isinstance(step, Read):
 				count = (width + 7) // 8
+				read = numeric_accessor(resolved, step.struct, step.member)
 				lines += [
 					f"{indent}let v = u64::from({source}."
-					f"{_ident(step.member)}());\t// {step.path}",
+					f"{read}());\t// {step.path}",
 					f"{indent}for b in 0..{count} {{",
 					f"{indent}\tkey[at + b] = (v >> (8 * ({count} - 1 - b))) as u8;",
 					f"{indent}}}",
@@ -73,14 +74,17 @@ def _key_bytes(sides: Side, view: str, indent: str,
 	return lines
 
 
-def _key(sides: Side, view: str, indent: str) -> list[str]:
+def _key(sides: Side, view: str, indent: str,
+		resolved: ResolvedSchema) -> list[str]:
 	lines = [f"{indent}let mut key: u64 = 0;"]
 	for chain, width in sides:
 		source = view
 		for step in chain:
 			if isinstance(step, Read):
+				# `_bits` for an enum member; its getter answers `Option<T>`.
+				read = numeric_accessor(resolved, step.struct, step.member)
 				lines.append(f"{indent}key = (key << {width}) | "
-				             f"u64::from({source}.{_ident(step.member)}());")
+				             f"u64::from({source}.{read}());")
 			elif isinstance(step, SubView):
 				lines.append(f"{indent}let {_ident(step.member)} = "
 				             f"{source}.{_ident(step.member)}()?;")
@@ -180,8 +184,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t/// Send `{first.name}` and remember it until it is answered.",
 			f"\tpub fn send(&mut self, {first.name}: &{req}, bytes: &'a [u8],",
 			"\t            id: u32, now_ms: u32) -> Result<()> {",
-			*(_key(request, first.name, "\t\t") if layout.packed
-			  else _key_bytes(request, first.name, "\t\t", layout.total_bytes)),
+			*(_key(request, first.name, "\t\t", resolved) if layout.packed
+			  else _key_bytes(request, first.name, "\t\t",
+			                  layout.total_bytes, resolved)),
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif !slot.live {",
@@ -200,8 +205,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// something outstanding.",
 			f"\tpub fn on_message(&mut self, {second.name}: &{resp})"
 			" -> Result<u32> {",
-			*(_key(response, second.name, "\t\t") if layout.packed
-			  else _key_bytes(response, second.name, "\t\t", layout.total_bytes)),
+			*(_key(response, second.name, "\t\t", resolved) if layout.packed
+			  else _key_bytes(response, second.name, "\t\t",
+			                  layout.total_bytes, resolved)),
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif slot.live && slot.key == key {",

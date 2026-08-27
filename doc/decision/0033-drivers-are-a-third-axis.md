@@ -474,11 +474,38 @@ failure legible enough to diagnose. Twenty runs pass now. A driver whose
 test is intermittent is worse than no driver, because the next person learns
 to re-run it.
 
-**One defect stays pinned rather than patched.** The Rust key builders emit
-`u64::from(view.member())` for a relation keyed on an enum field, and an
-enum accessor answers `Option<Enum>`, so such a schema does not compile --
-which includes `example/dns`, the only worked example stating a policy. The
-key wants the raw numeric value, as C reads it, and that is a codegen
-decision rather than a driver's to make. It is an `xfail(strict=True)` in
-`test_tokio_driver.py`, so it fails the moment it is fixed. The pin for the
-expiry count did exactly that and has been retired.
+**The defect that was pinned is fixed, and the pin retired itself.** The
+Rust key builders emitted `u64::from(view.member())` for a relation keyed on
+an enum field, and an enum accessor answers `Option<Enum>`, so such a schema
+did not compile -- `example/dns` among them, the only worked example stating
+a policy. Both pins this driver left behind have now flipped to XPASS and
+been removed, which is what `strict=True` is for: a pin that outlives its
+bug is a test asserting the wrong thing.
+
+The fix is a `{member}_bits()` accessor beside the getter for enum-typed
+fields, returning the same raw load the getter reads before mapping, and a
+shared chooser that picks it for enum members. An accessor rather than an
+inline bit read because the key builders emit into separate modules and the
+view's `bytes` is private. It is additive: no existing accessor changed.
+
+**The semantics are the point, not the compile.** A conversation key must
+correlate a message whose enum field holds a value the schema does not name
+-- which is exactly what C does, its accessor being the raw value cast to
+the enum typedef. Mapping `None` to zero would have compiled and silently
+collided every unnamed value with the zero member. Proved runnable: a
+message whose opcode is 7, which `dns` does not name, answers `None` from
+the enum accessor, keeps 7 in its bits, correlates with another message
+carrying 7, and does *not* correlate with opcode 0.
+
+**Sweeping for the same shape found two more instances.** The relation
+`must` predicates had it -- `reply.opcode() == query.opcode()` rendered as a
+non-primitive cast -- and so did a bound naming a sibling field, so
+`u8 n [max = kind]` did not compile either. Neither had been reported,
+because no schema in the tree combined those constructs with an enum until
+this one did.
+
+**And the pin had been passing for the wrong reason.** Its schema declared a
+`u4` with no `bit_order`, so generation refused before the compile the pin
+existed to watch ever ran -- a vacuous pass wearing an xfail, which is the
+shape `evidence.md` warns about with the marker's own name on it. The
+replacement schema declares the bit order, and says why in a comment.

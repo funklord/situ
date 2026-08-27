@@ -160,6 +160,33 @@ def _ident(name: str) -> str:
 	return f"r#{safe}" if safe in KEYWORDS else safe
 
 
+def numeric_accessor(resolved: ResolvedSchema, struct: str, member: str) -> str:
+	"""The accessor that answers a member's *number*, for a key or a compare.
+
+	An enum-typed field's getter hands back `Option<T>` -- right for a reader,
+	who has to be told that section 8.7 admits a value no member names, and
+	wrong for anybody who wants the value as a number: `Option<T> as u64` is
+	not a cast Rust has. So the key builders and the relation predicates ask
+	for `_bits`, which `Emitter._enum_bits` emits beside the getter for enum
+	fields alone.
+
+	Every other backend keys on the raw bits already, and the semantics are
+	the point rather than the spelling: a conversation key has to correlate a
+	message whose enum field holds an unnamed value, and mapping one to a
+	named member's number would make every unnamed value collide with it.
+
+	A member this cannot resolve keeps the plain getter. That is the shape
+	that compiled before this existed, so an unknown path is left exactly as
+	it was rather than sent to an accessor that may not be there.
+	"""
+	entry = resolved.find(f"{struct}.{member}")
+	if entry is None:
+		return _ident(member)
+	if entry.placement.type_name in resolved.layout.env.enums:
+		return f"{_ident(member)}_bits"
+	return _ident(member)
+
+
 def _pascal(name: str) -> str:
 	"""Rust type names are PascalCase, and a schema's are the author's.
 
@@ -2153,6 +2180,59 @@ class Emitter:
 				"\t\t}",
 				f"\t\t{self._load(placement, scalar, offset)}",
 			]),
+			"\t}",
+			*self._enum_bits(placement, scalar, offset, fits, name),
+		]
+
+	def _enum_bits(self, placement: Placement, scalar: ScalarType,
+			offset: str | None, fits: str | None, name: str) -> list[str]:
+		"""The numeric read behind an enum-typed field's getter.
+
+		The getter hands back `Option<T>`, because section 8.7 admits a value
+		no member names -- and that is the right type for a *reader*, who has
+		to be told the difference. It is the wrong one for anybody who wants
+		the number: `Option<T> as u64` is not a cast Rust has, so a relation
+		keyed on an enum field, or comparing two of them, did not compile at
+		all. `example/dns` keys on `opcode` and is exactly that shape.
+
+		The other three backends key on the raw bits and are right to. A
+		conversation key must still correlate a message whose enum field
+		holds a value the schema does not name, and mapping such a value to
+		anything -- zero, say -- would collide every unnamed value with
+		whichever member is spelled zero. C's accessor *is* the raw value cast
+		to the enum typedef, C++ static_casts it, and Python's `as_enum` hands
+		back a plain int; this is how Rust says the same thing while keeping
+		`Option` for the reader who wants it.
+
+		Inside this module an expression over an enum reads the backing bytes
+		directly (`_raw_load`), which is why `case K.a:` compiles. The key
+		builders cannot: `bytes` is private and they emit into their own
+		modules, so the read has to be reachable through the type. Hence an
+		accessor rather than another inline read.
+
+		`_bits` follows the derived-name shape the backend already uses --
+		`_len`, `_count`, `_offset`, `_at` -- and decision 0013 leaves a
+		schema that collides with one to the compiler rather than to a
+		reserved-separator scheme it rejected.
+		"""
+		if placement.type_name not in self.enums:
+			return []
+
+		rtype = self._rust_type(scalar)
+		return [
+			"",
+			f"\t/// The bits behind `{name}`, whatever they spell.",
+			"\t///",
+			"\t/// The getter answers `None` for a value section 8.7 does not",
+			"\t/// name; a key or a comparison still has to see it, and see it",
+			"\t/// as itself rather than as a value it is not.",
+			f"\tpub fn {name}_bits(&self) -> {rtype} {{",
+			*([] if fits is None else [
+				f"\t\tif !({fits}) {{",
+				"\t\t\treturn 0;",
+				"\t\t}",
+			]),
+			f"\t\t{self._raw_load(placement, scalar, offset)} as {rtype}",
 			"\t}",
 		]
 
@@ -4753,12 +4833,21 @@ class Emitter:
 
 	def value(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
-		"""What a sibling holds, for a bound that names one."""
+		"""What a sibling holds, for a bound that names one.
+
+		`_bits` where that sibling is an enum, for the key builders' reason:
+		its getter answers `Option<T>` and `Option<T> as i64` is not a cast,
+		so `u8 n [max = kind]` did not compile. A bound compares numbers, and
+		an unnamed value is a number like any other.
+		"""
 		if placement.scalar is None or placement.array_count is not None:
 			return None
 		if not is_own_member(struct, placement):
 			return None
-		return f"(self.{_ident(local_name(struct, placement))}() as i64)"
+		name = _ident(local_name(struct, placement))
+		if placement.type_name in self.enums:
+			name = f"{name}_bits"
+		return f"(self.{name}() as i64)"
 
 	def bound_literal(self, value: int) -> str:
 		"""Plain, because a bound is compared against a widened value."""
