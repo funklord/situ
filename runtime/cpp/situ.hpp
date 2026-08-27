@@ -68,7 +68,7 @@ class span {
 public:
 	constexpr span() noexcept : data_(nullptr), size_(0) {}
 	constexpr span(T *data, std::size_t size) noexcept
-		: data_(data), size_(size) {}
+	    : data_(data), size_(size) {}
 
 	constexpr T          *data()  const noexcept { return data_; }
 	constexpr std::size_t size()  const noexcept { return size_; }
