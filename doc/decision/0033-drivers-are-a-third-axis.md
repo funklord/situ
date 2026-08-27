@@ -1,10 +1,11 @@
 # 0033: drivers are a third axis, and the vtable is completion-shaped
 
-Status: accepted, and five drivers are built -- `--driver epoll`, `poll`,
-`select` and `blocking` (readiness and no-multiplexer) and `--driver
-io_uring` (completion, the one the vtable was shaped for), all C-only over
-`--layer drive` (see the amendments below). The taxonomy and the two shape
-calls were decided here; the copyright holder then asked for these built.
+Status: accepted, and six drivers are built -- `--driver epoll`, `poll`,
+`select`, `ppoll` and `blocking` (readiness and no-multiplexer) and
+`--driver io_uring` (completion, the one the vtable was shaped for), all
+C-only over `--layer drive` (see the amendments below). The taxonomy and the
+two shape calls were decided here; the copyright holder then asked for these
+built.
 Date: 2026-08-08
 Phase: 26.98 gains the deadline return; epoll/poll/blocking/io_uring built
 2026-08-26
@@ -341,3 +342,27 @@ Held to the same AF_UNIX datagram socketpair test as the others. The
 generator is `situc/codegen/c/select.py`; it earns its place from a consumer
 who needs POSIX-everywhere and can promise low descriptors, which is the only
 place `select` is not simply `poll` done worse.
+
+## Amendment, 2026-08-27: ppoll, and what it takes to not be poll
+
+`--driver ppoll` is `poll` with the two things `ppoll(2)` adds: a nanosecond
+timeout, and -- the reason to reach for it -- a signal mask applied atomically
+across the wait. A ppoll driver that passed a null mask would be poll with a
+`timespec` and nothing gained, so this one exposes the mask: its run function
+takes a `const sigset_t *sigmask` passed straight to `ppoll`. A caller that
+blocks a signal everywhere and hands its set here has that signal delivered
+only while the loop waits, with none of the race the self-pipe trick exists to
+close. NULL asks for no change, at which point it is honestly just poll.
+
+That extra parameter is the first driver to need the shared scaffolding to
+bend, and it bent by three small parameters rather than a fork: `driver`'s
+`header` learned a `run_tail` (how the run prototype's parameter list closes,
+so ppoll can add the mask) and `extra_includes` (its `sigset_t` needs
+`<signal.h>` in the header), and `driver.source` learned a `feature` macro
+(glibc gates `ppoll` behind `_GNU_SOURCE`, not `_POSIX_C_SOURCE`). All three
+default to what the other five already emit -- verified by regenerating each
+and diffing byte-for-byte against a baseline -- so the shared path stayed the
+shared path and gained three honest knobs rather than a special case.
+
+Held to the same socketpair test, driven with a NULL mask. The generator is
+`situc/codegen/c/ppoll.py`.
