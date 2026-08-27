@@ -243,6 +243,29 @@ def test_covered_mutable_fields_are_one_suggestion_with_a_price() -> None:
 	assert "recomputation over 8 bytes" in found.detail
 
 
+def test_the_recomputation_price_names_the_access_pattern_it_assumes() -> None:
+	"""A cost per *write* assumes the frame is rewritten after it is built.
+
+	A frame assembled once and sent writes every covered field before the
+	tag exists and pays one recomputation between them, not one each -- so
+	the suggestion is conditional, and `suggestion/fuzznet.md` read it as
+	unconditional because nothing said otherwise. A ranked, costed
+	suggestion whose cost model does not match the usage is the shape of a
+	gate that cannot model what it checks: whoever knows enough ignores it,
+	and whoever does not obeys it.
+
+	The condition is in the text now, so it cannot be read as a flat price.
+	"""
+	found = only("""struct s {
+		authenticated { u32 seq; u32 other; }
+		tag u8[16];
+	}
+	""", "uncover-mutable-field")
+
+	assert "rewritten after it is built" in found.detail
+	assert "built once and sent" in found.detail
+
+
 def test_a_sealed_field_is_not_offered_a_move_it_cannot_make() -> None:
 	"""Moving it out of coverage means taking it out of the seal."""
 	found = by_rule("""codec aead {

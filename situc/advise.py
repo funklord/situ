@@ -607,9 +607,23 @@ def _find_mutable_under_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 				subject = tag.placement.path,
 				span    = tag.placement.span,
 				summary = "move the fields you rewrite often out of this coverage",
+				# The cost is per *write*, which assumes the frame is
+				# mutated after it is built. A frame assembled once and sent
+				# writes every covered field before the tag exists and pays
+				# one recomputation between them, not one each -- so this
+				# suggestion is conditional, and the condition was invisible
+				# until a consumer read it as unconditional and said so
+				# (suggestion/fuzznet.md). A ranked, costed suggestion whose
+				# cost model does not match the usage is the shape of a gate
+				# that cannot model what it checks: the reader who knows
+				# enough ignores it, and the reader who does not obeys it.
 				detail  = (f"{len(candidates)} covered field(s) are writable in "
 				           f"place -- {listed} -- and each write costs a "
-				           f"recomputation over {extent} bytes"),
+				           f"recomputation over {extent} bytes, where the "
+				           f"frame is rewritten after it is built. A frame "
+				           f"built once and sent pays one recomputation "
+				           f"between them, and this suggestion is worth "
+				           f"little to it"),
 				cost    = Cost(basis="moving a member, not adding one"),
 				yields  = ("writes that invalidate no tag, which is why real "
 				           "protocols keep routing and hop fields outside "

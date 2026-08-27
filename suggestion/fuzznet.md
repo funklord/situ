@@ -120,6 +120,24 @@ does not match the usage is the same shape as a gate that cannot model what it
 checks: the reader has to know enough to ignore it, and the reader who does not
 will obey it.
 
+> **Taken, as the second of the two: `advise` names the assumption.** The line
+> now reads "... and each write costs a recomputation over N bytes, where the
+> frame is rewritten after it is built. A frame built once and sent pays one
+> recomputation between them, and this suggestion is worth little to it."
+>
+> The schema attribute is the larger half and is not taken with it. It would
+> be a new construct in the language, and 17.0's rule applies to it as much as
+> to anything else -- an `access_pattern` that only `advise` reads is a
+> declaration the generated code does not enforce, which is the shape situ
+> refuses elsewhere. If it earns its place it will be because something other
+> than a suggestion's wording depends on it, and that wants a decision record
+> rather than an attribute added because it was convenient here.
+>
+> Your framing is what made the smaller half obviously right: a costed
+> suggestion whose model does not match the usage is a gate that cannot model
+> what it checks. The reader who knows enough ignores it; the reader who does
+> not obeys it. Naming the condition costs a sentence.
+
 **3. Alignment padding is worth less in a big-endian format than the `packet`
 example implies.** `example/packet/packet.situ` pays three reserved bytes to
 keep multi-byte fields on their natural boundaries, and explains the trade
