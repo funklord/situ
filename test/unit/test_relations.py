@@ -1930,6 +1930,27 @@ def test_python_returns_the_expiry_count_even_when_it_empties() -> None:
 	assert "return (soonest, expired)" in module
 
 
+def test_rust_returns_the_expiry_count_even_when_it_empties() -> None:
+	"""The third backend with the same defect, found by writing a driver
+	against it. Rust answered `Err(Error::Truncated)` where nothing was
+	left, which carries no count -- so the call that gives up on the last
+	exchange lost it, exactly as Python's did before the test above.
+
+	C writes `*expired` alongside SITU_ERR_TRUNCATED and Python returns it
+	beside a None deadline, both for the reason C's comment gives: a caller
+	that is never told has an exchange it waits on for ever. Rust reports
+	it on both paths now, and an empty in-flight set is a `None` deadline
+	rather than an error, because completion is not a failure.
+	"""
+	schema, resolved = analysed(POLICY)
+
+	module = drive_rs.generate(schema, resolved, "t")["t_drive.rs"]
+
+	assert "pub fn step(&mut self, now_ms: u32) -> (Option<u32>, u32) {" in module
+	assert "(soonest, expired)" in module
+	assert "Err(Error::Truncated)" not in module
+
+
 def test_no_policy_generates_no_driver_in_any_backend() -> None:
 	schema, resolved = analysed(GOOD)
 
@@ -2793,10 +2814,13 @@ fn main()
 	driver.send(&query, &bytes, 7, 0).expect("a slot to send from");
 	assert_eq!(seen.get(), 1, "sending did not submit");
 
-	driver.step(100).expect("a step before the deadline");
+	let (next, expired) = driver.step(100);
+	assert!(next.is_some(), "a step before the deadline lost the deadline");
+	assert_eq!(expired, 0, "nothing had given up yet");
 	assert_eq!(seen.get(), 1, "retransmitted before the deadline");
 
-	driver.step(2000).expect("a step past the deadline");
+	let (_, expired) = driver.step(2000);
+	assert_eq!(expired, 0, "the exchange still had retries left");
 	assert_eq!(seen.get(), 2, "the deadline passed and nothing was resent");
 
 	let id = driver.on_message(&query).expect("the request just sent");
