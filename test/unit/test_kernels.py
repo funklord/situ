@@ -438,6 +438,143 @@ def test_the_generated_crcs_match_the_published_check_values(tmp_path: Path) -> 
 	assert result.returncode == 0, f"check {result.returncode} failed"
 
 
+# -- the shift register at widths that are not C words (26.12) --------------
+
+
+SCRAMBLERS = """codec scr24 {
+	kernel = shift_register(taps = 0x80000D, width = 24, seed = 0x555555,
+	                        feedback = input);
+}
+impl scr24 derived;
+
+codec scr24_sync {
+	kernel = shift_register(taps = 0x80000D, width = 24, seed = 0x555555,
+	                        feedback = output);
+}
+impl scr24_sync derived;
+
+codec scr64 {
+	kernel = shift_register(taps = 0x800000000000000D, width = 64,
+	                        seed = 0xACE1ACE1ACE1ACE1, feedback = input);
+}
+impl scr64 derived;
+
+codec scr64_sync {
+	kernel = shift_register(taps = 0x800000000000000D, width = 64,
+	                        seed = 0xACE1ACE1ACE1ACE1, feedback = output);
+}
+impl scr64_sync derived;
+
+struct s { u8 a; }
+"""
+
+
+def test_a_shift_register_generates_at_any_width_it_accepts() -> None:
+	"""The emitter's widths must be the language's, not a subset of them.
+
+	`kernels.py` validates a shift register's feedback source and never its
+	width, so every width the parser takes has a derived signature. The
+	emitter took 8, 16 and 32 and returned nothing for the rest, which is
+	the worst shape a gap can have: the codec is accepted, its properties
+	are correct, and what arrives is a comment suggesting an `extern` --
+	for a code the compiler could have written. Widths 1, 4, 12, 24, 48 and
+	64 were all silently ungenerated this way.
+
+	Twenty-four and sixty-four are the two ends worth pinning. Twenty-four
+	is `_accumulator`'s case, the same one CRC-24/BLE established: held in
+	the next word up and masked back after the shift. Sixty-four is the
+	other edge, where the accumulator *is* the width and a mask written for
+	narrowing would either be a no-op or -- shifted one bit wider -- be
+	undefined.
+	"""
+	emitted = derived.generate(parse_text("endian big;\n" + SCRAMBLERS), "unit")
+
+	assert "No implementation for" not in emitted
+	for name in ("scr24", "scr24_sync", "scr64", "scr64_sync"):
+		assert f"uint32_t situ_{name}_encode(" in emitted
+		assert f"uint32_t situ_{name}_decode(" in emitted
+
+	# Only the multiplicative path shifts left, so only it can carry a bit
+	# past the register's end. Twenty-four bits are masked back into their
+	# `uint32_t`; sixty-four fill the word, so the type does the masking and
+	# the line is left exactly as the three working widths already emitted
+	# it.
+	assert ("state = (uint32_t)(((uint32_t)(state << 1) | output)"
+		" & (uint32_t)0xFFFFFFu);") in emitted
+	assert "state = (uint64_t)((uint64_t)(state << 1) | output);" in emitted
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_generated_scramblers_invert_at_every_width(tmp_path: Path) -> None:
+	"""Emitting is not the check -- the code has to scramble and come back.
+
+	Additive is held to the stronger property, because the derived signature
+	claims it: the register runs on its own state and the keystream is XORed
+	in, so encoding twice returns the plaintext. Multiplicative is fed from
+	the scrambled output and is not its own inverse, so it gets
+	decode(encode(x)).
+
+	Both are also checked against being a no-op. That is what a register
+	stuck on its seed looks like, and what a mask one bit too wide would
+	produce -- and either would pass a round-trip test on its own.
+	"""
+	schema   = parse_text("endian big;\n" + SCRAMBLERS)
+	resolved = resolve(schema, solve(schema))
+	built    = generate(schema, resolved, "unit")
+
+	(tmp_path / "unit.h").write_text(built.header, encoding="ascii")
+	(tmp_path / "unit_derived.c").write_text(
+		derived.generate(schema, "unit"), encoding="ascii")
+	(tmp_path / "probe.c").write_text(
+		"#include <string.h>\n"
+		'#include "unit.h"\n'
+		"\n"
+		"int main(void)\n"
+		"{\n"
+		"\tuint8_t plain[32];\n"
+		"\tuint8_t coded[32];\n"
+		"\tuint8_t back[32];\n"
+		"\tuint32_t i;\n"
+		"\n"
+		"\tfor (i = 0; i < 32u; i++) { plain[i] = (uint8_t)(i * 7u + 3u); }\n"
+		"\n"
+		"\t/* Additive: its own inverse, so encoding twice is identity. */\n"
+		"\tif (situ_scr24_encode(plain, 32u, coded) != 32u) { return 1; }\n"
+		"\tif (memcmp(plain, coded, 32u) == 0) { return 2; }\n"
+		"\tif (situ_scr24_encode(coded, 32u, back) != 32u) { return 3; }\n"
+		"\tif (memcmp(plain, back, 32u) != 0) { return 4; }\n"
+		"\n"
+		"\tif (situ_scr64_encode(plain, 32u, coded) != 32u) { return 5; }\n"
+		"\tif (memcmp(plain, coded, 32u) == 0) { return 6; }\n"
+		"\tif (situ_scr64_encode(coded, 32u, back) != 32u) { return 7; }\n"
+		"\tif (memcmp(plain, back, 32u) != 0) { return 8; }\n"
+		"\n"
+		"\t/* Multiplicative: fed from the scrambled side, so decoding is\n"
+		"\t * its own function rather than the same one again. */\n"
+		"\tif (situ_scr24_sync_encode(plain, 32u, coded) != 32u) { return 9; }\n"
+		"\tif (memcmp(plain, coded, 32u) == 0) { return 10; }\n"
+		"\tif (situ_scr24_sync_decode(coded, 32u, back) != 32u) { return 11; }\n"
+		"\tif (memcmp(plain, back, 32u) != 0) { return 12; }\n"
+		"\n"
+		"\tif (situ_scr64_sync_encode(plain, 32u, coded) != 32u) { return 13; }\n"
+		"\tif (memcmp(plain, coded, 32u) == 0) { return 14; }\n"
+		"\tif (situ_scr64_sync_decode(coded, 32u, back) != 32u) { return 15; }\n"
+		"\tif (memcmp(plain, back, 32u) != 0) { return 16; }\n"
+		"\n"
+		"\treturn 0;\n"
+		"}\n", encoding="ascii")
+
+	compiled = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit_derived.c"),
+		 "-o", str(tmp_path / "run")],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+
+	result = subprocess.run([str(tmp_path / "run")], capture_output=True)
+	assert result.returncode == 0, f"check {result.returncode} failed"
+
+
 # -- the acceptance criterion (26.12) ---------------------------------------
 
 

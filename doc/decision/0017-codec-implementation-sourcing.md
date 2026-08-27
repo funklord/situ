@@ -107,3 +107,39 @@ should not become several that drift.
 **Decide per backend when each is built.** Rejected because that is how C++ and
 Rust end up with different answers, which is the outcome this record exists to
 prevent.
+
+## Amendment, 2026-08-27: a C gap that was not this record's deferral
+
+This record defers **native implementations per language** -- a Rust or
+Python codec written instead of linking the C one -- and says why: C++ links
+C for free, Python's performance expectations do not justify a second
+implementation, and Rust adoption was far enough out that speculative work
+would be guesswork.
+
+That is not the same thing as a kernel description C itself declines to
+implement, and the two had been conflated. Measured: a `shift_register`
+kernel of width 1, 4, 12, 24, 48 or 64 was accepted by the language, had its
+signature derived correctly, appeared in the capability map -- and then
+`gen-derived` emitted a comment telling the author to write the code
+themselves. Only 8, 16 and 32 generated. Nothing in `kernels.py` refuses a
+24-bit register; it validates the feedback source and never looks at width.
+The tuple `(8, 16, 32)` in the emitter was the whole of it.
+
+It is fixed, and the fix was already in the same file. `_polynomial` had met
+this and solved it -- "a 24-bit CRC accumulates in a `uint32_t`, and every
+shift is masked back" -- so `_shift_register` now takes its accumulator from
+the same `_accumulator` helper and masks where the word is wider than the
+register. The three widths that already worked emit byte-identical C, which
+is the property that made the change safe to take: it is checked by
+regenerating against `git show HEAD:` rather than asserted.
+
+**The distinction is worth keeping** because the two failures look alike
+from outside -- both end in "bind an `impl ... extern`" -- and only one of
+them is a decision. A described kernel that C declines is a gap. A codec
+that Rust links from C is this record's answer working.
+
+**What remains genuinely undecided here is unchanged**, and one thing is
+sharper: `stuffing` returns no implementation for any input at all, and
+unlike the sub-byte CRC refusal -- which `kernels.py` states with a reason
+the author can read -- nothing says why. That is a gap or a decision, and
+which it is has not been written down.

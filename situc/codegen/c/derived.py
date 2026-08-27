@@ -936,6 +936,22 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	Both are here because the pair is the point: the same family, the same taps
 	and opposite properties, worked out from one word of the description.
+
+	ANY WIDTH UP TO 64, not the three that happen to be C words. This read
+	`width not in (8, 16, 32)` and returned None for everything else, which is
+	the same gap `_width` above describes for CRCs and was left here when that
+	one was closed: `kernels.py` validates only the feedback source, so a
+	24-bit or 48-bit register is a schema situ accepts, derives a correct
+	signature for, and then declines to implement -- with a note telling the
+	author to write it themselves. Nothing about an LFSR needs the register to
+	be a word. It needs an accumulator at least as wide, which `_accumulator`
+	already picks, and a mask wherever a shift can carry a bit past the
+	register's own end.
+
+	The mask is emitted only where the word is wider than the register. At 8,
+	16 and 32 the C type truncates at exactly the right bit, so the generated
+	code for those three is unchanged to the byte -- which is what a reader of
+	`git log` should be able to check rather than take on trust.
 	"""
 	kernel = decl.kernel
 	assert kernel is not None
@@ -944,13 +960,35 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	width = _number(decl, "width", 16)
 	seed  = _number(decl, "seed", (1 << width) - 1)
 
-	if not taps or width not in (8, 16, 32):
+	if not taps or not 1 <= width <= WORD_WIDTHS[-1]:
 		return None
 
 	source = kernel.argument("feedback")
 	additive = isinstance(source, ast.NameRef) and source.name == "input"
 	name  = ident(prefix, decl.name)
-	word  = f"uint{width}_t"
+	held  = _accumulator(width)
+	word  = f"uint{held}_t"
+
+	# Only the multiplicative path shifts *left*, so only it can push a bit
+	# past the register's end; the additive path shifts right from a seed that
+	# already fits, and never grows. Where the word is the register's own
+	# width the type does the masking, and the expression is left exactly as
+	# it was rather than gaining a mask that says what C already says -- the
+	# three widths that worked emit the same bytes they always did.
+	#
+	# The mask does not change the ciphertext, and claiming it did would be
+	# the easy overstatement: the feedback reads `state & taps`, and taps
+	# name only bits below the width, so an accumulator carrying junk above
+	# the register's end scrambles identically. Checked by stripping it from
+	# a 24-bit encoder and diffing the output, which matched. What it buys is
+	# a register that holds what it says it holds -- for anyone who reads the
+	# state in a debugger, compares it against a reference implementation, or
+	# widens this code later into somewhere the high bits are read.
+	def shifted_in(bit: str) -> str:
+		inner = f"({word})(state << 1) | {bit}"
+		if held == width:
+			return f"state = ({word})({inner});"
+		return f"state = ({word})(({inner}) & ({word})0x{(1 << width) - 1:X}u);"
 
 	shared = [
 		"",
@@ -1024,7 +1062,7 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 			"\t\t\tcoded = (uint8_t)(coded | (uint8_t)(output << bit));",
 			f"\t\t\t/* The scrambled bit goes into the register: that is what",
 			"\t\t\t * makes a receiver self-synchronising. */",
-			f"\t\t\tstate = ({word})(({word})(state << 1) | output);",
+			f"\t\t\t{shifted_in('output')}",
 			"\t\t}",
 			"\t\tout[at] = coded;",
 			"\t}",
@@ -1050,7 +1088,7 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 			"",
 			"\t\t\tplain = (uint8_t)(plain | (uint8_t)"
 			"((uint8_t)(coded ^ feedback) << bit));",
-			f"\t\t\tstate = ({word})(({word})(state << 1) | coded);",
+			f"\t\t\t{shifted_in('coded')}",
 			"\t\t}",
 			"\t\tout[at] = plain;",
 			"\t}",
