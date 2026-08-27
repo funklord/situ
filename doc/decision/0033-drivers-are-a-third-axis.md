@@ -1,10 +1,10 @@
 # 0033: drivers are a third axis, and the vtable is completion-shaped
 
-Status: accepted, and four drivers are built -- `--driver epoll`, `poll` and
-`blocking` (readiness and no-multiplexer) and `--driver io_uring` (completion,
-the one the vtable was shaped for), all C-only over `--layer drive` (see the
-amendments below). The taxonomy and the two shape calls were decided here;
-the copyright holder then asked for these built.
+Status: accepted, and five drivers are built -- `--driver epoll`, `poll`,
+`select` and `blocking` (readiness and no-multiplexer) and `--driver
+io_uring` (completion, the one the vtable was shaped for), all C-only over
+`--layer drive` (see the amendments below). The taxonomy and the two shape
+calls were decided here; the copyright holder then asked for these built.
 Date: 2026-08-08
 Phase: 26.98 gains the deadline return; epoll/poll/blocking/io_uring built
 2026-08-26
@@ -318,3 +318,26 @@ That is the ceremony 0033 said completion puts into the simple cases, living
 in the driver where it was meant to, written once. The generator is
 `situc/codegen/c/io_uring.py`; held to the same socketpair test as the
 others.
+
+## Amendment, 2026-08-27: select, and its cliff made a refusal
+
+`--driver select` joins the readiness drivers, and it is the first one added
+after the shared scaffolding was lifted into `driver.py` -- so it is almost
+all `_run` and a few strings, which is what that refactor was for. It is
+readiness like `poll`, rebuilding its one-descriptor set and its timeout each
+turn because `select` writes back through both.
+
+What `select` has that the others do not is a cliff. Its descriptor set is a
+fixed-size bitmap, `FD_SETSIZE` wide, so a descriptor at or past that bound
+cannot be named -- `FD_SET` on one is undefined and corrupts the caller's
+stack. This record said `select` "is strictly worse than `poll` wherever
+`poll` exists and its descriptor limit is a cliff". The driver makes the
+cliff an explicit refusal rather than a silent corruption: a descriptor it
+cannot watch is `SITU_ERR_BOUNDS` before the loop starts. That is the honest
+shape of what `select` cannot do, stated in the code that would otherwise
+have fallen off it.
+
+Held to the same AF_UNIX datagram socketpair test as the others. The
+generator is `situc/codegen/c/select.py`; it earns its place from a consumer
+who needs POSIX-everywhere and can promise low descriptors, which is the only
+place `select` is not simply `poll` done worse.
