@@ -44,9 +44,9 @@ FUTURE_LAYERS: dict[str, str] = {
 #: worse asyncio -- so each names the backends it is available for, and an
 #: unavailable pair is refused naming both.
 #:
-#: The first six are C event loops over a descriptor. `qt` is the first cell
-#: that is not C: a host runtime rather than an OS facility, so it lives where
-#: its runtime does (0033 names Qt the one this workspace wants first).
+#: The first six are C event loops over a descriptor. `qt` and `asyncio` are
+#: the cells that are not C: host runtimes rather than OS facilities, so each
+#: lives where its runtime does (0033 names both).
 DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 	"epoll": ("c",),
 	"poll": ("c",),
@@ -55,6 +55,7 @@ DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 	"blocking": ("c",),
 	"io_uring": ("c",),
 	"qt": ("cpp",),
+	"asyncio": ("python",),
 }
 DRIVERS = tuple(DRIVER_BACKENDS)
 
@@ -523,8 +524,10 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 	if args.driver is not None and args.layer != "drive":
 		# The suffix follows the backend the driver is for: a C driver adds a
-		# `.c` beside its header, a C++ one is a header alone.
-		suffix = "hpp" if DRIVER_BACKENDS[args.driver] == ("cpp",) else "c"
+		# `.c` beside its header, a C++ one is a header alone, and a Python
+		# one is a module.
+		suffix = {"c": "c", "cpp": "hpp",
+		          "python": "py"}[DRIVER_BACKENDS[args.driver][0]]
 		raise SystemExit(
 			f"situc: --driver {args.driver} pumps the rung-6 state machine, "
 			f"which is emitted at --layer drive, and --layer is {args.layer}. "
@@ -666,6 +669,11 @@ def cmd_build(args: argparse.Namespace) -> int:
 			from situc.codegen.cpp import qt
 
 			files.update({"qt": qt}[args.driver].generate(
+				parsed, resolved, args.schema.stem))
+		elif args.target == "python":
+			from situc.codegen.python import asyncio_driver
+
+			files.update({"asyncio": asyncio_driver}[args.driver].generate(
 				parsed, resolved, args.schema.stem))
 		else:
 			from situc.codegen.c import (blocking, epoll, io_uring, poll,

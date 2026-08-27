@@ -99,7 +99,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 
 | Command | Artifact |
 |---|---|
-| `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), and the shape they take (`--owned`, `--materialize`, `--single-file`) |
+| `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), the shape they take (`--owned`, `--materialize`, `--single-file`), and what pumps the rung-6 state machine (`--driver`) |
 | `situc map` | the capability map; `--check` compares against a committed one and fails on a diff |
 | `situc explain` | one field's capability vector and the blame chain behind every weakening |
 | `situc advise` | ranked, costed schema changes that would restore what was lost |
@@ -207,6 +207,15 @@ already-reviewed file to review again.
 the ladder explains refusals that used to stand alone: `--materialize` turns
 down an uncapped run at `view` because the index would have to be allocated,
 and `--layer edit --materialize` is how you ask for it anyway.
+
+**And a third axis says what pumps it.** The top rung sends, retransmits and
+times out, and it is sans-I/O: it never opens a socket and never reads a
+clock, so it cannot tell one event loop from another. `--driver` adds the
+adapter that does -- `epoll`, `poll`, `select`, `ppoll`, `blocking` and
+`io_uring` in C, `qt` in C++, `asyncio` in Python -- as an extra file over
+the same schema, changing nothing else. A driver names the backends it is
+available for and an unavailable pair is refused naming both, because
+`--driver epoll --target python` is a worse asyncio (decision 0033).
 
 Above `relate` a schema has to say more than bytes -- which relation pairs a
 request with its reply, what the retry policy is -- because both endpoints
