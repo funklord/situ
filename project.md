@@ -14631,6 +14631,76 @@ four-backend differential and both walkers: random `u16` draws are full of
 lone surrogates, so the pass means all six agree on which byte sequences are
 UTF-16 and which are not.
 
+### 26.136 Nine drivers, and the five bugs they found
+
+Decision 0033's driver axis is built across all four backends: `epoll`,
+`poll`, `select`, `ppoll`, `blocking` and `io_uring` in C, `qt` in C++,
+`asyncio` in Python, `tokio` in Rust. The core did not learn a single new
+fact -- each is an additive artifact over `--layer drive`, refused on a
+backend it is not available for, naming both. That is the axis working as
+designed, and it is the least interesting thing here.
+
+**The completion shape was proven rather than assumed.** 0033 made the
+vtable completion-shaped on the argument that a readiness loop implements
+completion trivially while the reverse is impossible, and named `io_uring`
+as the driver that would test it. It does: the same submit vtable and the
+same `step`/`on_message` machine drive it with no change to the core. Its
+raw ring handling depends only on the kernel uapi header, so it compiles and
+runs where `liburing` is not installed, which is what let it be verified at
+all.
+
+**A host runtime may return its outcome, and the first one could not.** Qt
+delivers completion by callback, which read at the time as what a host
+runtime does. It is not: it is what *Qt* does, a C++ function that installs
+a notifier having no way to return something that has not happened. A
+coroutine and an `async fn` are precisely the runtime's way of saying
+"finishes later and yields a value", so asyncio and tokio return theirs.
+Only the per-event reports stay callbacks in all three, because no single
+return value can carry events that happen *during* an exchange.
+
+**Five pre-existing bugs fell out, and not one was found by the suite.**
+Every one surfaced because something finally consumed the layer:
+
+- Qt defines `slots` as an empty macro, and the C++ drive and converse rungs
+  emitted a constructor taking `slot *slots`. In a Qt translation unit the
+  parameter name is deleted and `slots_(slots)` becomes `slots_()`, a null
+  the constructor writes through. It compiled clean under `-Wall -Wextra`
+  and segfaulted at construction. Live for every Qt consumer of those rungs,
+  which is three of these projects, and it had never fired because nothing
+  here built C++ against Qt.
+- Rust's `step` dropped the expiry count on the call that gives up on the
+  last exchange. C writes it alongside SITU_ERR_TRUNCATED and Python returns
+  it beside a `None` deadline, both for the reason C's comment gives: a
+  caller that is never told waits for ever. Rust was the third backend with
+  it, and Python has carried a named regression test since it was fixed
+  there.
+- tokio's sink sent with `try_send`, which answers `WouldBlock` out of
+  tokio's readiness bookkeeping *without attempting the syscall*, re-armed
+  only by a runtime that cannot run inside a synchronous callback. Since
+  `step` spends a retry before it calls `submit`, a swallowed `WouldBlock`
+  cost the datagram and its retransmission together.
+- The Rust key builders cast an enum accessor's `Option` to an integer, so a
+  relation keyed on an enum did not compile -- `example/dns` among them.
+  Sweeping for the shape rather than the symptom found the same thing in the
+  `must` predicates and in a bound naming a sibling.
+
+**The pattern is worth more than the bugs.** A schema compiler's tests
+generate code and check what it says; they had not linked it against Qt, run
+it inside tokio, or keyed a relation on an enum. Writing a consumer is a
+different instrument, and it found in a day what the suite had not in the
+life of four backends. The differential's own lesson, one level up: a second
+implementation is what catches the first.
+
+**Two smaller lessons, both about evidence.** The tokio driver was reported
+green with its failures blamed on machine load; twelve runs on an idle box
+said otherwise, and the fix for the expiry count is what made the remaining
+failure legible enough to diagnose. And the `xfail(strict=True)` pinning the
+enum-key defect had been passing for the wrong reason -- its schema declared
+a `u4` with no `bit_order`, so generation refused before the compile the pin
+existed to watch ever ran. A vacuous pass wearing an xfail. Both pins that
+were left behind have since flipped to XPASS and been retired, which is what
+`strict=True` is for: a pin that outlives its bug asserts the wrong thing.
+
 
 ---
 
