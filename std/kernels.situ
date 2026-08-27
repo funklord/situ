@@ -206,6 +206,39 @@ codec smtp_dot_stuffing {
 }
 impl smtp_dot_stuffing derived;
 
+// SLIP, RFC 1055. The oldest of these and still the one a serial link reaches
+// for: a frame ends with END, and a payload byte that would look like END is
+// sent as ESC and a substitute instead.
+//
+// The substitution is a table rather than a transformation -- END becomes 0xDC
+// and ESC becomes 0xDD, which is not one operation applied to either -- so a
+// decoder cannot reconstruct an escape it was not told about, and refuses.
+//
+// `unit = byte`: unlike SMTP's, the trigger is the byte itself and needs no
+// knowledge of what came before it. Worst case is a payload of nothing but
+// END, two bytes out for one in.
+codec slip_framing {
+	kernel = stuffing(worst_case = 2, per = 1, unit = byte, code = slip);
+}
+impl slip_framing derived;
+
+// PPP asynchronous framing, RFC 1662 section 4.2. The same shape as SLIP and a
+// different rule: an escaped byte is the original exclusive-ored with 0x20.
+//
+// That difference is worth having both for. Because the escape is defined as a
+// transformation, a decoder reverses escapes nobody enumerated -- which is what
+// makes it correct against a peer whose ACCM asks it to escape control
+// characters. A table-driven decoder would refuse those, and a link that
+// negotiated a non-zero ACCM would fail in a way that looks like corruption.
+//
+// The encoder here escapes the two that are always required, which is what an
+// ACCM of zero asks for. Escaping more is a per-link negotiation and not a
+// property of the code.
+codec ppp_async_framing {
+	kernel = stuffing(worst_case = 2, per = 1, unit = byte, code = ppp_async);
+}
+impl ppp_async_framing derived;
+
 // ---------------------------------------------------------------------------
 // A pipeline, composing pointwise and conservatively.
 //

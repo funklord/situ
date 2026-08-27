@@ -259,3 +259,73 @@ designed and never built, or built and dropped. It does not change the
 question above, which asks what the *default* should be for Rust. It does
 mean there is currently no override to fall back on, so today the C
 binding is not one choice among two -- it is the only one.
+
+## Amendment, 2026-08-28: SLIP and PPP, and a correction about stuffing
+
+The amendment above this one closed by saying that `stuffing` "returns no
+implementation for any input at all". That was wrong when it was written.
+Three codes generated then -- `cobs`, `hdlc` and `smtp_dot` -- and the SMTP
+example in this tree has been getting a real dot-stuffing implementation the
+whole time.
+
+**How the error was made is worth more than the correction.** A schema
+naming a code this build does not generate got a comment saying a stuffing
+kernel was "described but not yet generated", with nothing about which
+codes *are*. Read once, on the one code that was missing, it says the family
+is unimplemented -- and that is what went into the record and was repeated
+from it. The message now names what the build generates and which of them
+the schema asked for, which costs two lines and closes the reading that
+produced this.
+
+The general form is one this file already carries in another shape: a
+refusal that does not say what would have been accepted leaves the reader to
+infer the boundary, and they will infer it wrongly in the direction of
+"nothing works".
+
+**Two codes are added, and they are the ones a serial link actually needs.**
+`slip` is RFC 1055 and `ppp_async` is RFC 1662 section 4.2. Both are
+escape-stuffed byte codes -- the payload is kept and the bytes that would be
+mistaken for framing are prefixed with an escape -- which is the opposite
+trade from COBS, where the delimiter value is removed from the body outright
+and paid for with a pointer per group.
+
+They are not one code with two constants, and the difference is the
+interesting part:
+
+- **SLIP substitutes from a table.** END becomes 0xDC and ESC becomes 0xDD,
+  which is not one operation applied to either. So its decoder refuses an
+  escape sequence the code does not define, because there is nothing to
+  compute -- guessing would invent a byte.
+- **PPP defines the escape as a transformation**: the original
+  exclusive-ored with 0x20. Its decoder therefore reverses escapes nobody
+  enumerated, which is what makes it correct against a peer whose ACCM asks
+  it to escape control characters. A table-driven PPP decoder would refuse
+  frames that are entirely legal.
+
+The encoder escapes the two bytes that are always required, which is what an
+ACCM of zero asks for. A negotiated ACCM asks the *sender* for more, and
+that is a per-link decision rather than a property of the code -- so it is
+stated in the generated comment rather than guessed at.
+
+**The tests are chosen so that a plausible wrong implementation fails.**
+Round-trip cannot do this work: an encoder that substitutes wrongly and a
+decoder that reverses it agree with each other perfectly. Measured, with
+both sabotages run:
+
+- Swapping SLIP's two substitutes leaves every round-trip test passing and
+  fails `test_slip_matches_rfc_1055`.
+- Making PPP's decoder table-driven -- the plausible wrong design, and the
+  one that looks tidier -- leaves the round-trip tests and the RFC vector
+  test passing, and fails only
+  `test_ppp_decodes_an_accm_escape_it_never_encodes`, which is the case the
+  encoder cannot reach and therefore the case a self-consistent suite never
+  asks about.
+
+The vectors are published values from the two RFCs, not values situ computed
+and then recorded as its own expectation -- the distinction
+`test/generated/test_kernels.c` opens by making, and the one this session
+spent its first half restoring for the CRCs.
+
+**What is still not generated**: a stuffing code outside the five. The
+message says so by name now, so the next one is a gap somebody can see
+rather than a family they write off.

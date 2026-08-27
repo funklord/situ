@@ -660,6 +660,55 @@ def test_every_family_generates_an_implementation() -> None:
 		assert f"{name}(" in emitted, f"{name} was not generated"
 
 
+def test_every_stuffing_code_generated_is_offered_by_the_standard_kernels(
+		) -> None:
+	"""`DERIVED_STUFFING` and `std/kernels.situ` say the same thing, or this
+	fails in whichever direction they have come apart.
+
+	The list above it enumerates names by hand, which is a claim about
+	coverage that ages every time a code is added -- and one did age: the
+	message a schema gets for a code this build cannot generate used to say
+	only that a stuffing kernel was "not yet generated", so decision 0017
+	recorded that stuffing generated nothing at all while three codes were
+	generating. Reading both sides is what keeps the two honest.
+
+	A code the compiler can generate and the standard kernels do not offer is
+	work already done that nobody can reach. One offered and not generated
+	would put a "No implementation" comment in the standard library itself.
+	"""
+	source = (ROOT / "std" / "kernels.situ").read_text(encoding="ascii")
+	schema = parse_text(source)
+
+	offered = {}
+	for decl in schema.codecs():
+		if decl.kernel is None:
+			continue
+		if decl.kernel.family is not ast.KernelFamily.STUFFING:
+			continue
+		named = decl.kernel.argument("code")
+		assert isinstance(named, ast.NameRef), (
+			f"{decl.name} states a stuffing kernel with no `code`, so nothing "
+			f"selects which stuffing it is")
+		offered[named.name] = decl.name
+
+	assert offered, (
+		"no stuffing codec found in std/kernels.situ -- this is reading the "
+		"wrong thing, and an empty set passes as loudly as a real one")
+
+	generated = set(derived.DERIVED_STUFFING)
+	assert set(offered) == generated, (
+		f"the standard kernels offer {sorted(offered)} and this build "
+		f"generates {sorted(generated)}; "
+		f"unreachable: {sorted(generated - set(offered))}, "
+		f"unimplemented: {sorted(set(offered) - generated)}")
+
+	emitted = derived.generate(schema, "kernels")
+	for code, codec in sorted(offered.items()):
+		assert f"situ_{codec}_encode(" in emitted, (
+			f"`{code}` is in DERIVED_STUFFING and `{codec}` declares it, but "
+			f"no implementation was generated")
+
+
 def test_the_two_scramblers_differ_in_the_generated_code() -> None:
 	"""The same family and the same shape of kernel, and opposite code.
 

@@ -14704,6 +14704,38 @@ were left behind have since flipped to XPASS and been retired, which is what
 
 ---
 
+### 26.137 Scope: what a protocol needs, situ implements
+
+Stated by the copyright holder, 2026-08-28, and recorded here because it
+settles a class of question rather than one question:
+
+> If something is required for a protocol we implement it in a thoughtful
+> way. We want to be the #1 protocol swiss army knife, we don't want anyone
+> to come later and say they did it better, almost nothing to do with
+> protocols is out of scope for us.
+
+What that changes in practice is the default answer to "should this be a
+gap or an implementation". The tree had been treating an unimplemented
+kernel description as a thing to record and defer, on the reasoning that
+each one is a judgement about difficulty. Under this it is work, and the
+judgement moves from *whether* to *how*.
+
+**It was applied the same day, to stuffing.** The language accepted any
+`code = <name>` and this build generated three of them, so `code = slip`
+compiled, derived a correct signature, entered the capability map and
+emitted no implementation. SLIP and PPP asynchronous framing are now
+generated and carried in `std/kernels.situ`, with the reasoning in decision
+0017's third amendment -- including why the two are not one code with
+different constants, which is the part that would have been lost by treating
+them as a table lookup.
+
+**And the reason the gap survived is worth keeping separately**, because it
+is not about stuffing. The comment a schema got for an ungenerated code said
+a kernel was "described but not yet generated" and never said which codes
+*were*, so the one reader who hit it concluded the family was unimplemented
+and wrote that into 0017. A refusal that does not say what would have been
+accepted gets read as "nothing works". The message names the five now.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

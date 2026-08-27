@@ -30,8 +30,10 @@ codec hdlc_bit_stuffing derived expansion=ratio_bounded(6,5) seekable=none granu
 codec interleave_16 derived length_preserving seekable=permuted granularity=byte invertible deterministic
 codec manchester_802_3 derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
 codec manchester_thomas derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
+codec ppp_async_framing derived expansion=ratio_bounded(2,1) seekable=none granularity=byte invertible deterministic
 codec reed_solomon_255_223 derived expansion=+32 seekable=linear granularity=block(255) systematic invertible deterministic error_propagating
 codec reed_solomon_64_56 derived expansion=+8 seekable=linear granularity=block(64) systematic invertible deterministic error_propagating
 codec scrambler_additive derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec scrambler_multiplicative derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
+codec slip_framing derived expansion=ratio_bounded(2,1) seekable=none granularity=byte invertible deterministic
 codec smtp_dot_stuffing derived expansion=ratio_bounded(4,3) seekable=none granularity=stream invertible deterministic

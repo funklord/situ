@@ -611,6 +611,114 @@ static void test_dot_stuffing_carries_line_state_across_the_buffer(void **state)
 	assert_memory_equal(out, ".x\r\n", 4);
 }
 
+/* -- SLIP (RFC 1055) and PPP asynchronous framing (RFC 1662) ---------------- */
+
+static void test_slip_matches_rfc_1055(void **state)
+{
+	static const struct {
+		uint32_t len;
+		uint8_t  in[4];
+		uint32_t encoded;
+		uint8_t  want[8];
+	} cases[] = {
+		/* END and ESC are the two that cannot travel as themselves. The
+		 * substitutes are what RFC 1055 names ESC_END and ESC_ESC. */
+		{ 1, {0xC0},             3, {0xDB, 0xDC, 0xC0} },
+		{ 1, {0xDB},             3, {0xDB, 0xDD, 0xC0} },
+		{ 2, {0xC0, 0xDB},       5, {0xDB, 0xDC, 0xDB, 0xDD, 0xC0} },
+		/* Everything else travels untouched, which is the whole point of an
+		 * escape code as against COBS: the payload is not rewritten. */
+		{ 2, {0x68, 0x69},       3, {0x68, 0x69, 0xC0} },
+		{ 0, {0},                1, {0xC0} },
+	};
+	uint8_t  out[16];
+	uint8_t  back[16];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		uint32_t written = situ_slip_framing_encode(cases[i].in, cases[i].len,
+		                                            out);
+
+		assert_int_equal(written, cases[i].encoded);
+		assert_memory_equal(out, cases[i].want, written);
+
+		assert_int_equal(situ_slip_framing_decode(out, written, back),
+		                 cases[i].len);
+		assert_memory_equal(back, cases[i].in, cases[i].len);
+	}
+}
+
+static void test_slip_refuses_an_escape_it_does_not_define(void **state)
+{
+	/* ESC followed by anything but ESC_END or ESC_ESC is not a sequence RFC
+	 * 1055 defines. A decoder that guessed -- passing the byte through, or
+	 * exclusive-oring it the way PPP does -- would round-trip its own output
+	 * perfectly and still be wrong about somebody else's frame, so this is
+	 * the case that separates the two codes rather than a round trip. */
+	static const uint8_t bad[] = {0xDB, 0x41, 0xC0};
+	uint8_t out[8];
+
+	(void)state;
+
+	assert_int_equal(situ_slip_framing_decode(bad, 3, out), 0);
+}
+
+static void test_ppp_matches_rfc_1662(void **state)
+{
+	static const struct {
+		uint32_t len;
+		uint8_t  in[4];
+		uint32_t encoded;
+		uint8_t  want[8];
+	} cases[] = {
+		/* 0x7E and 0x7D, each exclusive-ored with 0x20 after the escape. */
+		{ 1, {0x7E},             3, {0x7D, 0x5E, 0x7E} },
+		{ 1, {0x7D},             3, {0x7D, 0x5D, 0x7E} },
+		{ 2, {0x68, 0x69},       3, {0x68, 0x69, 0x7E} },
+	};
+	uint8_t  out[16];
+	uint8_t  back[16];
+	unsigned i;
+
+	(void)state;
+
+	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		uint32_t written = situ_ppp_async_framing_encode(cases[i].in,
+		                                                 cases[i].len, out);
+
+		assert_int_equal(written, cases[i].encoded);
+		assert_memory_equal(out, cases[i].want, written);
+
+		assert_int_equal(situ_ppp_async_framing_decode(out, written, back),
+		                 cases[i].len);
+		assert_memory_equal(back, cases[i].in, cases[i].len);
+	}
+}
+
+static void test_ppp_decodes_an_accm_escape_it_never_encodes(void **state)
+{
+	/* The case the two codes disagree about, and the reason PPP's decoder is
+	 * a rule rather than a table.
+	 *
+	 * A peer whose ACCM asks it to escape control characters sends 0x7D 0x21
+	 * for a literal 0x01. This encoder never produces that -- it escapes only
+	 * the two that are mandatory -- so a round trip against itself cannot
+	 * reach this case, and a table-driven decoder would refuse a frame that
+	 * is entirely legal. Reversing the transformation handles it without
+	 * anybody enumerating it.
+	 */
+	static const uint8_t accm[] = {0x7D, 0x21, 0x7D, 0x23, 0x7E};
+	static const uint8_t want[] = {0x01, 0x03};
+	uint8_t out[8];
+
+	(void)state;
+
+	assert_int_equal(situ_ppp_async_framing_decode(accm, 5, out), 2);
+	assert_memory_equal(out, want, 2);
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
@@ -627,6 +735,10 @@ int main(void)
 		cmocka_unit_test(test_dot_stuffing_carries_line_state_across_the_buffer),
 		cmocka_unit_test(test_hdlc_inserts_a_zero_after_five_ones),
 		cmocka_unit_test(test_hdlc_refuses_six_ones),
+		cmocka_unit_test(test_slip_matches_rfc_1055),
+		cmocka_unit_test(test_slip_refuses_an_escape_it_does_not_define),
+		cmocka_unit_test(test_ppp_matches_rfc_1662),
+		cmocka_unit_test(test_ppp_decodes_an_accm_escape_it_never_encodes),
 		cmocka_unit_test(test_base64_matches_rfc_4648_vectors),
 		cmocka_unit_test(test_base32_matches_rfc_4648_vectors),
 		cmocka_unit_test(test_the_output_is_always_whole_groups),

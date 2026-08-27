@@ -20,6 +20,8 @@ happens to do.
 
 from __future__ import annotations
 
+import textwrap
+
 from math import lcm
 
 from situc import ast
@@ -62,7 +64,9 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 				f"/* No implementation for `{decl.name}`: a "
 				f"{decl.kernel.family.value} kernel is described but not yet",
 				" * generated. Its properties are derived and correct; bind an",
-				f" * `impl {decl.name} extern \\\"...\\\"` to supply the code. */",
+				f" * `impl {decl.name} extern \"...\"` to supply the code.",
+				*_what_is_generated(decl),
+				" */",
 			])
 			continue
 
@@ -86,7 +90,27 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 #: One list because there were two: the dispatch in `_stuffing` and the
 #: prototype gate in `_byte_declarations`, and adding a code to one of them
 #: emitted a definition nothing declared.
-DERIVED_STUFFING = ("cobs", "hdlc", "smtp_dot")
+DERIVED_STUFFING = ("cobs", "hdlc", "ppp_async", "slip", "smtp_dot")
+
+#: The escape-stuffed byte codes, which differ from COBS in kind: rather than
+#: eliminating a byte value, they keep it and prefix it with an escape, so the
+#: delimiter stays available to frame with. Each entry is the delimiter, the
+#: escape, and how a byte that cannot appear literally is spelled after it.
+#:
+#: The two here spell that last part differently, and the difference is not
+#: cosmetic. SLIP substitutes from a table -- 0xC0 becomes 0xDC and 0xDB
+#: becomes 0xDD, which is not a uniform transformation of either. PPP defines
+#: the escape as "the next byte, exclusive-ored with 0x20", which is a rule
+#: rather than a table and is why its decoder below is the more general of the
+#: two: it reverses any escaped byte, including the control characters an
+#: ACCM asks a sender to escape and which no fixed table could enumerate.
+ESCAPE_STUFFING: dict[str, tuple[str, int, int, int | None,
+                                 tuple[tuple[int, int], ...]]] = {
+	"slip": ("SLIP, RFC 1055", 0xC0, 0xDB, None,
+	         ((0xC0, 0xDC), (0xDB, 0xDD))),
+	"ppp_async": ("PPP asynchronous framing, RFC 1662 section 4.2",
+	              0x7E, 0x7D, 0x20, ((0x7E, 0x5E), (0x7D, 0x5D))),
+}
 
 
 def declarations(schema: ast.Schema, prefix: str) -> list[str]:
@@ -165,6 +189,37 @@ def pair_of(decl: ast.CodecDecl, prefix: str = "situ") -> tuple[str, str] | None
 		return None
 
 	return (ident(prefix, decl.name, "encode"), ident(prefix, decl.name, "decode"))
+
+
+def _what_is_generated(decl: ast.CodecDecl) -> list[str]:
+	"""Which descriptions of this family DO generate, where that is a list.
+
+	The message above says a kernel is "not yet generated", and on its own
+	that reads as though the whole family were unimplemented. It was read
+	that way: decision 0017 recorded that `stuffing` "returns no
+	implementation for any input at all", when three codes generated then and
+	five do now. Naming them is the difference between a gap somebody can
+	close and a family somebody writes off.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+	if kernel.family is not ast.KernelFamily.STUFFING:
+		return []
+
+	named = _named_code(decl)
+	known = ", ".join(f"`{code}`" for code in DERIVED_STUFFING)
+	wrapped = _wrap(f"The stuffing codes this build generates are {known}.")
+	return [
+		" *",
+		*wrapped,
+		f" * `{named}` is not one of them." if named is not None else
+		" * This kernel names no code, and a stuffing code is what selects one.",
+	]
+
+
+def _wrap(prose: str) -> list[str]:
+	"""One sentence as C comment continuation lines, inside 78 columns."""
+	return [f" * {line}" for line in textwrap.wrap(prose, width=74)]
 
 
 def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
@@ -1128,7 +1183,148 @@ def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _hdlc(decl, prefix)
 	if code == "smtp_dot":
 		return _smtp_dot(decl, prefix)
+	if code in ESCAPE_STUFFING:
+		return _escape_stuffing(decl, prefix, code)
 	return None
+
+
+def _escape_stuffing(decl: ast.CodecDecl, prefix: str, code: str) -> list[str]:
+	"""An escape-stuffed byte code: SLIP and PPP's asynchronous framing.
+
+	Both keep every payload byte and make the ones that would be mistaken for
+	framing unmistakable by putting an escape in front. That is the opposite
+	trade from COBS, which removes the delimiter value from the body entirely
+	and pays a pointer per group for it; here the payload is untouched and the
+	worst case is two bytes out for one in, when every byte needs escaping.
+
+	The decoder differs between the two and the comments say why: PPP's
+	escape is defined as a transformation, so reversing it needs no table and
+	covers escapes this generator never enumerated.
+	"""
+	title, delim, esc, xor, pairs = ESCAPE_STUFFING[code]
+	name = ident(prefix, decl.name)
+
+	lines = [
+		"",
+		f"/* {decl.name}: {title}.",
+		" *",
+		f" * A payload byte equal to the delimiter (0x{delim:02X}) or to the"
+		f" escape",
+		f" * (0x{esc:02X}) is sent as the escape followed by a substitute, so"
+		" neither",
+		" * can be mistaken for the end of a frame. Every other byte is sent as",
+		" * it stands.",
+		" *",
+		" * `out` needs 2 * len + 1 bytes: twice the payload if every byte has",
+		" * to be escaped, plus the trailing delimiter. Returns the length",
+		" * written.",
+		" */",
+		f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"\tuint32_t read;",
+		"\tuint32_t written = 0;",
+		"",
+		"\tfor (read = 0; read < len; read++) {",
+		"\t\tswitch (in[read]) {",
+	]
+
+	for literal, escaped in pairs:
+		lines += [
+			f"\t\tcase 0x{literal:02X}u:",
+			f"\t\t\tout[written++] = (uint8_t)0x{esc:02X}u;",
+			f"\t\t\tout[written++] = (uint8_t)0x{escaped:02X}u;",
+			"\t\t\tbreak;",
+		]
+
+	lines += [
+		"\t\tdefault:",
+		"\t\t\tout[written++] = in[read];",
+		"\t\t\tbreak;",
+		"\t\t}",
+		"\t}",
+		"",
+		f"\tout[written++] = (uint8_t)0x{delim:02X}u;\t/* the frame"
+		" delimiter */",
+		"\treturn written;",
+		"}",
+		"",
+	]
+
+	if xor is None:
+		undo = [
+			"\t\tswitch (in[read++]) {",
+			*[line for literal, escaped in pairs for line in (
+				f"\t\tcase 0x{escaped:02X}u:",
+				f"\t\t\tout[written++] = (uint8_t)0x{literal:02X}u;",
+				"\t\t\tbreak;")],
+			"\t\tdefault:",
+			"\t\t\t/* An escape this code does not define. Refusing beats",
+			"\t\t\t * inventing a byte: the frame is not what it claims. */",
+			"\t\t\treturn 0;",
+			"\t\t}",
+		]
+		note = [
+			" * The substitutions are a table rather than a transformation --"
+			f" 0x{pairs[0][0]:02X}",
+			f" * becomes 0x{pairs[0][1]:02X} and 0x{pairs[1][0]:02X} becomes"
+			f" 0x{pairs[1][1]:02X}, which is no single operation on either --",
+			" * so an escape sequence outside it is refused rather than"
+			" guessed.",
+		]
+	else:
+		undo = [
+			f"\t\t/* RFC 1662: an escaped byte is the original exclusive-ored",
+			f"\t\t * with 0x{xor:02X}, so undoing it is the same operation"
+			" again. */",
+			f"\t\tout[written++] = (uint8_t)(in[read++] ^ 0x{xor:02X}u);",
+		]
+		note = [
+			f" * The escape is defined as a transformation -- exclusive-or"
+			f" with 0x{xor:02X} --",
+			" * rather than as a table, so this reverses any escaped byte and"
+			" not",
+			" * only the two that must always be escaped. That matters: a peer",
+			" * whose ACCM asks it to escape control characters sends escapes",
+			" * this generator never enumerated, and they decode correctly"
+			" here.",
+			" *",
+			" * Encoding escapes only the two that are mandatory, which is what"
+			" an",
+			" * ACCM of zero asks for. A link that negotiated a different one"
+			" is",
+			" * asking the sender for escapes this does not add.",
+		]
+
+	lines += [
+		"/* The inverse, stopping at the delimiter.",
+		" *",
+		*note,
+		" */",
+		f"uint32_t {name}_decode(const uint8_t *in, uint32_t len, uint8_t *out)",
+		"{",
+		"\tuint32_t read = 0;",
+		"\tuint32_t written = 0;",
+		"",
+		"\twhile (read < len) {",
+		"\t\tconst uint8_t byte = in[read++];",
+		"",
+		f"\t\tif (byte == (uint8_t)0x{delim:02X}u) {{",
+		"\t\t\tbreak;\t\t/* the delimiter ends the frame */",
+		"\t\t}",
+		f"\t\tif (byte != (uint8_t)0x{esc:02X}u) {{",
+		"\t\t\tout[written++] = byte;",
+		"\t\t\tcontinue;",
+		"\t\t}",
+		"\t\tif (read >= len) {",
+		"\t\t\treturn 0;\t/* truncated: an escape ended the input */",
+		"\t\t}",
+		*undo,
+		"\t}",
+		"",
+		"\treturn written;",
+		"}",
+	]
+	return lines
 
 
 def _smtp_dot(decl: ast.CodecDecl, prefix: str) -> list[str]:
