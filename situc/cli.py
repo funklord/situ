@@ -42,7 +42,11 @@ FUTURE_LAYERS: dict[str, str] = {
 #: state machine, selected by `--driver`. A driver crosses the backend axis
 #: and not every cell is meaningful -- `--driver epoll --target python` is a
 #: worse asyncio -- so each names the backends it is available for, and an
-#: unavailable pair is refused naming both. `epoll` is a Linux C event loop.
+#: unavailable pair is refused naming both.
+#:
+#: The first six are C event loops over a descriptor. `qt` is the first cell
+#: that is not C: a host runtime rather than an OS facility, so it lives where
+#: its runtime does (0033 names Qt the one this workspace wants first).
 DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 	"epoll": ("c",),
 	"poll": ("c",),
@@ -50,6 +54,7 @@ DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 	"ppoll": ("c",),
 	"blocking": ("c",),
 	"io_uring": ("c",),
+	"qt": ("cpp",),
 }
 DRIVERS = tuple(DRIVER_BACKENDS)
 
@@ -514,15 +519,18 @@ def cmd_build(args: argparse.Namespace) -> int:
 			f"situc: --driver {args.driver} is available for {available} and "
 			f"--target is {args.target}. A driver crosses the backend axis and "
 			f"not every cell is meaningful -- {args.driver} on {args.target} "
-			f"is a worse fit for a facility that backend already has natively "
-			f"(decision 0033).")
+			f"is not one situ emits (decision 0033).")
 
 	if args.driver is not None and args.layer != "drive":
+		# The suffix follows the backend the driver is for: a C driver adds a
+		# `.c` beside its header, a C++ one is a header alone.
+		suffix = "hpp" if DRIVER_BACKENDS[args.driver] == ("cpp",) else "c"
 		raise SystemExit(
 			f"situc: --driver {args.driver} pumps the rung-6 state machine, "
 			f"which is emitted at --layer drive, and --layer is {args.layer}. "
-			f"The driver adds `<name>_{args.driver}.c` over the drive layer "
-			f"rather than pulling it in, so ask for both (decision 0033).")
+			f"The driver adds `<name>_{args.driver}.{suffix}` over the drive "
+			f"layer rather than pulling it in, so ask for both "
+			f"(decision 0033).")
 
 	# The layer boundary, made real. A construct whose output extent cannot be
 	# known without transforming it has nowhere to put the result at rung 1,
@@ -645,17 +653,29 @@ def cmd_build(args: argparse.Namespace) -> int:
 		# same relations. Re-reporting would be one message twice.
 		#
 		# Only the selected driver is imported: each is a separate module and
-		# a new one is added by writing `situc/codegen/c/<name>.py`, adding it
-		# to DRIVER_BACKENDS, and one branch here.
-		from situc.codegen.c import (blocking, epoll, io_uring, poll,
-		                             ppoll, select)
-
+		# a new one is added by writing `situc/codegen/<backend>/<name>.py`,
+		# adding it to DRIVER_BACKENDS, and one branch here.
+		#
+		# The branch is on the *target*, not the driver: the availability
+		# refusal above has already established that the two agree, and the
+		# target is what decides the calling convention. A C generator takes
+		# the symbol prefix; a C++ one does not -- there the prefix is a
+		# namespace, which only the accessor emitter consumes.
 		parsed = parse(source)
-		driver = {"epoll": epoll, "poll": poll, "select": select,
-		          "ppoll": ppoll, "blocking": blocking,
-		          "io_uring": io_uring}
-		files.update(driver[args.driver].generate(
-			parsed, resolved, args.schema.stem, args.prefix))
+		if args.target == "cpp":
+			from situc.codegen.cpp import qt
+
+			files.update({"qt": qt}[args.driver].generate(
+				parsed, resolved, args.schema.stem))
+		else:
+			from situc.codegen.c import (blocking, epoll, io_uring, poll,
+			                             ppoll, select)
+
+			driver = {"epoll": epoll, "poll": poll, "select": select,
+			          "ppoll": ppoll, "blocking": blocking,
+			          "io_uring": io_uring}
+			files.update(driver[args.driver].generate(
+				parsed, resolved, args.schema.stem, args.prefix))
 
 	args.out.mkdir(parents=True, exist_ok=True)
 	for name, text in files.items():

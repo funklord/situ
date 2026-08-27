@@ -1,9 +1,10 @@
 # 0033: drivers are a third axis, and the vtable is completion-shaped
 
-Status: accepted, and six drivers are built -- `--driver epoll`, `poll`,
-`select`, `ppoll` and `blocking` (readiness and no-multiplexer) and
-`--driver io_uring` (completion, the one the vtable was shaped for), all
-C-only over `--layer drive` (see the amendments below). The taxonomy and the
+Status: accepted, and seven drivers are built. Six are C over `--layer
+drive` -- `--driver epoll`, `poll`, `select`, `ppoll` and `blocking`
+(readiness and no-multiplexer) and `--driver io_uring` (completion, the one
+the vtable was shaped for) -- and `--driver qt` is the first host runtime and
+the first cell that is not C. See the amendments below. The taxonomy and the
 two shape calls were decided here; the copyright holder then asked for these
 built.
 Date: 2026-08-08
@@ -366,3 +367,60 @@ shared path and gained three honest knobs rather than a special case.
 
 Held to the same socketpair test, driven with a NULL mask. The generator is
 `situc/codegen/c/ppoll.py`.
+
+## Amendment, 2026-08-27: qt, the first host runtime -- and a segfault it found
+
+`--driver qt` is built. It is the driver this record singled out -- "the one
+this workspace will want first, three private projects being Qt" -- and it is
+the first on two axes at once: the first host runtime rather than an OS
+facility, and the first cell that is not C. The availability rule wrote
+itself in the new direction: `--driver qt --target c` is refused naming both,
+with no code change, because the check reads the driver's declared backends.
+
+**A host runtime does not own the loop, and that changes the caller's
+shape.** The six fd-based drivers are handed a descriptor and run until the
+exchange ends, returning the outcome. Qt's event loop belongs to the
+application, so this driver installs a `QSocketNotifier` and a single-shot
+`QTimer`, wires them to the state machine, and returns -- the caller's
+`exec()` pumps it. The outcome therefore arrives at a completion callback,
+and the return value reports only whether arming succeeded. That is the one
+place a driver changes what the *caller* sees rather than absorbing the
+difference, and it is written down here so the next host runtime -- asyncio,
+tokio -- does not reinvent it. `step`'s deadline becomes the timer's
+interval, wrap-safe and floored at zero, exactly as it becomes a wait
+timeout elsewhere.
+
+**Nothing it emits declares `Q_OBJECT`, a signal or a slot**, and that is a
+requirement rather than a style: a consumer must not have to run `moc` over
+generated code, which would put a build step inside situ's output. Every
+connection is made to a lambda with a plain `QObject` member as context, so
+only Qt's already-moc'd classes need a metaobject, and destroying the pump
+drops both connections though the pump is not a `QObject` itself. A test
+asserts the macros are absent, and the compile is the other half: a type
+declaring `Q_OBJECT` without moc fails at link with an undefined vtable.
+
+**The driver found a segfault in the C++ backend that predates it.** Qt
+defines `slots` as an empty macro, and `cpp/drive.py` and `cpp/converse.py`
+both emitted a constructor taking `slot *slots` with the member initialiser
+`slots_(slots)`. In any translation unit that has included a Qt header the
+parameter name vanishes and the initialiser becomes `slots_()` -- a null the
+constructor immediately writes through, **compiling clean under `-Wall
+-Wextra`**. Measured: a segfault at construction. This was live for every Qt
+consumer of `--layer converse` or `--layer drive`, which is three of these
+projects, and it had never fired only because nothing here built C++ against
+Qt. The parameter is `store` now. The guard is portable -- it emulates the
+macro rather than requiring Qt -- and was watched failing with the fix
+reverted, because a regression test for a bug that compiles clean is worth
+nothing unless it has been seen to catch it.
+
+**Qt's own headers do not survive the repository's warning set**, so the
+test includes them with `-isystem` and keeps `-Wconversion -Wsign-conversion
+-Werror` over situ's generated code. Third-party headers are system headers;
+the strictness stays where it can be acted on.
+
+Held to a real `QCoreApplication` over an AF_UNIX datagram socketpair:
+retransmit twice then correlate the echoed reply, and expire after the retry
+budget, with a watchdog so a loop that never completes fails rather than
+hangs. The generator is `situc/codegen/cpp/qt.py`, emitting one
+`<name>_qt.hpp` -- the C++ backend's one-file convention, which the driver
+axis had not met before.
