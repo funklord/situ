@@ -14772,13 +14772,38 @@ fail on the byte rather than on anything a reader could act on. The
 round-trip test asserts the printed source is ASCII, and reverting the
 `_escape` arm turns it red.
 
-**Still open, and found while checking this**: for a length-changing coded
-region the C header declares the codec entry points while Rust, C++ and
-Python emit no binding to them, because no generated accessor calls one --
-the accessors hand back the encoded span and decoding is the caller's step.
-A C consumer can therefore call `situ_slip_decode` and a Rust consumer has
-to declare the extern by hand. That is an asymmetry rather than a decision,
-and it is the next thing to settle in this area.
+**Still open, and found while checking this**: which codec entry points a
+consumer gets declared has four backends giving three answers. Measured on
+one schema built twice, identical but for its `impl`, with a
+length-changing coded region so that no generated accessor decodes:
+
+| backend | `impl ... derived` | `impl ... extern "app_slip"` |
+|---|---|---|
+| C | both declared | not declared |
+| C++ | not declared | declared |
+| Rust | not declared | declared |
+| Python | not declared | not declared |
+
+The rule each backend is following is legible -- C declares what it
+defines, and the others declare the symbol an accessor calls, which for a
+length-changing region is only ever the tier-1 one reached through the
+`covers`/scattered path. But the result reads backwards: C++ and Rust
+declare the symbol situ does *not* control, whose signature it knows only
+by convention, and omit the one it generated itself and knows exactly. A
+Rust consumer of SLIP gets `body_offset`, `body_len` and
+`body_terminated_from`, and has to hand-write `extern "C" { fn
+situ_slip_decode(..) }` to do anything with the bytes.
+
+Python is the one that needs more than a declaration: it has no FFI
+statement to emit, so giving it the entry point means deciding what a
+Python binding to the C runtime looks like, which 0017 anticipated as "a
+build step" and never specified.
+
+So the question is not "add a line to two emitters". It is whether a
+generated module should declare every codec entry point its schema names
+or only those its own accessors call -- and that is a decision about the
+public shape of four backends rather than a defect to patch, so it is
+recorded here rather than settled in passing.
 
 ## 27. Questions, and how they were settled
 
