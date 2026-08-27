@@ -493,6 +493,17 @@ def _escape(text: str) -> str:
 			out.append("\\r")
 		elif char == "\0":
 			out.append("\\0")
-		else:
+		elif " " <= char <= "~":
 			out.append(char)
+		else:
+			# Everything else is a byte with no printable spelling -- a SLIP
+			# delimiter, a control character in a magic.
+			#
+			# The lexer would accept it raw: non-ASCII is refused outside a
+			# string literal and permitted inside one. What refuses it is the
+			# rule a level up, that situ source is ASCII, and the practical
+			# consequence that several tools here read and write `.situ` with
+			# the ascii codec and would fail on the byte rather than on
+			# anything a reader could act on.
+			out.append(f"\\x{ord(char):02X}")
 	return "".join(out)

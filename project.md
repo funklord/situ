@@ -14736,6 +14736,50 @@ a kernel was "described but not yet generated" and never said which codes
 and wrote that into 0017. A refusal that does not say what would have been
 accepted gets read as "nothing works". The message names the five now.
 
+### 26.138 A delimiter is a byte, and now it can be written
+
+`\xNN` is a string escape. It closes a gap this document had already
+recorded twice without closing: 26.54 found 540 composed cells refused
+because the template wrote a terminator `"\xff"` and fixed *the template*,
+and a later pass wrote it down plainly -- "string literals know
+`\n \t \r \0 \\ \"` and no `\xNN`, so a delimiter outside that set cannot
+be spelled".
+
+**What made it worth closing now is that SLIP framing arrived.** A frame
+delimiter is a byte, and SLIP's is 0xC0, which nothing in ASCII spells. PPP
+asynchronous framing was expressible the whole time for no better reason
+than that 0x7E happens to be `~`. A language that supports a protocol only
+when its constants are printable has got lucky rather than covered it, and
+under 26.137 that is not a gap to record a third time.
+
+**The byte pipeline already worked and only the spelling was missing**,
+which is why this is small: the parser has always encoded a delimiter with
+`latin-1`, so every value 0x00 to 0xFF round-trips to the byte of the same
+number. Nothing downstream changed.
+
+**Two digits exactly, never one.** A variable-length escape makes `"\xC00"`
+ambiguous between a byte followed by `0` and a number that ran on, and a
+reader cannot tell which without counting. Refusing one digit costs an
+author a zero and buys certainty about where every escape ends.
+
+**The half that breaks quietly is unparsing, not lexing.** `_escape`
+printed anything it did not recognise as the raw character, so a 0xC0
+delimiter round-tripped to a byte in the source file. That would not have
+been caught by the lexer -- non-ASCII is refused *outside* a string literal
+and allowed inside one -- but it violates this project's ASCII source rule
+and the several tools here that read `.situ` with the ascii codec would
+fail on the byte rather than on anything a reader could act on. The
+round-trip test asserts the printed source is ASCII, and reverting the
+`_escape` arm turns it red.
+
+**Still open, and found while checking this**: for a length-changing coded
+region the C header declares the codec entry points while Rust, C++ and
+Python emit no binding to them, because no generated accessor calls one --
+the accessors hand back the encoded span and decoding is the caller's step.
+A C consumer can therefore call `situ_slip_decode` and a Rust consumer has
+to declare the extern by hand. That is an asymmetry rather than a decision,
+and it is the next thing to settle in this area.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

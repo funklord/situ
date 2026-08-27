@@ -111,6 +111,47 @@ def test_unknown_escape_rejected() -> None:
 		tokenize(Source("<test>", r'"a\qb"'))
 
 
+def test_hex_escape_names_a_byte_no_character_can() -> None:
+	"""`\\xNN` exists because a frame delimiter is a byte, not a character.
+
+	SLIP ends a frame with 0xC0 and nothing in ASCII spells it, so before
+	this the delimiter could not be written at all -- while PPP's 0x7E could,
+	because it happens to be `~`. A language where a protocol is expressible
+	only when its constants are printable is one that got lucky, not one
+	that supports them.
+	"""
+	assert tokenize(Source("<test>", r'"\xC0"'))[0].text == "\u00c0"
+	assert tokenize(Source("<test>", r'"\x7e"'))[0].text == "~"
+	assert tokenize(Source("<test>", r'"\x00"'))[0].text == "\0"
+	assert tokenize(Source("<test>", r'"a\xFFb"'))[0].text == "a\u00ffb"
+
+
+def test_hex_escape_is_case_insensitive() -> None:
+	assert (tokenize(Source("<test>", r'"\xab"'))[0].text
+	        == tokenize(Source("<test>", r'"\xAB"'))[0].text)
+
+
+def test_hex_escape_takes_exactly_two_digits() -> None:
+	"""Two, so the escape ends in a fixed place.
+
+	With a variable-length escape `"\\xC00"` would be ambiguous between one
+	byte followed by `0` and a number that ran on, and the reader could not
+	tell which without counting. Refusing one digit costs an author a zero
+	and buys every reader that certainty.
+	"""
+	with pytest.raises(SituError, match="exactly two hexadecimal digits"):
+		tokenize(Source("<test>", r'"\xA"'))
+	with pytest.raises(SituError, match="exactly two hexadecimal digits"):
+		tokenize(Source("<test>", r'"\xG0"'))
+	with pytest.raises(SituError, match="exactly two hexadecimal digits"):
+		tokenize(Source("<test>", r'"\x"'))
+
+
+def test_a_third_digit_is_a_character_not_part_of_the_escape() -> None:
+	"""The consequence of the rule above, asserted rather than assumed."""
+	assert tokenize(Source("<test>", r'"\xC00"'))[0].text == "\u00c00"
+
+
 def test_unterminated_string_rejected() -> None:
 	with pytest.raises(SituError, match="unterminated string literal"):
 		tokenize(Source("<test>", '"no closing quote'))

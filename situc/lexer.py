@@ -51,6 +51,7 @@ SYMBOLS = (
 IDENT_START	= frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
 IDENT_BODY	= IDENT_START | frozenset("0123456789")
 DIGITS		= frozenset("0123456789")
+HEX_DIGITS	= frozenset("0123456789abcdefABCDEF")
 
 RADIX_DIGITS = {
 	"x": frozenset("0123456789abcdefABCDEF"),
@@ -220,8 +221,40 @@ class Lexer:
 		simple = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"'}
 		if char in simple:
 			return simple[char]
+		if char == "x":
+			return self.scan_hex_escape(start)
 
-		raise error(f"unknown escape sequence `\\{char}`", self.span(start, self.pos))
+		raise error(f"unknown escape sequence `\\{char}`", self.span(start, self.pos),
+		            notes = ["the escapes are `\\n`, `\\t`, `\\r`, `\\0`, "
+		                     "`\\\\`, `\\\"` and `\\xNN`"])
+
+	def scan_hex_escape(self, start: int) -> str:
+		"""`\\xNN`: one byte, written with the ASCII characters that name it.
+
+		A frame delimiter is a byte and is frequently not a character anybody
+		can type -- SLIP ends a frame with 0xC0 and nothing in ASCII spells
+		it. Without this a binary delimiter could not be written at all, while
+		one that happened to be printable could: PPP's 0x7E is `~` and worked
+		by luck rather than by the language supporting it.
+
+		Exactly two digits, so that the end of the escape never depends on
+		what follows it. `"\\xC0" "0"` and `"\\xC00"` differ by where a string
+		ends and not by how far a number ran.
+		"""
+		digits = self.text[self.pos : self.pos + 2]
+		if len(digits) < 2 or any(char not in HEX_DIGITS for char in digits):
+			raise error(
+				"`\\x` takes exactly two hexadecimal digits",
+				self.span(start, min(self.pos + 2, len(self.text))),
+				label = f"found `{digits}`" if digits else "found nothing",
+				notes = ["a byte is always two digits here, so that the escape "
+				         "ends in a fixed place and the character after it is "
+				         "never part of the number",
+				         "write `\\x0A` rather than `\\xA`"],
+			)
+
+		self.pos += 2
+		return chr(int(digits, 16))
 
 
 def tokenize(source: Source) -> list[Token]:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from situc import ast
 from situc.diagnostics import Source
 from situc.dump import dump
 from situc.parser import parse_decls, parse_text
@@ -135,6 +136,52 @@ def test_an_import_directive_round_trips(source: str) -> None:
 	"""Including its escapes: a path is a string literal, and the printer has
 	to give back the bytes the lexer read."""
 	roundtrip_decls(source)
+
+
+SLIP_FRAMED = r"""target buffer;
+endian big;
+bit_order msb_first;
+codec slip {
+	kernel = stuffing(worst_case = 2, per = 1, unit = byte, code = slip);
+}
+impl slip derived;
+struct frame {
+	coded body(slip) until "\xC0" { u8 payload[remaining]; }
+}
+"""
+
+
+def test_a_binary_delimiter_survives_a_round_trip() -> None:
+	"""The half of `\\xNN` that is easy to forget, and breaks quietly.
+
+	Reading the escape is only useful if writing it back produces source that
+	reads the same way. Before `_escape` learned it, a 0xC0 delimiter was
+	printed as the raw byte -- which the lexer would have accepted, since
+	non-ASCII is refused outside a string literal and allowed inside one, and
+	which still puts a byte in a `.situ` file that this project's ASCII rule
+	forbids and its ascii-codec readers cannot open.
+	"""
+	roundtrip(SLIP_FRAMED)
+
+	printed = unparse(parse_text(SLIP_FRAMED))
+	assert r"\xC0" in printed, printed
+	assert printed.isascii(), "unparse emitted a byte no situ source may carry"
+
+
+def test_the_delimiter_is_the_byte_and_not_its_spelling() -> None:
+	"""`\\xC0` has to reach the AST as one byte 0xC0.
+
+	The spelling is four ASCII characters and the delimiter is one byte, and
+	nothing downstream should be able to tell which way it was written -- a
+	scan comparing four bytes against a frame would never terminate.
+	"""
+	schema = parse_text(SLIP_FRAMED)
+	found = [member.until.delimiter
+	         for struct in schema.structs()
+	         for member in struct.members
+	         if isinstance(member, ast.Coded) and member.until is not None]
+
+	assert found == [b"\xc0"], found
 
 
 def test_precedence_survives_a_round_trip() -> None:
