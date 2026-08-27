@@ -33,6 +33,7 @@ import pytest
 from every_schema import ROOT
 from oracles import DRIVERS, LIES, ORACLES, Oracle, have
 
+from situc import ast
 from situc.codegen import c as generate_c
 from situc.codegen import python as generate_py
 from situc.codegen.c import derived as generate_derived
@@ -148,6 +149,194 @@ def test_each_oracle_notices_a_schema_that_lies(
 	assert ours != theirs, (
 		f"{oracle.name}: the oracle agreed with a schema whose members are "
 		f"swapped, so it is not comparing what it claims to compare")
+
+
+# -- generated computation, not generated layout ------------------------------
+#
+# Every oracle above checks where the bytes are. This one checks what situ
+# *computes* from them: `gen-derived` emits CRC implementations from a kernel
+# description -- a 256-entry table it calculates rather than copies -- and
+# situ's own property tests read that same description, so a table built from
+# a mistranscribed polynomial would agree with them forever.
+#
+# This existed and was deleted on 2026-08-04 by 17724a0, a commit about network
+# oracles whose message never mentions it. The imports it used stayed behind,
+# so nothing went red: an unused import is not a failure, and the only outside
+# check on any derived codec vanished under a green suite. That is what
+# `test_every_polynomial_codec_is_checked_or_excused` exists to prevent a
+# second time.
+#
+# Two kinds of evidence here, and they are not equally strong.
+#
+# `zlib.crc32` and `binascii.crc_hqx` are independent *implementations* that
+# ship with Python, both old enough and used enough that disagreement means
+# situ is wrong. That is the real oracle, and it reaches two codecs.
+#
+# A published check value -- what a CRC produces for "123456789" -- is weaker,
+# and saying so matters: it comes from the same catalogue the kernel
+# parameters were transcribed from, so it is not a second implementation and
+# must not be counted as one. What it does catch is the transcription, which
+# is the failure that actually happens: a wrong poly, init, xorout or reflect
+# gives a different check value. It is the only outside evidence available for
+# the five CRCs the standard library does not implement.
+#
+# Measured, so that the strength of both is known rather than assumed:
+# flipping one bit of crc32's polynomial disagrees with zlib at 8 of the 9
+# lengths below. The exception is the empty input, where the result is
+# init ^ xorout and the table never runs.
+
+CRC_CASES = (
+	("crc32", "situ_crc32", ctypes.c_uint32,
+	 lambda data: zlib.crc32(data)),
+	("crc16_ccitt", "situ_crc16_ccitt", ctypes.c_uint16,
+	 lambda data: binascii.crc_hqx(data, 0xFFFF)),
+)
+
+#: Each CRC's published check value: its output over the nine bytes
+#: "123456789", which is how the catalogue identifies a parameter set.
+CRC_CHECK_VALUES = {
+	"crc8_smbus":   (ctypes.c_uint8,  0xF4),
+	"crc16_ccitt":  (ctypes.c_uint16, 0x29B1),
+	"crc16_modbus": (ctypes.c_uint16, 0x4B37),
+	"crc24_ble":    (ctypes.c_uint32, 0xC25A56),
+	"crc32":        (ctypes.c_uint32, 0xCBF43926),
+	"crc32c":       (ctypes.c_uint32, 0xE3069283),
+	"crc40_gsm":    (ctypes.c_uint64, 0xD4164FC646),
+}
+
+#: A polynomial codec neither oracle reaches, and why. Being named here is a
+#: decision a reader can see and argue with; being in none of the three is the
+#: silence the guard below refuses.
+CRC_UNCHECKED = {
+	"reed_solomon_255_223": "a block code rather than a CRC -- it has no "
+	                        "check value and its own encode/decode shape",
+	"reed_solomon_64_56":   "as reed_solomon_255_223",
+}
+
+
+@pytest.fixture(scope="module")
+def kernel_library(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
+	"""Build the derived codecs of `std/kernels.situ` into a shared object.
+
+	Built once for the module rather than once per case: the nine checks
+	below all read the same standard kernels, and a compile each was most
+	of what they cost.
+
+	Skips loudly without a compiler rather than passing: a differential
+	test that quietly becomes a no-op is worth less than no test at all.
+	"""
+	compiler = shutil.which("cc") or shutil.which("gcc")
+	if compiler is None:
+		pytest.skip("no C compiler; the CRC oracle did not run")
+
+	tmp = tmp_path_factory.mktemp("kernels")
+
+	kernels = ROOT / "std" / "kernels.situ"
+	source  = Source(str(kernels), kernels.read_text(encoding="ascii"))
+	parsed  = parse(source)
+	solved  = resolve(parsed, solve(parsed))
+
+	(tmp / "kernels.h").write_text(
+		generate_c.generate(parsed, solved, "kernels").header, encoding="ascii")
+	(tmp / "derived.c").write_text(
+		generate_derived.generate(parsed, "kernels"), encoding="ascii")
+
+	shared = tmp / "kernels.so"
+	built  = subprocess.run(
+		[compiler, "-O2", "-shared", "-fPIC",
+		 "-I", str(ROOT / "runtime" / "c"), "-I", str(tmp),
+		 str(tmp / "derived.c"), "-o", str(shared)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	return ctypes.CDLL(str(shared))
+
+
+def _crc(lib: ctypes.CDLL, name: str, ctype: type) -> object:
+	"""One generated CRC, bound with its real signature."""
+	fn = getattr(lib, f"situ_{name}")
+	fn.restype  = ctype
+	fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32]
+	return fn
+
+
+@pytest.mark.parametrize(
+	"name,symbol,ctype,independently", CRC_CASES,
+	ids=[case[0] for case in CRC_CASES])
+def test_a_generated_crc_matches_an_independent_implementation(
+		name: str, symbol: str, ctype: type, independently: object,
+		kernel_library: ctypes.CDLL) -> None:
+	"""What situ computes, against what the standard library computes.
+
+	The kernel description says width, polynomial, initial value and whether
+	the input is reflected; situ turns that into a 256-entry table and a loop.
+	A table generated from a wrong polynomial is wrong consistently, so situ's
+	own tests -- which read the same description -- would agree with it.
+	"""
+	fn = _crc(kernel_library, name, ctype)
+
+	# Lengths around the boundaries a table-driven CRC gets wrong: empty, a
+	# single byte, and either side of a 256-byte table wrap.
+	random.seed(20260804)
+	for length in (0, 1, 2, 15, 64, 255, 256, 257, 1024):
+		data = bytes(random.randrange(256) for _ in range(length))
+		buf  = (ctypes.c_uint8 * max(1, length))(*data)
+
+		assert fn(buf, length) == independently(data), (  # type: ignore[operator]
+			f"{name}: situ and the standard library disagree at {length} bytes")
+
+
+@pytest.mark.parametrize("name", sorted(CRC_CHECK_VALUES))
+def test_a_generated_crc_produces_its_published_check_value(
+		name: str, kernel_library: ctypes.CDLL) -> None:
+	"""Every CRC here against the value its catalogue entry publishes.
+
+	This is the transcription check, and it is the only outside evidence for
+	the five the standard library does not implement. A parameter copied
+	wrongly out of the catalogue -- the polynomial, the initial value, the
+	final xor, the reflection -- lands on a different check value.
+	"""
+	ctype, expected = CRC_CHECK_VALUES[name]
+	fn = _crc(kernel_library, name, ctype)
+
+	data = b"123456789"
+	buf  = (ctypes.c_uint8 * len(data))(*data)
+	got  = fn(buf, len(data))                             # type: ignore[operator]
+
+	assert got == expected, (
+		f"{name}: situ computes {got:#x} over \"123456789\" where the "
+		f"catalogue publishes {expected:#x}, so a kernel parameter in "
+		f"std/kernels.situ does not say what it was meant to say")
+
+
+def test_every_polynomial_codec_is_checked_or_excused() -> None:
+	"""No generated CRC joins the standard kernels unchecked and unremarked.
+
+	The section above was deleted once without anybody noticing, because
+	nothing asserted that it was still there. This reads the schema rather
+	than a list of its own, so a tenth polynomial codec is covered the moment
+	it is added -- and deleting the cases fails here rather than quietly.
+	"""
+	kernels = ROOT / "std" / "kernels.situ"
+	parsed  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	polynomial = {codec.name for codec in parsed.codecs()
+	              if codec.kernel is not None
+	              and codec.kernel.family is ast.KernelFamily.POLYNOMIAL}
+	assert polynomial, (
+		"no polynomial codec found in std/kernels.situ -- this guard is "
+		"reading the wrong thing, and an empty set passes exactly as loudly "
+		"as a real one")
+	assert CRC_CASES, "CRC_CASES is empty, so no generated CRC is checked"
+
+	covered = ({case[0] for case in CRC_CASES} | set(CRC_CHECK_VALUES)
+	           | set(CRC_UNCHECKED))
+	missing = polynomial - covered
+	assert not missing, (
+		f"{sorted(missing)}: a generated CRC that nothing outside this "
+		f"project checks. Add it to CRC_CASES if the standard library "
+		f"implements it, to CRC_CHECK_VALUES with its published check value, "
+		f"or to CRC_UNCHECKED with the reason it can have neither")
 
 
 def test_the_corpus_is_not_this_project_s_opinion() -> None:

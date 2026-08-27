@@ -143,3 +143,119 @@ sharper: `stuffing` returns no implementation for any input at all, and
 unlike the sub-byte CRC refusal -- which `kernels.py` states with a reason
 the author can read -- nothing says why. That is a gap or a decision, and
 which it is has not been written down.
+
+## Amendment, 2026-08-27: what the one implementation costs
+
+This record rests on two things it asserts rather than measures: that one C
+implementation is *correct* -- "one implementation that is correct is worth
+more than four that are each nearly correct" -- and that binding to it is
+cheap for every other backend. Both were measured today. The first was not
+true at the time of measuring, and the second is true of C++ and false of
+Rust.
+
+**Nothing outside this project had checked a generated CRC since 4 August.**
+A differential test held `situ_crc32` and `situ_crc16_ccitt` against
+`zlib.crc32` and `binascii.crc_hqx`. 17724a0 -- a commit adding network
+oracles, whose message never mentions it -- deleted the test and left its
+imports behind, and an unused import fails nothing, so the only outside
+check on any derived codec vanished under a green suite for three weeks.
+The commit's own subject is "every one required to be able to fail".
+
+It is restored, and wider than it was. The standard kernels carry nine
+polynomial codecs; the two independent implementations in the standard
+library reach two of them. The other five CRCs are now checked against the
+check value their catalogue entry publishes for "123456789", which is
+weaker evidence and is labelled as such in the test: the check value comes
+from the same catalogue the kernel parameters were transcribed from, so it
+is not a second implementation. What it does catch is the transcription --
+a wrong poly, init, xorout or reflect lands on a different value -- and
+that is the failure that actually happens. The two Reed-Solomons are named
+as reachable by neither, with the reason. A guard reads the schema and
+refuses a tenth polynomial codec that is in none of the three.
+
+None of that argues against this record. One implementation is still better
+than four. But it was the premise the record leans hardest on, and it was
+being taken on trust.
+
+**The Rust binding costs more than the record expected, and the reason
+given does not transfer to it.** The deferral is justified by the other two
+backends: "C++ links C for free and idiomatically, and Python's performance
+expectations do not justify a second implementation." Measured, that is
+exactly right for C++ -- `runtime/cpp/situ.hpp` includes `situ.h` already,
+so a codec adds nothing a C++ consumer was not already linking.
+
+Rust is the opposite case, and this record could not have known it: Rust
+adoption was "far enough out that speculative work would be guesswork". It
+is not far out now -- the Rust backend spans the layer ladder to `drive`
+and has a tokio driver -- and `runtime/rust/situ_rt.rs` is `#![no_std]`
+with no C dependency whatever: no `extern "C"`, no `libc`, no `#[link]`, no
+`cc`. The C runtime is not something a Rust consumer already has. It is a
+dependency the first codec introduces.
+
+The whole of what that costs, for a schema whose only codec is derived:
+
+    extern "C" {
+        fn situ_scramble_decode(input: *const u8, len: u32, out: *mut u8) -> u32;
+    }
+
+One `unsafe` block, a C toolchain in the build, and a `no_std` story that
+now depends on linking C -- for a 16-bit shift register described by its
+taps, seed and feedback. This record anticipated the `unsafe` and said it
+was "the price of not having four Reed-Solomons". The price is the same
+whether the codec is a Reed-Solomon or an LFSR, which is the part worth
+looking at again.
+
+**What is not being proposed is "native where the algorithm is simple".**
+This record rejected that and the rejection stands: the line between simple
+enough and not "is a judgement that would be made once per codec per
+backend, and every one of those judgements is a chance to be wrong."
+
+The question worth re-opening is a different one, and it is not a
+judgement. `derived` is a keyword the schema already carries, and it
+already partitions exactly the codecs situ computes from the ones it does
+not. "Derived codecs are native in every backend, extern codecs are FFI in
+every backend" admits no exceptions and needs no per-codec ruling.
+
+Two things bearing on the drift argument have changed since:
+
+- **The derivation is not per-backend.** Of `situc/codegen/c/derived.py`'s
+  1734 lines, 739 are Python computing tables, masks and accumulator
+  widths, and 707 are C being spelled -- the rest comment and blank. A
+  second backend re-spells; it does not re-derive. That is the division this record already accepts for
+  accessors, where "there is no algorithm to get wrong" -- here the
+  algorithm is in the Python, and it is written once however many backends
+  read it.
+- **Drift is caught mechanically now.** The Reed-Solomon bug this record
+  cites as its evidence was found by hand, with a Python model built for
+  the purpose. Six readers are held to each other by the differential
+  suite, and as of today the generated CRCs are held to outside
+  implementations and published check values as well. "Four chances to
+  introduce four different variants of that bug" is a real cost and no
+  longer an unmonitored one.
+
+**What this asks.** Nothing is changed by this amendment; the decision
+above stands as written. The question put to the holder is narrower than
+the one the record deferred:
+
+> Should `impl <codec> derived` generate native Rust, rather than an
+> `extern "C"` binding to the C implementation?
+
+C++ and Python are not part of it. The record's reasoning holds for both,
+and this amendment confirms the C++ half by measurement.
+
+**And the slot this record leans on is not there.** Both this record and
+project.md's summary of it say a per-language plugin slot "exists ... and
+is empty", spelled `impl crc32 derived for rust`. Measured, it is absent
+rather than empty: the parser refuses the qualifier outright --
+
+    error: expected `;` after the impl binding, found `for`
+
+-- and `ImplDecl` carries `codec`, `kind` and `symbol`, with nothing to
+qualify them by target.
+
+That is flagged and not resolved here, because which side is wrong is a
+real question with an answer somebody holds: the syntax may have been
+designed and never built, or built and dropped. It does not change the
+question above, which asks what the *default* should be for Rust. It does
+mean there is currently no override to fall back on, so today the C
+binding is not one choice among two -- it is the only one.
