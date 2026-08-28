@@ -15053,6 +15053,70 @@ and the recipe refuses outright rather than counting when one does not:
 
 Checked by deleting a source with rebuilds suppressed, which exits 1.
 
+### 26.142 State between items, which three protocols have wanted this week
+
+Looking for the next protocol to carry as a worked example, CoAP was the
+candidate: a bit-packed header, a variable token, and options whose tag is
+a four-bit delta and length in one byte with two escape widths. The header
+is expressible. The options are not, and the reason is the same one 8b10b
+gave.
+
+**Measured.** A `tlv` whose identity is the raw per-item delta parses:
+
+    tag_decode   = { delta = tag >> 4, length = tag & 0x0F },
+    tag_identity = delta,
+
+CoAP's option *number* is not the delta. It is the running sum of every
+delta before it, so an option numbered 11 after one numbered 4 carries a
+delta of 7. Written as such, situ refuses by name:
+
+    error: `previous` is not in scope in a tag decode
+      = `previous` is not the raw tag
+      = a `tag_decode` part is an expression over `tag`, the raw tag just read
+      = nothing else has been read yet: the parts are what decide where the
+        value ends
+
+**The refusal is right and its stated reason is narrower than the rule it
+gives.** "Nothing else has been read yet" is true of the item being
+decoded -- the tag parts fix where its value ends, so they cannot depend
+on the value. It is not true of the items *before* it, which are parsed
+and whose numbers are known. So a running total is refused by a rule
+whose justification does not reach it. That is worth separating: the
+implementation forbids every name but `tag`, and the note explains a
+different and narrower thing.
+
+**Three protocols wanted inter-item state this week and one got it.**
+NRZI (26.140) needed the previous output bit and is expressible, because
+`shift_register` carries a register across bits and the width turns down
+to one. 8b10b (26.139) needs running disparity across symbols and is not,
+because `table` is a stateless map. CoAP needs a running option number
+across items and is not, because a tag decode sees one tag.
+
+Put together: **situ carries state inside codecs and nowhere in the
+layout.** `shift_register` holds a register, and `stuffing` with
+`unit = stream` holds line position -- `test_dot_stuffing_carries_line_state_across_the_buffer`
+is that, and SMTP needs it because "the start of a line" cannot be
+evaluated from one byte. Both are internal to a transform. Nothing a
+schema writes can say "this item's number is the last one plus this
+delta", and the three findings above are one absence seen from three
+sides rather than three gaps.
+
+**Whose decision, and what it would cost.** Whether the layout language
+should carry a value between items is the same class of question as
+whether `table` should carry disparity, and both should probably be
+answered together rather than one at a time -- a `tlv` running total and
+a symbol-code running disparity are the same mechanism at two
+granularities, and adding them separately is how one language grows two
+spellings for one idea. Recorded rather than proposed, since 13.4's
+six-family survey is the argument for keeping the count small and it is
+the holder's to weigh.
+
+What is *not* blocked: CoAP's header, token and option framing all
+express today. A schema could carry the deltas and leave the running sum
+to a caller, which is honest and is what a tier-1 `impl` does for a codec
+situ will not generate -- worth knowing before anybody concludes the
+protocol is out of reach.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
