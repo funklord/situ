@@ -2431,7 +2431,7 @@ kernel families, or a pipeline of them. This bounds the tier-2 design.
 
 | Family | Description form | Covers | Derived properties |
 |---|---|---|---|
-| **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, 8b10b, NRZI, Gray, BCD, base16/32/64 | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
+| **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, NRZI, Gray, BCD, base16/32/64 (not 8b10b -- see 26.139) | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
 | **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon, BCH | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 
 | **linear block** | generator or parity-check matrix over GF(2) | Hamming, extended Hamming, LDPC, arbitrary block codes | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
@@ -5319,7 +5319,7 @@ Recommended order within the phase, cheapest and highest-value first:
    `checksum` reusing the tag machinery rather than as a codec. Existing
    generators (pycrc, crcany) are good references for the table-generation and
    reflection handling.
-2. **table codes.** Manchester, NRZI, 4b5b, 8b10b. Exercises `ratio_exact`,
+2. **table codes.** Manchester, NRZI, 4b5b. Exercises `ratio_exact`,
    symbol granularity, and bit phase end to end.
 3. **permutation.** Interleavers; exercises `seekable = permuted`.
 4. **linear block.** Hamming, then general GF(2) matrices; exercises
@@ -14857,6 +14857,61 @@ not the tier-1 symbol. Declaring the tier-1 prototype would make a
 signature mismatch in the caller's own implementation a compile error
 rather than a link-time or run-time surprise, which is much of why this
 project generates headers.
+
+### 26.139 8b10b is not a table code, and was listed as one in four places
+
+Looking for the next protocol gap after SLIP, the natural candidate was
+8b10b -- Gigabit Ethernet, PCIe gen 1 and 2, USB 3, SATA, DisplayPort,
+Fibre Channel. It turned out not to be a gap in the implementation. It is
+an error in the classification, and the classification is load-bearing.
+
+**Measured.** `table` derives `deterministic` unconditionally: a codec
+declaring it changes nothing, and withholding it changes nothing, because
+the family sets it. 2186 defines the property as "repeated encoding of
+identical input is byte-identical". 8b10b fails that by construction --
+most input bytes have two valid ten-bit symbols, one for each running
+disparity, and which is emitted depends on everything encoded before it.
+
+So the consequence is not cosmetic. 1862 weakens `canonical` to
+`NonCanonical` for a codec that is not `deterministic`, which means a
+schema modelling 8b10b as a table would claim canonical encoding for a
+code with two encodings per input -- the exact class of silent capability
+lie the tier-2 derivation exists to prevent, arriving through the
+derivation itself.
+
+**It was listed as a table code in four places** -- `kernels.py`'s family
+docstring, `derived.py`'s module docstring, the family table at 2434, and
+the phase list at 5322 -- and those are corrected. Two mentions are left
+alone deliberately: 2256 cites 8b10b's 10:8 as an example of an exact
+ratio, which is true and is about addressing rather than family; and 2175
+lists it among "the algorithms users will actually reach for", which is
+the commitment this entry says is unmet rather than a misclassification.
+
+**Why it is none of the six.** Its ratio is table-like and its state is
+not: `table` is a stateless symbol map, `shift_register` is an LFSR and
+8b10b is not one, `stuffing` inserts rather than substitutes, and
+`polynomial`, `linear_block` and `permutation` are not close. Nor is it a
+pipeline of them, because the disparity is inside the symbol selection
+rather than a stage before or after it. 64b66b is worth contrasting: its
+scrambler *is* `shift_register` and its sync header is framing, so it
+plausibly is a pipeline. The six-family survey holds better than this one
+counter-example suggests, and the counter-example is not obscure.
+
+**What it would take, and whose decision it is.** Three shapes, and
+choosing between them is a language decision rather than a table entry:
+
+- **A `state` or `disparity` argument to `table`**, making the family
+  cover a symbol map whose selection carries a running value. Smallest
+  change; risks turning one family into two wearing one name.
+- **A seventh family.** Honest about what it is, and the survey in 13.4 is
+  the argument against adding one lightly.
+- **Leave it tier-1.** An author binds `impl eightbten extern "..."` and
+  declares the signature by hand, which is what tier 1 is for -- and which
+  costs exactly the trust that tier 2 was built to remove.
+
+Nothing is decided here. What is fixed is the documentation claiming situ
+handles it as a table, because that claim is what would have sent somebody
+to write the table.
 
 ## 27. Questions, and how they were settled
 

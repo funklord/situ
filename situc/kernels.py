@@ -129,10 +129,20 @@ def _render(name: str, value: object) -> str:
 def _table(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	"""An input symbol maps to an output symbol.
 
-	Manchester, 4b5b, 8b10b, NRZI in its table form, Gray, BCD. The ratio is
+	Manchester, 4b5b, NRZI in its table form, Gray, BCD. The ratio is
 	exact because every symbol is the same width, which is what keeps an
 	interior position a linear function of an input position -- and the reason
 	these keep static addressing where a stuffing code does not.
+
+	**8b10b is not one of these, and was listed here as though it were.** Its
+	ratio is table-like -- 10:8, exact -- but its encoder carries running
+	disparity, so one input byte has two valid output symbols and which one is
+	emitted depends on everything encoded before it. A table kernel derives
+	`deterministic` unconditionally, and by this project's own definition --
+	"repeated encoding of identical input is byte-identical" -- 8b10b is not,
+	which propagates a false `canonical` through the lattice. Nothing hits it
+	today because no 8b10b table is implemented; the classification was the
+	error, and closing it is a language question rather than a table entry.
 
 	Not systematic: the input symbols do not appear verbatim in the output, so
 	nothing can be read without decoding.
