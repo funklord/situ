@@ -15111,11 +15111,40 @@ spellings for one idea. Recorded rather than proposed, since 13.4's
 six-family survey is the argument for keeping the count small and it is
 the holder's to weigh.
 
-What is *not* blocked: CoAP's header, token and option framing all
-express today. A schema could carry the deltas and leave the running sum
-to a caller, which is honest and is what a tier-1 `impl` does for a codec
-situ will not generate -- worth knowing before anybody concludes the
-protocol is out of reach.
+**Correction, made the same day: the option framing does not express
+either, and this entry said it did.** The claim came from a schema that
+parsed:
+
+    value_size = switch (length) { default: self_delimiting },
+
+`self_delimiting` means the value carries its own extent. A CoAP option's
+does not -- its length is the second nibble of the tag byte just read. The
+schema compiled and described a different wire format, and "it parsed" was
+recorded as "it expresses".
+
+Asking for what CoAP actually says is refused twice, in both spellings:
+
+    value_size = switch (delta) { default: length }
+      error: expected a value size, found `length`
+
+    value_size = switch (delta) { default: prefixed(length) }
+      error: unknown length type `length`
+
+`value_rule` is a literal count, `self_delimiting`, `prefixed(<type>)` or
+`error`, and none of them is "as many bytes as this tag part says".
+`prefixed` is the near miss and means a length *before the value on the
+wire*, which is protobuf's shape and not CoAP's.
+
+**So there are two independent reasons, not one.** The running option
+number needs state between items; the option length needs a value sized
+by a part of its own tag. Either alone blocks it. That makes the entry
+above more nearly right about the family and wrong about the remedy: a
+schema cannot carry the deltas and leave the sum to a caller, because it
+cannot size the values to begin with.
+
+What *does* express is the header and the token: two-bit version, type,
+four-bit token length, code, message id, and `u8 token[token_length]`.
+That much is a worked example whenever somebody wants one.
 
 ## 27. Questions, and how they were settled
 
