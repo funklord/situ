@@ -550,6 +550,30 @@ def test_the_report_names_what_did_not_run(
 
 	assert ran or skipped
 
+	# The codec checks are the other half of this file and were not in this
+	# report, which is the same shape as the fault it exists to prevent: they
+	# all go through `kernel_library`, that fixture skips without a compiler,
+	# and a machine with no `cc` reported a green suite in which nothing had
+	# checked a single generated codec. Counted from the registries rather
+	# than written down, so the number cannot go stale.
+	kernels = ROOT / "std" / "kernels.situ"
+	parsed  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+	shifts  = sum(1 for codec in parsed.codecs()
+	              if codec.kernel is not None
+	              and codec.kernel.family is ast.KernelFamily.SHIFT)
+	codec_checks = len(CRC_CASES) + len(CRC_CHECK_VALUES) + shifts
+
+	if shutil.which("cc") or shutil.which("gcc"):
+		print(f"codec checks:         {codec_checks} ran against the built "
+		      f"kernel library")
+	else:
+		print(f"codec checks:         {codec_checks} SKIPPED -- no C "
+		      f"compiler, so no generated codec was checked by anything")
+
+	assert codec_checks > 0, (
+		"the registries this counts are empty, so the report would announce "
+		"coverage that does not exist")
+
 
 def test_the_oracles_scratch_goes_away(tmp_path: Path) -> None:
 	"""A run must leave no scratch directory behind, and the count is the
