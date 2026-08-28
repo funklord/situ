@@ -639,8 +639,14 @@ codec selfsync { kernel = shift_register(taps = 0x8810, width = 16,
 codec cobs     { kernel = stuffing(worst_case = 255, per = 254, code = cobs); }
 codec hdlc     { kernel = stuffing(worst_case = 6, per = 5, unit = bit,
                                    code = hdlc); }
+codec manch    { kernel = table(input_bits = 1, output_bits = 2,
+                                code = manchester_802_3); }
+codec crc      { kernel = polynomial(width = 16, poly = 0x1021,
+                                     init = 0xFFFF); }
 
 impl inter derived;
+impl manch derived;
+impl crc derived;
 impl hamming derived;
 impl additive derived;
 impl selfsync derived;
@@ -652,12 +658,41 @@ struct s { u8 a; }
 
 
 def test_every_family_generates_an_implementation() -> None:
-	emitted = derived.generate(parse_text("endian big;\n" + REMAINING), "unit")
+	"""Every kernel family, read from the language rather than listed here.
 
-	for name in ("situ_inter_encode", "situ_hamming_encode",
-	             "situ_additive_encode", "situ_selfsync_encode",
-	             "situ_cobs_encode", "situ_hdlc_encode"):
-		assert f"{name}(" in emitted, f"{name} was not generated"
+	The name claimed all six and the list held four: `table` and `polynomial`
+	were absent, so the two families every schema in the tree actually uses
+	were the two this never asked about. That is the shape `evidence.md` calls
+	a name that quantifies over a hand-written enumeration -- the assertion
+	was fine, the population was short, and no assertion can fail about a
+	family it does not name.
+
+	So the families come from `ast.KernelFamily` and the codecs from the
+	schema, and the two are compared. A seventh family fails here until
+	something in `REMAINING` declares one.
+	"""
+	schema  = parse_text("endian big;\n" + REMAINING)
+	emitted = derived.generate(schema, "unit")
+
+	covered: dict[ast.KernelFamily, list[str]] = {}
+	for decl in schema.codecs():
+		if decl.kernel is None:
+			continue
+		covered.setdefault(decl.kernel.family, []).append(decl.name)
+
+	missing = set(ast.KernelFamily) - set(covered)
+	assert not missing, (
+		f"{sorted(family.value for family in missing)}: no codec in "
+		f"`REMAINING` declares this family, so this test cannot say whether "
+		f"it generates. Add one rather than narrowing what the name claims")
+
+	for family, names in sorted(covered.items(), key=lambda pair: pair[0].value):
+		for name in names:
+			assert f"No implementation for `{name}`" not in emitted, (
+				f"{family.value}: `{name}` derived a signature and generated "
+				f"no implementation")
+			assert f"situ_{name}" in emitted, (
+				f"{family.value}: nothing named `situ_{name}` was emitted")
 
 
 def test_every_stuffing_code_generated_is_offered_by_the_standard_kernels(
