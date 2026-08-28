@@ -14961,6 +14961,53 @@ wrong direction: the list was wrong.
 What is left in the table family is what belongs there: Manchester in its
 two named forms, 4b5b, and the base-N alphabets.
 
+### 26.141 `make fuzz` run, and what "no crash in 36 harnesses" is worth
+
+The target has existed and is documented at 26.x and in the table at 4343.
+Nothing records it having been run. It has been now: 36 harnesses built
+with clang under `-fsanitize=fuzzer,address` and run for 30 seconds each,
+**no crash**, exit 0.
+
+That is worth having and it is worth deflating, because the summary line
+the target prints is a count of harnesses rather than of tests that could
+have failed.
+
+**Coverage across the 36 spans 1 to 2510.** `edges` reached 2510 and
+`http` 1371; the median is 52; `register` and `kernels` reached 1. The
+first reading was that the low ones had failed to get past a magic or a
+length field -- random bytes cannot guess a four-byte magic, and the
+corpus starts empty because nothing seeds it, though `example/*.vectors`
+holds twelve files of accepted messages that could.
+
+**That reading was wrong, and testing it is what showed so.** Seeding
+`ntp`'s corpus from its vectors moved its final coverage not at all: 21
+seeded, 21 unseeded, starting from 18 rather than 0. `tiff`, chosen
+because a TIFF magic is exactly what random bytes cannot reach, did the
+same: 14 either way. Both saturate. An NTP header is forty-eight bytes of
+straight-line field reads with no length, no loop and no variant, and 21
+edges is all there is to cover.
+
+So the coverage spread measures how much branching a schema has, not how
+well the fuzzer did, and the seeding improvement this was heading toward
+is not warranted. Measured before it was built, which is the only reason
+it was not built.
+
+**What is real is smaller and is about the claim.** Two of the 36
+harnesses have an empty entry point -- `LLVMFuzzerTestOneInput` is
+`(void)data; (void)size; return 0;` -- because `std/kernels.situ` has no
+struct at all and `example/register/register.situ` has nothing a byte
+stream can acquire. They cannot crash, and the target counts them:
+"no crash in 36 harnesses" is 34 tests and two tautologies.
+
+The fix has no clean seam yet, which is why this is recorded rather than
+done. The generated `_fuzz.c` is deleted as a build intermediate, so the
+recipe cannot grep it; the targets are `static` and inlined at `-O1`, so
+`nm` reports zero symbols for a harness that has them; and `gen-fuzz`
+prints a filename rather than a count. Any of three would close it --
+have `gen-fuzz` report how many targets it emitted, emit no harness where
+there are none, or keep the source -- and which is right is a question
+about the generator's interface rather than about the Makefile.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
