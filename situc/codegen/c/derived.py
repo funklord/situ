@@ -86,6 +86,16 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	return "\n".join(lines) + "\n"
 
 
+#: Linear block codes this build derives an implementation for.
+#:
+#: One entry, and named anyway. It was the literal `"hamming_7_4"` written
+#: twice -- the prototype gate in `_byte_declarations` and the dispatch in
+#: `_linear_block` -- which is the shape that had just cost this file a
+#: silent gap in `stuffing`, in the same two places. A second code added to
+#: one of them would declare a function nothing defined, or define one
+#: nothing declared, and neither is visible in the diff that causes it.
+DERIVED_LINEAR = ("hamming_7_4",)
+
 #: Stuffing codes this build derives an implementation for.
 #:
 #: One list because there were three. The dispatch in `_stuffing` and the
@@ -740,7 +750,7 @@ def _byte_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
 		]
 
 	if kernel.family is ast.KernelFamily.LINEAR:
-		if _named_code(decl) != "hamming_7_4":
+		if _named_code(decl) not in DERIVED_LINEAR:
 			return []
 		return [
 			"",
@@ -889,7 +899,7 @@ def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	which is exactly what the `systematic` property promises, and what makes it
 	worth deriving rather than declaring.
 	"""
-	if _named_code(decl) != "hamming_7_4":
+	if _named_code(decl) not in DERIVED_LINEAR:
 		return None
 
 	name = ident(prefix, decl.name)
