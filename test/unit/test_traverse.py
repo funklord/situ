@@ -232,6 +232,16 @@ def test_a_region_is_not_a_field() -> None:
 EMITTERS = sorted(path.parent.name
                   for path in (ROOT / "situc" / "codegen").glob("*/emit.py"))
 
+# Deriving the population fixed one failure and opened another: pytest skips
+# an empty parameter set rather than failing it, so a glob that stops matching
+# takes this test with it and says nothing. That is the same hole
+# `every_schema.py` carries a guard for, and this list was written an hour
+# after that one without it.
+assert EMITTERS, (
+	f"no backend found under {ROOT / 'situc' / 'codegen'}; parametrizing over "
+	f"an empty list would skip this test rather than fail it, which is how a "
+	f"derived population goes quiet")
+
 #: Backends that legitimately do not route through the shared classifier,
 #: with the reason. Named rather than skipped by a string comparison inside
 #: the test, so the exception is as visible as the rule.
