@@ -230,6 +230,49 @@ codec scrambler_additive {
 }
 impl scrambler_additive derived;
 
+// The scramblers protocols actually name, as against the two above, which are
+// textbook parameters demonstrating the two feedback shapes.
+//
+// What is carried here is the *polynomial*, which is the part that is hard to
+// get right and easy to transcribe wrongly, and which situ can check: a
+// primitive polynomial's register visits all 2^n - 1 non-zero states, so a
+// mistyped tap almost always shows up as a short period.
+// `test_every_additive_scrambler_has_maximal_period` measures it from the
+// generated C rather than from the description it came from.
+//
+// The seed is the other half and is not checkable the same way -- a wrong one
+// produces a wrong keystream with no property to catch it. Each is the value
+// its protocol loads at the sync point it resets on, and a schema whose link
+// resets somewhere else overrides it.
+
+// SONET/SDH frame synchronous scrambler, G.707: x^7 + x^6 + 1, reset to all
+// ones at the start of every frame. The shortest register here, and the one
+// whose 127-bit period is short enough to matter -- it repeats within a
+// frame, which is why SONET adds it to the payload rather than relying on it.
+codec sonet_scrambler {
+	kernel = shift_register(taps = 0x60, width = 7, seed = 0x7F,
+	                        feedback = input);
+}
+impl sonet_scrambler derived;
+
+// USB 3.0 and PCIe gen 1 and 2: x^16 + x^5 + x^4 + x^3 + 1, reset on COM.
+// Additive, so a receiver that has seen the reset stays aligned by counting
+// rather than by recovering state, and a corrupt bit spoils only itself.
+codec usb3_scrambler {
+	kernel = shift_register(taps = 0x801C, width = 16, seed = 0xFFFF,
+	                        feedback = input);
+}
+impl usb3_scrambler derived;
+
+// ITU-T O.150 PRBS23, x^23 + x^18 + 1, which V.34 also uses. The pattern
+// serial links are brought up on: 8388607 bits before it repeats, long
+// enough that a bit-error-rate measurement is not measuring the pattern.
+codec prbs23 {
+	kernel = shift_register(taps = 0x420000, width = 23, seed = 0x7FFFFF,
+	                        feedback = input);
+}
+impl prbs23 derived;
+
 codec hamming_7_4 {
 	kernel = linear_block(n = 7, k = 4, standard_form, code = hamming_7_4);
 }

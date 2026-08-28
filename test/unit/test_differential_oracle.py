@@ -315,6 +315,113 @@ def test_a_generated_crc_produces_its_published_check_value(
 		f"std/kernels.situ does not say what it was meant to say")
 
 
+#: An additive scrambler whose polynomial is not primitive, and why that is
+#: not a defect. A multiplicative register is fed from the ciphertext rather
+#: than running free, so its cycle length is not a property of the taps alone
+#: and the check below does not apply to it.
+NON_MAXIMAL = {
+	"scrambler_multiplicative": "multiplicative: the register is fed from the "
+	                            "output, so it does not run free",
+}
+
+#: Registers too wide to walk two periods of inside a unit test. Named rather
+#: than skipped by a width comparison alone, so that adding a wide scrambler
+#: is a decision somebody sees: a cap that drops work silently reads exactly
+#: like coverage.
+TOO_WIDE = {"prbs23"}
+
+
+def test_every_additive_scrambler_has_maximal_period(
+		kernel_library: ctypes.CDLL) -> None:
+	"""A primitive polynomial visits every non-zero state, and a typo does not.
+
+	This is the scrambler equivalent of a CRC's published check value, and it
+	is better evidence: the period is a mathematical property of the taps
+	rather than a number somebody wrote down, so nothing here was copied from
+	the same place the parameters were.
+
+	It is measured from the generated C -- stepping the emitted encoder over a
+	run of zero bytes recovers the keystream, and the keystream of an additive
+	scrambler is the register's own sequence. A period short of 2^n - 1 means
+	the polynomial is reducible, which for a mistyped tap is the usual
+	outcome: of the four protocol polynomials added with this test, every one
+	was confirmed maximal before it was written down, and the encoding rule
+	itself was checked against `scrambler_additive`, whose 0xB400 was already
+	here.
+
+	`scrambler_multiplicative` is excluded with its reason. Its taps are the
+	Galois form of x^16 + x^12 + x^5 + 1 -- the CRC-CCITT polynomial, which is
+	not primitive and gives 32767 rather than 65535. That is correct for a
+	self-synchronising scrambler and would be a defect in a free-running one,
+	which is the whole distinction this test is keyed on.
+	"""
+	kernels = ROOT / "std" / "kernels.situ"
+	parsed  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	additive: dict[str, int] = {}
+	for codec in parsed.codecs():
+		if codec.kernel is None:
+			continue
+		if codec.kernel.family is not ast.KernelFamily.SHIFT:
+			continue
+		source = codec.kernel.argument("feedback")
+		if not isinstance(source, ast.NameRef) or source.name != "input":
+			continue
+		# 16 is the family's own default, and a `width` that is not a literal
+		# would be a schema this test cannot size rather than one it may
+		# guess at.
+		declared = codec.kernel.argument("width")
+		if declared is None:
+			additive[codec.name] = 16
+			continue
+		assert isinstance(declared, ast.IntLiteral), (
+			f"{codec.name}: `width` is not a literal, so the period this "
+			f"test would check is not one it can compute")
+		additive[codec.name] = declared.value
+
+	assert additive, (
+		"no additive shift-register codec found in std/kernels.situ -- this "
+		"is reading the wrong thing, and an empty set passes as loudly as a "
+		"real one")
+
+	for name, width in sorted(additive.items()):
+		if name in NON_MAXIMAL:
+			continue
+
+		fn = getattr(kernel_library, f"situ_{name}_encode")
+		fn.restype  = ctypes.c_uint32
+		fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		               ctypes.POINTER(ctypes.c_uint8)]
+
+		# A run of zeroes through an additive scrambler is the keystream, and
+		# the keystream repeats exactly when the register does. Two periods'
+		# worth of bits, capped so a wide register does not run the suite.
+		full  = (1 << width) - 1
+		if name in TOO_WIDE:
+			continue
+		assert full <= (1 << 17), (
+			f"{name} is {width} bits, so walking two periods here would run "
+			f"the suite for {full * 2} bits. Add it to TOO_WIDE, which is a "
+			f"visible gap rather than a silent one")
+		bytes_needed = (full * 2 + 7) // 8 + 1
+		zeroes = (ctypes.c_uint8 * bytes_needed)()
+		out    = (ctypes.c_uint8 * bytes_needed)()
+		fn(zeroes, bytes_needed, out)
+
+		stream = "".join(f"{out[i]:08b}"[::-1] for i in range(bytes_needed))
+		head   = stream[:full]
+		assert stream[full:full * 2] == head, (
+			f"{name}: the keystream does not repeat with period {full}, so "
+			f"the taps are not the primitive polynomial they were meant to be")
+		assert head != "0" * full, f"{name}: the keystream is all zeroes"
+		assert len(set(head)) == 2, f"{name}: the keystream is constant"
+
+	unchecked = sorted(TOO_WIDE - set(additive))
+	assert not unchecked, (
+		f"{unchecked}: named too wide to walk, and not an additive scrambler "
+		f"in std/kernels.situ at all -- the exclusion outlived what it was for")
+
+
 def test_every_polynomial_codec_is_checked_or_excused() -> None:
 	"""No generated CRC joins the standard kernels unchecked and unremarked.
 
