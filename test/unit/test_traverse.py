@@ -221,20 +221,35 @@ def test_a_region_is_not_a_field() -> None:
 	assert classified(body, "s.authenticated") is Member.REGION
 
 
-@pytest.mark.parametrize("target", ["c", "cpp", "python", "rust"])
+#: Every backend, read from the tree rather than typed here.
+#:
+#: The list was `["c", "cpp", "python", "rust"]`, which named all four and
+#: was therefore complete -- until a fifth is added, which is the one moment
+#: this test needs to fire. A backend that grows its own dispatch is exactly
+#: what it exists to catch, and a new backend is exactly when that happens.
+#: A hand-written population makes the name a claim about the day it was
+#: written.
+EMITTERS = sorted(path.parent.name
+                  for path in (ROOT / "situc" / "codegen").glob("*/emit.py"))
+
+#: Backends that legitimately do not route through the shared classifier,
+#: with the reason. Named rather than skipped by a string comparison inside
+#: the test, so the exception is as visible as the rule.
+OWN_DISPATCH = {
+	"c": "predates the classifier; its dispatch is spread across `_field`, "
+	     "which is why it never had the bug -- it never had one place to get "
+	     "it wrong in",
+}
+
+
+@pytest.mark.parametrize("target", EMITTERS)
 def test_every_backend_uses_the_shared_order(target: str) -> None:
 	"""The point of the module. A backend that grew its own dispatch would get
 	the two traps above wrong in its own way, which is what happened three
 	times before this existed.
-
-	The C backend is the exception and is listed anyway: it predates the
-	classifier and its dispatch is spread across `_field`, which is why it
-	never had the bug -- it never had one place to get it wrong in.
 	"""
-	import importlib
-
-	if target == "c":
-		pytest.skip("the C backend dispatches per construct, not in one place")
+	if target in OWN_DISPATCH:
+		pytest.skip(f"{target}: {OWN_DISPATCH[target]}")
 
 	source = (ROOT / "situc" / "codegen" / target / "emit.py").read_text()
 	assert "classify(struct, placement, self.structs)" in source
