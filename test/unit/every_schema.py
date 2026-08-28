@@ -18,12 +18,34 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: Not a sample. Which constructs a sample happens to contain is not something
-#: anyone chose -- the same argument `gen-fuzz` makes for a harness per schema.
-SCHEMAS = sorted(
-	[*ROOT.glob("example/*/*.situ"),
-	 *ROOT.glob("std/*.situ"),
-	 *ROOT.glob("test/schema/*.situ")])
+#: Where the schemas are, kept apart so that each can be checked to have
+#: found something. One glob going quiet is the realistic failure -- a
+#: directory renamed, `ROOT` resolving somewhere else after this file moves --
+#: and it is quieter than it looks: 23 tests parametrize over the result, and
+#: pytest turns an empty parameter set into a skip rather than a failure.
+#:
+#: Measured by pointing all three somewhere that does not exist: collection
+#: falls from 4154 tests to 2618, and the only complaint is two collection
+#: errors from `test_dissector.py` and one other, whose `ids=lambda p: p.stem`
+#: happens to crash on pytest's empty sentinel. 1536 tests leave and two
+#: incidental `AttributeError`s are the whole warning. The files that pass
+#: `ids=ids(...)` -- most of them -- skip in silence.
+SOURCES = ("example/*/*.situ", "std/*.situ", "test/schema/*.situ")
+
+SCHEMAS = sorted(path for pattern in SOURCES for path in ROOT.glob(pattern))
+
+# Asserted here rather than in a test, so that the 42 files importing this
+# fail at collection instead of one of them noticing later. A guard on the
+# whole list would not catch the case worth catching: `std/` renamed while
+# `example/` still answers drops `kernels.situ` and `image.situ` out of every
+# sweep in the repository, and leaves a list long enough to look right.
+for _pattern in SOURCES:
+	if not any(ROOT.glob(_pattern)):
+		raise AssertionError(
+			f"no schema matches {_pattern!r} under {ROOT}. Every sweep in "
+			f"this suite parametrizes over this list, and pytest skips an "
+			f"empty parameter set rather than failing it, so this refuses "
+			f"rather than letting a third of the tests disappear quietly")
 
 
 def ids(paths: list[Path]) -> list[str]:
