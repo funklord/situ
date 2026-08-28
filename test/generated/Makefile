@@ -219,8 +219,16 @@ $(foreach name,$(RELATE_NAMES),\
 # second build failed compiling a suite whose header no longer existed. A
 # build bug that appears only on the second run is the expensive kind, and
 # this is the third time this repository has met that rule.
+#
+# The fuzz sources are here for a second reason: the `fuzz` summary reads them
+# to say how many harnesses could actually have failed. Two schemas generate
+# an empty `LLVMFuzzerTestOneInput` -- `std/kernels.situ` declares no struct,
+# and a register is a bus transaction rather than bytes off a wire -- and a
+# count that includes them reports more tests than exist. Deleted as spent,
+# they were unreadable by the time the summary ran.
 .SECONDARY: $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.c) \
-	    $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.h)
+	    $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.h) \
+	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
 
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
@@ -379,7 +387,7 @@ $(FUZZ_DIR)/%: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.c
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$^ '$(RUNTIME_INC)/situ.c' -o $@
 
-fuzz: $(FUZZ_RUNNERS)
+fuzz: $(FUZZ_RUNNERS) $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
 	@for t in $(FUZZ_RUNNERS); do \
 		corpus="$(FUZZ_DIR)/corpus/$$(basename $$t)"; \
 		mkdir -p "$$corpus"; \
@@ -387,7 +395,21 @@ fuzz: $(FUZZ_RUNNERS)
 		"$$t" -max_total_time=$(FUZZ_SECONDS) -print_final_stats=1 \
 			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
 	done
-	@echo 'no crash in $(words $(FUZZ_RUNNERS)) harnesses'
+	@real=0; empty=''; \
+	for n in $(FUZZ_SCHEMAS); do \
+		src='$(GEN_DIR)'/$${n}_fuzz.c; \
+		if [ ! -f "$$src" ]; then \
+			echo "$$src is missing, so this count would call every" \
+			     "harness empty; refusing to report one" >&2; \
+			exit 1; \
+		fi; \
+		if grep -q 'static void fuzz_' "$$src"; \
+		then real=$$((real + 1)); else empty="$$empty$$n "; fi; \
+	done; \
+	if [ -n "$$empty" ]; then \
+		echo "no crash in $$real harnesses; $${empty}have no parseable" \
+		     "struct and test nothing"; \
+	else echo "no crash in $$real harnesses"; fi
 
 clean:
 	rm -rf '$(BUILD_DIR)'

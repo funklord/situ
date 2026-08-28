@@ -15020,11 +15020,29 @@ opposite mistake, when `example/protobuf` was filtered out by a
 `size_bytes > 0` test and fuzzed nothing at coverage 1 for 16 million
 executions. What was missing was only that nobody was told.
 
-The Makefile summary still says 36. Making it say 34 needs the recipe to
-know which are empty, and the generated `_fuzz.c` is deleted as an
-intermediate before the summary runs, so that half remains open -- but it
-is now a Makefile question rather than a generator one, which is a
-smaller thing than this entry first claimed.
+**And the Makefile half is closed too, by the rule this file already
+carries.** The generated `_fuzz.c` was deleted as a spent intermediate,
+so the summary could not read it. `test/generated/Makefile` already keeps
+a *named* `.SECONDARY:` -- named rather than bare, with a comment
+recording that a bare one catches every pattern rule and that this
+repository has met that rule three times -- and the fuzz sources join it.
+
+The summary now reads what it counts:
+
+    no crash in 34 harnesses; register kernels have no parseable struct
+    and test nothing
+
+**The first version of that count had the fault it was written to fix.**
+`grep -q ... 2>/dev/null` on an absent file is false, so a missing source
+would have counted as an empty harness, and every source missing would
+have reported all 36 as empty -- a confident, wrong number in place of a
+confident, wrong number. `fuzz` now depends on the sources so they exist,
+and the recipe refuses outright rather than counting when one does not:
+
+    build/gen/arp_fuzz.c is missing, so this count would call every
+    harness empty; refusing to report one
+
+Checked by deleting a source with rebuilds suppressed, which exits 1.
 
 ## 27. Questions, and how they were settled
 
