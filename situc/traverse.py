@@ -1540,6 +1540,39 @@ def extern_symbol(schema: Schema, codec: str) -> str | None:
 	return None
 
 
+def codec_entry_point(schema: Schema, codec: str) -> str | None:
+	"""The decode symbol a consumer must call, where an accessor will not.
+
+	A backend that declines to generate a decode -- because the region's
+	encoded extent is the codec's to report, so there is no length to hand a
+	buffer -- still owes the caller the name of what to call. Without it the
+	generated module says a decode is somebody else's job and does not say
+	whose, which is a refusal that names no remedy.
+
+	Measured before this existed: for a length-changing region the four
+	backends gave three answers about which entry point a consumer could
+	reach. C declared the derived pair because C defines them; C++ and Rust
+	declared the *tier-1* symbol and not the derived one, which is backwards
+	-- the declared symbol is the one situ does not control and the omitted
+	one is the C function it generated itself; and Python declared neither,
+	though for a region it *can* decode it already names the symbol and the
+	buffer size in a comment. That last is the shape worth having everywhere,
+	and this is where the answer is decided so it stays one answer.
+
+	`None` where there is no implementation to name -- a signature with no
+	`impl` (13.1). A refusal that invents a symbol nobody agreed to write is
+	worse than one that says only that the region is not decoded here.
+	"""
+	symbol = extern_symbol(schema, codec)
+	if symbol is not None:
+		return f"{symbol}_decode"
+
+	for decl in schema.impls():
+		if decl.codec == codec:
+			return f"situ_{codec}_decode"
+	return None
+
+
 def decodes_here(codec: object) -> bool:
 	"""Whether a decode accessor has a settled shape to call.
 

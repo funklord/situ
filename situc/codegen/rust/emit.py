@@ -42,6 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	codec_entry_point,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
@@ -1332,6 +1333,29 @@ class Emitter:
 			"\t}",
 		]
 
+	def _undecoded_note(self, placement: object) -> list[str]:
+		"""Name the entry point a caller must reach for, having declined it.
+
+		The lines above say the region is not decoded here and, until this,
+		did not say what to call instead -- a refusal naming no remedy. The
+		symbol is decided in `traverse.codec_entry_point` so that the four
+		backends cannot drift back to the three different answers they gave
+		before it existed.
+		"""
+		codec = getattr(placement, "codec", None)
+		if codec is None:
+			return []
+		symbol = codec_entry_point(self.schema, codec)
+		if symbol is None:
+			return [f"\t// `{codec}` has no `impl`, so there is nothing to"
+			        f" call yet."]
+
+		unit = ("bits" if decode_counts_bits(self.codecs.get(codec))
+		        else "bytes")
+		return [f"\t// Decode the bytes above by calling `{symbol}` from"
+		        f" the C runtime;",
+		        f"\t// its count is in {unit} (decision 0017)."]
+
 	def _coded_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The encoded bytes of a coded region, and the decode beside them.
@@ -1347,7 +1371,8 @@ class Emitter:
 		if start is None or placement.size_max_bits is None \
 				or placement.size_bits % BITS_PER_BYTE:
 			return ["", f"\t// No accessor for {placement.path}: its encoded",
-			        f"\t// extent is {placement.codec}'s to report."]
+			        f"\t// extent is {placement.codec}'s to report.",
+			        *self._undecoded_note(placement)]
 
 		# The interior's extent through the codec's expansion
 		# (`traverse.region_extent`), not the region's minimum: a region whose
@@ -1357,7 +1382,8 @@ class Emitter:
 		size = self._region_length(struct, placement)
 		if size is None:
 			return ["", f"\t// No accessor for {placement.path}: its encoded",
-			        f"\t// extent is {placement.codec}'s to report."]
+			        f"\t// extent is {placement.codec}'s to report.",
+			        *self._undecoded_note(placement)]
 
 		lines = [
 			"",

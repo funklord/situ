@@ -14799,11 +14799,40 @@ statement to emit, so giving it the entry point means deciding what a
 Python binding to the C runtime looks like, which 0017 anticipated as "a
 build step" and never specified.
 
-So the question is not "add a line to two emitters". It is whether a
-generated module should declare every codec entry point its schema names
-or only those its own accessors call -- and that is a decision about the
-public shape of four backends rather than a defect to patch, so it is
-recorded here rather than settled in passing.
+**The weakest thing all four can do is now done, and it is not nothing.**
+Where a backend declines to decode, it names the entry point a caller must
+reach for and whether the count is bits or bytes. The symbol is decided in
+`traverse.codec_entry_point`, beside `extern_symbol` and
+`decode_counts_bits`, so the four cannot drift back to three answers; a
+cross-backend test asks each of them to say it, and asserts first that
+none of them decodes the region, since a case that no longer arises would
+pass for the wrong reason. Reverting one backend's note turns it red.
+
+That closes the half that was a plain defect -- a refusal naming no
+remedy. Python had the right shape already for a region it *can* decode,
+naming the symbol and the buffer size in a comment, and what was missing
+was that nobody had generalised it.
+
+**What stays open is a real decision, not a patch.** Whether a generated
+module should *declare* every codec entry point its schema names, rather
+than only name it in prose, sets the public shape of four APIs. Two things
+make it more than a line in two emitters:
+
+- **Rust warns.** An uncalled private `extern "C"` declaration is
+  `dead_code`, so declaring them means making them `pub` -- raw FFI in the
+  public API -- or wrapping them in a safe function, which is the better
+  Rust and a larger piece of design: the wrapper needs the output-capacity
+  contract, which situ knows from the expansion ratio and would then be
+  asserting on the caller's behalf.
+- **Python has no declaration to emit at all.** Reaching the entry point
+  means deciding what a Python binding to the C runtime looks like -- the
+  "build step" 0017 anticipated and never specified.
+
+And a third thing worth settling with it: C declares the derived pair and
+not the tier-1 symbol. Declaring the tier-1 prototype would make a
+signature mismatch in the caller's own implementation a compile error
+rather than a link-time or run-time surprise, which is the kind of thing
+this project generates headers for.
 
 ## 27. Questions, and how they were settled
 

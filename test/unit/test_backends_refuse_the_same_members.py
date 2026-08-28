@@ -174,6 +174,62 @@ def test_the_refusal_phrases_are_still_written() -> None:
 	)
 
 
+#: A schema whose coded region changes length, so no backend can compute the
+#: region's encoded extent and none of them emits a decode. That is the case
+#: where a consumer most needs to be told what to call.
+UNDECODABLE = """target buffer;
+endian big;
+bit_order msb_first;
+codec slip {
+	kernel = stuffing(worst_case = 2, per = 1, unit = byte, code = slip);
+}
+impl slip derived;
+struct frame { coded body(slip) { u8 payload[4]; } }
+"""
+
+
+def test_a_declined_decode_names_the_entry_point_in_every_backend() -> None:
+	"""Refusing to decode is fine; refusing without naming the remedy is not.
+
+	Measured before this existed: for a length-changing coded region the four
+	backends gave three different answers about which entry point a consumer
+	could reach. C declared the derived pair because C defines them, C++ and
+	Rust declared the tier-1 symbol and not the derived one -- backwards,
+	since the declared symbol is the one situ does not control -- and Python
+	declared neither. A consumer of the Rust module got framing accessors and
+	no way to use them.
+
+	The symbol is decided once in `traverse.codec_entry_point`, so this asks
+	each backend whether it says it. Naming it is the weakest thing all four
+	can do; whether a module should also *declare* it is a question about the
+	public shape of four APIs and is open.
+	"""
+	source   = Source("<undecodable>", UNDECODABLE)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	outputs = {
+		"c":      generate_c(schema, resolved, "u").header,
+		"cpp":    generate_cpp(schema, resolved, "u").header,
+		"python": generate_py(schema, resolved, "u").module,
+		"rust":   generate_rs(schema, resolved, "u").module,
+	}
+
+	# The premise: nobody decodes this region, or the test is asking about a
+	# case that does not arise and would pass for the wrong reason.
+	for backend, text in outputs.items():
+		assert "body_decode" not in text, (
+			f"{backend} decodes the region after all, so this schema no "
+			f"longer exercises a declined decode")
+
+	silent = [backend for backend, text in outputs.items()
+	          if "situ_slip_decode" not in text]
+	assert not silent, (
+		f"{silent}: declined to decode a coded region without naming "
+		f"`situ_slip_decode`, so a consumer is told the decode is somebody "
+		f"else's job and not whose")
+
+
 def test_the_exemptions_are_still_divergences() -> None:
 	"""An exemption for something no longer split is a note claiming a
 	difference that is not there. Invariant 11, one level up."""
