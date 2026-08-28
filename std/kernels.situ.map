@@ -18,11 +18,17 @@ codec base64url derived expansion=ratio_padded(8,6) seekable=linear granularity=
 codec cobs derived expansion=ratio_bounded(255,254) seekable=none granularity=stream invertible deterministic
 codec code_4b5b derived expansion=ratio_exact(5,4) seekable=linear granularity=symbol(4) invertible deterministic
 codec crc16_ccitt derived expansion=+2 seekable=linear granularity=block systematic deterministic
+codec crc16_kermit derived expansion=+2 seekable=linear granularity=block systematic deterministic
 codec crc16_modbus derived expansion=+2 seekable=linear granularity=block systematic deterministic
+codec crc16_usb derived expansion=+2 seekable=linear granularity=block systematic deterministic
+codec crc16_xmodem derived expansion=+2 seekable=linear granularity=block systematic deterministic
 codec crc24_ble derived expansion=+3 seekable=linear granularity=block systematic deterministic
 codec crc32 derived expansion=+4 seekable=linear granularity=block systematic deterministic
+codec crc32_bzip2 derived expansion=+4 seekable=linear granularity=block systematic deterministic
 codec crc32c derived expansion=+4 seekable=linear granularity=block systematic deterministic
 codec crc40_gsm derived expansion=+5 seekable=linear granularity=block systematic deterministic
+codec crc64_xz derived expansion=+8 seekable=linear granularity=block systematic deterministic
+codec crc8_maxim derived expansion=+1 seekable=linear granularity=block systematic deterministic
 codec crc8_smbus derived expansion=+1 seekable=linear granularity=block systematic deterministic
 codec framed unbound expansion=ratio_exact(2,1) seekable=permuted granularity=block deterministic
 codec hamming_7_4 derived expansion=ratio_exact(7,4) seekable=linear granularity=bit(4) systematic invertible deterministic

@@ -202,6 +202,12 @@ CRC_CHECK_VALUES = {
 	"crc32":        (ctypes.c_uint32, 0xCBF43926),
 	"crc32c":       (ctypes.c_uint32, 0xE3069283),
 	"crc40_gsm":    (ctypes.c_uint64, 0xD4164FC646),
+	"crc8_maxim":   (ctypes.c_uint8,  0xA1),
+	"crc16_xmodem": (ctypes.c_uint16, 0x31C3),
+	"crc16_kermit": (ctypes.c_uint16, 0x2189),
+	"crc16_usb":    (ctypes.c_uint16, 0xB4C8),
+	"crc32_bzip2":  (ctypes.c_uint32, 0xFC891918),
+	"crc64_xz":     (ctypes.c_uint64, 0x995DC9BBDF1939FA),
 }
 
 #: A polynomial codec neither oracle reaches, and why. Being named here is a

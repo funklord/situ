@@ -58,6 +58,62 @@ codec crc40_gsm {
 }
 impl crc40_gsm derived;
 
+// The rest of what a protocol actually reaches for. Each is a parameter set
+// from the CRC catalogue and nothing else -- no new machinery, since the
+// polynomial family already derives any width up to 64 with either
+// reflection. They are here because a schema that needs CRC-16/USB and finds
+// only CRC-16/MODBUS has to transcribe a polynomial by hand, and a
+// transcribed polynomial is the thing situ exists to stop.
+//
+// Every one is checked against the value its catalogue entry publishes for
+// "123456789", which is what catches a parameter copied wrongly: the check
+// value is not derivable by eye, so it and the parameters cannot be
+// misremembered into agreement.
+
+// Dallas/Maxim 1-Wire, on every DS18B20 and iButton.
+codec crc8_maxim {
+	kernel = polynomial(width = 8, poly = 0x31, init = 0x00, reflect);
+}
+impl crc8_maxim derived;
+
+// XMODEM, and the same polynomial as `crc16_ccitt` with a zero init -- the
+// pair most often confused, which is the reason to carry both by name.
+codec crc16_xmodem {
+	kernel = polynomial(width = 16, poly = 0x1021, init = 0x0000);
+}
+impl crc16_xmodem derived;
+
+// KERMIT, sometimes called CRC-16/CCITT-TRUE: XMODEM's parameters reflected.
+codec crc16_kermit {
+	kernel = polynomial(width = 16, poly = 0x1021, init = 0x0000, reflect);
+}
+impl crc16_kermit derived;
+
+// USB's token and data CRC-16. MODBUS's polynomial and init, with the final
+// xor MODBUS does not have.
+codec crc16_usb {
+	kernel = polynomial(width = 16, poly = 0x8005, init = 0xFFFF,
+	                    xorout = 0xFFFF, reflect);
+}
+impl crc16_usb derived;
+
+// bzip2's, which is CRC-32 unreflected -- same polynomial, same init, same
+// final xor, and a different answer for every input.
+codec crc32_bzip2 {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF);
+}
+impl crc32_bzip2 derived;
+
+// xz's, and the widest the accumulator holds: 64 bits exactly, so nothing is
+// masked after a shift.
+codec crc64_xz {
+	kernel = polynomial(width = 64, poly = 0x42F0E1EBA9EA3693,
+	                    init = 0xFFFFFFFFFFFFFFFF,
+	                    xorout = 0xFFFFFFFFFFFFFFFF, reflect);
+}
+impl crc64_xz derived;
+
 codec crc8_smbus {
 	kernel = polynomial(width = 8, poly = 0x07);
 }
