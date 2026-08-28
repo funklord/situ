@@ -441,11 +441,62 @@ def test_it_names_only_the_flags_that_are_global() -> None:
 #: ones below only by whether they write into a directory.
 READS  = ("map", "advise", "wire", "doc", "dump-ast")
 WRITES = ("gen-fuzz", "gen-checks", "gen-dissector", "gen-derived",
-	"gen-codec-tests")
+	"gen-codec-tests", "build", "gen-tamper")
+
+#: `pack` alone means a *file* by `--out`, where the eight above mean a
+#: directory. Adding it to `WRITES` failed on every schema with
+#: `IsADirectoryError`, which is how the difference was found: one flag
+#: spelled the same way in nine subcommands and meaning two things.
+WRITES_A_FILE = ("pack",)
+
+#: Subcommands this sweep cannot drive from a schema alone, and what each
+#: needs instead. Named rather than absent, because the list above claimed
+#: "every subcommand" while covering ten of the parser's nineteen -- and
+#: three of the nine it left out took a schema and nothing else.
+#:
+#: `build` was one of them. It is the primary surface of the whole compiler,
+#: and the sweep written to stop a subcommand going unexercised had never run
+#: it. `pack` and `gen-tamper` were the other two.
+#:
+#: Their absence cost nothing measurable: all three run clean over every
+#: schema in the tree, and `build` does so on all four targets. That is the
+#: point rather than a reprieve -- nothing here knew that, and the test whose
+#: name says otherwise was the reason nobody looked.
+NEEDS_MORE_THAN_A_SCHEMA = {
+	"gen-tests":    "takes a vectors file as well as a schema",
+	"verify":       "takes a vectors file as well as a schema",
+	"explain":      "takes a path expression as well as a schema",
+	"diff":         "takes two schemas, an old and a new",
+	"import-proto": "takes a `.proto`, which is not a schema",
+	"lsp":          "takes no schema: it serves a protocol on stdin",
+}
+
+
+def test_every_subcommand_is_swept_or_excused() -> None:
+	"""The sweep's population comes from the parser, not from this file.
+
+	`READS + WRITES` was ten names typed here, under a test called
+	`test_every_subcommand_runs_on_every_schema`. The parser has nineteen.
+	Three of the nine missing needed only a schema and were simply absent,
+	`build` among them.
+
+	A twentieth subcommand now fails here until it is swept or excused, which
+	is the property the name was already claiming.
+	"""
+	actions = [action for action in build_parser()._actions
+	           if isinstance(action, argparse._SubParsersAction)]
+	assert actions, "the parser has subcommands"
+	available = set(actions[0].choices)
+
+	classified = (set(READS) | set(WRITES) | set(WRITES_A_FILE)
+	              | set(NEEDS_MORE_THAN_A_SCHEMA))
+	assert classified == available, (
+		f"unclassified: {sorted(available - classified)}; "
+		f"named but absent from the parser: {sorted(classified - available)}")
 
 
 @pytest.mark.parametrize("schema", ALL_SCHEMAS, ids=ids(ALL_SCHEMAS))
-@pytest.mark.parametrize("command", READS + WRITES)
+@pytest.mark.parametrize("command", READS + WRITES + WRITES_A_FILE)
 def test_every_subcommand_runs_on_every_schema(
 		command: str, schema: Path, tmp_path: Path) -> None:
 	"""A subcommand is a product surface, and a schema is what it is for.
@@ -464,6 +515,8 @@ def test_every_subcommand_runs_on_every_schema(
 	argv = [command, str(schema)]
 	if command in WRITES:
 		argv += ["--out", str(tmp_path)]
+	elif command in WRITES_A_FILE:
+		argv += ["--out", str(tmp_path / "packed.bin")]
 
 	assert main(argv) == 0
 
