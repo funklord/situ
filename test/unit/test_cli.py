@@ -117,6 +117,39 @@ def test_gen_fuzz_writes_a_harness(
 	assert "wrote" in capsys.readouterr().err
 
 
+def test_gen_fuzz_says_how_many_targets_it_emitted(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""A harness with no target is invisible from outside, so it is counted.
+
+	`std/kernels.situ` declares no struct, and a register is a bus
+	transaction rather than bytes off a wire, so both produce an
+	`LLVMFuzzerTestOneInput` that is `(void)data; (void)size; return 0;`.
+	Each compiles, runs, and returns zero for every input -- 16 million
+	executions at coverage 1 is what that looks like from the outside, which
+	the generator's own comment records having cost once already.
+
+	Neither is a fault. What was missing is that nobody was told: a fuzz run
+	over 36 harnesses of which two cannot fail reports 34 tests and two
+	tautologies. The other four `gen-*` commands already print a count in
+	parentheses; this one printed a filename.
+	"""
+	root = Path(__file__).resolve().parents[2]
+
+	assert main(["gen-fuzz", str(root / "std" / "kernels.situ"),
+	             "--out", str(tmp_path)]) == 0
+	assert "(0 fuzz target(s))" in capsys.readouterr().err
+
+	assert main(["gen-fuzz", HEADER, "--out", str(tmp_path)]) == 0
+	said = capsys.readouterr().err
+	assert "(0 fuzz target(s))" not in said, said
+	assert "fuzz target(s))" in said, said
+
+	# The count comes from the artifact, so it cannot drift from it.
+	text = (tmp_path / "header_fuzz.c").read_text(encoding="ascii")
+	assert f"({text.count('static void fuzz_')} fuzz target(s))" in said
+
+
 def test_gen_tests_writes_a_vector_suite(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:

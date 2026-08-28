@@ -14999,14 +14999,32 @@ struct at all and `example/register/register.situ` has nothing a byte
 stream can acquire. They cannot crash, and the target counts them:
 "no crash in 36 harnesses" is 34 tests and two tautologies.
 
-The fix has no clean seam yet, which is why this is recorded rather than
-done. The generated `_fuzz.c` is deleted as a build intermediate, so the
-recipe cannot grep it; the targets are `static` and inlined at `-O1`, so
-`nm` reports zero symbols for a harness that has them; and `gen-fuzz`
-prints a filename rather than a count. Any of three would close it --
-have `gen-fuzz` report how many targets it emitted, emit no harness where
-there are none, or keep the source -- and which is right is a question
-about the generator's interface rather than about the Makefile.
+**That was recorded as having no clean seam, and the deferral was wrong.**
+Three routes were named -- report the count, emit no harness, keep the
+source -- and the first was called a question about the generator's
+interface. It is not: `pack`, `gen-tests`, `gen-codec-tests` and
+`gen-derived` all print `wrote <file> (<count> <thing>)` already.
+`gen-fuzz` printing a bare filename was the odd one out, and adding the
+count is conformance rather than a decision.
+
+It prints `(0 fuzz target(s))` for `std/kernels.situ` and for
+`register.situ` now, and the number is counted from the emitted text
+rather than re-derived from the schema, so it cannot disagree with the
+file it describes. `test_gen_fuzz_says_how_many_targets_it_emitted` pins
+both ends and fails if the reported count stops coming from the artifact.
+
+Neither empty harness is a fault. `std/kernels.situ` declares no struct,
+and this generator excludes registers deliberately -- "a register is a bus
+transaction, not bytes off a wire" -- having already paid once for the
+opposite mistake, when `example/protobuf` was filtered out by a
+`size_bytes > 0` test and fuzzed nothing at coverage 1 for 16 million
+executions. What was missing was only that nobody was told.
+
+The Makefile summary still says 36. Making it say 34 needs the recipe to
+know which are empty, and the generated `_fuzz.c` is deleted as an
+intermediate before the summary runs, so that half remains open -- but it
+is now a Makefile question rather than a generator one, which is a
+smaller thing than this entry first claimed.
 
 ## 27. Questions, and how they were settled
 

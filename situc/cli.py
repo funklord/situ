@@ -982,7 +982,16 @@ def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 	args.out.mkdir(parents=True, exist_ok=True)
 	target = args.out / f"{name}_fuzz.c"
 	target.write_text(text, encoding="ascii")
-	print(f"situc: wrote {target}", file=sys.stderr)
+
+	# Counted from the artifact rather than re-derived from the schema, and
+	# reported because a harness with none is invisible from outside: it
+	# compiles, it runs, and it returns 0 for every input. Two schemas here
+	# produce one legitimately -- `std/kernels.situ` declares no struct, and
+	# a register is a bus transaction rather than bytes off a wire -- so the
+	# number is not a fault to fix but a fact the caller was not told. A fuzz
+	# run counting those as harnesses reports more tests than could fail.
+	harnesses = text.count("static void fuzz_")
+	print(f"situc: wrote {target} ({harnesses} fuzz target(s))", file=sys.stderr)
 
 	_report(args, requirements.warnings(outcomes) + requirements.deferrals(outcomes))
 	return 0
