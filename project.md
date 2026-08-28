@@ -2431,7 +2431,7 @@ kernel families, or a pipeline of them. This bounds the tier-2 design.
 
 | Family | Description form | Covers | Derived properties |
 |---|---|---|---|
-| **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, NRZI, Gray, BCD, base16/32/64 (not 8b10b -- see 26.139) | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
+| **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, base16/32/64 (not NRZI, 8b10b, Gray or BCD -- see 26.140) | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
 | **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon, BCH | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 
 | **linear block** | generator or parity-check matrix over GF(2) | Hamming, extended Hamming, LDPC, arbitrary block codes | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
@@ -5319,7 +5319,7 @@ Recommended order within the phase, cheapest and highest-value first:
    `checksum` reusing the tag machinery rather than as a codec. Existing
    generators (pycrc, crcany) are good references for the table-generation and
    reflection handling.
-2. **table codes.** Manchester, NRZI, 4b5b. Exercises `ratio_exact`,
+2. **table codes.** Manchester, 4b5b, base16/32/64. Exercises `ratio_exact`,
    symbol granularity, and bit phase end to end.
 3. **permutation.** Interleavers; exercises `seekable = permuted`.
 4. **linear block.** Hamming, then general GF(2) matrices; exercises
@@ -14912,6 +14912,54 @@ choosing between them is a language decision rather than a table entry:
 Nothing is decided here. What is fixed is the documentation claiming situ
 handles it as a table, because that claim is what would have sent somebody
 to write the table.
+
+### 26.140 NRZI was in the same list, and the family that has it already did
+
+26.139 pulled 8b10b out of the table family. Reading the rest of that list
+found three more entries that do not belong in it, and one of them situ
+could already do.
+
+**NRZI is differential.** A one is sent as a transition and a zero as
+none, so the output bit is the input bit exclusive-ored with the
+*previous output bit*. No stateless symbol map expresses that, and
+`kernels.py` had it as "NRZI in its table form", which is a form that does
+not exist.
+
+What it is is a one-bit register fed from its own output -- the
+multiplicative shape already in the family, with the width turned down as
+far as it goes. `taps = 0x1, width = 1` makes the feedback the whole
+register, so the emitted loop reduces to `output = plain ^ state;
+state = output`, which is the differential rule. Nothing was written to
+support it. It was reachable the day `shift_register` stopped refusing
+widths outside 8, 16 and 32, and nobody noticed because the documentation
+was pointing at the wrong family.
+
+Checked against the two facts a standard states rather than against the
+rule a generator would be written from: all ones flips the level on every
+bit and gives 0x55 a byte, all zeroes holds at the seed. An identity, an
+inversion or a stateless table fails both. The derivation then works out
+what the description implies without being told -- `seekable = none` and
+`error_propagating`, which are exactly right for a self-synchronising code
+and are not properties a table would have got.
+
+**And the convention is named, because there are two.** This is
+transition-on-one, which is HDLC's. USB transitions on a zero, which needs
+the feedback complemented and no kernel argument says that -- so it is not
+expressible, and is recorded here rather than approximated. Calling the
+codec `nrzi` unqualified would have repeated exactly what `manchester` is
+refused for: two codes, one name, and a decoder built on the wrong one
+returning plausible bytes with nothing at run time to notice.
+
+**Gray and BCD are the other two, and they are a category error rather
+than a misfiling.** Neither is a codec. BCD is already a field type --
+`situ_bcd_encode` in the runtime, `bcd2` in `example/rtc` -- and adding a
+BCD codec would have been a second spelling of something the language has.
+Gray is the same kind of thing. Implementing either to match the list
+would have been inventing capability to satisfy a document, which is the
+wrong direction: the list was wrong.
+
+What is left in the table family is what belongs there: Manchester in its
+two named forms, 4b5b, and the base-N alphabets.
 
 ## 27. Questions, and how they were settled
 

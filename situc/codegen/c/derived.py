@@ -8,7 +8,8 @@ so they cannot disagree.
 
 Two families here, in the order 26.12 recommends: polynomial, which is every
 CRC variant and lands as a `checksum` rather than a codec, and table, which is
-Manchester, NRZI and 4b5b. (Not 8b10b: see `kernels.py`.)
+Manchester, 4b5b and the base-N alphabets. (Not NRZI or 8b10b: see
+`kernels.py`.)
 
 The generated CRC is table-driven and the table is computed here rather than
 copied, so a variant nobody has written down works the same as a famous one.

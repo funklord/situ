@@ -422,6 +422,54 @@ def test_every_additive_scrambler_has_maximal_period(
 		f"in std/kernels.situ at all -- the exclusion outlived what it was for")
 
 
+def test_nrzi_transitions_on_a_one_and_holds_on_a_zero(
+		kernel_library: ctypes.CDLL) -> None:
+	"""NRZI's defining behaviour, asked of it without restating its algorithm.
+
+	`nrzi_transition_on_one` is a one-bit multiplicative register: the output
+	bit is the input bit exclusive-ored with the previous output bit. Nothing
+	implements it specially, which is the interesting part -- it is the
+	scrambler family with the width turned down as far as it goes, and the
+	documentation had it filed under table codes, where a stateless symbol
+	map cannot express a differential rule at all.
+
+	The assertions are the two facts a standard states rather than the rule a
+	generator would be written from: all ones transitions on every bit, and
+	all zeroes holds. A generator that had accidentally emitted the identity,
+	or the inversion, or a stateless table, fails both.
+	"""
+	fn = getattr(kernel_library, "situ_nrzi_transition_on_one_encode")
+	fn.restype  = ctypes.c_uint32
+	fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+	               ctypes.POINTER(ctypes.c_uint8)]
+
+	def encode(data: bytes) -> bytes:
+		buf = (ctypes.c_uint8 * len(data))(*data)
+		out = (ctypes.c_uint8 * len(data))()
+		fn(buf, len(data), out)
+		return bytes(out)
+
+	# Every input bit a one, so the level flips on every bit: 0101...
+	# from a zero seed, which is 0x55 per byte with bit 0 sent first.
+	assert encode(b"\xff" * 4) == b"\x55" * 4, encode(b"\xff" * 4).hex()
+
+	# Every input bit a zero, so the level never moves and stays at the seed.
+	assert encode(b"\x00" * 4) == b"\x00" * 4, encode(b"\x00" * 4).hex()
+
+	# And the round trip, which is the weakest of the three and included
+	# because a decoder shifting in what it made rather than what it received
+	# passes the two above and fails this.
+	back = getattr(kernel_library, "situ_nrzi_transition_on_one_decode")
+	back.restype  = ctypes.c_uint32
+	back.argtypes = fn.argtypes
+	data = bytes(range(64))
+	coded = encode(data)
+	buf = (ctypes.c_uint8 * len(coded))(*coded)
+	out = (ctypes.c_uint8 * len(coded))()
+	back(buf, len(coded), out)
+	assert bytes(out) == data
+
+
 def test_every_polynomial_codec_is_checked_or_excused() -> None:
 	"""No generated CRC joins the standard kernels unchecked and unremarked.
 

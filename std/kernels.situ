@@ -230,6 +230,27 @@ codec scrambler_additive {
 }
 impl scrambler_additive derived;
 
+// NRZI, and it is here rather than among the table codes because it is not
+// one: a 1 is sent as a transition and a 0 as none, so the output bit is the
+// input bit exclusive-ored with the *previous output bit*. That is a one-bit
+// register fed from its own output, which is exactly the multiplicative shape
+// above with the width turned down as far as it goes.
+//
+// Nothing new implements it. taps = 0x1 and width = 1 make the feedback the
+// whole register, so `output = plain ^ state` and `state = output`, which is
+// the differential rule written in the family that already had it.
+//
+// This is the transition-on-one convention -- HDLC's, and magnetic
+// recording's. USB inverts it, transitioning on a zero, and that is not
+// expressible here: it needs the feedback complemented, which no kernel
+// argument says. Naming this one `nrzi` unqualified would repeat the mistake
+// `manchester` is refused for, so it says which it is.
+codec nrzi_transition_on_one {
+	kernel = shift_register(taps = 0x1, width = 1, seed = 0x0,
+	                        feedback = output);
+}
+impl nrzi_transition_on_one derived;
+
 // The scramblers protocols actually name, as against the two above, which are
 // textbook parameters demonstrating the two feedback shapes.
 //

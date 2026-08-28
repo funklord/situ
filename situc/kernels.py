@@ -129,10 +129,19 @@ def _render(name: str, value: object) -> str:
 def _table(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	"""An input symbol maps to an output symbol.
 
-	Manchester, 4b5b, NRZI in its table form, Gray, BCD. The ratio is
+	Manchester, 4b5b, base16/32/64. The ratio is
 	exact because every symbol is the same width, which is what keeps an
 	interior position a linear function of an input position -- and the reason
 	these keep static addressing where a stuffing code does not.
+
+	**Three things were listed here that are not table codes.** NRZI is
+	differential -- the output bit is the input bit exclusive-ored with the
+	previous *output* bit -- which no stateless symbol map expresses; it is a
+	one-bit multiplicative shift register and `std/kernels.situ` carries it as
+	one. Gray and BCD are field encodings rather than codecs: BCD is already a
+	field type here, with `situ_bcd_encode` in the runtime and `bcd2` in
+	`example/rtc`, and putting either in this family would have been a second
+	spelling of something the language already has.
 
 	**8b10b is not one of these, and was listed here as though it were.** Its
 	ratio is table-like -- 10:8, exact -- but its encoder carries running
