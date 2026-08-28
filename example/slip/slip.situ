@@ -1,0 +1,69 @@
+// SLIP, RFC 1055 -- Serial Line IP.
+//
+// The smallest framing protocol worth modelling, and included because it is
+// the one that makes the case for `\xNN`: every constant SLIP is built from
+// is a byte no character spells. END is 0xC0, ESC is 0xDB, and the two
+// substitutes are 0xDC and 0xDD.
+//
+// It is also the shape most unlike the other examples here. There is no
+// header, no length field and no checksum -- nothing to read a number out
+// of. A frame is "bytes until END", and the only reason that is unambiguous
+// is the stuffing: an END inside the payload is sent as ESC ESC_END, so the
+// END that ends the frame cannot occur anywhere else. The framing and the
+// codec are the same fact, which is why the region carries both.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+// One byte out per byte in, except for the two that cannot travel as
+// themselves, which take two. `worst_case = 2, per = 1` is a payload of
+// nothing but END or ESC.
+//
+// The substitution is a table rather than a transformation: END becomes 0xDC
+// and ESC becomes 0xDD, and neither is one operation applied to the other.
+// That is why the generated decoder refuses an escape sequence the code does
+// not define instead of computing something from it -- there is nothing to
+// compute, and guessing would invent a byte. PPP is the same shape with the
+// opposite answer: its escape is defined as exclusive-or with 0x20, so its
+// decoder reverses escapes nobody enumerated. Both are in `std/kernels.situ`.
+codec slip {
+	kernel = stuffing(worst_case = 2, per = 1, unit = byte, code = slip);
+}
+impl slip derived;
+
+struct frame {
+	// The whole of it. `until "\xC0"` is the framing and `(slip)` is what
+	// makes the framing sound: the scan runs on the *encoded* bytes, where
+	// END appears exactly once and at the end, which is the property the
+	// stuffing exists to create.
+	//
+	// The map records the consequence: the region is `seekable = none` and
+	// its expansion is `ratio_bounded(2, 1)`, so nothing inside it can be
+	// addressed without decoding first. That is true of every stuffing code
+	// and is why they belong at the outermost layer.
+	coded datagram(slip) until "\xC0" {
+		u8 payload[remaining];
+	}
+}
+
+// The frame has no header, so the payload begins at byte zero and always
+// does -- there is nothing in front of it whose size could vary. That is the
+// one static fact SLIP offers, and stating it is what makes the map's
+// `offset=AbsoluteStatic(0x00)` a claim somebody checks rather than an
+// observation somebody made.
+require absolute_static(frame.datagram);
+
+// What situ does not describe here, said plainly.
+//
+// RFC 1055 recommends sending an END *before* a frame as well, so that line
+// noise before a transmission is flushed as an empty frame the receiver
+// discards. That is a sender's convention and a receiver's tolerance, not a
+// property of the bytes: a leading END produces a zero-length frame, which
+// this schema reads as a frame with an empty payload rather than as nothing.
+// A reader that wants RFC 1055's behaviour discards those itself.
+//
+// There is also no datagram size limit here. RFC 1055 names 1006 bytes as
+// what an implementation must accept, which is a requirement on the peer
+// rather than a fact about the encoding, and a schema that stated it would
+// be refusing frames the specification permits.
