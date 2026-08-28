@@ -4285,10 +4285,19 @@ situc import-proto <proto> -o <schema>   [--accept-lossy]
 
 Two global flags: `--diagnostics=text|json`, and `--version`, which prints the
 string in `situc/__init__.py` -- the same one the Debian packaging reads, so a
-package and the binary inside it cannot claim different versions. `--out=DIR`,
+package and the binary inside it cannot claim different versions. `--out`,
 `--target=c|cpp|python|rust` and `--prefix=NAME` belong to the subcommands that
 take them, which is not the same thing and was written here as though it were.
 There is no `--strict`; it was listed for a while and never existed.
+
+`--out` names a **directory** in nine subcommands and a **file** in two, and
+this line said `--out=DIR` flatly until somebody passed a directory to `pack`
+and got `IsADirectoryError`. The two that want a file are `pack` and
+`import-proto`, each producing a single artifact rather than a set, and the
+parser already marks them: they are exactly the two that also accept `-o`.
+That correlation was there before it was written down, and
+`test_a_short_out_flag_marks_a_file` now holds it, so a subcommand gaining
+one meaning without the other fails rather than surprising a reader.
 
 `test_the_cli_section_lists_every_command` holds this block to the parser, for
 the reason section 0 gives: this list had drifted, and so had 11.3, and a

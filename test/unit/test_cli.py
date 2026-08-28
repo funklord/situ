@@ -472,6 +472,41 @@ NEEDS_MORE_THAN_A_SCHEMA = {
 }
 
 
+def test_a_short_out_flag_marks_a_file() -> None:
+	"""`--out` means a directory in nine subcommands and a file in two.
+
+	Section 21 said `--out=DIR` flatly, and it is how adding `pack` to the
+	sweep above failed on all 37 schemas with `IsADirectoryError`: one flag,
+	spelled the same everywhere, meaning two things and documented as one.
+
+	The parser already told them apart and nobody had noticed. `pack` and
+	`import-proto` each produce a single artifact rather than a set, and they
+	are exactly the two that also accept `-o`. Asserting the correlation is
+	what turns an accident into a convention: a subcommand that starts
+	writing a file without offering `-o`, or offers `-o` while writing into a
+	directory, fails here rather than surprising somebody at a prompt.
+	"""
+	actions = [action for action in build_parser()._actions
+	           if isinstance(action, argparse._SubParsersAction)]
+	assert actions, "the parser has subcommands"
+
+	short: set[str] = set()
+	takes_out: set[str] = set()
+	for name, parser in actions[0].choices.items():
+		for action in parser._actions:
+			if "--out" not in action.option_strings:
+				continue
+			takes_out.add(name)
+			if "-o" in action.option_strings:
+				short.add(name)
+
+	assert takes_out, "no subcommand takes --out, so this checks nothing"
+	assert short == set(WRITES_A_FILE) | {"import-proto"}, (
+		f"`-o` is offered by {sorted(short)}; the subcommands that write a "
+		f"single file are `pack` and `import-proto`. One of the two has "
+		f"moved, and section 21 describes the pairing")
+
+
 def test_every_subcommand_is_swept_or_excused() -> None:
 	"""The sweep's population comes from the parser, not from this file.
 
