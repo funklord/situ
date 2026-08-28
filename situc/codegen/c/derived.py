@@ -26,6 +26,7 @@ from math import lcm
 
 from situc import ast
 from situc.codegen.c.names import ident, macro
+from situc.traverse import DERIVED_STUFFING as DERIVED_STUFFING
 from situc.traverse import table_is_padded
 from situc.layout import BITS_PER_BYTE
 from situc import __version__
@@ -87,10 +88,10 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 
 #: Stuffing codes this build derives an implementation for.
 #:
-#: One list because there were two: the dispatch in `_stuffing` and the
-#: prototype gate in `_byte_declarations`, and adding a code to one of them
-#: emitted a definition nothing declared.
-DERIVED_STUFFING = ("cobs", "hdlc", "ppp_async", "slip", "smtp_dot")
+#: One list because there were three. The dispatch in `_stuffing` and the
+#: prototype gate in `_byte_declarations` were consolidated first; `traverse`
+#: held a third copy that pass did not find, and it is the one every backend
+#: asks the shape question of. It lives there now and is imported here.
 
 #: The escape-stuffed byte codes, which differ from COBS in kind: rather than
 #: eliminating a byte value, they keep it and prefix it with an escape, so the

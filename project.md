@@ -14813,26 +14813,50 @@ remedy. Python had the right shape already for a region it *can* decode,
 naming the symbol and the buffer size in a comment, and what was missing
 was that nobody had generalised it.
 
-**What stays open is a real decision, not a patch.** Whether a generated
-module should *declare* every codec entry point its schema names, rather
-than only name it in prose, sets the public shape of four APIs. Two things
-make it more than a line in two emitters:
+**And the decision it looked like turned out to be mostly a stale list.**
+This entry previously described declaring the entry point as a design
+question spanning four public APIs, on the evidence that Rust warns
+`dead_code` on an uncalled private `extern` -- so declaring one would mean
+`pub` raw FFI or a safe wrapper carrying the capacity contract, which was
+called "a larger piece of design". The wrapper already exists. Rust emits
+`extern "C" { fn situ_<codec>_decode(..) }` and a safe method around it
+with the `unsafe` at the call site, and has for as long as the layer has,
+for any codec whose decode has a settled shape.
 
-- **Rust warns.** An uncalled private `extern "C"` declaration is
-  `dead_code`, so declaring them means making them `pub` -- raw FFI in the
-  public API -- or wrapping them in a safe function, which is the better
-  Rust and a larger piece of design: the wrapper needs the output-capacity
-  contract, which situ knows from the expansion ratio and would then be
-  asserting on the caller's behalf.
-- **Python has no declaration to emit at all.** Reaching the entry point
-  means deciding what a Python binding to the C runtime looks like -- the
-  "build step" 0017 anticipated and never specified.
+What SLIP did not have was the shape, and it did not have it because
+`DERIVED_STUFFING` was defined twice. `codegen/c/derived.py` decides which
+codes generate; `traverse.decodes_here` decides whether a region's decode
+has an interface to call, and held its own copy. Adding `slip` and
+`ppp_async` to the generator left `traverse` at three codes, so all four
+backends were told a SLIP region had no settled decode and declined an
+accessor every one of them could have emitted -- with the C function
+present and Rust's wrapper around it written and nothing calling either.
 
-And a third thing worth settling with it: C declares the derived pair and
+The measurement in the table above was taken during that window and reads
+as a design divergence. It was one list short.
+
+`derived.py` carries a note reading "one list because there were two",
+from an earlier pass that consolidated a dispatch and a prototype gate
+after exactly this. It did not find the third copy. The list lives in
+`traverse` now -- the only direction available, since `derived` already
+imports from it -- and `test_the_stuffing_code_list_has_one_home` fails if
+a second definition appears or if the generator stops reading the one that
+is left.
+
+**What stays genuinely open is narrower.** A codec whose decode has *no*
+settled shape -- `linear_block`, where a Hamming codeword is a nibble in
+and a byte out with a correction flag -- still gets no accessor anywhere,
+correctly, because a generic region decode over it would be guessing. The
+entry-point note is the right answer there and is what those regions now
+carry. Python is unchanged in either case: it has no FFI statement to
+emit, so it names the symbol and the size, which is what 0017 anticipated
+as "a build step" and never specified.
+
+And one thing worth settling separately: C declares the derived pair and
 not the tier-1 symbol. Declaring the tier-1 prototype would make a
 signature mismatch in the caller's own implementation a compile error
-rather than a link-time or run-time surprise, which is the kind of thing
-this project generates headers for.
+rather than a link-time or run-time surprise, which is much of why this
+project generates headers.
 
 ## 27. Questions, and how they were settled
 

@@ -1509,9 +1509,21 @@ def arm_of(struct: ResolvedStruct,
 	return None
 
 
-#: Stuffing codes a derived implementation exists for. The C generator owns the
-#: list; this is the shape question, which every backend asks.
-DERIVED_STUFFING = ("cobs", "hdlc", "smtp_dot")
+#: Stuffing codes a derived implementation exists for.
+#:
+#: Owned here rather than in the C generator, which is the only direction that
+#: works: `codegen.c.derived` already imports from this module, so the list
+#: cannot live there and be read here without a cycle.
+#:
+#: It was in both, and the comment here said the C generator owned it -- which
+#: was true of nothing, since neither read the other. `derived.py` carries a
+#: note saying "one list because there were two", written when a dispatch and
+#: a prototype gate were consolidated; this was a third copy that pass did not
+#: find. Adding `slip` and `ppp_async` to the C generator's copy left this one
+#: at three codes, so every backend asked whether a SLIP region had a settled
+#: decode shape and was told no, and declined an accessor it could have
+#: emitted. `test_the_stuffing_code_list_has_one_home` is the guard.
+DERIVED_STUFFING = ("cobs", "hdlc", "ppp_async", "slip", "smtp_dot")
 
 
 def extern_symbol(schema: Schema, codec: str) -> str | None:

@@ -418,6 +418,41 @@ def test_every_module_parses_at_the_declared_floor() -> None:
 # -- the generated-C build's own list of schemas -----------------------------
 
 
+def test_the_stuffing_code_list_has_one_home() -> None:
+	"""Which stuffing codes generate is one list, and it has been three.
+
+	`codegen/c/derived.py` carries a note reading "one list because there
+	were two" -- the dispatch and the prototype gate, consolidated after
+	adding a code to one of them emitted a definition nothing declared. That
+	pass did not find a third copy in `traverse.py`, which is the one every
+	backend asks the *shape* question of: whether a region's decode has a
+	settled interface to call.
+
+	It cost exactly what the first two cost. Adding `slip` and `ppp_async` to
+	the generator's copy left `traverse` at three codes, so every backend was
+	told a SLIP region had no settled decode and declined an accessor all
+	four could have emitted -- the C runtime function existed, and Rust's
+	safe wrapper around it existed, and nothing called either.
+
+	Nothing about that is visible in a diff of the file being edited, which
+	is why it is asserted rather than remembered.
+	"""
+	defined = sorted(
+		path.relative_to(ROOT)
+		for path in ROOT.glob("situc/**/*.py")
+		if re.search(r"^DERIVED_STUFFING\s*=", path.read_text(encoding="ascii"),
+		             re.MULTILINE))
+
+	assert len(defined) == 1, (
+		f"DERIVED_STUFFING is defined in {defined}; two lists of which codes "
+		f"generate is how one of them goes stale without a symptom")
+
+	from situc.codegen.c import derived
+	from situc import traverse
+	assert derived.DERIVED_STUFFING is traverse.DERIVED_STUFFING, (
+		"the generator does not read the list it is defined in")
+
+
 def test_the_generated_build_lists_every_schema() -> None:
 	"""`test/generated/Makefile` names the schemas it builds, by hand.
 
