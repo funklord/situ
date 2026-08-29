@@ -12,7 +12,8 @@ import pytest
 from every_schema import ROOT
 from every_schema import SCHEMAS as ALL_SCHEMAS
 from every_schema import ids
-from situc.cli import build_parser, main
+import situc
+from situc.cli import COPYRIGHT, build_parser, main
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -410,6 +411,37 @@ def test_the_cli_section_lists_every_command() -> None:
 	assert actions, "the parser has subcommands"
 
 	assert listed == set(actions[0].choices)
+
+
+def test_the_version_names_the_copyright_holder(
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""`harmonization.md`: every private project names the holder in its
+	`--version`, its About window, and its README. situ has two of the three.
+
+	On two lines, which needed a custom action: argparse's own `version`
+	action hands the string to `HelpFormatter`, which wraps it and folds
+	whitespace, so `situc 1.0\nCopyright ...` printed as one line with a
+	space. It looked close enough to pass a glance.
+
+	Attribution rather than licensing. Naming the holder grants nothing, and
+	situ has no licence by decision -- `packaging/copyright` records that,
+	and this test exists to keep the *name* present, not to acquire a
+	`License:` line beside it.
+	"""
+	with pytest.raises(SystemExit) as exit_:
+		main(["--version"])
+	assert exit_.value.code == 0
+
+	printed = capsys.readouterr().out.splitlines()
+	assert printed[0] == f"situc {situc.__version__}", printed
+	assert printed[1] == COPYRIGHT, printed
+	assert "Nabeel Sowan <nabeel@vibes.se>" in COPYRIGHT
+
+	# The README is the other surface, and the same line.
+	readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(
+		encoding="utf-8")
+	assert COPYRIGHT in readme, "the README does not name the holder"
 
 
 def test_it_names_only_the_flags_that_are_global() -> None:

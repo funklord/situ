@@ -570,3 +570,13 @@ DS1307 driver for `rtc`, the Linux Bluetooth stack for `ble`, GNU cpio for
 `cpio`, and for `netlink` the reply a `NETLINK_ROUTE` socket gave to a dump
 request. A description that agrees only with its own compiler has demonstrated
 nothing, and two of those eight disagreed with the schema on arrival.
+
+## Copyright
+
+Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>
+
+This names who wrote situ and grants nothing: authorship vests
+automatically, and saying so is a statement of fact rather than a licence.
+No licence has been declared for this tree, which is the holder's decision
+rather than an oversight -- `packaging/copyright` states it, and says what
+follows from it.

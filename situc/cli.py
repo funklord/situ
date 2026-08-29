@@ -61,6 +61,40 @@ DRIVER_BACKENDS: dict[str, tuple[str, ...]] = {
 DRIVERS = tuple(DRIVER_BACKENDS)
 
 
+#: The copyright holder, named in `--version` and in the README -- the two
+#: surfaces situ has of the three `harmonization.md` asks for; there is no
+#: About window.
+#:
+#: Attribution, not a licence grant. Authorship vests automatically, so
+#: naming the holder states a fact and permits nothing. situ has no licence
+#: by the holder's decision and `packaging/copyright` records that
+#: deliberately rather than by omission, so a reader who reads this as an
+#: invitation to add a `License:` beside it would be undoing that decision
+#: rather than completing it.
+COPYRIGHT = "Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>"
+
+
+class _Version(argparse.Action):
+	"""`--version`, printed rather than passed through the help formatter.
+
+	argparse's own `version` action hands the string to `HelpFormatter`,
+	which wraps it and folds whitespace, so a newline between the version
+	and the copyright line comes out as a space:
+
+	    situc 1.0 Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>
+
+	Two lines is what every other tool prints and what a reader scanning for
+	a version expects, so this writes them itself.
+	"""
+
+	def __call__(self, parser: argparse.ArgumentParser,
+			namespace: argparse.Namespace, values: object,
+			option_string: str | None = None) -> None:
+		print(f"situc {__version__}")
+		print(COPYRIGHT)
+		parser.exit()
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
 		prog        = "situc",
@@ -72,8 +106,13 @@ def build_parser() -> argparse.ArgumentParser:
 	# A packaged tool that cannot say which version it is cannot be evaluated,
 	# and the number comes from the package rather than from a second copy
 	# here: `situc/__init__.py` is what the Debian packaging reads too.
-	parser.add_argument("--version", action="version",
-	                    version=f"situc {__version__}",
+	# The copyright line is attribution and not a licence grant. Authorship
+	# vests automatically, so naming the holder states a fact and permits
+	# nothing; situ has no licence by the holder's decision, and
+	# `packaging/copyright` records that deliberately rather than by
+	# omission. A reader who takes this line as an invitation to add a
+	# `License:` beside it would be undoing that decision, not completing it.
+	parser.add_argument("--version", action=_Version, nargs=0, default=None,
 	                    help="print the version and exit")
 
 	sub = parser.add_subparsers(dest="command", required=True)
