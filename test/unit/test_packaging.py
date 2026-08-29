@@ -189,14 +189,57 @@ def test_the_manual_page_names_every_subcommand() -> None:
 	assert not missing, f"situc.1 does not document {sorted(missing)}"
 
 
+#: The copyright statement exists twice, and only one copy reaches a user.
+#: `debian/copyright` is what `dh_installdocs` puts at
+#: `/usr/share/doc/situc/copyright`; `packaging/copyright` predates the move
+#: to debhelper -- it was last touched by the commit before it, and sits
+#: beside the `packaging/*.control` files nothing references any more.
+#:
+#: They are byte-identical today and nothing held them so. Every citation in
+#: the tree -- `project.md`, the README, `situc/cli.py` -- names the one that
+#: ships nowhere, and this test guarded that one too, so an edit to the file
+#: dpkg actually reads would have gone unnoticed.
+COPYRIGHT_FILES = (PACKAGING / "copyright", ROOT / "debian" / "copyright")
+
+
 def test_the_copyright_file_does_not_invent_a_licence() -> None:
 	"""There is no LICENSE in this tree, and the packaging says so rather than
 	picking one. Delete this test when a licence is added -- and the stanza
-	with it."""
-	text = (PACKAGING / "copyright").read_text(encoding="ascii")
+	with it.
+
+	Both copies are read. The one that ships is `debian/copyright`, and it was
+	the unguarded one.
+	"""
 	assert not (ROOT / "LICENSE").exists(), \
-		"a LICENSE exists now; packaging/copyright must carry it"
-	assert "License: UNDECIDED" in text
+		"a LICENSE exists now; both copyright files must carry it"
+
+	for path in COPYRIGHT_FILES:
+		text = path.read_text(encoding="ascii")
+		assert "License: UNDECIDED" in text, (
+			f"{path.relative_to(ROOT)} no longer says the licence is "
+			f"undecided")
+
+
+def test_the_two_copyright_files_agree() -> None:
+	"""One statement of the licensing position, not two that can drift.
+
+	Nothing copies one to the other and nothing compared them. A tree whose
+	shipped copyright and whose documented copyright can disagree is the
+	worst place in it for two copies of one fact, because the disagreement
+	would be discovered by whoever received the package rather than by
+	whoever wrote it.
+
+	This asserts they match rather than choosing between them: which should
+	survive is the holder's, and it is not a question this test needs
+	answered to be useful.
+	"""
+	first, second = (path.read_text(encoding="ascii")
+	                 for path in COPYRIGHT_FILES)
+	assert first == second, (
+		f"{COPYRIGHT_FILES[0].relative_to(ROOT)} and "
+		f"{COPYRIGHT_FILES[1].relative_to(ROOT)} differ; the second is the "
+		f"one `dh_installdocs` ships and the first is the one every document "
+		f"here cites")
 
 
 def test_the_version_is_a_version() -> None:
