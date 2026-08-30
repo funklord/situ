@@ -437,6 +437,37 @@ guessed at.
 the reasoning, including the verification that Python accepts tabs-then-spaces
 at every tab width.
 
+## Switch labels sit at the switch's own indentation
+
+Measured across `walker/`, `runtime/` and `editor/`: 45 `case` and `default`
+labels, every one of them at the same tab count as its `switch`, and none a
+level deeper. The bodies are one deeper than the labels.
+
+```c
+switch (kind) {
+case CHECK_MUST_EQ:
+	broken = ((int64_t)value != want);
+	break;
+}
+```
+
+Written down because the tree is uniform and nothing was holding it so.
+`tool/style_gate.py` models the *other* convention -- its comment says
+"`level` is brace-nesting depth plus one for a switch's case/default body,
+since C labels open no brace but their bodies sit a level deeper" -- so it
+expects labels one level in from the `switch` and bodies two. It does not
+complain about either: a line shallower than the model is passed through
+unchanged rather than reported, which is what lets the gate tolerate a label
+style it does not model.
+
+That tolerance is the reason this needs saying. A contributor who follows the
+gate's model rather than the surrounding code writes the other style, the gate
+accepts it, and the tree has two. Neither is wrong in C; having both is.
+
+This records what is there rather than choosing it. If the other style is
+wanted, that is a convention change and belongs to a deliberate pass -- 45
+lines and the gate's own model are what such a pass would have to weigh.
+
 ## ASCII, and the two things this project adds to it
 
 The rule itself is above, in the copied portion, and is not restated here.
