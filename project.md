@@ -15146,6 +15146,70 @@ What *does* express is the header and the token: two-bit version, type,
 four-bit token length, code, message id, and `u8 token[token_length]`.
 That much is a worked example whenever somebody wants one.
 
+### 26.143 What the CI history is evidence of, which is two things
+
+`gh run list` on this repository is an unbroken wall of `failure` back
+past the window it will show, and it is not one fact. Walked over 183
+runs, 2026-07-27 to 2026-08-30:
+
+- **Last green: `7ec7b01`**, 2026-08-09 19:10, "walker: frame a stream and
+  match a reply, from the image".
+- **First genuine red: `595bdaf`**, 2026-08-09 21:37, "walker: decode an
+  owned value out of a walked message". 49 seconds, steps executed,
+  reached `make check` and failed there.
+- **Genuine reds until 2026-08-14 02:55** (1m18s, steps executed).
+- **Blocked from 2026-08-14 09:09**: "The job was not started because
+  recent account payments have failed". Two seconds, no step run. Account
+  billing, and the holder's.
+
+So roughly five days of a real red, then seventeen days of a runner that
+never started, rendered identically in `gh run list`.
+
+**Only a step count separates them, and the cheap shortcut does not
+work.** Duration looks like it should: most blocked runs here are 3-5
+seconds where the build takes minutes. It was written into this entry as
+a screening rule and it is wrong. situ's own blocked runs span **3 to 36
+seconds**, and one of them -- `32985041292`, 36 seconds -- was read
+directly while establishing the boundary above, noted as "the duration
+variance is queueing, not execution", and the rule was written anyway a
+few lines later. netcfgd then supplied the overlap outright: a blocked
+run at 1m36s and a genuine one executing sixteen steps in 40s.
+
+Duration is a property of the queue rather than of the work. `gh run
+view` and a step count decide; nothing in the list view does.
+
+**What broke on 2026-08-09 is not recoverable.** The logs have expired.
+That is worth stating rather than leaving as an open question somebody
+re-opens later, and it sets a floor on what a future green means.
+
+**The tree is clean now on the one axis CI uniquely covers.** `check.yml`
+runs `actions/setup-python@v5` at `python-version: '3.11'`, and 3.11 is
+not on the development machine, so
+`test_every_module_parses_at_the_declared_floor` runs *only* on CI. That
+is the test whose docstring records situc claiming 3.11 and not having run
+on it for six phases, because "the machine this was written on runs 3.13
+and every test passed there" -- the same failure now arriving through the
+runner rather than the developer.
+
+Two local substitutes were run instead, and neither is the interpreter:
+
+- Every shipped module parsed at `feature_version=(3, 11)`: 102 modules,
+  zero failures, with PEP 695 generics as a control the parse refuses.
+- A tokenizer sweep for the four PEP 701 constructs, controlled both ways.
+  Six sites flagged and all six false on reading: two nested f-strings
+  using *different* quotes, four triple-quoted multi-line literals. Both
+  shapes have been legal since 3.6.
+
+`feature_version` cannot catch PEP 701, which is a tokenizer change --
+that is why the second sweep exists and why the first is not sufficient
+alone.
+
+**When the block lifts, the first green is not a fix.** It will be the
+first execution since 2026-08-14 of a suite that has changed by around
+thirty commits, and it will arrive looking like something was repaired.
+Nothing was. What is known is written above; what failed in August is
+not, and a green will not answer it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
