@@ -80,6 +80,56 @@ no non-allocating spelling and is the stated exception, bounded by the
 schema's own `max`. That guarantee belongs to the default layer -- see *How
 much of it you take*.
 
+## The capability lattice
+
+Section 11 of `project.md` is the core of the project, and everything else in
+the compiler exists to feed it or report its results. A field's **capability
+vector** is thirteen axes, each with a domain ordered strongest to weakest.
+The layout solver computes them, `require` asserts them, the map commits
+them, and every backend emits exactly the operations the vector supports.
+
+| axis | domain, strongest first | what it answers |
+|---|---|---|
+| `size` | `Fixed(n)` > `Bounded(lo,hi)` > `Unbounded` | how many bytes |
+| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | where it is, and what finding it costs |
+| `access` | `Random` > `Sequential` | can element N be reached directly |
+| `mutate` | `InPlaceFixed` > `InPlaceSlack` > `Shifting` > `RewriteRequired` > `Immutable` | what a write costs |
+| `address` | `Stable` > `FrameStable` > `Unstable` | may a pointer to it be held |
+| `align` | `Aligned(n)` > `Unaligned` | relative to the message base |
+| `repr` | `MemoryIdentical` > `ValueConverted` > `TextConverted` > `ConditionallyConverted(f)` | is the value literally the bytes, and can the conversion fail |
+| `atomic` | `AtomicWord` > `NonAtomic` | is single-instruction access possible |
+| `canonical` | `Canonical` > `CanonicalGiven(f)` > `NonCanonical` | does one value have exactly one encoding |
+| `stage` | `CompileTime` < `ParseTime` < `TransformTime` < `VerifyGated` | when the answer is knowable |
+| `auth` | `Uncovered` / `Covered(obligation)` | which obligations cover these bytes |
+| `secrecy` | `Public` / `Secret` | may it be printed, and does it get a debug accessor |
+| `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | does touching it do something |
+
+Four of them are worth a sentence, because they are the ones other systems
+do not distinguish:
+
+- **`repr`.** A big-endian `u32` on a little-endian host is
+  `ValueConverted`: the value is not the memory. So "in-place mutation" of it
+  is a read-swap-write rather than a store, and a caller cannot take a
+  pointer to the value. `TextConverted` goes further -- a decimal parse can
+  *fail*, where a byte swap cannot.
+- **`offset`.** `Dynamic` is arithmetic over values already read; `DataPlaced`
+  is one read of an offset the message itself chose, so nothing about the
+  frame bounds it; `Scanned` is a search that can fail. Three different costs
+  and three different failure modes, where "not a constant" would be one word.
+- **`canonical`.** `CanonicalGiven(f)` is the honest answer for a
+  byte-order-marked format: more than one encoding exists, exactly one given
+  field `f`. The consequence is a rule -- **verify over received bytes, never
+  over re-encoded bytes** -- and it is why a schema distinguishes
+  `deterministic_writer(X)` from `canonical(X)`.
+- **`stage`.** The only axis that increases rather than weakens. `VerifyGated`
+  is what makes a sealed region's interior unreachable until a tag verifies,
+  and it is a *type* in C++ and Rust rather than a flag.
+
+**A weakening is never silent and never anonymous.** Each carries a blame
+chain naming the construct that caused it, and `situc explain` prints it with
+the remedy attached, which is what the excerpt at the top of this file is.
+`situc advise` ranks those remedies across a whole schema by what they buy.
+
 ## Quickstart
 
 ```sh
@@ -320,6 +370,88 @@ nlattr attrs[] while (nla_len >= 4);  // while a predicate over each element hol
 u8   pixels[n] at file.pixel_offset;  // placed where the data says
 u32  crc @ 0x1c;                      // assert the offset the solver computed
 ```
+
+### Choosing between layouts, and describing a run of items
+
+A `variant` is one of several layouts chosen by a field already read, and it
+is where a format stops being a struct:
+
+```situ
+// example/icmp/icmp.situ.
+variant body switch (type) {
+	case icmp_type.echo_request:            icmp_echo_id  echo;
+	case icmp_type.echo_reply:              icmp_echo_id  reply;
+	case icmp_type.redirect:                u8            gateway[4];
+	case icmp_type.destination_unreachable: icmp_frag     frag;
+	case icmp_type.time_exceeded:           u8            unused[4];
+	case icmp_type.parameter_problem:       u8            pointer[4];
+}
+```
+
+`default:` takes `error`, `opaque` or a member -- three different positions
+on an unknown discriminant, stated rather than implied.
+
+A `tlv` region describes a run of tag-length-value items by declaring the
+item grammar, which is what lets the compiler reason about a self-describing
+format without a parser being written for it:
+
+```situ
+// example/protobuf/protobuf.situ, abridged.
+tlv fields (
+	tag_type       = pb_varint,
+	tag_decode     = { field = tag >> 3, wire = tag & 0x7 },
+	tag_identity   = field,          // which half of the tag names an item
+	value_size     = switch (wire) {
+		case 0: self_delimiting,
+		case 1: 8,
+		case 2: prefixed(pb_varint),
+		case 5: 4,
+		default: error,              // groups are not supported
+	},
+	duplicate_tags = allowed,
+	known = { 1 : { name = user_id, wire = 0, type = pb_varint }, ... },
+)
+```
+
+`indexed (base = region)` is the other shape a struct cannot describe:
+members reached through an offset table rather than laid out in order, which
+is what a page format like SQLite's does. `opaque name [n]` is the honest
+answer where the interior is not described at all.
+
+### The expression language
+
+Small on purpose, because everything in it has to be evaluable by the layout
+solver *and* by four backends *and* by a table walk. Field references,
+arithmetic, comparisons, and six builtins: `min`, `max` and `align_up` over
+values; `size`, `offset` and `count` over the layout.
+
+```situ
+u8       body[length - 8];              // arithmetic over a field already read
+reserved u8 [align_up(nla_len, 4) - nla_len] [must_be_zero];
+require  size(udp_header) == 8;
+require  offset(tcp_header.options) == 20;
+```
+
+`remaining` is the one keyword that is not an expression: it means "to the
+end of the frame", and it is what makes a member's size depend on the buffer
+rather than on the message.
+
+That second line is netlink's alignment padding written by hand, and it is
+also what `pad_to(4);` says in one member -- `base::Pickle`, cpio and most
+RPC framings all spell it the long way. The construct exists because the
+long way is a `reserved` run the map labels `<reserved0>`, where `pad_to`
+labels it `<pad>` and the wire signature carries it as padding rather than as
+bytes that happen to be zero.
+
+### Strictness
+
+`strictness = strict` or `lenient`, at file level, and it is section 14.5's
+answer about malleability rather than a parser mood. Lenient makes
+`canonical` `NonCanonical` throughout, so the generated code does not hold a
+message to one canonical form -- and the map records that, which is the
+point. A schema that accepts what the format permits and the author would
+rather refuse has said so in the artifact a reviewer diffs, instead of in a
+comment.
 
 ### Attributes, requirements and invariants
 
@@ -573,6 +705,72 @@ situc diff old.situ new.situ     # what changed between two revisions
 
 `wire` records the byte-level contract and `map` records the cost; they are
 different questions, which is why there are two files (decision 0041).
+
+### Documentation, generated from the layout
+
+`situc doc` emits RFC-style byte diagrams and a field reference from the same
+layout the accessors come from, so the picture cannot drift from the code:
+
+```
+struct udp_header
+-----------------
+
+Size: 8 to 65535 bytes.
+
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          source_port          |        destination_port       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|             length            |          checksum[2]          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/                      payload[length - 8]                      /
+/                           (variable)                          /
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+Field                Offset  Size          Type           Notes
+-------------------  ------  ------------  -------------  --------------------
+summed               0       8 bytes       authenticated  covered by checksum
+source_port          0       2 bytes       u16            big endian; covered..
+length               4       2 bytes       u16            big endian; min = 8..
+checksum[2]          6       2 bytes       u8             self_as = 0
+payload[length - 8]  8       [length - 8]  u8             covered by checksum
+```
+
+(The Notes column is cut here to fit; it runs to 98 columns in the real
+output, and it is where `[min]`, `[must_eq]`, `[self_as]`, the byte order and
+the covering tag all end up.)
+
+The Wireshark dissector (`situc gen-dissector`) comes off the same traversal,
+which is why a schema that parses in C parses in Wireshark.
+
+### The tests you do not write
+
+Five of the subcommands generate test code, and the argument for each is that
+it asks a question a hand-written test would have to be remembered to ask:
+
+- `gen-checks` holds the accessors to the capability map they were generated
+  beside -- every member the map calls writable has a setter, and every
+  member it calls unwritable says why.
+- `gen-tests` turns hex vectors into golden tests, so a corpus somebody else
+  produced becomes a build failure when the schema stops describing it.
+- `gen-fuzz` emits a libFuzzer harness per parseable struct. `make fuzz` runs
+  them under ASan.
+- `gen-tamper` drives the caller's verifier across the schema's own coverage
+  geometry, flipping every covered byte and every tag byte with refusal
+  required. A gate nobody has watched fail is not evidence.
+- `gen-codec-tests` emits the property tests that would falsify a codec
+  signature that lies, against the ABI its `impl` binds.
+
+All five derive from the schema, so adding a worked example adds coverage
+without anybody writing a test.
+
+**Diagnostics are a product here, not a finish.** Section 17 makes message
+quality part of what situ is for, and `test/unit/test_diagnostics.py`
+compares the rendered text against exactly what it should say: a regression
+in the wording of a blame chain fails the build. That is why a refusal in this tree usually names what *would* have
+been accepted -- a message that only says no leaves the reader to infer the
+boundary, and they infer it in the direction of "nothing works".
 
 ## Four backends, one layout
 
