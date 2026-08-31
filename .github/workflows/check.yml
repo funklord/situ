@@ -125,29 +125,73 @@ jobs:
           make check 2>&1 | tee /tmp/check.log
 
       # `make check` passing is not the same as `make check` having run over
-      # everything. A skip is invisible in an exit status, so the number is
-      # compared against what this tree skips with every toolchain present --
-      # 34 at the time of writing, with the ceiling above it so that adding a
-      # skip is not a build break, and far enough below a bare runner that a
-      # missing toolchain is. Raise it deliberately, and say why.
+      # everything. A skip is invisible in an exit status, and the guard that
+      # this replaces compared the *count* against a ceiling -- 34 at the time
+      # it was written, 45 as the limit. It earned its place on its first real
+      # run: 50 skips against 34 locally, the whole difference being sixteen
+      # differential-oracle tests that wanted `tshark`, quietly absent while
+      # `make check` reported success.
       #
-      # This is what the guard is for, and its first real run earned it: 50
-      # skips against 34 locally, the whole difference being sixteen
-      # differential-oracle tests that wanted `tshark` -- somebody else's
-      # dissector for seven of the protocols this tree describes, quietly
-      # absent while `make check` reported success.
+      # WHY THE COUNT WAS THE WRONG INSTRUMENT. It was 40 by the first green
+      # run after the block lifted, five under the ceiling, and 38 of those 40
+      # were properties of the *schemas* rather than of the machine: a schema
+      # with no fixed-size struct has nothing for `--owned` to own, and there
+      # are 37 schemas. So the number that trips this first is the one that
+      # grows every time somebody adds an example -- a false red for routine
+      # work -- while a toolchain vanishing and taking four tests with it
+      # stays under the limit and passes. One ceiling over two populations
+      # that move for different reasons fails for the wrong reason first and
+      # is blind to the reason it exists.
+      #
+      # So classify instead of counting. Every skip reason that is a property
+      # of the tree is named below with what it is; anything else is a skip
+      # this machine caused, and one is enough to fail. Adding a line here is
+      # the deliberate act the old ceiling asked for, and it costs a reason
+      # rather than a number.
+      #
+      # `Qt6Core` is in the list and is the one machine-caused entry: the
+      # install step deliberately does not carry Qt, which is heavy and buys
+      # two tests. Naming it here is what keeps it a decision rather than
+      # headroom being silently spent.
       #
       # Read from the log `make check` already wrote rather than running the
       # suite a second time: the first version of this took four minutes to
       # ask a question the first run had already answered.
-      - name: Refuse a run that skipped more than it should have
+      - name: Refuse a skip this machine caused
         run: |
-          skipped=$(sed -n 's/.*[^0-9]\([0-9]\+\) skipped.*/\1/p' \
-                    /tmp/check.log | tail -1)
-          skipped=${skipped:-0}
-          echo "skipped: $skipped"
-          if [ "$skipped" -gt 45 ]; then
-            echo "check: $skipped tests skipped; a toolchain is missing" >&2
-            grep '^SKIPPED' /tmp/check.log | sed 's/^/  /' | head -40 >&2
+          expected='has no fixed-size struct to own'          # --owned, per schema
+          expected="$expected|no struct a driver can acquire" # --driver, per schema
+          expected="$expected|got empty parameter set"        # a parametrize with no cases
+          expected="$expected|predates the classifier"        # the C backend, by design
+          expected="$expected|no draw validated"              # padded.situ needs vectors
+          expected="$expected|where the interpreter is the check"  # we are ON the floor
+          expected="$expected|Qt6Core"                        # not installed, deliberately
+
+          total=$(sed -n 's/.*[^0-9]\([0-9]\+\) skipped.*/\1/p' \
+                  /tmp/check.log | tail -1)
+          total=${total:-0}
+          lines=$(grep -c 'SKIPPED \[' /tmp/check.log || true)
+
+          # A guard that reads nothing passes as loudly as one that reads
+          # everything. `make check` runs pytest with `-rs`, so skips above
+          # zero must come with a report; no report means this could not have
+          # answered and must not say it did.
+          if [ "$total" -gt 0 ] && [ "$lines" -eq 0 ]; then
+            echo "check: $total skipped and no skip report in the log;" >&2
+            echo "check: this guard read nothing. Is pytest still run -rs?" >&2
+            exit 1
+          fi
+
+          accounted=$(awk -v pat="$expected" \
+            '/SKIPPED \[/ && $0 ~ pat { c=$2; gsub(/[^0-9]/,"",c); n += c }
+             END { print n+0 }' /tmp/check.log)
+          unaccounted=$(( total - accounted ))
+          echo "skipped: $total ($accounted accounted for, $unaccounted not)"
+
+          if [ "$unaccounted" -gt 0 ]; then
+            echo "check: $unaccounted skip(s) this machine caused:" >&2
+            awk -v pat="$expected" '/SKIPPED \[/ && $0 !~ pat' \
+              /tmp/check.log | sed 's/^/  /' >&2
+            echo "check: install what they name, or add the reason above" >&2
             exit 1
           fi

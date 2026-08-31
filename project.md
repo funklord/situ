@@ -16022,7 +16022,67 @@ executed as a batch, so a defect any one of them introduced and a later one
 removed leaves no trace. That is the ordinary cost of a build that stopped
 running, and it is worth stating once rather than discovering later.
 
-### 26.155 Perl and PicoLisp, when there is nothing left to hold them up
+### 26.155 The skip guard counted the wrong population
+
+The workflow refuses a run that skipped more than it should, because a skip
+is invisible in an exit status. It earned its place on its first real run --
+50 skips against 34 locally, the difference being sixteen differential-oracle
+tests that wanted `tshark`, quietly absent while `make check` reported
+success. The instrument was a count against a ceiling of 45.
+
+**The first green run after the block lifted reported 40**, five under the
+ceiling, and reading what the 40 *were* is what showed the instrument to be
+wrong. From the run's own log:
+
+    24  <schema> has no fixed-size struct to own      12 schemas x 2 tests
+     6  no struct a driver can acquire
+     3  got empty parameter set for (path)
+     2  needs a C++ compiler and Qt6Core
+     1  running on 3.11, where the interpreter is the check
+     1  padded: no draw validated
+     1  c: predates the classifier
+
+**Thirty-eight of the forty are properties of the schemas rather than of the
+machine.** A schema with no fixed-size struct has nothing for `--owned` to
+own, and there are 37 schemas, so that population grows every time somebody
+adds an example. Two are the machine: Qt6 is not installed, deliberately.
+
+So the ceiling trips first on routine work and is blind to the thing it
+exists for. Both halves are measurable, and both were measured against the
+real log rather than argued:
+
+- **A toolchain vanishing and taking four tests with it gives 44**, which is
+  under 45 and passes. That is the `tshark` case the guard was built for,
+  arriving smaller.
+- **Twenty more schemas gives 80**, which fails a build for adding examples.
+
+One ceiling over two populations that move for different reasons fails for
+the wrong reason first.
+
+**Classify instead of counting.** Every skip reason that is a property of the
+tree is named in the workflow with what it is; anything left is a skip this
+machine caused, and one is enough to fail, printed by name. Adding a line is
+the deliberate act the old ceiling's comment asked for, and it costs a reason
+rather than a number. `Qt6Core` is on the list as the one machine-caused
+entry, which keeps it a decision rather than headroom being silently spent.
+
+**And the vacuous case is closed, which the count also had.** `make check`
+runs pytest with `-rs`; if that ever stops, there is no skip report, the
+classifier accounts for nothing, and "nothing unaccounted for" is exactly
+what a clean run looks like. Skips above zero with no report in the log now
+fail, naming the cause.
+
+**Tested by extracting the step's own script out of the YAML and running it
+over the real log**, so what was checked is what CI runs rather than a
+transcription of it. Three sabotages, each watched:
+
+    a toolchain vanishing   44 skipped   FAILED, naming lua5.4  (was: passed)
+    the report gone         40 skipped   FAILED, naming -rs     (was: passed)
+    twenty more schemas     80 skipped   passed                 (was: failed)
+
+The two that changed answer are the two the old guard had backwards.
+
+### 26.156 Perl and PicoLisp, when there is nothing left to hold them up
 
 Stated by the copyright holder, 2026-09-01: **situ should probably grow Perl
 and PicoLisp backends eventually, once the features are all implemented and
