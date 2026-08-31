@@ -56,6 +56,30 @@ def shipped_modules() -> list[Path]:
 	        *sorted(ROOT.glob("editor/**/*.py"))]
 
 
+def floor_modules() -> list[Path]:
+	"""Every Python the declared interpreter has to run, which is more than
+	what ships.
+
+	**CI installs the floor and runs `make check`**, so the suite executes at
+	the declared version too -- and a construct the floor cannot tokenize
+	fails there at *collection*, before one test runs, naming a file rather
+	than a claim. Nothing held `test/` to the floor: `shipped_modules()`
+	stops at `editor/`, and both gates read it.
+
+	That is the fourth widening of a list of Python trees here and it has the
+	cause the module docstring gives for the other three -- the list named
+	what somebody was thinking about rather than what runs. It is the largest
+	of the four: the suite is 83 modules against 102 shipped, so the gate that
+	"never skips" was covering a little over half of what the floor has to
+	parse, on a machine with no floor interpreter to catch the rest.
+
+	Kept separate from `shipped_modules()` rather than folded into it,
+	because the two answer different questions: what a user installs, and
+	what the declared interpreter must be able to read.
+	"""
+	return [*shipped_modules(), *sorted(ROOT.glob("test/**/*.py"))]
+
+
 #: The f-string token types 3.12 introduced, resolved by name because 3.11
 #: does not have them -- and mypy runs at the declared floor, so naming them
 #: directly is an error there. `None` means the interpreter running the tests

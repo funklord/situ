@@ -365,12 +365,18 @@ def test_no_module_uses_a_construct_the_floor_cannot_parse() -> None:
 	3.11 -- `below_floor` knows the grammar plus three tokenizer changes
 	where the interpreter knows the language -- but it closes the gap that
 	actually opened, and closes it where the code is authored.
+
+	It reads `floor_modules()` rather than `shipped_modules()`, which is a
+	wider list by the whole test suite. CI runs the suite at the declared
+	floor, so a construct the floor cannot tokenize fails there at collection
+	-- and 83 of the 185 modules the floor has to parse were outside this
+	gate until that list existed.
 	"""
 	if python_floor.floor_version() >= (3, 12):
 		pytest.skip(f"the floor is {declared_floor()}, where PEP 701 is available")
 
 	failed = []
-	for path in python_floor.shipped_modules():
+	for path in python_floor.floor_modules():
 		for line, why in python_floor.below_floor(path.read_text(encoding="utf-8")):
 			failed.append(f"{path.relative_to(ROOT)}:{line}: {why}")
 
@@ -398,7 +404,7 @@ def test_every_module_parses_at_the_declared_floor() -> None:
 	if python is None:
 		pytest.skip(f"no python{floor} on PATH")
 
-	modules = python_floor.shipped_modules()
+	modules = python_floor.floor_modules()
 
 	failed = []
 	for path in modules:

@@ -73,6 +73,15 @@ jobs:
       # floating version turns "situ disagrees with pymodbus" into "pymodbus
       # changed", which is the one thing a differential check must not say.
       #
+      # `paho-mqtt` is pinned to the 2 series for that reason and one more.
+      # The floor is real -- `mqtt.CallbackAPIVersion` arrived in 2.0 and the
+      # oracle names it -- and the ceiling is the sharper half: the oracle
+      # lays its packets out through `_send_connect`, `_send_publish`,
+      # `_send_subscribe`, `_send_pingreq` and `_send_disconnect`, which are
+      # private and carry no compatibility promise at all. That is the
+      # pymodbus hazard with the guarantee removed, so it was the one package
+      # here that should not have been floating. It was, until now.
+      #
       # `pymodbus` and `paho-mqtt` are the differential oracles -- somebody
       # else's implementation of two protocols this tree describes -- and
       # they are not optional to `make check` even though the tests that use
@@ -83,7 +92,7 @@ jobs:
       # without them tried it: that is what the first CI run found.
       - run: |
           python -m pip install --disable-pip-version-check \
-            pytest mypy 'pymodbus>=3.8,<3.9' paho-mqtt
+            pytest mypy 'pymodbus>=3.8,<3.9' 'paho-mqtt>=2,<3'
 
       - name: Report what is actually installed
         run: |

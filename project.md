@@ -15833,6 +15833,81 @@ a *number* does not. Three sabotages, each watched going red -- a family
 count reduced by one, a CRC added to `std/kernels.situ` without touching the
 prose, and the signature count moved.
 
+### 26.152 CI, and the half of the floor gate nobody was holding
+
+**The red is still the billing block, and it is still not fixable from a
+tree.** Read rather than assumed, by the discriminator 26.143 established --
+`gh run view`, not the list view and not the duration:
+
+    X master check - 33446111968
+    X check in 2s (ID 99665477400)
+    ANNOTATIONS
+    X The job was not started because recent account payments have failed
+      or your spending limit needs to be increased
+
+Zero steps, as every run since 2026-08-14. Nothing in `.github/workflows/`
+is wrong and nothing there needs changing.
+
+**What is fixable is what fills the hole CI leaves**, and looking for it
+found a real one. The floor gate has three parts: a real 3.11 interpreter
+(skips here -- 3.13 is what is installed), `ast.parse(feature_version=)`,
+and a PEP 701 token scan, the last two in
+`test_no_module_uses_a_construct_the_floor_cannot_parse`, which never skips.
+That much was already built and is good. **What both gates read is
+`shipped_modules()`, and CI does not run only shipped modules.** It installs
+3.11 and runs `make check`, so the *suite* executes at the floor too, and a
+construct 3.11 cannot tokenize fails there at collection -- before one test
+runs, naming a file rather than a claim.
+
+The numbers: 102 shipped modules, 83 test modules. **The gate that "never
+skips" was covering 55% of what the floor has to parse**, on a machine with
+no floor interpreter to catch the rest, while a session that had written
+three hundred lines of test code and nothing else would have been checked by
+neither half.
+
+`python_floor.floor_modules()` is `shipped_modules()` plus the suite, and
+both gates read it. Kept as a second function rather than folded into the
+first, because the two answer different questions -- what a user installs,
+and what the declared interpreter must be able to read.
+
+**It is the fourth widening of a list of Python trees here**, and
+`python_floor`'s own docstring predicted it: it records three, in the *other*
+gate, each added after the same lesson -- "`mypy situc tools tests` read the
+compiler and its suite", then `walker`, then `editor` "named on arrival
+rather than after the same lesson a third time". The floor check never got
+that widening; this is it, and it is the largest of the four.
+
+**Proved both ways rather than asserted.** A file with `f"{table["k"]}"` in
+`test/unit/`, which 3.11 cannot tokenize:
+
+    with floor_modules():     FAILED -- test_zz_probe.py:3: a string
+                              reusing its f-string's quote character
+    with shipped_modules():   1 passed
+
+The old list was blind to it with the offending file sitting in the tree.
+That is the whole finding, and it is why the fix is a list rather than a
+check.
+
+**And one package in the workflow was floating that should not have been.**
+The file already argues the case, for its neighbour: `pymodbus` is pinned to
+the 3.8 series because "an oracle is only an oracle while it is the
+implementation the schema was checked against", and a floating version turns
+"situ disagrees with pymodbus" into "pymodbus changed". `paho-mqtt` was
+installed unpinned two words later. It is the sharper case of the two: the
+MQTT oracle lays its packets out through `_send_connect`, `_send_publish`,
+`_send_subscribe`, `_send_pingreq` and `_send_disconnect`, which are private
+and carry no compatibility promise at all -- the pymodbus hazard with the
+guarantee removed. Pinned to `>=2,<3`; the floor is real too, since
+`mqtt.CallbackAPIVersion` arrived in 2.0 and the oracle names it. Local is
+2.1.0 and pymodbus 3.8.6, so neither pin moves what runs here.
+
+**What is still only CI's.** A real 3.11 interpreter knows the language where
+`below_floor` knows the grammar plus three tokenizer changes, so the static
+gate narrows the window and does not close it. The tree is clean by both
+substitutes today -- 185 modules parsed at `feature_version=(3, 11)` and swept
+for PEP 701 with the sweep's controls passing in both directions -- which is
+the strongest statement available here and is not the same as a green run.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
