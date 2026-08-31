@@ -15210,6 +15210,79 @@ thirty commits, and it will arrive looking like something was repaired.
 Nothing was. What is known is written above; what failed in August is
 not, and a green will not answer it.
 
+### 26.144 What is open, and what was tried and did not work
+
+Written down because it was carried in a session rather than in the tree,
+and a question nobody can find is one that gets answered twice or not at
+all. Each of these is the copyright holder's; none is blocked on work.
+
+**Decisions waiting.**
+
+- **`doc/decision/0045-pad-random.md` is `Status: proposed`.** It proposes
+  that `pad_random(min, max)` be bounds and a name, and that 14.7's
+  `random` content policy be dropped as unenforceable -- a schema cannot
+  state what the generated code cannot test. Accepting or refusing it is
+  the decision; nothing waits on code.
+- **0017's Rust question, narrowed.** Should `impl <codec> derived`
+  generate native Rust rather than an `extern "C"` binding to the C one?
+  Measured in its third amendment: `runtime/cpp/situ.hpp` includes
+  `situ.h` already, so 0017's "C++ links C for free" holds; the Rust
+  runtime is `#![no_std]` with no C dependency at all, so a codec
+  introduces the first. C++ and Python are not part of the question.
+- **The plugin slot does not exist.** This document and 0017 both say
+  `impl crc32 derived for rust` "exists ... and is empty". The parser
+  refuses the qualifier and `ImplDecl` has no field to hold it. Designed
+  and never built, or built and dropped -- that is the question, and it
+  is not the same as the one above.
+- **`linear_block` knows one code.** `hamming_7_4`, and going further
+  needs the generator matrix expressible in a schema, which is a language
+  addition rather than a table entry.
+- **USB's NRZI is not expressible.** 26.140 added transition-on-one,
+  which is HDLC's. USB transitions on a zero, which needs the feedback
+  complemented and no kernel argument says that.
+- **8b10b and CoAP are one absence, not two** (26.139, 26.142): state
+  carried between items, which situ holds inside codecs and nowhere in
+  the layout. Answering them separately is how a language grows two
+  spellings for one idea.
+- **Which `copyright` file survives.** `dh_installdocs` ships
+  `debian/copyright`; `packaging/copyright` predates debhelper and is
+  what `project.md`, the README, `situc/cli.py` and a test all cite. They
+  are byte-identical, and `test_the_two_copyright_files_agree` asserts
+  that rather than choosing between them. **The resting state is
+  deliberate**: a session should not pick which statement of the
+  licensing position survives, and the guard does not need that answered
+  to work.
+- **The switch-label style is recorded, not chosen.** `code-style.md`
+  documents what is there -- 45 labels at the switch's own indentation,
+  none deeper -- because the shared gate models the other convention and
+  objects to neither. Standardising is a convention change and belongs to
+  a deliberate pass.
+
+**Tried, measured, and not worth doing -- so that nobody spends the hour
+again.**
+
+- **Seeding the fuzz corpus from `example/*.vectors`.** The reasoning was
+  that a magic-guarded parser cannot be reached by random bytes. Seeding
+  `ntp` moved its final coverage from 21 to 21, and `tiff` -- chosen
+  because a TIFF magic is exactly what random bytes cannot guess -- from
+  14 to 14. Both saturate: the parsers are small, and the coverage spread
+  measures branching per schema rather than fuzzing quality.
+- **Detecting under-indentation by flagging the style gate's fallback
+  branch.** The gate says plainly that it does not check
+  under-indentation, and the branch that passes a too-shallow line
+  through looks like the hole. On this tree it reports 93 lines and every
+  one is a false positive: 30 single-line `case X: stmt; break;`, 15
+  plain labels, 6 C++ access specifiers, and the bodies under them. The
+  branch is load-bearing -- it is what lets the fixer leave alone a label
+  style it does not model. Closing the stated limitation needs a model
+  that separates labels from bodies, not a branch counter.
+- **Checking the READMEs name every example.** `test_every_example_the_readmes_name_exists`
+  reads README to filesystem and not back, which looked like the
+  one-directional shape worth fixing. The READMEs name 7 of 30 examples:
+  they are a curated selection rather than an inventory, so the reverse
+  check would demand naming all thirty and be wrong. Paths in prose are
+  examples; paths in a table are a declared inventory.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
