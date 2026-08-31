@@ -975,6 +975,15 @@ four of them over packets whose fields are then compared with the layout),
 `make cross-test` are the two steps that need their toolchain rather than
 skipping: they build and run the generated C directly.
 
+**A full `make check` writes about 1.6 GB of temporary build output**, in
+roughly 1900 directories under pytest's `tmp_path` root, and pytest keeps the
+last three runs -- so budget around 5 GB on whatever filesystem `/tmp` is on.
+Most of it is the four-backend differential and the walker compiling every
+schema in every backend, which is the check the rest of this file's claims
+rest on; it grows when an example is added and not otherwise. Interrupting a
+run leaves its tree behind, because a killed pytest never reaches its
+cleanup and the pruner retires the next run rather than that one.
+
 There is no autoformatter. Tabs carry indent level and spaces carry alignment,
 which `black` and `ruff format` cannot be configured to leave alone, so
 `tool/style_gate.py` under `make style` is the enforcement instead
