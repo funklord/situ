@@ -5012,9 +5012,17 @@ said 20, which is what a hand-maintained count does between the day it is
 written and the day it is read. `test/unit/every_schema.py` is where the third
 one comes from, and running the suite is where the first one does. The generated
 checks are derived from the schemas, so adding an example adds coverage without
-anybody writing a test. Diagnostics are snapshot-tested in `test/golden/`,
-because section 17 makes message quality the product rather than a finish: a
-regression in the exact text of a blame chain fails the build.
+anybody writing a test. Diagnostics are snapshot-tested in
+`test/unit/test_diagnostics.py`, which compares `render()` against the exact
+expected text, because section 17 makes message quality the product rather
+than a finish: a regression in the wording of a blame chain fails the build.
+
+This line said `test/golden/` for a long time and no such directory has ever
+existed. The docs gate could not see it, and by its own rules should not:
+`doc_paths` reads backticked paths **in table rows** -- 26.144's finding that
+"paths in prose are examples; paths in a table are a declared inventory" --
+and skips any token ending in `/`, so a directory named in a sentence is
+outside its scope twice over. The scope is right; the sentence was wrong.
 
 Phases 0 through 8 are ordered by dependency, and 9 onward are largely
 independent of each other. Do not implement ahead of the plan.
@@ -15975,6 +15983,96 @@ actions/setup-python@v5 are being forced to run on Node.js 24". A warning
 today and a break when the runners drop it; bumping both is its own change,
 and it belongs after a green rather than mixed into the commit trying to get
 one.
+
+### 26.154 The first green in three weeks, and what it is worth
+
+`check` passed at 2026-08-31 23:26, 7m14s, every step: the first green run
+since `7ec7b01` on 2026-08-09. 26.143 predicted the shape of it and the
+prediction held -- it says nothing about what broke in August, whose logs
+have expired, and it says one thing about now, which is that Python 3.11 has
+finally run the suite it was declared for.
+
+Two numbers from it are worth keeping:
+
+- **`skipped: 40`, against a ceiling of 45.** The workflow refuses a run that
+  skips more than it should, and its comment records 34 "at the time of
+  writing". It is 40 now, on a runner with every toolchain installed, so the
+  headroom the guard was given is down to five. Raising it is a deliberate
+  act by that comment's own instruction; nobody should do it to make a build
+  pass. Recorded so the next person meets a number rather than a surprise.
+- **7m14s**, which is what a full run costs on a hosted runner: install,
+  `make check` including the aarch64 emulation, and the skip audit.
+
+**What the green establishes and what it does not.** It establishes that the
+tree parses, typechecks, tests and cross-builds on the declared floor -- the
+one axis no local machine here covers. It does not establish anything about
+the thirty-odd commits between 2026-08-14 and now individually: they were
+executed as a batch, so a defect any one of them introduced and a later one
+removed leaves no trace. That is the ordinary cost of a build that stopped
+running, and it is worth stating once rather than discovering later.
+
+### 26.155 Perl and PicoLisp, when there is nothing left to hold them up
+
+Stated by the copyright holder, 2026-09-01: **situ should probably grow Perl
+and PicoLisp backends eventually, once the features are all implemented and
+everything works.** Recorded here rather than acted on, because the condition
+is the substance of it and the condition is not met.
+
+**What the condition means, in terms this document can check.** "Features all
+implemented" is not a mood. Three things say where it stands: 26.31, the
+frontier list, has no open gap; the layer ladder ships all six rungs in all
+four backends; and 26.144 is the list of what is open, which today holds
+`linear_block` knowing one code, the 8b10b/CoAP question about state carried
+between items, the plugin slot that was designed and never built, and the
+delimiter question 26.147 opened. A fifth and sixth backend before those are
+settled would be spelling an unsettled language twice more.
+
+**Why the cost is smaller than four backends make it look.** The layout
+solver, the capability lattice and the traversal are shared; `walk.py`'s own
+docstring calls itself "the sixth spelling of `traverse.py`", and the four
+compiled backends plus `gen-dissector` are five renderings of one set of
+answers. A new backend is a renderer and a thin runtime, not a compiler. The
+arithmetic lives once, in C, and every backend that can call C may borrow it.
+
+**Why the cost is larger than that makes it look, which is the half worth
+writing down.** Four backends are worth nothing if they disagree, so each new
+one joins the differential check -- a driver generated per backend from the
+layout, fed the same hostile buffers, answers diffed, writes as well as
+reads. That is the real price of a backend and it is paid forever, not once.
+It also re-opens a settled question: **what a schema may say is decided once,
+not four times.** Relations refuse comparing a `u64` against an `i8` in all
+four backends, because Python would do it happily and C, C++ and Rust cannot,
+and a schema one backend accepts and another does not is a schema that means
+two things. A fifth language with its own numeric model asks that question
+again, and the answer has to stay one answer.
+
+**What each of the two would actually raise.** Neither has been tried; these
+are the questions to start from rather than findings.
+
+- **Perl already has a byte-layout vocabulary**, which no current backend
+  does: `pack`/`unpack` templates are a small declarative language for
+  exactly what situ describes. So the interesting design question is not
+  "how do we write accessors" but *whether the backend should emit templates
+  instead* -- which would make the generated artifact far smaller and far
+  more idiomatic, and would immediately run into the places a template cannot
+  go: a delimited member, a variant switching on a field already read, a
+  region under a codec. Lvalue `substr` is the in-place write, and
+  invalidation would be a generation counter as Python's is. The numeric
+  question is real and is a *build* property rather than a language one:
+  integer width depends on how the interpreter was compiled, so `u64` is not
+  uniformly available the way it is in C.
+- **PicoLisp is the opposite shape**: very small, with a direct C FFI. That
+  makes the first question whether a backend should generate Lisp at all or
+  bind `libsitu` through the FFI -- which is decision 0017's question about
+  derived codecs in Rust, arriving again one layer up, and the answer there
+  turned on whether the runtime already depends on C. Its numeric model needs
+  checking before anything else, because it decides whether the relation
+  refusal above lands the same way it does for Python.
+
+**Not put on the front page.** The README describes what ships; a backend
+that has not been written is not a feature, and listing it would be the exact
+overstatement 26.151 found the README does not otherwise make. It belongs
+here until there is code.
 
 ## 27. Questions, and how they were settled
 
