@@ -13431,6 +13431,47 @@ the difference is a wrong answer nobody sees.**
    preamble asserts a method; each entry still has to have been through it,
    and the one that was not is indistinguishable on the page.
 
+154. **Where two states produce identical evidence, the fix is not a better
+   check.** It is making the states distinguishable, and refusing when they
+   are not. Ten instances in one week, and the shape is the same every time:
+   something absent and something empty, something deleted and something
+   never run, a probe that failed and a probe that could not have succeeded
+   -- rendered alike, with nothing forcing them apart. A CRC oracle deleted
+   by a commit about network oracles, its imports surviving so nothing went
+   red. `DERIVED_STUFFING` defined in two modules, one stale, so every
+   backend was told a SLIP region had no settled decode while the C function
+   and Rust's safe wrapper around it both existed. A skip report that counted
+   the tool oracles and not the codec checks, so seventeen tests could vanish
+   with a missing compiler and the suite stay green. A test named "every
+   family" enumerating four of six. A schema glob with no floor, where
+   renaming `std/` alone dropped 123 tests at exit 0. A licensing guard
+   reading `packaging/copyright` while `dh_installdocs` ships
+   `debian/copyright` -- with the shipped one edited to `License: MIT` the
+   suite passed. `grep -q` on a missing file, which would have called every
+   fuzz harness empty. And twice a probe of this session's own: one that
+   could not report a `-o` flag whatever the parser held, because
+   `True and []` is falsy; one that read `git show --stat` and counted the
+   commit *message*. None was carelessness. In each, both states were
+   legible and neither looked incomplete.
+
+155. **A generalisation can contradict a measurement on the same page, and
+   that is harder to catch than a gap in the data.** 26.143 asserted that
+   duration screens a billing-blocked CI run from a genuine failure -- 2-5
+   seconds against minutes. This repository's blocked runs span 3 to 36
+   seconds, and run `32985041292` at 36s had been read directly while
+   establishing the boundary that entry reports, and described correctly as
+   "queueing rather than execution". The refutation was written, accurately,
+   a few lines above the rule that contradicted it. A sibling project made
+   the same claim from a sample that genuinely could not contain the
+   counter-example, which is the forgivable version: it announces itself
+   when somebody widens the window. This one does not, because nothing is
+   missing -- what is missing is the reconciliation between two things
+   already written down. The habit that catches it is re-reading an entry
+   against its own measurements before it goes out, and the cost of not
+   doing so is set entirely by where in the cycle it is caught: this was
+   caught before commit and cost nothing, the sibling's was live for an hour
+   in a document sixteen projects read.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -15282,6 +15323,45 @@ again.**
   they are a curated selection rather than an inventory, so the reverse
   check would demand naming all thirty and be wrong. Paths in prose are
   examples; paths in a table are a declared inventory.
+
+### 26.145 What stands behind the last thirty commits
+
+**Local evidence only, and it should be said plainly rather than inferred
+from 26.143.** No commit since 2026-08-14 has been executed by CI, so the
+thirty in this stretch -- the restored CRC oracle, SLIP and PPP framing,
+`\xNN`, six CRCs, three scramblers, NRZI, the SLIP example, the
+`DERIVED_*` consolidations, the attribution work, the copyright guard --
+rest on `make check` on one developer machine. That is 4118 passed and 38
+skipped, style and mypy clean, C built and run on the host and under
+aarch64 emulation, and 36 fuzz harnesses under libFuzzer and ASan with no
+crash.
+
+It is a good deal of evidence and it is one machine. The gap CI would
+close is named in 26.143 and is narrow -- Python 3.11, which nothing here
+has -- and two substitutes stand in its place. Nothing else in the
+workflow is absent locally: every differential oracle ran, so `tshark`,
+ImageMagick and the rest are present.
+
+**A green run says less than it used to, and the wording now says so.**
+`tool/style_gate.py` printed "N files conform" until 2026-08-30 and now
+prints "N file(s) pass: whitespace, and indentation except
+under-indentation, which is not checked", because the converter it
+compares against never *adds* indentation, so a line with too few tabs is
+invisible to it. Every earlier record in this document citing "files
+conform" was quoting a summary wider than the check behind it. Nothing
+those records assert is wrong; the guarantee attached to them is narrower
+than the sentence implied.
+
+**The habits that produced the findings, since they cost little and paid
+repeatedly.** Sabotage before trusting: break the thing, watch the check
+go red, restore -- which is how the CRC vectors, the scrambler periods,
+every `DERIVED_*` guard and the copyright guard were shown to discriminate
+rather than merely pass. A control inside a one-off sweep, classified
+before any real file is read, so that a clean result means something: the
+two population sweeps and the PEP 701 check each carry one, and each would
+have been quoted wrongly without it. And reading the artifact rather than
+a summary of it -- `git diff-tree` rather than `git show --stat`, the
+commit's file list rather than a rendering that also contains its message.
 
 ## 27. Questions, and how they were settled
 
