@@ -460,10 +460,11 @@ def test_a_generated_code_list_has_one_home() -> None:
 def test_the_generator_reads_the_stuffing_list_it_is_defined_in() -> None:
 	"""The other half, which a definition count cannot see.
 
-	`DERIVED_STUFFING` lives in `traverse` -- the only direction available,
-	since `codegen.c.derived` already imports from it. A copy that agreed
-	today would satisfy the count above and be exactly the state this is
-	about, so the check is object identity rather than equality.
+	`DERIVED_STUFFING` is built in `traverse` from `kernels.STUFFING_BOUNDS`,
+	and `codegen.c.derived` imports it from there -- the only direction
+	available, since the generator already imports `traverse`. A copy that
+	agreed today would satisfy the count above and be exactly the state this
+	is about, so the check is object identity rather than equality.
 	"""
 	from situc.codegen.c import derived
 	from situc import traverse

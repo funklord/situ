@@ -38,6 +38,7 @@ from situc.codegen import c as generate_c
 from situc.codegen import python as generate_py
 from situc.codegen.c import derived as generate_derived
 from situc.diagnostics import Source
+from situc.kernels import STUFFING_BOUNDS
 from situc.layout import solve
 from situc.parser import parse
 from situc.resolve import resolve
@@ -524,6 +525,109 @@ def test_usb_nrzi_transitions_on_a_zero_and_holds_on_a_one(
 	# And the round trip, which a decoder that dropped the complement passes
 	# nothing else here would catch: it would decode its own encoder happily.
 	assert run(usb, "decode", ours) == data
+
+
+#: What each generated stuffing encoder does, measured rather than declared.
+#:
+#: Per code: an input that makes it expand as far as it can and the count of
+#: units that is -- bits for HDLC, whose lengths are in bits, and bytes for
+#: the rest -- then the ratio it follows and the constant it adds on top.
+#: Each input is the case its own comment in `std/kernels.situ` names: a
+#: payload of nothing but the delimiter, a run with no zero to point past, a
+#: body of nothing but dot lines.
+STUFFING_MEASURED: dict[str, tuple[bytes, int, tuple[int, int], int]] = {
+	"cobs":      (b"\x01" * 254, 254, (255, 254), 1),
+	"hdlc":      (b"\xff" * 5,    40, (6, 5),     0),
+	"ppp_async": (b"\x7e" * 16,   16, (2, 1),     1),
+	"slip":      (b"\xc0" * 16,   16, (2, 1),     1),
+	"smtp_dot":  (b".\r\n" * 16,  48, (4, 3),     0),
+}
+
+#: The codes whose generated encoder appends a frame delimiter, so that its
+#: output is one byte longer than the `ratio_bounded` its signature declares.
+#:
+#: Named here rather than repaired, because the repair is not one thing. The
+#: signature could gain the constant -- the layout arithmetic already carries
+#: a ratio with an addend, `_expand` in `layout.py`, for a pipeline that
+#: appends parity before expanding -- or the delimiter could be held to be
+#: framing rather than the codec's, since section 20.3 makes framing its own
+#: concept and a COBS block in the literature does not carry it. The two lead
+#: to different code and the choice is not this guard's to make; what is not
+#: acceptable is that neither is chosen and the map keeps saying the shorter
+#: number. See project.md 26.147.
+DELIMITER_NOT_IN_THE_SIGNATURE = frozenset({"cobs", "ppp_async", "slip"})
+
+
+def test_every_stuffing_code_expands_by_the_amount_it_is_measured_at(
+		kernel_library: ctypes.CDLL) -> None:
+	"""`ratio_bounded(w, p)` is a promise, so it is measured, not trusted.
+
+	The declared pair is the codec's signature and is what a consumer sizes a
+	receive buffer from; the generated implementation has its own constants.
+	Nothing held the two together until `kernels.STUFFING_BOUNDS` did, and
+	that table is itself a written-down claim -- so it is checked here against
+	what the emitted encoder does, by feeding each code the input its own
+	schema comment calls the worst case and measuring what comes back.
+
+	It found the delimiter immediately. Three of the five write one byte more
+	than their ratio predicts, which is a consumer's buffer overrunning by one
+	on every encode, and every committed schema declares the ratio the table
+	does -- so nothing in the suite could have caught it from the declaration
+	side. That is why this measures the object file instead.
+	"""
+	kernels = ROOT / "std" / "kernels.situ"
+	parsed  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	# code name -> codec name, from the schema, so a sixth stuffing code is
+	# covered the day it is declared rather than the day somebody adds a row.
+	codecs: dict[str, str] = {}
+	for codec in parsed.codecs():
+		if codec.kernel is None:
+			continue
+		if codec.kernel.family is not ast.KernelFamily.STUFFING:
+			continue
+		named = codec.kernel.argument("code")
+		code  = getattr(named, "name", None)
+		# A stuffing kernel naming no code would drop out of the population
+		# silently, and a guard over a short population passes as loudly as
+		# one over a whole one.
+		assert isinstance(code, str), f"{codec.name} names no stuffing code"
+		codecs[code] = codec.name
+
+	assert set(codecs) == set(STUFFING_MEASURED) == set(STUFFING_BOUNDS), (
+		f"std/kernels.situ declares {sorted(codecs)}, the bounds table holds "
+		f"{sorted(STUFFING_BOUNDS)} and this file measures "
+		f"{sorted(STUFFING_MEASURED)}; one of the three has moved")
+
+	for code, name in codecs.items():
+		data, units, ratio, adds = STUFFING_MEASURED[code]
+		worst, per = ratio
+
+		assert STUFFING_BOUNDS[code] == ratio, (
+			f"{code}: the bounds table says {STUFFING_BOUNDS[code]} and the "
+			f"generated encoder follows {ratio}")
+
+		fn = getattr(kernel_library, f"situ_{name}_encode")
+		fn.restype  = ctypes.c_uint32
+		fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		               ctypes.POINTER(ctypes.c_uint8)]
+
+		buf = (ctypes.c_uint8 * len(data))(*data)
+		out = (ctypes.c_uint8 * (len(data) * worst // per + 8))()
+		written = fn(buf, units, out)
+
+		assert written == units * worst // per + adds, (
+			f"{name}: measured {written} out for {units} in, and "
+			f"{worst} for {per} plus {adds} predicts "
+			f"{units * worst // per + adds}")
+
+		# The constant is what the signature does not carry, so which codes
+		# have one is asserted rather than merely recorded: a sixth code that
+		# appends a delimiter joins the defect and must join the list.
+		assert (adds > 0) == (code in DELIMITER_NOT_IN_THE_SIGNATURE), (
+			f"{code}: adds {adds} bytes beyond its ratio and is "
+			f"{'not ' if code not in DELIMITER_NOT_IN_THE_SIGNATURE else ''}"
+			f"listed as one that does")
 
 
 def test_every_polynomial_codec_is_checked_or_excused() -> None:

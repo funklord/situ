@@ -172,6 +172,39 @@ def test_stuffing_loses_interior_addressing() -> None:
 	assert decl.seekable is ast.Seekable.NONE
 
 
+def test_a_named_stuffing_code_may_not_be_given_someone_else_s_overhead() -> None:
+	"""The declared pair is the signature; the implementation is fixed.
+
+	`stuffing(worst_case = 7, per = 6, unit = bit, code = hdlc)` derived
+	`ratio_bounded(7,6)` and generated a stuffer inserting after five, with
+	its own comment saying five and a buffer bound of `len + len / 5`. A
+	consumer sizing from the signature would allocate for a code it was not
+	linking, which is the disagreement between signature and object file that
+	a derived codec exists to make impossible.
+
+	The refusal names the pair the code does have rather than only rejecting
+	the one it was given, so a reader learns the boundary instead of
+	inferring it.
+	"""
+	rendered = refusal("codec c { kernel = stuffing(worst_case = 7, per = 6, "
+	                   "unit = bit, code = hdlc); }")
+	assert "declares an overhead `hdlc` does not have" in rendered
+	assert "`hdlc` is 6 for 5, not 7 for 6" in rendered
+	assert "worst_case = 6, per = 5" in rendered
+
+
+def test_an_unnamed_stuffing_code_keeps_the_overhead_it_declares() -> None:
+	"""Nothing is generated for it, so nothing can disagree with it.
+
+	The check above must not become a rule that every stuffing kernel states
+	one of five known ratios: a code this build has no implementation for is
+	a signature and only a signature, and section 13.1 permits that.
+	"""
+	decl = only("codec c { kernel = stuffing(worst_case = 9, per = 4, "
+	            "code = something_else); }")
+	assert decl.ratio == (9, 4)
+
+
 def test_a_polynomial_width_must_be_a_whole_number_of_bytes() -> None:
 	rendered = refusal("codec c { kernel = polynomial(width = 12, poly = 3); }")
 	assert "not a whole number of bytes" in rendered

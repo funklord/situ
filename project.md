@@ -15453,6 +15453,105 @@ thing a tier-2 codec is supposed to make impossible, since the signature and
 the implementation are meant to come from one description. The comment now
 says only what is true.
 
+### 26.147 A named code's overhead is the code's, and three declare it short
+
+26.146's schema comment claimed situ already had USB's bit stuffing, spelled
+`stuffing(worst_case = 7, per = 6, unit = bit)`. Reading the emitter rather
+than shipping the sentence found that it does not, and found something
+worse on the way.
+
+**`per` was derived from and not generated from.** The declaration's
+`worst_case` and `per` become the codec's `ratio_bounded` signature, and the
+generator's constants are fixed per code. Nothing held them together:
+`stuffing(worst_case = 7, per = 6, unit = bit, code = hdlc)` compiled,
+derived `ratio_bounded(7,6)`, and emitted a stuffer inserting a zero after
+five ones -- with its own comment saying five and a buffer bound of
+`len + len / 5`. A consumer sizing from the signature allocates for a code
+it is not linking. That is the disagreement between signature and object
+file that a derived codec exists to make impossible, and section 26.12's
+whole claim for tier 2 is that the two come from one description.
+
+`kernels.STUFFING_BOUNDS` is now that description. Five rows, one per code
+this build generates, and a declaration that disagrees is refused naming
+the pair the code does have. `traverse.DERIVED_STUFFING` is its key set
+rather than a fourth written-out list -- that list has already been
+duplicated twice, and the copy that fell behind left three codes where the
+other had five, so every backend declined a SLIP accessor it could have
+emitted.
+
+A code this build does *not* generate keeps whatever it declares, because
+there the signature is all there is and nothing can contradict it. Section
+13.1 permits a signature with no implementation, and the refusal must not
+quietly become a rule that every stuffing kernel state one of five known
+ratios.
+
+**Then the table was measured against the object file, and three codes
+failed.** `STUFFING_BOUNDS` is itself a written claim, so
+`test_every_stuffing_code_expands_by_the_amount_it_is_measured_at` feeds
+each code the input its own schema comment calls the worst case and counts
+what comes back:
+
+    cobs        254 in -> 256 out      declared 255 for 254
+    hdlc         40 in ->  48 out      declared   6 for 5
+    ppp_async    16 in ->  33 out      declared   2 for 1
+    slip         16 in ->  33 out      declared   2 for 1
+    smtp_dot     48 in ->  64 out      declared   4 for 3
+
+HDLC and SMTP follow their ratios exactly. **COBS, SLIP and PPP each write
+one byte more**, and it is the same byte in all three: the frame delimiter
+the generated encoder appends. The output is `ratio + 1`, confirmed at four
+lengths for COBS and three for the other two -- 1 in gives 3 out, 508 gives
+511 -- so it is a constant and not a rounding artefact.
+
+**A consumer sizing a buffer from the published `ratio_bounded` overruns it
+by one on every encode of those three.** Nothing in the suite could have
+caught it from the declaration side, because every committed schema
+declares the ratio the table does; the declarations and the generators
+agree with each other and both disagree with what the encoder writes. It
+took measuring the object file.
+
+**The repair is not one thing, and it is not this session's to choose.**
+Both branches are real and they lead to different code:
+
+- **The signature gains the constant.** `layout.py`'s `_expand` already
+  carries a ratio with an addend -- decision 0016 built it for a pipeline
+  that appends parity before expanding, where the addend is scaled -- so
+  the arithmetic exists. What does not is a spelling: `capmap` renders a
+  ratio or an addend and never both, and `std/codecs.situ` hand-writes
+  `expansion = ratio_bounded(255, 254)` for `cobs` with no way to say
+  `+ 1`, so the agreement test between the hand-written and derived
+  signatures would fail until the surface grows. That is a grammar change
+  and a decision record.
+- **The delimiter is framing, not the codec.** Section 20.3 makes framing
+  its own concept, the ladder has a `frame` rung, and COBS as Cheshire and
+  Baker define it produces a block that a framer delimits. On this reading
+  the signatures are right and three encoders are doing a neighbouring
+  layer's job. But `slip_framing` is named for framing and the SLIP example
+  depends on the byte being there, so this branch changes behaviour and
+  costs more than it looks.
+
+Recorded rather than resolved, per `working-practice.md`: a document and
+its code contradicting each other is evidence somebody's model is wrong,
+and the model at fault is often neither of the two on offer. What is not
+acceptable is neither branch being taken while the map keeps printing the
+shorter number, so the three are named in
+`DELIMITER_NOT_IN_THE_SIGNATURE` and a fourth code that appends a delimiter
+fails the guard until it joins them.
+
+**Four sabotages, each watched going red**: the refusal deleted; a wrong
+row in the bounds table, which makes `std/kernels.situ` itself refuse to
+parse, the loudest available signal; the HDLC emitter moved to a run of
+six, which the measurement catches at 46 bytes where 48 was predicted; and
+a member removed from the delimiter list.
+
+**Two of those first went red in the wrong place**, reporting the refusal
+where the measurement was under test, and the cause was not established --
+the obvious one, a stale `__pycache__` surviving a restore, was tried and
+does not reproduce. It is recorded because of what it cost rather than
+what it was: a sabotage that fails for the wrong reason has demonstrated
+nothing about the check it was aimed at, and both were re-run from a clean
+tree before any of the four above was believed.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

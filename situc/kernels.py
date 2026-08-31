@@ -468,6 +468,42 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	worst = _positive(kernel, "worst_case", decl)
 	over  = _positive(kernel, "per", decl)
 
+	# A named code's overhead is the code's, not the schema's to state.
+	#
+	# `worst_case` and `per` become the codec's signature -- `ratio_bounded`,
+	# which is what every consumer sizes a buffer from -- while the generated
+	# implementation is the one this build has for that name, with its
+	# constants fixed. Nothing held the two together:
+	# `stuffing(worst_case = 7, per = 6, unit = bit, code = hdlc)` derived
+	# `ratio_bounded(7,6)` and generated a stuffer that inserts after five,
+	# with its own comment saying five and a buffer bound of `len + len / 5`.
+	#
+	# That is a signature lying about the object file, which is the one thing
+	# a derived codec exists to rule out: both are supposed to come from one
+	# description. Found while checking a claim in a schema comment rather
+	# than by anything in the suite, because every committed schema happens
+	# to declare the right numbers.
+	#
+	# So a code this build generates is refused any bound but its own. A code
+	# it does not generate keeps the declared one, because there the signature
+	# is all there is and nothing can disagree with it.
+	named = _name_of(kernel.argument("code"))
+	actual = STUFFING_BOUNDS.get(named or "")
+	if actual is not None and (worst, over) != actual:
+		raise error(
+			f"`{decl.name}` declares an overhead `{named}` does not have",
+			kernel.span,
+			label = f"`{named}` is {actual[0]} for {actual[1]}, "
+			        f"not {worst} for {over}",
+			notes = ["the declared pair becomes `ratio_bounded` in the "
+			         "signature, which is what a consumer sizes its buffer "
+			         "from, and the generated implementation has its own "
+			         "constants -- so a pair the code does not match is a "
+			         "signature that lies about the object file",
+			         f"write `worst_case = {actual[0]}, per = {actual[1]}`, "
+			         "or name a code whose overhead is the one you mean"],
+		)
+
 	# What the trigger examines. HDLC counts bits and COBS scans a stream of
 	# bytes, and the difference is real: it decides the smallest amount a
 	# decoder has to take in before it can act.
@@ -493,6 +529,28 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 		invertible       = True,
 		deterministic    = True,
 	)
+
+
+#: What each generated stuffing code costs, as `(worst_case, per)`.
+#:
+#: One entry per code this build implements, and `traverse.DERIVED_STUFFING`
+#: is its key set rather than a second list -- that list has already been
+#: duplicated twice, and the second copy left three codes behind while the
+#: first had five, so every backend declined an accessor for SLIP that it
+#: could have emitted.
+#:
+#: The numbers are the generators': COBS replaces a run of up to 254 bytes
+#: with 255, HDLC inserts a zero after five ones, SMTP sends a `.CRLF` line
+#: as four bytes for three, and both escape-stuffed byte codes can double a
+#: payload that is nothing but the delimiter. Adding a code means adding its
+#: implementation and its row together.
+STUFFING_BOUNDS: dict[str, tuple[int, int]] = {
+	"cobs":      (255, 254),
+	"hdlc":      (6, 5),
+	"ppp_async": (2, 1),
+	"slip":      (2, 1),
+	"smtp_dot":  (4, 3),
+}
 
 
 STUFFING_UNITS: dict[str, tuple[ast.Granularity, int | None]] = {

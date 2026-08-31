@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from situc import ast
+from situc import kernels
 from situc.ast import Schema
 from math import lcm
 
@@ -1511,9 +1512,15 @@ def arm_of(struct: ResolvedStruct,
 
 #: Stuffing codes a derived implementation exists for.
 #:
-#: Owned here rather than in the C generator, which is the only direction that
-#: works: `codegen.c.derived` already imports from this module, so the list
-#: cannot live there and be read here without a cycle.
+#: The names are the key set of `kernels.STUFFING_BOUNDS`, which records what
+#: each code's overhead actually is so that the derivation can refuse a schema
+#: declaring one the implementation does not have. A name in that table and a
+#: name in this list are the same claim, so they are one object rather than
+#: two that agree today.
+#:
+#: The direction is the only one available. `codegen.c.derived` imports this
+#: module, so the list could never have lived there; `kernels` imports nothing
+#: from here, so it can own what both read.
 #:
 #: It was in both, and the comment here said the C generator owned it -- which
 #: was true of nothing, since neither read the other. `derived.py` carries a
@@ -1523,7 +1530,7 @@ def arm_of(struct: ResolvedStruct,
 #: at three codes, so every backend asked whether a SLIP region had a settled
 #: decode shape and was told no, and declined an accessor it could have
 #: emitted. `test_the_stuffing_code_list_has_one_home` is the guard.
-DERIVED_STUFFING = ("cobs", "hdlc", "ppp_async", "slip", "smtp_dot")
+DERIVED_STUFFING = tuple(sorted(kernels.STUFFING_BOUNDS))
 
 
 def extern_symbol(schema: Schema, codec: str) -> str | None:
