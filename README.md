@@ -85,9 +85,28 @@ much of it you take*.
 ```sh
 git clone <this repository> && cd situ
 make                                    # build the C runtime
+
+# The part worth seeing first: what a schema costs, and why.
+./bin/situc explain example/http/http.situ request_line.version
+./bin/situc advise example/http/http.situ
+
+# The part every IDL has.
 ./bin/situc build --target c --out /tmp/gen example/udp/udp.situ
 ./bin/situc map example/udp/udp.situ
-./bin/situc doc example/udp/udp.situ   # RFC-style byte diagrams
+./bin/situc doc example/udp/udp.situ    # RFC-style byte diagrams
+```
+
+`explain` answers "what did this field cost me and why"; `advise` answers
+"what should I change", ranked by what it buys and priced by what it costs:
+
+```
+6 suggestion(s), highest yield first.
+
+request_head.start: move this variable-length member after the fixed ones
+    its extent is not fixed, so 1 member behind it are Dynamic: `fields`
+    cost: nothing (reordering moves no bytes, and every deployed peer reads
+    the old order)
+    yields: 1 member return to AbsoluteStatic, and their accessors to base + K
 ```
 
 `situc` needs Python 3.11 or later and nothing else -- no third-party packages,
@@ -99,7 +118,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 
 | Command | Artifact |
 |---|---|
-| `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), the shape they take (`--owned`, `--materialize`, `--single-file`), and what pumps the rung-6 state machine (`--driver`) |
+| `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), the shape they take (`--owned`, `--materialize`, `--single-file`), what pumps the rung-6 state machine (`--driver`), and whether a declaration reaching no code fails the build (`--refuse-ungenerated`) |
 | `situc map` | the capability map; `--check` compares against a committed one and fails on a diff |
 | `situc explain` | one field's capability vector and the blame chain behind every weakening |
 | `situc advise` | ranked, costed schema changes that would restore what was lost |
@@ -111,6 +130,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 | `situc gen-checks` | tests holding the generated accessors to the map they were generated beside |
 | `situc gen-tests` | golden-vector tests from a schema and hex vectors |
 | `situc gen-fuzz` | a libFuzzer harness per parseable struct |
+| `situc gen-tamper` | the harness that watches a tag's gate refuse: every covered byte and every tag byte flipped one at a time, with refusal required |
 | `situc gen-dissector` | a Wireshark dissector in Lua, over the same traversal the code backends use |
 | `situc gen-derived` | codec implementations from kernel descriptions |
 | `situc gen-codec-tests` | property tests that would falsify a lying codec signature, against the ABI an `impl` binds |
@@ -125,112 +145,129 @@ it to the parser, so a subcommand that exists and is undocumented fails the
 suite rather than going quiet. Section 21 of `project.md` is the authority
 above both.
 
-**The second binary is `situ-walk`**, which is not a `situc` subcommand and is
-not meant to be: decision 0026 keeps the compiler and the interpreter apart,
-and the separation is the point rather than a packaging detail. It takes a
-packed image and a buffer of hex, and prints what it can read of every struct
-in it.
+### The other tools
+
+`situc` is the compiler, and three more programs read bytes against a
+description at run time rather than generating code from it. None is a
+`situc` subcommand and none is meant to be: decision 0026 keeps the compiler
+and the interpreter apart, so that under the compiler an offset stays a
+constant and an operation stays *absent* rather than refused. The separation
+is the point rather than a packaging detail.
+
+```sh
+situ-edit      proto.situ capture.bin    # the fields these bytes hold
+situ-edit-tui  proto.situ capture.bin    # the same, on a terminal
+
+situc pack     proto.situ -o proto.image # the description a walker reads
+situ-walk      proto.image <hex>         # every struct, every member it can read
+make walk-c                              # situ-walk-c: the same walk, in C
+```
+
+`situ-edit` takes a `.situ` or a packed image; given a schema it runs
+`situc pack` first, across a process boundary rather than a link-time one,
+which is how 0026's separation survives the convenience.
 
 ```
-situ-walk <image> <hex>
+$ situ-edit example/udp/udp.situ capture.bin
+udp_header  8 bytes
+     0 +  2  source_port              4660
+     2 +  2  destination_port         53
+     4 +  2  length                   8
+     6 +  2  checksum                 abcd
+     8 +  0  payload
 ```
 
-It has no manual page yet, which is a gap and is named here rather than left
-for somebody to notice: `situc` has one and this ships beside it.
+**`situ-walk`** is the interpreter: a table walk over live bytes, which also
+serves as a fifth column in the differential check, answering the same
+questions as four compiled backends about the same hostile bytes. It has no
+manual page yet, which is a gap and is named here rather than left for
+somebody to notice.
+
+**`situ-walk-c`** is the same walk in C, for the case decision 0026 was
+argued from -- a device whose framing must change without a firmware rebuild,
+reading a description out of a fixed arena. `make walk-c` builds it, and a
+differential test holds it to the Python walker: every probe the fifth column
+makes, this answers. What it declines it declines *by name*.
+
+**`situ-edit` and `situ-edit-tui`** open a capture and a schema and show the
+fields, which sounds like every template-driven hex editor and is not one.
+010 Editor, Kaitai's IDE and Wireshark all do "open bytes, open a
+description, see fields"; none of them carries **capability reasoning**, so
+none can grey out a setter that does not exist, say that the field you just
+looked at cannot be written in place, or show the blame chain for why
+(decision 0034). Read-only for now: writing a field that shifts the layout
+drags in the invalidation model, a covered field goes stale, and an invariant
+must be maintained rather than checked -- which is its own piece of work. The
+CLI can do everything the TUI can, deliberately, because an interactive
+frontend is hard to test and a scriptable one is not.
 
 ## How much of it you take
 
 A schema may describe more of a protocol than you want generated, so how much
 becomes code is a choice you make at the command line rather than in the
-schema. `situc build --layer` takes it, defaulting to `view`, which is what
-`situc build` has always done. **All six rungs are built**, in all four
-backends. The ladder was written down ahead of the rungs on purpose, and the
-table says what each one adds:
+schema. `situc build --layer` takes it, defaulting to `view`. **All six rungs
+are built**, in all four backends:
 
-| `--layer` | what it emits | the new "yes" | status |
-|---|---|---|---|
-| `view` | accessors over bytes you own | *(baseline)* | **ships** |
-| `edit` | build or resize a message whose extent is not fixed | may it allocate? | **ships** |
-| `relate` | predicates over two messages | may it look at two messages? | **ships** |
-| `frame` | a byte stream in, whole messages out | may it hold bytes between calls? | **ships** |
-| `converse` | match a reply to its request | may it hold messages between calls? | **ships** |
-| `drive` | send, receive, retransmit, time out | may it own I/O? | **ships** |
+| `--layer` | what it emits | the new "yes" |
+|---|---|---|
+| `view` | accessors over bytes you own | *(baseline)* |
+| `edit` | build or resize a message whose extent is not fixed | may it allocate? |
+| `relate` | predicates over two messages | may it look at two messages? |
+| `frame` | a byte stream in, whole messages out | may it hold bytes between calls? |
+| `converse` | match a reply to its request | may it hold messages between calls? |
+| `drive` | send, receive, retransmit, time out | may it own I/O? |
 
-`doc/decision/0032-the-layer-ladder.md` is the reasoning, and writing it
-down before the rungs existed is the point: "should situ do X" stops being
-asked once per adopter and becomes "at which rung does X live".
+The ladder was written down before the rungs existed, and that is the point:
+"should situ do X" stops being asked once per adopter and becomes "at which
+rung does X live" (`doc/decision/0032-the-layer-ladder.md`). A rung emits
+every file the rung below emits, byte-identical, plus new ones, so moving up
+leaves you no already-reviewed file to review again. The rung you pick is the
+invariant you get: `view` guarantees the allocation-free property above, and
+`edit` is where it is spent.
 
-Rung 2 is where allocation is spent, and `--owned` is only its first case:
-it emits a fixed-size struct and a decode that copies into it, and refuses a
-variable-length member because "a pointer reintroduces exactly the lifetime
-the caller was escaping, and an array of the worst case is a decision about
-memory nobody asked for". Both stop being true once the caller supplies the
-backing, which is what `_edit.h` adds -- measure, then decode into storage
-you hand it. `doc/decision/0031-where-allocation-is-unavoidable.md`
-enumerates the five cases and `project.md` 26.99 says which shape serves
-each.
-
-A relation is a pure predicate over two views, so `--layer relate` adds one
-function per relation and nothing else, in whichever backend you asked for:
+A relation is a pure predicate over two views, read through the generated
+getters rather than the bytes -- so a big-endian `u16` compares correctly
+against a little-endian `u32` without the author thinking about it:
 
 ```c
 situ_err_t situ_rel_response_to(situ_view_t request, situ_view_t response);
 ```
-```rust
-pub fn rel_response_to(request: &Frame, response: &Frame) -> Result<()>
-```
 
-It reads through the generated getters rather than the bytes, which is what
-makes the comparison one of *values* -- a big-endian `u16` against a
-little-endian `u32` compares correctly without the author thinking about it.
-A failed constraint is `SITU_ERR_CONSTRAINT`, which already meant exactly
-that, so no new failure class had to reach four runtimes; Python raises
-`ConstraintError` instead, as `validate` already does there.
+**What a relation may say is decided once, not four times.** Python's integers
+are arbitrary precision and would compare a `u64` against an `i8` happily; C,
+C++ and Rust cannot. It is refused in all four, because a schema one backend
+accepts and another does not is a schema that means two things. The walker
+answers relations out of the packed image too, so a schema's predicates can be
+exercised without generating or compiling anything.
 
-**What a relation may say is decided once, not four times.** Python's
-integers are arbitrary precision and would compare a `u64` against an `i8`
-happily; C, C++ and Rust cannot, no 64-bit type holding both ranges. It is
-refused in all four, because a schema one backend accepts and another does
-not is a schema that means two things. The walker reads relations out of the
-packed image and answers them too, so a schema's predicates can be exercised
-without generating or compiling anything.
-
-Each rung answers one more question yes, and the rung you pick is the
-invariant you get: `--layer view` guarantees the allocation-free property
-above and `--layer edit` is where it is spent. A rung emits every file the
-rung below emits, byte-identical, plus new ones, so moving up leaves you no
-already-reviewed file to review again.
-
-**The ladder is a second axis, not a replacement for the shape flags.**
-`--layer` says which invariants the output holds to; `--owned`,
-`--materialize` and `--single-file` say what shape it takes. They compose, and
-the ladder explains refusals that used to stand alone: `--materialize` turns
-down an uncapped run at `view` because the index would have to be allocated,
-and `--layer edit --materialize` is how you ask for it anyway.
-
-**And a third axis says what pumps it.** The top rung sends, retransmits and
-times out, and it is sans-I/O: it never opens a socket and never reads a
-clock, so it cannot tell one event loop from another. `--driver` adds the
-adapter that does -- `epoll`, `poll`, `select`, `ppoll`, `blocking` and
-`io_uring` in C, `qt` in C++, `asyncio` in Python -- as an extra file over
-the same schema, changing nothing else. A driver names the backends it is
-available for and an unavailable pair is refused naming both, because
+**The ladder is one axis of three.** `--layer` says which invariants the
+output holds to; `--owned`, `--materialize` and `--single-file` say what shape
+it takes; and `--driver` says what pumps the top rung. The first two compose,
+and the ladder explains refusals that used to stand alone: `--materialize`
+turns down an uncapped run at `view` because the index would have to be
+allocated, and `--layer edit --materialize` is how you ask for it anyway. That rung is sans-I/O
+-- it never opens a socket and never reads a clock -- so `--driver` adds the
+adapter that does, as an extra file over the same schema: `epoll`, `poll`,
+`select`, `ppoll`, `blocking` and `io_uring` in C, `qt` in C++, `tokio` in
+Rust, `asyncio` in Python. An unavailable pair is refused naming both, because
 `--driver epoll --target python` is a worse asyncio (decision 0033).
 
 Above `relate` a schema has to say more than bytes -- which relation pairs a
 request with its reply, what the retry policy is -- because both endpoints
-must agree on those and a command-line flag cannot make them agree. **None of
-it is ever inferred.** There is no default timeout and no implicit
-retransmission; where a schema states no policy the generated code has none. A
-deployment may override a declared *value* at the command line and may never
-introduce a *shape*. Rung 6 owns I/O and never owns the clock: time enters as
-a parameter, so a timeout bug reproduces every run instead of racing a
-deadline nobody wrote down.
+must agree and a command-line flag cannot make them agree. **None of it is
+ever inferred.** There is no default timeout and no implicit retransmission;
+where a schema states no policy the generated code has none. A deployment may
+override a declared *value* at the command line and may never introduce a
+*shape*. Rung 6 owns I/O and never owns the clock: time enters as a parameter,
+so a timeout bug reproduces every run instead of racing a deadline nobody
+wrote down.
 
 ## The language
 
 `doc/grammar.ebnf` is the extracted grammar and section 7 of `project.md` is
 the authority; what follows is the working vocabulary.
+
+### Types and structure
 
 **Directives** set how the rest of the file is read:
 
@@ -269,23 +306,30 @@ struct cannot describe:
 | `coded name (codec) { ... }` | a region transformed before it is read |
 | `register` / `register_block` | an MMIO register with its bus width and access rules |
 
-**Where a member ends** is the question the language spends most of itself on,
-because it is what decides the capability vector:
+### Where a member ends
+
+This is the question the language spends most of itself on, because it is what
+decides the capability vector:
 
 ```situ
-u8   fixed[4];                      // a count
-u8   rest[remaining];               // to the end of the frame
-u8   name[]    until ":";           // to a delimiter
-u8   method[]  until " " max 16;    // bounded, so it stays allocatable
+u8   fixed[4];                        // a count
+u8   rest[remaining];                 // to the end of the frame
+u8   name[]    until ":";             // to a delimiter
+u8   method[]  until " " max 16;      // bounded, so it stays allocatable
 nlattr attrs[] while (nla_len >= 4);  // while a predicate over each element holds
 u8   pixels[n] at file.pixel_offset;  // placed where the data says
-u32  crc @ 0x1c;                    // assert the offset the solver computed
+u32  crc @ 0x1c;                      // assert the offset the solver computed
 ```
 
-**Attributes** are a closed vocabulary in brackets: `[min = 8]`, `[max = N]`,
-`[since = 2]` for a member a later version added, `[encoding = ascii]`,
-`[case_insensitive]`, `[trim]`, `[self_as = 0]` for what a checksum's own bytes
-read as while it is computed.
+### Attributes, requirements and invariants
+
+**Attributes** are a closed vocabulary in brackets, and a table says which
+member kinds each may appear on -- an attribute in the wrong place is refused
+rather than ignored. `[min = 8]`, `[max = N]`, `[must_eq = 0x1f]`,
+`[must_be_zero]`, `[preserve]`, `[since = 2]` for a member a later version
+added, `[secret]`, `[self_as = 0]` for what a checksum's own bytes read as
+while it is computed, `[allow_straddle]` for a bit field that crosses a byte
+boundary on purpose.
 
 **The rest of the declarations:**
 
@@ -293,12 +337,242 @@ read as while it is computed.
 const header_bytes = 8;
 enum operation : u16 { request = 1, reply = 2, }
 checksum u8 header_checksum[2] covers(header) [self_as = 0];
-require absolute_static(arp_packet);         // fails the build if it does not hold
+require absolute_static(arp_packet);   // fails the build if it does not hold
 invariant derived.total == size(derived.a) + size(derived.b);
 ```
 
 `require` is a compile-time assertion about the capability vector; `invariant`
-names a field situ maintains rather than one it merely checks.
+names a field situ *maintains* rather than one it merely checks. Writing a
+field an invariant reads leaves the derived one stale in exactly the way a
+covered write leaves a tag stale, and the generated API says so.
+
+### Codecs, in two tiers
+
+A codec is a transform over a region -- a checksum, a line code, a cipher, a
+framing rule. What the capability lattice consumes is never an implementation
+but a **property signature**: how the length changes, whether an interior
+position is still computable, what unit the transform works in, whether the
+input survives verbatim, whether it is invertible, deterministic, error
+propagating, authenticating. The two tiers differ only in where that signature
+comes from.
+
+**Tier 1 is `extern`.** The signature is declared and situ trusts it, because
+the implementation is somebody else's:
+
+```situ
+// std/codecs.situ, verbatim.
+codec aes_gcm_128 {
+	tag_bytes   = 16;
+	nonce_bytes = 12;
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+impl aes_gcm_128 extern "my_gcm";   // yours, called as my_gcm_encode/_decode
+```
+
+The map marks such a codec `trusted` for exactly that reason, and
+`situc gen-codec-tests` emits the property tests that would falsify a lying
+one, against the ABI the `impl` binds. `std/codecs.situ` carries 19 such
+signatures -- AES-CTR and AES-CBC, ChaCha20, AES-GCM, ChaCha20-Poly1305,
+HMAC-SHA256, deflate, lz4 -- and deliberately binds none of them: they are
+contracts, and which implementation satisfies one is the adopter's to name.
+
+**Tier 2 is `derived`,** and it is the interesting half. The schema gives a
+*kernel description* rather than a signature, and situ computes the signature
+and generates the implementation from the same description -- so the two
+cannot disagree, which is the whole argument for the tier:
+
+```situ
+// Feedback from the input: startable anywhere, and a corrupt bit spoils only
+// itself. Change one word to `output` and both answers flip.
+codec scrambler_additive {
+	kernel = shift_register(taps = 0xB400, width = 16, seed = 0xACE1,
+	                        feedback = input);
+}
+impl scrambler_additive derived;
+```
+
+Six kernel families cover essentially every line code, FEC, scrambler and
+framing code in practical use, which is what bounds the design:
+
+| family | described by | covers |
+|---|---|---|
+| `table` | input symbol to output symbol, optionally padded to whole groups | both Manchesters, 4b5b, base16/32/64 |
+| `polynomial` | a generator polynomial over GF(2) or GF(2^m), plus init, reflection and xorout | every CRC variant, Reed-Solomon, BCH |
+| `linear_block` | a generator or parity-check matrix over GF(2) | Hamming and other block codes |
+| `shift_register` | taps, a feedback source, an initial state, and whether the feedback is complemented | additive and multiplicative scramblers, both NRZI conventions |
+| `permutation` | an index mapping | block and convolutional interleavers |
+| `stuffing` | a trigger predicate and an insertion rule | COBS, bit stuffing, SLIP, PPP, SMTP dot-stuffing |
+
+`std/kernels.situ` carries 38 of them: 15 polynomial (13 CRCs and 2
+Reed-Solomon codes), 8 table, 7 shift_register (two scramblers, the two NRZI
+conventions, SONET, USB 3.0, PRBS23), 6 stuffing, 1 linear_block -- a
+Hamming(7, 4) -- and 1 permutation. Those counts are held to the schema by a
+test, because a number in a README is a claim like any other. Stages compose
+into a pipeline, whose properties are the product taken conservatively:
+
+```situ
+codec framed   = crc32 |> interleave_16 |> manchester_802_3;
+codec usb_line = usb_bit_stuffing |> nrzi_transition_on_zero;
+```
+
+**None of it is believed on the strength of having compiled.** The CRCs are
+held to the catalogue's published check values, SLIP and PPP to their RFCs'
+own vectors, the scramblers to the maximal period a primitive polynomial must
+have, and the two NRZI conventions to the two facts a standard states rather
+than to the rule a generator would be written from. Beyond the per-codec
+oracles, three guards read the generated object file rather than the
+declaration: every codec's declared expansion is measured against what its
+encoder writes, every stuffing code's `ratio_bounded` against the input its
+own comment calls the worst case, and the `error_propagating` axis by
+flipping one coded bit and counting how much of the decode it takes with it.
+
+### Authentication and sealing
+
+`authenticated { }` names a region a tag covers, and the tag is a member like
+any other:
+
+```situ
+// example/packet/packet.situ, abridged.
+struct packet {
+	authenticated {
+		header  hdr;
+		u8      nonce[12];
+	}
+
+	sealed(aes_gcm_128, nonce = nonce) {
+		u16  inner_kind;
+		u32  inner_seq;
+		u8   session_key[16]  [secret];
+		u8   body[hdr.length];
+	}
+
+	tag u8[16];        // coverage inferred: every authenticated and
+}                      // sealed region in this struct
+
+require verify_gated(packet.sealed);
+require in_place_dirty(packet.sealed.inner_seq);
+```
+
+Three things follow, and the generated API is where they show up.
+
+**A covered field loses its plain setter.** It gets `set_x()`, which marks the
+tag stale, and the message is not transmittable until a `recompute` puts it
+right. `require in_place_dirty(...)` is how a schema asserts it noticed. A
+checksum inside its own coverage says what its bytes read as while the
+algorithm runs (`[self_as = 0]`, which is RFC 1071's rule), and one that
+covers bytes the message does not contain names them (`prefix(...)`, which is
+UDP's and TCP's pseudo-header).
+
+**The interior of a sealed region does not exist until the tag verifies.**
+That is the doom principle as a typestate: parsing attacker-controlled
+plaintext before authenticating it is the mistake, so situ makes it
+unspellable. C++ gives the interior view no public constructor and Rust a
+private field, so in those two the compiler refuses; C and Python check at run
+time.
+
+**A codec must earn the right to seal.** It has to declare `authenticated`,
+so `sealed(crc32)` is refused rather than handing out the interior on a flag
+nothing checked; and a `derived` implementation may not seal at all, because a
+table indexed by plaintext leaks it through the cache and situ cannot
+discharge that obligation (decision 0019). Which key and which nonce are
+fields, not configuration -- `sealed(codec, nonce = n, key = epoch)` names
+them, and a conversation key wider than a word is the exact bytes of a field.
+
+`situc gen-tamper` is the harness that watches the gate refuse: it takes the
+caller's verifier as a callback and drives it across the schema's own coverage
+geometry, flipping every covered byte and every tag byte one at a time with
+refusal required. A gate nobody has watched fail is not evidence.
+
+### Text
+
+Situ describes text formats as layouts, which is the part of them that is one:
+
+```situ
+// example/http/http.situ, three of its structs.
+struct request_line {
+	u8  method[]   until " "     max 16   [encoding = ascii];
+	u8  target[]   until " "     max 8192;
+	u8  version[]  until "\r\n"  max 16   [encoding = ascii];
+}
+
+struct status_line {
+	u8       version[]  until " "     max 16  [encoding = ascii];
+	decimal  u16        code until " " max 4  [minimal];
+	u8       reason[]   until "\r\n"  max 256;
+}
+
+struct header_field {
+	u8  name[]   until ":"     [case_insensitive, encoding = ascii];
+	u8  value[]  until "\r\n"  [trim];
+}
+```
+
+A radix prefix -- `decimal` or `hex` -- says a number is written as digits
+rather than laid down as bytes, which is what `cpio`'s eight-character hex
+fields and HTTP's status codes need. `[encoding = ascii | utf8 | utf16le |
+leb128]` says what a run holds and gets a validity check that rejects a lone
+surrogate the way the UTF-8 one rejects an overlong form. `[trim]`,
+`[case_insensitive]`, `[nul_terminated]`, `[quoted = "\""]` and
+`[escape = "\\"]` describe the rest, and each is a real claim: a
+case-insensitive token is `NonCanonical` on the lattice, because
+`Content-Length` and `content-length` are one value with two spellings, and
+the generated comparison folds case the way the schema says.
+
+String literals know `\n \t \r \0 \\ \"` and `\xNN`, so a frame delimiter
+outside ASCII -- SLIP's 0xC0 -- can be written.
+
+**Where situ stops is a grammar.** A field whose *text* contains an expression
+language is not a layout, and situ describes the layout around it rather than
+generating a parser for it. Section 8.6.6 is where that line is drawn.
+
+### Registers
+
+`target mmio` changes what a schema means: offsets are bus addresses, reads
+and writes may have side effects, and a partial access may be forbidden.
+
+```situ
+register ctrl_reg @ 0x00 {
+	width        = 32;
+	access_width = 32;          // partial access forbidden implicitly
+	volatile;
+	no_rmw;                     // reads have side effects; RMW unsafe
+
+	bit       enable  [rw];
+	bit       start   [wo, on_write = trigger];
+	u3        mode    [rw];
+	bit       busy    [ro];
+	bit       error   [w1c];
+	reserved  u25     [preserve];
+}
+```
+
+The access attributes are the hardware's vocabulary -- `[ro]`, `[rw]`, `[wo]`,
+`[wo_once]`, `[w1c]`, `[w0c]`, `[w1s]`, `[w0s]`, `[rc]`, `[rs]` -- and a
+`reserved` run carries the policy the datasheet states, `[preserve]` or
+`[must_be_zero]`, which the generated validator enforces. `register_block`
+groups registers that share bus settings.
+
+### Versions
+
+A version byte in a header is a promise, and section 19 is where keeping it
+becomes a compile error rather than an `if`. `[since = N]` marks a member a
+later revision added; the wire signature and the capability map are the two
+committed artifacts that make a change reviewable:
+
+```sh
+situc wire --check  proto.situ   # did a field move?
+situc map  --check  proto.situ   # did a field get more expensive to reach?
+situc diff old.situ new.situ     # what changed between two revisions
+```
+
+`wire` records the byte-level contract and `map` records the cost; they are
+different questions, which is why there are two files (decision 0041).
 
 ## Four backends, one layout
 
@@ -319,15 +593,30 @@ are shared, and the runtime arithmetic lives once, in C:
 - **Python** -- views over `memoryview`, with the generation check of section
   12.3 that a release build of C cannot afford.
 
-Four backends are worth nothing if they disagree, so several checks exist to
-make disagreement fail rather than ship.
+What differs between them is not the bytes but how much of the lattice each
+language can *enforce* rather than document:
 
-The differential one generates a driver per backend *from the layout*, feeds
-all four the same pseudo-random buffers -- drawn from several alphabets and
-mostly short, because uniform noise never enters a text protocol's parse paths
--- and diffs the answers. It writes as well as reads: every writable scalar
-takes a pattern, and the buffer afterwards is the assertion, because a byte
-order reversed in a setter is invisible to a read pass over bytes nobody wrote.
+| | C | C++ | Python | Rust |
+|---|---|---|---|---|
+| bounds | run time | run time | run time | run time |
+| invalidation | generation, checked in `SITU_CHECKED` | as C | generation, always | **borrow checker** |
+| a length that cannot be lost | `_COUNT` macro | `span` | `memoryview` | slice |
+| an error that cannot be dropped | no | `[[nodiscard]]` | exception | `Result` |
+| the stage gate | a struct anyone can fill in | **no public constructor** | a run-time token | **private field** |
+
+The two in bold are refused by a compiler rather than reported by a runtime,
+and they are the argument for having written those backends.
+
+Four backends are worth nothing if they disagree, so several checks exist to
+make disagreement fail rather than ship. The differential one generates a
+driver per backend *from the layout*, feeds all four the same pseudo-random
+buffers -- drawn from several alphabets and mostly short, because uniform
+noise never enters a text protocol's parse paths -- and diffs the answers. It
+writes as well as reads: every writable scalar takes a pattern, and the buffer
+afterwards is the assertion, because a byte order reversed in a setter is
+invisible to a read pass over bytes nobody wrote. `situ-walk` joins it as a
+fifth column, answering out of the packed image whether a table walk agrees
+with four compiled backends about hostile bytes.
 
 Beside it: every schema is generated *and compiled* in every backend, because
 generating is not compiling; every schema's dissector is executed over bytes,
@@ -340,14 +629,15 @@ to disagree.
 
 ## Is your format worth a schema?
 
-Situ is worth its cost above a floor, and the floor is not a field count. Five
-projects evaluated it against real trees and two said no; what follows is
-their reasoning rather than an argument from this side.
+Situ is worth its cost above a floor, and the floor is not a field count. Six
+projects evaluated it against real trees and wrote the result up in
+`suggestion/`; two adopted, three said no, and the sixth recorded its verdict
+in its own tree. What follows is their reasoning rather than an argument from
+this side.
 
 **The wrong axis is size.** A five-field record read by two implementations in
 two languages is above the floor. A forty-field format parsed once into native
-objects, in one language, by one program, may be below it. Counting fields
-predicts almost nothing.
+objects, in one language, by one program, may be below it.
 
 **Four things decide it, and any one is usually enough:**
 
@@ -423,14 +713,15 @@ text files a reviewer can read.
   Python allocates because its data model gives it no other spelling, bounded
   by the schema's own `max`.
 - No recursive types: size and capability computation would not terminate.
-- No transformed payloads. A field whose bytes must be *decompressed,
-  decrypted or unescaped* before they mean anything is not a layout, and
-  situ describes the layout around it, not the transform. A codec names an
-  extern implementation and situ checks the contract; a decompressor that
-  writes into a different buffer with overlapping copies -- LZ4, zlib -- is
-  the caller's, because its output is not a view over its input and it must
-  allocate. This follows from the no-allocation rule above rather than being
-  a separate one.
+- No grammar inside a field. A field whose text holds an expression language
+  is not a layout; situ describes the layout around it (section 8.6.6).
+- **No transform that has to allocate.** A codec whose output is not a view
+  over its input -- deflate, LZ4, anything with overlapping copies into a
+  second buffer -- stays tier 1: situ checks the contract and the caller
+  supplies the implementation. This follows from the no-allocation rule rather
+  than being a separate one, and it is the boundary of the derived tier rather
+  than of codecs generally: a transform that keeps its output the size of its
+  input, or expands it by a computable amount, situ generates.
 - No behaviour the schema did not state. Situ describes conversations where a
   schema says so, and generates the machinery only when `--layer` asks for it,
   but it never supplies a fact nobody declared -- no default timeout, no
@@ -445,15 +736,18 @@ make check      # everything before a commit: style, types, test, aarch64
 make bench      # what the offset cache costs and saves, in all four backends
 make fuzz       # every generated harness, under libFuzzer and ASan
 make hooks      # install the commit-message hook from tool/hooks/
+make walk-c     # build situ-walk-c, the embedded walker
+make deb        # situc and libsitu-dev, with debhelper
 make help       # everything else
 ```
 
-`test` and `check` are not the same target and the difference matters:
+`test` and `check` are not the same target and the difference matters.
 `make test` is pytest plus the generated C, which is the fast one to run while
-working. `make check` is what has to pass before a commit -- it adds `style`
-(indentation, ASCII, and project.md's own claims), `typecheck` (mypy strict
-over `situc`, `tools` and `tests`) and `cross-test` (the generated accessors on
-aarch64 under emulation).
+working. `make check` is what has to pass before a commit: it adds `style`
+(indentation, ASCII, and project.md's own claims), `typecheck` (mypy over
+`situc`, `walker`, `editor`, `tool` and `test`, and `--strict` over
+`runtime/python`) and `cross-test` (the generated accessors on aarch64 under
+emulation).
 
 CMake is the other entry point, not a wrapper around that one:
 
@@ -491,15 +785,22 @@ which `black` and `ruff format` cannot be configured to leave alone, so
 ## Layout
 
 ```
-project.md        the specification, and the authority on intent
-doc/decision/   append-only decision records, numbered, with alternatives
+project.md       the specification, and the authority on intent
+doc/decision/    append-only decision records, numbered, with alternatives
 doc/grammar.ebnf extracted from section 7, held in sync by a test
-situc/            the compiler: Python 3.11+, standard library only, mypy strict
-runtime/          one runtime per backend, each thin; the arithmetic lives in C
+situc/           the compiler: Python 3.11+, standard library only, mypy clean
+runtime/         one runtime per backend, each thin; the arithmetic lives in C
+std/             codec signatures, kernel descriptions, and the packed image's
+                 own schema
 example/         one directory per protocol, each with at least one `require`
+suggestion/      what other projects said when they evaluated situ, and the
+                 replies; correspondence rather than a backlog
 test/            unit, generated-C, cross-architecture, golden diagnostics,
-                  a Wireshark stub, and the schemas written to be awkward
+                 a Wireshark stub, and the schemas written to be awkward
 tool/            the style gate, the commit-msg hook, the benchmark, the sweep
+walker/          the interpreter behind `situ-walk`, and `walker/c` behind
+                 `situ-walk-c`; shares nothing with situc but the image format
+editor/          the document model behind `situ-edit`, and its frontends
 ```
 
 ## Status
@@ -509,8 +810,7 @@ recorded in 26.14 onward, in folds -- a batch of work, then what it found and
 what it left open. Every construct the language offers is reachable in all four
 backends, and 26.31, the list of where the frontier is, has no open gap on it.
 The latest fold is the place to look for what is open today; each entry there
-says why it is, and two of them say why they are deliberate rather than
-pending.
+says why it is, and several say why they are deliberate rather than pending.
 
 There is no wheel and no PyPI release: `situc` runs from the tree or from a
 directory copy, which is the distribution the no-dependency policy is for.
@@ -524,18 +824,8 @@ carries a stable ABI promise yet.
 change without a firmware rebuild: ship a description of the new format, load
 it, parse. The format is itself a situ schema (`std/image.situ`), read through
 generated accessors, so everything this repository does to a schema it also
-does to the image.
-
-**The walker is `situ-walk`, a separate binary.** `situc` never walks an
-image -- decision 0026 keeps the compiler and the interpreter apart, so that
-an offset stays a constant and an operation stays *absent* rather than
-refused -- and `bin/situ-walk` shares nothing with it but the format (0026,
-amended 2026-08-07). That is what lets it join the differential check as a
-fifth column, answering whether a table walk says the same thing as four
-compiled backends about hostile bytes. It does, for every schema here.
-
-What it renders is a named subset, `walker.report.SUPPORTED`, and `situc
-pack --coverage` says what any given image contains. Note also what an
+does to the image. `situc pack --coverage` says what any given image contains,
+and `walker.report.SUPPORTED` is the subset the walker renders. Note what an
 interpreter cannot do, which is make an operation *absent*: under a walker the
 capability map stops being the shape of the interface and becomes data a
 caller may consult.
@@ -547,6 +837,8 @@ Beyond those, `project.md` is long and is meant to be. Useful entry points:
 
 - **Section 11**, the capability lattice: the core of the project. Every other
   part of the compiler exists to feed it or to report its results.
+- **Section 13**, codecs and the kernel families; **section 14**, the
+  cryptographic model and the stage gate.
 - **Section 26.31**, where the frontier is: what is unfinished, re-derived from
   generated output rather than remembered. It has been wrong four times, and
   says so.
@@ -555,21 +847,28 @@ Beyond those, `project.md` is long and is meant to be. Useful entry points:
   after finding drift, and each found more than expected.
 - `example/README.md` for what each worked example is there to prove.
 
-The examples are the schemas to read first: `udp` for the smallest complete
-one, `ipv4` for bit packing, `dns` and `dnsname` for a variant and a walk,
-`http` for a text protocol, `sqlite` for an offset table, `ble` for a count of
-records that each say how long they are, `netlink` for a format whose byte
-order is the sending machine's, `cpio` for numbers written as digits, and
-`packet` for authenticated and sealed regions.
+Thirty worked examples ship, and they are the schemas to read first:
+`example/udp` for the smallest complete one, `example/ipv4` for bit packing,
+`example/dns` and `example/dnsname` for a variant and a walk, `example/http`
+for a text protocol, `example/sqlite` for an offset table, `example/ble` for a
+count of records that each say how long they are, `example/netlink` for a
+format whose byte order is the sending machine's, `example/cpio` for numbers
+written as digits, `example/register` for memory-mapped hardware, and
+`example/packet` for authenticated and sealed regions.
 
-Eight of them carry a `.vectors` file, and what is in it matters more than that
-it exists: bytes some *other* implementation wrote, with that implementation
-named. ImageMagick for `bmp` -- a whole file, header and pixels -- glibc's
-`struct arphdr` for `arp`, lwIP's SNTP client for `ntp`, U-Boot's `bin2bcd` and
-DS1307 driver for `rtc`, the Linux Bluetooth stack for `ble`, GNU cpio for
-`cpio`, and for `netlink` the reply a `NETLINK_ROUTE` socket gave to a dump
-request. A description that agrees only with its own compiler has demonstrated
-nothing, and two of those eight disagreed with the schema on arrival.
+Eleven carry a `.vectors` file, and where the bytes came from matters more
+than that they exist. Eight are bytes some *other* implementation wrote, with
+that implementation named: ImageMagick for `bmp` -- a whole file, header and
+pixels -- glibc's `struct arphdr` for `arp`, lwIP's SNTP client for `ntp`,
+U-Boot's `bin2bcd` and DS1307 driver for `rtc`, the Linux Bluetooth stack for
+`ble`, GNU cpio for `cpio`, libtiff and matplotlib's committed test data for
+`tiff`, and for `netlink` the reply a `NETLINK_ROUTE` socket gave to a dump
+request. Two more are laid out by hand from an RFC's own field list rather
+than by situ (`tcp` and `udp`, both pseudo-headers). The eleventh, `packet`,
+is situ's own output and its header says so in the first paragraph, because a
+vector file that agrees only with its own compiler has demonstrated nothing
+and should not be counted as though it had. Two of the eight disagreed with
+the schema on arrival.
 
 ## Copyright
 

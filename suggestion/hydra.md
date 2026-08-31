@@ -208,6 +208,14 @@ Two suggestions follow from that rather than from any shortcoming:
   the quickstart, on a field that is actually weakened, would show the thing
   worth having within thirty seconds of cloning.
 
+  > **Done, and the ordering is yours.** The quickstart now runs `explain` and
+  > `advise` first, on `request_line.version` -- weakened on six axes, so the
+  > output is the blame chain rather than a wall of `AbsoluteStatic` -- under
+  > a comment saying which half is the differentiator and which half every IDL
+  > has. What we did not take is the implied "so cut the generated-code
+  > material": a reader who is past deciding still has to find the command
+  > table, and it stays where it was.
+
 - **`advise` is listed and never demonstrated.** The command table says it gives
   "ranked, costed schema changes that would restore what was lost", which sounds
   like exactly the same value as blame with an ordering over it. Nothing in the
@@ -215,6 +223,19 @@ Two suggestions follow from that rather than from any shortcoming:
   suggested it would say more than `explain` already had -- which is a
   discoverability problem rather than a capability one, and the cheapest fix in
   this file.
+
+  > **Done, with its real output.** The README shows one `advise` suggestion
+  > verbatim, and the reason it is worth showing is the part your note
+  > predicted would be missing: it is not blame with an ordering over it. Each
+  > suggestion carries a *cost* and a *yield* -- "cost: nothing (reordering
+  > moves no bytes, and every deployed peer reads the old order); yields: 1
+  > member return to AbsoluteStatic" -- which is the thing `explain` does not
+  > say, because `explain` answers what happened and `advise` answers what to
+  > do about it and what it will take.
+  >
+  > You were right that this was the cheapest fix in the file, and it stayed
+  > unfixed for a month because "listed in a table" reads as documented. A
+  > command nobody has seen the output of is a command nobody runs.
 
 ## One correction to the section above
 

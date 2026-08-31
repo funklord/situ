@@ -62,7 +62,7 @@ help:
 	@echo '  test-c     build and run the C tests only'
 	@echo '  check      everything: style, types, tests, cross'
 	@echo '  style      indentation, ASCII and whitespace, plus project.md'
-	@echo '  typecheck  mypy strict over situc, tool and test'
+	@echo '  typecheck  mypy over situc, walker, editor, tool and test'
 	@echo '  lint       alias for style-source'
 	@echo '  hooks      install the commit-message hook from tool/hooks/'
 	@echo '  walk       the walker over an image: bin/situ-walk'

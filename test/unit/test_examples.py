@@ -146,6 +146,63 @@ def test_committed_map_is_current(path: Path) -> None:
 	)
 
 
+def test_the_readme_codec_counts_match_the_standard_library() -> None:
+	"""The front page counts the codec library, so the count is held to it.
+
+	`test_every_example_the_readmes_name_exists` makes the same argument about
+	example directories: prose drifts slowly because a wrong paragraph usually
+	reads wrong, and a *number* does not. project.md's own phase table carries
+	four counts that were each stale when somebody last looked -- 1280 tests
+	where there were 2685, 20 schemas where there were 27 -- which is what a
+	hand-maintained figure does between the day it is written and the day it
+	is read.
+
+	So the README says `19 such signatures` and `38 of them: 15 polynomial
+	(13 CRCs and 2 Reed-Solomon codes), 8 table, 7 shift_register ...`, and
+	this reads both schemas and compares. Adding a codec fails here until the
+	sentence is updated, which is the point: the alternative is a front page
+	that quietly understates the library by a third.
+	"""
+	root   = EXAMPLES.parent
+	readme = (root / "README.md").read_text(encoding="ascii")
+
+	signatures = re.search(r"carries (\d+) such\s+signatures", readme)
+	assert signatures, "the README no longer states a tier-1 signature count"
+
+	codecs = root / "std" / "codecs.situ"
+	hand   = parse(Source(str(codecs),
+		codecs.read_text(encoding="ascii")))
+	assert len(list(hand.codecs())) == int(signatures.group(1)), (
+		f"std/codecs.situ holds {len(list(hand.codecs()))} signatures and the "
+		f"README says {signatures.group(1)}")
+
+	kernels = root / "std" / "kernels.situ"
+	auto    = parse(Source(str(kernels),
+		kernels.read_text(encoding="ascii")))
+	families: dict[str, int] = {}
+	derived = 0
+	for decl in auto.codecs():
+		if decl.kernel is None:		# a pipeline, which has no kernel
+			continue
+		derived += 1
+		families[decl.kernel.family.value] = (
+			families.get(decl.kernel.family.value, 0) + 1)
+
+	total = re.search(r"carries (\d+) of them", readme)
+	assert total and int(total.group(1)) == derived, (
+		f"std/kernels.situ holds {derived} derived codecs and the README says "
+		f"{total.group(1) if total else 'nothing'}")
+
+	# One per family, read out of the same sentence rather than listed here,
+	# so a seventh family is a failure rather than a silent omission.
+	for family, count in sorted(families.items()):
+		stated = re.search(rf"(\d+) {re.escape(family)}\b", readme)
+		assert stated, f"the README does not count the `{family}` family"
+		assert int(stated.group(1)) == count, (
+			f"{family}: {count} in std/kernels.situ, {stated.group(1)} in "
+			f"the README")
+
+
 @pytest.mark.parametrize("path", FUTURE, ids=ids(FUTURE))
 def test_future_examples_have_no_stale_map(path: Path) -> None:
 	"""A schema that does not build cannot have a map to commit."""

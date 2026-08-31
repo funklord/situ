@@ -15771,6 +15771,68 @@ which is the line that stops this becoming a test only the easy half of
 which runs; and the third is the one above, which passes here by design and
 fails elsewhere.
 
+### 26.151 The README, and which direction a front page goes stale in
+
+Rewritten to cover what the project does now. What is worth keeping is not
+the rewrite but the shape of what was wrong: **every omission understated the
+tool, and there was only one outright false claim -- also in that direction.**
+A front page does not drift into boasting. It drifts into describing an
+earlier, smaller program, because features arrive and prose does not.
+
+**Three of the four shipped binaries were missing.** `bin/` holds `situc`,
+`situ-walk`, `situ-edit` and `situ-edit-tui`, and `make walk-c` builds a
+fifth thing, the embedded C walker of decision 0035. The README named two.
+The worst of the omissions is the editor: 0034's argument for it is that 010
+Editor, Kaitai's IDE and Wireshark all do "open bytes, open a description,
+see fields" and none of them carries capability reasoning -- which is this
+project's whole differentiator, shipped, in a shape a reader can run, and
+absent from the page that has to make the case.
+
+**The codec section did not exist, and the one sentence on the subject was
+false.** "What it will not do" said "A codec names an extern implementation
+and situ checks the contract", which is tier 1 and was the whole story once.
+`std/kernels.situ` now derives 38 implementations across all six kernel
+families from their descriptions, which is the tier the two-tier design was
+built for. The bullet is narrowed to what remains true -- a transform that
+must allocate, whose output is not a view over its input, stays the
+caller's -- and the feature it was standing in front of is described.
+
+**The smaller staleness, each in the same direction.** The command table was
+missing `gen-tamper`. The driver list was missing `tokio`. `typecheck` was
+described as "mypy strict over situc, tools and tests", which has the two
+directory names wrong, omits `walker` and `editor`, and applies `--strict`
+where only `runtime/python` gets it -- the same wrong sentence was in `make
+help` and is fixed there too. Five projects were said to have evaluated situ
+where six have, and two to have declined where three did.
+
+**The vectors claim was true and measured the wrong thing.** "Eight of them
+carry a `.vectors` file" -- eleven do. The number that carries the argument
+is a different one: eight hold bytes some other implementation wrote, two are
+laid out by hand from an RFC's field list, and one is situ's own output whose
+header says so in its first paragraph. Counting all eleven as evidence would
+have counted that one, which is exactly what its header exists to prevent.
+
+**Two consumer asks about the README had been open for a month.**
+`suggestion/hydra.md` asked for `explain` to lead the quickstart rather than
+`build`, and observed that `advise` is listed in the command table and its
+output shown nowhere. Both are answered now -- the quickstart opens with
+`explain` and `advise` on a field weakened on six axes, and one real `advise`
+suggestion is quoted with its cost and yield lines, which are the part
+`explain` does not have. The second ask names its own cause: it was the
+cheapest fix in the file and it stayed unfixed, because a command listed in a
+table reads as documented. **A command nobody has seen the output of is a
+command nobody runs.**
+
+**And the counts are now held to the tree**, by
+`test_the_readme_codec_counts_match_the_standard_library`, which reads "19
+such signatures" and "38 of them: 15 polynomial ... 8 table ..." out of the
+prose and compares each against the parsed schema. It is the same argument
+`test_every_example_the_readmes_name_exists` already makes about directory
+names: prose drifts slowly because a wrong paragraph usually reads wrong, and
+a *number* does not. Three sabotages, each watched going red -- a family
+count reduced by one, a CRC added to `std/kernels.situ` without touching the
+prose, and the signature count moved.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
