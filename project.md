@@ -15292,6 +15292,15 @@ all. Each of these is the copyright holder's; none is blocked on work.
   carried between items, which situ holds inside codecs and nowhere in
   the layout. Answering them separately is how a language grows two
   spellings for one idea.
+- **Where COBS, SLIP and PPP's frame delimiter belongs.** Their generated
+  encoders each write one byte more than the `ratio_bounded` their
+  signature declares, so a consumer sizing from the published bound
+  overruns by one on every encode. Either the signature gains the
+  constant -- a grammar change and a decision record, since `capmap`
+  renders a ratio or an addend and never both -- or the delimiter is
+  framing rather than the codec's, which changes three encoders and the
+  SLIP example. Measured and named in 26.147; the guard fails if a fourth
+  code joins them, and neither branch is taken.
 - **Which `copyright` file survives.** `dh_installdocs` ships
   `debian/copyright`; `packaging/copyright` predates debhelper and is
   what `project.md`, the README, `situc/cli.py` and a test all cite. They
