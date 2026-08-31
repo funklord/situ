@@ -3,13 +3,26 @@
 # record (project.md section 22).
 
 [tool.pytest.ini_options]
-testpaths       = ["tests"]
+# `test`, not `tests`. It was `tests` and no such directory has ever existed
+# here, so bare `pytest` warned "No files were found in testpaths" and
+# searched recursively from the working directory instead -- which reaches
+# `build/` and the caches. `make test` passes explicit paths and never saw
+# it. The same wrong pair of names, `tools` and `tests`, has now been found
+# in four places; `python_floor`'s docstring records the Makefile's.
+testpaths       = ["test"]
 pythonpath      = ["."]
 filterwarnings  = ["error"]
 
 [tool.mypy]
 python_version         = "3.11"
 strict                 = true
+# Stated rather than inherited. `bytearray` is not a `bytes`, and mypy
+# promoted one to the other for years before stopping; `strict` implies this
+# in a new enough mypy and did not in 1.15, so the same tree passed here and
+# failed on CI, which installs the latest. Naming it makes the two agree and
+# makes the position the project's rather than a property of whichever mypy
+# is on the machine.
+strict_bytes           = true
 warn_unreachable       = true
 disallow_any_unimported = true
 show_error_codes       = true

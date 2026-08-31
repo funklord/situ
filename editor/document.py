@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from walker.image import NONE, Image, load
 from walker.owned import decode
 from walker.report import FIELD, RESERVED
-from walker.walk import (BITS_PER_BYTE, Refused, View, acquire, offset_bits,
-                         size_bits)
+from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
+                         offset_bits, size_bits)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -113,7 +113,7 @@ class Document:
 			return {}
 
 
-def open_document(image_bytes: bytes, message: bytes,
+def open_document(image_bytes: bytes, message: Bytes,
 		struct: str | None = None) -> Document:
 	"""Open a message against a packed image.
 

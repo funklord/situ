@@ -22,6 +22,17 @@ from typing import Literal
 from walker import vm
 from walker.image import BIG, LITTLE, NATIVE, NONE, Image, Placement, Struct
 
+#: What a walk may be handed. Read-only either way -- nothing here writes
+#: through it -- so the distinction is the caller's storage rather than the
+#: walker's behaviour, and refusing a `bytearray` would refuse the buffer an
+#: embedded reader is most likely to have: one it just received into.
+#:
+#: Spelled as a union because `collections.abc.Buffer` says it in one word
+#: and arrived in 3.12, which is above the declared floor. mypy promoted
+#: `bytearray` to `bytes` for years and stopped, which is how a signature
+#: that had always been too narrow became visible.
+Bytes = bytes | bytearray
+
 BITS_PER_BYTE = 8
 
 
@@ -53,7 +64,7 @@ class View:
 	"""A struct over a buffer: a base, a limit, and the image behind them."""
 
 	image: Image
-	buffer: bytes
+	buffer: Bytes
 	struct: int
 	at: int
 	limit: int
@@ -63,7 +74,7 @@ class View:
 		return self.image.structs[self.struct]
 
 
-def acquire(image: Image, buffer: bytes, struct: int) -> View:
+def acquire(image: Image, buffer: Bytes, struct: int) -> View:
 	"""The one bounds check, which everything after it trusts.
 
 	A fixed struct needs its whole size present; a frame takes what there is.
@@ -482,7 +493,12 @@ def read_bytes(view: View, index: int) -> bytes:
 	last  = first + width // BITS_PER_BYTE
 	if last > view.limit:
 		raise Refused("the frame does not reach this run")
-	return view.buffer[first:last]
+	# Copied, like every other run this module hands out as a value: the
+	# buffer may be a `bytearray`, and a slice of one is a `bytearray` that
+	# follows the caller's later writes. Three sites here already spelled it
+	# `bytes(...)` and three did not, which nothing could see while mypy
+	# promoted the two to one type.
+	return bytes(view.buffer[first:last])
 
 
 def scan(view: View, index: int) -> tuple[int, bool]:

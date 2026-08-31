@@ -15908,6 +15908,74 @@ substitutes today -- 185 modules parsed at `feature_version=(3, 11)` and swept
 for PEP 701 with the sweep's controls passing in both directions -- which is
 the strongest statement available here and is not the same as a green run.
 
+### 26.153 The first CI run in forty commits, and what it caught
+
+The billing block lifted, and `check` ran for the first time since
+2026-08-14. It went red in 48 seconds with every install step green and
+`make check` failing -- which is what 26.143 said this run would be worth:
+nothing about what broke in August, something about now.
+
+**Five errors, one shape**, in `test_relations.py` and `test_editor.py`:
+
+    Argument 2 to "acquire" has incompatible type "bytearray";
+    expected "bytes"  [arg-type]
+
+**The cause is not the Python version, which was the obvious guess and is
+wrong.** `pyproject.toml` already sets `python_version = "3.11"`, so mypy
+was targeting the floor here too, and running it with `--python-version
+3.11` explicitly reproduced nothing. It is the *mypy* version. mypy promoted
+`bytearray` to `bytes` for years and stopped; `strict` implies the stricter
+rule in a new enough one and did not in the 1.15 installed here, and the
+workflow installs the latest. Same tree, same command, two answers.
+
+**The annotations were genuinely too narrow, so the newer mypy was right.**
+`acquire` calls `len()` on its buffer and stores it; `open_document` calls
+`bytes(message)` on the first line. Both accept a `bytearray` and said they
+did not. And the `bytearray` in the editor test is load-bearing rather than
+incidental -- `test_the_document_outlives_the_buffer_it_was_read_from`
+mutates the buffer after opening the document and asserts the fields did not
+move, which is a test `bytes` cannot express at all.
+
+**Widening `View.buffer` cascaded to exactly three sites, and the cascade is
+the second finding.** Each is a function returning `bytes` that returned a
+slice of the buffer. Three sibling sites in the same two modules already
+wrote `bytes(view.buffer[...])` and three did not -- the same operation
+spelled two ways, where the three that did not were handing out a view of a
+caller's mutable buffer under an annotation promising an owned value.
+Nothing could see it while the two types were promoted to one. All six copy
+now, which is what the majority already did and what the annotation says.
+
+**The fix that matters is one line of configuration.** `strict_bytes = true`
+in `pyproject.toml`, so the position is the project's rather than a property
+of whichever mypy is on the machine. Proved both ways, with one `bytes(...)`
+removed again:
+
+    with strict_bytes:      Found 1 error in 1 file
+    without strict_bytes:   Success: no issues found in 183 source files
+
+That second line is what this repository had. A gate whose strictness is
+inherited from a floating tool is a gate whose answer changes without anybody
+editing it, in both directions -- and the direction that hurts is the one
+where CI is stricter than the machine the code is written on, because the
+author cannot reproduce the failure.
+
+**And `testpaths` named a directory that has never existed.** It was
+`["tests"]`; the directory is `test`. Bare `pytest` answered "No files were
+found in testpaths; searching recursively from the current directory
+instead" and walked `build/` and the caches, while `make test` passed
+explicit paths and never met it. **That is the fourth place the same wrong
+pair of names has turned up** -- `tools` and `tests` for `tool` and `test`.
+`python_floor`'s docstring records the Makefile's, 26.151 found the README's
+and `make help`'s, and this is `pyproject.toml`'s. The directories were never
+called that.
+
+**Still open, and named rather than taken with a red on the board.** Every
+run annotates "Node.js 20 is deprecated ... actions/checkout@v4,
+actions/setup-python@v5 are being forced to run on Node.js 24". A warning
+today and a break when the runners drop it; bumping both is its own change,
+and it belongs after a green rather than mixed into the commit trying to get
+one.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

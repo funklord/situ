@@ -964,10 +964,12 @@ def _run_bytes(view: View, index: int) -> bytes:
 		last = first + placement.array_count
 		if last > view.limit:
 			raise Refused("the frame does not hold the declared array")
-		return view.buffer[first:last]
+		return bytes(view.buffer[first:last])
 
+	# Copied for the reason `walk.byte_run` gives: a slice of a `bytearray`
+	# is a `bytearray`, and this is handed out as a value.
 	want = size_bits(view, index) // 8
-	return view.buffer[first:min(first + want, view.limit)]
+	return bytes(view.buffer[first:min(first + want, view.limit)])
 
 
 def _run_count(view: View, index: int) -> int:
