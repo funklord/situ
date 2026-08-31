@@ -792,6 +792,113 @@ def test_every_table_codec_encodes_by_the_ratio_it_declares(
 			f"final symbol")
 
 
+def test_the_error_propagation_axis_is_measured_not_declared(
+		kernel_library: ctypes.CDLL) -> None:
+	"""Flip one bit of the coded stream and count what the decode gets wrong.
+
+	`error_propagating` is a lattice axis and a real promise: it says a
+	corrupt bit spoils more than itself, which is what makes a
+	self-synchronising code cost something. The derivation computes it from
+	one word of the kernel description -- feedback from the input is
+	additive and does not propagate, from the output is multiplicative and
+	does -- and until now nothing had asked the generated code whether that
+	was true.
+
+	It is, in all eight cases, and the pair `std/kernels.situ` was built to
+	demonstrate comes out exactly as the schema comment claims: the same
+	family and the same taps, opposite answers. Measured, one flipped
+	ciphertext bit gives
+
+	    scrambler_additive          1 bit wrong
+	    scrambler_multiplicative    4 bits wrong
+	    nrzi_transition_on_one      2 bits wrong
+
+	-- one for the additive codes, more for the multiplicative ones, where
+	how many more is the tap count and not the point.
+
+	The population is the length-preserving codecs with the
+	`(in, len, out) -> count` shape whose decoder does not refuse a corrupted
+	stream outright. That excludes the symbol maps: Manchester's decoder
+	answers 0 for a code the table does not define, which is a *visible*
+	failure rather than a propagated one, and asking this question of it
+	measures the refusal instead of the axis.
+
+	Round trip and determinism ride along because they are the other two
+	axes every one of these declares and nothing was checking either. The
+	determinism check is vacuous against today's tree -- these are pure
+	functions of their input -- and it is here for 26.139's case: a table
+	code carrying running disparity, which 8b10b does, would declare
+	`deterministic` from the family and fail this.
+
+	**What this cannot catch, deliberately.** It holds the declaration and
+	the object file to each other, and both come from the same kernel
+	description -- so changing `feedback = output` to `feedback = input` on
+	NRZI moves both together and passes here. That is the right division:
+	whether the description matches the standard is the dedicated tests'
+	question, and the same sabotage fails two of them,
+	`test_nrzi_transitions_on_a_one_and_holds_on_a_zero` on the standard's
+	own two facts and `test_every_additive_scrambler_has_maximal_period` on
+	a keystream that comes out all zeroes.
+	"""
+	kernels = ROOT / "std" / "kernels.situ"
+	parsed  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	families = (ast.KernelFamily.SHIFT, ast.KernelFamily.PERMUTATION)
+	population = [decl for decl in parsed.codecs()
+	              if decl.kernel is not None
+	              and decl.kernel.family in families
+	              and decl.expansion is ast.Expansion.PRESERVING]
+
+	assert len(population) >= 8, (
+		f"{len(population)} length-preserving codecs found; this guard is "
+		f"reading the wrong thing, and a short population passes as loudly "
+		f"as a whole one")
+	assert any(decl.error_propagating for decl in population), (
+		"no codec here declares error propagation, so the interesting half "
+		"of the assertion below could not fail")
+
+	def run(codec: str, direction: str, data: bytes) -> bytes:
+		fn = getattr(kernel_library, f"situ_{codec}_{direction}")
+		fn.restype  = ctypes.c_uint32
+		fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		               ctypes.POINTER(ctypes.c_uint8)]
+		buf = (ctypes.c_uint8 * len(data))(*data)
+		out = (ctypes.c_uint8 * len(data))()
+		fn(buf, len(data), out)
+		return bytes(out)
+
+	data = bytes(range(16))
+	for decl in population:
+		coded = run(decl.name, "encode", data)
+
+		# `invertible`, and it is declared by every one of these.
+		assert decl.invertible, decl.name
+		assert run(decl.name, "decode", coded) == data, (
+			f"{decl.name}: declares `invertible` and does not round trip")
+
+		# `deterministic`: the same input twice, the same bytes twice.
+		assert decl.deterministic, decl.name
+		assert run(decl.name, "encode", data) == coded, (
+			f"{decl.name}: declares `deterministic` and encoded the same "
+			f"input two different ways")
+
+		# `error_propagating`: one flipped bit in the middle of the coded
+		# stream, and how much of the decode it takes with it.
+		damaged = bytearray(coded)
+		damaged[len(damaged) // 2] ^= 0x10
+		wrong = sum(bin(was ^ now).count("1") for was, now
+		            in zip(data, run(decl.name, "decode", bytes(damaged))))
+
+		if decl.error_propagating:
+			assert wrong > 1, (
+				f"{decl.name}: declares `error_propagating` and one flipped "
+				f"bit spoiled {wrong}, which is only itself")
+		else:
+			assert wrong == 1, (
+				f"{decl.name}: declares no error propagation and one flipped "
+				f"bit spoiled {wrong} bits")
+
+
 def test_every_polynomial_codec_is_checked_or_excused() -> None:
 	"""No generated CRC joins the standard kernels unchecked and unremarked.
 

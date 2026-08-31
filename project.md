@@ -15703,6 +15703,74 @@ checked by the group formula rather than by a listed expectation: a group is
 the shortest run that is both a whole number of bytes and a whole number of
 symbols, which is what makes `ratio_padded` mean anything.
 
+### 26.150 The axis the scrambler pair was built to demonstrate, measured
+
+`error_propagating` is a lattice axis and a promise a consumer acts on: it
+says a corrupt bit spoils more than itself, which is what a
+self-synchronising code costs. The derivation computes it from one word of
+the kernel description -- feedback from the input is additive and does not
+propagate, from the output is multiplicative and does -- and the schema
+comment above `scrambler_multiplicative` says the pair exists to demonstrate
+exactly that: "the same family and the same taps, and opposite properties,
+worked out from one word of the description".
+
+**Nothing had ever asked the generated code.** Flip one bit in the middle of
+the coded stream, decode, and count how much of the plaintext comes back
+wrong:
+
+    scrambler_additive          1 bit wrong    declares no propagation
+    sonet_scrambler             1
+    usb3_scrambler              1
+    prbs23                      1
+    interleave_16               1
+    nrzi_transition_on_one      2 bits wrong   declares propagation
+    nrzi_transition_on_zero     2
+    scrambler_multiplicative    4
+
+Eight for eight. The claim was true and is now checked, and how far a
+multiplicative one spreads is its tap count rather than anything the axis
+promises -- so the assertion is "more than itself" rather than a number.
+
+**And the comment that sent me looking was wrong in one word.** The section
+header said the pair is "the same family and the same taps, and opposite
+properties". The taps are 0x8810 and 0xB400 -- each is the polynomial its
+own textbook uses, and nothing about the pair depends on them being equal.
+The claim that holds is one word of description apart, and it is stated
+exactly now: two *declared* axes differ, `seekable` and `error_propagating`,
+and two further differences follow that are not axes -- the additive one is
+its own inverse, so its generated decoder is a call to its encoder, and the
+multiplicative one self-synchronises.
+
+**Round trip and determinism ride along**, because they are the other two
+axes every one of these declares and neither was checked as a claim of the
+declaration. Determinism is vacuous against today's tree -- these are pure
+functions -- and it is here for 26.139's case: a table code carrying running
+disparity, which 8b10b does, derives `deterministic` from its family and
+would fail this.
+
+**The population excludes the symbol maps, and the reason is the finding.**
+Manchester's decoder answers 0 for a code its table does not define, so a
+flipped bit produces a *visible* failure rather than a wrong answer. Asking
+this question of it would measure the refusal and call it an axis.
+
+**What the guard cannot catch, and that is the right boundary.** It holds
+the declaration and the object file to each other, and both come from the
+same kernel description -- so rewriting NRZI's `feedback = output` as
+`feedback = input` moves both together and passes. Whether the description
+matches the standard is a different question with its own tests, and the
+same sabotage fails two of them: the NRZI facts test, on 0xFF encoding to
+0x55, and the maximal-period test, on a keystream that comes out all zeroes.
+Recorded because a guard that looked like an oracle and was an agreement
+test would be read as covering more than it does.
+
+**Three sabotages.** The derivation forced to `True` for every shift
+register, caught at `scrambler_additive` spoiling only itself; forced to
+`False`, caught not by a codec assertion but by the control -- "no codec
+here declares error propagation, so the interesting half could not fail" --
+which is the line that stops this becoming a test only the easy half of
+which runs; and the third is the one above, which passes here by design and
+fails elsewhere.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

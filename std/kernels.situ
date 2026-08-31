@@ -210,8 +210,16 @@ impl code_4b5b derived;
 // ---------------------------------------------------------------------------
 // The remaining four families.
 //
-// The pair of scramblers is the point: the same family and the same taps, and
-// opposite properties, worked out from one word of the description.
+// The pair of scramblers is the point: one family, one word of the description
+// between them, and opposite answers on two of the declared axes -- `seekable`
+// is linear for one and none for the other, and only one is
+// `error_propagating`. Two more differences follow and are not axes: the
+// additive one is its own inverse, so the generated decoder is a call to the
+// encoder, and the multiplicative one self-synchronises.
+//
+// The taps differ between them because each is the polynomial its own
+// textbook uses. Nothing about the pair depends on that; the word `feedback`
+// decides all four.
 // ---------------------------------------------------------------------------
 
 // Feedback from the output, so neither seekable nor self-synchronising --
