@@ -1032,6 +1032,7 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	source = kernel.argument("feedback")
 	additive = isinstance(source, ast.NameRef) and source.name == "input"
+	complemented = kernel.flag("complement_feedback")
 	name  = ident(prefix, decl.name)
 	held  = _accumulator(width)
 	word  = f"uint{held}_t"
@@ -1057,6 +1058,16 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 			return f"state = ({word})({inner});"
 		return f"state = ({word})(({inner}) & ({word})0x{(1 << width) - 1:X}u);"
 
+	# The one XOR that separates the two differential conventions. It is built
+	# here rather than spelled twice because the encoder and the decoder must
+	# complement or not complement together: a decoder that disagreed with its
+	# encoder about this returns the complement of what was sent, which is
+	# plausible bytes with nothing at run time to notice.
+	feedback = (f"(uint8_t)({name}_parity(({word})(state & "
+	            f"({word})0x{taps:X}u)))")
+	if complemented:
+		feedback = f"(uint8_t)({feedback} ^ 1u)"
+
 	shared = [
 		"",
 		f"/* {decl.name}: a {width}-bit LFSR, taps 0x{taps:X}, seed 0x{seed:X}.",
@@ -1068,8 +1079,22 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		 if additive else
 		 " * receiver synchronises without being told the state -- and pays for it"),
 		(" */" if additive else
-		 " * with error propagation, which the signature reports.\n */"),
+		 " * with error propagation, which the signature reports."),
 	]
+	if complemented:
+		shared += [
+			" *",
+			" * The feedback is complemented, so the bit that causes a"
+			" transition is",
+			" * the opposite one from the same register without it. That is"
+			" the whole",
+			" * of the difference between the two NRZI conventions, and a"
+			" receiver",
+			" * built on the wrong one returns the complement of what was"
+			" sent.",
+		]
+	if not additive:
+		shared.append(" */")
 
 	if additive:
 		body = [
@@ -1122,8 +1147,7 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 			"",
 			"\t\tfor (bit = 0; bit < 8u; bit++) {",
 			"\t\t\tuint8_t plain = (uint8_t)((in[at] >> bit) & 1u);",
-			f"\t\t\tuint8_t feedback = (uint8_t)({name}_parity("
-			f"({word})(state & ({word})0x{taps:X}u)));",
+			f"\t\t\tuint8_t feedback = {feedback};",
 			"\t\t\tuint8_t output = (uint8_t)(plain ^ feedback);",
 			"",
 			"\t\t\tcoded = (uint8_t)(coded | (uint8_t)(output << bit));",
@@ -1150,8 +1174,7 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 			"",
 			"\t\tfor (bit = 0; bit < 8u; bit++) {",
 			"\t\t\tuint8_t coded = (uint8_t)((in[at] >> bit) & 1u);",
-			f"\t\t\tuint8_t feedback = (uint8_t)({name}_parity("
-			f"({word})(state & ({word})0x{taps:X}u)));",
+			f"\t\t\tuint8_t feedback = {feedback};",
 			"",
 			"\t\t\tplain = (uint8_t)(plain | (uint8_t)"
 			"((uint8_t)(coded ^ feedback) << bit));",

@@ -109,6 +109,41 @@ def test_a_shift_register_must_say_where_its_feedback_comes_from() -> None:
 	assert "seekable and self-synchronising" in rendered
 
 
+def test_complementing_the_feedback_changes_no_derived_property() -> None:
+	"""The flag says which bit causes a transition, and nothing else.
+
+	It is one xor on the term the register hands to the data, so it changes
+	which bits come out and none of where they can be read from. If it ever
+	moved a property, a schema would be choosing a convention and silently
+	buying a different capability vector with it -- so all nine are compared
+	rather than the two the feedback source is known to set.
+	"""
+	plain = only("codec mul { kernel = shift_register(taps = 1, width = 1, "
+	             "seed = 0, feedback = output); }")
+	inverted = only("codec mul { kernel = shift_register(taps = 1, width = 1, "
+	                "seed = 0, feedback = output, complement_feedback); }")
+
+	for prop in PROPERTIES:
+		assert getattr(plain, prop) == getattr(inverted, prop), prop
+
+
+def test_an_additive_scrambler_may_not_complement_its_feedback() -> None:
+	"""The flag exists for the differential convention, and says so.
+
+	Complementing an additive keystream is well defined -- it inverts every
+	output bit -- and no protocol here names one, so accepting it would emit a
+	generator nothing in this repository ever runs. The refusal says what
+	would have been accepted instead, which is the lesson 26.137 records: a
+	refusal that does not name the accepted spelling is read as "nothing
+	works".
+	"""
+	rendered = refusal("codec s { kernel = shift_register(taps = 5, "
+	                   "feedback = input, complement_feedback); }")
+	assert "complements the feedback of an additive scrambler" in rendered
+	assert "`complement_feedback` goes with `feedback = output`" in rendered
+	assert "USB's NRZI" in rendered
+
+
 def test_a_linear_block_is_systematic_only_in_standard_form() -> None:
 	plain = only("codec h { kernel = linear_block(n = 7, k = 4); }")
 	assert not plain.systematic

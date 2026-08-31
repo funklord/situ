@@ -470,6 +470,62 @@ def test_nrzi_transitions_on_a_one_and_holds_on_a_zero(
 	assert bytes(out) == data
 
 
+def test_usb_nrzi_transitions_on_a_zero_and_holds_on_a_one(
+		kernel_library: ctypes.CDLL) -> None:
+	"""The other convention, which is the one on every USB cable.
+
+	USB 2.0 section 7.1.8: a one is sent as no change in the level and a zero
+	as a change. That is the exact opposite of the codec above, and the
+	assertions here are the same two facts with the inputs swapped -- all
+	zeroes now flips on every bit, all ones now holds.
+
+	The pair is the point. Each codec passes its own two assertions and fails
+	the other's, which is what a name has to distinguish: a receiver built on
+	the wrong convention returns the complement of what was sent, with
+	nothing at run time to notice. Checking either alone would not show that
+	`complement_feedback` reaches the generated code at all -- an emitter
+	that dropped the flag produces the transition-on-one codec twice, and
+	only the cross-check below can see it.
+	"""
+	def run(codec: str, direction: str, data: bytes) -> bytes:
+		fn = getattr(kernel_library, f"situ_{codec}_{direction}")
+		fn.restype  = ctypes.c_uint32
+		fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		               ctypes.POINTER(ctypes.c_uint8)]
+
+		buf = (ctypes.c_uint8 * len(data))(*data)
+		out = (ctypes.c_uint8 * len(data))()
+		fn(buf, len(data), out)
+		return bytes(out)
+
+	usb = "nrzi_transition_on_zero"
+
+	# Every input bit a zero, so the level flips on every bit: 0101... from a
+	# zero seed, which is 0x55 per byte with bit 0 sent first.
+	assert run(usb, "encode", b"\x00" * 4) == b"\x55" * 4
+
+	# Every input bit a one, so the level never moves and stays at the seed.
+	assert run(usb, "encode", b"\xff" * 4) == b"\x00" * 4
+
+	# The two codecs are opposites rather than the same generator emitted
+	# twice, and the relation between them is not the complement it looks
+	# like. Writing o for transition-on-one and u for transition-on-zero:
+	# u(0) = o(0) ^ 1, and thereafter each extra inversion cancels the one
+	# before it, so u(n) = o(n) ^ 1 for even n and u(n) = o(n) for odd. The
+	# state carries across bytes and a byte starts on an even bit, so every
+	# byte differs by 0x55 with bit 0 sent first -- which is also what the
+	# two assertions above say, read against each other.
+	hdlc = "nrzi_transition_on_one"
+	data = bytes(range(64))
+	ours   = run(usb, "encode", data)
+	theirs = run(hdlc, "encode", data)
+	assert ours == bytes(byte ^ 0x55 for byte in theirs), ours.hex()
+
+	# And the round trip, which a decoder that dropped the complement passes
+	# nothing else here would catch: it would decode its own encoder happily.
+	assert run(usb, "decode", ours) == data
+
+
 def test_every_polynomial_codec_is_checked_or_excused() -> None:
 	"""No generated CRC joins the standard kernels unchecked and unremarked.
 

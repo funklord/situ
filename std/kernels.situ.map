@@ -37,6 +37,7 @@ codec interleave_16 derived length_preserving seekable=permuted granularity=byte
 codec manchester_802_3 derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
 codec manchester_thomas derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
 codec nrzi_transition_on_one derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
+codec nrzi_transition_on_zero derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
 codec ppp_async_framing derived expansion=ratio_bounded(2,1) seekable=none granularity=byte invertible deterministic
 codec prbs23 derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec reed_solomon_255_223 derived expansion=+32 seekable=linear granularity=block(255) systematic invertible deterministic error_propagating

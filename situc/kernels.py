@@ -379,6 +379,36 @@ def _shift_register(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 		)
 
 	from_input = source == "input"
+
+	# `complement_feedback` inverts the bit the register hands to the data, and
+	# it exists because a differential code has two conventions rather than
+	# one. Fed from the output at width 1 it is the whole difference between
+	# NRZI transitioning on a one -- HDLC's, and magnetic recording's -- and on
+	# a zero, which is USB's. Neither is a variant of the other at the surface:
+	# a receiver built on the wrong one returns the complement of what was sent.
+	#
+	# It says nothing about any of the nine derived properties. Complementing
+	# one XOR term changes which bits come out and none of where they can be
+	# read from, so seekability, error propagation, invertibility and the rest
+	# are the feedback source's answer exactly as before.
+	if kernel.flag("complement_feedback") and from_input:
+		raise error(
+			f"`{decl.name}` complements the feedback of an additive scrambler",
+			kernel.span,
+			label = "`complement_feedback` goes with `feedback = output`",
+			notes = ["an additive scrambler xors the data with the register's "
+			         "own bits, so complementing them inverts every output bit "
+			         "and leaves the code additive -- it does not make it "
+			         "differential",
+			         "what the flag is for is the differential convention: "
+			         "`feedback = output` with `complement_feedback` "
+			         "transitions on a zero, which is USB's NRZI, against a "
+			         "one without it, which is HDLC's",
+			         "an inverted keystream is a real construct and no "
+			         "protocol here names one; it would generate code nothing "
+			         "in this repository runs"],
+		)
+
 	return Derived(
 		expansion        = ast.Expansion.PRESERVING,
 		seekable         = ast.Seekable.LINEAR if from_input else ast.Seekable.NONE,

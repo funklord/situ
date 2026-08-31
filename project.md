@@ -2435,7 +2435,7 @@ kernel families, or a pipeline of them. This bounds the tier-2 design.
 | **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon, BCH | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 
 | **linear block** | generator or parity-check matrix over GF(2) | Hamming, extended Hamming, LDPC, arbitrary block codes | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
-| **shift register** | taps, feedback source, initial state | convolutional codes, additive and multiplicative scramblers, Miller | `length_preserving` or `ratio_exact`; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output |
+| **shift register** | taps, feedback source, initial state, and whether the feedback is complemented | convolutional codes, additive and multiplicative scramblers, NRZI in both conventions, Miller | `length_preserving` or `ratio_exact`; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output. `complement_feedback` moves none of them |
 | **permutation** | index mapping, closed form or table | block and convolutional interleavers | `length_preserving`; `seekable = permuted`; `deterministic` |
 | **stuffing** | trigger predicate plus insertion rule | HDLC bit stuffing, COBS, SLIP, byte stuffing | `expansion = ratio_bounded`; `not seekable`; interior addressing lost |
 
@@ -15000,6 +15000,9 @@ codec `nrzi` unqualified would have repeated exactly what `manchester` is
 refused for: two codes, one name, and a decoder built on the wrong one
 returning plausible bytes with nothing at run time to notice.
 
+*Superseded on the USB half: `complement_feedback` says it now, and
+`nrzi_transition_on_zero` is generated and checked. See 26.146.*
+
 **Gray and BCD are the other two, and they are a category error rather
 than a misfiling.** Neither is a codec. BCD is already a field type --
 `situ_bcd_encode` in the runtime, `bcd2` in `example/rtc` -- and adding a
@@ -15278,9 +15281,13 @@ all. Each of these is the copyright holder's; none is blocked on work.
 - **`linear_block` knows one code.** `hamming_7_4`, and going further
   needs the generator matrix expressible in a schema, which is a language
   addition rather than a table entry.
-- **USB's NRZI is not expressible.** 26.140 added transition-on-one,
-  which is HDLC's. USB transitions on a zero, which needs the feedback
-  complemented and no kernel argument says that.
+- ~~**USB's NRZI is not expressible.**~~ **Closed, and it was not a
+  decision.** 26.137 had already settled the class -- a protocol needs it,
+  so it is work -- and listing it here was a misclassification rather than
+  a question anybody was waiting on. `complement_feedback` is one xor in
+  the emitter and one refusal in the derivation; see 26.146. The other
+  items in this list are not that shape: each needs something chosen, not
+  something built.
 - **8b10b and CoAP are one absence, not two** (26.139, 26.142): state
   carried between items, which situ holds inside codecs and nowhere in
   the layout. Answering them separately is how a language grows two
@@ -15362,6 +15369,89 @@ two population sweeps and the PEP 701 check each carry one, and each would
 have been quoted wrongly without it. And reading the artifact rather than
 a summary of it -- `git diff-tree` rather than `git show --stat`, the
 commit's file list rather than a rendering that also contains its message.
+
+### 26.146 USB's NRZI, and a gap that was filed as a decision
+
+`complement_feedback` on the `shift_register` kernel, and
+`nrzi_transition_on_zero` in `std/kernels.situ`. USB 2.0 section 7.1.8 sends
+a one as no change in the line level and a zero as a change, which is the
+opposite of the convention 26.140 built, and every USB packet below high
+speed is in it.
+
+**The implementation is one xor.** The multiplicative loop already computed
+`feedback = parity(state & taps)`; the flag makes it
+`parity(state & taps) ^ 1`, so `output = plain ^ state ^ 1` at width 1 --
+and a one now holds the level where a zero flips it. Encoder and decoder
+build that expression from one variable rather than spelling it twice,
+because a decoder that disagreed with its encoder about the complement
+returns the complement of what was sent: plausible bytes, no error, and
+nothing at run time to notice.
+
+**Nothing else moved, and that was checked rather than argued.** Refactoring
+the feedback into a variable regenerated `std/kernels.situ` and
+`std/codecs.situ` byte-identically -- 109,624 and 515 bytes, compared before
+and after -- so the twelve existing shift-register codecs are provably
+untouched. The final diff over the generated file is 71 lines added and none
+removed. The flag moves none of the nine derived properties either, and the
+test compares all nine rather than the two the feedback source is known to
+set: a schema choosing a convention must not silently buy a different
+capability vector with it.
+
+**Checking one codec would not have shown the flag reaching the code.** An
+emitter that dropped it produces transition-on-one twice, and both copies
+pass their own two assertions. So the test asserts the standard's two facts
+for the new codec -- all zeroes flips on every bit, all ones holds -- and
+then compares the two codecs against each other. That relation is not the
+complement it looks like: the first output bit is inverted, the next
+inversion cancels it, and the two alternate, so with bit 0 sent first every
+byte differs by **0x55 rather than 0xFF**. The state carries across bytes and
+a byte begins on an even bit, which is why it is 0x55 for every byte and not
+only the first.
+
+**Four sabotages, each watched going red**: the emitter ignoring the flag;
+the encoder losing it while the decoder keeps it; the additive refusal
+deleted; and the flag wired to change a derived property.
+
+**Refused on the additive side, and the refusal says what would be
+accepted.** Complementing an additive keystream is well defined -- it
+inverts every output bit -- and no protocol here names one, so generating
+it would be code nothing in this repository runs. The diagnostic names
+`feedback = output` and says which convention each spelling gets, which is
+26.137's lesson about a refusal that does not name the accepted form.
+
+**The part worth keeping is the filing error.** 26.144 listed this under
+"decisions waiting ... each of these is the copyright holder's", one bullet
+away from `linear_block`'s generator matrix and the 8b10b/CoAP question,
+which genuinely are. It is not the same shape. Those need something
+*chosen* -- a construct that does not exist, and a spelling for state
+carried between items that must serve both cases at once. This needed
+something *built*, and 26.137 had already settled that class in the
+holder's own words: if a protocol needs it, we implement it, and the
+judgement moves from whether to how.
+
+So the cost of the misfiling was not an hour of work; it was that a piece
+of work sat in a list nobody was coming back to, wearing a decision's
+clothes. That is the shape `working-practice.md` names -- a wrongly
+deferred question is caught by nothing, because it looks exactly like
+diligence -- and this is the first instance of it in this tree that was
+caught. **A gap belongs in the decisions list only if naming what to build
+is the hard part.** Where the construct is obvious and only the writing is
+left, it is a task, and filing it as a decision hides it.
+
+**What this does not close, and the defect that fell out of checking it.**
+USB stuffs a zero after six consecutive ones, and that is a separate stage:
+stuffing changes the length and a line code does not, so the two are a
+pipeline of two kernels rather than one. The schema comment first claimed
+situ already had that stage, spelled `stuffing(worst_case = 7, per = 6,
+unit = bit)`. Reading the emitter rather than shipping the sentence found
+that `per` **is derived from and not generated from**: the signature of
+`stuffing(worst_case = 7, per = 6, unit = bit, code = hdlc)` is
+`ratio_bounded(7,6)` and the emitted C stuffs after five, with a comment
+saying five and a buffer bound of `len + len / 5`. A schema can therefore
+declare one bit stuffing and link another, silently -- which is the one
+thing a tier-2 codec is supposed to make impossible, since the signature and
+the implementation are meant to come from one description. The comment now
+says only what is true.
 
 ## 27. Questions, and how they were settled
 

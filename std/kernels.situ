@@ -231,25 +231,45 @@ codec scrambler_additive {
 impl scrambler_additive derived;
 
 // NRZI, and it is here rather than among the table codes because it is not
-// one: a 1 is sent as a transition and a 0 as none, so the output bit is the
-// input bit exclusive-ored with the *previous output bit*. That is a one-bit
-// register fed from its own output, which is exactly the multiplicative shape
-// above with the width turned down as far as it goes.
+// one: a bit is sent as a transition or as none, so the output bit depends on
+// the *previous output bit* and no stateless symbol map expresses that. It is
+// a one-bit register fed from its own output, which is exactly the
+// multiplicative shape above with the width turned down as far as it goes.
 //
-// Nothing new implements it. taps = 0x1 and width = 1 make the feedback the
-// whole register, so `output = plain ^ state` and `state = output`, which is
-// the differential rule written in the family that already had it.
+// taps = 0x1 and width = 1 make the feedback the whole register, so the
+// emitted loop reduces to `output = plain ^ state; state = output` -- the
+// differential rule written in the family that already had it.
 //
-// This is the transition-on-one convention -- HDLC's, and magnetic
-// recording's. USB inverts it, transitioning on a zero, and that is not
-// expressible here: it needs the feedback complemented, which no kernel
-// argument says. Naming this one `nrzi` unqualified would repeat the mistake
-// `manchester` is refused for, so it says which it is.
+// Which bit causes the transition is the convention, there are two, and
+// neither is the default, so each says which it is. Naming either one `nrzi`
+// unqualified would repeat the mistake `manchester` is refused for: two codes
+// under one name, and a receiver built on the wrong one returning the
+// complement of what was sent.
+//
+// This one transitions on a one. HDLC's, and magnetic recording's.
 codec nrzi_transition_on_one {
 	kernel = shift_register(taps = 0x1, width = 1, seed = 0x0,
 	                        feedback = output);
 }
 impl nrzi_transition_on_one derived;
+
+// And this one transitions on a zero, which is USB's -- see USB 2.0 section
+// 7.1.8, where a one is sent as no change in level and a zero as a change.
+// Every USB packet on the wire below high speed is in this code.
+//
+// The whole of the difference is `complement_feedback`, which inverts the bit
+// the register hands to the data: `output = plain ^ state ^ 1` rather than
+// `output = plain ^ state`. So a one now holds the level and a zero flips it,
+// which is the same register run the other way up rather than a second code.
+//
+// USB also stuffs a zero after six ones, and that is a separate stage rather
+// than part of this one: stuffing changes the length and this code does not,
+// so they are a pipeline of two kernels. What is here is the line code.
+codec nrzi_transition_on_zero {
+	kernel = shift_register(taps = 0x1, width = 1, seed = 0x0,
+	                        feedback = output, complement_feedback);
+}
+impl nrzi_transition_on_zero derived;
 
 // The scramblers protocols actually name, as against the two above, which are
 // textbook parameters demonstrating the two feedback shapes.
