@@ -28,7 +28,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v5 is where checkout moved to Node 24, which is the deprecation the
+      # runner annotates; v7 is the current major and the two steps between
+      # are a credential-handling change this workflow does not reach (it
+      # never uses the token after checkout) and a refusal to check out a
+      # fork PR under `pull_request_target` or `workflow_run`, neither of
+      # which is a trigger here. Taking the current major rather than the
+      # minimum that clears the warning, because the minimum is a version
+      # that will be annotated again.
+      - uses: actions/checkout@v7
 
       # Named one per line with a reason, because a toolchain that quietly
       # falls out of this list takes a group of tests with it and says so
@@ -63,7 +71,9 @@ jobs:
             imagemagick \
             tshark
 
-      - uses: actions/setup-python@v5
+      # v6 is Node 24 here and v7 is an ESM and dependency refresh. Same
+      # reasoning as above.
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 

@@ -15977,12 +15977,23 @@ pair of names has turned up** -- `tools` and `tests` for `tool` and `test`.
 and `make help`'s, and this is `pyproject.toml`'s. The directories were never
 called that.
 
-**Still open, and named rather than taken with a red on the board.** Every
-run annotates "Node.js 20 is deprecated ... actions/checkout@v4,
-actions/setup-python@v5 are being forced to run on Node.js 24". A warning
-today and a break when the runners drop it; bumping both is its own change,
-and it belongs after a green rather than mixed into the commit trying to get
-one.
+**Named rather than taken with a red on the board, and taken once there was
+a green.** Every run annotated "Node.js 20 is deprecated ...
+actions/checkout@v4, actions/setup-python@v5 are being forced to run on
+Node.js 24" -- a warning today and a break when the runners drop it, but
+bumping both is its own change and belonged after a green rather than mixed
+into the commit trying to get one.
+
+Both are at v7 now, which is the current major rather than the minimum that
+clears the warning. The minimum is checkout v5 and setup-python v6, each
+being the release that moved to Node 24; taking those would be pinning to a
+version that gets annotated again. The majors in between were read rather
+than assumed: checkout v6 persists credentials to a separate file, which
+this workflow never reaches because it does not use the token after
+checkout, and v7 refuses to check out a fork PR under `pull_request_target`
+or `workflow_run`, neither of which is a trigger here. setup-python v7 is an
+ESM and dependency refresh. Nothing in `make check` reads the workflow, so
+the verification for this one is the run itself.
 
 ### 26.154 The first green in three weeks, and what it is worth
 
