@@ -541,6 +541,7 @@ STUFFING_MEASURED: dict[str, tuple[bytes, int, tuple[int, int], int]] = {
 	"ppp_async": (b"\x7e" * 16,   16, (2, 1),     1),
 	"slip":      (b"\xc0" * 16,   16, (2, 1),     1),
 	"smtp_dot":  (b".\r\n" * 16,  48, (4, 3),     0),
+	"usb":       (b"\xff" * 3,    24, (7, 6),     0),
 }
 
 #: The codes whose generated encoder appends a frame delimiter, so that its
@@ -628,6 +629,67 @@ def test_every_stuffing_code_expands_by_the_amount_it_is_measured_at(
 			f"{code}: adds {adds} bytes beyond its ratio and is "
 			f"{'not ' if code not in DELIMITER_NOT_IN_THE_SIGNATURE else ''}"
 			f"listed as one that does")
+
+
+def test_the_two_bit_stuffings_differ_at_the_run_that_names_them(
+		kernel_library: ctypes.CDLL) -> None:
+	"""Five ones is HDLC's trigger and not USB's, which is the whole of it.
+
+	One algorithm and one constant, so a generator that ignored the constant
+	emits the same function twice and each copy passes its own round trip.
+	The discriminating input is a run of exactly five: HDLC must insert a
+	zero after it and USB must not, and the outputs differ in length as well
+	as content, so neither a length check nor a content check alone is being
+	relied on.
+
+	Bits are read back MSB first, which is the order `situ_bits_set_msb`
+	writes them and the order both codes count runs in.
+	"""
+	def stuff(codec: str, bits: str) -> str:
+		data = bits.ljust((len(bits) + 7) // 8 * 8, "0")
+		buf  = (ctypes.c_uint8 * (len(data) // 8))(
+			*(int(data[at:at + 8], 2) for at in range(0, len(data), 8)))
+		out  = (ctypes.c_uint8 * (len(data) // 8 + 4))()
+
+		fn = getattr(kernel_library, f"situ_{codec}_encode")
+		fn.restype  = ctypes.c_uint32
+		fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		               ctypes.POINTER(ctypes.c_uint8)]
+		written = fn(buf, len(bits), out)
+
+		whole = "".join(f"{byte:08b}" for byte in out)
+		return whole[:written]
+
+	hdlc = "hdlc_bit_stuffing"
+	usb  = "usb_bit_stuffing"
+
+	# Five ones and then a zero. HDLC has already stuffed by the time the
+	# zero arrives; USB has not, and never will on this input.
+	assert stuff(hdlc, "11111000") == "111110000"
+	assert stuff(usb,  "11111000") == "11111000"
+
+	# Six ones, which is where USB acts and where HDLC has acted once
+	# already. Both grow by one bit and they put the bit in different places.
+	assert stuff(hdlc, "11111111") == "111110111"
+	assert stuff(usb,  "11111111") == "111111011"
+
+	# And the round trip, per code, over a run long enough to stuff twice.
+	for codec in (hdlc, usb):
+		bits = "1" * 24
+		coded = stuff(codec, bits)
+		buf = (ctypes.c_uint8 * ((len(coded) + 7) // 8))(
+			*(int(coded.ljust((len(coded) + 7) // 8 * 8, "0")[at:at + 8], 2)
+			  for at in range(0, (len(coded) + 7) // 8 * 8, 8)))
+		out = (ctypes.c_uint8 * 8)()
+
+		back = getattr(kernel_library, f"situ_{codec}_decode")
+		back.restype  = ctypes.c_uint32
+		back.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		                 ctypes.POINTER(ctypes.c_uint8)]
+		written = back(buf, len(coded), out)
+
+		whole = "".join(f"{byte:08b}" for byte in out)
+		assert whole[:written] == bits, f"{codec}: {whole[:written]}"
 
 
 def test_every_polynomial_codec_is_checked_or_excused() -> None:

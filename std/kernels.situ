@@ -329,10 +329,38 @@ codec cobs {
 }
 impl cobs derived;
 
+// The two bit stuffings, which are one algorithm and two constants: insert a
+// zero after a run of ones, so that a run one longer cannot occur in the data
+// and means something else on the wire.
+//
+// They are named apart for the reason the two NRZIs are. The rule is shared
+// and the run is not, and a decoder built on the wrong length is wrong from
+// the first stuffed bit onward with nothing at run time to notice. What the
+// insertion buys differs too, which is why neither is the other's default.
+
+// HDLC's five, so the flag sequence 0x7E cannot appear inside a frame.
 codec hdlc_bit_stuffing {
 	kernel = stuffing(worst_case = 6, per = 5, unit = bit, code = hdlc);
 }
 impl hdlc_bit_stuffing derived;
+
+// USB's six, USB 2.0 section 7.1.9, and it is a clock rather than a flag. The
+// data goes out through `nrzi_transition_on_zero`, which holds the line still
+// on a one, so an unbroken run of ones is an unbroken level and a receiver has
+// nothing to recover its bit clock from. Six is the longest run the phase-
+// locked loop is specified to ride out.
+//
+// The pair is a pipeline and the order is not free: USB stuffs before it
+// encodes, so it is `usb_bit_stuffing |> nrzi_transition_on_zero`. Stuffing
+// the encoded stream instead would be a different code and a broken one. In
+// the line stream a held level is a run of *identical* bits, which may be
+// zeros just as easily as ones, so a rule that counts runs of ones would
+// leave half the stuck-line cases unstuffed -- and the run it did break
+// would no longer correspond to any run in the data a receiver recovers.
+codec usb_bit_stuffing {
+	kernel = stuffing(worst_case = 7, per = 6, unit = bit, code = usb);
+}
+impl usb_bit_stuffing derived;
 
 // SMTP dot-stuffing, RFC 5321 section 4.5.2. A line beginning with a period is
 // sent with two and the receiver removes one, which is what leaves `CRLF . CRLF`
@@ -388,3 +416,9 @@ impl ppp_async_framing derived;
 // ---------------------------------------------------------------------------
 
 codec framed = crc32 |> interleave_16 |> manchester_802_3;
+
+// USB's line coding, both stages and in the order the standard puts them.
+// The pipeline is what says what it costs: a bounded expansion followed by a
+// length-preserving stage, which is a shape the one above does not have --
+// `framed` is exact ratios all the way down.
+codec usb_line = usb_bit_stuffing |> nrzi_transition_on_zero;

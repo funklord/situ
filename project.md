@@ -15462,6 +15462,9 @@ thing a tier-2 codec is supposed to make impossible, since the signature and
 the implementation are meant to come from one description. The comment now
 says only what is true.
 
+*The declaration hole is closed in 26.147 and USB's own stuffing in
+26.148.*
+
 ### 26.147 A named code's overhead is the code's, and three declare it short
 
 26.146's schema comment claimed situ already had USB's bit stuffing, spelled
@@ -15560,6 +15563,85 @@ does not reproduce. It is recorded because of what it cost rather than
 what it was: a sabotage that fails for the wrong reason has demonstrated
 nothing about the check it was aimed at, and both were re-run from a clean
 tree before any of the four above was believed.
+
+### 26.148 USB's bit stuffing, and the whole of its line coding
+
+26.146 left this open by name: USB stuffs a zero after six consecutive ones,
+situ's bit stuffing was HDLC's five, and the two are a separate stage from
+the line code because stuffing changes the length and NRZI does not.
+
+**One algorithm, two constants, two names.** `_hdlc` became
+`_bit_stuffing`, the run is its argument, and `BIT_STUFFING` carries the run
+with the sentence saying what the insertion buys -- HDLC's five keeps the
+flag sequence 0x7E out of a frame, USB's six keeps the *line* moving. They
+are named apart for the reason the two NRZIs are: a decoder built on the
+wrong length is wrong from the first stuffed bit onward, with nothing at run
+time to notice.
+
+**And that is the opposite trade from SLIP and PPP**, which decision 0017's
+third amendment refused to merge. Those two share a shape -- escape-stuffed
+byte codes -- and differ in what they *do*: SLIP substitutes from a table
+and refuses an escape it was not told about, PPP transforms with an xor and
+therefore reverses escapes nobody enumerated. Sharing an implementation
+would have made one of them wrong. Here the implementation is genuinely
+identical and only a number differs, so one generator with an argument is
+the honest shape and two names is still the honest surface. The test for
+which case you are in is whether merging them would change any behaviour,
+not whether the descriptions rhyme.
+
+**The refactor moved nothing.** Regenerating `std/kernels.situ` and
+`std/codecs.situ` gave byte-identical output, 111,866 and 515 bytes --
+including HDLC's generated comment, which was rewritten as a per-code
+string and had to come back the same.
+
+**26.147's guard paid for itself one commit after it was written.** Adding
+the row to `STUFFING_BOUNDS` before the codec existed failed
+immediately with the three populations printed side by side, and adding the
+codec without the measurement row failed again. The point of that guard was
+that a stuffing code could join the build with nothing checking what it
+actually expands by; the first new code since is the proof it works.
+
+**Checking USB alone would have proved nothing.** A generator that ignored
+the run emits the same function twice, and each copy passes its own round
+trip. So the discriminating input is a run of exactly five ones followed by
+a zero, which is HDLC's trigger and not USB's:
+
+    11111000  ->  111110000   (hdlc, stuffed)
+    11111000  ->  11111000    (usb, untouched)
+    11111111  ->  111110111   (hdlc)
+    11111111  ->  111111011   (usb)
+
+The first pair differs in length and the second in content, so neither a
+length check nor a content check is carrying the result alone.
+
+**The pipeline says what the pair costs**, and it is a shape the tree did
+not have. `framed` is exact ratios all the way down; `usb_line` is a
+bounded expansion followed by a length-preserving one:
+
+    codec usb_line unbound expansion=ratio_bounded(7,6) seekable=none
+                   granularity=bit invertible deterministic error_propagating
+
+The bounded ratio survives the length-preserving stage, seekability is gone
+because stuffing took it, and `error_propagating` arrives from the NRZI
+half. None of that was declared.
+
+**The order is not free, and the reason is sharper than "the standard says
+so".** USB stuffs before it encodes. Stuffing the encoded stream instead
+would not be the same code applied later -- in the line stream a held level
+is a run of *identical* bits, which may be zeros as easily as ones, so a
+rule counting runs of ones leaves half the stuck-line cases unstuffed, and
+the run it did break would correspond to no run in the data a receiver
+recovers.
+
+**What USB has now.** `crc16_usb` and `usb3_scrambler` were already here.
+With `usb_bit_stuffing` and `nrzi_transition_on_zero` the low- and
+full-speed line path is expressible end to end -- CRC, stuffing, line code,
+in one schema and in the order the standard puts them.
+
+**Three sabotages, each watched going red**: USB's run set to five, so it is
+HDLC twice, caught by the discriminating input; the decoder's run left one
+behind the encoder's, caught by the round trip returning nothing; and the
+`usb` row deleted from the bounds table, caught by the population guard.
 
 ## 27. Questions, and how they were settled
 

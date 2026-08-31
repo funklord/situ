@@ -540,16 +540,18 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 #: could have emitted.
 #:
 #: The numbers are the generators': COBS replaces a run of up to 254 bytes
-#: with 255, HDLC inserts a zero after five ones, SMTP sends a `.CRLF` line
-#: as four bytes for three, and both escape-stuffed byte codes can double a
-#: payload that is nothing but the delimiter. Adding a code means adding its
-#: implementation and its row together.
+#: with 255, the two bit stuffings insert a zero after five ones and after
+#: six, SMTP sends a `.CRLF` line as four bytes for three, and both
+#: escape-stuffed byte codes can double a payload that is nothing but the
+#: delimiter. Adding a code means adding its implementation and its row
+#: together.
 STUFFING_BOUNDS: dict[str, tuple[int, int]] = {
 	"cobs":      (255, 254),
 	"hdlc":      (6, 5),
 	"ppp_async": (2, 1),
 	"slip":      (2, 1),
 	"smtp_dot":  (4, 3),
+	"usb":       (7, 6),
 }
 
 

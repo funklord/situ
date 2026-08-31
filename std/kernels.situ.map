@@ -48,3 +48,5 @@ codec slip_framing derived expansion=ratio_bounded(2,1) seekable=none granularit
 codec smtp_dot_stuffing derived expansion=ratio_bounded(4,3) seekable=none granularity=stream invertible deterministic
 codec sonet_scrambler derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec usb3_scrambler derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
+codec usb_bit_stuffing derived expansion=ratio_bounded(7,6) seekable=none granularity=bit(1) invertible deterministic
+codec usb_line unbound expansion=ratio_bounded(7,6) seekable=none granularity=bit invertible deterministic error_propagating

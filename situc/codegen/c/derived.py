@@ -1214,8 +1214,8 @@ def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return None
 	if code == "cobs":
 		return _cobs(decl, prefix)
-	if code == "hdlc":
-		return _hdlc(decl, prefix)
+	if code in BIT_STUFFING:
+		return _bit_stuffing(decl, prefix, code)
 	if code == "smtp_dot":
 		return _smtp_dot(decl, prefix)
 	if code in ESCAPE_STUFFING:
@@ -1523,24 +1523,55 @@ def _cobs(decl: ast.CodecDecl, prefix: str) -> list[str]:
 	]
 
 
-def _hdlc(decl: ast.CodecDecl, prefix: str) -> list[str]:
-	"""HDLC bit stuffing: after five ones in a row, insert a zero.
+#: Bit-stuffing codes: the run of ones that triggers an inserted zero, what
+#: the insertion is for, and what a run one longer means to a decoder.
+#:
+#: Two codes rather than one with a parameter, and they are named apart for
+#: the reason 26.140 names the two NRZIs apart: a decoder built on the wrong
+#: run length returns bytes that are wrong from the first stuffed bit onward,
+#: with nothing at run time to notice. What they share is the algorithm, so
+#: the generator is one function and the run is its argument -- the opposite
+#: trade from SLIP and PPP, which share a name for their shape and differ in
+#: what they actually do (decision 0017's third amendment).
+BIT_STUFFING: dict[str, tuple[int, tuple[str, ...], str]] = {
+	"hdlc": (5,
+	         ("After five consecutive ones a zero is inserted, so the flag "
+	          "sequence",
+	          "cannot appear inside a frame. Six bits out for five in, worst "
+	          "case,",
+	          "and where a frame lands in that range depends on its content."),
+	         "six ones is a flag, not data"),
+	"usb":  (6,
+	         ("After six consecutive ones a zero is inserted, so the line "
+	          "cannot",
+	          "hold still: this goes out through NRZI, which transitions on a "
+	          "zero,",
+	          "so an unbroken run of ones would leave a receiver nothing to",
+	          "recover its clock from. USB 2.0 section 7.1.9. Seven bits out "
+	          "for",
+	          "six in, worst case."),
+	         "seven ones cannot be sent"),
+}
 
-	Which is what stops the flag sequence 0x7E appearing inside a frame. The
-	worst case is six bits out for five in, and how close to it any particular
-	frame gets depends on the data.
+
+def _bit_stuffing(decl: ast.CodecDecl, prefix: str, code: str) -> list[str]:
+	"""Insert a zero after a run of ones: HDLC's five, USB's six.
+
+	One algorithm and one constant. The worst case is `run + 1` bits out for
+	`run` in, and how close to it any particular frame gets depends on the
+	data -- which is `ratio_bounded` and why `kernels.STUFFING_BOUNDS` holds
+	the pair rather than the schema being trusted for it.
 	"""
 	name = ident(prefix, decl.name)
+	run, purpose, overrun = BIT_STUFFING[code]
 
 	return [
 		"",
-		f"/* {decl.name}: HDLC bit stuffing.",
+		f"/* {decl.name}: {code.upper()} bit stuffing.",
 		" *",
-		" * After five consecutive ones a zero is inserted, so the flag sequence",
-		" * cannot appear inside a frame. Six bits out for five in, worst case,",
-		" * and where a frame lands in that range depends on its content.",
+		*(f" * {line}" for line in purpose),
 		" *",
-		" * Lengths are in bits. `out` needs len + len / 5 + 1 bits.",
+		f" * Lengths are in bits. `out` needs len + len / {run} + 1 bits.",
 		" */",
 		f"uint32_t {name}_encode(const uint8_t *in, uint32_t len, uint8_t *out)",
 		"{",
@@ -1555,7 +1586,7 @@ def _hdlc(decl: ast.CodecDecl, prefix: str) -> list[str]:
 		"",
 		"\t\tif (bit) {",
 		"\t\t\tones++;",
-		"\t\t\tif (ones == 5u) {",
+		f"\t\t\tif (ones == {run}u) {{",
 		"\t\t\t\tsitu_bits_set_msb(out, written++, 1u, 0u);",
 		"\t\t\t\tones = 0;",
 		"\t\t\t}",
@@ -1576,11 +1607,11 @@ def _hdlc(decl: ast.CodecDecl, prefix: str) -> list[str]:
 		"\tfor (at = 0; at < len; at++) {",
 		"\t\tuint32_t bit = (uint32_t)situ_bits_get_msb(in, at, 1u);",
 		"",
-		"\t\tif (ones == 5u) {",
+		f"\t\tif (ones == {run}u) {{",
 		"\t\t\t/* A stuffed zero, which the encoder put there. */",
 		"\t\t\tones = 0;",
 		"\t\t\tif (bit) {",
-		"\t\t\t\treturn 0;\t/* six ones is a flag, not data */",
+		f"\t\t\t\treturn 0;\t/* {overrun} */",
 		"\t\t\t}",
 		"\t\t\tcontinue;",
 		"\t\t}",
