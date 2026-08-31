@@ -21,6 +21,7 @@ import binascii
 import ctypes
 import importlib
 import itertools
+import math
 import random
 import shutil
 import subprocess
@@ -690,6 +691,105 @@ def test_the_two_bit_stuffings_differ_at_the_run_that_names_them(
 
 		whole = "".join(f"{byte:08b}" for byte in out)
 		assert whole[:written] == bits, f"{codec}: {whole[:written]}"
+
+
+def test_every_table_codec_encodes_by_the_ratio_it_declares(
+		kernel_library: ctypes.CDLL) -> None:
+	"""The declared ratio measured against the generated encoder, and the
+	partial symbol nobody was refusing.
+
+	A `table` kernel comes in two shapes and they count in different units:
+	an exact-ratio code walks bits, and a padded one walks whole input bytes
+	into whole output groups. `traverse.decode_counts_bits` exists because
+	getting that wrong was a buffer overrun (26.35); what nothing measured is
+	whether the ratio itself is what comes out.
+
+	It is, in every case, for a length that is a whole number of units. What
+	was not is a length that is not. `base16` handed seven bits encoded four
+	of them and returned 8 -- a successful-looking answer, three bits gone,
+	and a generated comment promising `bits * 8 / 4` which for seven bits is
+	14. Manchester's decoder dropped an odd trailing bit the same way. Both
+	refuse now, as `interleave_16` already did for a partial block, and the
+	generated comment says so.
+	"""
+	kernels = ROOT / "std" / "kernels.situ"
+	parsed  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	def call(codec: str, direction: str, data: bytes, units: int) -> int:
+		fn = getattr(kernel_library, f"situ_{codec}_{direction}")
+		fn.restype  = ctypes.c_uint32
+		fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		               ctypes.POINTER(ctypes.c_uint8)]
+		buf = (ctypes.c_uint8 * max(len(data), 1))(*data)
+		out = (ctypes.c_uint8 * 512)()
+		return int(fn(buf, units, out))
+
+	tables = [decl for decl in parsed.codecs()
+	          if decl.kernel is not None
+	          and decl.kernel.family is ast.KernelFamily.TABLE]
+	assert len(tables) >= 8, (
+		f"{len(tables)} table codecs found in std/kernels.situ; this guard is "
+		f"reading the wrong thing, and a short population passes as loudly "
+		f"as a whole one")
+
+	for decl in tables:
+		kernel = decl.kernel
+		assert kernel is not None
+		inputs  = getattr(kernel.argument("input_bits"), "value", 0)
+		outputs = getattr(kernel.argument("output_bits"), "value", 0)
+		assert inputs and outputs, decl.name
+
+		if kernel.argument("pad") is not None:
+			# Padded: whole input *bytes* into whole output groups, where a
+			# group is the shortest run that is both a whole number of bytes
+			# and a whole number of symbols. The declaration says
+			# `ratio_padded`, and this is what that has to mean.
+			group  = math.lcm(inputs, 8) // 8
+			result = group * 8 // inputs
+			for length in (1, group - 1, group, group + 1, group * 3):
+				if length < 1:
+					continue
+				expected = -(-length // group) * result
+				assert call(decl.name, "encode", b"\x5a" * length,
+				            length) == expected, (
+					f"{decl.name}: {length} bytes in should pad to "
+					f"{expected} out")
+			continue
+
+		# Exact: bits in, bits out, and the ratio holds exactly.
+		bits = inputs * 4
+		coded = call(decl.name, "encode", b"\x5a" * 8, bits)
+		assert coded == bits * outputs // inputs, (
+			f"{decl.name}: {bits} bits in gave {coded} out, and the declared "
+			f"{outputs}:{inputs} predicts {bits * outputs // inputs}")
+
+		# A length that is not a whole number of symbols has no encoding, and
+		# encoding part of it and reporting success is the shape this test
+		# was written to close.
+		if inputs > 1:
+			assert call(decl.name, "encode", b"\x5a" * 8, bits + 1) == 0, (
+				f"{decl.name}: encoded {bits + 1} bits, which is "
+				f"{bits + 1} % {inputs} = {(bits + 1) % inputs} short of a "
+				f"whole symbol")
+
+		# The same in the other direction, over the encoder's own output so
+		# that a refusal cannot be an undefined symbol instead.
+		buf = (ctypes.c_uint8 * 8)(*(b"\x5a" * 8))
+		out = (ctypes.c_uint8 * 512)()
+		enc = getattr(kernel_library, f"situ_{decl.name}_encode")
+		enc.restype  = ctypes.c_uint32
+		enc.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+		                ctypes.POINTER(ctypes.c_uint8)]
+		enc(buf, bits, out)
+
+		dec = getattr(kernel_library, f"situ_{decl.name}_decode")
+		dec.restype  = ctypes.c_uint32
+		dec.argtypes = enc.argtypes
+		back = (ctypes.c_uint8 * 512)()
+		assert int(dec(out, coded, back)) == bits, decl.name
+		assert int(dec(out, coded - 1, back)) == 0, (
+			f"{decl.name}: decoded {coded - 1} bits, which is a truncated "
+			f"final symbol")
 
 
 def test_every_polynomial_codec_is_checked_or_excused() -> None:

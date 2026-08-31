@@ -15643,6 +15643,66 @@ HDLC twice, caught by the discriminating input; the decoder's run left one
 behind the encoder's, caught by the round trip returning nothing; and the
 `usb` row deleted from the bounds table, caught by the population guard.
 
+### 26.149 The partial symbol three table codes encoded half of
+
+The lens that found 26.147 was: measure the object file rather than reading
+the declaration. It had paid three times in one afternoon, so it was pointed
+at the rest of the codec library -- every derived codec's declared expansion,
+measured against what its generated encoder actually writes.
+
+**Everything holds at a whole number of units.** Manchester at 2:1, base16
+and 4b5b at their exact ratios, base32 and base64 padding to whole groups,
+every shift register length-preserving, the interleaver too. The declarations
+are right and nothing had checked them.
+
+**What was not right is a length that is not a whole number of units.** The
+non-padded table codes walk bits, and their loop condition is
+`at + inputs <= bits`, so a trailing partial symbol falls out of the loop and
+is dropped:
+
+    situ_base16_encode(in, 7, out)   ->  8
+
+Seven bits in, one symbol encoded, three bits gone, and a return value that
+looks exactly like success. The generated comment above that function
+promised "the number of output bits written, which is exactly
+bits * 8 / 4" -- which for seven bits is 14. Manchester's *decoder* did the
+same to an odd trailing bit, and 4b5b's encoder to up to three.
+
+**It is invariant 154's shape and the tree already had the answer.**
+`interleave_16` refuses a partial block outright, with a comment saying a
+partial block has no defined permutation, and a partial symbol has no
+encoding for exactly the same reason. So the five affected functions refuse
+now -- base16 and base16_lower, code_4b5b, and both Manchesters' decode
+side -- and the generated comment states the refusal rather than promising a
+formula the code does not compute.
+
+**Zero is not ambiguous here, which is worth stating because it looks it.**
+The decode direction already returned 0 for a symbol the code does not
+define, so the convention was in place. In the encode direction 0 was
+previously only "nothing to do", and the two now share a value -- but a
+caller that passed a nonzero length and got 0 back was refused, and a caller
+that passed 0 had nothing to encode. The only length that could have
+produced 0 from real input was a sub-symbol one, which is the case being
+refused.
+
+**Manchester's encoder is untouched and provably so.** Its input symbol is
+one bit, so the guard would be dead code and is not emitted; the diff over
+the generated file is 56 lines added and 13 replaced, all of them in the
+five functions named above, with `std/codecs.situ` byte-identical.
+
+**Three sabotages, each watched going red**: the encode guard removed,
+caught at base16 encoding 17 bits as 32; the decode guard removed, caught at
+Manchester decoding 7 bits as 3; and the encode loop's stride doubled,
+caught by the ratio assertion rather than by any of the refusal ones.
+
+**And the guard is now general rather than about this bug.** It reads every
+`table` codec out of `std/kernels.situ`, measures the exact ones in bits and
+the padded ones in whole groups, and holds each to the ratio it declares --
+so a ninth table code is covered the day it is declared. The padded half is
+checked by the group formula rather than by a listed expectation: a group is
+the shortest run that is both a whole number of bytes and a whole number of
+symbols, which is what makes `ratio_padded` mean anything.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
