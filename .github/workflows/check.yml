@@ -104,8 +104,27 @@ jobs:
           python -m pip install --disable-pip-version-check \
             pytest mypy 'pymodbus>=3.8,<3.9' 'paho-mqtt>=2,<3'
 
+      # `pipefail`, for the reason the `make check` step below gives and in
+      # the step where it bites hardest. Six of these eleven lines pipe into
+      # `head`, and a pipeline's status is the last command's -- so with the
+      # default shell, `/usr/bin/bash -e {0}`, a missing tool prints "command
+      # not found" to stderr and this step goes green. The step whose whole
+      # job is to verify that the toolchains are present could not fail when
+      # one was absent.
+      #
+      # Which six matters: `rustc`, `doxygen`, `python` and the oracle import
+      # are unpiped and did fail correctly. The six that could not are `gcc`,
+      # `g++`, `lua5.4`, `tshark`, `qemu-aarch64` and
+      # `aarch64-linux-gnu-gcc` -- the C and cross toolchains among them,
+      # which are exactly the two the note further down says do not skip:
+      # "`make test-c` and `make cross-test` are the two steps that need
+      # their toolchain rather than skipping".
+      #
+      # The skip audit at the end would still have caught a large absence,
+      # but late and by inference. This names the tool.
       - name: Report what is actually installed
         run: |
+          set -o pipefail
           gcc --version | head -1
           g++ --version | head -1
           rustc --version

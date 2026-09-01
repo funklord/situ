@@ -16269,6 +16269,51 @@ that has not been written is not a feature, and listing it would be the exact
 overstatement 26.151 found the README does not otherwise make. It belongs
 here until there is code.
 
+### 26.158 The step that verifies the toolchains could not fail
+
+`.github/workflows/check.yml` has a step named "Report what is actually
+installed", and the install step above it is long and commented because "a
+toolchain that quietly falls out of this list takes a group of tests with
+it". Six of its eleven lines are `tool --version | head -1`. A pipeline's
+status is the last command's, and GitHub runs the step as
+`/usr/bin/bash -e {0}` -- no `pipefail` -- so a missing tool printed
+"command not found" to stderr and the step went green.
+
+**Which six is the sharp part.** `rustc`, `doxygen`, `python` and the oracle
+import are unpiped and did fail correctly. The six that could not are `gcc`,
+`g++`, `lua5.4`, `tshark`, `qemu-aarch64` and `aarch64-linux-gnu-gcc` --
+including the C and the cross toolchains, which are exactly the two the same
+file says elsewhere do not skip: "`make test-c` and `make cross-test` are the
+two steps that need their toolchain rather than skipping".
+
+**The fix is one line, and the file already argued for it four steps down.**
+`set -o pipefail` sits above `make check 2>&1 | tee`, under a comment reading
+"or `tee` would swallow a failing `make` and this would be a workflow that
+reports success for a red build". The hazard was identified exactly, fixed
+where `tee` was the swallower, and left where `head` is.
+
+**Measured by extracting the step's own script and running it as CI does**,
+which took three attempts and the failures are the useful part:
+
+    bash -e, pipefail, tools present     exit 0
+    bash -e, pipefail, gcc renamed away  exit 127
+    bash -e, no pipefail, gcc renamed    exit 0     <- what it did
+
+The first attempt piped the script into `tail` and read `$?`, which is
+`tail`'s -- the identical mistake, in the command demonstrating the fix. The
+second ran without `-e`, where a mid-script failure does not stop the run and
+the status is the last command's, so a broken `gcc` line was masked by a
+later one that worked. Only the third is faithful. **A measurement of a check
+is a check, and it fails the same ways.**
+
+**This is the fourth instance tonight of one shape**: an argument accepted
+and ignored (26.156), a table row promising a `ratio_exact` no code path
+could produce (13.4), a skip ceiling that could not see a missing toolchain
+(26.155), and this. Invariant 154 already names it -- where two states
+produce identical evidence, make them distinguishable and refuse when they
+are not -- and what this run adds is that the shape reaches the instruments
+as readily as the code, including the ones written to catch it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
