@@ -20,7 +20,7 @@ from walker.image import NONE, Image, load
 from walker.owned import decode
 from walker.report import FIELD, RESERVED
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
-                         offset_bits, size_bits)
+                         offset_bits, size_bits, write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -89,7 +89,7 @@ class Document:
 	"""One message, opened against one image."""
 
 	image: Image
-	buffer: bytes
+	buffer: bytearray
 	struct: int
 
 	@property
@@ -141,6 +141,113 @@ class Document:
 
 		return rows
 
+	def _members(self) -> dict[str, int]:
+		"""Local name -> placement index, for the members `fields` shows."""
+		image = self.image
+		found: dict[str, int] = {}
+		for index in image.members(image.structs[self.struct]):
+			if image.placements[index].kind not in (FIELD, RESERVED):
+				continue
+			name = image.name_of(index)
+			found[name.rpartition(".")[2] or name] = index
+		return found
+
+	def set(self, name: str, value: int) -> list[str]:
+		"""Store a value, if the schema permits it. Returns what it cost.
+
+		Three refusals and one warning, in that order, because they are
+		different things and an editor that ran them together would either
+		refuse a legal write or allow an illegal one:
+
+		- **the image did not say.** Packed without its metadata tail, it
+		  carries no capability vectors, and silence is not permission.
+		- **the schema forbids it.** `mutate = Immutable` is a checksum, a
+		  derived field, a read-only register: there is no setter anywhere in
+		  situ for these and there is not one here.
+		- **the write does not fit the member**, which `write_scalar` checks
+		  and which is a range error rather than a permission one.
+
+		The warning is coverage. A write to a member a tag authenticates
+		leaves that tag stale, and **situ does not recompute it** -- 14.1
+		puts computing a checksum with the caller, and this tool is not the
+		exception. So the write happens and the staleness is reported, which
+		is the honest half: refusing would make the field uneditable, and
+		silently recomputing would be this tool inventing a value the schema
+		says is somebody else's.
+		"""
+		index = self._members().get(name)
+		if index is None:
+			# Without the metadata tail there are no names either, so a
+			# lookup fails before the capability check does -- and "no member
+			# named `destination_port`" would be a lie about a member that is
+			# right there. Which half is missing decides which is said.
+			if not self.image.placement_names:
+				raise Refused(
+					f"`{name}`: this image was packed without its metadata "
+					f"tail, so it carries neither names nor capabilities; "
+					f"pack it with `--metadata`")
+			raise Refused(f"no member named `{name}` in `{self.name}`")
+
+		mutate = self.image.capability_of(index, "mutate")
+		if mutate is None:
+			raise Refused(
+				f"`{name}`: the image does not say whether this may be "
+				f"written; pack it with `--metadata`")
+		if mutate == "Immutable":
+			raise Refused(
+				f"`{name}`: the schema does not let anyone write this")
+
+		# A fixed scalar written in place may still *shift* the layout: udp's
+		# `length` is `InPlaceFixed` and decides how long the payload is, so
+		# storing 40 in an eight-byte message leaves it claiming a 32-byte
+		# payload and nothing after the write can be read. 0034's table has
+		# that as its second row -- "anything that shifts layout" -- and puts
+		# it behind 26.99; this is the first row's door, and it arrived
+		# through it.
+		#
+		# Measured rather than analysed: write into a copy, walk it again,
+		# and compare where every member starts and how long it is. That
+		# catches the case whatever caused it, including the ones nobody
+		# enumerated, and it is the walk itself answering rather than a
+		# second model of what drives what.
+		candidate = Document(self.image, bytearray(self.buffer), self.struct)
+		write_scalar(candidate.view(), index, value)
+
+		before, after = self._extents(), candidate._extents()
+		if before != after:
+			moved = sorted(name for name in before
+			               if before.get(name) != after.get(name))
+			raise Refused(
+				f"`{name}`: writing this moves {', '.join(moved)}, and a "
+				f"shifting write is not built (0034: it needs the "
+				f"invalidation model of 12.3)")
+
+		self.buffer[:] = candidate.buffer
+
+		if self.image.capability_of(index, "auth") == "Covered":
+			return [f"`{name}` is covered by a tag, which is now stale: "
+			        f"situ does not compute it (14.1)"]
+		return []
+
+	def _extents(self) -> dict[str, tuple[int, int] | None]:
+		"""Where every member starts and how long it is, or `None` where the
+		walk cannot say.
+
+		Every member keeps a key either way, so the comparison is over one
+		key set and a member that stops being placeable differs from one that
+		is placed. Recording `None` rather than dropping the key is for the
+		reader: a map missing a name says nothing about why."""
+		view  = self.view()
+		image = self.image
+		found: dict[str, tuple[int, int] | None] = {}
+		for index in image.members(image.structs[self.struct]):
+			name = image.name_of(index)
+			try:
+				found[name] = (offset_bits(view, index), size_bits(view, index))
+			except Refused:
+				found[name] = None
+		return found
+
 	def _values(self, view: View) -> dict[str, int | bytes]:
 		"""What rung 2 can read, or nothing where it refuses the message.
 
@@ -175,4 +282,9 @@ def open_document(image_bytes: bytes, message: Bytes,
 			              f"{', '.join(names)}")
 		chosen = names.index(struct)
 
-	return Document(image, bytes(message), chosen)
+	# A `bytearray`, and a copy. Mutable because a document may now be
+	# written to (0034's write path), and copied because that write must not
+	# reach the caller's buffer or the file behind it: persisting is a
+	# separate and explicit step, so an edit that is never saved changes
+	# nothing anywhere.
+	return Document(image, bytearray(message), chosen)

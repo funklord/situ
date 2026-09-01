@@ -6,8 +6,10 @@ TUI or the GUI can do may be absent here: an interactive frontend is hard to
 test and a scriptable one is not, so this is what keeps the other two
 testable, and it is what lets CI ask whether a capture still conforms.
 
-Read-only. The write path is its own piece of work (0034); this is the half
-that makes it worth having.
+Reads, and writes what the schema permits. The write path was deferred in
+0034 and built in 26.179: `--set name=value` stores a value where `mutate`
+allows one and refuses where it does not, and nothing reaches the file
+without `--out`.
 """
 
 from __future__ import annotations
@@ -39,7 +41,38 @@ def build_parser() -> argparse.ArgumentParser:
 	                    help="json is for a frontend that is not Python, and "
 	                         "is how the Qt window reads a document without "
 	                         "a second copy of the model")
+	parser.add_argument("--set", action="append", default=[],
+	                    metavar="NAME=VALUE", dest="assignments",
+	                    help="store a value, where the schema permits one. "
+	                         "Decimal, or 0x for hex. Repeatable, applied in "
+	                         "order")
+	parser.add_argument("--out", type=Path, default=None,
+	                    help="write the edited message here. Without it "
+	                         "nothing is written anywhere: an edit is shown "
+	                         "and discarded, which is the safe default for a "
+	                         "tool that edits files in place")
 	return parser
+
+
+def apply_edits(document: object, assignments: list[str]) -> list[str]:
+	"""Every `--set`, in order, returning what each one cost.
+
+	In order, and stopping at the first refusal: a half-applied edit written
+	to a file is worse than none, and a reader of the output has to be able
+	to say which writes happened.
+	"""
+	notes: list[str] = []
+	for assignment in assignments:
+		name, sep, text = assignment.partition("=")
+		if not sep:
+			raise Refused(f"`--set {assignment}` is not `name=value`")
+		try:
+			value = int(text, 0)
+		except ValueError:
+			raise Refused(f"`--set {assignment}`: `{text}` is not a number") \
+				from None
+		notes.extend(document.set(name.strip(), value))	# type: ignore[attr-defined]
+	return notes
 
 
 def main() -> int:
@@ -51,8 +84,22 @@ def main() -> int:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1
 
+	try:
+		notes = apply_edits(document, args.assignments)
+	except Refused as why:
+		print(f"situ-edit: {why}", file=sys.stderr)
+		return 1
+
 	print(as_json(document) if args.format == "json"
 	      else "\n".join(render(document)))
+	for note in notes:
+		print(f"situ-edit: {note}", file=sys.stderr)
+
+	if args.out is not None:
+		args.out.write_bytes(bytes(document.buffer))
+	elif args.assignments:
+		print("situ-edit: not written; pass --out to keep it",
+		      file=sys.stderr)
 	return 0
 
 

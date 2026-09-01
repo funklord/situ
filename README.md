@@ -266,12 +266,28 @@ fields, which sounds like every template-driven hex editor and is not one.
 description, see fields"; none of them carries **capability reasoning**, so
 none can grey out a setter that does not exist, say that the field you just
 looked at cannot be written in place, or show the blame chain for why
-(decision 0034). They read; they do not write. Writing a field that shifts
-the layout drags in the invalidation model, a covered field goes stale, and
-an invariant must be maintained rather than checked -- so a write path is a
-different program from a reader, and 0034 keeps them apart. The CLI can do
-everything the TUI can, deliberately, because an interactive frontend is hard
-to test and a scriptable one is not.
+(decision 0034).
+
+`--set name=value` writes one, where the schema permits it. What that means
+is decided by the capability vectors and not by the editor: a member the
+schema forbids anyone to write is refused, a value that does not fit its
+width is refused, and **a write that would shift the layout is refused too**
+-- udp's `length` is a fixed scalar written in place whose value decides how
+long the payload is, so storing 40 in an eight-byte message would leave it
+claiming a 32-byte payload. That is measured rather than assumed: the write
+goes into a copy, the copy is walked again, and every member's offset and
+size are compared. A shifting write drags in the invalidation model and is
+0034's own next piece of work.
+
+A write to a tag-covered field happens and is reported stale. situ does not
+compute a checksum -- 14.1 puts that with the caller -- so recomputing one
+here would be this tool inventing a value the schema says is somebody
+else's, and refusing would make the field uneditable.
+
+Nothing reaches the file without `--out`, which is the safe default for a
+tool that edits files in place. The CLI can do everything the TUI can,
+deliberately, because an interactive frontend is hard to test and a
+scriptable one is not.
 
 ## How much of it you take
 

@@ -17339,6 +17339,62 @@ nothing -- so it means something when it is there. `--format json` carries the
 same as `writable`, `mutate`, `auth` and `write_cost`, which is the surface a
 frontend or another tool reads.
 
+### 26.179 The write path, and the row it arrived through
+
+0034 deferred it and the tool's own docstring said so: "Read-only. The write
+path is its own piece of work." Its table names four cases, and the first is
+"a fixed scalar in place -- the easy reverse of `read_scalar`". That one is
+built: `write_scalar` in the walker, `Document.set` above it, and `--set
+name=value` at the CLI.
+
+**Three refusals, kept apart because they are three questions.** The image did
+not say, and silence is not permission. The schema forbids it -- `mutate =
+Immutable` is a checksum, a derived field, a read-only register, and there is
+no setter for those anywhere else in situ either. And the value does not fit
+the member: **the range is checked rather than truncated**, because a writer
+that masked 70000 into a `u16` would put a number in the message that the
+schema says cannot be there.
+
+**A fourth refusal was missing, and it is the one worth recording.** udp's
+`length` is `InPlaceFixed` -- a fixed scalar, written in place, the first row
+of the table exactly. Its *value* decides how long the payload is. Writing 40
+into an eight-byte message left it claiming a 32-byte payload, and every
+member after it read "cannot be read". **The second row of 0034's table
+arrived through the first row's door**, which is what a table of cases cannot
+tell you: it lists what is written, and the hazard was in what the write
+means.
+
+Measured rather than analysed. The write goes into a copy, the copy is walked
+again, and every member's offset and size are compared; anything that moved
+refuses the write and is named in the message. That needs no second model of
+what drives what -- the walk answers -- and it catches the case whatever
+caused it, including the ones nobody enumerated.
+
+**Coverage is reported, not repaired.** A write to a tag-covered field
+happens and the tag is said to be stale. 14.1 puts computing a checksum with
+the caller and this tool is not the exception: recomputing one here would be
+`situ-edit` inventing a value the schema says is somebody else's, and refusing
+would make every covered field uneditable -- which for `example/udp` is every
+field but one.
+
+**Nothing reaches the file without `--out`**, and the document edits its own
+copy, so an edit that is never saved changes nothing anywhere. Both are
+pinned, including that a refused write leaves no output file at all.
+
+**The types caught the fifth refusal.** A `View`'s buffer is `bytes |
+bytearray`, and the read path is happy with either; a write is not. mypy said
+so -- "unsupported target for indexed assignment" -- after the same thing had
+already appeared at runtime as a `TypeError` from inside the walker. It is a
+refusal now, saying what it needs, which is what a caller with an immutable
+view should get.
+
+**One sabotage passed, and it was right to.** Dropping an unplaceable member
+from the extent map instead of recording `None` changes nothing: a missing key
+differs from a present one just as well. The comment claiming that `None` is
+what makes an unplaceable member count had overclaimed, and the answer was to
+correct the comment rather than to invent a test for a distinction that is
+not one.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

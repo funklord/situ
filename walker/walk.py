@@ -423,6 +423,105 @@ def read_scalar(view: View, index: int) -> int:
 	return _read_at(view, index, start, width)
 
 
+def write_scalar(view: View, index: int, value: int) -> None:
+	"""Store one member's value, bounds- and range-checked.
+
+	`read_scalar`'s mirror, and it refuses exactly what that refuses: a run,
+	a varint, a delimited member and a variant have no single value to read
+	and none to write either, and each says so in the same terms. A text
+	number is refused too, and separately: `parse_digits` reads one, and
+	writing it back is an encoding rather than a store -- the digits may need
+	a different count than the ones there.
+
+	**The range is checked rather than truncated.** Storing 70000 in a `u16`
+	is a schema violation, and a writer that masked it would put a number in
+	the message that the schema says cannot be there, which is the one thing
+	an editor must not do quietly.
+
+	This says nothing about whether the *schema* permits the write. That is
+	`mutate`, it lives in the capability vectors, and it is the editor's to
+	ask before calling this (26.178).
+	"""
+	placement = view.image.placements[index]
+	if placement.radix:
+		raise Refused(f"placement {index} is a text number; writing one is an "
+		              f"encoding rather than a store")
+	if (placement.size_code != NONE or placement.array_count != NONE
+			or placement.repeat_code != NONE):
+		raise Refused(f"placement {index} is a run, not a scalar")
+	if index in view.image.varints:
+		raise Refused(f"placement {index} is a varint; its width depends on "
+		              f"the value, so a store may not fit where it sits")
+	if index in view.image.delimiters and placement.type_struct == NONE:
+		raise Refused(f"placement {index} ends at a delimiter, so its extent "
+		              f"is not the schema's to keep")
+	if index in view.image.arms:
+		raise Refused(f"placement {index} is a variant, not a scalar")
+
+	start = offset_bits(view, index)
+	width = size_bits(view, index)
+	if width <= 0 or width > 64:
+		raise Refused(f"a {width}-bit scalar is not one to write")
+
+	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
+		raise Refused("the frame does not reach this member")
+
+	low, high = _range(width, placement.signed)
+	if not low <= value <= high:
+		raise Refused(f"{value} does not fit a {width}-bit "
+		              f"{'signed' if placement.signed else 'unsigned'} member "
+		              f"({low} to {high})")
+
+	# A view may be over `bytes`, which the read path is happy with and this
+	# is not. Said here rather than discovered at the store: mypy names it
+	# ("unsupported target for indexed assignment"), and without the check
+	# the caller gets a `TypeError` from inside the walker instead of a
+	# refusal saying what it needs.
+	buffer = view.buffer
+	if not isinstance(buffer, bytearray):
+		raise Refused("this view is over immutable bytes; a write needs a "
+		              "`bytearray`")
+
+	_write_at(buffer, view, index, start, width, value)
+
+
+def _range(width: int, is_signed: bool) -> tuple[int, int]:
+	if is_signed:
+		return -(1 << (width - 1)), (1 << (width - 1)) - 1
+	return 0, (1 << width) - 1
+
+
+def _write_at(buffer: bytearray, view: View, index: int, start: int,
+		width: int, value: int) -> None:
+	"""`_read_at` backwards, and split out for the same reason it was.
+
+	The buffer is passed rather than read off the view because only the
+	caller has established that it is writable.
+	"""
+	placement = view.image.placements[index]
+	raw = value & ((1 << width) - 1)		# two's complement for a negative
+
+	if start % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
+		first = view.at + start // BITS_PER_BYTE
+		size  = width // BITS_PER_BYTE
+		buffer[first:first + size] = raw.to_bytes(size, _order(placement))
+		return
+
+	# Bit-packed: read the bytes the value touches, clear its bits, put it
+	# back. The block covers whole bytes, so the value sits `after` bits from
+	# its end -- the same arithmetic the read does, in the other direction.
+	end   = start + width
+	first = start // BITS_PER_BYTE
+	last  = (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+	span  = buffer[view.at + first:view.at + last]
+	block = int.from_bytes(span, "big")
+	after = last * BITS_PER_BYTE - end
+	mask  = ((1 << width) - 1) << after
+	block = (block & ~mask) | (raw << after)
+	buffer[view.at + first:view.at + last] = \
+		block.to_bytes(last - first, "big")
+
+
 def _read_at(view: View, index: int, start: int, width: int) -> int:
 	"""One value of `width` bits at `start`, in the member's own terms.
 

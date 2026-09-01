@@ -1,6 +1,7 @@
 # 0034: the editor is the tooling walker, in three frontends over one core
 
-Status: accepted, and the read-only half is built for the two frontends that
+Status: accepted; the read-only half and the in-place write are built for
+the two frontends that
 are Python -- the core, `situ-edit` and `situ-edit-tui`. The GUI is not, and
 the reason recorded here first was wrong: it said no Qt binding was
 installed, from a check that piped a successful import through `head -1` and
@@ -142,5 +143,17 @@ input is least trusted.
   concrete. It is raised there, not answered here.
 - The write path is blocked on 26.99. The read-only editor is not, and should
   come first.
+
+  **Amended 2026-09-01 (26.179): the first row of the table above is built.**
+  A fixed scalar written in place is "the easy reverse of `read_scalar`" and
+  it is `--set name=value` now, refusing what the schema forbids, what does
+  not fit the member's width, and what the image was never told. The other
+  three rows stand: a shifting write is still blocked on 26.99 and is refused
+  by measuring rather than by analysis -- the write goes into a copy, the copy
+  is walked, and every member's offset and size are compared, so a write whose
+  *consequence* shifts the layout is caught however it arrives. udp's `length`
+  is that case: a fixed scalar in place whose value decides the payload's
+  extent. A tag-covered write happens and is reported stale, since 14.1 puts
+  computing a checksum with the caller and this tool is not the exception.
 - The metadata tail finally has a consumer, which means `--metadata` stops
   being a flag nothing reads and starts being one something depends on.

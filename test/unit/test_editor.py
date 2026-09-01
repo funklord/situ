@@ -264,3 +264,154 @@ def test_an_image_without_the_tail_says_it_was_not_told() -> None:
 		assert field.mutate is None
 		assert not field.writable
 		assert field.write_cost == "the image does not say"
+
+
+# -- the write path (26.179) ------------------------------------------------
+
+
+def udp_document() -> tuple[bytes, bytearray]:
+	schema  = (ROOT / "example/udp/udp.situ").read_text(encoding="ascii")
+	parsed  = parse_text(schema, path="udp.situ")
+	image, _ = pack(parsed, resolve(parsed, solve(parsed)), metadata=True)
+	return image, bytearray(bytes.fromhex("123400350008abcd"))
+
+
+def test_a_permitted_write_lands_and_says_what_it_cost() -> None:
+	image, message = udp_document()
+	document = open_document(image, message)
+
+	notes = document.set("destination_port", 4242)
+
+	assert document.buffer.hex() == "123410920008abcd"
+	assert notes and "stale" in notes[0], notes
+	# situ does not compute a checksum (14.1), so it reports rather than
+	# recomputes -- and the tag's bytes are untouched.
+	assert document.buffer[6:8] == bytes.fromhex("abcd")
+
+
+def test_the_document_edits_a_copy_and_not_the_caller_s_bytes() -> None:
+	"""An edit that is never saved changes nothing anywhere."""
+	image, message = udp_document()
+	before = bytes(message)
+
+	open_document(image, message).set("destination_port", 4242)
+
+	assert bytes(message) == before
+
+
+def test_the_three_refusals_are_three_different_things() -> None:
+	"""Permission, existence and range are separate questions, and running
+	them together would either refuse a legal write or allow an illegal
+	one."""
+	image, message = udp_document()
+	document = open_document(image, message)
+
+	with pytest.raises(Refused) as forbidden:
+		document.set("checksum", 1)
+	assert "does not let anyone write this" in str(forbidden.value)
+
+	with pytest.raises(Refused) as absent:
+		document.set("nope", 1)
+	assert "no member named" in str(absent.value)
+
+	with pytest.raises(Refused) as too_big:
+		document.set("length", 70000)
+	assert "does not fit a 16-bit unsigned member" in str(too_big.value)
+
+	# And none of them moved a byte.
+	assert document.buffer.hex() == "123400350008abcd"
+
+
+def test_an_image_without_the_tail_says_which_half_is_missing() -> None:
+	"""Without the tail there are no names either, so the lookup fails before
+	the capability check does -- and "no member named `destination_port`"
+	would be a lie about a member that is right there."""
+	schema  = (ROOT / "example/udp/udp.situ").read_text(encoding="ascii")
+	parsed  = parse_text(schema, path="udp.situ")
+	image, _ = pack(parsed, resolve(parsed, solve(parsed)), metadata=False)
+
+	document = open_document(image, bytearray(bytes.fromhex("123400350008abcd")))
+	with pytest.raises(Refused) as why:
+		document.set("destination_port", 1)
+	assert "without its metadata tail" in str(why.value)
+
+
+def test_nothing_reaches_the_file_without_out(tmp_path: Path) -> None:
+	"""The safe default for a tool that edits files in place."""
+	(tmp_path / "m.bin").write_bytes(bytes.fromhex("123400350008abcd"))
+
+	done = run("situ-edit", str(ROOT / "example/udp/udp.situ"),
+	           str(tmp_path / "m.bin"), "--set", "destination_port=4242")
+	assert done.returncode == 0, done.stderr
+	assert "4242" in done.stdout
+	assert "not written" in done.stderr
+	assert (tmp_path / "m.bin").read_bytes() == bytes.fromhex("123400350008abcd")
+
+	done = run("situ-edit", str(ROOT / "example/udp/udp.situ"),
+	           str(tmp_path / "m.bin"), "--set", "destination_port=4242",
+	           "--out", str(tmp_path / "out.bin"))
+	assert done.returncode == 0, done.stderr
+	assert (tmp_path / "out.bin").read_bytes() == bytes.fromhex("123410920008abcd")
+	assert (tmp_path / "m.bin").read_bytes() == bytes.fromhex("123400350008abcd")
+
+
+def test_a_refused_write_exits_nonzero_and_writes_nothing(tmp_path: Path) -> None:
+	(tmp_path / "m.bin").write_bytes(bytes.fromhex("123400350008abcd"))
+
+	done = run("situ-edit", str(ROOT / "example/udp/udp.situ"),
+	           str(tmp_path / "m.bin"), "--set", "checksum=1",
+	           "--out", str(tmp_path / "out.bin"))
+
+	assert done.returncode == 1
+	assert "does not let anyone write this" in done.stderr
+	assert not (tmp_path / "out.bin").exists()
+
+
+def test_a_write_that_shifts_the_layout_is_refused() -> None:
+	"""`InPlaceFixed` is about the member, not about its consequences.
+
+	udp's `length` is a fixed scalar written in place, and it decides how
+	long the payload is: storing 40 in an eight-byte message leaves it
+	claiming a 32-byte payload, and nothing after the write can be read.
+	0034's table has that as its second row -- "anything that shifts layout"
+	-- and puts it behind 26.99. It arrived through the first row's door.
+
+	Measured rather than analysed: the write goes into a copy, the copy is
+	walked again, and every member's offset and size are compared. That
+	catches the case whatever caused it, and it is the walk answering rather
+	than a second model of what drives what.
+	"""
+	image, message = udp_document()
+	document = open_document(image, message)
+
+	with pytest.raises(Refused) as why:
+		document.set("length", 40)
+	assert "writing this moves udp_header.payload" in str(why.value)
+	assert "0034" in str(why.value)
+
+	# Refused means refused: not a byte of it landed.
+	assert document.buffer.hex() == "123400350008abcd"
+
+	# And the member beside it, which shifts nothing, still writes.
+	document.set("destination_port", 4242)
+	assert document.buffer.hex() == "123410920008abcd"
+
+
+def test_a_write_needs_a_mutable_buffer_and_says_so() -> None:
+	"""A view may be over `bytes`, which the read path is happy with.
+
+	mypy names it -- "unsupported target for indexed assignment" -- and
+	without the check the caller gets a `TypeError` out of the walker's
+	insides instead of a refusal saying what it needs. Which is what
+	happened while this was being written.
+	"""
+	from walker.image import load
+	from walker.walk import acquire, write_scalar
+
+	image, message = udp_document()
+	loaded = load(image)
+	view   = acquire(loaded, bytes(message), 0)	# immutable on purpose
+
+	with pytest.raises(Refused) as why:
+		write_scalar(view, 1, 4242)
+	assert "immutable bytes" in str(why.value)
