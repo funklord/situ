@@ -298,10 +298,19 @@ def _gainers_behind(members: list[Resolved], index: int,
 def _find_varint_replacement(resolved: ResolvedSchema) -> list[Suggestion]:
 	"""A varint whose range is bounded tightly enough to be worth pinning.
 
-	Costed honestly in both directions: across most of a `max = 1500` field's
-	range a varint already spends two bytes, so `u16` is free typically and
-	saves a byte in the worst case -- while restoring fixed offsets for
-	everything behind it.
+	Costed across the varint's range rather than at one end of it. Most of a
+	bounded field's values need the widest encoding the bound allows -- three
+	quarters of a 16-bit range need three leb128 bytes -- so a fixed width is
+	typically cheap, and the frames that pay are the ones carrying a small
+	value.
+
+	Both numbers named the widest encoding, which made `worst` the extra a
+	frame pays when it was *already* paying the most: the smallest cost in
+	the range, reported under the name of the largest. A `u16` against a
+	one-to-two byte varint priced at "nothing" -- and a frame carrying a
+	small value pays a byte for it. `Cost` justifies its own `unknown` on
+	exactly that ground: reporting zero "would be a lie in the cheapest
+	possible direction".
 	"""
 	found = []
 
@@ -311,25 +320,27 @@ def _find_varint_replacement(resolved: ResolvedSchema) -> list[Suggestion]:
 			if placement.varint is None:
 				continue
 
-			worst = _worst_bytes(placement)
-			least = placement.size_bits // BITS_PER_BYTE
-			if worst is None:
+			widest    = _worst_bytes(placement)
+			narrowest = placement.size_bits // BITS_PER_BYTE
+			if widest is None:
 				continue
 
-			fixed            = _fixed_width_for(worst)
+			fixed            = _fixed_width_for(widest)
 			behind, encloses = _behind(struct, placement)
 			found.append(Suggestion(
 				rule    = "varint-to-fixed",
 				subject = placement.path,
 				span    = placement.span,
 				summary = f"replace the varint with a fixed `u{fixed * 8}`",
-				detail  = (f"the encoding spends {least} to {worst} bytes, and a "
-				           f"u{fixed * 8} spends {fixed} always"),
-				cost    = Cost(typical=fixed - worst, worst=fixed - worst,
-				               basis="fixed width against the varint's worst case"),
+				detail  = (f"the encoding spends {narrowest} to {widest} bytes, "
+				           f"and a u{fixed * 8} spends {fixed} always"),
+				# Typical at the widest encoding, worst at the narrowest --
+				# the frame that was spending least is the one that pays most.
+				cost    = Cost(typical=fixed - widest, worst=fixed - narrowest,
+				               basis="fixed width across the varint's range"),
 				yields  = _pinned_yield(struct, behind, encloses, "the varint"),
 				rank    = 1,
-				weight  = worst,
+				weight  = widest,
 			))
 
 	return found

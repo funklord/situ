@@ -148,8 +148,12 @@ def test_a_varint_is_priced_against_a_fixed_width() -> None:
 
 	assert "replace the varint with a fixed `u32`" in found.summary
 	assert "spends 1 to 3 bytes" in found.detail
-	# Three bytes worst case against four fixed: one byte, not free.
-	assert found.cost.worst == 1
+	# Typical at the widest encoding: three bytes against four, one byte.
+	assert found.cost.typical == 1
+	# Worst at the narrowest, which is the frame that pays most: one against
+	# four. Both numbers were the typical one, so the largest cost in the
+	# range was reported under the name of the smallest.
+	assert found.cost.worst == 3
 
 
 def test_an_unbounded_region_is_priced_as_unknown() -> None:
@@ -795,3 +799,53 @@ def test_every_catalog_rule_has_its_yield_measured() -> None:
 	assert not missing, (
 		f"{missing} fire in a test but nothing takes the advice and measures "
 		"what it bought")
+
+
+def test_every_priced_rule_costs_what_it_says_on_the_wire() -> None:
+	"""`Cost` counts bytes on the wire and `worst` is the most a frame pays.
+
+	That is measurable without knowing anything about a value distribution:
+	where the rewritten schema is fixed, the frame that was smallest before is
+	the one that pays most, so the worst cost is the difference between the
+	two minima. `typical` is not measurable the same way -- each rule averages
+	over what it knows, arms for one and encoding widths for another -- so
+	this pins the number that has one meaning.
+
+	`varint-to-fixed` reported both numbers at the varint's *widest*
+	encoding, making `worst` the extra paid by a frame already paying the
+	most: the smallest cost in the range under the name of the largest. A
+	`u16` against a one-to-two byte varint priced at "nothing", which is what
+	`Cost` refuses to do for an unbounded region on the ground that zero is
+	"a lie in the cheapest possible direction".
+	"""
+	varint = "varint_type v { encoding = leb128; max_bits = 16; minimal; }\n"
+	arms   = """enum k : u8 { a = 1, b = 2, }
+struct small { u16 x; }
+struct large { u8 y[10]; }
+"""
+	cases = [
+		("move-dynamic-to-tail",
+		 "struct s { u16 n [max = 1500]; u8 opts[n]; u32 seq; }",
+		 "struct s { u16 n [max = 1500]; u32 seq; u8 opts[n]; }"),
+		("fill-alignment-holes",
+		 "struct s { u8 flag; u32 counter; reserved u8[3]; u16 seq; }",
+		 "struct s { u8 flag; reserved u8[3]; u32 counter; u16 seq; }"),
+		("varint-to-fixed",
+		 varint + "struct s { v n; u32 seq; }\n",
+		 varint + "struct s { u32 n; u32 seq; }\n"),
+		("equalize-variant-arms",
+		 arms + "struct s { k kind; variant b switch (kind)"
+		        " { case k.a: small p; case k.b: large q; } u32 after; }\n",
+		 arms + "struct s { k kind; variant b switch (kind) [equalize]"
+		        " { case k.a: small p; case k.b: large q; } u32 after; }\n"),
+	]
+
+	def smallest_frame(body: str) -> int:
+		return build(body).structs["s"].layout.size_bits // 8
+
+	for rule, before, after in cases:
+		found = only(before, rule)
+		paid  = smallest_frame(after) - smallest_frame(before)
+		assert found.cost.worst == paid, (
+			f"{rule} prices its worst case at {found.cost.worst} byte(s); the "
+			f"smallest frame pays {paid}")

@@ -16689,6 +16689,47 @@ so the region survives on purpose. A test asserting the rule stops firing
 would have asserted the opposite of the advice -- which is how a measurement
 turns into the thing it was added to catch.
 
+### 26.165 The cheapest number in the range, under the name of the dearest
+
+18.2 calls the cost column the advisor's differentiator, and the test module
+says so in its opening: "the tests below check the numbers, not just that a
+suggestion fired". **Checking a number is not measuring one.** `Cost` counts
+bytes on the wire and `worst` is the most a frame pays -- which is what
+`equalize-variant-arms` reports, 8 bytes for the arm that was smallest.
+
+`varint-to-fixed` computed both its numbers from the varint's *widest*
+encoding. `worst` was therefore the extra paid by a frame that was already
+paying the most, which is the **smallest** cost in the range. Measured on
+`v n; u32 seq` with `max_bits = 16`: frames run 5 to 7 bytes before the
+change and 8 after, so a frame carrying a small value pays three bytes. The
+rule said one.
+
+**The sharp case prints "nothing".** At `max_bits = 14` the fixed width is
+`u16` and the widest encoding is already two bytes, so both numbers came out
+zero and the suggestion read `cost: nothing`. Frames run 5 to 6 bytes before
+and 6 after: a frame carrying a small value pays a byte for a change priced
+as free. `Cost` refuses to do this for an unbounded region and says why in
+its own docstring -- reporting zero "would be a lie in the cheapest possible
+direction" -- and the same class was doing it two rules over.
+
+Two rules disagreed about what `worst` meant and **the name was the only
+thing that said so**, which is why neither test caught it: each asserted the
+number its own rule produced.
+
+`worst` is measurable without knowing any value distribution. Where the
+rewritten schema is fixed, the frame that was smallest before is the one that
+pays most, so the worst cost is the difference between the two minima --
+pinned now for all four priced rules. `typical` is not measurable that way and
+is not pinned: each rule averages over what it can see, arms for one and
+encoding widths for another, and those are different claims that happen to
+share a field.
+
+A suggestion makes three claims a reader acts on -- what to do, what it
+costs, what it buys. **Two of the three were checked by assertion rather than
+by measurement, and both had a defect** (26.163, 26.164 and this). The
+remaining one is the summary text, which is the only one where the assertion
+*is* the measurement.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
