@@ -1535,7 +1535,19 @@ def _metadata(order: list[tuple[str, ResolvedStruct]],
 		for axis in Axis:
 			value  = entry.vector.get(axis) if entry is not None else None
 			domain = [str(name) for name in DOMAINS[axis]]
-			shown  = str(value) if value is not None else None
+			# The base, not the rendering. A value carrying a parameter --
+			# `Covered(checksum)`, `AbsoluteStatic(0x06)`, `Fixed(2)` -- never
+			# matched a domain name, so it encoded as 0xFF, which is the byte
+			# for "this walker could not tell". Two states, one evidence
+			# (invariant 154): a field a tag authenticates was indistinguishable
+			# from a field whose auth nobody worked out, and that distinction is
+			# exactly the one a reader needs before writing. 289 of 1573 bytes
+			# across five examples were 0xFF and 289 of them had a value.
+			#
+			# The parameter is still not carried. Encoding it is a format
+			# change and this is not one: the stride, the meaning of a byte,
+			# and every reader that skips the section are unchanged.
+			shown  = value.base if value is not None else None
 			vectors.append(domain.index(shown)
 			               if shown is not None and shown in domain else 0xFF)
 

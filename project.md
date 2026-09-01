@@ -17250,6 +17250,49 @@ three emitters have none, so adding this to C alone follows the tree rather
 than splitting it. Recorded here so that a later reader asking why C says it
 and Rust does not finds the reason rather than the omission.
 
+### 26.177 Every parameterised value in the image said "could not tell"
+
+Chasing what `situ-edit` would need in order to refuse a write, rather than
+only to show a field. The answer turned out to be already in the image and
+already broken.
+
+**The image does carry capability vectors.** 26.33 split the metadata tail off
+for exactly this reader, `situ-edit` packs with `--metadata`, and the tail is
+names plus one byte per axis per placement -- an index into that axis's
+domain. Across `udp`, `bmp`, `sqlite`, `mqtt` and `tcp` the vectors are 1573
+of 14686 bytes, **10.7% of a metadata image**.
+
+**The encoder compared the rendering against the domain, and a domain lists
+base names.** `Covered(checksum)`, `AbsoluteStatic(0x06)` and `Fixed(2)` are
+in none of them, so each wrote `0xFF` -- which is the byte for "this walker
+could not tell". 289 of the 1573 bytes were `0xFF` and every one of them had a
+value. Per axis: `size` 110 of 121, `offset` 90, `align` 67, `auth` 22, and
+zero for the other nine.
+
+**`auth` is the one that costs something.** A field a tag authenticates and a
+field whose auth nobody worked out encoded as the same byte, and that
+distinction is precisely the one a reader needs before writing: it is what
+says this write invalidates a checksum. Invariant 154 in the image format.
+
+The base is what the domain holds, so the fix costs no format change -- the
+stride, the meaning of a byte and every walker that skips the section are
+unchanged. `0xFF` is now 0 of 1573. The *parameter* is still not carried, and
+encoding it would be a format change; that is a separate question and is not
+this.
+
+**The test named for this checked half of it.**
+`test_the_metadata_tail_carries_the_names_and_the_vectors` asserted two field
+names were in the blob and nothing at all about the vectors -- and the vectors
+were the half that was wrong. It reads the section now and refuses a `0xFF`.
+
+**Left open, and it is the real gap for an editor.** Nothing reads the vectors.
+`walker/image.py` gives section 13 the name `VECTORS` and no consumer, and
+`editor/document.Field` carries `name`, `offset`, `size`, `value`, `note` and
+a `readable` property with **no mirror**. So `situ-edit` pays for the tail,
+uses the names, and drops the capabilities -- which is why it can show a field
+and not say whether writing it is legal. The image half is right now; the
+reader half is a feature and belongs to whoever wants it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

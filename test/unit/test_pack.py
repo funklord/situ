@@ -31,6 +31,7 @@ import pytest
 from typing import Any
 
 from situc import ast
+from situc.capability import Axis, DOMAINS
 from situc import pack as packer
 from situc import traverse
 from situc.layout import solve
@@ -347,17 +348,75 @@ def test_the_metadata_tail_is_optional_and_additive(
 	assert packer.SECTION_NAMES in full_at
 
 
-def test_the_metadata_tail_carries_the_names_and_the_vectors() -> None:
+def test_the_metadata_tail_carries_the_names_and_the_vectors(
+	image_module: ModuleType,
+) -> None:
 	"""The tooling half of the split: a walker can print a field name.
 
 	Without this the tail is dead weight, and the split it justifies is not
 	worth the format version it costs.
+
+	It checked the names and not the vectors, which is half of what it is
+	named for -- and the vectors were the half that was wrong.
 	"""
 	schema, resolved = _resolved(IMAGE_SCHEMA.read_text(encoding="ascii"))
 	full, _ = packer.pack(schema, resolved, metadata=True)
 
 	assert b"image_header\0" in full
 	assert b"image_header.magic\0" in full
+
+	at = sections(image_module, full)
+	assert packer.SECTION_VECTORS in at, "the tail carries no vectors"
+	offset, count, stride = at[packer.SECTION_VECTORS]
+	assert stride == len(list(Axis))
+
+	vectors = full[offset:offset + count * stride]
+	assert vectors, "the vectors section is empty"
+	assert 0xFF not in vectors, (
+		"a vector byte says `this walker could not tell` for a value the "
+		"compiler knows")
+
+
+def test_a_parameterised_value_encodes_as_its_base_not_as_unknown(
+	image_module: ModuleType,
+) -> None:
+	"""`0xFF` is the byte for "could not tell", and it was also the byte for
+	every value carrying a parameter.
+
+	The encoder compared `str(value)` against the domain, and a domain lists
+	base names: `Covered(checksum)`, `AbsoluteStatic(0x06)` and `Fixed(2)`
+	are in none of them, so each wrote `0xFF`. **A field a tag authenticates
+	was indistinguishable from a field whose auth nobody worked out** --
+	invariant 154, and the distinction a reader most needs before writing.
+	Across five examples 289 of 1573 bytes were `0xFF` and every one of them
+	had a value.
+
+	The base is what the domain holds, so this costs no format change: the
+	stride, the meaning of a byte, and every walker that skips the section
+	are all unchanged. The parameter is still not carried, which would be
+	one.
+	"""
+	schema, resolved = _resolved(
+		"target buffer;\nendian big;\n"
+		"struct s {\n"
+		"\tauthenticated summed {\n"
+		"\t\tu16 a;\n"
+		"\t\tchecksum u8 sum[2] covers(summed) [self_as = 0];\n"
+		"\t}\n"
+		"}\n")
+	full, _ = packer.pack(schema, resolved, metadata=True)
+
+	offset, count, stride = sections(image_module, full)[packer.SECTION_VECTORS]
+	vectors = full[offset:offset + count * stride]
+	axes    = list(Axis)
+	auth    = axes.index(Axis.AUTH)
+	domain  = [str(name) for name in DOMAINS[Axis.AUTH]]
+
+	seen = {domain[vectors[row * stride + auth]]
+	        for row in range(count)
+	        if vectors[row * stride + auth] != 0xFF}
+	assert "Covered" in seen, (
+		f"a covered field's auth did not survive the image: {sorted(seen)}")
 
 
 # ---------------------------------------------------------------------------
