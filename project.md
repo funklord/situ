@@ -17211,6 +17211,45 @@ re-declare themselves is a separate question and 0047 says so: `bmp` describes
 the BMP format, not a particular BMP file, and the target says where the bytes
 are worked on rather than what they are.
 
+### 26.176 The axis moved and the header said nothing
+
+26.175 built `target file` and the check was green: the axis moves, the map
+prints `effect=EffectOnWrite`, `explain` blames the row. **Then the generated
+header was read**, and a file schema's C came out byte-identical to a
+buffer's -- the same accessors, the same comments, nothing anywhere saying a
+store lands in a file.
+
+That is the feature working at the lattice level and not arriving where
+somebody uses it. And the header already carries the argument against it, in
+`_invalidation_note`'s own docstring: "The C type system cannot enforce view
+invalidation, so the generated header has to say what does it -- otherwise
+the only record of the rule is in the compiler's head."
+
+**Durability is the case where that is most true**, because `target file`
+changes no generated code at all. The accessors are the same arithmetic over
+a mapping; there is no `volatile`, no bus transaction, nothing a compiler
+would emit differently. The header is therefore not one record of the rule
+among several -- it is **the only one** a C programmer reading this API will
+meet.
+
+So a `DURABILITY` banner, beside `INVALIDATION`, per struct, saying that a
+store outlives the process, that another reader may already have seen it, and
+that it is not a store to be repeated, reordered or elided on the caller's
+behalf -- and saying what situ does *not* claim: it writes the bytes and says
+nothing about `msync`.
+
+**Keyed on the axis, not on the directive.** What the header documents is
+what the lattice concluded, so the emitter asks the vector whether the effect
+is `EffectOnWrite` rather than asking the schema what its target was. The
+sabotage that matters is the second one: making the banner unconditional
+fails, because a buffer schema getting it would be a false statement about
+the caller's own memory.
+
+**Only the C backend.** `INVALIDATION` is a C-header convention and the other
+three emitters have none, so adding this to C alone follows the tree rather
+than splitting it. Recorded here so that a later reader asking why C says it
+and Rust does not finds the reason rather than the omission.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

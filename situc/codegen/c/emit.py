@@ -27,7 +27,7 @@ from math import lcm
 from dataclasses import dataclass, field
 
 from situc import ast
-from situc.capability import Axis
+from situc.capability import Axis, Value
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	c_name, check_collisions, ident, macro)
@@ -940,6 +940,7 @@ class Emitter:
 
 		if layout.is_fixed_size:
 			return [
+				*self._durability_note(struct),
 				*self._invalidation_note(struct),
 				"/* Acquire a view. This is the one bounds check; the field",
 				" * accessors below are constant offsets from the view base. */",
@@ -952,6 +953,7 @@ class Emitter:
 			]
 
 		lines = [
+			*self._durability_note(struct),
 			*self._invalidation_note(struct),
 			"/* Acquire a view. This struct is a frame: its extent depends on the",
 			" * data, so the caller supplies the length they have and the bounds",
@@ -987,6 +989,34 @@ class Emitter:
 			for placement in self._top_level(struct)
 			if placement.sized_by and placement.sized_by != "remaining"
 		})
+
+	def _durability_note(self, struct: ResolvedStruct) -> list[str]:
+		"""Say that a store to this struct outlives the process.
+
+		The same argument as `_invalidation_note` below, which states it: the
+		C type system cannot enforce the rule, so the header has to say it, or
+		the only record of it is in the compiler's head. `target file` moves
+		the `effect` axis and nothing in the generated code changes -- the
+		accessors are the same arithmetic over a mapping -- so the header is
+		the *only* place a reader of this API can learn that a setter is not
+		scratch (0047).
+
+		Keyed on the axis rather than on the directive, because what the
+		header documents is what the lattice concluded.
+		"""
+		if struct.vector.get(Axis.EFFECT) != Value("EffectOnWrite"):
+			return []
+
+		return [
+			f"/* DURABILITY: a store to a {struct.name} lands in the file. It",
+			" * outlives this process and another reader may already have seen",
+			" * it, so a setter here is not scratch and not a store the",
+			" * compiler may repeat, reorder or elide on your behalf.",
+			" *",
+			" * When it reaches the disk is the caller's: situ writes the bytes",
+			" * and says nothing about `msync`.",
+			" */",
+		]
 
 	def _invalidation_note(self, struct: ResolvedStruct) -> list[str]:
 		"""Document, per view type, exactly what invalidates it.

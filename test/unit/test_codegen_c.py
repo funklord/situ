@@ -3576,3 +3576,40 @@ def test_that_setter_does_both_jobs() -> None:
 	body = body[:body.index("\n}")]
 	assert "situ_msg_touch(msg);" in body
 	assert "situ_msg_mark_dirty(msg, SITU_R_SUM_DIRTY);" in body
+
+
+# -- the file target (0047) -------------------------------------------------
+
+
+FILE_TARGET   = "target file;\nendian big;\nbit_order msb_first;\n"
+BUFFER_TARGET = "target buffer;\nendian big;\nbit_order msb_first;\n"
+
+ON_A_FILE = "struct record { u16 n [max = 64]; u8 body[n]; u32 seq; }\n"
+
+
+def test_the_header_says_a_store_to_a_file_is_durable() -> None:
+	"""`target file` moves the `effect` axis and changes no generated code --
+	the accessors are the same arithmetic over a mapping -- so the header is
+	the only place a reader of this API can learn that a setter is not
+	scratch.
+
+	The same argument `_invalidation_note` already makes for itself: the C
+	type system cannot enforce the rule, so the header has to say it or the
+	only record of it is in the compiler's head.
+	"""
+	header, _ = emit(ON_A_FILE, FILE_TARGET)
+
+	assert "DURABILITY: a store to a record lands in the file" in header
+	assert "not a store the" in header and "elide on your behalf" in header
+	# What situ does not claim: it writes bytes and says nothing about when
+	# they reach the disk.
+	assert "`msync`" in header
+
+	# The control. The same struct in a buffer is a store to the caller's own
+	# memory, and the note would be false.
+	buffered, _ = emit(ON_A_FILE, BUFFER_TARGET)
+	assert "DURABILITY" not in buffered
+
+
+def test_a_file_target_compiles_in_c(tmp_path: Path) -> None:
+	compile_generated(tmp_path, ON_A_FILE, FILE_TARGET)
