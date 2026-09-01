@@ -659,6 +659,55 @@ def _version_guard(struct: ResolvedStruct, placement: Placement) -> str | None:
 	return f"if {test} then"
 
 
+def _located_body(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, field: str, name: str) -> list[str]:
+	"""A member the data positions, read where the data says.
+
+	The driver is named relative to the struct -- `file.pixel_offset` inside
+	`bitmap_file` -- so the entry to read is `bitmap_file.file.pixel_offset`,
+	which `_key_read` cannot find because it only ever looks one level down.
+
+	Declines rather than guessing where the driver is not at a constant
+	offset, which is the same answer `_key_read` gives and for the same
+	reason: a byte range that moves is not one to read from.
+	"""
+	target = f"{struct.name}.{placement.located}"
+	driver = next((entry.placement for entry in struct.entries
+	               if entry.placement.path == target), None)
+
+	if driver is None or driver.offset_bits is None \
+			or driver.offset_bits % BITS_PER_BYTE \
+			or driver.size_bits is None or driver.size_bits % BITS_PER_BYTE \
+			or driver.size_bits // BITS_PER_BYTE > 4 or _host_order(driver):
+		return [f"\t-- {placement.path}: placed by `{placement.located}`, "
+		        f"which this dissector cannot read at a constant offset"]
+
+	little = "true" if driver.endian is ast.Endian.LITTLE else "false"
+	where  = (f"situ_uint(tvb, {driver.offset_bits // BITS_PER_BYTE}, "
+	          f"{driver.size_bits // BITS_PER_BYTE}, {little})")
+
+	local  = _lua(name)
+	length = _length(resolved, struct, placement, "0")
+	extent = f"{local}_n" if length is not None else None
+
+	lines = [f"\t-- {placement.path}: placed at `{placement.located}`",
+	         f"\tlocal {local}_at = {where}"]
+	if extent is None:
+		lines.append(f"\tlocal {local}_n = tvb:len() - {local}_at")
+		extent = f"{local}_n"
+	else:
+		lines.append(f"\tlocal {extent} = {length}")
+
+	lines.extend([
+		f"\tif {local}_at + {extent} <= tvb:len() then",
+		f"\t\tsubtree:add({field}, tvb({local}_at, {extent}))",
+		"\tend",
+		# `at` is deliberately untouched: 9.8 again. The member after this one
+		# sits where it would if this one were not declared.
+	])
+	return lines
+
+
 def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> list[str]:
 	name  = _local(struct, placement)
@@ -669,6 +718,21 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	start = placement.offset_bits
 	at    = "at" if start is None else str(start // BITS_PER_BYTE)
 	seek  = [] if start is None else [f"\tat = {at}"]
+
+	# `at expr`: the message says where this member is, so the cursor is the
+	# wrong answer and advancing past it is a second wrong answer. Section 9.8
+	# is explicit -- a located member "joins no offset chain: it contributes
+	# nothing to the enclosing struct's extent, and the member declared after
+	# it sits where it would if the located member were not there".
+	#
+	# `offset_bits` is None for one, so it fell through to the running cursor
+	# and was dissected wherever the walk had reached. For a typical BMP that
+	# is 54 and `file.pixel_offset` is also 54, which is why nothing noticed:
+	# right by coincidence in the common case, and wrong in exactly the case
+	# the construct exists for -- a gap, or a colour table, between the
+	# headers and the pixels.
+	if placement.located is not None:
+		return _located_body(resolved, struct, placement, field, name)
 
 	# Before the nested-struct case. A run of records names a struct type and
 	# is not one, and this used to reach the delimiter branch only because a

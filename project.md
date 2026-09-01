@@ -17492,6 +17492,50 @@ which reads as though it handles a case. If the name ever changed, every
 bounded struct would quietly print "and up; no upper bound" -- the reassuring
 direction again. It asks for the attribute directly now.
 
+### 26.183 The dissector read the located member wherever the walk had reached
+
+Three places print that something "cannot drift from the parser": `situc doc`,
+`situc gen-dissector`, and the CLI's own docstring for the second. 26.182
+found `doc`'s claim true of its offsets and false of its row width. This is
+the same sweep reaching the dissector.
+
+**The claim holds for every construct but one.** The dissector reads
+placements, and its one use of `size_bytes` -- the length guard
+`if tvb:len() < N then return 0` -- is the *correct* use of a minimum: a
+dissector should accept a frame at the struct's smallest legal size, and
+using the maximum would reject valid short frames. Not every use of the
+minimum is the defect 26.172 found.
+
+**`at expr` is the exception, and `dissector.py` mentioned `located` zero
+times.** A located member's `offset_bits` is `None` -- layout.py says so
+directly, "None for a located member: its offset is whatever the field says"
+-- so it fell through to the running cursor and was dissected wherever the
+walk had got to. Then the cursor advanced past it, which section 9.8 forbids
+in as many words: it "joins no offset chain: it contributes nothing to the
+enclosing struct's extent, and the member declared after it sits where it
+would if the located member were not there".
+
+**It was right by coincidence.** In a typical BMP the two headers end at 54
+and `file.pixel_offset` is also 54, so the cursor and the declared offset
+agree and every test passed. They disagree exactly when the file has a colour
+table or a gap between the headers and the pixels -- which is the entire
+reason the field exists, and the reason 9.8 gives for the construct. **A
+feature that is correct whenever it is not needed passes every test written
+from the common case.**
+
+The C backend never had this: it has `_located_accessor` and dispatches on
+`placement.located`. So the schema, the map (`offset=DataPlaced`) and the
+accessors all agreed, and the fourth description -- the one whose whole
+argument is that a hand-written dissector is "a third description of the
+layout, and the one nobody remembers to update" -- was the one that had
+drifted.
+
+It reads the driver at its constant offset now (`situ_uint(tvb, 10, 4, true)`
+for BMP), dissects there, and leaves `at` alone. Where the driver is not at a
+constant offset it declines and says so, which is the answer `_key_read`
+already gives for a conversation key and for the same reason: a byte range
+that moves is not one to read from.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

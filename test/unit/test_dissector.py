@@ -822,3 +822,33 @@ def test_a_number_in_digits_is_never_negative(tmp_path: Path) -> None:
 		[LUA, str(HARNESS), str(lua), "s", b"-26 \x00\x00\x00\x00".hex()],
 		capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
+
+
+def test_a_located_member_is_read_where_the_data_says() -> None:
+	"""`at expr` places a member where a field says, and the dissector read it
+	at the running cursor instead.
+
+	Section 9.8 is explicit: a located member "joins no offset chain: it
+	contributes nothing to the enclosing struct's extent, and the member
+	declared after it sits where it would if the located member were not
+	there". `offset_bits` is `None` for one, so it fell through to `at` and
+	was dissected wherever the walk had reached -- while the file printed
+	"the dissector cannot drift from the parser" at the top.
+
+	For a typical BMP the two agree: the headers end at 54 and
+	`file.pixel_offset` is also 54. That is why nothing noticed, and it is
+	the case the construct does not exist for. A file with a colour table or
+	a gap between the headers and the pixels is the one it does.
+	"""
+	schema = parse_text((ROOT / "example/bmp/bmp.situ").read_text(encoding="ascii"))
+	lua    = generate(schema, resolve(schema, solve(schema)), "bmp")
+
+	# `file.pixel_offset` is at 0x0A, four bytes, little endian.
+	assert "local pixels_at = situ_uint(tvb, 10, 4, true)" in lua
+	assert "subtree:add(bitmap_file_f.pixels, tvb(pixels_at, pixels_n))" in lua
+
+	# And the cursor is not advanced past it: nothing in its block touches
+	# `at`, because the member after it sits where it would without it.
+	block = lua[lua.index("-- bitmap_file.pixels"):]
+	block = block[:block.index("\n\n")]
+	assert "at = at +" not in block, block
