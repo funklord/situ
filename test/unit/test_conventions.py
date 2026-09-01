@@ -288,6 +288,78 @@ def test_the_failure_classes_match_the_runtimes() -> None:
 # -- the interpreter floor --------------------------------------------------
 
 
+def test_a_rung_is_numbered_and_a_layer_is_named() -> None:
+	"""25.2's convention, checked rather than merely observed.
+
+	`layer` is the axis and its named values -- `--layer relate` -- and `rung`
+	is a numbered position on it. "Rung 3" and "`--layer relate`" name the
+	same thing from two directions, and neither "layer 3" nor "rung relate"
+	is written.
+
+	The reason is that `layer` is already taken. This document says
+	"upper-layer protocol", "link-layer CRC", "stuffing at the outermost
+	layer" and "the segment length is the IP layer's", because that is the
+	word the subject uses; a tool for describing protocol layers cannot
+	number its own layers 1 to 6 without colliding with the reader's other
+	meaning on every page.
+
+	`doc/decision/` is exempt and stays that way: rule 5 makes those records
+	append-only, and the eight uses of `layer <n>` in 0031 and 0032 are
+	inside them. Everywhere the text can change, it already follows this.
+
+	**Section 25.2 itself is exempt, and it is the first thing this caught.**
+	The section states the rule by naming the spellings it refuses -- neither
+	"layer 3" nor "rung relate" is written -- and a regex cannot tell a use
+	from a mention. Naming what not to write is what makes a convention
+	teachable, so the section stays as written and the sweep skips it. That
+	the check found its own definition before it found anything else is the
+	evidence that it discriminates.
+	"""
+	pattern = re.compile(r"\blayer\s+[1-6]\b", re.I)
+	rungs   = re.compile(r"\brung\s+(view|edit|relate|frame|converse|drive)\b",
+	                     re.I)
+
+	def defining_section(lines: list[str]) -> range:
+		"""The span of 25.2, which is allowed to spell what it forbids."""
+		start = next((i for i, l in enumerate(lines)
+		              if l.startswith("### 25.2 ")), None)
+		if start is None:
+			return range(0)
+		end = next((i for i in range(start + 1, len(lines))
+		            if lines[i].startswith(("### ", "## "))), len(lines))
+		return range(start, end)
+
+	offences = []
+	for path in (ROOT / "project.md", ROOT / "README.md"):
+		lines  = path.read_text(encoding="ascii").splitlines()
+		exempt = defining_section(lines)
+		for number, line in enumerate(lines, start=1):
+			if number - 1 in exempt:
+				continue
+			for found in pattern.finditer(line):
+				offences.append(f"{path.name}:{number}: `{found.group(0)}` "
+				                f"-- a numbered position is a rung (25.2)")
+			for found in rungs.finditer(line):
+				offences.append(f"{path.name}:{number}: `{found.group(0)}` "
+				                f"-- a named value is a layer (25.2)")
+
+	assert not offences, "\n  ".join(["25.2 is not being followed:"] + offences)
+
+	# The control: a sweep that finds no offences is only evidence if the
+	# thing it is checking is there to be got wrong. The two files hold 20
+	# uses of `rung <n>` between them, so a floor of 12 leaves room for the
+	# prose to move and still fails a document that stopped using the word.
+	numbered = sum(len(re.findall(r"\brung\s+[1-6]\b",
+	                              (ROOT / name).read_text(encoding="ascii"),
+	                              re.I))
+	               for name in ("project.md", "README.md"))
+	assert numbered >= 12, (
+		f"only {numbered} uses of `rung <n>` across project.md and "
+		f"README.md; "
+		f"this guard is reading the wrong thing, or the convention has been "
+		f"abandoned")
+
+
 def test_section_22_and_pyproject_agree_on_the_floor() -> None:
 	"""Two statements of one number, and the section is the one people read."""
 	spec = (ROOT / "project.md").read_text(encoding="utf-8")

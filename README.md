@@ -104,6 +104,16 @@ them, and every backend emits exactly the operations the vector supports.
 | `secrecy` | `Public` / `Secret` | may it be printed, and does it get a debug accessor |
 | `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | does touching it do something |
 
+**The casing carries meaning.** An axis is lowercase and a value on it is
+CamelCase, and that is what `situc map` prints: `offset=AbsoluteStatic(0x00)`,
+`align=Aligned(8)`, `size=Bounded(1, 16)`. Several words appear at both
+casings for two different things, deliberately -- `Canonical` is where a
+field sits on an axis and `canonical` is the predicate a schema asserts;
+`Unbounded` is a size and `unbounded` is what a codec's `expansion` says;
+`Secret` is a position and `[secret]` is the attribute that puts it there.
+Reading a CamelCase name is reading the compiler's answer; writing the
+lowercase one is stating a requirement.
+
 Four of them are worth a sentence, because they are the ones other systems
 do not distinguish:
 

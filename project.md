@@ -4972,6 +4972,37 @@ pair of corrections to the same evaluation file. No content changed -- every
 commit reused its original tree object. What the reformat measured on the way
 is 26.78.
 
+### 25.2 A rung is numbered; a layer is named
+
+The ladder of decision 0032 has two words for its parts and they are not
+interchangeable. **`layer` is the axis and its named values** -- the flag is
+`--layer`, and it takes `view`, `edit`, `relate`, `frame`, `converse`,
+`drive`. **`rung` is a position on that axis, and takes a number.** So "rung
+3" and "`--layer relate`" name the same thing from the two directions, and
+neither "layer 3" nor "rung relate" is written.
+
+**The reason is that `layer` is already taken.** This document has to say
+"upper-layer protocol", "link-layer CRC", "stuffing at the outermost layer"
+and "the segment length is the IP layer's", because that is the word the
+subject uses. A tool for describing protocol layers cannot number its own
+layers 1 to 6 without colliding with the reader's other meaning on every
+page. Numbering the rungs is what keeps the two apart, and the mixed
+metaphor is the mitigation rather than the problem.
+
+Measured before it was written down, because it was already being followed:
+61 uses of `rung <n>` against 8 of `layer <n>`, and all 8 of those are inside
+`doc/decision/0031` and `0032`, which are append-only and stay as written.
+`rung <name>` appears nowhere.
+`test_a_rung_is_numbered_and_a_layer_is_named` refuses `layer <n>` in this
+document and in the README now, so the convention is checked rather than
+merely observed.
+
+It is not in `style_gate.py`, and the reason is worth stating because the
+gate is the obvious home: that file is a verbatim copy of the shared source,
+so a rule added here would be drift by construction, and a rule about *this
+project's* ladder has no business in a gate three other trees run. A
+project-specific convention gets a project-specific check.
+
 ---
 
 ## 26. Implementation plan
