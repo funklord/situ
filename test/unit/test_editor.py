@@ -9,14 +9,16 @@ asks the same document, and the GUI -- when it exists -- must do the same.
 from __future__ import annotations
 
 import ast as pyast
+import dataclasses
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from editor.document import open_document
-from editor.text import render
+from editor.document import Field, open_document
+from editor.text import as_json, render
 from every_schema import ROOT
 from situc.layout import solve
 from situc.pack import pack
@@ -486,3 +488,51 @@ def test_set_bytes_reaches_the_cli(tmp_path: Path) -> None:
 	          str(tmp_path / "m.bin"), "--set-bytes", "payload=zz")
 	assert bad.returncode == 1
 	assert "is not hex" in bad.stderr
+
+
+# -- the JSON document (26.181) ---------------------------------------------
+
+
+def test_the_json_document_carries_everything_the_model_has() -> None:
+	"""0034 makes this the process boundary: the C++ window drives
+	`situ-edit` rather than reimplementing the document model, "because a
+	second implementation is precisely what 0034 forbids".
+
+	So the JSON *is* the contract, and nothing was checking it -- not the
+	capability fields added in 26.178, and not the ones that were there
+	first. A key renamed or dropped breaks a frontend and nothing here
+	notices.
+
+	Read off the model rather than listed here, so a field added to `Field`
+	and forgotten in `as_json` fails this instead of going unnoticed. `kind`
+	is the one key with no attribute behind it: it says how to read `value`,
+	which JSON cannot say for itself.
+	"""
+	image, message = udp_with_payload()
+	document = open_document(image, message)
+
+	rows = json.loads(as_json(document))["fields"]
+	assert rows, "the document has no fields"
+
+	derived = {"readable", "writable", "write_cost"}
+	wanted  = {held.name for held in dataclasses.fields(Field)} | derived
+	for row in rows:
+		assert wanted <= set(row), (
+			f"the JSON drops {sorted(wanted - set(row))}, which the model has")
+	assert set(rows[0]) - wanted == {"kind"}, \
+		f"the JSON invents {sorted(set(rows[0]) - wanted - {'kind'})}"
+
+
+def test_the_json_says_what_a_write_would_cost() -> None:
+	"""The values, not only the keys."""
+	image, message = udp_with_payload()
+	rows = {row["name"]: row
+	        for row in json.loads(as_json(open_document(image, message)))["fields"]}
+
+	assert rows["checksum"]["writable"] is False
+	assert rows["checksum"]["mutate"] == "Immutable"
+	assert "does not let anyone write" in rows["checksum"]["write_cost"]
+
+	assert rows["source_port"]["writable"] is True
+	assert rows["source_port"]["auth"] == "Covered"
+	assert rows["payload"]["mutate"] == "Shifting"

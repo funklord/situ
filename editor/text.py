@@ -142,6 +142,9 @@ def as_json(document: Document) -> str:
 				"kind":   ("bytes" if isinstance(field.value, bytes)
 				           else "int" if field.value is not None else "none"),
 				"note":   field.note,
+				# `readable` beside `writable`, because a frontend asking one
+				# question should not have to derive the other from `kind`.
+				"readable":   field.readable,
 				# What a write would do. `mutate` is null where the image was
 				# packed without its metadata tail, and a frontend must read
 				# that as "not told" rather than as permission.

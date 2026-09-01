@@ -17425,6 +17425,35 @@ CLI, which is 0034's rule holding: nothing a frontend can do may be absent
 from the scriptable one, and the way to keep that true is for the other
 frontends to have no rendering of their own.
 
+### 26.181 The contract that exists to prevent a second model had no test
+
+`as_json` is what 0034 calls the process boundary: the C++ window drives
+`situ-edit` rather than reimplementing the document model, "because a second
+implementation is precisely what 0034 forbids". **Nothing checked it.** Not
+the capability fields added in 26.178, and not the ones that were there first
+-- no test in the tree parsed the editor's JSON at all.
+
+So the one interface designed to stop the model being written twice was the
+one where a renamed or dropped key would break a frontend silently.
+
+**Read off the model rather than listed in the test.** `dataclasses.fields`
+plus the three derived properties is the wanted set, so a field added to
+`Field` and forgotten in `as_json` fails here instead of going unnoticed --
+which is what the sabotage confirms, and it is the case the gate exists for
+rather than a hypothetical. `kind` is the one key with no attribute behind
+it: it says how to read `value`, which JSON cannot say for itself, and the
+test names it as the single exception rather than allowing extras.
+
+**`readable` was missing beside `writable`.** The asymmetry arrived with
+26.178: the mirror was added to the model and only the new half was published.
+A frontend asking one question should not have to derive the other from
+`kind`, so it is in the document now.
+
+The shape, again: **the surface added in a hurry is the one the exhaustiveness
+gate would have caught**, and writing the gate found the omission in the same
+pass. Three sabotages -- a key dropped, a model field forgotten, a value
+wrong -- and each fails a different half.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
