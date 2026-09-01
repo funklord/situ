@@ -17058,6 +17058,40 @@ up and the acceptance block looks like it predates the rule, but a normative
 "must produce" is not something to quietly edit to match what is produced.
 Nothing checked it either way, which is why it could differ at all.
 
+### 26.173 The fix left the same defect one `if` away from itself
+
+26.172 made the map's struct line print `min..max` instead of the minimum.
+It has two branches, and only one was fixed. The other returned `size_bits`
+alone for any struct that is not whole bytes, so
+
+    struct s { bit a; bit rest[remaining]; }
+
+-- one bit and an unbounded bit run -- printed `size=1bit`, which is the
+defect the commit was written to remove, surviving in the branch beside it.
+
+**Nothing disagreed, because nothing exercised it.** No bit-sized struct is
+committed anywhere in the tree: 158 structs and not one. A branch with no
+coverage reads exactly like one that works, and this is the fourth time this
+session that sentence has been the finding rather than the moral.
+
+Both bounds go through one `_extent` now -- bytes where the count is whole
+bytes, a `bit` count where it is not -- so `3bit`, `1bit..`, `4` and
+`8..65535` come out of the same two lines. The committed maps are unchanged
+by it, which is the check that it touched only the branch nothing reached.
+
+**It was found by asking the fix the question the fix answers.** After
+committing, the same lens went back over the new code: *what does this print
+where nothing measures it*. Three shapes were tried before one worked -- a
+variable bit array is refused because `n` is not in scope, a variant of
+bit-sized arms is refused because a variant must start on a byte boundary --
+and the third is legal, which is exactly the kind of construct no schema
+author writes and no committed example covers.
+
+**And the test written for it carried its own version of the fault.** The
+first draft asserted `... in struct_line(...) or True`, which passes on any
+input at all. Caught before it was committed, by reading the assertion rather
+than the result -- a green test is not evidence that it can be red.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

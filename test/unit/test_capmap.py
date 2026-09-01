@@ -431,3 +431,53 @@ def test_map_shows_dynamic_and_frame_offsets() -> None:
 	assert "offset=Dynamic" in text
 	assert "offset=FrameStatic(0x00)" in text
 	assert "size=Unbounded" not in text
+
+
+BIT_SIZED = ("target buffer;\nendian big;\nbit_order msb_first;\n"
+             "struct s { bit a; bit b; bit c; }\n")
+
+BIT_SIZED_UNBOUNDED = ("target buffer;\nendian big;\nbit_order msb_first;\n"
+                       "struct s { bit a; bit rest[remaining]; }\n")
+
+
+def struct_line(text: str) -> str:
+	source   = Source("s.situ", text)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	rendered = capmap.render(schema, resolved, "s.situ")
+	return next(line for line in rendered.splitlines()
+	            if line.startswith("struct s "))
+
+
+def test_a_struct_size_is_a_range_where_it_is_one() -> None:
+	"""`size=` on the struct line was `size_bytes`, which is the minimum, and
+	nothing said so: `udp_header` runs to 65535 bytes and printed `size=8`,
+	`proto_message` has no upper bound and printed `size=0`. Fifty of the
+	tree's 158 structs understated themselves, while the field line directly
+	below each printed a range for the same token.
+	"""
+	fixed = struct_line("target buffer;\nendian big;\n"
+	                    "struct s { u32 a; }\n")
+	assert "size=4 " in fixed, fixed
+
+	# A bare number has to mean fixed, or it means nothing.
+	bounded = struct_line("target buffer;\nendian big;\n"
+	                      "struct s { u16 n [max = 1500]; u8 body[n]; }\n")
+	assert "size=2..1502 " in bounded, bounded
+
+	unbounded = struct_line("target buffer;\nendian big;\n"
+	                        "struct s { u8 rest[remaining]; }\n")
+	assert "size=0.. " in unbounded, unbounded
+
+
+def test_a_bit_sized_struct_says_when_it_is_unbounded_too() -> None:
+	"""The branch the fix above did not reach, which is the defect it was
+	written to remove, surviving one `if` away from it.
+
+	`size_bits` alone was returned for anything not whole bytes, so a struct
+	of one bit and an unbounded bit run printed `size=1bit`. No such struct
+	is committed here, so nothing disagreed with it -- which is the whole
+	reason a branch with no coverage reads exactly like one that works.
+	"""
+	assert "size=3bit " in struct_line(BIT_SIZED)
+	assert "size=1bit.. " in struct_line(BIT_SIZED_UNBOUNDED)

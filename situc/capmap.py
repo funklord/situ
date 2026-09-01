@@ -155,16 +155,26 @@ def _struct_size(layout: StructLayout) -> str:
 
 	Written as `min..max`, or `min..` where nothing bounds it, so a reader who
 	sees a bare number knows the struct is fixed.
-	"""
-	if not layout.is_byte_sized:
-		return f"{layout.size_bits}bit"
 
-	low = layout.size_bytes
+	Both branches, which the first version of this got wrong in the way it
+	was written to fix: the bit-sized branch returned `size_bits` alone, so
+	`struct s { bit a; bit rest[remaining]; }` -- one bit and no upper bound
+	-- printed `size=1bit`. No such struct is committed here, which is why
+	the branch had no coverage to disagree with it; one is built in the
+	suite now.
+	"""
+	low = _extent(layout.size_bits)
 	if layout.size_max_bits is None:
 		return f"{low}.."
 	if layout.size_max_bits == layout.size_bits:
-		return f"{low}"
-	return f"{low}..{layout.size_max_bits // BITS_PER_BYTE}"
+		return low
+	return f"{low}..{_extent(layout.size_max_bits)}"
+
+
+def _extent(bits: int) -> str:
+	"""A byte count, or a bit count where it is not whole bytes."""
+	whole, over = divmod(bits, BITS_PER_BYTE)
+	return f"{whole}" if not over else f"{bits}bit"
 
 
 def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
