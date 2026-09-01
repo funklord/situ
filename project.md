@@ -15043,14 +15043,14 @@ and are not properties a table would have got.
 
 **And the convention is named, because there are two.** This is
 transition-on-one, which is HDLC's. USB transitions on a zero, which needs
-the feedback complemented and no kernel argument says that -- so it is not
-expressible, and is recorded here rather than approximated. Calling the
-codec `nrzi` unqualified would have repeated exactly what `manchester` is
-refused for: two codes, one name, and a decoder built on the wrong one
-returning plausible bytes with nothing at run time to notice.
-
-*Superseded on the USB half: `complement_feedback` says it now, and
-`nrzi_transition_on_zero` is generated and checked. See 26.146.*
+the feedback complemented -- and no kernel argument said so on the day this
+was written, so it was recorded here rather than approximated.
+`complement_feedback` says it now, and `nrzi_transition_on_zero` is
+generated and checked against the standard's own two facts (26.146). What
+does not change is why both are named: calling either `nrzi` unqualified
+would repeat exactly what `manchester` is refused for -- two codes, one
+name, and a decoder built on the wrong one returning plausible bytes with
+nothing at run time to notice.
 
 **Gray and BCD are the other two, and they are a category error rather
 than a misfiling.** Neither is a codec. BCD is already a field type --
@@ -15518,11 +15518,10 @@ that `per` **is derived from and not generated from**: the signature of
 saying five and a buffer bound of `len + len / 5`. A schema can therefore
 declare one bit stuffing and link another, silently -- which is the one
 thing a tier-2 codec is supposed to make impossible, since the signature and
-the implementation are meant to come from one description. The comment now
-says only what is true.
-
-*The declaration hole is closed in 26.147 and USB's own stuffing in
-26.148.*
+the implementation are meant to come from one description. The comment was
+corrected to say only what was true, and the hole itself is closed in 26.147,
+which gave every named stuffing code one recorded overhead and refuses a
+declaration that disagrees. USB's own stuffing arrived in 26.148.
 
 ### 26.147 A named code's overhead is the code's, and three declare it short
 
