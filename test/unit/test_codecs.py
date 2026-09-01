@@ -348,8 +348,8 @@ def test_a_kernel_with_no_pair_is_declined() -> None:
 	says so where the suite would have been."""
 	text = codec_tests(
 		"codec c { kernel = polynomial(width = 32, poly = 0x04C11DB7,"
-		" init = 0xFFFFFFFF, xor_out = 0xFFFFFFFF, reflect_in = true,"
-		" reflect_out = true); }\nimpl c derived;", bind=False)
+		" init = 0xFFFFFFFF, xorout = 0xFFFFFFFF, reflect); }\n"
+		"impl c derived;", bind=False)
 
 	assert "no suite" in text
 	assert "static void test_c_" not in text

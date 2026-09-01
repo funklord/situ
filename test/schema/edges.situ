@@ -745,8 +745,11 @@ require absolute_static(hp_split);
 // So the buffer size was never the unknown. It is the encoded length exactly,
 // and the accessor is emitted with `1:1` now.
 codec scramble {
+	// No `unit`: a shift register works a bit at a time by construction, so
+	// the family reads no such argument and this one was ignored from the day
+	// it was written. It said `stream` while the codec derived `bit(1)`.
 	kernel = shift_register(taps = 0x8810, width = 16, seed = 0xFFFF,
-	                        unit = stream, feedback = input);
+	                        feedback = input);
 }
 
 impl scramble derived;

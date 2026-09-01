@@ -3441,7 +3441,7 @@ def test_the_widening_guard_refuses_only_what_it_must() -> None:
 
 SCRAMBLER = """codec scramble {
 	kernel = shift_register(taps = 0x8810, width = 16, seed = 0xFFFF,
-	                        unit = stream, feedback = input);
+	                        feedback = input);
 }
 impl scramble derived;
 

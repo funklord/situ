@@ -16092,7 +16092,80 @@ transcription of it. Three sabotages, each watched:
 
 The two that changed answer are the two the old guard had backwards.
 
-### 26.156 Perl and PicoLisp, when there is nothing left to hold them up
+### 26.156 A kernel argument nothing reads, and the one that costs
+
+`shift_register(taps = 0xB400, width = 16, sed = 0xACE1, feedback = input)`
+compiled. One character, and the generated scrambler starts at 0xFFFF
+instead of 0xACE1 -- a different keystream, no diagnostic, and nothing
+downstream able to say so.
+
+**Every family took what it recognised and ignored the rest.** For most
+arguments that is cheap: `input_bits` has no default, so a table kernel
+missing one already fails. `seed` is the expensive one because it *has* a
+default, and `std/kernels.situ` states in so many words why nothing later
+catches a wrong one -- a mistyped tap "almost always shows up as a short
+period", while the seed "is not checkable the same way: a wrong one produces
+a wrong keystream with no property to catch it". The period test measures the
+taps. So the argument name is the only place this was ever catchable, and it
+was not being checked there either.
+
+**The vocabulary is closed per family now**, which is what
+`wellformed.check_attribute_places` already does one construct over, and the
+refusal names the near miss because a message listing five valid names
+without pointing at the one you meant makes the reader do the diff:
+
+    error: `s` passes `sed` to a `shift_register` kernel
+       = did you mean `seed`?
+       = `shift_register` reads `complement_feedback`, `feedback`, `seed`,
+         `taps`, `width`
+       = an argument this family does not read was ignored, and whatever it
+         carried was replaced by a default
+
+**The vocabulary is itself a claim, so it is held to the schemas rather than
+to the code it came from.** It was read out of the `argument()` and `flag()`
+calls in `kernels.py` *and* in `codegen/c/derived.py`, which is two places
+and two chances to miss one -- and a name only the generator reads (`poly`,
+`seed`, `init`) is still one a schema legitimately writes, so leaving those
+out would have refused every CRC in the standard kernels. The guard sweeps
+every committed schema and asserts the vocabulary already contains whatever
+they write, with a floor under the population so an empty sweep cannot pass
+as a clean one.
+
+**It found three instances in the tree, and where they were is the useful
+part.** `test/schema/edges.situ` declared `unit = stream` on a shift
+register; nothing has ever read it, since a scrambler works a bit at a time
+by construction and the codec derived `granularity=bit(1)` while the schema
+said `stream`. Removed, with the capability map byte-identical afterwards,
+which is the proof it was inert. That it was in `edges.situ` is worth
+noticing on its own -- the file exists to be awkward on purpose and was
+carrying a silently ignored argument nobody had a way to see.
+
+The other two were in the suite. `test_codegen_c.py` carried the same
+`unit = stream`. `test_codecs.py` wrote a whole CRC-32 --
+`xor_out = 0xFFFFFFFF, reflect_in = true, reflect_out = true` -- of which
+**none of the three is a name this language has**: it spells them `xorout`
+and `reflect`, a bare flag covering both directions, and `reflect_in = true`
+is not even a value form the grammar offers. Only `width`, `poly` and `init`
+were read. The test asserts that a non-invertible codec gets no conformance
+suite, so the parameters never mattered to what it checked, which is exactly
+how three wrong ones sat in one line.
+
+**And the guard that swept the schemas did not find those two, which is the
+right division rather than a hole.** `test_the_argument_vocabulary_covers_
+every_kernel_in_the_tree` reads committed `.situ` files and passed; the
+inline kernels live in Python string literals and are reached by *parsing*,
+so the refusal fires when the test runs. `make check` went red on three tests
+and named them. A schema sweep for the committed population and the suite
+itself for the rest is two instruments over two populations -- which is what
+26.155 had just finished saying about the skip guard, one file over.
+
+**Three sabotages, each watched going red**: the check removed, caught by
+the refusal test; `seed` dropped from the vocabulary, caught by the sweep
+against the committed schemas rather than by any hand-written case; and the
+original typo reintroduced into `std/kernels.situ`, which now fails at parse
+rather than generating a different scrambler.
+
+### 26.157 Perl and PicoLisp, when there is nothing left to hold them up
 
 Stated by the copyright holder, 2026-09-01: **situ should probably grow Perl
 and PicoLisp backends eventually, once the features are all implemented and

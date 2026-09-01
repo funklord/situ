@@ -23,6 +23,8 @@ and quietly preferring either would hide which.
 
 from __future__ import annotations
 
+import difflib
+
 from math import lcm
 
 from dataclasses import dataclass, replace
@@ -60,7 +62,74 @@ def derive(decl: ast.CodecDecl) -> Derived:
 	kernel = decl.kernel
 	assert kernel is not None, "callers check for a kernel first"
 
+	_known_arguments(decl, kernel)
 	return _FAMILIES[kernel.family](decl, kernel)
+
+
+def _known_arguments(decl: ast.CodecDecl, kernel: ast.Kernel) -> None:
+	"""Refuse an argument the family does not read.
+
+	Every family took what it recognised and ignored the rest, so a misspelled
+	name was accepted and the value it carried silently replaced by a default.
+	That is cheap for most of them -- `input_bits` has no default and a missing
+	one is already an error -- and it is not cheap for `seed`:
+
+	    shift_register(taps = 0xB400, width = 16, sed = 0xACE1, feedback = input)
+
+	compiled, and generated a scrambler starting at 0xFFFF rather than 0xACE1.
+	A different keystream, one character apart, with nothing downstream able to
+	say so. `std/kernels.situ` states the reason it cannot be caught later, in
+	the comment above the codecs it would hit: a mistyped tap "almost always
+	shows up as a short period", and the seed "is not checkable the same way --
+	a wrong one produces a wrong keystream with no property to catch it". The
+	period test measures the taps. Nothing measures the seed, so the argument
+	name is the only place this is catchable at all.
+
+	The vocabulary is closed per family, which is what `wellformed`'s attribute
+	table already does one construct over. A near miss is named, because a
+	refusal that lists twelve valid names and does not point at the one you
+	meant makes the reader do the diff.
+	"""
+	known = KERNEL_ARGUMENTS[kernel.family]
+	for arg in kernel.args:
+		if arg.name in known:
+			continue
+
+		near = difflib.get_close_matches(arg.name, sorted(known), n = 1)
+		notes = [f"`{kernel.family.value}` reads "
+		         f"{', '.join(f'`{name}`' for name in sorted(known))}"]
+		if near:
+			notes.insert(0, f"did you mean `{near[0]}`?")
+		notes.append("an argument this family does not read was ignored, and "
+		             "whatever it carried was replaced by a default")
+		raise error(
+			f"`{decl.name}` passes `{arg.name}` to a "
+			f"`{kernel.family.value}` kernel",
+			kernel.span,
+			label = "not an argument of this family",
+			notes = notes,
+		)
+
+
+#: What each family reads, taken from the derivations here and the generators
+#: in `codegen/c/derived.py` together -- an argument only the emitter reads is
+#: still one the schema may legitimately write, and leaving those out would
+#: refuse `poly` and `seed`, which no derivation touches.
+KERNEL_ARGUMENTS: dict[ast.KernelFamily, frozenset[str]] = {
+	ast.KernelFamily.TABLE:       frozenset({
+		"input_bits", "output_bits", "pad", "code"}),
+	ast.KernelFamily.POLYNOMIAL:  frozenset({
+		"width", "poly", "init", "xorout", "reflect",
+		# Reed-Solomon and BCH: `field` is what selects them.
+		"field", "n", "k", "first_root", "primitive"}),
+	ast.KernelFamily.LINEAR:      frozenset({
+		"n", "k", "standard_form", "code"}),
+	ast.KernelFamily.SHIFT:       frozenset({
+		"taps", "width", "seed", "feedback", "complement_feedback"}),
+	ast.KernelFamily.PERMUTATION: frozenset({"rows", "columns", "span"}),
+	ast.KernelFamily.STUFFING:    frozenset({
+		"worst_case", "per", "unit", "code"}),
+}
 
 
 def apply_to(decl: ast.CodecDecl) -> ast.CodecDecl:

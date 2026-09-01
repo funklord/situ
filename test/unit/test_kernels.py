@@ -205,6 +205,65 @@ def test_an_unnamed_stuffing_code_keeps_the_overhead_it_declares() -> None:
 	assert decl.ratio == (9, 4)
 
 
+def test_a_kernel_argument_the_family_does_not_read_is_refused() -> None:
+	"""A misspelled argument was ignored, and its value replaced by a default.
+
+	Most of them are harmless: `input_bits` has no default, so a table kernel
+	missing one already fails. `seed` is the expensive case, because it has a
+	default and nothing downstream measures it.
+
+	    shift_register(taps = 0xB400, width = 16, sed = 0xACE1,
+	                   feedback = input)
+
+	compiled and generated a scrambler starting at 0xFFFF rather than 0xACE1
+	-- a different keystream, one character apart. `std/kernels.situ` says in
+	so many words why nothing later can catch it: a mistyped tap shows up as
+	a short period, and the seed "is not checkable the same way -- a wrong one
+	produces a wrong keystream with no property to catch it". The argument
+	name is the only place it is catchable.
+	"""
+	rendered = refusal("codec s { kernel = shift_register(taps = 0xB400, "
+	                   "width = 16, sed = 0xACE1, feedback = input); }")
+	assert "passes `sed` to a `shift_register` kernel" in rendered
+	assert "did you mean `seed`?" in rendered
+	assert "`seed`" in rendered and "`taps`" in rendered
+
+
+def test_the_argument_vocabulary_covers_every_kernel_in_the_tree() -> None:
+	"""The whitelist is a claim, so it is held to the schemas rather than to
+	the code it was read out of.
+
+	It was built from the `argument()` and `flag()` calls in this module and
+	in the C generator together, which is two places and therefore two chances
+	to miss one. A name only the generator reads -- `poly`, `seed`, `init` --
+	is still one a schema legitimately writes, and leaving those out would
+	have refused every CRC in the standard kernels. This asks the schemas
+	instead: whatever they write, the vocabulary must already contain.
+	"""
+	from situc.kernels import KERNEL_ARGUMENTS
+
+	seen = 0
+	for path in sorted(ROOT.glob("std/*.situ")) + sorted(
+			ROOT.glob("example/*/*.situ")) + sorted(
+			ROOT.glob("test/schema/*.situ")):
+		schema = parse(path)
+		for decl in schema.codecs():
+			if decl.kernel is None:
+				continue
+			known = KERNEL_ARGUMENTS[decl.kernel.family]
+			for arg in decl.kernel.args:
+				seen += 1
+				assert arg.name in known, (
+					f"{path.name}: `{decl.name}` writes `{arg.name}` to a "
+					f"`{decl.kernel.family.value}` kernel and the vocabulary "
+					f"does not have it")
+
+	assert seen >= 100, (
+		f"only {seen} kernel arguments found across the committed schemas; "
+		f"this guard is reading the wrong files and an empty sweep passes "
+		f"as loudly as a real one")
+
+
 def test_a_polynomial_width_must_be_a_whole_number_of_bytes() -> None:
 	rendered = refusal("codec c { kernel = polynomial(width = 12, poly = 3); }")
 	assert "not a whole number of bytes" in rendered
