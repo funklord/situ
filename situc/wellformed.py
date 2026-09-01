@@ -1902,6 +1902,52 @@ def _within_one_edit(a: str, b: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _check_derived_kernel(decl: ast.CodecDecl, impl: ast.ImplDecl) -> None:
+	"""A generated implementation needs what the signature does not.
+
+	`shift_register` derives every property it reports from one word,
+	`feedback`, so the derivation never looks at taps, width or seed. The
+	emitter reads all three, defaulted two and fell silent on the third: a
+	missing `seed` generated 0xFFFF, a missing `width` generated a 16-bit
+	register where `taps = 0x1` means NRZI at width 1, and a missing `taps`
+	produced no implementation without saying which argument was absent.
+
+	Only for a `derived` binding. Section 13.1 makes a signature with no
+	implementation the normal case for a protocol under design, and one of
+	those needs none of this -- which is also why the check is here rather
+	than in `kernels.derive`, where it would refuse the derivation tests that
+	legitimately state nothing but `feedback`.
+	"""
+	from situc.kernels import KERNEL_REQUIRED_FOR_DERIVED
+
+	if impl.kind is not ast.ImplKind.DERIVED or decl.kernel is None:
+		return
+
+	needed = KERNEL_REQUIRED_FOR_DERIVED.get(decl.kernel.family)
+	if needed is None:
+		return
+
+	missing = [name for name in needed if decl.kernel.argument(name) is None]
+	if not missing:
+		return
+
+	raise error(
+		f"`{decl.name}` is generated and does not say "
+		f"{', '.join(f'`{name}`' for name in missing)}",
+		decl.kernel.span,
+		label = f"a derived `{decl.kernel.family.value}` needs "
+		        f"{', '.join(f'`{name}`' for name in needed)}",
+		notes = ["the signature does not read these -- `feedback` decides "
+		         "every property it reports -- so nothing else can notice "
+		         "them missing",
+		         "each has a default that generates a different code in "
+		         "silence: no `seed` starts the register at all ones, and no "
+		         "`width` makes it sixteen bits, where `taps = 0x1` is NRZI "
+		         "at width 1",
+		         "a signature with no `impl` needs none of this (13.1)"],
+	)
+
+
 def check_codec_bindings(schema: ast.Schema) -> None:
 	"""Every `impl` names a declared codec, and no codec is bound twice.
 
@@ -1929,6 +1975,7 @@ def check_codec_bindings(schema: ast.Schema) -> None:
 				"binding, not adding another",
 			])
 		bound[impl.codec] = impl
+		_check_derived_kernel(codecs[impl.codec], impl)
 
 	for struct in schema.structs():
 		for region in _coded_regions(struct.members):

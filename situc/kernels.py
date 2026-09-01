@@ -634,6 +634,30 @@ STUFFING_BOUNDS: dict[str, tuple[int, int]] = {
 }
 
 
+#: Arguments a *generated* implementation needs that the signature does not.
+#:
+#: Every other family's needs are already required where the signature is
+#: derived: `_table` calls `_positive` for `input_bits`, `_linear_block` for
+#: `n` and `k`, `_stuffing` for `worst_case` and `per`. `shift_register`
+#: derives everything it reports from one word, `feedback`, and reads taps,
+#: width and seed nowhere but the emitter -- which defaulted two of them and
+#: fell silent on the third:
+#:
+#:     no seed   -> generated with 0xFFFF, a different keystream
+#:     no width  -> generated a 16-bit register; `taps = 0x1` is NRZI at
+#:                  width 1 and something else entirely at 16
+#:     no taps   -> no implementation, and nothing saying which argument
+#:                  was missing
+#:
+#: No committed schema omits any of them, so the defaults existed only to be
+#: wrong. Checked against a `derived` binding rather than at derivation,
+#: because 13.1 makes a signature with no implementation the normal case for
+#: a protocol under design, and such a codec needs none of this.
+KERNEL_REQUIRED_FOR_DERIVED: dict[ast.KernelFamily, tuple[str, ...]] = {
+	ast.KernelFamily.SHIFT: ("taps", "width", "seed"),
+}
+
+
 STUFFING_UNITS: dict[str, tuple[ast.Granularity, int | None]] = {
 	"bit":    (ast.Granularity.BIT, 1),
 	"byte":   (ast.Granularity.BYTE, None),

@@ -16472,6 +16472,52 @@ losing `nonce`, caught by the test that writes the working form rather than
 by any refusal case; and `indexed` losing `offset_type`, caught by
 `example/sqlite`, which is the committed schema that writes it.
 
+### 26.161 The arguments only the emitter reads, and their defaults
+
+26.156 closed the argument you wrote that nothing reads. This is the other
+half: the argument you did not write that something needed.
+
+**A signature and a generated implementation need different things**, and
+`shift_register` is where they diverge furthest. It derives every property
+it reports -- seekability, error propagation, invertibility -- from one word,
+`feedback`. Taps, width and seed are read nowhere but the emitter, which
+defaulted two of them and fell silent on the third:
+
+    no seed    generated with 0xFFFF, a different keystream
+    no width   generated a 16-bit register, where `taps = 0x1` is NRZI at
+               width 1 and something else entirely at 16
+    no taps    no implementation, and nothing naming the missing argument
+
+**No committed schema omits any of them**, so those defaults existed only to
+be wrong. Every other family's needs are already required where the signature
+is derived -- `_table` calls `_positive` for `input_bits`, `_linear_block`
+for `n` and `k`, `_stuffing` for `worst_case` and `per` -- which is why this
+family alone had the gap and why the table has one entry.
+
+**The check hangs off the `impl`, not the derivation**, and the two reasons
+agree. 13.1 makes a signature with no implementation the normal case for a
+protocol under design, and such a codec wants none of this; and putting it in
+`kernels.derive` would refuse the derivation tests that state nothing but
+`feedback`, which is exactly what those tests exist to check.
+
+**The test claimed to cover the guard and did not, and the sabotage is what
+showed it.** The first version asserted that a codec with no `impl` still
+parses -- but such a codec never enters the loop the check hangs off, so
+removing the `ImplKind.DERIVED` guard left the test green. It read as
+coverage of the guard and was coverage of nothing. The guard's real subject
+is an **`extern` binding**: the implementation is the caller's, situ emits
+none, and the emitter's arguments are as unwanted there as for a bare
+signature. Both cases are written now, and removing the guard fails.
+
+That is this session's shape arriving in the instrument again, and by now the
+count is worth stating: a check that cannot fail reads exactly like one that
+works, and tonight it turned up in a kernel argument, a table row, a skip
+ceiling, a toolchain report, a region vocabulary, a `make check` piped into
+`tail`, a `pgrep` matching itself, and a test asserting something it could
+not observe. The instruments are not safer than the code. **Sabotage is the
+only thing that tells the two apart**, and it has to be aimed at the specific
+line the test claims to hold, not at the feature.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

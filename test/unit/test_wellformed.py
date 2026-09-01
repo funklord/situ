@@ -1136,6 +1136,70 @@ def test_a_key_selector_must_carry_a_value() -> None:
 	assert "no value to select by" in text
 
 
+def test_a_derived_shift_register_must_say_what_only_the_emitter_reads() -> None:
+	"""A signature and a generated implementation need different things.
+
+	`shift_register` derives every property it reports from one word,
+	`feedback`, so the derivation never looks at taps, width or seed. The
+	emitter reads all three and defaulted two of them:
+
+	    no seed   generated 0xFFFF, a different keystream
+	    no width  generated a 16-bit register, where `taps = 0x1` is NRZI
+	              at width 1 and something else entirely at 16
+	    no taps   no implementation, and nothing naming the missing argument
+
+	No committed schema omits any of them, so the defaults could only ever
+	be wrong. This is the omission half of the same shape 26.156 closed for
+	misspelling: an argument nothing reads, and an argument nothing wrote.
+	"""
+	whole = ("taps = 0xB400, width = 16, seed = 0xACE1, feedback = input")
+	for missing, kernel in [
+			("seed",  "taps = 0xB400, width = 16, feedback = input"),
+			("width", "taps = 0xB400, seed = 0xACE1, feedback = input"),
+			("taps",  "width = 16, seed = 0xACE1, feedback = input")]:
+		text = rendered(f"endian big;\ncodec s {{ kernel = "
+		                f"shift_register({kernel}); }}\n"
+		                f"impl s derived;\nstruct t {{ u8 a; }}\n")
+		assert f"does not say `{missing}`" in text, text
+		assert "generates a different code in silence" in text, text
+
+	# Stated in full it parses, which is the half a refusal test cannot show.
+	parse_text(f"endian big;\ncodec s {{ kernel = "
+	           f"shift_register({whole}); }}\n"
+	           f"impl s derived;\nstruct t {{ u8 a; }}\n")
+
+
+def test_a_signature_without_an_implementation_needs_none_of_that() -> None:
+	"""13.1's normal case for a protocol under design, and the reason this
+	check hangs off the `impl` rather than off the derivation.
+
+	A codec that declares a kernel and binds nothing generates nothing, so
+	the arguments only the emitter reads are not missing -- they are not
+	wanted. Putting the requirement in `kernels.derive` would refuse the
+	derivation tests that state nothing but `feedback`, which is exactly what
+	those tests are for.
+
+	**An `extern` binding is the case the guard is actually for**, and the
+	first version of this test did not reach it: a codec with no `impl` never
+	enters the loop the check hangs off, so removing the `ImplKind.DERIVED`
+	guard left it passing. The implementation is the caller's there, situ
+	emits none, and the emitter's arguments are as unwanted as they are for a
+	bare signature.
+	"""
+	from situc.parser import parse_text
+
+	# No binding: never reaches the check.
+	parse_text("endian big;\n"
+	           "codec s { kernel = shift_register(taps = 5, "
+	           "feedback = input); }\n")
+
+	# Bound to somebody else's code: reaches it, and must pass.
+	parse_text("endian big;\n"
+	           "codec s { kernel = shift_register(taps = 5, "
+	           "feedback = input); }\n"
+	           "impl s extern \"my_scrambler\";\n")
+
+
 def test_every_region_kind_refuses_an_argument_it_does_not_read() -> None:
 	"""`sealed` refused one and its three neighbours did not, in this file.
 
