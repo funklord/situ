@@ -15646,12 +15646,27 @@ six, which the measurement catches at 46 bytes where 48 was predicted; and
 a member removed from the delimiter list.
 
 **Two of those first went red in the wrong place**, reporting the refusal
-where the measurement was under test, and the cause was not established --
-the obvious one, a stale `__pycache__` surviving a restore, was tried and
-does not reproduce. It is recorded because of what it cost rather than
-what it was: a sabotage that fails for the wrong reason has demonstrated
-nothing about the check it was aimed at, and both were re-run from a clean
-tree before any of the four above was believed.
+where the measurement was under test. A sabotage that fails for the wrong
+reason has demonstrated nothing about the check it was aimed at, so both
+were re-run from a clean tree before any of the four above was believed.
+
+The cause is a stale `__pycache__` surviving the restore, and it took a
+second sitting to pin because the first attempt to reproduce it failed --
+recorded here as unexplained until 26.162 caught it happening again and
+isolated the mechanism. Python validates a `.pyc` against the source's
+**mtime in whole seconds and its size**. A sabotage-restore cycle writes one
+file twice within a second, and a sabotage that swaps a word for another of
+the same length -- `(6, 5)` for `(7, 6)`, `but` for `and` -- leaves both
+unchanged, so the interpreter keeps the bytecode built from the sabotaged
+source. Demonstrated in four lines: write `VALUE = "and"`, import, and the
+module still reports `but`.
+
+The first reproduction attempt failed for the reason that makes this hard to
+see: it ran a full `pytest` between the sabotage and the restore, which takes
+longer than a second, so the mtimes differed and the cache invalidated
+correctly. **The bug needs the cycle to be fast, which is exactly what a
+sabotage cycle is.** Clear the cache between the two, or the restore is not
+one.
 
 ### 26.148 USB's bit stuffing, and the whole of its line coding
 
@@ -16517,6 +16532,105 @@ ceiling, a toolchain report, a region vocabulary, a `make check` piped into
 not observe. The instruments are not safer than the code. **Sabotage is the
 only thing that tells the two apart**, and it has to be aimed at the specific
 line the test claims to hold, not at the feature.
+
+### 26.162 A caveat in the position of a reason, and the cache that hid a sabotage
+
+**`situc advise` contradicted its own docstring, in the product's flagship
+output.** `Cost.render` said that "nothing" for a reordering "says nothing
+about the peers already speaking the old order", and the text it rendered
+said this:
+
+    cost: nothing (reordering moves no bytes, and every deployed peer
+    reads the old order)
+
+The number is right and the model behind it is right: `Cost` counts **bytes
+on the wire and nothing else**, so a reordering is "nothing" however many
+peers it breaks, and 18.2 calls it the highest-yield single change for that
+reason. What was wrong is one word. The basis put the single cost the number
+cannot see into the grammatical position of a *second supporting reason*, and
+after the word "nothing" a reader takes "and ..." as reassurance rather than
+as the warning it is.
+
+`and` becomes `but`, in both rules that carry the phrase, and the golden test
+asserts the joining word on purpose so that softening it back fails rather
+than passes quietly. Section 17 makes message quality the product; this is
+what that means when the message is an argument rather than an error.
+
+**I said nothing pinned that text, and a test did.** The grep missed it
+because the source splits the string across adjacent literals --
+`"...reads the old "` then `"order)"` -- so the phrase never appears
+contiguously. That is 26.159's miss exactly: **a scan for a name cannot see a
+form, and a scan for a phrase cannot see a phrase the source assembles.**
+An hour after writing that entry.
+
+**And the stale bytecode of 26.147 is explained**, which that entry recorded
+as tried and not reproducing. It reproduced here, and isolates in four lines.
+Python validates a `.pyc` against the source's mtime **in whole seconds** and
+its size. A sabotage-restore cycle writes one file twice inside a second, and
+a sabotage that swaps a word for another of the same length -- `(6, 5)` for
+`(7, 6)`, `but` for `and` -- changes neither, so the interpreter keeps the
+bytecode built from the sabotaged source:
+
+    write VALUE = "and", import, and the module reports "but"
+
+The first attempt to reproduce it failed for the reason that makes this hard
+to see: it ran a full `pytest` between the sabotage and the restore, which
+takes longer than a second, so the mtimes differed and the cache invalidated
+correctly. **The bug needs the cycle to be fast, which is exactly what a
+sabotage cycle is.** 26.147 is rewritten rather than appended to, per the
+rule `working-practice.md` gained this morning: when you settle something,
+the entry saying it was unsettled is part of what you are settling.
+
+### 26.163 A fix that stayed in the rule that produced it
+
+A suggestion carries three things a test can check -- its text, its cost and
+its rank -- and one it usually does not: **`yields` is a prediction about a
+schema that does not exist yet.** It is the only claim in the catalogue that
+can be wrong while every assertion about the message passes. Two of the eight
+rules measure theirs by building the schema the advice describes and counting
+what it bought. Six assert the message and stop.
+
+**What the two that measure had already found, and where it stopped.**
+`_reordering_gain` exists because `move-dynamic-to-tail` counted every dynamic
+member behind the mover. Only the members up to and including the *next*
+variable-length one gain; whatever follows that is placed after a variable
+extent either way. Its docstring records the cost -- "`example/message` is the
+case: the advisor promised two and delivered one" -- and, about the other half
+of the same repair, that it "is the same defect 26.36 found for `[since]` and
+did not generalise".
+
+It did not generalise this time either. Both other rules that pin an extent
+printed the raw count of members behind:
+
+- **`equalize-variant-arms` promised three and delivered two** for a variant
+  followed by a length-prefixed region. The rule does measure its yield, and
+  the test says so -- "the yield is measured, not asserted" -- but it measures
+  the *trailing* case, where the count is zero. Zero is the one value that
+  cannot be too large.
+- **`varint-to-fixed` said "every member behind it keeps its static offset"**,
+  which names no number and so could not be measured against one. With nothing
+  behind the varint it promised offsets to members that do not exist, while the
+  one real gain -- the struct becomes a fixed size -- went unsaid. That is
+  precisely the repair `equalize-variant-arms` had already been given and this
+  rule had not.
+
+Both now go through one `_gainers_behind` and one `_pinned_yield`, which takes
+the noun as a parameter because the answer does not depend on which construct
+was pinned, only on what sits behind it.
+
+**A claim that names no number cannot be checked against one.** The varint's
+old text was not a weaker measurement; it was outside the class of things a
+measurement applies to, and it read as the most confident line in the
+catalogue. The three rules that print a count all got their count wrong at
+some point and all were caught. The one that printed a quantifier was not.
+
+**And the entry this replaces was itself the error it warned about.** It said
+`move-dynamic-to-tail`'s yield was unmeasured, on the evidence of the tests
+beside the rule; the two that take the advice and count are 470 lines further
+down, under a section header reading "the suggestion, taken". A duplicate test
+was written and this entry claimed a gap that had been closed before the
+session started. **Absence where you looked is not absence** -- which is
+26.158's shape once more, in the one place that had just finished naming it.
 
 ## 27. Questions, and how they were settled
 

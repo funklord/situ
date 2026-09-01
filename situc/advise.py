@@ -52,9 +52,17 @@ class Cost:
 		Every rule in the catalogue supplies a `basis` and none of them was
 		ever printed, so eight different changes all read "cost: nothing" or
 		"cost: N bytes" with no way to tell what was being counted. The basis
-		is the half that keeps the number honest: "nothing" for a reordering
-		means no bytes move, and says nothing about the peers already
-		speaking the old order.
+		is the half that keeps the number honest: it says what the number
+		counts, and where the number cannot see a cost, it names it.
+
+		**The number counts bytes on the wire and nothing else**, so a
+		reordering is "nothing" however many peers it breaks. That is the one
+		place the basis has to do more than label the count, and the joining
+		word is what does it: "no bytes move, *but* a peer already speaking
+		this format reads the old order". It read "and" until 26.162, which
+		puts a caveat in the grammatical position of a second reason, and
+		after the word "nothing" a reader takes it as reassurance -- the
+		opposite of what it says.
 		"""
 		if self.unknown:
 			body = "depends on the bound chosen"
@@ -220,8 +228,8 @@ def _find_tail_reordering(resolved: ResolvedSchema) -> list[Suggestion]:
 				detail  = (f"its extent is not fixed, so "
 				           f"{_count(len(behind), 'member')} behind it are "
 				           f"Dynamic: {listed}"),
-				cost    = Cost(basis="reordering moves no bytes, and every "
-				               "deployed peer reads the old order"),
+				cost    = Cost(basis="no bytes move, but a peer already "
+				               "speaking this format reads the old order"),
 				yields  = (f"{_count(len(behind), 'member')} return to "
 				           "AbsoluteStatic, and their accessors to base + K"),
 				rank    = 0,
@@ -256,6 +264,26 @@ def _reordering_gain(members: list[Resolved],
 	                if later.placement.sized_by == "remaining"
 	                or later.placement.kind in ("tag", "checksum")), None)
 
+	gainers = _gainers_behind(members, index, stopper)
+
+	if stopper is None:
+		return gainers, "after the fixed ones"
+	return gainers, f"after the fixed ones, before `{stopper.placement.name}`"
+
+
+def _gainers_behind(members: list[Resolved], index: int,
+		stopper: Resolved | None = None) -> list[Resolved]:
+	"""Which members regain a static offset when this one's extent is pinned.
+
+	Not the count of everything behind it. Only the members up to and
+	including the *next* variable-length one gain: whatever follows that is
+	placed after a variable extent either way.
+
+	`move-dynamic-to-tail` learned this and the lesson stopped at that rule.
+	Both other rules that pin an extent printed the raw count, and both
+	overclaimed by exactly the members past the next variable one -- a variant
+	followed by a length-prefixed region promised three and delivered two.
+	"""
 	gainers: list[Resolved] = []
 	for later in members[index + 1:]:
 		if later is stopper:
@@ -264,10 +292,7 @@ def _reordering_gain(members: list[Resolved],
 			gainers.append(later)
 		if _is_dynamic_size(later.placement):
 			break		# whatever follows this one is dynamic either way
-
-	if stopper is None:
-		return gainers, "after the fixed ones"
-	return gainers, f"after the fixed ones, before `{stopper.placement.name}`"
+	return gainers
 
 
 def _find_varint_replacement(resolved: ResolvedSchema) -> list[Suggestion]:
@@ -291,7 +316,8 @@ def _find_varint_replacement(resolved: ResolvedSchema) -> list[Suggestion]:
 			if worst is None:
 				continue
 
-			fixed = _fixed_width_for(worst)
+			fixed            = _fixed_width_for(worst)
+			behind, encloses = _behind(struct, placement)
 			found.append(Suggestion(
 				rule    = "varint-to-fixed",
 				subject = placement.path,
@@ -301,8 +327,7 @@ def _find_varint_replacement(resolved: ResolvedSchema) -> list[Suggestion]:
 				           f"u{fixed * 8} spends {fixed} always"),
 				cost    = Cost(typical=fixed - worst, worst=fixed - worst,
 				               basis="fixed width against the varint's worst case"),
-				yields  = ("a fixed extent, so every member behind it keeps its "
-				           "static offset"),
+				yields  = _pinned_yield(struct, behind, encloses, "the varint"),
 				rank    = 1,
 				weight  = worst,
 			))
@@ -395,7 +420,8 @@ def _find_variant_equalization(resolved: ResolvedSchema) -> list[Suggestion]:
 				           f"discriminant: {_arms(sizes)}"),
 				cost    = Cost(typical=average, worst=worst,
 				               basis="padding to the largest arm"),
-				yields  = _equalized_yield(struct, behind, encloses),
+				yields  = _pinned_yield(struct, behind, encloses,
+				                        "the variant"),
 				rank    = 3,
 				# What it buys, not what it costs. `weight` orders the
 				# catalogue and this rule handed it the padding, so the most
@@ -416,37 +442,48 @@ def _arms(sizes: tuple[tuple[str, int], ...]) -> str:
 
 def _behind(struct: ResolvedStruct,
 		placement: Placement) -> tuple[int, bool]:
-	"""How many of the struct's own members follow this one, and whether
-	pinning this one's extent pins the whole struct's.
+	"""How many of the struct's own members gain from pinning this one's
+	extent, and whether pinning it pins the whole struct's.
 
 	The second is not implied by the first. A variant that is the last member
 	has nothing behind it and equalizing it still buys something -- it is what
 	makes `example/dnsname`'s `label` a fixed 64 bytes -- but only when every
 	other member of the struct is already fixed. Measured rather than promised.
+
+	The first is measured too, and was not: it counted every member that
+	followed. See `_gainers_behind` for what that cost.
 	"""
-	members = [entry.placement for entry in own_entries(struct)]
+	members = own_entries(struct)
 	index   = next((i for i, held in enumerate(members)
-	                if held.path == placement.path), None)
+	                if held.placement.path == placement.path), None)
 	if index is None:
 		return 0, False
 
-	others   = members[:index] + members[index + 1:]
+	others   = [held.placement for i, held in enumerate(members) if i != index]
 	encloses = all(held.size_max_bits == held.size_bits
 	               and held.size_bits is not None for held in others)
-	return len(members) - index - 1, encloses
+	return len(_gainers_behind(members, index)), encloses
 
 
-def _equalized_yield(struct: ResolvedStruct, behind: int,
-		encloses: bool) -> str:
-	"""What the padding actually returns, in the order it is worth having."""
+def _pinned_yield(struct: ResolvedStruct, behind: int, encloses: bool,
+		noun: str) -> str:
+	"""What pinning an extent actually returns, in the order it is worth
+	having.
+
+	Shared by the two rules that pin one, because the answer does not depend
+	on which construct was pinned -- only on what sits behind it. The varint
+	rule had its own answer, "every member behind it keeps its static offset",
+	which named no number, degraded to nothing when there was no member behind
+	it, and went unmeasured because it named nothing a test could count.
+	"""
 	gains = []
 	if behind:
-		gains.append(f"{_count(behind, 'member')} after the variant keep "
+		gains.append(f"{_count(behind, 'member')} after {noun} keep "
 		             "absolute offsets")
 	if encloses:
 		gains.append(f"`{struct.name}` itself becomes a fixed size")
 	if not gains:
-		return "a fixed extent for the variant, and nothing else in this struct"
+		return f"a fixed extent for {noun}, and nothing else in this struct"
 
 	return "a fixed extent, so " + ", and ".join(gains)
 
@@ -527,8 +564,9 @@ def _find_alignment_holes(resolved: ResolvedSchema) -> list[Suggestion]:
 				detail  = (f"it is a {scalar.bits}-bit scalar at an unaligned "
 				           f"offset, and the struct already spends "
 				           f"{_bytes(padding)} on reserved padding"),
-				cost    = Cost(basis="the padding bytes are already spent, and "
-				               "every deployed peer reads the old order"),
+				cost    = Cost(basis="the padding bytes are already spent, but "
+				               "a peer already speaking this format reads the "
+				               "old order"),
 				yields  = bought,
 				rank    = 4,
 				weight  = scalar.bits // BITS_PER_BYTE,

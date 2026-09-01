@@ -78,14 +78,27 @@ def test_a_badly_ordered_schema_gets_the_reordering_suggestion() -> None:
 
 
 def test_the_reordering_suggestion_costs_nothing_and_says_so() -> None:
-	"""Reordering moves no bytes. Printing that is the point, not omitting it."""
+	"""Reordering moves no bytes. Printing that is the point, not omitting it.
+
+	**The joining word is load-bearing and is asserted here on purpose.** The
+	number counts bytes on the wire and nothing else, so a reordering is
+	"nothing" however many peers it breaks -- and the basis is where that one
+	invisible cost has to be named. It read "no bytes move, *and* every
+	deployed peer reads the old order", which puts a caveat in the
+	grammatical position of a second reason: after the word "nothing", a
+	reader takes it as reassurance, which is the opposite of what it says.
+	"But" is the whole fix, and a later edit that softens it back to "and"
+	should fail here rather than pass quietly.
+	"""
 	found = only(BADLY_ORDERED, "move-dynamic-to-tail")
 
 	assert found.cost.typical == 0
 	assert found.cost.worst == 0
-	assert found.cost.render() == ("cost: nothing (reordering moves no bytes, "
-	                               "and every deployed peer reads the old "
-	                               "order)")
+	assert found.cost.render() == ("cost: nothing (no bytes move, but a peer "
+	                               "already speaking this format reads the "
+	                               "old order)")
+	assert ", but " in found.cost.basis, (
+		f"the caveat has to read as one: {found.cost.basis!r}")
 	assert "3 members return to AbsoluteStatic" in found.yields
 
 
@@ -559,3 +572,84 @@ def test_the_reordering_suggestion_compiles_when_taken() -> None:
 
 	# And the rewrite it describes is one the solver accepts.
 	build(moved_to_tail(body, "opts", before="tail"))
+
+
+VARINT = "varint_type v { encoding = leb128; max_bits = 16; minimal; }\n"
+
+
+def test_the_varint_yield_counts_only_the_members_that_gain() -> None:
+	"""`move-dynamic-to-tail` learned that pinning an extent does not make
+	everything behind it static -- only the members up to and including the
+	next variable-length one -- and the lesson stopped at that rule.
+
+	This one said "every member behind it keeps its static offset", which
+	names no number and so could not be measured against one. Here three
+	members follow the varint and two of them gain.
+	"""
+	body = VARINT + """struct s {
+	v   n;
+	u16 k [max = 8];
+	u8  body[k];
+	u32 seq;
+}
+"""
+	found  = only(body, "varint-to-fixed")
+	before = offsets(body)
+	after  = offsets(body.replace("v   n;", "u32 n;"))
+
+	gained = [path for path, base in before.items()
+	          if base != "AbsoluteStatic"
+	          and after.get(path) == "AbsoluteStatic"]
+
+	assert len(gained) == 2, gained			# `seq` follows `body` either way
+	assert found.yields == (f"a fixed extent, so {len(gained)} members after "
+	                        "the varint keep absolute offsets"), \
+		f"advisor promised `{found.yields}`, the rewrite delivered {gained}"
+
+
+def test_a_trailing_varint_claims_only_what_it_delivers() -> None:
+	"""Nothing follows it, so no member regains an offset -- but the struct
+	holding it becomes a fixed size, which is the whole reason to spend the
+	bytes. The old text promised offsets for members that do not exist and
+	left the one real gain unsaid; `equalize-variant-arms` was given this
+	same repair and the varint rule was not."""
+	body  = VARINT + "struct s { v n; }\n"
+	found = only(body, "varint-to-fixed")
+
+	assert "`s` itself becomes a fixed size" in found.yields
+	assert "member" not in found.yields
+
+	# And taking it does that. The yield is measured, not asserted.
+	assert not build(body).structs["s"].layout.is_fixed_size
+	assert build(body.replace("v n;", "u32 n;")).structs["s"].layout.is_fixed_size
+
+
+def test_equalizing_counts_only_the_members_that_gain() -> None:
+	"""The same overclaim in the rule that already measures its trailing case.
+
+	`test_equalizing_a_trailing_variant_claims_only_what_it_delivers` measures
+	the count where it is zero, which is the one value that cannot be too
+	large. With three members behind the variant it promised three.
+	"""
+	body = """enum k : u8 { a = 1, b = 2, }
+struct small { u16 x; }
+struct large { u8 y[10]; }
+struct s {
+	k kind;
+	variant body switch (kind) { case k.a: small p; case k.b: large q; }
+	u16 n [max = 8];
+	u8  rest[n];
+	u32 seq;
+}
+"""
+	found  = only(body, "equalize-variant-arms")
+	before = offsets(body)
+	after  = offsets(body.replace("switch (kind) {", "switch (kind) [equalize] {"))
+
+	gained = [path for path, base in before.items()
+	          if base != "AbsoluteStatic"
+	          and after.get(path) == "AbsoluteStatic"]
+
+	assert len(gained) == 2, gained			# `seq` follows `rest` either way
+	assert found.yields == ("a fixed extent, so 2 members after the variant "
+	                        "keep absolute offsets")
