@@ -17092,6 +17092,50 @@ first draft asserted `... in struct_line(...) or True`, which passes on any
 input at all. Caught before it was committed, by reading the assertion rather
 than the result -- a green test is not evidence that it can be red.
 
+### 26.174 What a `file` target would actually change, measured
+
+The copyright holder asked whether situ should have a third target beside
+`buffer` and `mmio` -- `target file`, as a shorthand carrying the assumptions
+that follow from working on a file, with append and sparse support alongside
+it, motivated by making `situ-edit` write as well as read.
+
+Recorded in `doc/decision/0047-a-file-target.md`, which is `proposed`. The
+measurement behind it, over the seven file-format examples with five wire
+formats as a control:
+
+- **`effect` is `Pure` on all 130 file members and all 209 wire ones.**
+  Tree-wide it is 1075 `Pure`, 25 `EffectOnRead` and one `EffectOnWrite`, and
+  those 26 are the `mmio` register example. **Outside a register, nothing in
+  situ has ever had an effect.** A durable, externally visible write is
+  exactly `EffectOnWrite`, is true of a file as such, and cannot be said
+  today -- which is the one assumption a `file` target would carry that earns
+  its place.
+- **The editor does not need the target.** The 130 members already partition
+  into 107 writable in place, 22 whose write moves what follows, and one the
+  schema refuses to let anyone write, with `auth=Covered(t)` marking the
+  writes that invalidate a tag. Everything `situ-edit` decides per field, the
+  capability map decides now.
+- **`append` is not a default**: it flips 117 of the 130 addresses to
+  `Unstable`, and exactly one of the seven -- `sqlite` -- has an unbounded
+  top-level extent that needs it.
+- **Sparse has nowhere to land**: it makes a write's cost and fallibility
+  depend on where *within* a member it happens, and no axis varies a property
+  by position.
+
+**The first answer given was wrong and the record says so.** It argued that a
+target must be a capability distinction rather than a bundle of assumptions --
+and `mmio` is a bundle, as the compiler's own diagnostic says: "`target mmio`
+makes `volatile` implicit and `access_width` ...". It also read 9.8's "no
+`target file` for it to hang off" as a ruling against the target, when that
+argument is about where to hang `at expr` and concludes only that *that
+construct* does not follow the file line.
+
+**Incidental, and worth fixing or not on its own terms:** `at expr` is used by
+one committed schema. 9.8 names BMP's `pixel_offset`, TIFF's `ifd_offset` and
+DNS name compression as the three that wanted it; only `bmp` has it. The
+argument does not need all three to be committed -- its point is that they do
+not share a medium -- but a reader counting uses finds one.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
