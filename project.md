@@ -15270,6 +15270,16 @@ all. Each of these is the copyright holder's; none is blocked on work.
 
 **Decisions waiting.**
 
+- **`doc/decision/0046-sub-byte-checksums.md` is `Status: proposed`.** A
+  checksum narrower than a byte is refused in two places, and USB's token
+  packets, CAN's frames and MMC's commands each carry one. The record
+  measures where the bytes assumption lives -- four places, from
+  `layout._expand` through the generated `_covered` accessor to the runtime
+  helpers -- and proposes widening the mechanism while keeping the rule: a
+  parity field may be any width, an authentication tag may not, because no
+  AEAD produces five bits and 14.3's stage gate hands out an interior on
+  that tag. What makes it a decision rather than a task is that the emitted
+  coverage API changes shape in four backends.
 - **`doc/decision/0045-pad-random.md` is `Status: proposed`.** It proposes
   that `pad_random(min, max)` be bounds and a name, and that 14.7's
   `random` content policy be dropped as unenforceable -- a schema cannot
