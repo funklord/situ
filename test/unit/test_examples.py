@@ -18,6 +18,8 @@ from situc.diagnostics import Source, SituError
 from situc.dump import dump
 from situc.layout import solve
 from situc.resolve import resolve
+from situc.kernels import KERNEL_ARGUMENTS
+from situc.lexer import tokenize
 from situc.parser import parse, parse_text
 from situc.unparse import unparse
 
@@ -397,3 +399,99 @@ def test_a_readme_excerpt_is_in_the_file_it_names() -> None:
 				f"an excerpt may leave lines out; it may not have different ones")
 
 	assert labelled >= 5, f"only {labelled} labelled excerpts found"
+
+
+# ---------------------------------------------------------------------------
+# The specification's own schemas
+#
+# project.md holds 28 `situ` blocks and README thirteen, and nothing read any
+# of them. Most are fragments -- a few members, a variant's arms, a `tlv`
+# argument list -- shown at whatever level the sentence above them is about,
+# and no wrapper makes those parse. Two things can be checked without one.
+
+
+DOCUMENTS = ("README.md", "project.md")
+
+
+def document_situ_blocks(name: str) -> list[tuple[int, list[str]]]:
+	blocks: list[tuple[int, list[str]]] = []
+	held: list[str] | None = None
+	lang = ""
+	at = 0
+	path = Path(__file__).resolve().parents[2] / name
+	for number, line in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
+		if line.startswith("```"):
+			if held is None:
+				held, lang, at = [], line[3:].strip(), number
+			else:
+				if lang == "situ":
+					blocks.append((at, held))
+				held = None
+			continue
+		if held is not None:
+			held.append(line)
+	return blocks
+
+
+@pytest.mark.parametrize("document", DOCUMENTS)
+def test_a_documented_schema_lexes(document: str) -> None:
+	"""A fragment need not parse -- it has no context -- but it has to be made
+	of this language's tokens.
+
+	`project.md`'s `non_canonical` example wrapped its string across two
+	lines to fit the page, and a string literal does not span lines here.
+	`example/dnsname/dnsname.situ` writes the same attribute on one long line
+	because that is the only way it can be written, so the document showed a
+	spelling the file it describes could not use.
+	"""
+	for at, body in document_situ_blocks(document):
+		text = "\n".join(body)
+		try:
+			tokenize(Source(path=f"{document}:{at}", text=text))
+		except SituError as refused:		# pragma: no cover - the failure path
+			raise AssertionError(
+				f"{document} line {at} is not made of situ tokens:\n{refused}"
+			) from None
+
+
+@pytest.mark.parametrize("document", DOCUMENTS)
+def test_a_documented_kernel_argument_is_one_the_family_reads(document: str) -> None:
+	"""`KERNEL_ARGUMENTS` is the one source of truth for what a kernel family
+	reads, and a document naming something else describes a schema the
+	compiler refuses.
+
+	project.md did. Its worked `crc32` wrote `polynomial(0x04C11DB7,
+	reflect_in, reflect_out, init = 0xFFFFFFFF)` -- a positional first
+	argument where the grammar wants `poly =`, no `width`, and two names the
+	family does not have. The same document says so 14,000 lines further
+	down, about the same two names found in the test suite: "none of the
+	three is a name this language has". The sweep that found them there did
+	not look at this document's own code blocks.
+	"""
+	families = {family.value: names for family, names in KERNEL_ARGUMENTS.items()}
+	pattern  = re.compile(r"kernel\s*=\s*(\w+)\s*\(([^)]*)\)", re.S)
+
+	checked = 0
+	for at, body in document_situ_blocks(document):
+		for found in pattern.finditer("\n".join(body)):
+			family, args = found.group(1), found.group(2)
+			assert family in families, (
+				f"{document} line {at} names an unknown kernel family "
+				f"`{family}`")
+			checked += 1
+			for piece in args.split(","):
+				name = piece.split("=")[0].strip()
+				# A bare value is positional, which the grammar does not take
+				# for these; an argument is `name` or `name = value`.
+				if not name or not name.replace("_", "").isalpha():
+					raise AssertionError(
+						f"{document} line {at} passes `{name or piece.strip()}` "
+						f"to `{family}` positionally; every kernel argument is "
+						f"named")
+				assert name in families[family], (
+					f"{document} line {at} passes `{name}` to a `{family}` "
+					f"kernel, which reads "
+					f"{', '.join(sorted(families[family]))}")
+
+	if document == "project.md":
+		assert checked, "project.md no longer documents a kernel description"

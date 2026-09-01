@@ -1945,8 +1945,7 @@ So a schema may say so:
 ```situ
 struct name {
     label labels[] while (form == 0 && rest != 0) max 128
-        [non_canonical = "a name may be spelled uncompressed, or as a pointer
-                          to any earlier occurrence of any suffix of it"];
+        [non_canonical = "a name may be spelled uncompressed, or as a pointer to any earlier occurrence of any suffix of it"];
 }
 ```
 
@@ -2142,7 +2141,8 @@ codec crc32 {                       // contract: what it does, conceptually
     systematic;
     seekable = linear;
     deterministic;
-    kernel = polynomial(0x04C11DB7, reflect_in, reflect_out, init = 0xFFFFFFFF);
+    kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+                        xorout = 0xFFFFFFFF, reflect);
 }
 
 impl crc32 derived;                 // use situc's generated implementation
@@ -16914,6 +16914,53 @@ exceptionless: name a schema in a block and you are quoting it, so say
 `verbatim` or `abridged`. Two blocks that named a file with no marker were
 being read by nothing; they say which they are now, and the check refuses a
 block that names one without saying.
+
+### 26.170 The specification refuted itself, fourteen thousand lines apart
+
+26.169 read the README's schemas. This document holds 28 more, and nothing
+read those either. **Two were wrong, and one of them this document already
+knew about.**
+
+**The worked `crc32`.** Section 13's codec example wrote
+
+    kernel = polynomial(0x04C11DB7, reflect_in, reflect_out, init = 0xFFFFFFFF);
+
+which is three separate refusals: a positional first argument where the
+grammar wants `poly =`, no `width`, and two argument names the family does not
+have. `KERNEL_ARGUMENTS[POLYNOMIAL]` is `width`, `poly`, `init`, `xorout`,
+`reflect`, and `std/kernels.situ` spells the same CRC-32 that way.
+
+**26.156 says so, about the same two names.** It records finding
+`xor_out = 0xFFFFFFFF, reflect_in = true, reflect_out = true` in
+`test_codecs.py` and states flatly that "none of the three is a name this
+language has". That sweep read the schemas and the test suite. **It did not
+read this document**, so the section a reader would copy from kept the
+spelling the section about it calls impossible.
+
+**The `non_canonical` example did not lex.** It wrapped its string across two
+lines to fit the page, and a string literal does not span lines here.
+`example/dnsname/dnsname.situ` writes the same attribute on one long line
+because that is the only way it can be written -- so the document showed a
+spelling the file it describes cannot use, and the fix is to write the long
+line the language requires.
+
+Two checks, neither needing a context the fragments do not have:
+
+- **Every documented block is made of this language's tokens.** A fragment
+  need not parse; it has to lex. That is what the multi-line string failed.
+- **Every kernel argument named in a document is one the family reads**, out
+  of `KERNEL_ARGUMENTS` rather than a list written here. A near miss --
+  `xor_out` for `xorout` -- fails it, which is the case 26.156 found by hand.
+
+**What is still unchecked, and why.** Fourteen of the 28 parse under one of
+four wrappers and fourteen do not, because each needs its own context: a
+variant's arms need their discriminant, a `tlv` list needs its struct. A
+context written in the test is one more copy to drift, which is the reason
+this stops at lexing rather than inventing one. The codec block does not
+parse either, and correctly: it shows three alternative `impl` lines with
+"or" in the comments, and the compiler refuses a second implementation. That
+is a documentation idiom rather than a defect, and it is why the parse check
+covers the README's whole-schema blocks and not this document's fragments.
 
 ## 27. Questions, and how they were settled
 
