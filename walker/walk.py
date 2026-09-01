@@ -306,6 +306,33 @@ def _variant_bits(view: View, index: int) -> int:
 	return 0
 
 
+def _value_in(view: View, index: int, base: int) -> int:
+	"""`_value_of` for a field of a struct nested `base` bytes into the frame.
+
+	A placement's offset is within its own struct, so reading one belonging
+	to a nested struct at that offset alone lands at the right offset of the
+	wrong struct -- right only where the nested struct sits at 0, and wrong
+	by the nesting offset everywhere else. `example/packet` reads a sealed
+	region's extent from `hdr.length`, at 2 in `header` and 6 in `packet`
+	(26.184).
+
+	The packer emits this form only where the nesting offset is static and
+	the target has a static offset of its own, so both are known here; a
+	dynamic one is refused at pack time and reported as unencodable.
+	"""
+	placement = view.image.placements[index]
+	if placement.offset_bits is None:
+		raise Refused(f"placement {index} has no static offset to base")
+
+	start = placement.offset_bits + base * BITS_PER_BYTE
+	width = size_bits(view, index)
+	if width <= 0 or width > 64:
+		raise Refused(f"a {width}-bit scalar is not one to read")
+	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
+		raise Refused("the frame does not reach this member")
+	return _read_at(view, index, start, width)
+
+
 def _value_of(view: View, index: int) -> int:
 	"""A member's value as a size or offset expression reads it.
 
@@ -342,6 +369,7 @@ def _evaluate(view: View, code_at: int, from_byte: int = 0) -> int:
 	return vm.run(
 		view.image.code, code_at,
 		load_field = lambda i: _value_of(view, i),
+		load_field_in = lambda i, base: _value_in(view, i, base),
 		size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
 		offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 		count_of   = lambda i: _count(view, i),

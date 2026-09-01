@@ -304,7 +304,7 @@ def test_an_expression_outside_section_10_is_refused() -> None:
 			           "struct s { u8 a; u8 b[a]; }\n")
 			and __import__("situc.ast", fromlist=["ast"]).StringLiteral(
 				span=None, value="no"),		# type: ignore[arg-type]
-			lambda path: 0)
+			lambda path: (0, 0))
 
 
 def test_the_metadata_tail_is_optional_and_additive(

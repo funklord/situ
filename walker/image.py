@@ -18,7 +18,7 @@ import struct as _struct
 from dataclasses import dataclass, field
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 3
+FORMAT_VERSION	= 4
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16

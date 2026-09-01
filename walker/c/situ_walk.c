@@ -80,7 +80,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 3u) {
+	if (u16_at(image + 4) != 4u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {
@@ -501,6 +501,11 @@ static situ_walk_err offset_bits_deep(const situ_walk_image *image,
                                       uint32_t shape, uint32_t index,
                                       uint32_t depth, uint32_t *out);
 
+static situ_walk_err read_at(const uint8_t *message, uint32_t len,
+                             const situ_walk_placement *held,
+                             uint32_t start_bits, uint32_t width_bits,
+                             uint64_t *out);
+
 /* How deep a measurement may nest before this build refuses.
  *
  * A `while` run's extent is the sum of its elements' extents, and an element
@@ -521,9 +526,49 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
                                     uint32_t shape, uint32_t index,
                                     uint32_t depth, uint32_t *out);
 
-static situ_walk_err ctx_load(void *raw, uint32_t index, int64_t *out)
+/* A field of a struct nested `base` bytes into this frame.
+ *
+ * `read_deep` resolves a placement's offset within its own struct, which is
+ * the right answer for a member of the struct being walked and the wrong one
+ * for a member of a struct inside it. The packer emits this form only where
+ * both the nesting offset and the target's own offset are static, so neither
+ * has to be resolved here (26.184). */
+static situ_walk_err read_based(const situ_walk_image *image,
+                                const uint8_t *message, uint32_t len,
+                                uint32_t index, int32_t base, int64_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if ((held.flags & FLAG_OFFSET_KNOWN) == 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	if (base < 0) {
+		return SITU_WALK_MALFORMED;
+	}
+
+	uint64_t value = 0u;
+	err = read_at(message, len, &held,
+	              held.offset_bits + (uint32_t)base * 8u, held.size_bits,
+	              &value);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	*out = (int64_t)value;
+	return SITU_WALK_OK;
+}
+
+static situ_walk_err ctx_load(void *raw, uint32_t index, int32_t base,
+                              int64_t *out)
 {
 	walk_ctx *ctx = (walk_ctx *)raw;
+	if (base != 0) {
+		return read_based(ctx->image, ctx->message, ctx->len, index, base,
+		                  out);
+	}
+
 	uint64_t value = 0u;
 	const situ_walk_err err = read_deep(ctx->image, ctx->message, ctx->len,
 	                                    ctx->shape, index, ctx->depth,
@@ -2133,6 +2178,7 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_OFFSET 0x05u
 #define OP_COUNT 0x06u
 #define OP_ARG_FIELD 0x07u
+#define OP_FIELD_IN 0x08u
 
 #define STACK_DEPTH 32u
 
@@ -2177,7 +2223,7 @@ situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_UNSUPPORTED;
 			}
 			const situ_walk_err err = load(ctx, u32_at(image->code + pc),
-			                               &value);
+			                               0, &value);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
@@ -2191,6 +2237,29 @@ situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_MALFORMED;
 			}
 			stack[depth++] = remaining;
+			continue;
+		}
+
+		/* A field of a struct nested into this frame: the placement index,
+		 * then the byte offset that struct sits at. Without the base the
+		 * read lands at the right offset of the wrong struct (26.184). */
+		if (op == OP_FIELD_IN) {
+			if (pc + 8u > image->code_len || depth >= STACK_DEPTH) {
+				return SITU_WALK_MALFORMED;
+			}
+			if (load == NULL) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			int64_t value = 0;
+			const uint8_t *arg = image->code + pc;
+			const int32_t base = (int32_t)u32_at(arg + 4u);
+			const situ_walk_err err = load(ctx, u32_at(arg), base,
+			                               &value);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			stack[depth++] = value;
+			pc += 8u;
 			continue;
 		}
 

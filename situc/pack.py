@@ -34,13 +34,13 @@ from situc import ast, traverse
 from situc.capability import DOMAINS, Axis
 from situc.diagnostics import SituError
 from situc.expr import evaluate
-from situc.layout import Placement
+from situc.layout import BITS_PER_BYTE, Placement
 from situc.relation import Refused as RelationRefused
 from situc.relation import plan as plan_relation
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 3
+FORMAT_VERSION	= 4
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
@@ -158,6 +158,14 @@ class Op:
 	# placement index alone does not say which message to read it out
 	# of. Only relation programs emit this (26.95).
 	ARG_FIELD	= 0x07		# + u8 parameter, u32 placement index
+	# A field of a *nested* struct: the placement index, plus the byte offset
+	# that struct sits at in the frame being walked. `FIELD` alone reads a
+	# placement at its offset within its *own* struct, which is right only
+	# where the nested struct is at offset 0 -- and silently wrong by the
+	# nesting offset everywhere else (26.184). Emitted only where the
+	# nesting offset is static; where it is not, the expression is refused
+	# and reported in `Coverage.unencodable` rather than encoded wrongly.
+	FIELD_IN	= 0x08		# + u32 placement index, i32 byte base
 	ADD		= 0x10
 	SUB		= 0x11
 	MUL		= 0x12
@@ -211,7 +219,10 @@ def _path_of(expr: ast.Expr) -> str | None:
 
 
 #: A path to a placement index, or None where the image does not name it.
-Resolver = Callable[[str | None], int | None]
+#: A path to (placement index, base). The base is the byte offset the
+#: field's struct sits at in the frame being walked, and is zero for a
+#: field of the struct itself (26.184).
+Resolver = Callable[[str | None], "tuple[int, int] | None"]
 #: A relation path resolves to the parameter it names and the placement
 #: within that parameter's struct.
 RelationResolver = Callable[[str], "tuple[int, int] | None"]
@@ -251,10 +262,15 @@ class Program:
 			if path is not None and path in known:
 				self.emit(Op.PUSH, known[path], "<q")
 				return
-			index = resolve_path(path) if path else None
-			if index is None:
+			found = resolve_path(path) if path else None
+			if found is None:
 				raise PackError(f"no placement for `{path or expr}`")
-			self.emit(Op.FIELD, index)
+			index, base = found
+			if base:
+				self.emit(Op.FIELD_IN, index)
+				self.code += _struct.pack("<i", base)
+			else:
+				self.emit(Op.FIELD, index)
 			return
 		if isinstance(expr, ast.Unary):
 			self.compile(expr.operand, resolve_path, known)
@@ -327,9 +343,18 @@ class Program:
 			if len(expr.args) != 1:
 				raise PackError(f"`{expr.name}` takes one path")
 			path  = _path_of(expr.args[0])
-			index = resolve_path(path) if path else None
-			if index is None:
+			found = resolve_path(path) if path else None
+			if found is None:
 				raise PackError(f"no placement for `{path}` in `{expr.name}`")
+			index, base = found
+			if base:
+				# `SIZE`, `OFFSET` and `COUNT` carry an index and no base, so
+				# a nested target has nowhere to put one. Refused rather than
+				# encoded at the wrong base, which is 26.184's whole lesson;
+				# the caller records it in `Coverage.unencodable`.
+				raise PackError(
+					f"`{expr.name}({path})` names a field of a nested struct, "
+					f"and this opcode carries no base")
 			self.emit(PATH_CALLS[expr.name], index)
 			return
 		if expr.name in VALUE_CALLS:
@@ -661,19 +686,40 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	                 for _, p in rows if _ == name}
 	          for name, _ in order}
 
-	def resolve_in(owner: str, parts: list[str]) -> int | None:
+	def resolve_in(owner: str, parts: list[str]) -> tuple[int, int] | None:
+		"""The placement a dotted path names, and the byte offset of the
+		struct it lives in relative to `owner`.
+
+		The second half used to be computed and thrown away. A placement's
+		own offset is within its own struct, so `hdr.length` resolved to
+		`header.length` at offset 2 and the walker read offset 2 of the
+		*frame* -- correct only because `packet.hdr` might have been at 0,
+		and wrong by 4 because it is not (26.184).
+		"""
 		here = own_of.get(owner, {}).get(parts[0])
 		if here is None:
 			return None
 		if len(parts) == 1:
-			return placement_index.get(here.path)
-		return resolve_in(here.type_name, parts[1:])
+			index = placement_index.get(here.path)
+			return None if index is None else (index, 0)
 
-	def resolve_path(path: str | None, owner: str | None = None) -> int | None:
+		# Stepping into a nested struct: its offset joins the base. A
+		# dynamic one cannot, and saying so is what keeps a wrong program
+		# from being written -- the caller records it as unencodable.
+		if here.offset_bits is None or here.offset_bits % BITS_PER_BYTE:
+			return None
+		deeper = resolve_in(here.type_name, parts[1:])
+		if deeper is None:
+			return None
+		index, base = deeper
+		return index, base + here.offset_bits // BITS_PER_BYTE
+
+	def resolve_path(path: str | None,
+			owner: str | None = None) -> tuple[int, int] | None:
 		if path is None:
 			return None
 		if path in placement_index:
-			return placement_index[path]
+			return placement_index[path], 0
 		parts = path.split(".")
 		if owner is not None:
 			found = resolve_in(owner, parts)
@@ -1296,8 +1342,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		# The discriminant is what makes an arm answerable: without it a
 		# walker has the cases and no way to say which one this message
 		# selected, which is the whole question the probe asks.
-		selects = resolve_path(placement.discriminant, owner) \
+		# The arms table carries a placement index and no base, so a
+		# discriminant inside a nested struct has nowhere to put one:
+		# `None` says the walker cannot tell which arm was selected, which
+		# is the answer it already gives for a discriminant it cannot read
+		# (26.184).
+		chose  = resolve_path(placement.discriminant, owner) \
 			if placement.discriminant else None
+		selects = chose[0] if chose is not None and not chose[1] else None
 		for arm in placement.arm_cases:
 			value, chosen, arm_kind = _arm_fields(arm)
 			arms_blob += _struct.pack(
@@ -1377,10 +1429,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			param = params.get(head)
 			if param is None or not rest:
 				return None
-			index = resolve_in(param.type_name, rest.split("."))
-			if index is None:
+			found = resolve_in(param.type_name, rest.split("."))
+			# `ARG_FIELD` carries a parameter and an index and no base, so a
+			# nested target is one this cannot express. Refusing is what the
+			# caller already handles.
+			if found is None or found[1]:
 				return None
-			return (list(params).index(head), index)
+			return (list(params).index(head), found[0])
 
 		# `compile_relation` trusts `situc.relation` to have refused
 		# everything it cannot emit, and that stopped being true when a

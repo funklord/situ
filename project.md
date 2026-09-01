@@ -17536,73 +17536,71 @@ constant offset it declines and says so, which is the answer `_key_read`
 already gives for a conversation key and for the same reason: a byte range
 that moves is not one to read from.
 
-### 26.184 A packed expression reads a nested field at the wrong base
+### 26.184 A packed expression read a nested field at the wrong base
 
-**Open. This needs a decision before it is fixed, and the fix is a format
-question.** Recorded with the evidence rather than repaired, because the
-repair is either a change to the image format or a reconstruction in the
-walker of something the packer knew and discarded.
+**Fixed in the packer, which is where the answer was.** Recorded first as
+open, because the repair was either a format change or a reconstruction in
+the walker of something the packer knew and discarded, and that is 0026's
+question. The holder chose the packer.
 
-**What is wrong.** A packed expression program references a field with
-`FIELD <placement index>`, and a placement's offset is *within its own
-struct*. Where the expression names a field of a **nested** struct, the
-walker therefore reads it at that struct's own offset rather than at the
-offset the nested struct sits at in the frame being walked. It is right
-whenever the nested struct is at offset 0, and wrong by the nesting offset
-otherwise.
+**What was wrong.** A packed expression references a field with `FIELD
+<placement index>`, and a placement's offset is *within its own struct*.
+Where the expression named a field of a **nested** struct, the walker read it
+at that struct's own offset rather than at the offset the nested struct sits
+at in the frame being walked -- right whenever the nested struct is at offset
+0, and silently wrong by the nesting offset otherwise.
 
-Two committed examples are affected, and both were proven by putting a
-distinct value at each candidate offset and seeing which one the program
-returns:
+Two committed examples, both proven by putting a distinct value at each
+candidate offset and seeing which one the program returned:
 
-- **`example/bmp`.** `bitmap_file.pixels` is sized by `info.image_size`.
-  `bitmap_info_header.image_size` is at 20 in its own struct; `bitmap_file.info`
-  sits at 14, so the field is at 34. The program reads **20**. Writing 999 at
-  offset 20 makes the size program answer 999; writing 77 at the real
-  `image_size` changes nothing.
-- **`example/packet`, which is the serious one.** `packet.sealed.body` -- the
-  interior of a **sealed** region -- takes its extent from `hdr.length`.
-  `header.length` is at 2 in its own struct; `packet.hdr` sits at 4, so the
-  field is at 6. The program reads **2**.
+- **`example/bmp`.** `bitmap_file.pixels` is sized by `info.image_size`, at
+  20 in `bitmap_info_header` and 34 in the frame, because `bitmap_file.info`
+  sits at 14. The program read 20. A 999 written at offset 20 came back as
+  the size; the real `image_size` changed nothing.
+- **`example/packet`, the serious one.** `packet.sealed.body` -- the interior
+  of a **sealed** region -- takes its extent from `hdr.length`, at 2 in
+  `header` and 6 in the frame. The program read 2.
 
-**The compiled backends are correct.** The generated C reads the same extent
-at `view.base + 6u`, from the resolved schema, where the nested path
-`packet.hdr.length` exists and carries offset 6. So the schema, the layout and
-four backends agree, and the image and the walker are the two that do not --
-which is the same shape as 26.183 one layer down, and this time the wrong
-answer is an extent rather than a display.
+**The compiled backends were correct.** The generated C reads that extent at
+`view.base + 6u`, from the resolved schema, where the nested path
+`packet.hdr.length` exists and carries offset 6. Schema, layout and four
+backends agreed; the image and the two walkers were the ones that did not.
 
-**Why nothing caught it.** The README calls `situ-walk` "a fifth column in the
-differential check, answering the same questions as four compiled backends
-about the same hostile bytes", and that differential exists. It did not catch
-this, which is the part worth understanding before choosing a fix: a
-differential over messages where the two candidate offsets happen to hold the
-same bytes cannot see a base error. Both of these read a *length* out of a
-header, and a test message that sets one length usually leaves the other
-zero -- so the wrong read returns 0 and the walk simply reports a short
-member, which looks like a message that is short.
+**Where the information was lost.** `resolve_in` walks a dotted path one
+nesting step at a time and had every step's offset in hand -- and returned
+only the placement index, discarding the accumulated base. It returns both
+now.
 
-**Two ways out, and they are not equivalent.**
+**The fix is a new opcode rather than a reshaped placement table.**
+`FIELD_IN` carries the index and an `i32` byte base; `FIELD` is unchanged and
+still means "a member of the struct being walked". Making the image carry
+nested placements instead would have reshaped what `members()` iterates,
+which is a much larger change for the same answer. `FORMAT_VERSION` is 4, in
+the packer and in both walkers.
 
-1. **The packer emits what it knows.** The nested path exists in the resolved
-   schema with the right offset and is dropped on the way into the image,
-   which carries placements per *struct type* rather than per containment.
-   Making the image carry the nested placement, or giving `FIELD` a base, is
-   a `FORMAT_VERSION` change and is 0026's to decide. This is the correct
-   fix: the packer has the answer and currently discards it.
-2. **The walker reconstructs the base.** Walking `packet` and meeting a
-   reference owned by `header`, it can look for a member of the current
-   struct whose type is `header`, and add that member's offset. No format
-   change, and it works for both cases above. **It is ambiguous where a
-   struct holds two members of the same type** -- `ipv4_header` has `source`
-   and `destination`, both `ipv4_address`; `ntp_packet` has four
-   `timestamp`s -- and there the walker would have to refuse rather than
-   pick. No committed program references those, so the ambiguity is
-   currently theoretical, which is a poor reason to build on it.
+**Three opcodes cannot express a base, and now refuse rather than guess.**
+`SIZE`, `OFFSET` and `COUNT` carry an index alone, as does the arms table's
+discriminant and a relation's `ARG_FIELD`. Each declines a nested target --
+reported through `Coverage.unencodable`, which exists for exactly this -- and
+across all 37 committed schemas none is reached: the packer reports nothing
+unencodable. **A refusal nothing hits today is still the right shape**,
+because the alternative was the wrong answer nobody could see.
 
-The second is cheaper and reconstructs downstream what the first has upstream,
-which is the direction this project's own doctrine argues against: ask the
-artifact, not a fresh measurement of where it came from.
+**And the base has to be static.** Stepping into a nested struct whose own
+offset is dynamic gives no constant to encode, so `resolve_in` returns
+`None` there and the expression is refused at pack time rather than written
+wrongly. That is the same trade as the located member's: the packer says
+what it cannot do rather than emitting something that walks.
+
+**Why nothing caught it.** The README calls `situ-walk` "a fifth column in
+the differential check, answering the same questions as four compiled
+backends about the same hostile bytes", and that differential exists. It
+cannot see a base error over messages where both candidate offsets hold the
+same bytes -- and both cases read a *length* out of a header, so a test
+message that sets one length leaves the other zero. The wrong read returned
+0, the walk reported a short member, and a short member looks exactly like a
+short message.
+
 
 ## 27. Questions, and how they were settled
 

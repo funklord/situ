@@ -28,6 +28,12 @@ END, PUSH, FIELD, REMAINING, SIZE, OFFSET, COUNT = range(7)
 #: does not say which message to read it out of; the operand is a
 #: parameter byte and then the index.
 ARG_FIELD = 7
+#: `FIELD` plus the byte offset the referenced field's struct sits at in the
+#: frame being walked. A placement's own offset is within its own struct, so
+#: a field of a nested struct needs the nesting offset as well -- without it
+#: the read lands at the right offset of the wrong struct, which is right
+#: only where the nested struct is at offset 0 (26.184).
+FIELD_IN = 8
 ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, SHL, SHR, NEG, NOT = range(0x10, 0x1C)
 EQ, NE, LT, LE, GT, GE, LAND, LOR = range(0x20, 0x28)
 MIN, MAX, ALIGN_UP = range(0x30, 0x33)
@@ -88,7 +94,8 @@ BINARY: dict[int, Callable[[int, int], int]] = {
 def run(code: bytes, at: int, load_field: Callable[[int], int],
         size_of: Callable[[int], int], offset_of: Callable[[int], int],
         count_of: Callable[[int], int], remaining: int,
-        load_arg: Callable[[int, int], int] | None = None) -> int:
+        load_arg: Callable[[int, int], int] | None = None,
+        load_field_in: Callable[[int, int], int] | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -118,6 +125,14 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 			pc += 4
 			stack.append({FIELD: load_field, SIZE: size_of,
 			              OFFSET: offset_of, COUNT: count_of}[op](index))
+			continue
+		if op == FIELD_IN:
+			index = _struct.unpack_from("<I", code, pc)[0]
+			base  = _struct.unpack_from("<i", code, pc + 4)[0]
+			pc += 8
+			if load_field_in is None:
+				raise VmError("field_in needs a base-aware loader")
+			stack.append(load_field_in(index, base))
 			continue
 		if op == ARG_FIELD:
 			if load_arg is None:

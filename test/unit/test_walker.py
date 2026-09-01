@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+import struct
+
 from situc import pack as packer
 from situc.layout import solve
 from situc.parser import parse_text
@@ -31,6 +33,7 @@ from fourway import COMPLETE, answers, build, draw
 sys.path.insert(0, str(ROOT))
 from walker import report, vm                      # noqa: E402
 from walker.image import load                      # noqa: E402
+from walker import walk as walk_module             # noqa: E402
 from walker.walk import Refused, View, acquire, read_scalar  # noqa: E402
 
 
@@ -506,3 +509,64 @@ def test_the_walker_knows_the_same_axes_as_the_compiler() -> None:
 		assert WALKER_DOMAINS[axis.value] == \
 			tuple(str(value) for value in COMPILER_DOMAINS[axis]), \
 			f"the walker's `{axis.value}` domain differs from the compiler's"
+
+
+# -- a nested field's base (26.184) -----------------------------------------
+
+
+def based_probe(schema: str, struct: str, member: str,
+                message: bytes) -> int:
+	"""Evaluate one member's size program over `message`."""
+	from situc.layout import solve as _solve
+	from situc.pack import pack as _pack
+	from situc.parser import parse_text as _parse
+	from situc.resolve import resolve as _resolve
+	from walker.image import load as _load
+	from walker import walk as _walk
+
+	parsed = _parse(Path(schema).read_text(encoding="ascii"), path=schema)
+	image  = _load(_pack(parsed, _resolve(parsed, _solve(parsed)),
+	                     metadata=True)[0])
+	names  = {image.name_of(i): i for i in range(len(image.placements))}
+	root   = next(i for i, n in enumerate(image.struct_names) if n == struct)
+	held   = image.placements[names[member]]
+	return walk_module._evaluate(_walk.acquire(image, message, root),
+	                             held.size_code)
+
+
+def test_a_sealed_extent_comes_from_the_nested_field_not_its_twin() -> None:
+	"""`example/packet` takes its sealed region's extent from `hdr.length`.
+
+	`header.length` is at 2 in its own struct and `packet.hdr` sits at 4, so
+	the field is at 6. The program read 2 -- a placement's offset is within
+	its own struct, and `FIELD` carried no base, so the read landed at the
+	right offset of the wrong struct. Right only where the nested struct is
+	at 0, and this one is not (26.184).
+
+	The compiled C reads it at `view.base + 6u`, so four backends and the
+	layout agreed and the image was the one that did not.
+	"""
+	def probe(at2: int, at6: int) -> int:
+		message = bytearray(96)
+		message[2:4] = struct.pack(">H", at2)
+		message[6:8] = struct.pack(">H", at6)
+		return based_probe("example/packet/packet.situ", "packet",
+		                   "packet.sealed.body", bytes(message))
+
+	assert probe(111, 222) == 222, "the extent came from the wrong offset"
+	assert probe(999, 222) == 222, "offset 2 still reaches the program"
+
+
+def test_a_located_run_is_sized_from_the_nested_field() -> None:
+	"""`example/bmp` sizes its pixels by `info.image_size`, at 20 in its own
+	struct and 34 in the frame, because `bitmap_file.info` sits at 14."""
+	message = bytearray(62)
+	message[0:2]   = b"BM"
+	message[2:6]   = struct.pack("<I", 62)
+	message[10:14] = struct.pack("<I", 58)
+	message[14:18] = struct.pack("<I", 40)
+	message[20:24] = struct.pack("<I", 999)		# the decoy, at its own offset
+	message[34:38] = struct.pack("<I", 4)		# the real image_size
+
+	assert based_probe("example/bmp/bmp.situ", "bitmap_file",
+	                   "bitmap_file.pixels", bytes(message)) == 4

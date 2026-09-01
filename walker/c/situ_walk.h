@@ -333,8 +333,13 @@ situ_walk_err situ_walk_validate(const situ_walk_image *image,
 
 /* Evaluate a section 10 program. `field` reads a placement's value for the
  * expression, and is the only thing tying this to a message. */
+/* `base` is the byte offset the referenced field's struct sits at in the
+ * frame being walked, and is zero for a field of the struct itself. A
+ * placement's own offset is within its own struct, so a field of a nested
+ * struct needs the nesting offset too -- without it the read lands at the
+ * right offset of the wrong struct (26.184). */
 typedef situ_walk_err (*situ_walk_load)(void *ctx, uint32_t index,
-                                            int64_t *out);
+                                            int32_t base, int64_t *out);
 
 situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
                                  situ_walk_load load, void *ctx,
