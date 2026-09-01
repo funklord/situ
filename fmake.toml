@@ -1,0 +1,34 @@
+# situ, built without a build file.
+#
+# Two things need saying here, and both are because this tree's default
+# deliverable is a library rather than a program. fmake discovers programs
+# by finding main(); everything below is what that cannot see.
+
+# The C runtime, which is what `make` builds and what every generated codec
+# links against. runtime/c/situ.c has no main and nothing in this tree links
+# it, so without this stanza fmake correctly concludes nothing reaches it and
+# correctly does not build it -- `make`'s default target would have no
+# equivalent at all. `kind = "static"` says the archive is the deliverable,
+# and the name gives libsitu.a, which is what the Makefile calls it and what
+# debian/libsitu-dev ships.
+[target.situ]
+kind    = "static"
+sources = ["runtime/c/situ.c"]
+
+# The embedded walker, `make walk-c`. fmake names a target after the
+# directory its root TU sits in, and walker/c's is `c` -- accurate and
+# useless, and it collides with nothing only by luck, runtime/c being the
+# other directory of that name. situ-walk-c is what the Makefile emits and
+# what section 0035 calls it.
+[target.c]
+name = "situ-walk-c"
+
+# Not configured, deliberately: the generated C suite. test/generated's
+# eleven programs are checked in, their headers are not -- situc generates
+# them into the build tree from thirty-odd .situ schemas, so a codegen
+# change cannot leave a stale copy behind. `fmake test` therefore compiles
+# eleven files against headers that do not exist, and stops. Reproducing
+# that needs a [generate] stanza per schema, cmocka as an @pkg, and the
+# double compilation (checked and release) the Makefile does to prove the
+# assertions compile out -- which is a build, not a line in a config file.
+# `make test` is how that suite runs. See README, "Building and testing".

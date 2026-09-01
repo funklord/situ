@@ -16,3 +16,9 @@ debian/libsitu-dev/
 debian/*.substvars
 debian/*.debhelper.log
 debian/debhelper-build-stamp
+
+# fmake's object cache, and the two artefacts it leaves at the top level:
+# libsitu.a and situ-walk-c, which make writes under build/ instead.
+.fmake/
+/libsitu.a
+/situ-walk-c

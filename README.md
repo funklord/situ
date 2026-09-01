@@ -148,6 +148,7 @@ the remedy attached, which is what the excerpt at the top of this file is.
 ```sh
 git clone <this repository> && cd situ
 make                                    # build the C runtime
+python3 ~/src/fmake/fmake                # the same, with no build file
 
 # The part worth seeing first: what a schema costs, and why.
 ./bin/situc explain example/http/http.situ request_line.version
@@ -997,6 +998,24 @@ make walk-c     # build situ-walk-c, the embedded walker
 make deb        # situc and libsitu-dev, with debhelper
 make help       # everything else
 ```
+
+Or with [fmake](../fmake), which needs no build file and nothing beyond the
+Python standard library:
+
+    python3 ~/src/fmake/fmake    # libsitu.a and situ-walk-c
+
+**Not `/usr/bin/fmake`**, which is older than the two fixes this tree needs.
+`fmake.toml` says only what finding `main()` cannot: that runtime/c is a
+static archive and is the deliverable, since nothing in the tree links it,
+and that walker/c's program is called situ-walk-c rather than `c`.
+
+That covers `make` and `make walk-c`, and stops there. **The suite stays
+with make.** test/generated's programs are checked in and their headers are
+not -- situc writes those into the build tree from the schemas, each test is
+then compiled twice, and cmocka has to be found; `fmake test` compiles
+eleven files against headers that do not exist yet. Nothing about that is
+wrong in either tool, but it is a build rather than a configuration, so
+`make test` and `make check` are the way to run this project's tests.
 
 `test` and `check` are not the same target and the difference matters.
 `make test` is pytest plus the generated C, which is the fast one to run while
