@@ -4755,7 +4755,10 @@ The top-level entry points:
 
 ```
 make            build the C runtime
-make test       pytest, mypy strict, lint, cmocka, cross
+make test       pytest and the generated C, which is the fast one to run
+                while working
+make check      style, typecheck, lint, test, cross-test: what has to pass
+                before a commit
 make bench      what the offset cache costs, in all four backends (26.30)
 make cross      aarch64 build of the runtime
 make cross-test generated accessors run on aarch64 under emulation
@@ -16961,6 +16964,59 @@ parse either, and correctly: it shows three alternative `impl` lines with
 "or" in the comments, and the compiler refuses a second implementation. That
 is a documentation idiom rather than a defect, and it is why the parse check
 covers the README's whole-schema blocks and not this document's fragments.
+
+### 26.171 `make test` was credited with three things it has never run
+
+Section 20's build reference said
+
+    make test       pytest, mypy strict, lint, cmocka, cross
+
+and `test` is `test-py test-c`. The types, the lint and the cross build are
+`check`, which the reference did not mention at all. **A contributor who ran
+`make test` and believed that line had run neither mypy nor the linter** --
+which is how this tree spent eight commits with a red `typecheck` while its
+tests passed (26.167).
+
+**The README said it correctly the whole time**: "`make test` is pytest plus
+the generated C, which is the fast one to run while working. `make check` is
+what has to pass before a commit". Two documents in one tree described one
+target two ways, and nothing compared them to the Makefile or to each other.
+
+Three vocabularies are shared between the documents and the tree with nothing
+holding them, and each is now read from the tree rather than from a list
+written in a test -- a list in the test is a third copy, and then two of the
+three have to be right:
+
+- **`make check`'s prerequisites**, parsed out of the rule, must each be named
+  where the document describes it. That is what was wrong.
+- **Every `make X` a document invokes** must be a rule. Only inside a code
+  span or a fenced block: prose says "make it allocatable", and a pattern
+  that reads those the same way reports `it` as a missing target. The
+  reference's own bare `make` line, with its description in a column, reports
+  `build` unless a target is required to follow a single space.
+- **Every `require` predicate** in `PREDICATES` and `DEFERRED_PREDICATES`.
+
+**A fourth was written and thrown away, because it already existed.**
+`test_the_cli_section_lists_every_command` has held section 21's verb list to
+the argument parser since it caught that section naming a `--strict` that
+never existed. The duplicate was written before looking, which is the second
+time this session -- 26.163 was the first -- and both times the existing check
+was in a file the search did not reach. **Looking for the gate is part of
+writing one**, and the cost of not is a second copy that has to be kept
+right.
+
+**The predicate check passed its first sabotage**, which is why it is written
+the way it is. Searching project.md for `name(` finds every predicate,
+because each is discussed in prose somewhere -- so renaming a row in the table
+left it green, and so would deleting the table outright. It locates the block
+and reads that. Six sabotages now, all red: one per check, plus the renamed
+row, the deleted table, and a verb the reference invents.
+
+The pattern across 26.169 to here: **a vocabulary written twice is a copy, and
+the copy in prose is the one that goes stale**, because the code is exercised
+and the prose is only read. Where the tree holds the vocabulary once --
+`KERNEL_ARGUMENTS`, `PREDICATES`, the argument parser, the Makefile's own rule
+-- the check reads it there and the document cannot drift without saying so.
 
 ## 27. Questions, and how they were settled
 

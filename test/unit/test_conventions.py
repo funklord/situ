@@ -583,3 +583,120 @@ def test_the_generated_build_lists_every_schema() -> None:
 	assert listed | exempt == real | exempt, (
 		f"in the tree and not built: {sorted(real - listed - exempt)}; "
 		f"built and not in the tree: {sorted(listed - real)}")
+
+
+# ---------------------------------------------------------------------------
+# Vocabularies the documents share with the tree
+#
+# Each of these exists once in code and is repeated in prose, which is the
+# shape that goes stale without anybody editing it (26.169, 26.170). The
+# check reads the code, never a list written here: a list in the test is a
+# third copy, and then two of the three have to be right.
+
+
+DOCUMENTS = ("README.md", "project.md")
+
+
+def document(name: str) -> str:
+	return (ROOT / name).read_text(encoding="ascii")
+
+
+def makefile_targets() -> set[str]:
+	return set(re.findall(r"^([a-z][a-z0-9-]*):", (ROOT / "Makefile").read_text(
+		encoding="ascii"), re.M))
+
+
+def invoked_make_targets(text: str) -> set[str]:
+	"""`make X` where it is a command rather than a verb.
+
+	Which is inside a code span or a fenced block, and nowhere else: prose
+	says "make it allocatable" and a pattern that reads the two the same way
+	reports `it` as a missing target.
+	"""
+	found = set(re.findall(r"`make ([a-z][a-z0-9-]*)[^`]*`", text))
+	fenced = False
+	for line in text.splitlines():
+		if line.startswith("```"):
+			fenced = not fenced
+			continue
+		if fenced:
+			# One space: the reference list writes a bare `make` in a
+			# column, and `make            build the C runtime` names no
+			# target called `build`.
+			opens = re.match(r"\s*(?:\$ )?make ([a-z][a-z0-9-]*)", line)
+			if opens:
+				found.add(opens.group(1))
+	return found
+
+
+def test_every_documented_make_target_exists() -> None:
+	"""A target renamed out from under a document leaves a command that
+	fails, which is worse than one that is missing: a reader runs it."""
+	real = makefile_targets()
+	for name in DOCUMENTS:
+		for target in sorted(invoked_make_targets(document(name))):
+			assert target in real, (
+				f"{name} names `make {target}`, which the Makefile has no "
+				f"rule for")
+
+
+def test_the_documented_check_names_what_check_runs() -> None:
+	"""`make check` is the one a contributor is told to run before a commit,
+	so what it is said to run has to be what it runs.
+
+	project.md credited `make test` with "pytest, mypy strict, lint, cmocka,
+	cross" -- three of which it has never run. `test` is `test-py test-c`;
+	the types, the lint and the cross build are `check`. A reader who ran
+	`make test` and believed the line had run neither mypy nor the linter,
+	which is exactly how this tree spent eight commits with a red
+	`typecheck` while its tests passed.
+
+	The README said it correctly the whole time. Two documents in one tree
+	described one target two ways, and nothing compared them.
+	"""
+	makefile = (ROOT / "Makefile").read_text(encoding="ascii")
+	needs    = re.search(r"^check:(.*)$", makefile, re.M)
+	assert needs, "the Makefile no longer has a `check` rule"
+	wanted = needs.group(1).split()
+	assert wanted, "`check` has no prerequisites to document"
+
+	described = re.search(r"^make check\s+(.*(?:\n {4,}.*)*)", document("project.md"),
+	                      re.M)
+	assert described, "project.md no longer describes `make check`"
+	for target in wanted:
+		assert target in described.group(1), (
+			f"project.md's `make check` does not name `{target}`, which is "
+			f"one of the targets it runs")
+
+
+def test_every_require_predicate_is_documented() -> None:
+	"""The predicate table is what a schema author writes `require` against,
+	and one that exists without being written down is one nobody uses."""
+	from situc.requirements import DEFERRED_PREDICATES, PREDICATES
+
+	known = set(PREDICATES) | set(DEFERRED_PREDICATES)
+
+	# The table, not the document. Searching the whole of project.md finds
+	# every predicate, because each is discussed in prose somewhere -- so the
+	# check passed with the table deleted, and passed a sabotage that renamed
+	# a row in it. Found by that sabotage; the first version of this test is
+	# the reason the block is located rather than grepped.
+	table: list[str] = []
+	fenced = False
+	for line in document("project.md").splitlines():
+		if line.startswith("```"):
+			if fenced and any("absolute_static(X)" in held for held in table):
+				break
+			fenced, table = not fenced, []
+			continue
+		if fenced:
+			table.append(line)
+	assert any("absolute_static(X)" in line for line in table), \
+		"project.md no longer has a block listing the `require` predicates"
+
+	# `no_realloc(expr)` takes an expression rather than a path, so the
+	# argument's spelling is not what identifies the form.
+	written = set(re.findall(r"(\w+)\s*\(", "\n".join(table)))
+	assert not known - written, (
+		f"the `require` table in project.md has no row for: "
+		f"{sorted(known - written)}")
