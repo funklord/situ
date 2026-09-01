@@ -20,7 +20,7 @@ from pathlib import Path
 
 import json
 
-from editor.document import Document, open_document
+from editor.document import Document, Field, open_document
 
 __all__ = ["as_json", "image_bytes", "open_from", "read_message",
            "render"]
@@ -85,8 +85,35 @@ def render(document: Document) -> list[str]:
 			shown = f"({field.note})"
 		else:
 			shown = str(field.value)
-		lines.append(f"  {where} +{wide}  {field.name:<24} {shown}")
+		row    = f"  {where} +{wide}  {field.name:<24} {shown}"
+		marker = _write_marker(field)
+		lines.append(f"{row.ljust(50)}{marker}".rstrip() if marker else row)
 	return lines
+
+
+def _write_marker(field: Field) -> str:
+	"""What a write to this field would cost, where it is not simply a store.
+
+	Nothing for the ordinary case, so the marker means something when it is
+	there. An editor of *files* is the case 0047 was raised for, and the one
+	question it has to answer before writing a byte is whether the schema
+	permits it -- which the image has carried since 26.33 and nothing read
+	until 26.177.
+	"""
+	if field.mutate is None:
+		return ""
+
+	held = []
+	if field.mutate == "Immutable":
+		held.append("read-only")
+	elif field.mutate == "Shifting":
+		held.append("moves")
+	elif field.mutate == "RewriteRequired":
+		held.append("rewrites")
+	if field.auth == "Covered":
+		held.append("tag")
+
+	return f"[{', '.join(held)}]" if held else ""
 
 
 def as_json(document: Document) -> str:
@@ -115,6 +142,13 @@ def as_json(document: Document) -> str:
 				"kind":   ("bytes" if isinstance(field.value, bytes)
 				           else "int" if field.value is not None else "none"),
 				"note":   field.note,
+				# What a write would do. `mutate` is null where the image was
+				# packed without its metadata tail, and a frontend must read
+				# that as "not told" rather than as permission.
+				"writable":   field.writable,
+				"mutate":     field.mutate,
+				"auth":       field.auth,
+				"write_cost": field.write_cost,
 			}
 			for field in document.fields()
 		],

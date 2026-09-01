@@ -17293,6 +17293,52 @@ uses the names, and drops the capabilities -- which is why it can show a field
 and not say whether writing it is legal. The image half is right now; the
 reader half is a feature and belongs to whoever wants it.
 
+### 26.178 `readable` finally got its mirror
+
+26.177 fixed the packer's half and left the reader's open: the image carried
+the capability vectors, `situ-edit` asked for them with `--metadata`, and
+nothing read them. `walker/image.py` gave section 13 the name `VECTORS` and no
+consumer, and `editor/document.Field` had `name`, `offset`, `size`, `value`,
+`note` and `readable` with nothing on the other side.
+
+So an editor could show a field and not say whether writing it was legal,
+which is the one question an editor of *files* has to answer before touching a
+byte.
+
+`Image.capability_of(index, axis)` decodes the section, `Field` carries
+`mutate` and `auth`, and `writable` and `write_cost` say what a write would
+do. On `example/udp` that is every answer at once: three covered fields a
+write may touch in place, a checksum nobody may write, and a payload whose
+write moves what follows.
+
+    0 +  2  source_port              4660        [tag]
+    6 +  2  checksum                 abcd        [read-only]
+    8 +  0  payload                              [moves, tag]
+
+**Silence is not permission.** An image packed without the tail carries no
+vectors, and `mutate` is `None` there. `writable` is false for it, not true:
+an editor that read the absence as a yes would offer a write the schema
+forbids, and that is the failure the property exists to prevent. It is pinned
+by its own test, because it is the one behaviour a plausible implementation
+gets backwards.
+
+**The walker now holds a second copy of the capability vocabulary, and it has
+to.** This walker imports nothing from the compiler but the image format,
+which is what lets a device carry it -- so the axis order and every domain are
+written out again in `walker/image.py`. **A copy is allowed to exist here only
+because a test compares it.** The packer writes an index into `DOMAINS[axis]`
+and the walker reads one out of its own table, so a value appended to an axis
+on one side and not the other silently renames every value after it, which is
+the worst shape a drift can take: every byte still decodes to something. The
+sabotage confirms both halves -- inserting one value into the walker's `auth`
+domain fails the comparison *and* turns `Uncovered` into `Covered` at the
+editor.
+
+The marker is empty for the ordinary case -- an in-place store invalidating
+nothing -- so it means something when it is there. `--format json` carries the
+same as `writable`, `mutate`, `auth` and `write_cost`, which is the surface a
+frontend or another tool reads.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

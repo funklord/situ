@@ -210,3 +210,57 @@ def test_the_readme_editor_sample_is_what_situ_edit_prints(tmp_path: Path) -> No
 	           if line.strip() and not line.startswith("$ ")]
 
 	assert printed[:len(shown)] == shown
+
+
+# -- what a write would cost (26.177) ---------------------------------------
+
+
+def test_a_field_says_whether_the_schema_lets_anyone_write_it() -> None:
+	"""`readable` had no mirror.
+
+	The image has carried the capability vectors since 26.33 split the tail
+	off for this reader, and `situ-edit` asks for them with `--metadata` --
+	and nothing read them, so an editor could show a field and not say
+	whether writing it was legal. That is the one question a *file* editor
+	has to answer before touching a byte.
+
+	`example/udp` is the case that exercises every answer: three covered
+	fields a write may touch in place, a checksum nobody may write, and a
+	payload whose write moves what follows it.
+	"""
+	schema  = (ROOT / "example/udp/udp.situ").read_text(encoding="ascii")
+	parsed  = parse_text(schema, path="udp.situ")
+	image, _ = pack(parsed, resolve(parsed, solve(parsed)), metadata=True)
+
+	document = open_document(image, bytearray(bytes.fromhex("123400350008abcd")))
+	fields   = {field.name: field for field in document.fields()}
+
+	assert fields["source_port"].writable
+	assert fields["source_port"].mutate == "InPlaceFixed"
+	assert fields["source_port"].auth == "Covered"
+	assert "a tag has to be recomputed" in fields["source_port"].write_cost
+
+	assert not fields["checksum"].writable
+	assert "the schema does not let anyone write this" in \
+		fields["checksum"].write_cost
+
+	assert fields["payload"].writable
+	assert "the bytes after it move" in fields["payload"].write_cost
+
+
+def test_an_image_without_the_tail_says_it_was_not_told() -> None:
+	"""Silence is not permission.
+
+	An image packed without `--metadata` carries no vectors, and an editor
+	that read the absence as "yes" would offer a write the schema forbids.
+	`mutate` is `None` there, and `writable` is false.
+	"""
+	schema  = (ROOT / "example/udp/udp.situ").read_text(encoding="ascii")
+	parsed  = parse_text(schema, path="udp.situ")
+	image, _ = pack(parsed, resolve(parsed, solve(parsed)), metadata=False)
+
+	document = open_document(image, bytearray(bytes.fromhex("123400350008abcd")))
+	for field in document.fields():
+		assert field.mutate is None
+		assert not field.writable
+		assert field.write_cost == "the image does not say"

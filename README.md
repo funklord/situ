@@ -55,8 +55,8 @@ require canonical(udp_header);
 ```
 
 The real `example/udp/udp.situ` describes the checksum too, and the region
-it covers. `require` is checked at compile time and fails the build. What comes out is a
-header of constant-offset accessors --
+it covers. `require` is checked at compile time and fails the build. What
+comes out is a header of constant-offset accessors --
 
 ```c
 static inline uint16_t situ_udp_header_length_get(situ_view_t view)
@@ -233,12 +233,21 @@ which is how 0026's separation survives the convenience.
 ```
 $ situ-edit example/udp/udp.situ capture.bin
 udp_header  8 bytes
-     0 +  2  source_port              4660
-     2 +  2  destination_port         53
-     4 +  2  length                   8
-     6 +  2  checksum                 abcd
-     8 +  0  payload
+     0 +  2  source_port              4660        [tag]
+     2 +  2  destination_port         53          [tag]
+     4 +  2  length                   8           [tag]
+     6 +  2  checksum                 abcd        [read-only]
+     8 +  0  payload                              [moves, tag]
 ```
+
+The bracket is what a write would cost, read out of the image's capability
+vectors: `read-only` where the schema lets nobody write, `moves` where the
+bytes after it shift, `tag` where a write invalidates a checksum or an
+authentication tag. Nothing is the ordinary case -- an in-place store that
+invalidates nothing -- so the marker means something when it is there. A
+`--format json` document carries the same as `writable`, `mutate`, `auth` and
+`write_cost`. An image packed without `--metadata` carries no vectors, and
+every field then reads "the image does not say", which is not permission.
 
 **`situ-walk`** is the interpreter: a table walk over live bytes, which also
 serves as a fifth column in the differential check, answering the same

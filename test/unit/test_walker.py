@@ -482,3 +482,27 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 	# is what `test_a_struct_the_image_cannot_answer_for_says_so` is for.
 	assert answerable >= 141, \
 		f"only {answerable} structs the walker can answer `validate` for"
+
+
+def test_the_walker_knows_the_same_axes_as_the_compiler() -> None:
+	"""`walker/image.py` carries a second copy of the capability vocabulary,
+	and it has to: this walker imports nothing from the compiler but the
+	image format, which is what lets a device carry it.
+
+	A copy is allowed to exist here only because this compares it. The
+	packer writes an index into `DOMAINS[axis]` and the walker reads one out
+	of its own table, so a value appended to an axis in one place and not the
+	other silently renames every value after it -- which is the worst shape a
+	drift can take, because every byte still decodes to something.
+	"""
+	from situc.capability import DOMAINS as COMPILER_DOMAINS
+	from situc.capability import Axis
+	from walker.image import AXES, DOMAINS as WALKER_DOMAINS
+
+	assert AXES == tuple(axis.value for axis in Axis), \
+		"the walker's axis order is not the order the packer writes"
+
+	for axis in Axis:
+		assert WALKER_DOMAINS[axis.value] == \
+			tuple(str(value) for value in COMPILER_DOMAINS[axis]), \
+			f"the walker's `{axis.value}` domain differs from the compiler's"

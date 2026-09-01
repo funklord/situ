@@ -43,6 +43,42 @@ PINNED = 128
 
 BIG, LITTLE, NATIVE = 1, 2, 3
 
+#: The capability vocabulary, in the order the packer writes it: one byte per
+#: axis per placement, holding that axis's index into the tuple below, or
+#: 0xFF where the packer could not tell.
+#:
+#: A second copy of `situc.capability.DOMAINS`, and it has to be: this walker
+#: imports nothing from the compiler but the image format, which is what lets
+#: a device carry it. The copy cannot drift silently --
+#: `test_the_walker_knows_the_same_axes_as_the_compiler` compares the two,
+#: which is the only reason a copy is allowed to exist here.
+AXES: tuple[str, ...] = (
+	"size", "offset", "access", "mutate", "address", "align", "repr",
+	"atomic", "canonical", "stage", "auth", "secrecy", "effect",
+)
+
+DOMAINS: dict[str, tuple[str, ...]] = {
+	"size":      ("Fixed", "Bounded", "Unbounded"),
+	"offset":    ("AbsoluteStatic", "FrameStatic", "Dynamic", "DataPlaced",
+	              "Scanned"),
+	"access":    ("Random", "Sequential"),
+	"mutate":    ("InPlaceFixed", "InPlaceSlack", "Shifting", "RewriteRequired",
+	              "Immutable"),
+	"address":   ("Stable", "FrameStable", "Unstable"),
+	"align":     ("Aligned", "Unaligned"),
+	"repr":      ("MemoryIdentical", "ValueConverted", "TextConverted",
+	              "ConditionallyConverted"),
+	"atomic":    ("AtomicWord", "NonAtomic"),
+	"canonical": ("Canonical", "CanonicalGiven", "NonCanonical"),
+	"stage":     ("CompileTime", "ParseTime", "TransformTime", "VerifyGated"),
+	"auth":      ("Uncovered", "Covered"),
+	"secrecy":   ("Public", "Secret"),
+	"effect":    ("Pure", "EffectOnRead", "EffectOnWrite", "EffectBoth"),
+}
+
+#: The byte the packer writes where it has no value for an axis.
+UNKNOWN_AXIS = 0xFF
+
 
 class ImageError(Exception):
 	"""The image cannot be read. Never a guess: a walker that carries on
@@ -195,6 +231,22 @@ class Image:
 	#: metadata tail, which a device does not carry.
 	struct_names: list[str]			= field(default_factory=list)
 	placement_names: list[str]		= field(default_factory=list)
+	#: placement index -> axis name -> the value's base, from the same tail.
+	#: Empty without it, and a walker that has no vectors says so rather than
+	#: guessing: `capability_of` returns `None` for an axis it was not told.
+	placement_vectors: list[dict[str, str]]	= field(default_factory=list)
+
+	def capability_of(self, index: int, axis: str) -> str | None:
+		"""One axis of one placement, or `None` where the image did not say.
+
+		`None` is the honest answer for an image packed without the metadata
+		tail, and it is a different answer from any value in the domain --
+		which is the distinction the packer itself lost until 26.177, when
+		every parameterised value was writing the byte for "could not tell".
+		"""
+		if index >= len(self.placement_vectors):
+			return None
+		return self.placement_vectors[index].get(axis)
 
 	def name_of(self, index: int) -> str:
 		"""A placement's path, or its index where the tail was omitted."""
@@ -338,6 +390,16 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				"<IIqIB", blob, at + i * stride)
 			found_arm = image.arms.setdefault(where, (selects, []))
 			found_arm[1].append((value, selected, aflags))
+
+	if VECTORS in found:
+		at, records, stride = found[VECTORS]
+		for i in range(records):
+			row = blob[at + i * stride:at + (i + 1) * stride]
+			image.placement_vectors.append({
+				axis: DOMAINS[axis][row[j]]
+				for j, axis in enumerate(AXES)
+				if j < len(row) and row[j] < len(DOMAINS[axis])
+			})
 
 	if NAMES in found and STRINGS in found:
 		at, records, stride = found[NAMES]

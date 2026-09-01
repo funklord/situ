@@ -40,10 +40,48 @@ class Field:
 	size: int | None
 	value: int | bytes | None
 	note: str = ""
+	#: What the schema says a write to this member would do, out of the
+	#: image's metadata tail. `None` where the image was packed without it,
+	#: which is a different answer from any value the lattice has.
+	mutate: str | None = None
+	auth: str | None = None
 
 	@property
 	def readable(self) -> bool:
 		return self.value is not None
+
+	@property
+	def writable(self) -> bool:
+		"""Whether the schema permits a write at all.
+
+		`readable`'s mirror, and it had none: the image has carried the
+		capability vectors since 26.33 split the tail off for this reader,
+		`situ-edit` asks for them with `--metadata`, and nothing read them --
+		so an editor could show a field and not say whether writing it was
+		legal, which is the one thing a *file* editor most needs to know
+		(26.177).
+
+		`None` mutate means the image did not say, and that is not the same
+		as permission: an editor that treats silence as yes is the failure
+		this property exists to prevent.
+		"""
+		return self.mutate is not None and self.mutate != "Immutable"
+
+	@property
+	def write_cost(self) -> str:
+		"""What a permitted write costs, in the terms the lattice uses."""
+		if self.mutate is None:
+			return "the image does not say"
+		if self.mutate == "Immutable":
+			return "refused: the schema does not let anyone write this"
+
+		moves = ("" if self.mutate == "InPlaceFixed"
+		         else "; the bytes after it move" if self.mutate == "Shifting"
+		         else "; the whole region is re-transformed"
+		         if self.mutate == "RewriteRequired"
+		         else "; an append needs slack")
+		tag = "" if self.auth != "Covered" else "; a tag has to be recomputed"
+		return f"{self.mutate}{moves}{tag}"
 
 
 @dataclass
@@ -87,7 +125,9 @@ class Document:
 				wide = size_bits(view, index) // BITS_PER_BYTE
 			except Refused as why:
 				rows.append(Field(local, None, None, None,
-				                  f"cannot be placed: {why}"))
+				                  f"cannot be placed: {why}",
+				                  mutate = image.capability_of(index, "mutate"),
+				                  auth   = image.capability_of(index, "auth")))
 				continue
 
 			value = held.get(local)
@@ -95,7 +135,9 @@ class Document:
 			if placement.type_struct != NONE:
 				note = "a nested struct; open it as its own document"
 
-			rows.append(Field(local, at, wide, value, note))
+			rows.append(Field(local, at, wide, value, note,
+			                  mutate = image.capability_of(index, "mutate"),
+			                  auth   = image.capability_of(index, "auth")))
 
 		return rows
 
