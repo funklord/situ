@@ -264,26 +264,42 @@ def test_the_readme_advise_sample_is_what_the_advisor_prints(
 QUOTED_OUTPUT = [
 	(["explain", "example/http/http.situ", "request_line.version"],
 	 "$ situc explain example/http/http.situ request_line.version", False),
-	(["map", "example/udp/udp.situ"],
-	 "struct udp_header size=8 mutate=Immutable repr=ValueConverted ...", True),
+	# A prefix, not the whole line: the rest of it is what the check is for.
+	(["map", "example/udp/udp.situ"], "struct udp_header size=", True),
 	(["doc", "example/udp/udp.situ"],
 	 "struct udp_header", True),
 ]
 
 
 def readme_block(first: str) -> list[str]:
-	"""The fenced block whose first content line is exactly `first`.
+	"""The fenced block opened by `first`: that line exactly, or, where no
+	block opens with exactly it, the one block that opens with it as a
+	prefix.
 
-	Exactly, because `struct udp_header` opens two of them: the capability
-	map and the `doc` diagram, and a prefix match takes whichever comes
-	first in the file.
+	Both, because neither alone works. `struct udp_header` opens two blocks
+	-- the capability map and the `doc` diagram -- so a prefix match takes
+	whichever comes first; and an exact anchor is a *copy of the line it is
+	checking*, so changing that line breaks the anchor instead of reporting
+	the drift. It did: the map's struct line grew its size range and this
+	stopped finding the block rather than saying the sample was stale.
+
+	Exact wins where it matches, which is what keeps `struct udp_header`
+	pointing at the shorter of the two.
 	"""
 	lines = (ROOT / "README.md").read_text(encoding="ascii").splitlines()
-	start = next(i for i, line in enumerate(lines)
-	             if line == first and i and lines[i - 1].startswith("```"))
-	end   = next(i for i, line in enumerate(lines[start:], start)
-	             if line.startswith("```"))
-	return lines[start:end]
+	opens = [i for i, line in enumerate(lines)
+	         if i and lines[i - 1].startswith("```")]
+
+	start = [i for i in opens if lines[i] == first]
+	if not start:
+		start = [i for i in opens if lines[i].startswith(first)]
+	assert len(start) == 1, (
+		f"{len(start)} README blocks open with {first!r}; the anchor has to "
+		f"name exactly one")
+
+	end = next(i for i, line in enumerate(lines[start[0]:], start[0])
+	           if line.startswith("```"))
+	return lines[start[0]:end]
 
 
 def flat(text: str) -> str:

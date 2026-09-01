@@ -7,11 +7,14 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 # codecs. `trusted` means the properties are declared and
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec slip derived expansion=ratio_bounded(2,1) seekable=none granularity=byte invertible deterministic
 
-struct frame size=1 access=Sequential mutate=Shifting atomic=NonAtomic stage=TransformTime effect=EffectOnRead
+struct frame size=1.. access=Sequential mutate=Shifting atomic=NonAtomic stage=TransformTime effect=EffectOnRead
   frame.datagram                         offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
   frame.datagram.payload                 offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime

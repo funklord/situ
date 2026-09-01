@@ -17018,6 +17018,46 @@ and the prose is only read. Where the tree holds the vocabulary once --
 `KERNEL_ARGUMENTS`, `PREDICATES`, the argument parser, the Makefile's own rule
 -- the check reads it there and the document cannot drift without saying so.
 
+### 26.172 A struct's size was printed as its minimum, with nothing to say so
+
+The capability map's struct line read `size={layout.size_bytes}`, which is the
+*minimum*. `struct udp_header size=8` for a struct that runs to 65535 bytes,
+and `struct proto_message size=0` for one with no upper bound at all. **Fifty
+of the tree's 158 structs understated themselves that way** -- and the line
+directly beneath each prints `size=Bounded(8, 65535)` for a field, so the same
+token meant a byte count on one line and a range on the next.
+
+A reader takes `size=0` for an empty struct. The map is the artefact
+`situc map --check` diffs in review, so what it under-reports is what a
+capability regression can hide behind.
+
+It is `min..max` now, `min..` where nothing bounds it, and a bare number only
+where the struct is fixed -- so a bare number means something. The 37
+committed maps are regenerated; the diff is the header note and the struct
+lines and nothing else, checked by counting the changed lines that are neither.
+
+**The README sample broke, which is the gate from 26.168 working** -- and the
+gate broke with it, which is the part worth recording. Its anchor was the
+block's first line *written out in the test*, so a legitimate change to that
+line stopped the block being found rather than being reported as drift: the
+check failed with "prints no line opening the README's block" instead of "the
+README shows a line map does not print". **An anchor that is a copy of the
+line it checks fails the wrong way.** It anchors on a prefix now, exact where
+one matches, since `struct udp_header` opens two blocks and only the shorter
+is exactly it.
+
+**Left open: the protobuf acceptance test disagrees with the compiler, and
+this is the holder's to settle.** Section 9.7 gives an expected capability
+outcome "which the compiler must produce", and it says
+`proto_message.fields mutate=RewriteRequired`. The compiler says
+`InPlaceSlack`, which is *stronger* -- the `tlv` rule sets it deliberately,
+with the reason "an item is rewritten in place only at the same size, and an
+append needs slack", and `RewriteRequired` is what a codec region gets, where
+any write re-transforms the whole thing. The implementation's reasoning holds
+up and the acceptance block looks like it predates the rule, but a normative
+"must produce" is not something to quietly edit to match what is produced.
+Nothing checked it either way, which is why it could differ at all.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

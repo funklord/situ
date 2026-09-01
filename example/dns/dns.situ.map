@@ -8,6 +8,9 @@
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
 #
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+#
 # layers: floor=view reach=drive
 
 struct dns_header size=12 repr=ValueConverted atomic=NonAtomic

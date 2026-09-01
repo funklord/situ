@@ -23,6 +23,7 @@ from pathlib import PurePath
 
 from situc import ast, layers
 from situc.capability import DOMAINS, Axis, Value, Vector
+from situc.layout import BITS_PER_BYTE, StructLayout
 from situc.resolve import ResolvedSchema
 
 FORMAT_VERSION = 1
@@ -127,6 +128,9 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 		"#",
 		"# Offsets are byte values, or byte:bit where a field does not start on",
 		"# a byte boundary. Sizes are bytes unless suffixed with `bit`.",
+		"#",
+		"# A struct's size is a bare number where it is fixed, `min..max` where",
+		"# it is bounded, and `min..` where nothing bounds it.",
 	]
 
 	lines.extend(_layer_lines(schema))
@@ -139,10 +143,34 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 	return "\n".join(lines) + "\n"
 
 
+def _struct_size(layout: StructLayout) -> str:
+	"""What the struct spans, which is a range whenever it is not fixed.
+
+	`size_bytes` alone is the *minimum*, and this printed it with nothing to
+	say so: `struct proto_message size=0` for a struct with no upper bound at
+	all, and `struct udp_header size=8` for one that runs to 65535. Fifty of
+	the tree's 158 structs understated themselves that way -- and the line
+	directly below each one prints `size=Bounded(8, 65535)` for a field, so
+	the same token meant a byte count on one line and a range on the next.
+
+	Written as `min..max`, or `min..` where nothing bounds it, so a reader who
+	sees a bare number knows the struct is fixed.
+	"""
+	if not layout.is_byte_sized:
+		return f"{layout.size_bits}bit"
+
+	low = layout.size_bytes
+	if layout.size_max_bits is None:
+		return f"{low}.."
+	if layout.size_max_bits == layout.size_bits:
+		return f"{low}"
+	return f"{low}..{layout.size_max_bits // BITS_PER_BYTE}"
+
+
 def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
 	struct  = resolved.structs[name]
 	layout  = struct.layout
-	size    = f"{layout.size_bytes}" if layout.is_byte_sized else f"{layout.size_bits}bit"
+	size    = _struct_size(layout)
 
 	# A register's address and access width belong in the map: they are what
 	# decides every mutate value under it, so a reader asking why a setter is

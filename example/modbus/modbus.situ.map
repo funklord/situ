@@ -7,6 +7,9 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 struct exception_response size=1
   exception_response.code                offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
@@ -26,11 +29,11 @@ struct read_request size=4 repr=ValueConverted
   read_request.start_address             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   read_request.quantity                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
 
-struct read_response size=1 mutate=Shifting
+struct read_response size=1..256 mutate=Shifting
   read_response.byte_count               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   read_response.values                   offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
-struct read_write_request size=9 mutate=Shifting repr=ValueConverted
+struct read_write_request size=9..264 mutate=Shifting repr=ValueConverted
   read_write_request.read_start_address  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   read_write_request.read_quantity       offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
   read_write_request.write_start_address offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
@@ -38,7 +41,7 @@ struct read_write_request size=9 mutate=Shifting repr=ValueConverted
   read_write_request.byte_count          offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   read_write_request.values              offset=AbsoluteStatic(0x09) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
-struct request size=5 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+struct request size=5..265 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   request.function                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   request.body                           offset=AbsoluteStatic(0x01) size=Bounded(4, 264) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
   request.body.read_coils                offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
@@ -81,7 +84,7 @@ struct request size=5 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   request.body.read_write.byte_count     offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   request.body.read_write.values         offset=AbsoluteStatic(0x0A) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
-struct response size=2 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+struct response size=2..257 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   response.function                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   response.body                          offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
   response.body.read_coils               offset=AbsoluteStatic(0x01) size=Bounded(1, 256) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
@@ -136,7 +139,7 @@ struct response size=2 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   response.body.e17                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   response.body.e17.code                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
 
-struct write_multiple_request size=5 mutate=Shifting repr=ValueConverted
+struct write_multiple_request size=5..260 mutate=Shifting repr=ValueConverted
   write_multiple_request.start_address   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   write_multiple_request.quantity        offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
   write_multiple_request.byte_count      offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord

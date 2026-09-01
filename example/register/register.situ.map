@@ -7,6 +7,9 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 register ctrl_reg @ 0x00 access_width=32 no_rmw size=4 mutate=Immutable repr=ValueConverted atomic=NonAtomic effect=EffectOnWrite
   ctrl_reg.enable                        offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=RewriteRequired

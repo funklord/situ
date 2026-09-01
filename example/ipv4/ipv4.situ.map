@@ -7,11 +7,14 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 struct ipv4_address size=4 atomic=NonAtomic
   ipv4_address.octets                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
 
-struct ipv4_header size=20 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(header_checksum)
+struct ipv4_header size=20..60 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(header_checksum)
   ipv4_header.header                     offset=AbsoluteStatic(0x00) size=Bounded(20, 60) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(header_checksum)
   ipv4_header.version                    offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(header_checksum)
   ipv4_header.ihl                        offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(header_checksum)

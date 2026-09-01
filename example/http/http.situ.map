@@ -7,12 +7,15 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
-struct header_field size=3 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+struct header_field size=3.. access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
   header_field.name                      offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   header_field.value                     offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
 
-struct request_head size=6 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+struct request_head size=6.. access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
   request_head.start                     offset=AbsoluteStatic(0x00) size=Bounded(4, 8224) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   request_head.start.method              offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   request_head.start.target              offset=Scanned size=Bounded(1, 8192) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
@@ -22,12 +25,12 @@ struct request_head size=6 access=Sequential mutate=Shifting address=Unstable at
   request_head.fields[].name             offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable canonical=NonCanonical effect=EffectOnRead
   request_head.fields[].value            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
 
-struct request_line size=4 access=Sequential mutate=Shifting address=Unstable
+struct request_line size=4..8224 access=Sequential mutate=Shifting address=Unstable
   request_line.method                    offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   request_line.target                    offset=Scanned size=Bounded(1, 8192) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
   request_line.version                   offset=Scanned size=Bounded(2, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
-struct response_head size=6 access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+struct response_head size=6.. access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
   response_head.start                    offset=AbsoluteStatic(0x00) size=Bounded(4, 276) align=Aligned(8) repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   response_head.start.version            offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   response_head.start.code               offset=Scanned size=Bounded(1, 4) align=Unaligned repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
@@ -37,7 +40,7 @@ struct response_head size=6 access=Sequential mutate=Shifting address=Unstable r
   response_head.fields[].name            offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable canonical=NonCanonical effect=EffectOnRead
   response_head.fields[].value           offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
 
-struct status_line size=4 access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
+struct status_line size=4..276 access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
   status_line.version                    offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   status_line.code                       offset=Scanned size=Bounded(1, 4) align=Unaligned repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   status_line.reason                     offset=Scanned size=Bounded(2, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable

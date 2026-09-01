@@ -7,6 +7,9 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 struct header size=12 repr=ValueConverted
   header.id                              offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
@@ -16,14 +19,14 @@ struct header size=12 repr=ValueConverted
   header.nscount                         offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   header.arcount                         offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
 
-struct label size=1 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+struct label size=1..64 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   label.form                             offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   label.rest                             offset=AbsoluteStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   label.body                             offset=AbsoluteStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
   label.body.text                        offset=AbsoluteStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   label.body.pointer_low                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
 
-struct name size=1 access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+struct name size=1..8192 access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   name.labels                            offset=AbsoluteStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
   name.labels[]                          offset=FrameStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting
   name.labels[].form                     offset=FrameStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
@@ -32,7 +35,7 @@ struct name size=1 access=Sequential mutate=Shifting repr=ValueConverted atomic=
   name.labels[].body.text                offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   name.labels[].body.pointer_low         offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
 
-struct question size=5 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+struct question size=5..8196 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   question.qname                         offset=AbsoluteStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
   question.qname.labels                  offset=AbsoluteStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
   question.qname.labels[]                offset=FrameStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting

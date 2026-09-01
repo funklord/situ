@@ -7,8 +7,11 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
-struct cpio_entry size=111 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+struct cpio_entry size=111..4294971507 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical
   cpio_entry.header                      offset=AbsoluteStatic(0x00) size=Fixed(110) align=Aligned(8) repr=TextConverted atomic=NonAtomic
   cpio_entry.header.magic                offset=AbsoluteStatic(0x00) size=Fixed(6) align=Aligned(8) repr=TextConverted atomic=NonAtomic
   cpio_entry.header.ino                  offset=AbsoluteStatic(0x06) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic

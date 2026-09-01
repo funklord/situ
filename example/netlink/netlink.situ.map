@@ -7,6 +7,9 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 struct ifaddrmsg size=8 canonical=NonCanonical
   ifaddrmsg.ifa_family                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
@@ -15,7 +18,7 @@ struct ifaddrmsg size=8 canonical=NonCanonical
   ifaddrmsg.ifa_scope                    offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   ifaddrmsg.ifa_index                    offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
 
-struct nl_message size=20 access=Sequential mutate=RewriteRequired address=Unstable atomic=NonAtomic canonical=NonCanonical
+struct nl_message size=20.. access=Sequential mutate=RewriteRequired address=Unstable atomic=NonAtomic canonical=NonCanonical
   nl_message.nlmsg_len                   offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   nl_message.nlmsg_type                  offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   nl_message.nlmsg_flags                 offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
@@ -51,7 +54,7 @@ struct nl_message size=20 access=Sequential mutate=RewriteRequired address=Unsta
   nl_message.attrs[].payload             offset=FrameStatic(0x04) size=Bounded(0, 65531) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
   nl_message.attrs[].<reserved0>         offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
 
-struct nlattr size=4 mutate=Shifting address=Unstable canonical=NonCanonical
+struct nlattr size=4..65538 mutate=Shifting address=Unstable canonical=NonCanonical
   nlattr.nla_len                         offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   nlattr.nla_type                        offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   nlattr.payload                         offset=AbsoluteStatic(0x04) size=Bounded(0, 65531) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

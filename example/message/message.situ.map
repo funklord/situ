@@ -7,6 +7,9 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 struct flags size=1 repr=ValueConverted atomic=NonAtomic
   flags.urgent                           offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
@@ -26,7 +29,7 @@ struct header size=11 repr=ValueConverted atomic=NonAtomic
   header.rec_count                       offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   header.seq                             offset=AbsoluteStatic(0x07) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
 
-struct message size=11 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+struct message size=11.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   message.hdr                            offset=AbsoluteStatic(0x00) size=Fixed(11) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
   message.hdr.version                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   message.hdr.type                       offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

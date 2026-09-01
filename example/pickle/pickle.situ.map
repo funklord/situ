@@ -7,7 +7,10 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
-struct pickle_wstring size=4 mutate=Shifting repr=ValueConverted
+struct pickle_wstring size=4..8589934594 mutate=Shifting repr=ValueConverted
   pickle_wstring.length                  offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   pickle_wstring.data                    offset=AbsoluteStatic(0x04) size=Bounded(0, 8589934590) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting

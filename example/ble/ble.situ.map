@@ -7,13 +7,16 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
-struct ad_structure size=2 mutate=Shifting canonical=NonCanonical
+struct ad_structure size=2..256 mutate=Shifting canonical=NonCanonical
   ad_structure.length                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   ad_structure.type                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   ad_structure.value                     offset=AbsoluteStatic(0x02) size=Bounded(0, 254) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
-struct adv_report size=10 mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical
+struct adv_report size=10..41 mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical
   adv_report.event_type                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   adv_report.address_type                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   adv_report.address                     offset=AbsoluteStatic(0x02) size=Fixed(6) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
@@ -21,7 +24,7 @@ struct adv_report size=10 mutate=Shifting address=Unstable atomic=NonAtomic cano
   adv_report.data                        offset=AbsoluteStatic(0x09) size=Bounded(0, 31) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   adv_report.rssi                        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
-struct le_advertising_report size=4 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical
+struct le_advertising_report size=4..10459 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical
   le_advertising_report.evt              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   le_advertising_report.plen             offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   le_advertising_report.subevent         offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord

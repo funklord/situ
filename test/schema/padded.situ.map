@@ -7,19 +7,22 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
 struct aligned_header size=8 repr=ValueConverted
   aligned_header.one                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   aligned_header.<pad>                   offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   aligned_header.word                    offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
-struct byte_run size=3 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+struct byte_run size=3..261 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   byte_run.n                             offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   byte_run.data                          offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   byte_run.<pad>                         offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
   byte_run.trailer                       offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
-struct pickle_string size=4 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+struct pickle_string size=4..65542 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   pickle_string.used                     offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   pickle_string.data                     offset=AbsoluteStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   pickle_string.<pad>                    offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

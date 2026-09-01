@@ -7,8 +7,11 @@
 #
 # Offsets are byte values, or byte:bit where a field does not start on
 # a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
 
-struct tcp_header size=20 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+struct tcp_header size=20.. mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
   tcp_header.summed                      offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(checksum)
   tcp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
   tcp_header.destination_port            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
