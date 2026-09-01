@@ -858,6 +858,30 @@ def test_a_bound_on_an_array_is_refused() -> None:
 		assert "no single value to bound" in text
 
 
+def test_a_bound_on_a_struct_typed_member_is_refused() -> None:
+	"""It has no value either, and this one was costing something.
+
+	`bound-unbounded` tells an author to put an upper bound on an unbounded
+	member. Written on a member whose type is a struct, `[max = N]` parsed,
+	resolved, moved no axis, and drew the same suggestion again on the next
+	run -- the `[size = N]` defect this rule already refuses, arriving under
+	a different name. The advisor now points inside the type instead.
+	"""
+	for name in ("min = 1", "max = 32", "must_eq = 2"):
+		text = rendered(BUFFER + "struct i { u8 r[remaining]; }\n"
+		                "struct b { i a [%s]; }\n" % name)
+		assert "no single value to bound" in text, name
+		assert "a bound inside the struct it names" in text, name
+
+
+def test_a_bound_on_an_enum_typed_member_is_accepted() -> None:
+	"""The control, and the reason the rule cannot key on "the type name is
+	not a width". An enum-typed member has exactly one value and `validate`
+	compares it; only a struct-typed one has none."""
+	parse_text(BUFFER + "enum k : u8 { a = 1, b = 2, }\n"
+	           "struct b { k a [min = 1, max = 2]; }\n", path="s.situ")
+
+
 def test_a_bound_on_a_text_number_is_accepted() -> None:
 	"""The control that matters, and the one the first version of the rule got
 	wrong. `decimal u32 magic[6]` is a six-character number with one value, so

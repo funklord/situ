@@ -16632,6 +16632,63 @@ was written and this entry claimed a gap that had been closed before the
 session started. **Absence where you looked is not absence** -- which is
 26.158's shape once more, in the one place that had just finished naming it.
 
+### 26.164 A bound that parsed, changed nothing, and asked for itself again
+
+`bound-unbounded` tells an author to put an upper bound on a member nothing
+bounds. Where the member's type is a struct, the advice was "give this member
+a bound the compiler can read". Taking it means writing `[max = 32]` on that
+member, and **it parsed, resolved, moved no axis, and drew the same suggestion
+again on the next run.**
+
+Both halves were wrong and each covered for the other. The compiler accepted
+an attribute nothing in any backend reads, which `check_attribute_places`
+already exists to refuse and says why in its own error text: "the generated
+code is byte-identical to the schema without it". The advisor handed out the
+sentence that leads there.
+
+**The rule already refuses this, for a different spelling.** Ten lines above
+the branch is a comment about `[size = N]` -- "in the parser's closed
+vocabulary and read by nothing, so a reader who took this advice got a schema
+that compiled, changed nothing, and produced the same suggestion again" --
+ending "26.36 is the same defect and was fixed there for one construct rather
+than as a rule". It was not made a rule that time either. This is the third
+recorded instance of that sentence being true, and the second in one session:
+26.163 is the same shape in the yield counts.
+
+The bound check refuses arrays and delimited runs already, on the ground that
+"a bound is a claim about *a value*". A struct-typed member has no value, and
+was the row nobody wrote. **The control is what makes the rule non-obvious**:
+an enum-typed member has exactly one value and `validate` compares it, so the
+check cannot key on "the type name is not a width" -- it has to ask the schema
+which names are structs. Both tests exist; the accepting one is the half that
+matters.
+
+Nothing in the tree relied on the gap: 37 schemas parsed, zero members carried
+`min`, `max` or `must_eq` on a struct type. The advisor now points at what
+actually bounds such a member, which is a bound on the region inside the type
+it names, and taking *that* clears both suggestions -- which is what makes the
+outer one a pointer rather than a second thing to do.
+
+**Found by taking the advice rather than by reading it.** The survey behind
+26.163 asked which of the eight rules measure their `yields` by building the
+schema they describe. Two did. Both defects sat in rules that did not, and
+neither was reachable from any assertion about a message.
+
+All eight measure now, and `test_every_catalog_rule_has_its_yield_measured`
+keeps it that way by reading the file's own "the suggestion, taken" marker
+rather than a list of rule names, since a list is a second place to forget.
+The remaining three were measured and are correct: moving a covered field out
+of the region uncovers exactly that field, regrouping two scattered regions
+clears the suggestion, and lifting a tag out of a TLV region gives it an
+absolute offset.
+
+**`tlv-to-positional` is the one yield that is not meant to clear its own
+suggestion**, and writing the test made the reason explicit: it offers to lift
+"the tags that are always present" and says "the rest can stay in the region",
+so the region survives on purpose. A test asserting the rule stops firing
+would have asserted the opposite of the advice -- which is how a measurement
+turns into the thing it was added to catch.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -372,6 +372,16 @@ def _find_unbounded_regions(resolved: ResolvedSchema) -> list[Suggestion]:
 			elif placement.delimiter is not None:
 				where = ("cap the scan with `max N` after the `until` clause, "
 				         "so a frame that never terminates stops somewhere")
+			elif placement.type_name in resolved.structs:
+				# The `else` below was the same defect the comment above
+				# describes, reached by a different route: told to "give this
+				# member a bound", a reader writes `[max = N]` on a
+				# struct-typed member, and it parsed, resolved, moved no axis
+				# and drew this very suggestion again. The compiler refuses
+				# that attribute now, so the advice has to name the thing that
+				# does bound it, which is inside the type.
+				where = (f"bound the region inside `{placement.type_name}`, "
+				         f"which is what leaves this member unbounded")
 			else:
 				where = "give this member a bound the compiler can read"
 

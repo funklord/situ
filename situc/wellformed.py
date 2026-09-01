@@ -1386,11 +1386,15 @@ STRUCT_ONLY_ATTRS = {
 }
 
 
-def _attribute_place(struct: ast.StructDecl,
-		member: ast.Member, attr: ast.Attr) -> str | None:
+def _attribute_place(struct: ast.StructDecl, member: ast.Member,
+		attr: ast.Attr, structs: frozenset[str] = frozenset()) -> str | None:
 	"""Where `attr` would have meant something, if not here.
 
 	`None` when the placement is fine or is not one this table has settled.
+
+	`structs` names the schema's struct types, which is the one question the
+	member alone cannot answer: a type name that is not a width could be an
+	enum, a varint or a struct, and only the last of those has no value.
 	"""
 	if attr.name in ACCESS_MODE_ATTRS:
 		if struct.register is not None and isinstance(member, ast.Field):
@@ -1566,6 +1570,19 @@ def _attribute_place(struct: ast.StructDecl,
 		if getattr(member, "until", None) is not None:
 			return ("a scalar field -- a delimited run's cap is spelled "
 			        "`max N` after `until`, which is syntax rather than this")
+
+		# A struct-typed member has no value either, and this is the case
+		# that was costing something rather than merely being untidy. The
+		# advisor tells an author to bound an unbounded member; `[max = N]`
+		# on one whose type is a struct parsed, resolved, changed no axis,
+		# and drew the same suggestion again on the next run -- which is the
+		# `[size = N]` defect this same rule already refuses, arriving by a
+		# different name. What bounds such a member is a bound on the region
+		# inside its type.
+		if getattr(getattr(member, "type_ref", None), "name", None) in structs:
+			return ("a scalar field -- a struct-typed member has no single "
+			        "value to bound, and what bounds its extent is a bound "
+			        "inside the struct it names")
 
 	return None
 
@@ -1752,10 +1769,12 @@ def _region_word(member: ast.Member) -> str:
 
 def check_attribute_places(schema: ast.Schema) -> None:
 	"""An attribute has to sit where something reads it (14.5, 17.0)."""
+	structs = frozenset(held.name for held in schema.structs())
+
 	for struct in schema.structs():
 		for member in _walk_members(struct.members):
 			for attr in getattr(member, "attrs", ()):
-				where = _attribute_place(struct, member, attr)
+				where = _attribute_place(struct, member, attr, structs)
 				if where is None:
 					continue
 

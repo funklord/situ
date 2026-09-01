@@ -13,6 +13,8 @@ fact arrives with the first.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from situc import advise, revision
@@ -653,3 +655,143 @@ struct s {
 	assert len(gained) == 2, gained			# `seq` follows `rest` either way
 	assert found.yields == ("a fixed extent, so 2 members after the variant "
 	                        "keep absolute offsets")
+
+
+def test_an_unbounded_struct_member_is_pointed_inside_its_type() -> None:
+	"""Advice that cannot be taken is worse than none, and this branch gave
+	some.
+
+	"give this member a bound the compiler can read" leads an author to write
+	`[max = N]` on a struct-typed member, which parsed, resolved, moved no
+	axis and drew this same suggestion again on the next run -- the `[size =
+	N]` defect the rule's own comment describes, arriving by another route.
+	The compiler refuses that attribute now, so the advice names the thing
+	that does bound it.
+	"""
+	body = """struct inner { u8 r[remaining]; }
+struct s { u16 a; inner b; }
+"""
+	found = {item.subject: item for item in by_rule(body, "bound-unbounded")}
+
+	assert set(found) == {"inner.r", "s.b"}
+	assert "bound the region inside `inner`" in found["s.b"].detail
+	assert "give this member a bound" not in found["s.b"].detail
+
+	# And bounding the region inside clears both, which is what makes the
+	# outer suggestion a pointer rather than a second thing to do.
+	bounded = body.replace("u8 r[remaining];", "u16 n [max = 32]; u8 r[n];")
+	assert not by_rule(bounded, "bound-unbounded")
+
+
+def test_taking_the_alignment_advice_aligns_the_member() -> None:
+	"""The rule's yield is prose -- "an aligned access" -- rather than a
+	count, so what it promises is an axis rather than a number. Measured the
+	same way: reorder so the reserved bytes precede the scalar, and the align
+	axis it was weakened on is the one that moves."""
+	before = "struct s { u8 flag; u32 counter; reserved u8[3]; u16 seq; }"
+	after  = "struct s { u8 flag; reserved u8[3]; u32 counter; u16 seq; }"
+
+	found = only(before, "fill-alignment-holes")
+	assert found.subject == "s.counter"
+
+	def align(body: str) -> str:
+		struct = build(body).structs["s"]
+		return next(str(entry.vector.get(Axis.ALIGN)) for entry in struct.entries
+		            if entry.placement.path == "s.counter")
+
+	assert align(before) == "Aligned(1)"
+	assert align(after)  == "Aligned(4)"
+	assert not by_rule(after, "fill-alignment-holes")
+
+
+def test_taking_the_uncover_advice_uncovers_the_field() -> None:
+	"""The yield is prose again -- "writes that invalidate no tag" -- and the
+	axis it means is `auth`. Move one covered field out of the region and it
+	is the only one that changes."""
+	before = """struct s {
+	authenticated { u32 seq; u32 other; }
+	tag u8[16];
+}
+"""
+	after = """struct s {
+	u32 seq;
+	authenticated { u32 other; }
+	tag u8[16];
+}
+"""
+	def auth(body: str) -> dict[str, str]:
+		return {entry.placement.path: str(entry.vector.get(Axis.AUTH))
+		        for struct in build(body).structs.values()
+		        for entry in struct.entries}
+
+	assert "2 covered field(s)" in only(before, "uncover-mutable-field").detail
+	assert auth(before)["s.seq"] == "Covered(tag)"
+	assert auth(after)["s.seq"] == "Uncovered"
+	assert auth(after)["s.other"] == "Covered(tag)"
+
+	# The tag still covers something, so the rule still fires -- over one
+	# field rather than two, which is what the advice was for.
+	assert "1 covered field(s)" in only(after, "uncover-mutable-field").detail
+
+
+def test_taking_the_grouping_advice_leaves_one_range() -> None:
+	"""`group-covered-regions` promises "one range to authenticate instead of
+	several". Move the member that splits them out from between."""
+	before = """struct s {
+	authenticated first { u32 a; }
+	u32 between;
+	authenticated second { u32 b; }
+	tag u8[16];
+}
+"""
+	after = """struct s {
+	u32 between;
+	authenticated first { u32 a; u32 b; }
+	tag u8[16];
+}
+"""
+	assert "2 regions" in only(before, "group-covered-regions").detail
+	assert not by_rule(after, "group-covered-regions")
+
+
+def test_the_tlv_trade_is_partial_and_says_so() -> None:
+	"""The one yield in the catalogue that is not meant to clear its own
+	suggestion: lifting the tags you always send leaves the region for the
+	rest, and the text says "the rest can stay in the region". A test that
+	asserted the rule stops firing would be asserting the opposite of what
+	the advice offers."""
+	before = "struct s { u16 hdr; tlv opts (tag_type = u8); }"
+	after  = "struct s { u16 hdr; u32 ttl; tlv opts (tag_type = u8); }"
+	found  = only(before, "tlv-to-positional")
+
+	assert "the rest can stay in the region" in found.yields
+
+	# The lifted field gets the address the region could not give it...
+	assert offsets(after)["s.ttl"] == "AbsoluteStatic"
+	# ...and the region is still worth reporting, because it is still there.
+	assert only(after, "tlv-to-positional").subject == "s.opts"
+
+
+def test_every_catalog_rule_has_its_yield_measured() -> None:
+	"""`yields` is the one claim a suggestion makes that no assertion about
+	its message can check: it is a prediction about a schema that does not
+	exist yet, so the only way to be wrong about it and stay green is to
+	never build that schema.
+
+	Two rules were, and both were wrong. `equalize-variant-arms` and
+	`varint-to-fixed` promised offsets to members that do not gain, and
+	`bound-unbounded` named an attribute the compiler accepted and ignored
+	(26.163, 26.164). Every one was found by taking the advice.
+
+	So a rule added to the catalog needs a test below the marker, not only
+	one that watches it fire. This reads the marker rather than a list,
+	because a list of rules with measured yields is a second place to forget.
+	"""
+	source = pathlib.Path(__file__).read_text()
+	taken  = source.split("# -- the suggestion, taken")[1]
+
+	missing = sorted(rule.name for rule in advise.CATALOG
+	                 if f'"{rule.name}"' not in taken)
+	assert not missing, (
+		f"{missing} fire in a test but nothing takes the advice and measures "
+		"what it bought")
