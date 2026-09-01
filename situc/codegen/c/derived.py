@@ -212,21 +212,56 @@ def _what_is_generated(decl: ast.CodecDecl) -> list[str]:
 	implementation for any input at all", when three codes generated then and
 	five do now. Naming them is the difference between a gap somebody can
 	close and a family somebody writes off.
+
+	**That fix reached one family of four.** `stuffing` named its codes and
+	`table`, `linear_block` and `permutation` went on saying only the old
+	sentence -- so a schema naming an unknown table code was told nothing
+	about the eight that work, which is the reading 0017 made about stuffing
+	and would have made again. The lesson was learned exactly and applied
+	once, which is the shape this session found twice more the same night:
+	in the workflow, where `pipefail` was added where `tee` swallowed a
+	status and not where `head` did.
+
+	`permutation` is the odd one and says something different, because what
+	it declines on is not an unknown name: a bare `span` describes the extent
+	of some permutation without saying which, which is enough for the
+	properties and not enough for the code.
 	"""
 	kernel = decl.kernel
 	assert kernel is not None
-	if kernel.family is not ast.KernelFamily.STUFFING:
+
+	if kernel.family is ast.KernelFamily.PERMUTATION:
+		return [
+			" *",
+			*_wrap("A permutation generates from `rows` and `columns`, which "
+			       "say which permutation it is. A bare `span` gives the "
+			       "extent and not the mapping, so the properties follow and "
+			       "the code cannot."),
+		]
+
+	catalogue = {
+		ast.KernelFamily.STUFFING: ("stuffing codes", DERIVED_STUFFING),
+		ast.KernelFamily.TABLE:    ("table codes", tuple(sorted(NAMED_CODES))),
+		ast.KernelFamily.LINEAR:   ("linear block codes", DERIVED_LINEAR),
+	}.get(kernel.family)
+	if catalogue is None:
 		return []
 
+	what, codes = catalogue
 	named = _named_code(decl)
-	known = ", ".join(f"`{code}`" for code in DERIVED_STUFFING)
-	wrapped = _wrap(f"The stuffing codes this build generates are {known}.")
-	return [
-		" *",
-		*wrapped,
-		f" * `{named}` is not one of them." if named is not None else
-		" * This kernel names no code, and a stuffing code is what selects one.",
-	]
+	known = ", ".join(f"`{code}`" for code in codes)
+	lines = [" *", *_wrap(f"The {what} this build generates are {known}.")]
+
+	if named is not None:
+		lines.extend(_wrap(f"`{named}` is not one of them."))
+	elif kernel.family is ast.KernelFamily.TABLE:
+		lines.extend(_wrap("This kernel names no code. A table is selected by "
+		                   "`code`, or given outright as one `symbol` per "
+		                   "input symbol."))
+	else:
+		lines.extend(_wrap(f"This kernel names no code, and a "
+		                   f"{what[:-6]} code is what selects one."))
+	return lines
 
 
 def _wrap(prose: str) -> list[str]:
@@ -429,9 +464,17 @@ def _reverse(value: int, width: int) -> int:
 def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""A symbol map, encoded and decoded a symbol at a time.
 
-	The map may be given outright, or named: `manchester` and `nrzi` are small
-	enough to describe in the schema, and a code with a 32-entry table is
-	better named than transcribed.
+	The map may be given outright, as one `symbol` per input symbol, or
+	named -- and a code with a 32-entry table is better named than
+	transcribed, because a table copied into a schema is a table nobody will
+	check. `NAMED_CODES` holds the eight this build knows.
+
+	This said "`manchester` and `nrzi` are small enough to describe in the
+	schema", and both halves aged badly. Bare `manchester` is *refused*,
+	because it names two codes that differ by an inversion (`AMBIGUOUS_CODES`);
+	and `nrzi` is not a table code at all -- it is differential, which no
+	stateless symbol map expresses, and 26.140 moved it to the shift register
+	family where it belongs.
 	"""
 	kernel = decl.kernel
 	assert kernel is not None

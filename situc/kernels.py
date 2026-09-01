@@ -117,7 +117,17 @@ def _known_arguments(decl: ast.CodecDecl, kernel: ast.Kernel) -> None:
 #: refuse `poly` and `seed`, which no derivation touches.
 KERNEL_ARGUMENTS: dict[ast.KernelFamily, frozenset[str]] = {
 	ast.KernelFamily.TABLE:       frozenset({
-		"input_bits", "output_bits", "pad", "code"}),
+		"input_bits", "output_bits", "pad", "code",
+		# `symbol` is repeated once per input symbol and gives the map
+		# outright rather than by name -- `_symbol_map` reads it as
+		# `arg.name == "symbol"`, which is a *form* the sweep that built
+		# this set did not look for. It searched `argument("x")`,
+		# `flag("x")` and the `_number`/`_positive` helpers, all of which
+		# take a literal name, and missed the one place a family filters
+		# `kernel.args` itself. Nothing caught the omission: no committed
+		# schema gives a map outright and no test did either, so an
+		# implemented and documented input form had no coverage at all.
+		"symbol"}),
 	ast.KernelFamily.POLYNOMIAL:  frozenset({
 		"width", "poly", "init", "xorout", "reflect",
 		# Reed-Solomon and BCH: `field` is what selects them.

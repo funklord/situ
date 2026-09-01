@@ -229,6 +229,32 @@ def test_a_kernel_argument_the_family_does_not_read_is_refused() -> None:
 	assert "`seed`" in rendered and "`taps`" in rendered
 
 
+def test_a_table_map_given_outright_generates() -> None:
+	"""`symbol = ...`, repeated once per input symbol, instead of `code = x`.
+
+	This form is implemented and documented -- `_symbol_map` reads it as
+	`arg.name == "symbol"` -- and until this test nothing exercised it: no
+	committed schema gives a map outright, and no test did either. That is
+	how closing the argument vocabulary refused it without anything going
+	red. The sweep below reads committed schemas, and the schemas do not use
+	it; the helper-call scan that built the vocabulary looks for
+	`argument("x")` and `flag("x")`, and this is the one place a family
+	filters `kernel.args` itself.
+
+	So the gap was a *form* rather than a name, and a vocabulary built by
+	scanning for names cannot see one. What covers it is a test that writes
+	the form.
+	"""
+	schema = parse_text("endian big;\n"
+		"codec c { kernel = table(input_bits = 1, output_bits = 2,\n"
+		"                         symbol = 0b01, symbol = 0b10); }\n"
+		"impl c derived;\nstruct t { u8 a; }\n")
+	emitted = derived.generate(schema, "u")
+
+	assert "situ_c_encode" in emitted, "a map given outright generated nothing"
+	assert "situ_c_encode_table[2] = {\n\t0x1u, 0x2u\n}" in emitted, emitted
+
+
 def test_the_argument_vocabulary_covers_every_kernel_in_the_tree() -> None:
 	"""The whitelist is a claim, so it is held to the schemas rather than to
 	the code it was read out of.
@@ -486,6 +512,55 @@ def test_an_ungenerated_family_says_so_rather_than_emitting_nothing() -> None:
 
 	assert "No implementation for `c`" in emitted
 	assert "properties are derived and correct" in emitted
+
+
+def test_a_declining_family_names_what_would_have_been_accepted() -> None:
+	"""26.137's rule, held to every family that can decline rather than one.
+
+	A refusal that does not say what *would* have worked gets read as
+	"nothing works": decision 0017 recorded that `stuffing` "returns no
+	implementation for any input at all" when three codes generated then and
+	six do now, because the comment said only "described but not yet
+	generated". The fix named the codes -- and named them for `stuffing`
+	alone, leaving `table` and `linear_block` saying the old sentence to
+	anyone who met them. That the test above checks the message exists and
+	not what it says is how the second half stayed uncovered.
+
+	The catalogues come from the generator rather than being listed here, so
+	a ninth table code has to appear in the message the day it is added.
+	"""
+	from situc.codegen.c.derived import (DERIVED_LINEAR, DERIVED_STUFFING,
+	                                     NAMED_CODES)
+
+	families = {
+		"table": ("kernel = table(input_bits = 1, output_bits = 2, "
+		          "code = wishful);", sorted(NAMED_CODES)),
+		"stuffing": ("kernel = stuffing(worst_case = 2, per = 1, "
+		             "code = wishful);", list(DERIVED_STUFFING)),
+		"linear_block": ("kernel = linear_block(n = 15, k = 11, "
+		                 "code = wishful);", list(DERIVED_LINEAR)),
+	}
+
+	for family, (kernel, catalogue) in families.items():
+		emitted = derived.generate(parse_text(
+			f"endian big;\ncodec c {{ {kernel} }}\n"
+			f"impl c derived;\nstruct s {{ u8 a; }}\n"), "unit")
+
+		assert "No implementation for `c`" in emitted, family
+		assert "`wishful` is not one of them" in emitted, family
+		assert catalogue, f"{family}: an empty catalogue names nothing"
+		for code in catalogue:
+			assert f"`{code}`" in emitted, (
+				f"{family}: the message does not name `{code}`, which it "
+				f"generates")
+
+	# `permutation` declines for a different reason -- a bare `span` is an
+	# extent without a mapping -- so it names the form rather than a code.
+	emitted = derived.generate(parse_text(
+		"endian big;\ncodec c { kernel = permutation(span = 8); }\n"
+		"impl c derived;\nstruct s { u8 a; }\n"), "unit")
+	assert "No implementation for `c`" in emitted
+	assert "`rows` and `columns`" in emitted
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")

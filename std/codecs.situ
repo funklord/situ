@@ -201,6 +201,13 @@ codec code_8b10b {
 
 // NRZI feeds back from its own output, so a corrupted bit damages the ones
 // after it and the encoder cannot be started from an arbitrary position.
+//
+// The signature is the same for both conventions, as `manchester`'s note
+// above says of its two: transition-on-one is HDLC's and transition-on-zero
+// is USB's, they differ by which bit moves the line, and no property here can
+// see that. A schema that needs the code generated says which
+// (`std/kernels.situ` carries both); one that only declares the signature
+// does not have to, because nothing is generated from it.
 codec nrzi {
 	length_preserving;
 	granularity = bit(1);

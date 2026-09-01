@@ -16313,6 +16313,75 @@ produce identical evidence, make them distinguishable and refuse when they
 are not -- and what this run adds is that the shape reaches the instruments
 as readily as the code, including the ones written to catch it.
 
+### 26.159 A form the vocabulary could not see, and a lesson that reached one family
+
+26.156 closed the kernel argument vocabulary per family. It refused a
+legitimate input form, and the way it got through is the finding.
+
+**A table map may be given outright**, as one `symbol` per input symbol,
+instead of by name:
+
+    kernel = table(input_bits = 1, output_bits = 2,
+                   symbol = 0b01, symbol = 0b10);
+
+`symbol` was not in the whitelist, so this became an error in a commit that
+had already been pushed.
+
+**The whitelist was built by scanning for names, and this is a form.** The
+sweep read `argument("x")`, `flag("x")`, `_number(decl, "x")` and
+`_positive(kernel, "x")` -- every one of which takes a literal name -- and
+`_symbol_map` is the single place a family filters `kernel.args` itself:
+`[arg.value for arg in kernel.args if arg.name == "symbol"]`. A scan for
+names cannot see that, and the guard built to hold the vocabulary to the
+schemas passed, because **no committed schema gives a map outright and no
+test did either.** An implemented, documented input form had no coverage at
+all, which is exactly why closing the vocabulary could break it in silence.
+There is a test for the form now; the sabotage that removes `symbol` again
+fails it.
+
+**The same reading found 26.137's rule applied to one family of four.** A
+refusal that does not say what would have been accepted reads as "nothing
+works" -- that is the lesson from decision 0017 recording `stuffing` as
+returning "no implementation for any input at all" when three codes
+generated then. The fix named the codes, for `stuffing`. `table` went on
+telling a reader nothing about its eight, and `linear_block` nothing about
+its one:
+
+    table         "a table kernel is described but not yet generated"
+    linear_block  "a linear_block kernel is described but not yet generated"
+    stuffing      "...are `cobs`, `hdlc`, `ppp_async`, `slip`, `smtp_dot`,
+                   `usb`. `wishful` is not one of them."
+
+All four name their catalogue now, read from the generator rather than
+listed, so a ninth table code appears in the message the day it is added.
+`permutation` says something different because it declines for a different
+reason: a bare `span` is an extent without a mapping, so it names `rows` and
+`columns` as the form that generates.
+
+**And the test that covered this checked the message existed, not what it
+said.** `test_an_ungenerated_family_says_so_rather_than_emitting_nothing`
+asserts "No implementation for `c`" and "properties are derived and
+correct", which both halves of the message have always satisfied -- so
+26.137's actual fix, the naming, was never covered. That is how it stayed at
+one family for as long as it did.
+
+**Two comments had aged past what they describe.** `_table`'s docstring
+offered "`manchester` and `nrzi`" as codes small enough to name in a schema:
+bare `manchester` is *refused* as ambiguous, and `nrzi` has not been a table
+code since 26.140 moved it to the shift registers. And `std/codecs.situ`'s
+hand-written `nrzi` signature lacked the note its `manchester` neighbour
+carries -- that the signature is the same for both conventions and a schema
+needing the code generated says which. Manchester needed that note because
+it had two conventions; NRZI acquired its second in 26.146, six entries ago,
+and nobody carried the sentence across.
+
+**This is the third time in one session** that a lesson was learned exactly,
+applied to the instance in front of somebody, and left in its neighbours:
+`pipefail` where `tee` swallowed a status and not where `head` did (26.158),
+the floor gate over shipped modules and not the suite (26.152), and this.
+The instance is what gets fixed because the instance is what hurt. Worth
+asking, when a fix is written: which is the *other* place this shape lives.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
