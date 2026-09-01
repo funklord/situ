@@ -13,6 +13,7 @@ from situc import wellformed
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import ATTRIBUTE_NAMES, parse_text
+from situc.resolve import resolve
 from situc.unparse import unparse
 
 
@@ -1291,3 +1292,52 @@ def test_an_unknown_region_argument_is_refused() -> None:
 	                "\ttag u8[16];\n}\n")
 	assert "`wibble` is not an argument a sealed region takes" in text
 	assert "`key = field`" in text
+
+
+# -- the file target (0047) -------------------------------------------------
+
+
+def test_an_unbounded_message_needs_append_on_a_file() -> None:
+	"""A message with no end, in a medium that has one.
+
+	The first struct is what a reader acquires, so its extent is the file's.
+	Unbounded is coherent about a stream and incoherent about a file nobody
+	is appending to: nothing would decide where it stops. `example/sqlite` is
+	the one of the seven file formats measured for 0047 with an unbounded
+	top-level extent, and it is exactly the format that grows.
+	"""
+	def built(source: str) -> None:
+		"""The extent is known to `solve`, so the check is in `resolve` beside
+		the other layout-dependent ones rather than in `wellformed`, which
+		reads the AST."""
+		schema = parse_text(source, path="s.situ")
+		resolve(schema, solve(schema))
+
+	with pytest.raises(SituError) as caught:
+		built("target file;\nendian big;\n"
+		      "struct s { u8 rest[remaining]; }\n")
+	text = caught.value.diagnostic.render()
+	assert "has no upper bound under `target file`" in text
+	assert "`target file append`" in text
+
+	# Both ways out, and the control: a buffer's extent is the caller's.
+	for source in ("target file append;\nendian big;\n"
+	               "struct s { u8 rest[remaining]; }\n",
+	               "target file;\nendian big;\n"
+	               "struct s { u16 n [max = 8]; u8 body[n]; }\n",
+	               "target buffer;\nendian big;\n"
+	               "struct s { u8 rest[remaining]; }\n"):
+		built(source)
+
+
+def test_a_register_still_needs_mmio_under_a_file() -> None:
+	"""The refusal that already existed covers the new target, because it is
+	keyed on `is not MMIO` rather than on `is BUFFER`."""
+	text = rendered("target file;\nendian little;\nbit_order lsb_first;\n"
+	                "register ctrl @ 0x00 {\n"
+	                "\twidth        = 32;\n"
+	                "\taccess_width = 32;\n"
+	                "\tbit enable [rw];\n"
+	                "\treserved u31;\n"
+	                "}\n")
+	assert "needs `target mmio`" in text

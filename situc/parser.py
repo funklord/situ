@@ -348,10 +348,25 @@ class Parser:
 			raise error(
 				f"unknown target `{token.text}`",
 				token.span,
-				label = "expected `buffer` or `mmio`",
+				label = "expected `buffer`, `mmio` or `file`",
 			)
+
+		append = False
+		if self.current.is_ident("append"):
+			flag = self.advance()
+			if kind is not ast.TargetKind.FILE:
+				raise error(
+					f"`append` means nothing under `target {kind.value}`",
+					flag.span,
+					label = "only a file grows",
+					notes = ["`append` makes the top-level extent growable and "
+					         "every address `Unstable`; a buffer's extent is "
+					         "the caller's and a register's is fixed by the bus"],
+				)
+			append = True
+
 		self.expect_symbol(";", "after the target directive")
-		return ast.TargetDirective(self.span_from(start), kind)
+		return ast.TargetDirective(self.span_from(start), kind, append)
 
 	def parse_endian(self) -> ast.EndianDirective:
 		start  = self.advance()

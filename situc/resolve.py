@@ -56,7 +56,10 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 	enums   = {decl.name: decl for decl in schema.enums()}
 	codecs  = {decl.name: decl for decl in schema.codecs()}
 	lenient = schema.strictness is ast.Strictness.LENIENT
+	target, append = _target_of(schema)
 	result  = ResolvedSchema(layout=layout)
+
+	_check_file_extent(schema, layout, target, append)
 
 	for name, struct_layout in layout.structs.items():
 		decl = structs[name]
@@ -66,7 +69,8 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 		_check_transform_tag_order(decl, struct_layout)
 
 		entries = [
-			apply(_context(placement, decl, structs, enums, codecs, lenient))
+			apply(_context(placement, decl, structs, enums, codecs, lenient,
+			               target, append))
 			for placement in struct_layout.placements
 		]
 		_meet_aggregates(entries, structs)
@@ -141,11 +145,58 @@ def _struct_vector(layout: StructLayout, entries: list[Resolved]) -> Vector:
 	return vector
 
 
+def _check_file_extent(schema: ast.Schema, layout: SchemaLayout,
+		target: ast.TargetKind, append: bool) -> None:
+	"""A message with no end, in a medium that has one.
+
+	The first struct is what a driver acquires, so its extent is the file's.
+	Unbounded is a coherent thing to say about a stream and an incoherent one
+	about a file that is not being appended to: nothing would ever decide
+	where it stops. `example/sqlite` is the one schema of the seven measured
+	for 0047 that has an unbounded top-level extent, and it is exactly the
+	format that grows.
+	"""
+	if target is not ast.TargetKind.FILE or append:
+		return
+
+	first = next((decl for decl in schema.structs()), None)
+	if first is None:
+		return
+
+	struct_layout = layout.structs.get(first.name)
+	if struct_layout is None or struct_layout.size_max_bits is not None:
+		return
+
+	raise error(
+		f"`struct {first.name}` has no upper bound under `target file`",
+		first.span,
+		label = "the file would have no end",
+		notes = ["the first struct is what a reader acquires, so its extent is "
+		         "the file's, and nothing here decides where it stops",
+		         "write `target file append` where the file grows, or bound "
+		         "the member that does not end (decision 0047)"],
+	)
+
+
+def _target_of(schema: ast.Schema) -> tuple[ast.TargetKind, bool]:
+	"""Where the bytes are worked on, and whether the file may grow.
+
+	`buffer` when the schema says nothing, which is what every schema written
+	before `target file` existed says.
+	"""
+	for decl in schema.decls:
+		if isinstance(decl, ast.TargetDirective):
+			return decl.kind, decl.append
+	return ast.TargetKind.BUFFER, False
+
+
 def _context(placement: Placement, decl: ast.StructDecl,
 		structs: dict[str, ast.StructDecl],
 		enums: dict[str, ast.EnumDecl],
 		codecs: dict[str, ast.CodecDecl],
-		lenient: bool) -> Context:
+		lenient: bool,
+		target: ast.TargetKind = ast.TargetKind.BUFFER,
+		append: bool = False) -> Context:
 	enum = enums.get(placement.type_name)
 
 	return Context(
@@ -159,6 +210,8 @@ def _context(placement: Placement, decl: ast.StructDecl,
 		                     and _has_attr(placement.attrs, "unknown")),
 		codec             = codecs.get(placement.codec or ""),
 		lenient           = lenient,
+		target            = target,
+		append            = append,
 	)
 
 

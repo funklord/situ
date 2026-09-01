@@ -743,6 +743,7 @@ class Decl(Node):
 class TargetKind(Enum):
 	BUFFER	= "buffer"
 	MMIO	= "mmio"
+	FILE	= "file"
 
 
 class Endian(Enum):
@@ -760,6 +761,11 @@ class BitOrder(Enum):
 class TargetDirective(Decl):
 	span: Span
 	kind: TargetKind
+	#: `target file append`. Written rather than implied, because it is not
+	#: true of files as such: it makes the top-level extent growable and turns
+	#: every address `Unstable`, since a resize invalidates every outstanding
+	#: pointer. Six of the seven file-format examples are not growable (0047).
+	append: bool = False
 
 
 @dataclass(frozen=True)

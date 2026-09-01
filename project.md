@@ -1880,6 +1880,13 @@ output can be read against this table directly.
 | `register-rmw-unsafe` | a partial-width field in a register whose reads are not free | computed from the construct |
 | `register-side-effect` | a register field whose access has a side effect | computed from the construct |
 
+**Files (0047)**
+
+| Rule | Construct | Effect |
+|---|---|---|
+| `file-durable-write` | a member of a schema worked on in a file | `effect := EffectOnWrite` |
+| `file-append` | a member of a file the schema may append to | `address := Unstable` |
+
 **Declared, not inferred**
 
 | Rule | Construct | Effect |
@@ -3380,6 +3387,32 @@ model applies.
 
 A schema may not mix `target buffer` and `target mmio` in one file. Cross-file
 `import` of type definitions is permitted; register declarations are not.
+
+**`target file` is the third, and it carries one assumption** (decision 0047):
+a store lands in the file, so `effect := EffectOnWrite` for every member. It
+is durable, another reader may see it, and it is therefore not a pure store to
+be repeated, reordered or elided. The assumption belongs to the medium and not
+to the member: whether there is a store at all is what `mutate` says, and a
+tag that nothing may write still reports the effect a write would have.
+
+`target file` also refuses what cannot live in a file. A `register` needs
+`target mmio`, which the existing refusal already covers because it is keyed
+on "not mmio" rather than on "buffer". And **an unbounded top-level extent
+requires `append`**: the first struct is what a reader acquires, so its extent
+is the file's, and a message with no end in a medium that has one is a schema
+nothing could decide where to stop reading.
+
+**`append` is written, not implied.** `target file append` makes the extent
+growable and sets `address := Unstable` throughout, because a resize may move
+the mapping and no pointer into it survives one. It is spelled because it is
+not true of files as such: of the seven file-format examples measured for
+0047, six are not growable and one -- `example/sqlite` -- is.
+
+Sparse-file support is deliberately not part of this. A hole reads as zeros
+cheaply and the first write into it allocates and may fail, which makes a
+write's cost and its fallibility depend on *where within* a member it happens,
+and no axis varies a property by position. That is a lattice question before
+it is a target one.
 
 ### 15.2 Registers
 
@@ -17135,6 +17168,48 @@ one committed schema. 9.8 names BMP's `pixel_offset`, TIFF's `ifd_offset` and
 DNS name compression as the three that wanted it; only `bmp` has it. The
 argument does not need all three to be committed -- its point is that they do
 not share a medium -- but a reader counting uses finds one.
+
+### 26.175 The `file` target, built
+
+Decision 0047, accepted and implemented. `target file` carries one assumption
+-- a store lands in the file, so `effect := EffectOnWrite` -- plus a legality
+gate, with `append` written rather than implied and sparse left out.
+
+**The one assumption earns its place because the measurement said so.**
+`effect` was `Pure` on all 130 members of the seven file-format examples and
+all 209 of the five wire ones; tree-wide the only 26 exceptions were the
+`mmio` register example. Outside a register, nothing in situ had ever had an
+effect, and durability could not be said at all.
+
+**Where the reasoning narrowed.** 0047 says "every writable member". The row
+fires for every member, because there is no predicate for "writable" at that
+point: `Immutable` is reached by four separate rows -- a derived field, a
+non-invertible codec, a tag, a read-only register -- and a row cannot see an
+axis another row is deciding. It does not need to. **Durability is a property
+of the medium, not of the member.** Whether there is a store at all is what
+`mutate` says, which is the separation 14.2 already makes between mutation
+being possible and its invalidating a tag. A tag nobody may write still
+reports what a write would do, and the test pins exactly that.
+
+**Two of the tree's own gates refused the change until it was documented**,
+which is what they are for. `test_the_spec_table_matches_the_rows` failed
+until both rows were in 11.3's normative table, and
+`test_reachable_rows_are_all_tested` failed until they were named in its
+tested set -- and the honest order is tests first, since adding a name to a
+list of what is tested is otherwise the same defect this session has spent its
+length finding.
+
+**Where the refusal lives.** The unbounded-extent check is in `resolve`, not
+`wellformed`: the extent is what `solve` computes, and `wellformed` reads the
+AST. It sits beside `_check_host_dependence` and the other layout-dependent
+checks. The register refusal needed no change at all -- it is keyed on "not
+mmio" rather than on "buffer", so it covered a target that did not exist when
+it was written.
+
+**Nothing in `example/` changed.** Whether the seven file formats should
+re-declare themselves is a separate question and 0047 says so: `bmp` describes
+the BMP format, not a particular BMP file, and the target says where the bytes
+are worked on rather than what they are.
 
 ## 27. Questions, and how they were settled
 

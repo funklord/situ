@@ -536,6 +536,9 @@ def test_reachable_rows_are_all_tested() -> None:
 		"versioned-member",
 		"trimmed-value",
 		"case-insensitive-token",
+		# Decision 0047, the `file` target.
+		"file-durable-write",
+		"file-append",
 	}
 	assert {row.rule.name for row in TABLE} == tested
 
@@ -1012,3 +1015,75 @@ def test_the_weaker_address_is_blamed_on_the_base() -> None:
 	named = rules_for(INDEXED_FROM_MESSAGE, "T.entries", Axis.ADDRESS)
 
 	assert "indexed-outside-the-region" in named
+
+
+# -- the file target (0047) -------------------------------------------------
+
+
+FILE_PREAMBLE   = "target file;\nendian big;\nbit_order msb_first;\n"
+APPEND_PREAMBLE = "target file append;\nendian big;\nbit_order msb_first;\n"
+BUFFER_PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
+
+ON_A_FILE = "struct s { u16 n [max = 8]; u8 body[n]; u32 seq; }\n"
+
+
+def test_a_store_to_a_file_is_not_a_pure_store() -> None:
+	"""The one assumption `target file` carries that cannot be said otherwise.
+
+	Measured before it was built: `effect` was `Pure` on all 130 members of
+	the seven file-format examples and all 209 of the five wire ones, and
+	tree-wide the only 26 exceptions were the `mmio` register example. Outside
+	a register nothing in situ had ever had an effect (0047).
+	"""
+	assert axis_of(ON_A_FILE, "s.seq", Axis.EFFECT, FILE_PREAMBLE) \
+		== Value("EffectOnWrite")
+	assert "file-durable-write" in rules_for(ON_A_FILE, "s.seq", Axis.EFFECT,
+	                                        FILE_PREAMBLE)
+
+	# The control, and the reason the row is keyed on the target rather than
+	# on anything about the member: the same member in a buffer is a pure
+	# store.
+	assert axis_of(ON_A_FILE, "s.seq", Axis.EFFECT, BUFFER_PREAMBLE) \
+		== Value("Pure")
+
+
+def test_the_medium_decides_durability_not_the_member() -> None:
+	"""0047 says "every writable member", and the row fires for every member.
+
+	`Immutable` is reached by four separate rows -- a derived field, a
+	non-invertible codec, a tag, a read-only register -- and a row cannot see
+	an axis another row is deciding. It does not need to: a store to a mapped
+	file outlives the process whatever the schema lets anyone store, and
+	whether there is a store at all is what `mutate` says. The two axes are
+	independent by design, which is the separation 14.2 already makes between
+	mutation being possible and its invalidating a tag.
+	"""
+	covered = ("struct s {\n"
+	           "\tauthenticated summed {\n"
+	           "\t\tu16 a;\n"
+	           "\t\tchecksum u8 sum[2] covers(summed) [self_as = 0];\n"
+	           "\t}\n"
+	           "}\n")
+	found = entries(covered, FILE_PREAMBLE)
+
+	# The tag is Immutable and still reports the medium's effect.
+	assert found["s.sum"].vector.get(Axis.MUTATE) == Value("Immutable")
+	assert found["s.sum"].vector.get(Axis.EFFECT) == Value("EffectOnWrite")
+
+
+def test_append_unsettles_every_address() -> None:
+	"""A resize may move the mapping, so no pointer into it survives one.
+
+	Written rather than implied: it flips 117 of the 130 addresses in the
+	measured file-format examples, and exactly one of the seven has an extent
+	that needs it.
+	"""
+	assert axis_of(ON_A_FILE, "s.n", Axis.ADDRESS, APPEND_PREAMBLE) \
+		== Value("Unstable")
+	assert "file-append" in rules_for(ON_A_FILE, "s.n", Axis.ADDRESS,
+	                                  APPEND_PREAMBLE)
+
+	# Without it the addresses are whatever the layout makes them, which for
+	# a member before the variable one is stable.
+	assert axis_of(ON_A_FILE, "s.n", Axis.ADDRESS, FILE_PREAMBLE) \
+		== Value("Stable")

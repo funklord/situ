@@ -27,11 +27,33 @@ def first_field(source: str) -> ast.Field:
 @pytest.mark.parametrize(("source", "kind"), [
 	("target buffer;", ast.TargetKind.BUFFER),
 	("target mmio;",   ast.TargetKind.MMIO),
+	("target file;",   ast.TargetKind.FILE),
 ])
 def test_target_directive(source: str, kind: ast.TargetKind) -> None:
 	decl = parse_text(source).decls[0]
 	assert isinstance(decl, ast.TargetDirective)
 	assert decl.kind is kind
+	assert decl.append is False
+
+
+def test_append_is_written_and_only_on_a_file() -> None:
+	"""It is not true of files as such -- six of the seven file-format
+	examples measured for 0047 are not growable -- so it is spelled, and it
+	is meaningless on the two targets that cannot grow."""
+	decl = parse_text("target file append;").decls[0]
+	assert isinstance(decl, ast.TargetDirective)
+	assert decl.kind is ast.TargetKind.FILE and decl.append is True
+
+	for kind in ("buffer", "mmio"):
+		with pytest.raises(SituError) as refused:
+			parse_text(f"target {kind} append;")
+		assert "means nothing under" in str(refused.value)
+
+
+def test_an_unknown_target_names_the_three_that_exist() -> None:
+	with pytest.raises(SituError) as refused:
+		parse_text("target disk;")
+	assert "`buffer`, `mmio` or `file`" in refused.value.diagnostic.render()
 
 
 @pytest.mark.parametrize(("source", "endian"), [

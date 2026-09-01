@@ -109,6 +109,9 @@ class Context:
 	codec: ast.CodecDecl | None = None
 	# The schema declared `strictness = lenient` (section 14.5).
 	lenient: bool = False
+	# Where the bytes are worked on, and whether the file may grow (0047).
+	target: ast.TargetKind = ast.TargetKind.BUFFER
+	append: bool = False
 
 
 def _align_value(placement: Placement) -> Value:
@@ -473,6 +476,26 @@ def _error_propagating(context: Context) -> bool:
 
 def _is_tlv(context: Context) -> bool:
 	return context.placement.kind == "tlv"
+
+
+def _is_on_a_file(context: Context) -> bool:
+	"""Every member, not only the writable ones.
+
+	0047 says "every writable member", and there is no predicate for that
+	here: `Immutable` is reached by four separate rows -- a derived field, a
+	non-invertible codec, a tag, a read-only register -- and a row cannot see
+	an axis another row is deciding. It does not need to. **Durability is a
+	property of the medium, not of the member**: a store to a mapped file
+	outlives the process whatever the schema lets you store. Whether there is
+	a store at all is what `mutate` says, and the two axes are independent by
+	design -- the same separation 14.2 makes between mutation being possible
+	and its invalidating a tag.
+	"""
+	return context.target is ast.TargetKind.FILE
+
+
+def _may_grow(context: Context) -> bool:
+	return context.append
 
 
 def _tlv_preserves_unknown(context: Context) -> bool:
@@ -1531,6 +1554,32 @@ TABLE: tuple[Row, ...] = (
 			remedy    = "",
 		),
 		applies = lambda context: _has_attr(context.placement.attrs, "secret"),
+	),
+	Row(
+		rule = Rule(
+			name      = "file-durable-write",
+			construct = "a member of a schema worked on in a file",
+			effects   = (Effect(Axis.EFFECT, Value("EffectOnWrite"),
+			                    "a store lands in the file: it outlives the "
+			                    "process and another reader may see it, so it "
+			                    "is not a pure store to be repeated, reordered "
+			                    "or elided"),),
+			remedy    = "`target buffer` where the bytes are the caller's "
+			            "memory and a store is a store",
+		),
+		applies = _is_on_a_file,
+	),
+	Row(
+		rule = Rule(
+			name      = "file-append",
+			construct = "a member of a file the schema may append to",
+			effects   = (Effect(Axis.ADDRESS, Value("Unstable"),
+			                    "growing the file may move the mapping, so no "
+			                    "pointer into it survives an append"),),
+			remedy    = "drop `append` where the extent is decided before the "
+			            "first write; the addresses come back",
+		),
+		applies = _may_grow,
 	),
 )
 

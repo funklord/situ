@@ -1,8 +1,9 @@
 # 0047: a `file` target, and which assumptions it may carry
 
-Status: proposed
+Status: accepted, and built
 Date: 2026-09-01
-Phase: unscheduled; raised by the copyright holder while reading `situ-edit`
+Phase: raised by the copyright holder while reading `situ-edit`;
+implemented the same day (26.175)
 
 ## Context
 
@@ -136,6 +137,31 @@ schema that states what the generated code does not enforce is worse than one
 that states nothing", and six of the seven examples are not growable. A
 shorthand may carry what is true of the medium and must not carry what is true
 of some of its instances.
+
+## What was built
+
+`TargetKind.FILE`, and `append` as a flag on the target directive rather than
+a directive of its own, so it sits beside the thing it modifies and is refused
+on the two targets that cannot grow.
+
+Two rows in section 11.3's table, which is normative and checked:
+`file-durable-write` and `file-append`. The suite refused both until they were
+listed there and named as tested, which is the table doing its job.
+
+The refusal for an unbounded top-level extent lives in `resolve` rather than
+`wellformed`, because the extent is what `solve` computes and `wellformed`
+reads the AST -- beside `_check_host_dependence` and the other
+layout-dependent checks.
+
+**One deviation from the decision above, and it is a narrowing of the
+reasoning rather than of the effect.** This record says `effect :=
+EffectOnWrite` on "every writable member". The row fires for every member,
+because there is no predicate for "writable" at that point: `Immutable` is
+reached by four separate rows and a row cannot see an axis another row is
+deciding. It does not need to. Durability is a property of the medium, and
+whether there is a store at all is what `mutate` says -- the same separation
+14.2 already makes between mutation being possible and its invalidating a
+tag. A tag nobody may write still reports what a write would do.
 
 ## Consequences
 
