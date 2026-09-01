@@ -229,9 +229,8 @@ udp_header  8 bytes
 
 **`situ-walk`** is the interpreter: a table walk over live bytes, which also
 serves as a fifth column in the differential check, answering the same
-questions as four compiled backends about the same hostile bytes. It has no
-manual page yet, which is a gap and is named here rather than left for
-somebody to notice.
+questions as four compiled backends about the same hostile bytes. `man situc`
+covers the compiler; this one is documented by `situ-walk` with no arguments.
 
 **`situ-walk-c`** is the same walk in C, for the case decision 0026 was
 argued from -- a device whose framing must change without a firmware rebuild,
@@ -245,18 +244,19 @@ fields, which sounds like every template-driven hex editor and is not one.
 description, see fields"; none of them carries **capability reasoning**, so
 none can grey out a setter that does not exist, say that the field you just
 looked at cannot be written in place, or show the blame chain for why
-(decision 0034). Read-only for now: writing a field that shifts the layout
-drags in the invalidation model, a covered field goes stale, and an invariant
-must be maintained rather than checked -- which is its own piece of work. The
-CLI can do everything the TUI can, deliberately, because an interactive
-frontend is hard to test and a scriptable one is not.
+(decision 0034). They read; they do not write. Writing a field that shifts
+the layout drags in the invalidation model, a covered field goes stale, and
+an invariant must be maintained rather than checked -- so a write path is a
+different program from a reader, and 0034 keeps them apart. The CLI can do
+everything the TUI can, deliberately, because an interactive frontend is hard
+to test and a scriptable one is not.
 
 ## How much of it you take
 
 A schema may describe more of a protocol than you want generated, so how much
 becomes code is a choice you make at the command line rather than in the
-schema. `situc build --layer` takes it, defaulting to `view`. **All six rungs
-are built**, in all four backends:
+schema. `situc build --layer` takes it, defaulting to `view`. Six rungs, each
+in all four backends:
 
 | `--layer` | what it emits | the new "yes" |
 |---|---|---|
@@ -267,9 +267,9 @@ are built**, in all four backends:
 | `converse` | match a reply to its request | may it hold messages between calls? |
 | `drive` | send, receive, retransmit, time out | may it own I/O? |
 
-The ladder was written down before the rungs existed, and that is the point:
-"should situ do X" stops being asked once per adopter and becomes "at which
-rung does X live" (`doc/decision/0032-the-layer-ladder.md`). A rung emits
+The ladder is what stops "should situ do X" being asked once per adopter: the
+question becomes "at which rung does X live", and it is answered once
+(`doc/decision/0032-the-layer-ladder.md`). A rung emits
 every file the rung below emits, byte-identical, plus new ones, so moving up
 leaves you no already-reviewed file to review again. The rung you pick is the
 invariant you get: `view` guarantees the allocation-free property above, and
@@ -1018,22 +1018,17 @@ walker/          the interpreter behind `situ-walk`, and `walker/c` behind
 editor/          the document model behind `situ-edit`, and its frontends
 ```
 
-## Status
+## Distribution and the packed image
 
-The phase plan in section 26 ran out some time ago; what came after it is
-recorded in 26.14 onward, in folds -- a batch of work, then what it found and
-what it left open. Every construct the language offers is reachable in all four
-backends, and 26.31, the list of where the frontier is, has no open gap on it.
-The latest fold is the place to look for what is open today; each entry there
-says why it is, and several say why they are deliberate rather than pending.
+Every construct the language offers is reachable in all four backends.
 
-There is no wheel and no PyPI release: `situc` runs from the tree or from a
-directory copy, which is the distribution the no-dependency policy is for.
-There is a version -- `VERSION` at the root, which `situc --version` and the
-Debian packaging both read, so the three cannot disagree -- and `make deb`
-builds `situc` and `libsitu-dev` packages with debhelper. Treat those as
-evaluation output rather than a release: nothing is signed, uploaded, or
-carries a stable ABI promise yet.
+`situc` runs from the tree or from a directory copy, which is the
+distribution the no-dependency policy is for: there is no wheel and no PyPI
+release, and vendoring is a `cp -r`. `VERSION` at the root is the one place
+the version is stated -- `situc --version` and the Debian packaging both read
+it, so the three cannot disagree -- and `make deb` builds `situc` and
+`libsitu-dev` with debhelper. The packages are unsigned and the C ABI is not
+promised stable.
 
 `situc pack` emits a packed layout image, for a device whose framing has to
 change without a firmware rebuild: ship a description of the new format, load
@@ -1054,9 +1049,9 @@ Beyond those, `project.md` is long and is meant to be. Useful entry points:
   part of the compiler exists to feed it or to report its results.
 - **Section 13**, codecs and the kernel families; **section 14**, the
   cryptographic model and the stage gate.
-- **Section 26.31**, where the frontier is: what is unfinished, re-derived from
-  generated output rather than remembered. It has been wrong four times, and
-  says so.
+- **Section 26.31**, the per-construct survey of what each backend does with
+  what: re-derived from generated output rather than remembered, because it
+  has been wrong four times and says so.
 - **Section 0**, on how the document is kept honest: seven claims in it are
   held to the code by tests that fail when they drift. Every one was added
   after finding drift, and each found more than expected.
