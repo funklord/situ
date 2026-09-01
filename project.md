@@ -16775,6 +16775,53 @@ holds the README's counts to the tree on the same ground; this is the same
 gate over the same document, for the part of it that is quoted rather than
 counted.
 
+### 26.167 The annotation said the new check was dead code
+
+`make typecheck` went red on five mypy errors, all in `tool/style_gate.py`
+and all from one declaration: `stack: list[list[int]]`, a per-brace record of
+ten positional fields, two of which hold `None` for "not learned yet". The
+comment beside it described three of the ten -- "one [is_switch, in_case,
+paren_depth] per open brace" -- and nothing held either the comment or the
+annotation to what was there.
+
+**Two of the five were the interesting ones.** mypy called the bodies of
+`if stack[-1][6] is None:` and `if stack[-1][8] is None:` unreachable, and
+under the declared type it was right: an `int` is never `None`, so those
+branches can never run. Those branches are where the gate *learns* a switch's
+label style and a class's access-specifier style -- the under-indentation
+check just added. **The annotation said the new feature was dead code**, the
+feature worked, and the two disagreed for eight commits because Python does
+not read the annotation and nothing else was reading it either.
+
+Widening the element type to `int | None` made it worse, not better: 16
+errors instead of 5, because a heterogeneous record addressed by position
+cannot be narrowed at a subscript. `sum(f[6] for f in frames if f[6])` is not
+narrowable, `level += stack[-1][8]` is not narrowable, and each use needs its
+own escape. The positional list was the defect and the annotation was only
+where it surfaced.
+
+So the fields are named: a `Frame` dataclass, whose two learned-later fields
+are `int | None` because that is what they are, and whose other eight say what
+they mean at each of the twenty-five places they are read.
+
+**Proved by differential rather than by review.** The old and new modules were
+run over every C and C++ file in eight trees at two tab widths -- 5,596 files,
+11,192 conversions -- comparing the rewritten text and all three side tables
+(`dual`, `short`, `shifts`). Zero mismatches. The differential was then
+sabotaged, by making `depth()` count the braces it is supposed to skip, and
+reported 87 mismatches in the first 400 files, so it is sensitive to exactly
+the kind of error a rename can introduce.
+
+The file's header names `~/.claude/tool/style_gate.py` as the source and says
+to fix drift the moment it is noticed, so the same change is there; the two
+differ only by the two-line provenance header, as before.
+
+The code landed in 4761d65, whose message describes a different fix to the
+same file. Two sessions were editing this tree, and an index is shared: the
+change was in the working tree when the other commit was made, so it went in
+under a subject that does not mention it. `git log --grep` for when the frame
+was named finds a commit about `convert_python`.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
