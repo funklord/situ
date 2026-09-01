@@ -18,7 +18,7 @@ from situc.diagnostics import Source, SituError
 from situc.dump import dump
 from situc.layout import solve
 from situc.resolve import resolve
-from situc.parser import parse
+from situc.parser import parse, parse_text
 from situc.unparse import unparse
 
 from every_schema import SCHEMAS as ALL_SCHEMAS
@@ -289,3 +289,111 @@ def test_every_example_the_readmes_name_exists() -> None:
 
 	missing = sorted(name for name in named if not (EXAMPLES / name).is_dir())
 	assert not missing, f"the READMEs name examples that do not exist: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# The README's schemas, which nobody was compiling
+#
+# This file's own opening argument applies to them: a schema nobody parses
+# stops being true the first time the language moves. Thirteen `situ` blocks
+# in the README were never read by anything, and two had gone stale in the
+# way documents do -- by staying right about an older tree.
+
+
+README = Path(__file__).resolve().parents[2] / "README.md"
+
+
+def readme_situ_blocks() -> list[tuple[int, list[str]]]:
+	"""Every fenced ```situ block, with the line it opens on."""
+	blocks: list[tuple[int, list[str]]] = []
+	held: list[str] | None = None
+	lang = ""
+	at = 0
+	for number, line in enumerate(README.read_text(encoding="ascii").splitlines(), 1):
+		if line.startswith("```"):
+			if held is None:
+				held, lang, at = [], line[3:].strip(), number
+			else:
+				if lang == "situ":
+					blocks.append((at, held))
+				held = None
+			continue
+		if held is not None:
+			held.append(line)
+	return blocks
+
+
+def without_comment(line: str) -> str:
+	return " ".join(line.split("//")[0].split())
+
+
+def test_a_readme_block_that_is_a_whole_schema_parses() -> None:
+	"""A block carrying a `target` declaration presents itself as a schema a
+	reader can paste, so it has to be one.
+
+	The blocks without it are fragments -- a few members, a variant's arms, a
+	`tlv` argument list -- shown at whatever level the sentence above them is
+	about, and there is no single wrapper that would make them parse. What
+	holds them to the language is the excerpt check below.
+	"""
+	whole = [(at, body) for at, body in readme_situ_blocks()
+	         if any(without_comment(line).startswith("target ") for line in body)]
+	assert whole, "the README no longer shows a complete schema"
+
+	for at, body in whole:
+		text = "\n".join(body)
+		try:
+			parse_text(text, path=f"README.md:{at}")
+		except SituError as refused:		# pragma: no cover - the failure path
+			raise AssertionError(
+				f"the README's schema at line {at} does not compile:\n{refused}"
+			) from None
+
+
+def test_a_readme_excerpt_is_in_the_file_it_names() -> None:
+	"""A block labelled with a schema's path has to be that schema.
+
+	"Abridged" licenses leaving lines out. It does not license putting
+	different ones in, and the README's opening example had drifted exactly
+	that way: it showed `u16 checksum;` and `require size(udp_header) == 8;`,
+	both of which `example/udp/udp.situ` carries a comment about having
+	*replaced* -- the checksum is described now, and a struct with a payload
+	has no single size. The example was right about the tree of some months
+	ago, which is the only way a document goes wrong without anybody editing
+	it.
+
+	A line holding `...` is an elision and is not looked for.
+	"""
+	labelled = 0
+	for at, body in readme_situ_blocks():
+		joined = "\n".join(body)
+		# Naming a schema inside the block is the claim; the marker says what
+		# kind of excerpt it is. A block that means to point at a file without
+		# quoting it says so in the prose around it, not in its own comments,
+		# so there is no exemption to get wrong.
+		cites  = re.search(r"//[^\n]*?((?:example|std)/[\w/]+\.situ)", joined)
+		named  = re.search(r"//\s*((?:example|std)/[\w/]+\.situ),\s*"
+		                   r"(?:abridged|verbatim)", joined)
+		assert cites is None or named is not None, (
+			f"README line {at} names {cites.group(1)} in the block, so it "
+			f"reads as an excerpt of it: say `verbatim` or `abridged`, or "
+			f"move the pointer into the prose")
+		if named is None:
+			continue
+
+		source = Path(__file__).resolve().parents[2] / named.group(1)
+		assert source.exists(), f"README line {at} names a schema that is gone"
+		labelled += 1
+
+		have = {without_comment(line) for line in
+		        source.read_text(encoding="ascii").splitlines()}
+		for line in body:
+			want = without_comment(line)
+			if not want or "..." in want:
+				continue
+			assert want in have, (
+				f"README line {at} says this is {named.group(1)} and it is "
+				f"not in that file:\n    {want}\n"
+				f"an excerpt may leave lines out; it may not have different ones")
+
+	assert labelled >= 5, f"only {labelled} labelled excerpts found"

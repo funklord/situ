@@ -38,7 +38,7 @@ vector supports.
 A schema is the format, not a description of a language's objects:
 
 ```situ
-// example/udp/udp.situ, abridged. RFC 768.
+// RFC 768's UDP header, simplified to four fields.
 target buffer;
 endian big;
 
@@ -54,7 +54,8 @@ require absolute_static(udp_header);
 require canonical(udp_header);
 ```
 
-`require` is checked at compile time and fails the build. What comes out is a
+The real `example/udp/udp.situ` describes the checksum too, and the region
+it covers. `require` is checked at compile time and fails the build. What comes out is a
 header of constant-offset accessors --
 
 ```c
@@ -389,7 +390,7 @@ A `variant` is one of several layouts chosen by a field already read, and it
 is where a format stops being a struct:
 
 ```situ
-// example/icmp/icmp.situ.
+// example/icmp/icmp.situ, verbatim.
 variant body switch (type) {
 	case icmp_type.echo_request:            icmp_echo_id  echo;
 	case icmp_type.echo_reply:              icmp_echo_id  reply;
@@ -422,7 +423,7 @@ tlv fields (
 	},
 	duplicate_tags = allowed,
 	known = { 1 : { name = user_id, wire = 0, type = pb_varint }, ... },
-)
+);
 ```
 
 `indexed (base = region)` is the other shape a struct cannot describe:
@@ -515,8 +516,12 @@ codec aes_gcm_128 {
 	invertible;
 	deterministic;
 }
+```
 
-impl aes_gcm_128 extern "my_gcm";   // yours, called as my_gcm_encode/_decode
+The signature is all situ ships. Binding it to an implementation is yours:
+
+```situ
+impl aes_gcm_128 extern "my_gcm";   // called as my_gcm_encode/_decode
 ```
 
 The map marks such a codec `trusted` for exactly that reason, and
@@ -646,7 +651,7 @@ refusal required. A gate nobody has watched fail is not evidence.
 Situ describes text formats as layouts, which is the part of them that is one:
 
 ```situ
-// example/http/http.situ, three of its structs.
+// example/http/http.situ, abridged to three of its structs.
 struct request_line {
 	u8  method[]   until " "     max 16   [encoding = ascii];
 	u8  target[]   until " "     max 8192;

@@ -16863,6 +16863,58 @@ where the others are lists and an omission there costs less.
 Five samples, five gates: `advise` and `situ-edit` compared whole,
 `map` and `doc` line for line, `explain` by containment.
 
+### 26.169 The document was right about a tree that no longer exists
+
+`test_examples` opens with the reason it exists: "a schema nobody parses stops
+being true the first time the language moves". The README holds thirteen
+`situ` blocks and **nothing read any of them.**
+
+**The opening example was the stale one, and it had gone stale by standing
+still.** Labelled "example/udp/udp.situ, abridged", it showed
+
+    u16  checksum;
+    require size(udp_header) == 8;
+
+and `example/udp/udp.situ` carries a comment about having replaced each. The
+checksum is a described `checksum u8 checksum[2] covers(summed)
+prefix(udp_pseudo_header) [self_as = 0]` now -- "where it used to be a plain
+`u16` this schema could say nothing about" -- and the size requirement went
+when the payload was written, because a struct with a payload has no single
+size, which is why the file requires `offset(udp_header.payload) == 8`
+instead. **Both README lines were true of the tree of some months ago**, which
+is the only way a document goes wrong with nobody editing it.
+
+**"Abridged" licenses leaving lines out; it does not license different ones.**
+That is the rule the check enforces, and it is the same one 26.168 arrived at
+for output samples from the other direction. Two more blocks were wrong in
+smaller ways: the `tlv` excerpt closed with `)` where a declaration ends `);`,
+and the codec block labelled "verbatim" carried an `impl` line that is
+deliberately *not* in `std/codecs.situ` -- the prose two paragraphs down says
+the file "deliberately binds none of them". That one was right and the label
+was wrong, so the `impl` moved to a block of its own.
+
+Two checks, and the split between them is what the blocks are:
+
+- **A block declaring a `target` is a whole schema** a reader can paste, so it
+  has to parse. The opening example's virtue is exactly that it compiles, and
+  keeping it required admitting it is a simplification rather than an excerpt.
+- **A block naming a schema in its own comments is an excerpt**, and every
+  line of it has to be in that file. A line holding `...` is an elision and is
+  not looked for.
+
+The rest are fragments -- a few members, a variant's arms, a `tlv` argument
+list -- shown at whatever level the sentence above them is about, and there is
+no wrapper that makes them parse. Four wrappers were tried; each fragment
+needs its own context, and a context written here is one more copy to drift.
+
+**The claim is in the block, and so the marker has to be.** Saying "the real
+one is example/udp/udp.situ" *inside* a block makes it read as an excerpt of
+that file, so the pointer moved into the prose and the rule became
+exceptionless: name a schema in a block and you are quoting it, so say
+`verbatim` or `abridged`. Two blocks that named a file with no marker were
+being read by nothing; they say which they are now, and the check refuses a
+block that names one without saying.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
