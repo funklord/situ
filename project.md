@@ -17536,6 +17536,74 @@ constant offset it declines and says so, which is the answer `_key_read`
 already gives for a conversation key and for the same reason: a byte range
 that moves is not one to read from.
 
+### 26.184 A packed expression reads a nested field at the wrong base
+
+**Open. This needs a decision before it is fixed, and the fix is a format
+question.** Recorded with the evidence rather than repaired, because the
+repair is either a change to the image format or a reconstruction in the
+walker of something the packer knew and discarded.
+
+**What is wrong.** A packed expression program references a field with
+`FIELD <placement index>`, and a placement's offset is *within its own
+struct*. Where the expression names a field of a **nested** struct, the
+walker therefore reads it at that struct's own offset rather than at the
+offset the nested struct sits at in the frame being walked. It is right
+whenever the nested struct is at offset 0, and wrong by the nesting offset
+otherwise.
+
+Two committed examples are affected, and both were proven by putting a
+distinct value at each candidate offset and seeing which one the program
+returns:
+
+- **`example/bmp`.** `bitmap_file.pixels` is sized by `info.image_size`.
+  `bitmap_info_header.image_size` is at 20 in its own struct; `bitmap_file.info`
+  sits at 14, so the field is at 34. The program reads **20**. Writing 999 at
+  offset 20 makes the size program answer 999; writing 77 at the real
+  `image_size` changes nothing.
+- **`example/packet`, which is the serious one.** `packet.sealed.body` -- the
+  interior of a **sealed** region -- takes its extent from `hdr.length`.
+  `header.length` is at 2 in its own struct; `packet.hdr` sits at 4, so the
+  field is at 6. The program reads **2**.
+
+**The compiled backends are correct.** The generated C reads the same extent
+at `view.base + 6u`, from the resolved schema, where the nested path
+`packet.hdr.length` exists and carries offset 6. So the schema, the layout and
+four backends agree, and the image and the walker are the two that do not --
+which is the same shape as 26.183 one layer down, and this time the wrong
+answer is an extent rather than a display.
+
+**Why nothing caught it.** The README calls `situ-walk` "a fifth column in the
+differential check, answering the same questions as four compiled backends
+about the same hostile bytes", and that differential exists. It did not catch
+this, which is the part worth understanding before choosing a fix: a
+differential over messages where the two candidate offsets happen to hold the
+same bytes cannot see a base error. Both of these read a *length* out of a
+header, and a test message that sets one length usually leaves the other
+zero -- so the wrong read returns 0 and the walk simply reports a short
+member, which looks like a message that is short.
+
+**Two ways out, and they are not equivalent.**
+
+1. **The packer emits what it knows.** The nested path exists in the resolved
+   schema with the right offset and is dropped on the way into the image,
+   which carries placements per *struct type* rather than per containment.
+   Making the image carry the nested placement, or giving `FIELD` a base, is
+   a `FORMAT_VERSION` change and is 0026's to decide. This is the correct
+   fix: the packer has the answer and currently discards it.
+2. **The walker reconstructs the base.** Walking `packet` and meeting a
+   reference owned by `header`, it can look for a member of the current
+   struct whose type is `header`, and add that member's offset. No format
+   change, and it works for both cases above. **It is ambiguous where a
+   struct holds two members of the same type** -- `ipv4_header` has `source`
+   and `destination`, both `ipv4_address`; `ntp_packet` has four
+   `timestamp`s -- and there the walker would have to refuse rather than
+   pick. No committed program references those, so the ambiguity is
+   currently theoretical, which is a poor reason to build on it.
+
+The second is cheaper and reconstructs downstream what the first has upstream,
+which is the direction this project's own doctrine argues against: ask the
+artifact, not a fresh measurement of where it came from.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
