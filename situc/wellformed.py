@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import difflib
+
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
@@ -59,6 +61,7 @@ def check(schema: ast.Schema) -> None:
 	check_tag_prefixes(schema)
 	check_coded_coverage(schema)
 	check_attribute_places(schema)
+	check_region_arguments(schema)
 	check_encoding_element_width(schema)
 	check_nonce_references(schema)
 	check_codec_sizes(schema)
@@ -1657,6 +1660,96 @@ def check_encoding_element_width(schema: ast.Schema) -> None:
 			)
 
 
+#: What each region-shaped construct reads from its argument list.
+#:
+#: Taken from the readers rather than from the grammar, and from *all* the
+#: readers: `.argument("x")` calls, the parser's structural dispatch, and the
+#: predicate forms -- `any(arg.name == "ordering")` in `parse_tlv`, and
+#: `_region_argument` in `layout`, which `coded` shares with `sealed` and
+#: which is why `coded` takes a nonce at all. A vocabulary built by grepping
+#: for one of those forms misses the others; that mistake was made once
+#: already, on a table kernel's `symbol` (26.159), and is the reason this
+#: comment lists where each name came from.
+#:
+#: `ordering` and `length_type` are read and no committed schema writes
+#: either, which is the same shape `symbol` was in. They stay because the
+#: code reads them: a vocabulary narrower than the readers refuses valid
+#: input, which is the failure this table exists to avoid rather than cause.
+#: Each entry is the names, and a sentence saying what shape they take --
+#: because a list of bare names is a worse message than the one this
+#: generalised. `sealed` said "`nonce = field` and `key = field`", which tells
+#: a reader the argument names a field rather than carrying a value, and
+#: replacing that with "reads `nonce`, `key`" would have been a generalisation
+#: that lost something. Its own test caught the loss.
+REGION_ARGUMENTS: dict[type, tuple[tuple[str, ...], str]] = {
+	ast.Sealed:  (("nonce", "key"),
+	              "a sealed region takes `nonce = field` and `key = field` "
+	              "(0040)"),
+	ast.Coded:   (("nonce", "key"),
+	              "a coded region takes `nonce = field` and `key = field`, "
+	              "which the layout reads through the same helper `sealed` "
+	              "uses"),
+	ast.Indexed: (("base", "offset_type", "count"),
+	              "an indexed region takes `base = region | message | member` "
+	              "(0024), `offset_type = <scalar>` and `count = <expr>`"),
+	ast.Tlv:     (("tag_type", "tag_decode", "tag_identity", "value_size",
+	               "known", "unknown", "duplicate_tags", "ordering",
+	               "length_type"),
+	              "a tlv region takes `tag_type`, `tag_decode`, "
+	              "`tag_identity`, `value_size`, `known`, `unknown`, "
+	              "`duplicate_tags`, `ordering` and `length_type` (9.5)"),
+}
+
+
+def check_region_arguments(schema: ast.Schema) -> None:
+	"""An argument a region does not read is refused, for every region kind.
+
+	`sealed` refused one and its three neighbours did not, in this file, for
+	the same stated reason: "anything else would state what the generated
+	code does not do". What that cost is sharpest on `indexed`, where
+	`_index_base` scans the list for `base` and falls back to
+	`IndexBase.REGION` when it does not find one -- so `basse = page_type`
+	measured every offset in the table from the region rather than from the
+	named member, and three separate readers each stepped past it. The
+	attribute checker could not see it either: it walks `member.attrs`, and
+	a region keeps its arguments in `.args`.
+
+	`_index_base`'s own docstring records that this argument has already been
+	ignored once -- "section 9.3 has written `base = table_start` since before
+	there was a parser for it, and nothing read the argument at all". The fix
+	then taught it to read `base` and left every other name unread.
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			entry = REGION_ARGUMENTS.get(type(member))
+			if entry is None:
+				continue
+			known, shape = entry
+
+			for arg in getattr(member, "args", ()):
+				if arg.name in known:
+					continue
+
+				near  = difflib.get_close_matches(arg.name, known, n = 1)
+				notes = [f"did you mean `{near[0]}`?"] if near else []
+				notes.append(shape)
+				notes.append("anything else would state what the generated "
+				             "code does not do")
+				raise error(
+					f"`{arg.name}` is not an argument "
+					f"{_region_word(member)} region takes",
+					arg.span,
+					label = "read by nothing",
+					notes = notes,
+				)
+
+
+def _region_word(member: ast.Member) -> str:
+	"""What a schema calls this region, with its article, for the message."""
+	return {ast.Sealed: "a sealed", ast.Coded: "a coded",
+	        ast.Indexed: "an indexed", ast.Tlv: "a tlv"}[type(member)]
+
+
 def check_attribute_places(schema: ast.Schema) -> None:
 	"""An attribute has to sit where something reads it (14.5, 17.0)."""
 	for struct in schema.structs():
@@ -2276,27 +2369,18 @@ def check_nonce_references(schema: ast.Schema) -> None:
 	distinctness of key is not a structural fact (0040's context has the
 	full argument).
 
-	The argument vocabulary is checked here too. `sealed(ae, wibble = x)`
-	was accepted with the argument read by nothing -- the same silence
-	26.117 closed for attributes, one construct over.
+	The argument vocabulary was checked here and only here. `sealed(ae,
+	wibble = x)` was accepted with the argument read by nothing -- the same
+	silence 26.117 closed for attributes, one construct over -- and the fix
+	covered `sealed` while `coded`, `indexed` and `tlv` went on accepting
+	anything. `check_region_arguments` holds all four now; this function
+	keeps the parts that are about a nonce.
 	"""
 	for struct in schema.structs():
 		fed: dict[str, ast.Member] = {}
 		for region in auth_regions(struct.members):
 			if not isinstance(region, ast.Sealed):
 				continue
-
-			for arg in region.args:
-				if arg.name not in ("nonce", "key"):
-					raise error(
-						f"`{arg.name}` is not an argument a sealed region "
-						"takes",
-						arg.span,
-						label = "read by nothing",
-						notes = ["a sealed region takes `nonce = field` and "
-						         "`key = field` (0040); anything else would "
-						         "state what the generated code does not do"],
-					)
 
 			_check_key_selector(struct, region)
 

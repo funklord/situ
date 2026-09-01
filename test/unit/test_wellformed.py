@@ -1136,6 +1136,63 @@ def test_a_key_selector_must_carry_a_value() -> None:
 	assert "no value to select by" in text
 
 
+def test_every_region_kind_refuses_an_argument_it_does_not_read() -> None:
+	"""`sealed` refused one and its three neighbours did not, in this file.
+
+	The rule and its reason were written for `sealed` -- "anything else would
+	state what the generated code does not do" -- and `coded`, `indexed` and
+	`tlv` went on accepting anything. What that cost is sharpest on
+	`indexed`: `_index_base` scans the list for `base` and falls back to
+	`IndexBase.REGION` when it does not find one, so `basse = page_type`
+	measured every offset in the table from the region rather than from the
+	named member, silently. Three readers stepped past it, and the attribute
+	checker could not see it at all -- it walks `member.attrs`, and a region
+	keeps its arguments in `.args`.
+
+	Each is asked for the near miss as well as the refusal, because a message
+	listing nine valid names without pointing at the one you meant makes the
+	reader do the diff.
+	"""
+	cases = [
+		("an indexed", "base",
+		 "endian big;\nstruct s { u8 hdr[4]; "
+		 "indexed (basse = hdr) { u8 a; } }\n", "basse"),
+		("a tlv", "duplicate_tags",
+		 "endian big;\nstruct s { "
+		 "tlv t (tag_type = u8, duplicat_tags = allowed); }\n",
+		 "duplicat_tags"),
+		("a coded", "nonce",
+		 "endian big;\ncodec c { length_preserving; }\n"
+		 "struct s { coded b(c, noncee = 1) { u8 x[4]; } }\n", "noncee"),
+	]
+
+	for article, meant, source, written in cases:
+		text = rendered(source)
+		assert f"`{written}` is not an argument {article} region takes" in text, text
+		assert f"did you mean `{meant}`?" in text, text
+		assert "state what the generated code does not do" in text, text
+
+
+def test_a_region_argument_that_is_read_still_parses() -> None:
+	"""The other half, and the one that catches a vocabulary built too narrow.
+
+	Closing the kernel argument vocabulary refused `symbol` -- a documented,
+	implemented form that no schema and no test exercised (26.159) -- so each
+	name in `REGION_ARGUMENTS` needs something that writes it. `coded` taking
+	a nonce is the one that would have been lost here: the wellformed check
+	only ever mentioned `sealed`, and it is `layout._region_argument`, shared
+	between the two, that reads it.
+	"""
+	from situc.parser import parse_text
+
+	parse_text("endian big;\nstruct s { u8 hdr[4]; "
+	           "indexed (base = hdr) { u8 a; } }\n")
+	parse_text("endian big;\n"
+	           "codec c { length_preserving; seekable = linear; "
+	           "granularity = byte; }\n"
+	           "struct s { u8 iv[8]; coded b(c, nonce = iv) { u8 x[4]; } }\n")
+
+
 def test_an_unknown_region_argument_is_refused() -> None:
 	"""`sealed(ae, wibble = x)` was accepted with the argument read by
 	nothing -- the same silence 26.117 closed for attributes, one construct

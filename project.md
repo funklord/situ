@@ -16382,6 +16382,65 @@ the floor gate over shipped modules and not the suite (26.152), and this.
 The instance is what gets fixed because the instance is what hurt. Worth
 asking, when a fix is written: which is the *other* place this shape lives.
 
+### 26.160 One rule, four constructs, and it was written on one
+
+`wellformed.py` refuses an argument a *sealed* region does not read, and
+says why: "anything else would state what the generated code does not do".
+Its three neighbours -- `coded`, `indexed` and `tlv` -- accepted anything.
+Measured, before:
+
+    sealed   noncee                  refused
+    coded    bogus                   accepted
+    indexed  basse, offset_typ       accepted
+    tlv      duplicat_tags, wishful  accepted
+
+**`indexed` is where it costs.** `_index_base` scans the argument list for
+`base` and returns `IndexBase.REGION` when it does not find one, so
+`basse = page_type` measures every offset in the table from the region
+rather than from the named member -- a parser reading entirely the wrong
+bytes, one transposed character apart. Three readers each step past it:
+`_index_base` skips anything not named `base`, the layout reads
+`offset_type` and `count` by name and ignores the rest, and
+`check_attribute_places` never sees them at all, because it walks
+`member.attrs` and a region keeps its arguments in `.args`.
+
+`_index_base`'s own docstring records that this argument has been ignored
+before: "section 9.3 has written `base = table_start` since before there was
+a parser for it, and nothing read the argument at all". That fix taught it to
+read `base`, and left every other name unread.
+
+**`check_region_arguments` is table-driven over all four**, which is the
+generalisation the fourth copy would not have been.
+
+**Building the table was the work, because of what happened an hour
+earlier.** 26.159 records a vocabulary built by scanning for `argument("x")`
+that refused `symbol`, a form read as `arg.name == "symbol"`. So this one
+was assembled from every reader shape: the `.argument("x")` calls, the
+parser's structural dispatch for `tag_decode`, `value_size` and `known`, the
+helper lookups `_tlv_policy` and `_tlv_identity`, and the predicate forms --
+`any(arg.name == "ordering")` in `parse_tlv`, and `layout._region_argument`,
+**which is how `coded` turned out to take a nonce at all.** The wellformed
+check named only `sealed`; the layout helper is shared, and
+`coded body(ctr, nonce = iv)` solves with `sealed_nonce = iv` recorded.
+Refusing it would have been 26.159 repeated in the same session.
+
+Two of the nine tlv names, `ordering` and `length_type`, are read by code and
+written by no schema -- the shape `symbol` was in. They stay: a vocabulary
+narrower than its readers refuses valid input, which is the failure this
+table exists to prevent rather than cause.
+
+**The old test caught a loss in the generalisation, which is what old tests
+are for.** `sealed`'s message said "`nonce = field` and `key = field`",
+telling a reader the argument names a field rather than carrying a value.
+Replacing it with "reads `nonce`, `key`" dropped that, and
+`test_an_unknown_region_argument_is_refused` failed on the missing phrase.
+Each construct carries its own sentence now rather than a list of bare names.
+
+**Three sabotages, each watched going red**: the check not called; `coded`
+losing `nonce`, caught by the test that writes the working form rather than
+by any refusal case; and `indexed` losing `offset_type`, caught by
+`example/sqlite`, which is the committed schema that writes it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
