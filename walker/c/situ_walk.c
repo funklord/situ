@@ -2241,7 +2241,7 @@ situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
 		case 0x17u: answer = left ^ right; break;
 		case 0x18u:
 			answer = (right >= 0 && right < 64) ? (int64_t)
-				((uint64_t)left << right) : 0;
+			    ((uint64_t)left << right) : 0;
 			break;
 		case 0x19u:
 			answer = (right >= 0 && right < 64) ? (left >> right) : 0;
