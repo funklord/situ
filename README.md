@@ -160,13 +160,13 @@ make                                    # build the C runtime
 "what should I change", ranked by what it buys and priced by what it costs:
 
 ```
-6 suggestion(s), highest yield first.
+6 suggestion(s), highest-yield class first.
 
 request_head.start: move this variable-length member after the fixed ones
-    its extent is not fixed, so 1 member behind it are Dynamic: `fields`
-    cost: nothing (reordering moves no bytes, and every deployed peer reads
-    the old order)
-    yields: 1 member return to AbsoluteStatic, and their accessors to base + K
+    its extent is not fixed, so 1 member behind it is Dynamic: `fields`
+    cost: nothing (no bytes move, but a peer already speaking this format
+    reads the old order)
+    yields: 1 member returns to AbsoluteStatic, and its accessor to base + K
 ```
 
 `situc` needs Python 3.11 or later and nothing else -- no third-party packages,

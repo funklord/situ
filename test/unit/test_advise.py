@@ -190,13 +190,38 @@ def test_every_suggestion_prints_the_basis_it_was_costed_on() -> None:
 		assert f"({item.cost.basis})" in item.cost.render()
 
 
-def test_counts_in_a_suggestion_are_spelled_with_a_plural() -> None:
-	"""The advisor is prose a person reads before editing a schema."""
-	one = only("""struct s { u8 n; u8 body[n]; u16 tail; }""",
-	           "move-dynamic-to-tail")
+def test_counts_in_a_suggestion_agree_with_the_verb_beside_them() -> None:
+	"""The advisor is prose a person reads before editing a schema.
 
-	assert "1 member behind it" in one.detail
-	assert one.yields.startswith("1 member return")
+	`_count` spelled the noun and every verb beside it was written once, in
+	the plural, so a single member read "1 member behind it are Dynamic" and
+	"1 member return to AbsoluteStatic, and their accessors". One member
+	behind a dynamic one is the common case, not the corner.
+
+	The test that covered this asserted `yields.startswith("1 member
+	return")`, which a corrected "returns" satisfies just as well: a prefix
+	cannot see the end of the word it is checking, so it pinned the broken
+	spelling and would have passed the fix without noticing either.
+	"""
+	one = only("struct s { u8 n; u8 body[n]; u16 tail; }", "move-dynamic-to-tail")
+	assert "1 member behind it is Dynamic" in one.detail
+	assert one.yields == ("1 member returns to AbsoluteStatic, and its "
+	                      "accessor to base + K")
+
+	two = only("struct s { u8 n; u8 body[n]; u16 tail; u16 more; }",
+	           "move-dynamic-to-tail")
+	assert "2 members behind it are Dynamic" in two.detail
+	assert two.yields == ("2 members return to AbsoluteStatic, and their "
+	                      "accessors to base + K")
+
+	# The other three sentences that carry a count.
+	varint = ("varint_type v { encoding = leb128; max_bits = 16; minimal; }\n"
+	          "struct s { v n; u32 seq; }\n")
+	assert "1 member after the varint keeps absolute offsets" in \
+		only(varint, "varint-to-fixed").yields
+	assert "1 covered field is writable in place" in \
+		only("struct s { authenticated { u32 seq; } tag u8[16]; }",
+		     "uncover-mutable-field").detail
 
 	assert advise._bytes(1) == "1 byte"
 	assert advise._bytes(-1) == "1 byte saved"
@@ -298,7 +323,7 @@ def test_covered_mutable_fields_are_one_suggestion_with_a_price() -> None:
 	""", "uncover-mutable-field")
 
 	assert found.subject == "s.tag"
-	assert "2 covered field(s)" in found.detail
+	assert "2 covered fields are writable" in found.detail
 	assert "recomputation over 8 bytes" in found.detail
 
 
@@ -728,14 +753,14 @@ def test_taking_the_uncover_advice_uncovers_the_field() -> None:
 		        for struct in build(body).structs.values()
 		        for entry in struct.entries}
 
-	assert "2 covered field(s)" in only(before, "uncover-mutable-field").detail
+	assert "2 covered fields are writable" in only(before, "uncover-mutable-field").detail
 	assert auth(before)["s.seq"] == "Covered(tag)"
 	assert auth(after)["s.seq"] == "Uncovered"
 	assert auth(after)["s.other"] == "Covered(tag)"
 
 	# The tag still covers something, so the rule still fires -- over one
 	# field rather than two, which is what the advice was for.
-	assert "1 covered field(s)" in only(after, "uncover-mutable-field").detail
+	assert "1 covered field is writable" in only(after, "uncover-mutable-field").detail
 
 
 def test_taking_the_grouping_advice_leaves_one_range() -> None:
@@ -849,3 +874,45 @@ struct large { u8 y[10]; }
 		assert found.cost.worst == paid, (
 			f"{rule} prices its worst case at {found.cost.worst} byte(s); the "
 			f"smallest frame pays {paid}")
+
+
+def test_the_heading_names_the_class_because_the_order_is_not_by_yield() -> None:
+	"""`rank` is a fixed position in the catalog, so every instance of a class
+	outranks every instance of the one below it however little it recovers.
+	The heading said "highest yield first", which is a claim about the whole
+	list that the sort does not make.
+
+	Both readings of "highest yield" fail on the catalog's own order, and this
+	pins the one that is measurable: a suggestion further down the list
+	recovering strictly more than one above it.
+	"""
+	body = """varint_type v { encoding = leb128; max_bits = 16; minimal; }
+enum k : u8 { a = 1, b = 2, }
+struct small { u16 x; }
+struct large { u8 y[10]; }
+struct tiny { v n; }
+struct big {
+	k kind;
+	variant body switch (kind) { case k.a: small p; case k.b: large q; }
+	u32 one; u32 two; u32 three; u32 four; u32 five;
+}
+"""
+	found = suggestions(body)
+	rules = [item.rule for item in found]
+
+	assert "highest-yield class first" in advise.render(found)
+
+	varint    = found[rules.index("varint-to-fixed")]
+	equalized = found[rules.index("equalize-variant-arms")]
+
+	# The varint sorts above the equalization and recovers strictly less:
+	# the equalization delivers everything it does and five members besides.
+	assert rules.index("varint-to-fixed") < rules.index("equalize-variant-arms")
+	assert "member" not in varint.yields
+	assert "5 members after the variant keep absolute offsets" in equalized.yields
+	assert "`big` itself becomes a fixed size" in equalized.yields
+
+	# And the ordering is exactly what `suggest` documents: catalog order,
+	# then the instance that recovers most within a class.
+	assert [(item.rank, -item.weight, item.subject) for item in found] == \
+		sorted((item.rank, -item.weight, item.subject) for item in found)

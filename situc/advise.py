@@ -90,6 +90,18 @@ def _count(many: int, noun: str) -> str:
 	return f"{many} {noun}" if many == 1 else f"{many} {noun}s"
 
 
+def _verb(many: int, singular: str, plural: str) -> str:
+	"""The word that has to agree with what `_count` just spelled.
+
+	`_count` got the noun right and every verb beside it was written once, in
+	the plural, so a count of one read "1 member behind it are Dynamic" and
+	"1 member return to AbsoluteStatic, and their accessors" -- the register
+	`_count` exists to keep the advisor out of. A schema with one member
+	behind a dynamic one is the common case, not the corner.
+	"""
+	return singular if many == 1 else plural
+
+
 @dataclass(frozen=True)
 class Suggestion:
 	rule: str
@@ -126,7 +138,8 @@ def suggest(resolved: ResolvedSchema) -> list[Suggestion]:
 
 	Ranked by the catalog's order first and by how much each instance recovers
 	second, so the highest-yield change in the highest-yield class is the one a
-	reader sees at the top.
+	reader sees at the top. Not the highest-yield change in the schema: see
+	`render`, whose heading claimed that until it was measured.
 	"""
 	found: list[Suggestion] = []
 	for rule in CATALOG:
@@ -136,11 +149,27 @@ def suggest(resolved: ResolvedSchema) -> list[Suggestion]:
 
 
 def render(suggestions: list[Suggestion]) -> str:
+	"""The list, under a heading that says what its order is.
+
+	The heading read "highest yield first", which is a claim about the whole
+	list and one the sort does not make: `rank` is a fixed position in the
+	catalog, so every instance of a class outranks every instance of the one
+	below it however little it recovers. A varint whose replacement returns
+	no member at all sorts above an equalization that returns five, and
+	`fill-alignment-holes` -- free, measured -- sorts below
+	`equalize-variant-arms`, which costs padding. Neither reading of "highest
+	yield" survives its own catalog.
+
+	Naming the class is the whole repair. Within a class the order is by what
+	the instance recovers and the claim holds; across classes it is 18.2's
+	judgement of which kind of change is worth most, which is a different
+	thing and now says so.
+	"""
 	if not suggestions:
 		return ("No suggestions: every construct in this schema is already at "
 		        "the strongest form the advisor knows how to reach.\n")
 
-	lines = [f"{len(suggestions)} suggestion(s), highest yield first.", ""]
+	lines = [f"{len(suggestions)} suggestion(s), highest-yield class first.", ""]
 	for index, suggestion in enumerate(suggestions):
 		if index:
 			lines.append("")
@@ -226,12 +255,16 @@ def _find_tail_reordering(resolved: ResolvedSchema) -> list[Suggestion]:
 				span    = entry.placement.span,
 				summary = (f"move this variable-length member {destination}"),
 				detail  = (f"its extent is not fixed, so "
-				           f"{_count(len(behind), 'member')} behind it are "
+				           f"{_count(len(behind), 'member')} behind it "
+				           f"{_verb(len(behind), 'is', 'are')} "
 				           f"Dynamic: {listed}"),
 				cost    = Cost(basis="no bytes move, but a peer already "
 				               "speaking this format reads the old order"),
-				yields  = (f"{_count(len(behind), 'member')} return to "
-				           "AbsoluteStatic, and their accessors to base + K"),
+				yields  = (f"{_count(len(behind), 'member')} "
+				           f"{_verb(len(behind), 'returns', 'return')} to "
+				           f"AbsoluteStatic, and "
+				           f"{_verb(len(behind), 'its accessor', 'their accessors')}"
+				           f" to base + K"),
 				rank    = 0,
 				weight  = len(behind),
 			))
@@ -499,8 +532,8 @@ def _pinned_yield(struct: ResolvedStruct, behind: int, encloses: bool,
 	"""
 	gains = []
 	if behind:
-		gains.append(f"{_count(behind, 'member')} after {noun} keep "
-		             "absolute offsets")
+		gains.append(f"{_count(behind, 'member')} after {noun} "
+		             f"{_verb(behind, 'keeps', 'keep')} absolute offsets")
 	if encloses:
 		gains.append(f"`{struct.name}` itself becomes a fixed size")
 	if not gains:
@@ -704,7 +737,8 @@ def _find_mutable_under_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 				# cost model does not match the usage is the shape of a gate
 				# that cannot model what it checks: the reader who knows
 				# enough ignores it, and the reader who does not obeys it.
-				detail  = (f"{len(candidates)} covered field(s) are writable in "
+				detail  = (f"{_count(len(candidates), 'covered field')} "
+				           f"{_verb(len(candidates), 'is', 'are')} writable in "
 				           f"place -- {listed} -- and each write costs a "
 				           f"recomputation over {extent} bytes, where the "
 				           f"frame is rewritten after it is built. A frame "

@@ -215,9 +215,43 @@ def test_advise_prints_ranked_suggestions(
 	assert main(["advise", str(schema)]) == 0
 
 	out = capsys.readouterr().out
-	assert "highest yield first" in out
+	assert "highest-yield class first" in out
 	assert "bad.opts: move this variable-length member after the fixed ones" in out
 	assert "cost: nothing" in out
+
+
+def test_the_readme_advise_sample_is_what_the_advisor_prints(
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""The README shows `advise` output. It was hand-maintained, and drifted
+	three ways at once: the heading it quoted no longer existed, the cost line
+	still read "and every deployed peer" from before that caveat was moved
+	after "but", and the yield still read "1 member return ... their
+	accessors" from before the verb agreed.
+
+	Every one was a change to the advisor that nobody carried into the
+	document, and nothing could have said so: the sample is program output
+	pasted into prose, which is a copy that cannot be told from a current one
+	by reading it. `test_examples` already holds the README's *counts* to what
+	the tree contains, on the same ground.
+
+	Compared with whitespace flattened, since the README wraps the cost line
+	to fit its column and the terminal does not.
+	"""
+	assert main(["advise", str(ROOT / "example/http/http.situ")]) == 0
+	printed = capsys.readouterr().out
+
+	readme = (ROOT / "README.md").read_text(encoding="ascii").splitlines()
+	start  = next(i for i, line in enumerate(readme)
+	              if line.startswith("6 suggestion(s)"))
+	end    = next(i for i, line in enumerate(readme[start:], start)
+	              if line.startswith("```"))
+
+	def flat(text: str) -> str:
+		return " ".join(text.split())
+
+	assert flat(printed).startswith(flat("\n".join(readme[start:end]))), (
+		"the README's advise sample is not what the advisor prints")
 
 
 def test_advise_never_fails_the_build(

@@ -16730,6 +16730,51 @@ by measurement, and both had a defect** (26.163, 26.164 and this). The
 remaining one is the summary text, which is the only one where the assertion
 *is* the measurement.
 
+### 26.166 A heading, a verb, and a sample nobody could have checked
+
+Three things the advisor said that were not true, found by reading its output
+instead of its tests.
+
+**The heading claimed an order the sort does not make.** `render` printed
+"N suggestion(s), highest yield first", and `rank` is a fixed position in the
+catalog: every instance of a class outranks every instance of the one below
+it, however little it recovers. Measured both ways. A `varint-to-fixed` whose
+yield is "`tiny` itself becomes a fixed size" -- no member at all -- sorts
+above an `equalize-variant-arms` that returns five members *and* fixes its
+struct. And `fill-alignment-holes`, free by measurement, sorts below
+`equalize-variant-arms`, which costs up to eight bytes of padding. Neither
+reading of "highest yield" survives the catalog's own order.
+
+Naming the class is the repair, because within a class the claim is true and
+`suggest` already documents exactly that. The heading was the only place the
+looser claim was made.
+
+**The verbs did not agree with the counts.** `_count` spells the noun --
+it exists so the advisor never prints "1 bytes" -- and every verb beside it
+was written once, in the plural. One member behind a dynamic one read "1
+member behind it are Dynamic" and "1 member return to AbsoluteStatic, and
+their accessors", and one covered field read "1 covered field(s) are writable
+in place", still in the parenthetical form `_count` replaced. One is the
+common case, not the corner.
+
+**The test named for this pinned the broken spelling.** It asserted
+`yields.startswith("1 member return")`, which the corrected "1 member
+returns" satisfies just as well: **a prefix cannot see the end of the word it
+is checking**, so the assertion passed before the fix and would have passed
+after it without ever distinguishing them. That is 26.158's shape in an
+assertion rather than in a gate.
+
+**And the README's sample of that output had drifted three ways at once** --
+the heading, the cost caveat moved after "but" in 26.162, and the agreement --
+each a change to the advisor that nobody carried into the document. Nothing
+could have said so: **a sample is program output pasted into prose, and a
+stale copy cannot be told from a current one by reading it.** It is generated
+from the example and compared now, with whitespace flattened because the
+README wraps to its column and a terminal does not. `test_examples` already
+holds the README's counts to the tree on the same ground; this is the same
+gate over the same document, for the part of it that is quoted rather than
+counted.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
