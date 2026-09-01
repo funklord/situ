@@ -535,11 +535,19 @@ framing code in practical use, which is what bounds the design:
 | family | described by | covers |
 |---|---|---|
 | `table` | input symbol to output symbol, optionally padded to whole groups | both Manchesters, 4b5b, base16/32/64 |
-| `polynomial` | a generator polynomial over GF(2) or GF(2^m), plus init, reflection and xorout | every CRC variant, Reed-Solomon, BCH |
-| `linear_block` | a generator or parity-check matrix over GF(2) | Hamming and other block codes |
+| `polynomial` | a generator polynomial over GF(2) or GF(2^m), plus init, reflection and xorout | every CRC variant, Reed-Solomon |
+| `linear_block` | a generator or parity-check matrix over GF(2) | Hamming(7,4); another `(n,k)` gets a correct signature and no code |
 | `shift_register` | taps, a feedback source, an initial state, and whether the feedback is complemented | additive and multiplicative scramblers, both NRZI conventions |
-| `permutation` | an index mapping | block and convolutional interleavers |
+| `permutation` | an index mapping | block interleavers |
 | `stuffing` | a trigger predicate and an insertion rule | COBS, bit stuffing, SLIP, PPP, SMTP dot-stuffing |
+
+**Where a family stops is memory rather than difficulty.** A convolutional
+code's encoder is a shift register with more output taps and its decoder is
+Viterbi; LDPC is belief propagation. Both want working storage proportional
+to the message, and generated C, C++ and Rust allocate nothing -- so
+soft-decision decoders are tier 1, where the caller owns the buffer and
+situ checks the contract. Section 13.4 of `project.md` records the boundary
+and the one case that is a trap rather than a gap.
 
 `std/kernels.situ` carries 38 of them: 15 polynomial (13 CRCs and 2
 Reed-Solomon codes), 8 table, 7 shift_register (two scramblers, the two NRZI

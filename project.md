@@ -2432,12 +2432,46 @@ kernel families, or a pipeline of them. This bounds the tier-2 design.
 | Family | Description form | Covers | Derived properties |
 |---|---|---|---|
 | **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, base16/32/64 (not NRZI, 8b10b, Gray or BCD -- see 26.140) | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
-| **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon, BCH | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
+| **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon. BCH takes the same route and none is written | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 
-| **linear block** | generator or parity-check matrix over GF(2) | Hamming, extended Hamming, LDPC, arbitrary block codes | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
-| **shift register** | taps, feedback source, initial state, and whether the feedback is complemented | convolutional codes, additive and multiplicative scramblers, NRZI in both conventions, Miller | `length_preserving` or `ratio_exact`; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output. `complement_feedback` moves none of them |
-| **permutation** | index mapping, closed form or table | block and convolutional interleavers | `length_preserving`; `seekable = permuted`; `deterministic` |
+| **linear block** | generator or parity-check matrix over GF(2) | Hamming(7,4). Any other `(n,k)` derives a correct `ratio_exact` and generates nothing; a matrix in the schema is the language addition that would change that (26.144). Not LDPC, for the reason below the table | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
+| **shift register** | taps, feedback source, initial state, and whether the feedback is complemented | additive and multiplicative scramblers, NRZI in both conventions. **Not convolutional codes, and not Miller** -- see below the table, which is a sharper refusal than the other rows' | `length_preserving`, always; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output. `complement_feedback` moves none of them |
+| **permutation** | index mapping, closed form or table | block interleavers. A bare `span` derives the properties and generates nothing, which is what a convolutional interleaver would get: a bank of delay lines is not an index map within a block | `length_preserving`; `seekable = permuted`; `deterministic` |
 | **stuffing** | trigger predicate plus insertion rule | HDLC bit stuffing, COBS, SLIP, byte stuffing | `expansion = ratio_bounded`; `not seekable`; interior addressing lost |
+
+**What the Covers column leaves out, and why it is one reason rather than
+four.** That column named convolutional codes, LDPC, BCH and Miller for a
+long time, none of which is written, which reads as four things nobody got
+to. Three of them are one boundary and the fourth is a different absence.
+
+**The boundary is memory, not difficulty.** A convolutional code's encoder is
+this family with more output taps; its decoder is Viterbi, which needs a
+traceback buffer. LDPC is belief propagation, iterative over a working
+matrix. Both want storage proportional to the message, and section 20's rule
+is that generated C, C++ and Rust allocate nothing. So they are tier-1
+codecs: a hand-written signature naming an `extern` implementation, which is
+expressible today and is where any soft-decision decoder belongs. This is
+the same line decision 0017 draws for codecs generally, arriving from the
+other side -- there it is about trusting a supplier's properties, here it is
+about who owns the buffer.
+
+**One of the four is a trap rather than a gap, and that is the difference
+worth keeping.** A `linear_block` with an unimplemented `(n,k)` derives a
+*correct* `ratio_exact` and generates nothing; a `permutation` with a bare
+`span` does the same. Both are honest: the signature is right and the author
+is told there is no implementation. A convolutional code declared as a shift
+register is not honest, because this family derives `length_preserving`
+unconditionally and has no argument that can say otherwise -- so a rate-1/2
+encoder would claim its output is the size of its input, and a consumer
+sizing a buffer from the map would under-allocate by half. The table
+promised "`length_preserving` or `ratio_exact`" and the second was
+unreachable. It says `length_preserving`, always, now.
+
+**Miller is not this family's absence at all.** It is a 2:1 code whose output
+depends on the previous *input* bit as well as the level -- a symbol map with
+state, which is exactly what 26.142 records for 8b10b and CoAP as one open
+question rather than several. Filing it under shift registers is the mistake
+26.139 found for 8b10b under table codes, in a different row.
 
 **Any whole number of bytes, and the reflection that hid in the palindromes.**
 A CRC's polynomial, width, initial value, reflection and final xor are the
@@ -5343,6 +5377,13 @@ Recommended order within the phase, cheapest and highest-value first:
    `systematic` derivation from matrix form.
 5. **shift register.** Scramblers, then convolutional codes; exercises
    feedback-source analysis for seekability.
+
+   Done for scramblers, and for both NRZI conventions, which arrived later
+   and needed no new machinery. **Not done for convolutional codes and it is
+   not queued**: the derivation is length-preserving with no way to say
+   otherwise, and the decoder is Viterbi, which wants a traceback buffer that
+   generated code does not allocate. 13.4 records the boundary under its
+   table.
 6. **stuffing.** COBS and HDLC; exercises `ratio_bounded` and the advisor rule
    about applying stuffing only at the outermost layer.
 7. **Reed-Solomon / BCH over GF(2^m).** The largest single item. Needs field
