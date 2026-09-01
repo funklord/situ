@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import argparse
@@ -252,6 +253,130 @@ def test_the_readme_advise_sample_is_what_the_advisor_prints(
 
 	assert flat(printed).startswith(flat("\n".join(readme[start:end]))), (
 		"the README's advise sample is not what the advisor prints")
+
+
+#: A README block quoting a tool's output: the argv that produces it, the
+#: exact line it opens with, and whether its lines can be matched one for
+#: one. `explain`'s cannot -- its blame text runs past the page and the
+#: README hard-wraps it -- so that one is held to containment, which cannot
+#: see an omitted line. The two that are lists are held line for line, which
+#: can, and that is where an omission would matter.
+QUOTED_OUTPUT = [
+	(["explain", "example/http/http.situ", "request_line.version"],
+	 "$ situc explain example/http/http.situ request_line.version", False),
+	(["map", "example/udp/udp.situ"],
+	 "struct udp_header size=8 mutate=Immutable repr=ValueConverted ...", True),
+	(["doc", "example/udp/udp.situ"],
+	 "struct udp_header", True),
+]
+
+
+def readme_block(first: str) -> list[str]:
+	"""The fenced block whose first content line is exactly `first`.
+
+	Exactly, because `struct udp_header` opens two of them: the capability
+	map and the `doc` diagram, and a prefix match takes whichever comes
+	first in the file.
+	"""
+	lines = (ROOT / "README.md").read_text(encoding="ascii").splitlines()
+	start = next(i for i, line in enumerate(lines)
+	             if line == first and i and lines[i - 1].startswith("```"))
+	end   = next(i for i, line in enumerate(lines[start:], start)
+	             if line.startswith("```"))
+	return lines[start:end]
+
+
+def flat(text: str) -> str:
+	"""Whitespace collapsed, and a table rule reduced to a token.
+
+	The README narrows its columns to fit the page, so the same row carries
+	different padding and the `doc` table's rule is twenty dashes where the
+	tool prints forty. Neither is content. What the columns hold is, and
+	that is compared as it stands.
+	"""
+	return re.sub(r"-{3,}", "---", " ".join(text.split()))
+
+
+@pytest.mark.parametrize("argv,first,line_for_line", QUOTED_OUTPUT,
+                         ids=[argv[0] for argv, _, _ in QUOTED_OUTPUT])
+def test_a_quoted_output_block_is_what_the_tool_prints(
+	argv: list[str], first: str, line_for_line: bool,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""What a README block shows has to be what the tool prints, and what it
+	leaves out has to say so.
+
+	These are program output pasted into prose, and a stale copy cannot be
+	told from a current one by reading it -- 26.166, where the `advise`
+	sample had drifted three ways at once. Two more had, in the other
+	direction: they elided without marking it. The capability map's struct
+	line dropped `mutate`, `atomic` and `auth` while the field lines under
+	it marked their own cut with `...`, and the `doc` field table dropped
+	`destination_port`, which the diagram directly above it draws.
+
+	An unmarked cut is the worse of the two, because a reader takes a
+	complete-looking line for a complete one. So the two marks mean two
+	different things and are checked differently:
+
+	    `...` alone on a line   lines are omitted here
+	    a trailing `..`         this line is cut short, and the next line
+	                            shown is the next line printed
+
+	The first version of this test flattened the block and looked for each
+	piece in order, which passes a block with a row deleted: containment
+	cannot see an absence. Found by sabotage -- deleting `destination_port`
+	again left it green -- which is the whole reason the marks are now told
+	apart.
+	"""
+	assert main(argv) == 0
+	printed = [flat(line) for line in capsys.readouterr().out.splitlines()]
+	printed = [line for line in printed if line]
+
+	shown = [line for line in readme_block(first) if not line.startswith("$ ")]
+
+	if not line_for_line:
+		joined, at = " ".join(printed), 0
+		for chunk in " \n".join(shown).split("..."):
+			text = flat(chunk)
+			if not text:
+				continue
+			found = joined.find(text, at)
+			assert found >= 0, f"{argv[0]} does not print:\n{text}"
+			at = found + len(text)
+		return
+
+	# Line for line, from where the block starts in the real output. The
+	# opening line may itself be cut, so it is located by the same rule.
+	head  = flat(shown[0])
+	head  = head.rstrip(".").rstrip() if head.endswith("..") else head
+	start = [i for i, line in enumerate(printed) if line.startswith(head)]
+	assert start, f"{argv[0]} prints no line opening the README's block: {head}"
+	at    = start[0]
+	skip = False
+	for line in shown:
+		text = flat(line)
+		if not text:
+			continue
+		if text == "...":
+			skip = True
+			continue
+
+		# A cut is spelled with two dots or three; strip whichever, and do
+		# not mistake a sentence's full stop for one.
+		cut  = text.endswith("..")
+		want = text.rstrip(".").rstrip() if cut else text
+		while skip and at < len(printed) and not printed[at].startswith(want):
+			at += 1
+		skip = False
+
+		assert at < len(printed), f"{argv[0]} stops before the README does: {want}"
+		got = printed[at]
+		assert got.startswith(want) if cut else got == want, (
+			f"the README shows a line {argv[0]} does not print here.\n"
+			f"  README: {text}\n  {argv[0]:<7}: {got}\n"
+			f"mark an omission with `...` on its own line, and a cut line "
+			f"with a trailing `..`")
+		at += 1
 
 
 def test_advise_never_fails_the_build(

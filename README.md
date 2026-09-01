@@ -68,8 +68,10 @@ static inline uint16_t situ_udp_header_length_get(situ_view_t view)
 test can compare against:
 
 ```
-struct udp_header size=8 repr=ValueConverted
+struct udp_header size=8 mutate=Immutable repr=ValueConverted ...
+  ...
   udp_header.source_port       offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) ...
+  udp_header.destination_port  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) ...
   udp_header.length            offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) ...
 ```
 
@@ -750,6 +752,7 @@ Field                Offset  Size          Type           Notes
 -------------------  ------  ------------  -------------  --------------------
 summed               0       8 bytes       authenticated  covered by checksum
 source_port          0       2 bytes       u16            big endian; covered..
+destination_port     2       2 bytes       u16            big endian; covered..
 length               4       2 bytes       u16            big endian; min = 8..
 checksum[2]          6       2 bytes       u8             self_as = 0
 payload[length - 8]  8       [length - 8]  u8             covered by checksum

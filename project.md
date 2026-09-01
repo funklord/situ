@@ -16822,6 +16822,47 @@ change was in the working tree when the other commit was made, so it went in
 under a subject that does not mention it. `git log --grep` for when the frame
 was named finds a commit about `convert_python`.
 
+### 26.168 An unmarked cut, and a gate that could not see an absence
+
+26.166 gated the README's `advise` sample after finding it had drifted three
+ways. The README quotes four other tools. Two of them were wrong, in the
+opposite direction: they elided without saying so.
+
+- **The capability map's struct line** printed `struct udp_header size=8
+  repr=ValueConverted`, dropping `mutate=Immutable`, `atomic=NonAtomic` and
+  `auth=Covered(checksum)` -- while the two field lines beneath it marked
+  their own cut with a trailing `...`. And the field list skipped `summed`
+  and `destination_port` with nothing to say it had.
+- **The `doc` field table** dropped `destination_port` entirely, which the
+  byte diagram immediately above it draws.
+
+`explain` and `situ-edit` were accurate.
+
+**An unmarked cut is worse than a stale line**, because a stale line is wrong
+about something whereas a complete-looking line is wrong about how much there
+is: a reader takes it for the whole. So the two marks mean two different
+things and are now checked as two different things:
+
+    `...` alone on a line   lines are omitted here
+    a trailing `..`         this line is cut short, and the next line shown
+                            is the next line printed
+
+**The first version of the gate could not see the defect it was written for.**
+It flattened the block and searched for each piece in order, which is
+containment -- and containment cannot see an absence. Deleting
+`destination_port` from the table again left it green. Three sabotages were
+run and only that one passed, which is the whole reason the marks are told
+apart rather than both treated as "something was left out".
+
+`explain` is still held to containment, because its blame text runs past the
+page and the README hard-wraps it, so there are no lines to match one for
+one. **That check is the weaker one and cannot see an omitted line**; it is
+recorded here rather than left to be discovered, since the block is prose
+where the others are lists and an omission there costs less.
+
+Five samples, five gates: `advise` and `situ-edit` compared whole,
+`map` and `doc` line for line, `explain` by containment.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

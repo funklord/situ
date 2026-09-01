@@ -183,3 +183,30 @@ def test_render_keeps_a_row_for_a_field_it_could_not_read() -> None:
 	lines    = render(document)
 
 	assert len(lines) == 1 + len(document.fields())
+
+
+def test_the_readme_editor_sample_is_what_situ_edit_prints(tmp_path: Path) -> None:
+	"""The README shows `situ-edit` reading a UDP capture. It is program
+	output pasted into prose, and a stale copy cannot be told from a current
+	one by reading it -- the same ground as the `advise`, `map`, `doc` and
+	`explain` samples (26.166, 26.168). This block elides nothing, so it is
+	held whole.
+
+	The capture is eight bytes and the README names the values it holds, so
+	it is rebuilt here rather than committed: a fixture that has to agree
+	with a document is one more copy to drift.
+	"""
+	from test_cli import flat, readme_block
+
+	capture = tmp_path / "capture.bin"
+	capture.write_bytes(bytes.fromhex("12340035" "0008abcd"))
+
+	done = run("situ-edit", str(ROOT / "example/udp/udp.situ"), str(capture))
+	assert done.returncode == 0, done.stderr
+
+	printed = [flat(line) for line in done.stdout.splitlines() if line.strip()]
+	block   = readme_block("$ situ-edit example/udp/udp.situ capture.bin")
+	shown   = [flat(line) for line in block
+	           if line.strip() and not line.startswith("$ ")]
+
+	assert printed[:len(shown)] == shown
