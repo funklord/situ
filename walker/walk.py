@@ -600,6 +600,42 @@ def read_bytes(view: View, index: int) -> bytes:
 	return bytes(view.buffer[first:last])
 
 
+def write_bytes(view: View, index: int, value: bytes) -> None:
+	"""`read_bytes` backwards, at the same length and no other.
+
+	A run is what a file editor most often edits -- a payload, a name, a
+	magic -- and a run written at the length it already has moves nothing,
+	which puts it in the same class as a fixed scalar written in place
+	(0034's first row) rather than in the shifting one.
+
+	**The length is the whole guard here.** A shorter or longer value is a
+	layout change however it is spelled, so it is refused by count rather
+	than left for the caller's own check: `read_bytes` says how many bytes
+	are there and this writes exactly that many.
+	"""
+	start = offset_bits(view, index)
+	width = size_bits(view, index)
+	if start % BITS_PER_BYTE or width % BITS_PER_BYTE:
+		raise Refused("a byte run that does not start on a byte")
+
+	first = view.at + start // BITS_PER_BYTE
+	last  = first + width // BITS_PER_BYTE
+	if last > view.limit:
+		raise Refused("the frame does not reach this run")
+
+	size = width // BITS_PER_BYTE
+	if len(value) != size:
+		raise Refused(f"this run is {size} byte(s) and the value is "
+		              f"{len(value)}; changing a run's length moves what "
+		              f"follows it")
+
+	buffer = view.buffer
+	if not isinstance(buffer, bytearray):
+		raise Refused("this view is over immutable bytes; a write needs a "
+		              "`bytearray`")
+	buffer[first:last] = value
+
+
 def scan(view: View, index: int) -> tuple[int, bool]:
 	"""How far a delimited member reaches, and whether it was terminated.
 

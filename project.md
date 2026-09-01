@@ -17395,6 +17395,36 @@ what makes an unplaceable member count had overclaimed, and the answer was to
 correct the comment rather than to invent a test for a distinction that is
 not one.
 
+### 26.180 A run written at its own length moves nothing
+
+26.179 built the scalar write and refused a run as "not a scalar", which is
+`read_scalar`'s refusal borrowed whole. It is the right refusal for a *read*
+-- a run has no single value -- and the wrong one for a write, because a run
+is what an editor of files most often edits: a payload, a name, a magic.
+
+**A run written at the length it already has moves nothing**, which puts it in
+0034's first row with the fixed scalar rather than in its second. Written
+shorter or longer it is a layout change however it is spelled, so the length
+is the whole guard and it is enforced by count: `read_bytes` says how many
+bytes are there and `write_bytes` writes exactly that many.
+
+`--set-bytes name=hex` at the CLI, beside `--set name=value`.
+
+**The marker is the field and the refusal is the write**, and this is where
+that stops being a distinction without a difference. `payload` shows
+`[moves]`, because `mutate = Shifting` says a write to it *may* move what
+follows -- the member's character, and true. Whether a particular write does
+is a different question, and the extent comparison answers it: the
+same-length write is allowed and the shorter one is refused, from the same
+field with the same marker. An editor that read the marker as the answer
+would refuse both, and be useless on the one file operation people actually
+want.
+
+The TUI needed no change. It renders through `editor.text.render` like the
+CLI, which is 0034's rule holding: nothing a frontend can do may be absent
+from the scriptable one, and the way to keep that true is for the other
+frontends to have no rendering of their own.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

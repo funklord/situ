@@ -268,7 +268,8 @@ none can grey out a setter that does not exist, say that the field you just
 looked at cannot be written in place, or show the blame chain for why
 (decision 0034).
 
-`--set name=value` writes one, where the schema permits it. What that means
+`--set name=value` writes a number and `--set-bytes name=hex` writes a run,
+where the schema permits it. What that means
 is decided by the capability vectors and not by the editor: a member the
 schema forbids anyone to write is refused, a value that does not fit its
 width is refused, and **a write that would shift the layout is refused too**
@@ -278,6 +279,13 @@ claiming a 32-byte payload. That is measured rather than assumed: the write
 goes into a copy, the copy is walked again, and every member's offset and
 size are compared. A shifting write drags in the invalidation model and is
 0034's own next piece of work.
+
+**The marker is the field and the refusal is the write.** `payload` shows
+`[moves]` because `mutate = Shifting` says a write to it *may* move what
+follows -- that is the member's character. Whether a particular write does is
+a different question, and the extent comparison answers it: a run written at
+the length it already has moves nothing and is allowed, which is what makes
+the tool useful on a file. Written shorter or longer it is refused by count.
 
 A write to a tag-covered field happens and is reported stale. situ does not
 compute a checksum -- 14.1 puts that with the caller -- so recomputing one

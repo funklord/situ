@@ -415,3 +415,74 @@ def test_a_write_needs_a_mutable_buffer_and_says_so() -> None:
 	with pytest.raises(Refused) as why:
 		write_scalar(view, 1, 4242)
 	assert "immutable bytes" in str(why.value)
+
+
+# -- byte runs (26.180) -----------------------------------------------------
+
+
+def udp_with_payload() -> tuple[bytes, bytearray]:
+	schema  = (ROOT / "example/udp/udp.situ").read_text(encoding="ascii")
+	parsed  = parse_text(schema, path="udp.situ")
+	image, _ = pack(parsed, resolve(parsed, solve(parsed)), metadata=True)
+	return image, bytearray(bytes.fromhex("12340035000cabcddeadbeef"))
+
+
+def test_a_run_written_at_its_own_length_moves_nothing() -> None:
+	"""A payload, a name, a magic: a run is what a file editor most often
+	edits, and one written at the length it already has is the same class of
+	safety as a fixed scalar in place."""
+	image, message = udp_with_payload()
+	document = open_document(image, message)
+
+	notes = document.set("payload", bytes.fromhex("cafebabe"))
+
+	assert document.buffer.hex() == "12340035000cabcdcafebabe"
+	assert notes and "stale" in notes[0]
+
+
+def test_a_run_written_at_another_length_is_refused() -> None:
+	"""The length is the whole guard: shorter or longer is a layout change
+	however it is spelled, so it is refused by count."""
+	image, message = udp_with_payload()
+	document = open_document(image, message)
+
+	for value in (bytes.fromhex("cafe"), bytes.fromhex("cafebabecafe")):
+		with pytest.raises(Refused) as why:
+			document.set("payload", value)
+		assert "changing a run's length moves what follows it" in str(why.value)
+
+	assert document.buffer.hex() == "12340035000cabcddeadbeef"
+
+
+def test_the_marker_is_the_field_and_the_refusal_is_the_write() -> None:
+	"""`payload` shows `[moves]` and a same-length write to it succeeds.
+
+	`mutate = Shifting` says a write to this member *may* move what follows,
+	which is the field's character. Whether a particular write does is a
+	question about that write, and the extent comparison answers it. The two
+	are different questions and the editor asks both.
+	"""
+	image, message = udp_with_payload()
+	document = open_document(image, message)
+	payload  = next(f for f in document.fields() if f.name == "payload")
+
+	assert payload.mutate == "Shifting"
+	assert "the bytes after it move" in payload.write_cost
+	document.set("payload", bytes.fromhex("cafebabe"))
+
+
+def test_set_bytes_reaches_the_cli(tmp_path: Path) -> None:
+	(tmp_path / "m.bin").write_bytes(bytes.fromhex("12340035000cabcddeadbeef"))
+
+	done = run("situ-edit", str(ROOT / "example/udp/udp.situ"),
+	           str(tmp_path / "m.bin"), "--set-bytes", "payload=cafebabe",
+	           "--out", str(tmp_path / "out.bin"))
+
+	assert done.returncode == 0, done.stderr
+	assert (tmp_path / "out.bin").read_bytes().hex() == \
+		"12340035000cabcdcafebabe"
+
+	bad = run("situ-edit", str(ROOT / "example/udp/udp.situ"),
+	          str(tmp_path / "m.bin"), "--set-bytes", "payload=zz")
+	assert bad.returncode == 1
+	assert "is not hex" in bad.stderr

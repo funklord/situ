@@ -20,7 +20,7 @@ from walker.image import NONE, Image, load
 from walker.owned import decode
 from walker.report import FIELD, RESERVED
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
-                         offset_bits, size_bits, write_scalar)
+                         offset_bits, size_bits, write_bytes, write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -152,7 +152,7 @@ class Document:
 			found[name.rpartition(".")[2] or name] = index
 		return found
 
-	def set(self, name: str, value: int) -> list[str]:
+	def set(self, name: str, value: int | bytes) -> list[str]:
 		"""Store a value, if the schema permits it. Returns what it cost.
 
 		Three refusals and one warning, in that order, because they are
@@ -164,8 +164,11 @@ class Document:
 		- **the schema forbids it.** `mutate = Immutable` is a checksum, a
 		  derived field, a read-only register: there is no setter anywhere in
 		  situ for these and there is not one here.
-		- **the write does not fit the member**, which `write_scalar` checks
-		  and which is a range error rather than a permission one.
+		- **the write does not fit the member**, which `write_scalar` and
+		  `write_bytes` check and which is a range error rather than a
+		  permission one. A number is held to the member's width and sign; a
+		  byte run is held to its exact length, since a run written shorter
+		  or longer moves what follows it.
 
 		The warning is coverage. A write to a member a tag authenticates
 		leaves that tag stale, and **situ does not recompute it** -- 14.1
@@ -211,7 +214,10 @@ class Document:
 		# enumerated, and it is the walk itself answering rather than a
 		# second model of what drives what.
 		candidate = Document(self.image, bytearray(self.buffer), self.struct)
-		write_scalar(candidate.view(), index, value)
+		if isinstance(value, bytes):
+			write_bytes(candidate.view(), index, value)
+		else:
+			write_scalar(candidate.view(), index, value)
 
 		before, after = self._extents(), candidate._extents()
 		if before != after:

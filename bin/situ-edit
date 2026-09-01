@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                    help="store a value, where the schema permits one. "
 	                         "Decimal, or 0x for hex. Repeatable, applied in "
 	                         "order")
+	parser.add_argument("--set-bytes", action="append", default=[],
+	                    metavar="NAME=HEX", dest="byte_assignments",
+	                    help="store a byte run, at the length it already has. "
+	                         "A run written shorter or longer moves what "
+	                         "follows it, which is a shifting write")
 	parser.add_argument("--out", type=Path, default=None,
 	                    help="write the edited message here. Without it "
 	                         "nothing is written anywhere: an edit is shown "
@@ -54,14 +59,16 @@ def build_parser() -> argparse.ArgumentParser:
 	return parser
 
 
-def apply_edits(document: object, assignments: list[str]) -> list[str]:
-	"""Every `--set`, in order, returning what each one cost.
+def apply_edits(document: object, assignments: list[str],
+		byte_assignments: list[str]) -> list[str]:
+	"""Every `--set` then every `--set-bytes`, returning what each one cost.
 
 	In order, and stopping at the first refusal: a half-applied edit written
 	to a file is worse than none, and a reader of the output has to be able
 	to say which writes happened.
 	"""
 	notes: list[str] = []
+
 	for assignment in assignments:
 		name, sep, text = assignment.partition("=")
 		if not sep:
@@ -72,6 +79,18 @@ def apply_edits(document: object, assignments: list[str]) -> list[str]:
 			raise Refused(f"`--set {assignment}`: `{text}` is not a number") \
 				from None
 		notes.extend(document.set(name.strip(), value))	# type: ignore[attr-defined]
+
+	for assignment in byte_assignments:
+		name, sep, text = assignment.partition("=")
+		if not sep:
+			raise Refused(f"`--set-bytes {assignment}` is not `name=hex`")
+		try:
+			raw = bytes.fromhex(text.strip())
+		except ValueError:
+			raise Refused(f"`--set-bytes {assignment}`: `{text}` is not "
+			              f"hex") from None
+		notes.extend(document.set(name.strip(), raw))	# type: ignore[attr-defined]
+
 	return notes
 
 
@@ -85,7 +104,8 @@ def main() -> int:
 		return 1
 
 	try:
-		notes = apply_edits(document, args.assignments)
+		notes = apply_edits(document, args.assignments,
+		                    args.byte_assignments)
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1
@@ -97,7 +117,7 @@ def main() -> int:
 
 	if args.out is not None:
 		args.out.write_bytes(bytes(document.buffer))
-	elif args.assignments:
+	elif args.assignments or args.byte_assignments:
 		print("situ-edit: not written; pass --out to keep it",
 		      file=sys.stderr)
 	return 0
