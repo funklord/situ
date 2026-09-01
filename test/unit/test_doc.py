@@ -93,6 +93,32 @@ def test_a_narrow_struct_gets_a_narrow_diagram() -> None:
 	assert "+-+-+-+-+-+-+-+-+-+" not in text
 
 
+def test_a_struct_is_drawn_as_wide_as_it_can_be() -> None:
+	"""The narrow row is for a struct that *is* small, not one that starts
+	small.
+
+	Keyed on the minimum, a struct that merely begins small got a narrow
+	diagram however large it grows: 23 of the tree's 158 diagrams were drawn
+	narrower than the thing they draw, including `sqlite/table_leaf_cell` --
+	whose maximum is 18 quintillion bytes -- in 16-bit rows. That misleads in
+	the direction the narrow case exists to prevent, and by more.
+	"""
+	# One byte at the front and no upper bound: narrow by its minimum, and
+	# not a small struct by any reading.
+	wide = emit("struct s { u8 kind; u8 rest[remaining]; }\n")
+	assert "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+" \
+		in wide
+
+	# Bounded, and its maximum is what decides.
+	bounded = emit("struct s { u8 n [max = 40]; u8 body[n]; }\n")
+	assert len(diagram(bounded)[0]) == len(diagram(wide)[0])
+
+	# And the case the narrow row was written for is untouched: fixed, and
+	# genuinely one byte.
+	narrow = emit("struct f { bit a; bit b; u6 rest; }\n")
+	assert len(diagram(narrow)[0]) < len(diagram(wide)[0])
+
+
 def test_a_variable_member_is_drawn_as_variable() -> None:
 	"""And it claims the rest of the row it starts in, because that is where it
 	starts -- padding there would read as unused space."""

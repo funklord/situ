@@ -43,8 +43,21 @@ def _row_width(struct: ResolvedStruct) -> int:
 	32 bits is the convention and the right answer for a packet header. It is
 	the wrong answer for a one-byte register or flags word: three empty bytes
 	of row read as three bytes of struct. Narrow structs get a narrow diagram.
+
+	**What the struct can be, not what it starts at.** Keyed on `size_bytes`,
+	which is the *minimum*, a struct that merely begins small got a narrow
+	diagram however large it grows -- 21 of the tree's 31 narrow diagrams
+	were of that kind, including `sqlite/table_leaf_cell`, whose maximum is
+	18 quintillion bytes, drawn in 16-bit rows. That misleads in the
+	direction the narrow case exists to prevent, and by more.
+
+	A fixed struct is unaffected: its minimum and maximum are the same
+	number, which is the case the narrow row was written for.
 	"""
-	bits = struct.layout.size_bytes * BITS_PER_BYTE
+	if struct.layout.size_max_bits is None:
+		return BITS_PER_ROW		# unbounded: the widest row is the honest one
+
+	bits = struct.layout.size_max_bits
 	if 0 < bits <= 8:
 		return 8
 	if bits <= 16:
@@ -110,7 +123,11 @@ def _size_note(struct: ResolvedStruct) -> list[str]:
 	if layout.is_fixed_size:
 		return [f"Size: {_bytes(layout.size_bytes)}, fixed."]
 
-	most = getattr(layout, "size_max_bytes", None)
+	# `layout.size_max_bytes`, not `getattr(..., None)`: it is a property
+	# that exists, so the default could never fire -- and if the name ever
+	# changed, every bounded struct would quietly print "no upper bound",
+	# which is the reassuring direction to be wrong in.
+	most = layout.size_max_bytes
 	if most is not None:
 		return [f"Size: {layout.size_bytes} to {_bytes(most)}."]
 	return [f"Size: {_bytes(layout.size_bytes)} and up; no upper bound."]

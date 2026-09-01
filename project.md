@@ -17454,6 +17454,44 @@ gate would have caught**, and writing the gate found the omission in the same
 pass. Three sabotages -- a key dropped, a model field forgotten, a value
 wrong -- and each fails a different half.
 
+### 26.182 The diagram was drawn to the minimum, not to the struct
+
+`situc doc` prints that "every offset here comes from the same layout the
+accessors are generated from, so the diagrams cannot drift from the code", and
+that claim holds: it renders from `struct.layout` rather than recomputing
+anything. The *width* of the row it renders into was another matter.
+
+`_row_width` picked 8, 16 or 32 bits from `layout.size_bytes`, which is the
+**minimum**. Its docstring says why a narrow row exists -- "three empty bytes
+of row read as three bytes of struct" -- and that reason is about a struct
+that *is* small. Keyed on the minimum it fired for any struct that merely
+*begins* small: **23 of the tree's 158 diagrams were drawn narrower than the
+thing they draw**, 14 of them in 16-bit rows and 9 in 8-bit. `mqtt/packet`
+and four more mqtt bodies are unbounded and were drawn two bytes wide;
+`sqlite/table_leaf_cell`, whose maximum is 18 quintillion bytes, was drawn in
+16-bit rows.
+
+It is keyed on `size_max_bits` now, and on the widest row where nothing bounds
+the struct. Eight narrow diagrams remain and **every one is a fixed-size
+struct** -- `message/flags`, `telemetry/status`, `mqtt/connack_body` and the
+rest -- which is exactly the case the narrow row was written for. All 23
+changes widen; none narrows.
+
+**The first measurement of this was wrong, and in the reassuring direction.**
+It counted "not small" as a maximum over `16 * 8`, reading the rule's
+thresholds as bytes when they are bits -- so it reported 21 where the answer
+is 23, and would have gone into this entry as a number nobody could check
+against the tree. Caught because the fix produced 8 remaining diagrams where
+the bad arithmetic predicted 10, and two is a small enough gap to be worth
+explaining. **A measurement that nearly agrees is the one to re-do**, and the
+unit was the thing that slipped.
+
+Also `getattr(layout, "size_max_bytes", None)` in the size note, where
+`size_max_bytes` is a property that exists: a default that can never fire,
+which reads as though it handles a case. If the name ever changed, every
+bounded struct would quietly print "and up; no upper bound" -- the reassuring
+direction again. It asks for the attribute directly now.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
