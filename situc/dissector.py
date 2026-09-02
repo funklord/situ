@@ -522,6 +522,26 @@ def _bitmask(placement: Placement, width: int) -> int | None:
 # ---------------------------------------------------------------------------
 
 
+#: Emitted in place of a member whose extent this dissector cannot compute.
+#: `_dissector` reads it and stops placing members that follow the cursor.
+_LOST = "\t-- (the cursor stops here)"
+
+
+def _uncomputable(path: str, why: str) -> list[str]:
+	"""A member this dissector cannot step over, said once and acted on.
+
+	Four branches declined a member by returning a comment and nothing else,
+	which left `at` where it was -- and the walk carried on placing every
+	member after it at a cursor that was now wrong, with full confidence.
+	`test/schema/edges.situ`'s `beats.after` was shown at offset 0 on all
+	eight probe packets, where the generated C walks the `while` run first
+	(`situ_beats_pulse_span_from`) and reads it at 2; the walker agrees with
+	C. A wrong line is worse than a missing one, and this is the file that
+	says so about a located member three hundred lines up.
+	"""
+	return [f"\t-- {path}: {why}", _LOST]
+
+
 def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 		members: list[Placement]) -> list[str]:
 	proto  = _lua(struct.name)
@@ -539,8 +559,29 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 		"",
 	]
 
+	# Once a member's extent cannot be computed, the cursor is wrong and
+	# every member declared after it is declined by name.
+	#
+	# Two shapes could in principle survive that -- a member with a static
+	# offset, which assigns `at` outright, and a located one, which reads at
+	# its driver's offset without consulting the cursor at all (9.8). Neither
+	# is special-cased. A static offset cannot follow a member of unknown
+	# extent in the first place, and no schema in this repository puts a
+	# located member after one, so the exemption would be a branch of a code
+	# generator that nothing in the tree exercises -- which is the thing this
+	# file has been wrong about twice already.
+	lost = False
 	for placement in members:
-		lines.extend(_member(resolved, struct, placement))
+		if lost:
+			lines.append(f"\t-- {placement.path}: not shown, because the"
+			             " member above it has no extent this")
+			lines.append("\t-- dissector can compute, so this one's"
+			             " offset is unknown")
+			continue
+
+		body = _member(resolved, struct, placement)
+		lines.extend(line for line in body if line != _LOST)
+		lost = _LOST in body
 
 	lines.extend(_conversation_calls(resolved, struct))
 	lines.extend(["", "\treturn at", "end"])
@@ -734,6 +775,24 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.located is not None:
 		return _located_body(resolved, struct, placement, field, name)
 
+	# `pad_to(n)`: the bytes from here to the next multiple of `n` (8.4,
+	# decision 0043). There is nothing to show -- that is what padding is --
+	# but it moves the cursor, and every member declared after it sits where
+	# it leaves them.
+	#
+	# It was not handled at all, so the cursor walked straight past the
+	# padding and `byte_run.trailer` was dissected wherever the run happened
+	# to end. On a 14-byte run the generated C aligns to 16
+	# (`situ_align_up_u32(offset, 4u, view.limit)`) and the walker reads 16;
+	# this read 15, one byte early, and showed a value straddling the pad.
+	# Relative to the current tvb rather than to the whole capture, which is
+	# what C does with its own view base.
+	if placement.pad_to:
+		unit = placement.pad_to
+		return [f"\t-- {placement.path}: pad to the next multiple of {unit}",
+		        *seek,
+		        f"\tat = at + (({unit} - at % {unit}) % {unit})"]
+
 	# Before the nested-struct case. A run of records names a struct type and
 	# is not one, and this used to reach the delimiter branch only because a
 	# delimited member carried `array_count = 1` -- so the check below failed
@@ -760,8 +819,10 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		size = str(nested.layout.size_bytes)
 		if not nested.layout.is_fixed_size:
 			if not _extent_terms(resolved, nested):
-				return [f"\t-- {placement.path}: one `{placement.type_name}`"
-				        " has no extent this dissector can compute"]
+				return _uncomputable(
+					placement.path,
+					f"one `{placement.type_name}` has no extent this"
+					" dissector can compute")
 			size = "size"
 
 		lines = [f"\t-- {placement.path}", *seek]
@@ -825,7 +886,8 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			# from wherever the walk happens to have got to.
 			length = _length(resolved, struct, placement, "0")
 			if length is None:
-				return [f"\t-- {placement.path}: no bytes of its own"]
+				return _uncomputable(placement.path,
+				                     "a length this dissector cannot render")
 			name = _lua(_local(struct, placement))
 			return [
 				f"\t-- {placement.path}: a length the data decides",
@@ -1389,8 +1451,8 @@ def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 		        " native`, and the",
 		        "\t-- capture does not record which machine wrote it."]
 	if element is None or not _run_span(resolved, struct, placement):
-		return [f"\t-- {placement.path}: elements of no size this dissector"
-		        " can compute"]
+		return _uncomputable(placement.path,
+		                     "elements of no size this dissector can compute")
 
 	cap   = placement.repeat_cap
 	guard = "" if cap is None else f" and n < {cap}"
@@ -1500,7 +1562,7 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	each = 1 if placement.kind == "opaque" else _element_bytes(resolved, placement)
 	if each is None:
-		return [f"\t-- {placement.path}: elements of no fixed size"]
+		return _uncomputable(placement.path, "elements of no fixed size")
 
 	lines = [f"\t-- {placement.path}", *seek, f"\tlocal {name}_n = {count}"]
 

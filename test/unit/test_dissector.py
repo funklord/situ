@@ -6,6 +6,11 @@ interpreter parses every dissector this repository can generate, and four of
 them are executed over real packet bytes through the Wireshark stub in
 `test/lua/dissect.lua`.
 
+And every one of them is now run over *random* bytes with its answers compared
+against the walker's, which is a third kind: `walker/report.listing` computes
+what the schema says about any buffer, so the chosen packets are no longer the
+only ones with a right answer.
+
 What is still not checked is that Wireshark accepts the plugin -- there is no
 Wireshark here, and the stub is a stand-in for its API rather than a copy of
 it. What is checked now is the dissection itself, which is the half that
@@ -19,16 +24,22 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
+from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
 from every_schema import SCHEMAS, ids
+from situc import pack as packer
 from situc.cli import analyse
 from situc.dissector import generate
 from situc.layout import solve
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
+from walker import report
+from walker.image import Image, load
 
 from every_schema import ROOT, SCHEMAS
 EXAMPLES = SCHEMAS
@@ -172,6 +183,16 @@ def dissect(tmp_path: Path, path: Path, proto: str,
 	lua = tmp_path / f"{path.stem}.lua"
 	lua.write_text(generate(parse(source), resolved, path.stem), encoding="ascii")
 
+	return read_back(lua, proto, packet)
+
+
+def read_back(lua: Path, proto: str,
+		packet: bytes) -> tuple[int, list[tuple[str, int, int, str]]]:
+	"""The same, for a dissector already written out.
+
+	Split off so that a sweep over many packets writes the Lua once. `analyse`
+	and `generate` are the expensive half and neither depends on the bytes.
+	"""
 	assert LUA is not None
 	result = subprocess.run(
 		[LUA, str(HARNESS), str(lua), proto, packet.hex()],
@@ -754,6 +775,70 @@ def dissect_bytes(rng: random.Random) -> bytes:
 	return bytes(alphabet[rng.randrange(len(alphabet))] for _ in range(length))
 
 
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_pad_lands_the_member_after_it_on_the_multiple(tmp_path: Path) -> None:
+	"""`pad_to(n)` shows nothing and moves the cursor, and it did neither.
+
+	`byte_run` is `u8 n; u8 data[n]; pad_to(4); u16 trailer;`. With `n = 14`
+	the run ends at 15 and the trailer sits at 16; the generated C says so in
+	as many words -- `situ_align_up_u32(offset, 4u, view.limit)` -- and the
+	walker reads 16. The dissector stepped over the run and straight past the
+	padding, and showed a trailer straddling the pad.
+
+	Chosen bytes rather than the sweep, because the sweep cannot see this:
+	an unhandled pad now reaches the "extent this dissector cannot compute"
+	branch, which declines every member after it, so the differential sees a
+	*missing* row rather than a wrong one -- correct behaviour, and one
+	answer of coverage, which no floor can be tight enough to catch.
+	"""
+	packet = bytes([14]) + bytes(range(0x20, 0x2e)) + b"\x00" + b"\xab\xcd"
+	assert len(packet) == 18
+
+	consumed, rows = dissect(tmp_path, ROOT / "test" / "schema" / "padded.situ",
+	                         "byte_run", packet)
+	trailer = [row for row in rows if row[0].endswith(".trailer")]
+
+	assert len(trailer) == 1, "the trailer is shown exactly once"
+	assert trailer[0][1] == 16, "the trailer sits on the multiple of four"
+	assert trailer[0][3] == "43981"		# 0xabcd, and not 0x00ab at 15
+	assert consumed == 18
+
+
+def test_a_pad_is_aligned_rather_than_stepped_over() -> None:
+	"""The arithmetic itself, so the structural half says it too.
+
+	Relative to the current tvb, which is what the generated C aligns
+	relative to -- its own view base, not the whole capture.
+	"""
+	source, resolved, _ = analyse(ROOT / "test" / "schema" / "padded.situ")
+	lua = generate(parse(source), resolved, "padded")
+
+	assert "at = at + ((4 - at % 4) % 4)" in lua
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_nothing_is_placed_after_a_member_with_no_computable_extent(
+		tmp_path: Path) -> None:
+	"""A wrong line is worse than a missing one, which this file already says
+	about a located member.
+
+	Four branches declined a member by returning a comment and leaving `at`
+	where it was, and the walk carried on placing every member after it at a
+	cursor that was now wrong. `beats` is `beat pulse[] while (kind == 0x33)
+	max 6; u16 after;` -- the run is declined, and `after` was then shown at
+	offset 0 on every packet, where C walks the run first and the walker
+	reads it at 2.
+	"""
+	source, resolved, _ = analyse(ROOT / "test" / "schema" / "edges.situ")
+	lua = generate(parse(source), resolved, "edges")
+
+	assert "beats.after: not shown" in lua
+	assert "coded_run.trailer: not shown" in lua
+
+	body = lua[lua.index("function beats.dissector"):]
+	assert "subtree:add(beats_f.after" not in body[:body.index("\nend")]
+
+
 @pytest.mark.skipif(LUA is None, reason="no Lua")
 @pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
 def test_every_dissector_runs(schema: Path, tmp_path: Path) -> None:
@@ -768,9 +853,18 @@ def test_every_dissector_runs(schema: Path, tmp_path: Path) -> None:
 	the two-argument `tvb(offset, length)` and a `[remaining]` member writes
 	`tvb(at)`.
 
-	This asks only that the dissector survives the packet. What it *shows* is
-	the business of the tests above, which is why those use chosen bytes: a
-	random buffer has no right answer to compare against.
+	This asks only that the dissector survives the packet, and that is still
+	worth asking on its own: nothing a dissector shows matters until it
+	finishes showing it.
+
+	What it used to say next was that a random buffer has no right answer to
+	compare against, so what a dissector *shows* was the business of the
+	chosen-byte tests above. That was false, and the machinery to disprove it
+	was already in the tree: `walker/report.listing` computes what the schema
+	says about *any* buffer, out of the packed image, so a random buffer has a
+	right answer and always had one.
+	`test_the_dissector_agrees_with_the_walker` below asks both descriptions
+	the same question over these same bytes.
 	"""
 	source, resolved, _ = analyse(schema)
 	lua = tmp_path / f"{schema.stem}.lua"
@@ -794,6 +888,241 @@ def test_every_dissector_runs(schema: Path, tmp_path: Path) -> None:
 			assert result.returncode == 0, (
 				f"{schema.name}/{name} died on {len(packet)} bytes:\n"
 				f"  {packet.hex()}\n{result.stderr}")
+
+
+# -- and both descriptions of the same bytes, compared (26.185) -------------
+
+#: Lines the walker's listing carries that are not a member at all: a verdict
+#: about the whole struct, and the note for a struct no view can be taken of.
+#: The same two `test_walker.py` holds out, for the same reason.
+NOT_A_MEMBER = frozenset({"validate", "no-view"})
+
+#: Where the dissector says what it thinks a member *is*. Read out of the
+#: emitted text rather than off a row, because `dissect.lua` prints the value
+#: and not the kind it printed it as -- and the kind is what decides whether
+#: the row is an integer at all.
+PROTOFIELD = re.compile(r'ProtoField\.(\w+)\("([^"]+)"')
+
+
+class Comparison(NamedTuple):
+	"""One schema's two descriptions of the same bytes, counted.
+
+	`shown` and `walked` are one side each and `compared` is the overlap,
+	which is the number that matters: 26.185's finding was that a one-sided
+	coverage number can look healthy while the overlap is small, and that
+	nothing counted the intersection.
+	"""
+
+	shown:    int
+	walked:   int
+	compared: int
+	differ:   tuple[str, ...]
+
+
+def _shown(rows: list[tuple[str, int, int, str]], proto: str,
+		kinds: dict[str, str]) -> tuple[int, dict[str, int]]:
+	"""What the dissector showed about `proto` itself: how much, and which of
+	it is an integer a walker's reading can be held against.
+
+	Rows a *nested* dissector added are not `proto`'s and are dropped before
+	either count. They carry the nested struct's own abbreviation and sit
+	wherever the sub-range began, while the walker's section for that struct
+	is read at offset 0 of the whole buffer -- two answers about different
+	bytes, which is a difference in what was asked.
+
+	Of what is left, three `ProtoField` kinds are counted and not compared,
+	each because the two sides are making different claims rather than
+	disagreeing:
+
+	- `bytes` -- a run or a delimited member, shown as its raw bytes. The
+	  walker answers `len=` and a first byte about the same member. Neither
+	  is wrong and neither is the other.
+	- `string` -- the same, for a member shown as text.
+	- `int` -- `dissect.lua`'s `shown` reads every range with `uint()`, so a
+	  signed member's row carries the stub's unsigned reading. Wireshark is
+	  what applies the sign and there is no Wireshark here, so the difference
+	  belongs to the stub rather than to the dissector. This cannot hide a
+	  signed member *declared* unsigned, which is the failure worth catching:
+	  that one has a `uint` kind, is compared, and disagrees.
+	"""
+	total  = 0
+	values: dict[str, int] = {}
+	seen:   set[str] = set()
+	for abbrev, _, _, value in rows:
+		if not abbrev.startswith(proto + "."):
+			continue
+		total += 1
+		if not kinds.get(abbrev, "").startswith("uint"):
+			continue
+		local = abbrev.split(".")[-1]
+		# The same member shown twice in one packet. The walker has one
+		# answer and nothing says which row it is about, so neither row is
+		# compared -- an invented pairing would be a disagreement the
+		# comparison made up.
+		if local in seen:
+			values.pop(local, None)
+			continue
+		seen.add(local)
+		values[local] = int(value)
+	return total, values
+
+
+def _walked(image: Image, proto: str,
+		packet: bytes) -> tuple[int, dict[str, int]]:
+	"""What the walker says about `proto` over the same bytes.
+
+	The count is every member line in that struct's section of the listing;
+	the values are the subset that is a plain integer, which is what
+	`report._members` prints for a scalar it read: `name value`.
+
+	Every other line answers a different question and is left out rather than
+	translated into one. `present=` is a tag's presence and not its bytes --
+	the difference the probe for this comparison ran into first. `little=` is
+	what a marker says about byte order. `ok=` and `extent=` are whether a
+	nested struct fits, and `count=`, `len=`, `term=` and `[0]=` are a run's
+	shape. A gate answers `refused=1 opened=1`, which is a claim about
+	permission and about no bytes at all.
+	"""
+	total  = 0
+	values: dict[str, int] = {}
+	where  = ""
+	for line in report.listing(image, packet).split("\n"):
+		if line.startswith("-- "):
+			where = line[3:]
+			continue
+		if where != proto or not line.strip():
+			continue
+		parts = line.split()
+		if parts[0] in NOT_A_MEMBER:
+			continue
+		total += 1
+		if len(parts) == 2 and "=" not in parts[1]:
+			values[parts[0]] = int(parts[1])
+	return total, values
+
+
+@lru_cache(maxsize=None)
+def compare(schema: Path) -> Comparison:
+	"""Run one schema's dissector and its walker over the same buffers.
+
+	The bytes are `test_every_dissector_runs`' bytes -- the same seed, the
+	same order, the same eight packets per struct -- so the claim that a
+	dissector survives a packet and the claim that it agrees about one are
+	made about the one buffer rather than about two draws that happen to
+	rhyme.
+
+	Cached because the corpus-wide floor below asks the same question of the
+	same 37 schemas, and the answer is a pure function of the tree.
+	"""
+	source, resolved, _ = analyse(schema)
+	parsed  = parse(source)
+	text    = generate(parsed, resolved, schema.stem)
+	blob, _ = packer.pack(parsed, resolved, metadata=True)
+	image   = load(blob)
+	kinds   = {abbrev: kind for kind, abbrev in PROTOFIELD.findall(text)}
+
+	shown = walked = compared = 0
+	differ: list[str] = []
+
+	with tempfile.TemporaryDirectory() as held:
+		lua = Path(held) / f"{schema.stem}.lua"
+		lua.write_text(text, encoding="ascii")
+
+		rng = random.Random(20260803)
+		for name, struct in sorted(resolved.structs.items()):
+			# A register map is a bus transaction rather than bytes on a
+			# wire, so no `Proto` is emitted for one and there is nothing to
+			# run -- the exclusion above, for the reason it gives.
+			if struct.layout.register is not None:
+				continue
+
+			for _ in range(8):
+				packet = dissect_bytes(rng)
+				_, rows = read_back(lua, name, packet)
+
+				rows_total, said = _shown(rows, name, kinds)
+				line_total, read = _walked(image, name, packet)
+				shown  += rows_total
+				walked += line_total
+
+				for member in said.keys() & read.keys():
+					compared += 1
+					if said[member] != read[member]:
+						differ.append(
+							f"{name}.{member}: the dissector shows "
+							f"{said[member]} and the walker reads "
+							f"{read[member]}\n    buffer: {packet.hex()}")
+
+	return Comparison(shown, walked, compared, tuple(differ))
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_dissector_agrees_with_the_walker(schema: Path) -> None:
+	"""Two descriptions of one layout, asked the same question.
+
+	The dissector walks a buffer in Lua from the placements the generator
+	read; `walker/report.listing` walks the same buffer from the packed
+	image. Neither is derived from the other at run time, so where both speak
+	about a member they are a differential -- the move 26.185 records for the
+	walker against C, one column over.
+
+	Only where both speak. A member the dissector shows and the walker never
+	renders is a difference in what was asked and not in the answer, and
+	forcing either side to answer something it does not is how a comparison
+	invents disagreements. `_shown` and `_walked` say which shapes are held
+	out and why.
+	"""
+	result = compare(schema)
+
+	assert result.differ == (), (
+		f"{schema.parent.name}/{schema.name}: the dissector and the walker "
+		f"disagree about bytes they were both handed:\n  "
+		+ "\n  ".join(result.differ))
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua")
+def test_the_comparison_covers_enough_to_be_a_differential() -> None:
+	"""The intersection, counted, because nothing else counts it.
+
+	A gate over an empty file list reports success exactly as loudly as a
+	real pass, and the test above is a gate over `said.keys() & read.keys()`.
+	It would go green over a corpus where the two sides never once speak
+	about the same member -- and each side has its own reasons to shrink,
+	none of which is visible from the other.
+
+	Two floors, for 26.185's reason: either alone can be met while the other
+	rots. The count, so the overlap cannot quietly shrink; and its share of
+	what the dissector shows, so adding schemas the walker says nothing about
+	cannot dilute it.
+
+	Measured over the 37 committed schemas: 3278 rows shown, 3940 member
+	lines walked, 2282 member-answers compared -- 69% of what the dissector
+	shows and 57% of what the walker renders.
+
+	The dissector shows 37 fewer rows than when this was first measured, and
+	that is the differential's first two findings being fixed rather than
+	coverage lost: a member after one whose extent the dissector cannot
+	compute used to be placed at the un-advanced cursor and shown with full
+	confidence. It is declined by name now.
+	"""
+	shown = walked = compared = 0
+	for schema in SCHEMAS:
+		result    = compare(schema)
+		shown    += result.shown
+		walked   += result.walked
+		compared += result.compared
+
+	assert compared >= 2260, (
+		f"the two descriptions are compared over {compared} member-answers, "
+		f"down from 2282; the dissector shows {shown} rows and the walker "
+		f"renders {walked} member lines")
+	assert compared * 100 >= shown * 68, (
+		f"{compared} of the dissector's {shown} rows are compared against "
+		f"the walker, down from 69%")
+	assert walked >= 3940, (
+		f"the walker renders {walked} member lines, down from 3940; the "
+		"share above can be met by the dissector showing less")
 
 
 @pytest.mark.skipif(LUA is None, reason="no Lua interpreter")

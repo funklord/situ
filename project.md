@@ -18386,6 +18386,74 @@ must not happen is hover knowing *less*.
 Sabotaged three ways, including the historical one: drop the remedy, and 34 of
 35 schemas go red.
 
+### 26.201 The dissector was the description nobody compared, and it was wrong twice
+
+`test_every_dissector_runs` executes every generated dissector over eight
+random packets per struct and asserts only that the process survives. Its
+docstring gave the reason:
+
+> This asks only that the dissector survives the packet. What it *shows* is the
+> business of the tests above, which is why those use chosen bytes: **a random
+> buffer has no right answer to compare against.**
+
+**There is a right answer, and it was already in the tree.**
+`walker/report.listing(image, buffer)` computes what the schema says about
+*any* buffer, which is the move 26.185 records for the walker-against-C
+differential. And `test/lua/dissect.lua` was built for this comparison -- its
+own header says its offsets are absolute because "absolute is what makes a row
+comparable with the layout the accessors were generated from, which is the
+thing being checked". The row format is `abbreviation, offset, length, value`;
+the walker renders `name value`. One premise, stated in a docstring, kept the
+fifth description out of the differential.
+
+**Over the corpus: 3278 rows shown, 3940 walker lines, 2282 compared** -- 69%
+of what the dissector shows and 57% of what the walker renders, on the same
+seeded packets `test_every_dissector_runs` already used. Nine schemas compare
+nothing, because everything they show is digits, delimited runs, TLV, or a
+register map that gets no `Proto` at all.
+
+**Two defects, both confirmed against the generated C so it is not
+walker-against-dissector.**
+
+`pad_to(n)` was not handled at all. `byte_run` is `u8 n; u8 data[n];
+pad_to(4); u16 trailer;`, and with `n = 14` the run ends at 15 and the trailer
+sits at 16 -- C says `situ_align_up_u32(offset, 4u, view.limit)` and the
+walker reads 16. The dissector read 15 and showed a value straddling the pad.
+The schema's own comment says it exists so "the four-backend differential
+draws its buffers against exactly this shape"; the dissector was not in that
+differential.
+
+**And four branches declined a member by returning a comment and nothing
+else**, which left the cursor where it was -- and the walk carried on placing
+every member after it with full confidence. `beats` is `beat pulse[] while
+(kind == 0x33) max 6; u16 after;`: the run is declined, and `after` was then
+shown at offset 0 on all eight packets, where C walks the run first and the
+walker reads it at 2. `coded_run.trailer` had the same shape and fell outside
+the intersection, so the differential could not see it; the same fix corrects
+it. **A wrong line is worse than a missing one** -- which this file already
+says, three hundred lines up, about a located member.
+
+**The two fixes are not independently guarded, and finding that out took a
+sabotage.** With the pad fix removed the padding now reaches the
+"extent this dissector cannot compute" branch, so the cursor is declared lost
+and the trailer is *declined* rather than shown wrongly. The differential goes
+green: one answer of coverage, which no floor can be tight enough to catch.
+That is the guard working, and it is also why the pad needs a chosen-bytes
+test of its own. **A fix that another fix makes invisible is a fix nothing is
+watching.**
+
+**One branch was removed rather than tested.** The first cut let a member with
+a static offset, or a located one, survive a lost cursor -- both correct in
+principle, neither reachable: a static offset cannot follow a member of
+unknown extent, and no schema here puts a located member after one. An
+exemption nothing exercises is a code-generator branch nobody has watched, and
+that is what this entry is about twice over.
+
+The floor is 2260 compared answers and 68% of the dissector's rows, plus a
+third on the *walker's* side -- because a share of what the dissector shows can
+be met by the dissector showing less, which is 26.185's own lesson about
+one-sided coverage numbers.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
