@@ -18454,6 +18454,51 @@ third on the *walker's* side -- because a share of what the dissector shows can
 be met by the dissector showing less, which is 26.185's own lesson about
 one-sided coverage numbers.
 
+### 26.202 `pad_to` aligns from a base 0043 does not name, and nothing has asked
+
+Decision 0043 exists because two readings of "pad to the next multiple of n"
+come apart, and it says so in its own words: `align_up(length, 4) - length`
+pads the *run's own length*, while "to the next multiple" reads as aligning
+"the **absolute offset from the message base**". It names when they diverge --
+"the moment a run does not start aligned" -- and what it costs: "the padding
+lands, the bytes parse, and a peer computing the other alignment reads the
+following field two bytes off". Then it decides: **absolute, from the message
+base.**
+
+**Every implementation aligns from the struct's own base instead**, which is
+the same number for a top-level struct and a different one for a nested member:
+
+    walker/walk.py   ((off + unit - 1) // unit) * unit - off, off from the view
+    codegen/c        situ_align_up_u32(offset, 4u, view.limit), offset from the view
+    dissector        at = at + ((4 - at % 4) % 4), at within the current tvb
+
+**The corpus cannot tell.** All three pad-bearing structs -- `pickle_string`,
+`aligned_header`, `byte_run` -- are top-level only, so struct base and message
+base are the same byte in every case the tree contains. Three descriptions
+agree with each other and no schema puts them in the situation the decision was
+written to settle.
+
+Nesting one is legal: `struct outer { u16 lead; inner body; }` resolves, and
+`outer.body` lands at byte 2. With `n = 2` the two readings put the trailer at
+6 and at 8. What the three then do is not one answer either -- C emits no
+`situ_outer_body_trailer_offset` at all, the walker reports the nested extent
+as 6 (the struct-relative reading), and the dissector declines the member.
+
+**This is the holder's, and it is not obviously a defect.** The reading that
+matches the implementations is defensible: situ's model is that a view is
+acquired once and every accessor after it is arithmetic *from that view*, so a
+nested struct is its own message and "the message base" is its own base. 0043's
+phrase would then be loose rather than wrong. The alternative is that a
+schema author writing `pad_to(4)` inside a struct someone else nests gets
+padding computed from a base they cannot see, which is exactly the silent
+interoperability break 0043 opens by describing.
+
+Recorded rather than fixed, and recorded rather than tested: pinning today's
+answer would bless one reading, and the case has no subject in the corpus, so a
+test would have to invent one. What is settled is that the question is now
+written down next to the measurement, instead of being a sentence in a decision
+record that three implementations quietly answer another way.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
