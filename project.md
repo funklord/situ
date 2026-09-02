@@ -18088,6 +18088,82 @@ the third time this session: **a sabotage whose anchor misses reports exactly
 what a sabotage the code survives reports.** The habit that catches it is
 asserting the anchor matched before believing the result.
 
+### 26.195 Two witnesses, one hand: the round trip that could not see ten fields
+
+Section 26.1's property is that `situc dump-ast` round-trips: "parsing,
+unparsing and reparsing must reach the same tree". The test spelled it
+
+    assert dump(again) == dump(first)
+
+and `situc/dump.py` imports its expression renderer from `situc/unparse.py`.
+**So the witness to the unparser's faithfulness was written by the same hand,
+and agreed with it wherever both were silent** -- which is the guidelines'
+"two documents agreeing are one witness", arrived at from the other end.
+
+Comparing the trees instead, over all 37 schemas, ten AST fields were dropped
+on the round trip:
+
+     40  CodecDecl.kernel / has_kernel      slip, smtp, std
+      5  CodecDecl.tag_bytes                dtls, keystore, packet, std
+      4  CodecDecl.nonce_bytes              keystore, packet, std
+      3  Field.repeat                       dnsname, ipv6ext, netlink
+      2  VarintDecl.declared_max_bytes      mqtt, sqlite
+      2  TagField.prefix                    tcp, udp
+      2  CodecDecl.pipeline                 std
+      1  Field.located                      bmp
+      1  CodecDecl.expansion_add            std
+
+and `unparse` **refused `test/schema/edges.situ` outright** -- `cannot unparse
+Invariant`, raised for years with nothing asking.
+
+Every one of them changes what the schema says. `at expr` is where the *data*
+puts a member; dropping it puts it back in sequence. A `while` run reprinted
+as a bare array ends at the frame instead of at its own condition. A tag's
+`prefix` is TCP's and UDP's pseudo-header, so the checksum covers different
+bytes. A pipeline codec re-rendered as a property body states the composed
+answer as though it had been written and drops the stages that produced it:
+`framed` came back with `expansion = +0` and no stages.
+
+**The measurement that settles which half was at fault.** Each fix sabotaged
+in turn, and both witnesses asked how many schemas notice:
+
+    sabotage       dump sees   tree sees
+    at expr                0           1
+    while                  0           1
+    tag prefix             0           2
+    max_bytes              0           3
+    kernel                 0           4
+    tag_bytes              0           4
+    nonce_bytes            0           3
+    pipeline               0           1
+
+**Zero and eight.** The dump is not a weak witness to this, it is no witness
+at all: it does not print these fields either, so it cannot disagree about
+them.
+
+**The corpus was the second half of it.** The round trip ran on `example/`
+alone while the two snapshot checks in the same file run on everything --
+`test/schema/edges.situ` "exists to carry the constructs no worked example
+has", and 26.35 already recorded that reading `example/` alone left its map
+and its wire signature stale and unread. The lesson had been learnt in this
+file, for two of its three tests.
+
+**Two docstrings in `unparse.py` state the property that was false.**
+`_codec_lines` says "Every property is written out, including the ones that
+were defaulted ... a round-tripped one that dropped a silent default would say
+something different from what it came from", while dropping the kernel, both
+AEAD sizes and the pipeline. And `_until_to_source` exists because this
+happened once before and was caught by something else entirely: "Absent
+entirely until an attribute-placement check found it: a delimited `decimal`
+field reprinted as a plain binary scalar, which parses, means something else,
+and says so nowhere." One of ten found by accident, and the accident is what
+wrote the comment.
+
+The comparison walks the dataclasses now and shares no code with `unparse`, so
+**a field added to the AST is compared whether or not anything learned to
+print it** -- which is the only version of this check that does not rot the
+same way.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

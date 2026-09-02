@@ -139,6 +139,8 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 		if decl.transform is not None:
 			lines.append(f"\ttransform = {decl.transform.value};")
 		lines.append(f"\tmax_bits = {decl.max_bits};")
+		if decl.declared_max_bytes is not None:
+			lines.append(f"\tmax_bytes = {decl.declared_max_bytes};")
 		if decl.minimal:
 			lines.append("\tminimal;")
 		lines.append("}")
@@ -163,6 +165,9 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.Requirement):
 		return [f"{decl.kind.value} {expr_to_source(decl.expr)};"]
 
+	if isinstance(decl, ast.Invariant):
+		return [f"invariant {decl.derived} == {expr_to_source(decl.expr)};"]
+
 	if isinstance(decl, ast.Relation):
 		params = ", ".join(f"{param.name}: {param.type_name}"
 		                   for param in decl.params)
@@ -182,8 +187,29 @@ def _codec_lines(decl: ast.CodecDecl) -> list[str]:
 	that dropped a silent default would say something different from what it
 	came from.
 	"""
-	lines = [f"codec {decl.name} {{", f"\t{codec_expansion(decl)};",
-	         f"\tgranularity = {codec_granularity(decl)};"]
+	if decl.pipeline:
+		# `codec framed = crc32 |> interleave_16 |> manchester_802_3;`. A
+		# pipeline declares no properties at all -- they compose from the
+		# stages (13.4) -- so rendering one as a property body states the
+		# composed answer as though it had been written, and drops the stages
+		# that produced it. `framed` came back with `expansion = +0` and no
+		# stages, which is a different codec.
+		return [f"codec {decl.name} = {' |> '.join(decl.pipeline)};"]
+
+	lines = [f"codec {decl.name} {{"]
+	# Before the properties, because that is where the schemas write them and
+	# because they are the primitive's sizes rather than the lattice's
+	# properties: `expansion` says nothing about the tag beside the ciphertext
+	# (0038).
+	if decl.tag_bytes is not None:
+		lines.append(f"\ttag_bytes = {decl.tag_bytes};")
+	if decl.nonce_bytes is not None:
+		lines.append(f"\tnonce_bytes = {decl.nonce_bytes};")
+	if decl.kernel is not None:
+		lines.append(f"\tkernel = {_kernel_to_source(decl.kernel)};")
+
+	lines += [f"\t{codec_expansion(decl)};",
+	          f"\tgranularity = {codec_granularity(decl)};"]
 
 	if decl.seekable is ast.Seekable.NONE:
 		lines.append("\tnot seekable;")
@@ -197,6 +223,18 @@ def _codec_lines(decl: ast.CodecDecl) -> list[str]:
 
 	lines.append("}")
 	return lines
+
+
+def _kernel_to_source(kernel: ast.Kernel) -> str:
+	"""`stuffing(worst_case = 2, per = 1, unit = byte, code = slip)`.
+
+	The family and its arguments, which are what name the code generated for
+	a codec rather than merely its signature. Dropping them left 38 of
+	`std/kernels.situ`'s codecs round-tripping into signatures with no kernel
+	-- declarations that say what a transform costs and no longer say what it
+	is.
+	"""
+	return f"{kernel.family.value}({_args_to_source(kernel.args)})"
 
 
 def codec_expansion(decl: ast.CodecDecl) -> str:
@@ -312,7 +350,10 @@ def member_to_source(member: ast.Member) -> str:
 		parts = [_radix_to_source(getattr(member, "radix", None)),
 		         member.type_ref.name, " ", member.name,
 		         _array_to_source(member.array),
-		         _until_to_source(getattr(member, "until", None))]
+		         _until_to_source(getattr(member, "until", None)),
+		         _while_to_source(getattr(member, "repeat", None))]
+		if member.located is not None:
+			parts.append(f" at {expr_to_source(member.located)}")
 		if member.pin is not None:
 			parts.append(f" @ {expr_to_source(member.pin)}")
 		parts.append(_attrs_to_source(member.attrs))
@@ -334,10 +375,12 @@ def member_to_source(member: ast.Member) -> str:
 		        f"{_attrs_to_source(member.attrs)};")
 
 	if isinstance(member, ast.TagField):
+		prefix = (f" prefix({member.prefix})"
+		          if member.prefix is not None else "")
 		return (f"{member.kind.value} {member.type_ref.name}"
 		        f"{_region_name(member.name, member.kind.value)}"
 		        f"{_array_to_source(member.array)}{_covers_to_source(member.covers)}"
-		        f"{_attrs_to_source(member.attrs)};")
+		        f"{prefix}{_attrs_to_source(member.attrs)};")
 
 	if isinstance(member, ast.Pad):
 		return f"pad_to({member.to}){_attrs_to_source(member.attrs)};"
@@ -478,6 +521,22 @@ def _until_to_source(until: "ast.Until | None") -> str:
 	body = _escape(until.delimiter.decode("latin-1"))
 	cap  = f" max {expr_to_source(until.cap)}" if until.cap is not None else ""
 	return f' until "{body}"{cap}'
+
+
+def _while_to_source(repeat: "ast.While | None") -> str:
+	"""`while (cond)`, and the cap where one was written.
+
+	Parenthesised for the reason the parser gives: the parentheses are what
+	stop a following `max` reading as part of the condition. Absent until the
+	round trip was compared over the tree rather than over the dump -- a
+	`while` run reprinted as a bare array is a member the frame ends instead
+	of the data, which parses and means something else.
+	"""
+	if repeat is None:
+		return ""
+
+	cap = f" max {expr_to_source(repeat.cap)}" if repeat.cap is not None else ""
+	return f" while ({expr_to_source(repeat.predicate)}){cap}"
 
 
 def _escape(text: str) -> str:

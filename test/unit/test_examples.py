@@ -8,6 +8,8 @@ merely sitting there.
 
 from __future__ import annotations
 
+import dataclasses
+import enum
 import re
 from pathlib import Path
 
@@ -97,10 +99,56 @@ def test_current_examples_parse(path: Path) -> None:
 	parse(Source(str(path), path.read_text(encoding="ascii")))
 
 
-@pytest.mark.parametrize("path", CURRENT, ids=ids(CURRENT))
-def test_current_examples_round_trip(path: Path) -> None:
+def _without_spans(node: object) -> object:
+	"""An AST as plain data, with the positions dropped.
+
+	Deliberately not `dump` and deliberately sharing no code with `unparse`.
+	The round-trip check compared `dump(again) == dump(first)`, and `dump.py`
+	imports its expression renderer from `unparse.py` -- so the witness to the
+	unparser's faithfulness was written by the same hand, and agreed with it
+	wherever both were silent. Ten AST fields were dropped on the round trip
+	across fifteen schemas and the comparison saw none of them: `at expr`, a
+	`while` run, a tag's pseudo-header, a varint's `max_bytes`, a codec's
+	kernel, its `tag_bytes` and `nonce_bytes`, and a pipeline's stages.
+
+	Walking the dataclasses is what makes this independent: a field added to
+	the AST is compared here whether or not anything learned to print it.
+	"""
+	if dataclasses.is_dataclass(node) and not isinstance(node, type):
+		return (type(node).__name__,
+		        {field.name: _without_spans(getattr(node, field.name))
+		         for field in dataclasses.fields(node)
+		         if field.name not in ("span", "source")})
+	if isinstance(node, (list, tuple)):
+		return [_without_spans(item) for item in node]
+	if isinstance(node, dict):
+		return {key: _without_spans(value)
+		        for key, value in sorted(node.items())}
+	if isinstance(node, enum.Enum):
+		return node.value
+	return node
+
+
+@pytest.mark.parametrize("path", SNAPSHOT, ids=ids(SNAPSHOT))
+def test_every_schema_round_trips(path: Path) -> None:
+	"""Parse, unparse, reparse, and compare the trees.
+
+	Over every schema rather than `example/` alone, for the reason `SNAPSHOT`
+	gives above: `test/schema/edges.situ` carries the constructs no worked
+	example has, and it was the file the unparser refused outright -- it
+	raised `cannot unparse Invariant` and nothing asked. The same lesson,
+	already learnt in this file for the two snapshot checks, had left the
+	round trip on the short list.
+
+	And against the tree rather than the dump, which is what could see any of
+	it. `dump` renders what someone taught it to render; the ten fields the
+	unparser dropped were fields it does not print either.
+	"""
 	first = parse(Source(str(path), path.read_text(encoding="ascii")))
 	again = parse(Source(str(path), unparse(first)))
+	assert _without_spans(again) == _without_spans(first)
+	# The weaker condition too: a dump that disagrees where the trees match
+	# is a defect in the dump, and this is where it would show.
 	assert dump(again) == dump(first)
 
 
