@@ -369,12 +369,75 @@ the authority; what follows is the working vocabulary.
 **Directives** set how the rest of the file is read:
 
 ```situ
-target buffer;          // or `mmio`, for memory-mapped registers
+target buffer;          // or `mmio`, or `file`
 endian big;             // or `little`, `native`
 bit_order msb_first;    // or `lsb_first`
 strictness = strict;    // or `lenient`
 import "std/codecs.situ";
 ```
+
+**The target is the medium, and it is a bundle of assumptions rather than a
+label.** Each brings what is true of its medium and refuses what cannot live
+there. (It is not `situc build --target`, which picks the output *language*.
+The two share a word and nothing else: `target file;` is where the bytes
+live, `--target c` is what reads them.)
+
+| target | what it brings | what it refuses |
+|---|---|---|
+| `buffer` | bytes somebody else owns; the extent is the caller's | the `mmio` attributes, and a `register` struct |
+| `mmio` | `volatile` implicit, `access_width` honoured, a register's width fixed by the bus | anything whose extent the data decides |
+| `file` | `effect = EffectOnWrite` on every member: a write is durable and visible to other processes | a `register` struct, the `mmio` attributes, and a top-level extent nothing bounds |
+
+`target file` exists because a file is the one medium whose writes are not
+pure stores, and that could not be said. Outside a memory-mapped register
+nothing in situ has ever had an effect, so a generated setter for a
+file-backed field looked exactly like one for a scratch buffer. Now it does
+not:
+
+```situ
+target file;
+endian little;
+
+struct rec {
+	u32  magic;
+	u16  n;
+	u8   data[n];
+}
+```
+
+```
+struct rec size=6..65541 mutate=Shifting repr=ValueConverted effect=EffectOnWrite
+  rec.magic    offset=AbsoluteStatic(0x00) size=Fixed(4) ... effect=EffectOnWrite
+  rec.n        offset=AbsoluteStatic(0x04) size=Fixed(2) ... effect=EffectOnWrite
+  rec.data     offset=AbsoluteStatic(0x06) size=Bounded(0, 65535) ... effect=EffectOnWrite
+```
+
+A file that grows says so, and is not assumed to:
+
+```situ
+target file append;     // written, never implied
+```
+
+`append` makes the top-level extent growable and every address `Unstable`,
+because a resize invalidates every outstanding pointer -- a real lattice
+consequence, which is the argument for spelling it rather than implying it.
+Most file formats do not grow, so a default that did would be wrong for most
+of them. An unbounded top-level extent *without* `append` is refused: "the
+first struct is what a reader acquires, so its extent is the file's, and
+nothing here decides where it stops".
+
+Sparse files are deliberately absent. A hole reads as zeros cheaply and the
+first write into it allocates and may fail, so a write's cost and its
+fallibility would depend on *where within a member* it happens -- and no axis
+varies a property by position. That is a lattice question before it is a
+target question, and inventing an axis to serve a target is the wrong order
+(decision 0047).
+
+What `target file` does *not* claim is that access is safe. A mapped file can
+fault under a live view -- another process truncates it and a load becomes a
+`SIGBUS`, which no bounds check prevents. That is real, and it is not
+file-specific: a shared-memory segment another process can shrink has it too,
+so it belongs to its own record rather than smuggled in under a target.
 
 **Scalars** are spelled by width, and the width need not be a whole byte:
 
@@ -402,6 +465,55 @@ struct cannot describe:
 | `sealed name (codec) { ... }` | a region nothing may read before the tag verifies |
 | `coded name (codec) { ... }` | a region transformed before it is read |
 | `register` / `register_block` | an MMIO register with its bus width and access rules |
+| `pad_to(n);` | the bytes from here to the next multiple of `n` |
+
+**Declarations** name a thing the members then use:
+
+| declaration | for |
+|---|---|
+| `enum name : u8 { a = 1, default = error }` | a named value set; `default` is `error`, or `pass` to admit unknown values |
+| `const name = expr;` | a compile-time constant |
+| `endian_marker name : u16 { little = 0x4949, big = 0x4D4D }` | a byte order the *data* declares |
+| `varint_type name { encoding = leb128; max_bits = 64; }` | a variable-length integer encoding |
+| `codec name { ... }` and `impl name extern "sym";` | a transform's property signature, and what implements it |
+| `relation name(a: t, b: t) { must ...; }` | a predicate over two messages, for request/response pairing |
+
+**A byte order the data declares** is TIFF's, and it is a construct rather
+than a case of `endian native` because the answer is in the bytes rather than
+in the machine:
+
+```situ
+endian_marker byte_order : u16 {
+	little = 0x4949,        // "II"
+	big    = 0x4D4D,        // "MM"
+}
+
+struct tiff_header [endian = from(byte_order)] {
+	endian_marker  byte_order;
+	u16            magic       [must_eq = 42];
+	u32            ifd_offset;
+}
+```
+
+It is cheap to support for one reason: endianness never changes extent, so
+`offset` and `size` are untouched and only `repr` moves. The format admits two
+encodings of one value, so it is not canonical -- but exactly one is valid
+*given* the marker, which is what `require deterministic_writer(...)` asserts.
+
+**A varint is decoded rather than declared**, so the type carries the
+decoder's own parameters rather than the schema's convenience:
+
+```situ
+varint_type sqlite_varint {
+	encoding  = be128;      // or `leb128`
+	max_bits  = 64;
+	max_bytes = 9;          // SQLite's ninth byte carries eight bits, not seven
+}
+```
+
+`transform = zigzag` is the other spelling, for a signed varint. `minimal;`
+demands one encoding per value, which is what makes a varint field canonical
+rather than merely readable.
 
 ### Where a member ends
 
@@ -510,6 +622,25 @@ added, `[secret]`, `[self_as = 0]` for what a checksum's own bytes read as
 while it is computed, `[allow_straddle]` for a bit field that crosses a byte
 boundary on purpose.
 
+The ones whose placement rule is the interesting part:
+
+| attribute | where, and what it says |
+|---|---|
+| `[equalize]` | on a `variant`: pad every arm to the largest, which buys back a static offset for whatever follows |
+| `[allow_unverified_read]` | on a `sealed` region: waive the stage gate |
+| `[truncated]` | on a `tag` or `checksum`: its width is deliberately less than the one its codec produces |
+| `[self_as = 0]` | on a `tag` or `checksum` inside its own coverage: what its bytes read as while the algorithm runs |
+| `[allow_host_dependent]` | on a struct whose layout the *host* decides -- netlink's, where every field is a plain dereference |
+| `[must_be_zero]` / `[must_be_one]` | on a `reserved` run: which way it is reserved, and it is checked |
+| `[preserve]` / `[unknown]` | on a `reserved` run: carry the bits through, or accept them, rather than demanding a value |
+| `[on_read = clear]` / `[on_write = ...]` | on an `mmio` register field: the side effect access has, which is why `effect` is an axis |
+| `[rsvd]` | on a register field: SystemRDL's reserved, which is not `reserved u2 [preserve]` |
+
+A member may carry an access mode too -- `[rw]`, `[ro]`, `[wo]`, `[w1c]`,
+`[w0c]`, `[w1s]`, `[w0s]`, `[rc]`, `[rs]`, `[wo_once]` -- which is the
+register vocabulary, and which is where `mutate` and `effect` come from for a
+memory-mapped field.
+
 **The rest of the declarations:**
 
 ```situ
@@ -524,6 +655,41 @@ invariant derived.total == size(derived.a) + size(derived.b);
 names a field situ *maintains* rather than one it merely checks. Writing a
 field an invariant reads leaves the derived one stale in exactly the way a
 covered write leaves a tag stale, and the generated API says so.
+
+`assert` is the same check reported as a warning rather than an error, and
+`require size(x) == N` / `require max_size(x) <= N` take a bound rather than a
+bare path. Every predicate names one axis and the value it insists on:
+
+| predicate | axis | what it demands |
+|---|---|---|
+| `absolute_static` | offset | the offset is known at compile time from the message base |
+| `aligned` | align | the field starts on the requested byte boundary |
+| `atomic` | atomic | the access fits in a single instruction |
+| `canonical` | canonical | exactly one byte sequence encodes a given value |
+| `deterministic_writer` | canonical | a writer always emits the same bytes for the same value |
+| `frame_static` | offset | the offset is fixed relative to a frame base resolved once at parse time |
+| `immutable` | mutate | the field cannot be written at all |
+| `in_place` | mutate | the field can be written without moving anything else, and writing it leaves no tag stale |
+| `in_place_dirty` | mutate | the field can be written without moving anything else, accepting that a tag covering it must then be recomputed |
+| `max_size` | size | the worst-case extent is known, so a static buffer can hold it |
+| `memory_identical` | repr | the bytes are the value: no swap, shift, scale or decode stands between them |
+| `no_alloc` | size | nothing under it needs storage rung 1 cannot give (0031, 0032) |
+| `no_tag_invalidation` | auth | writing the field invalidates no authentication tag |
+| `random_access` | access | element N can be reached without walking the ones before it |
+| `stable_address` | address | a pointer to the field stays valid |
+| `static` | offset | the offset is known at compile time, from the message or frame base |
+| `uncovered` | auth | no authentication tag covers these bytes |
+| `verify_gated` | stage | no view into these bytes can be obtained before the tag verifies |
+
+Three the language names and this build cannot decide. They are reported as
+notes rather than passing quietly, because a requirement that neither holds
+nor fails is the one a reader must not mistake for discharged:
+
+| predicate | why not |
+|---|---|
+| `bounded_stack` | it needs a stack-depth model of the generated code, which the compiler does not build |
+| `deterministic` | it asks about a codec's property signature rather than a field's capability vector, and nothing connects a field to the codec above it |
+| `no_realloc` | it depends on a runtime value, so it is a SITU_CHECKED check rather than a compile-time discharge, and that machinery is not wired |
 
 ### Codecs, in two tiers
 
@@ -666,6 +832,23 @@ plaintext before authenticating it is the mistake, so situ makes it
 unspellable. C++ gives the interior view no public constructor and Rust a
 private field, so in those two the compiler refuses; C and Python check at run
 time.
+
+A protocol that genuinely must read before it can verify says so, loudly:
+
+```situ
+sealed body(sealing_aead) [allow_unverified_read] {
+	u16  seq;
+}
+```
+
+`[allow_unverified_read]` waives the gate -- no gate type, no opener, the
+interior on the ordinary view -- and every backend that does so writes a note
+saying the accessors run on bytes nobody has authenticated, and that removing
+the attribute puts them back out of reach. It is the one construct in this
+language whose whole purpose is to give up a guarantee, which is why a schema
+that uses it has to write it down. The waiver moves the interior; it does not
+widen it: a `[secret]` member inside a waived region still gets no accessor,
+and a sibling sealed region in the same struct keeps its gate.
 
 **A codec must earn the right to seal.** It has to declare `authenticated`,
 so `sealed(crc32)` is refused rather than handing out the interior on a flag

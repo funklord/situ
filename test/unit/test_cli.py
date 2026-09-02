@@ -573,6 +573,52 @@ def spec_block() -> str:
 	return section[start:section.index("```", start)]
 
 
+def test_the_readme_lists_every_requirement_predicate() -> None:
+	"""A table of the language's vocabulary, held to the vocabulary.
+
+	The README's predicate table is generated prose: it says what each
+	`require` demands and which axis it reads, and nothing stopped a
+	predicate arriving without a row. That is the shape 26.166 found in the
+	`advise` sample and 26.172 in the `map` block -- a stale copy of
+	program-derived content cannot be told from a current one by reading it.
+
+	Names and axes rather than the summaries. The summaries are one wording
+	of the same fact and the README is free to wrap them; which predicates
+	exist, and which axis each reads, is not free.
+	"""
+	from situc.requirements import DEFERRED_PREDICATES, PREDICATES
+
+	readme = (ROOT / "README.md").read_text(encoding="ascii")
+
+	for name, predicate in PREDICATES.items():
+		row = f"| `{name}` | {predicate.axis.value} |"
+		assert row in readme, f"the README's predicate table has no row for {name}"
+
+	for name in DEFERRED_PREDICATES:
+		assert f"| `{name}` |" in readme, \
+			f"the README does not say {name} is undecided by this build"
+
+
+def test_the_readme_lists_every_placed_attribute() -> None:
+	"""The same, for the attribute vocabulary.
+
+	`PLACED_ATTRS` is the one source of truth for what may appear in
+	brackets, kept that way so a name moving out of `UNPLACED_ATTRS` fails a
+	test rather than opening a silent gap. The README documents that
+	vocabulary, and six of it were missing when this was written.
+
+	Containment, not a table: some attributes are named in prose and some in
+	a table, and which is right depends on the attribute rather than on a
+	rule worth enforcing. What must not happen is one going unmentioned.
+	"""
+	from situc.wellformed import PLACED_ATTRS
+
+	readme  = (ROOT / "README.md").read_text(encoding="ascii")
+	missing = sorted(name for name in PLACED_ATTRS if name not in readme)
+
+	assert not missing, f"the README does not mention {', '.join(missing)}"
+
+
 def test_the_cli_section_lists_every_command() -> None:
 	"""Section 21 is what a reader types from, and it had drifted: it named a
 	`--strict` that never existed and called three per-subcommand flags
