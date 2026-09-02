@@ -18,7 +18,7 @@ import pathlib
 import pytest
 
 from situc import advise, revision
-from situc.capability import Axis
+from situc.capability import Axis, Value
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import ResolvedSchema, resolve
@@ -916,3 +916,79 @@ struct big {
 	# then the instance that recovers most within a class.
 	assert [(item.rank, -item.weight, item.subject) for item in found] == \
 		sorted((item.rank, -item.weight, item.subject) for item in found)
+
+
+# -- what the diff was calling neither direction (26.187) -------------------
+
+
+def test_an_alignment_that_weakened_is_a_regression() -> None:
+	"""`align` carries strength in its parameter and the diff ignored it.
+
+	`capability.py` puts `Axis.ALIGN` in `NUMERIC_STRENGTH` and says why --
+	"`Aligned(8)` is stronger than `Aligned(2)`" -- but `_parameter_change`
+	special-cased `SIZE` and fell through to "moved" for everything else. So
+	a field that lost its alignment was reported as a layout change and the
+	run exited 0, while `situc build` **refuses the same edit** when a
+	`require aligned(...)` names it. The tool that exists to catch a
+	regression in review called it neither direction.
+	"""
+	assert revision._parameter_change(
+		Axis.ALIGN, Value("Aligned", ("8",)), Value("Aligned", ("4",))) \
+		== "weakened"
+	assert revision._parameter_change(
+		Axis.ALIGN, Value("Aligned", ("4",)), Value("Aligned", ("8",))) \
+		== "strengthened"
+
+	# End to end: moving a `u32` behind four bytes weakens its alignment.
+	changes = revision.compare(
+		build("struct s { u32 v; u8 a; u8 b; u8 c; u8 d; }"),
+		build("struct s { u8 a; u8 b; u8 c; u8 d; u32 v; }"))
+	weakened = [c for c in changes
+	            if c.axis is Axis.ALIGN and c.kind == "weakened"]
+	assert weakened, [(c.path, c.axis, c.kind) for c in changes]
+
+
+def test_a_sub_byte_size_that_grew_is_a_regression() -> None:
+	"""The verdict used to turn on whether the size divided by eight.
+
+	`render_size` writes a whole number of bytes as `2` and anything else as
+	`12bit`, and `_worst` was `int(tail) if tail.isdigit() else 0`. Both
+	sides of a sub-byte change collapsed to 0, `0 > 0` was False, and the
+	`else` arm returned "strengthened" -- so a field that grew from four bits
+	to six was printed under **Improvements**, while the same edit one byte
+	wide was a regression.
+	"""
+	assert revision._parameter_change(
+		Axis.SIZE, Value("Fixed", ("4bit",)), Value("Fixed", ("6bit",))) \
+		== "weakened"
+	assert revision._parameter_change(
+		Axis.SIZE, Value("Fixed", ("6bit",)), Value("Fixed", ("4bit",))) \
+		== "strengthened"
+
+	# The byte-sized control, which was already right and must stay so.
+	assert revision._parameter_change(
+		Axis.SIZE, Value("Fixed", ("1",)), Value("Fixed", ("2",))) == "weakened"
+
+	# And the two are on one scale now, so a byte is worse than seven bits.
+	assert revision._parameter_change(
+		Axis.SIZE, Value("Fixed", ("7bit",)), Value("Fixed", ("1",))) \
+		== "weakened"
+
+
+def test_a_worst_case_that_did_not_move_is_neither_direction() -> None:
+	"""Not measurably worse is not better.
+
+	`_parameter_change` had two outcomes for `SIZE`, so anything that was not
+	a regression was reported as an improvement. `Bounded(2, 10)` becoming
+	`Bounded(4, 10)` doubles the minimum extent and leaves the maximum where
+	it was: neither value is stronger -- `is_at_least` answers True in both
+	directions -- and "moved" is what the offset case already says.
+	"""
+	assert revision._parameter_change(
+		Axis.SIZE, Value("Bounded", ("2", "10")), Value("Bounded", ("4", "10"))) \
+		== "moved"
+
+	# The documented case still reads as the regression it is.
+	assert revision._parameter_change(
+		Axis.SIZE, Value("Bounded", ("0", "1500")),
+		Value("Bounded", ("0", "4096"))) == "weakened"

@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from situc.capability import Axis, Value, rank
+from situc.capability import (NUMERIC_STRENGTH, Axis, Value, is_at_least,
+                             rank)
+from situc.layout import BITS_PER_BYTE
 from situc.resolve import ResolvedSchema
 
 
@@ -102,15 +104,56 @@ def _parameter_change(axis: Axis, was: Value, now: Value) -> str:
 	`Bounded(0, 1500)` becoming `Bounded(0, 4096)` keeps the axis where it was
 	and costs every caller 2.5 KB of buffer, which is the kind of change this
 	tool exists to surface.
+
+	**Three outcomes, not two.** It used to be `weakened if worse else
+	strengthened`, so *not measurably worse* was reported as *better*:
+	`Bounded(2, 10)` becoming `Bounded(4, 10)` doubles the minimum extent,
+	leaves the maximum where it was, and was printed under "Improvements".
+	Neither value is stronger there -- `is_at_least` answers True in both
+	directions -- and "moved" is the answer the offset case already gives
+	(26.187).
+
+	**An axis whose parameters carry strength is compared on them.** `align`
+	is in `NUMERIC_STRENGTH` and `capability.py` says why: "`Aligned(8)` is
+	stronger than `Aligned(2)`". Falling through to "moved" reported a real
+	weakening as neither direction, and `situc build` refuses the very same
+	edit when a `require aligned(...)` names it -- so the tool that exists to
+	catch a regression in review called it a layout change and exited 0.
 	"""
+	if axis in NUMERIC_STRENGTH and was.params and now.params:
+		if is_at_least(axis, now, was) and not is_at_least(axis, was, now):
+			return "strengthened"
+		if is_at_least(axis, was, now) and not is_at_least(axis, now, was):
+			return "weakened"
+		return "moved"
+
 	if axis is Axis.SIZE and was.params and now.params:
-		return "weakened" if _worst(now) > _worst(was) else "strengthened"
+		worse, better = _worst(now), _worst(was)
+		if worse > better:
+			return "weakened"
+		if worse < better:
+			return "strengthened"
+		return "moved"		# the worst case did not move
+
 	return "moved"
 
 
 def _worst(value: Value) -> int:
+	"""The largest extent this value admits, in **bits**.
+
+	Bits because that is the unit both spellings share: `render_size` writes
+	a whole number of bytes as `2` and anything else as `12bit`, and
+	`"12bit".isdigit()` is False -- so both sides of a sub-byte change used to
+	collapse to 0, `0 > 0` was False, and a field that grew from four bits to
+	six was reported as an improvement. The same edit one byte wide is
+	reported as a regression, which is the tell: the verdict turned on
+	whether the size divided by eight.
+	"""
 	tail = value.params[-1]
-	return int(tail) if tail.isdigit() else 0
+	if tail.endswith("bit"):
+		head = tail[:-3]
+		return int(head) if head.isdigit() else 0
+	return int(tail) * BITS_PER_BYTE if tail.isdigit() else 0
 
 
 def _ordering(change: Change) -> tuple[int, str, str]:
