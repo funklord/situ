@@ -678,9 +678,22 @@ class Emitter:
 		to obtain one is to be handed it, inside a callback that runs only on
 		the verified branch -- so there is no expression a caller can write
 		that names a gate object outside that branch. Not discouraged: absent.
+
+		A region carrying `[allow_unverified_read]` gets none of this. The
+		schema has said in as many words that it wants the interior before the
+		tag verifies, and a gate that opened on `true` would be the ceremony
+		with none of the substance -- so `_waived_region` emits the interior
+		as ordinary members instead, beside the region itself.
+
+		This backend built the gate regardless until now, which made the
+		header say the opposite of what the capability map says about the same
+		bytes: `stage = TransformTime` there, "opens only once the tag has
+		verified" here. A comment that contradicts the map is worse than no
+		comment, because a reader has no way to tell which one is stale.
 		"""
 		regions = [entry.placement for entry in struct.entries
-		           if entry.placement.kind == "sealed"]
+		           if entry.placement.kind == "sealed"
+		           and not entry.placement.unverified_ok]
 		if not regions:
 			return []
 
@@ -779,6 +792,74 @@ class Emitter:
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 		])
+		return lines
+
+	def _waived_region(self, struct: ResolvedStruct,
+			region: Placement) -> list[str]:
+		"""A sealed region the schema has already given away.
+
+		`[allow_unverified_read]` is the one construct in this language whose
+		purpose is to surrender a guarantee, so there is nothing left here to
+		enforce: no gate class, no `with_<region>` opener, and the interior
+		reached as ordinary members of the ordinary view. That is what the
+		attribute asks for, and it is what the capability map already records
+		-- the interior comes out `TransformTime`, not `VerifyGated`.
+
+		The members go through `_member` untouched, which is the whole point:
+		a waived member is exactly a member nothing gates. One under a tag
+		keeps the setter that takes the message and marks the bit (14.2),
+		because the waiver gives up the stage gate and nothing else.
+
+		What is left of the gate is the comment, so it is written loudly and
+		beside the region rather than left to a map nobody has open at the
+		call site.
+		"""
+		name   = bare_name(local_name(struct, region))
+		inside = [entry for entry in struct.entries
+		          if entry.placement.sealed_by == region.name
+		          and entry.placement.kind == "field"
+		          # A field of an *element* of a run belongs to the element
+		          # type, which has accessors of its own, and the walk beside
+		          # the region is how a caller reaches one. The gate makes the
+		          # same exclusion for the same reason.
+		          and "[]" not in entry.placement.path
+		          and not self._walked_here(entry.placement)]
+
+		lines = [
+			"",
+			f"\t/* {region.path}, sealed by {region.codec or 'a codec'}"
+			f" and covered by {', '.join(region.covered_by) or 'a tag'}.",
+			"\t *",
+			"\t * The schema wrote `[allow_unverified_read]` over it, so the"
+			" stage gate",
+			"\t * of section 14.3 is waived: there is no gate class here and"
+			" no",
+			f"\t * with_{name}(). The accessors below are ordinary members of"
+			" this view,",
+			"\t * and every one of them reads bytes nobody has authenticated.",
+			"\t *",
+			"\t * The attribute is the whole of the permission and this note"
+			" is the",
+			"\t * whole of what stands in for the gate. Take it off and the"
+			" interior",
+			"\t * is unreachable until the tag verifies, which is the"
+			" strongest claim",
+			"\t * this backend makes about anything. */",
+		]
+
+		for entry in inside:
+			if any(attr.name == "secret" for attr in entry.placement.attrs):
+				lines.extend([
+					"",
+					f"\t/* {entry.placement.path} is [secret]: no debug"
+					" accessor is",
+					"\t * generated for it at all (section 14.6). The waiver"
+					" is about the",
+					"\t * stage gate and says nothing about secrecy. */",
+				])
+				continue
+			lines.extend(self._member(struct, entry))
+
 		return lines
 
 	def _in_gate(self, struct: ResolvedStruct, text: str) -> str:
@@ -3540,6 +3621,18 @@ class Emitter:
 			"\t}",
 		]
 
+	def _walked_here(self, placement: Placement) -> bool:
+		"""Whether `_region_runs` emits this member's walk on the view.
+
+		Asked in two places now: there, and by `_waived_region`, which has to
+		leave out whatever that family already writes or the class carries two
+		definitions of one name. Written once so the two lists cannot answer
+		differently.
+		"""
+		return (placement.type_name in self.structs
+		        and (is_counted_run(self.resolved.structs, placement)
+		             or placement.repeat_while is not None))
+
 	def _region_runs(self, struct: ResolvedStruct) -> list[str]:
 		"""A run of records inside a region, walked from out here.
 
@@ -3568,10 +3661,7 @@ class Emitter:
 			              and "." in placement.path[len(struct.name) + 1:]))
 			if not inside:
 				continue
-			if placement.type_name not in self.structs:
-				continue
-			if not is_counted_run(self.resolved.structs, placement) \
-					and placement.repeat_while is None:
+			if not self._walked_here(placement):
 				continue
 			lines.extend(self._variable(struct, placement))
 		return lines
@@ -4000,6 +4090,12 @@ class Emitter:
 		# missing feature while sitting directly above the thing that supports
 		# it -- the same contradiction the coded-region note had.
 		if placement.kind == "sealed":
+			# ...unless the schema waived it, and then there is no gate for
+			# the note to point at. Saying so anyway is worse than saying
+			# nothing: the header would assert a property the capability map
+			# denies about the same member.
+			if placement.unverified_ok:
+				return self._waived_region(struct, placement)
 			return ["",
 			        f"\t/* {placement.path} is sealed by {placement.codec}:"
 			        " it has no",

@@ -480,6 +480,11 @@ class Emitter:
 			# gate, on the side that escapes the object (invariant 28). C has
 			# demanded the gate here since the machinery landed. The gated
 			# setter is emitted with the rest of the interior.
+			#
+			# `[allow_unverified_read]` is the same skip for the opposite
+			# reason: the interior is emitted on the ordinary view, so its
+			# covered setter comes out of `_scalar` like any other and a
+			# second one here would be the same method twice.
 			if placement.sealed_by is not None:
 				continue
 
@@ -2215,6 +2220,8 @@ class Emitter:
 		# missing feature while sitting directly above the thing that supports
 		# it -- the same contradiction the coded-region note had.
 		if placement.kind == "sealed":
+			if placement.unverified_ok:
+				return self._waived_interior(struct, placement)
 			return ["",
 			        f"\t# {placement.path} is sealed by"
 			        f" {placement.codec}: it has no accessor",
@@ -4489,16 +4496,31 @@ class Emitter:
 	# -- gates ---------------------------------------------------------
 
 	def _gates(self, struct: ResolvedStruct) -> list[str]:
+		# `[allow_unverified_read]` waives the gate, so there is none to
+		# emit: the interior went out on the ordinary view where the region
+		# is declared. This backend emitted one anyway for a long while, so
+		# a schema that gave the guarantee up in C still had it here -- and
+		# the gate's docstring told the reader the interior was reachable
+		# only through a verified open, which the schema says it is not. The
+		# capability map is the arbiter and it says `TransformTime` (14.3).
 		regions = [entry.placement for entry in struct.entries
-		           if entry.placement.kind == "sealed"]
+		           if entry.placement.kind == "sealed"
+		           and not entry.placement.unverified_ok]
 		lines: list[str] = []
 		for region in regions:
 			lines.extend(self._gate(struct, region))
 		return lines
 
-	def _gate(self, struct: ResolvedStruct, region: Placement) -> list[str]:
-		name   = py_name(local_name(struct, region))
-		holder = f"_{name}_gate"
+	def _interior(self, struct: ResolvedStruct,
+			region: Placement) -> tuple[list[Resolved], list[str]]:
+		"""A sealed region's members: those with an accessor, and the paths
+		of those that deliberately have none.
+
+		Asked once, because the gate below and the waived spelling above it
+		differ only in *where* the interior hangs. Which members are
+		reachable is the same question whichever way it is reached, and two
+		copies of this filter would eventually be two answers to it.
+		"""
 		sealed = [entry.placement for entry in struct.entries
 		          if entry.placement.sealed_by == region.name
 		          and entry.placement.kind == "field"]
@@ -4511,21 +4533,64 @@ class Emitter:
 		          if entry.placement.sealed_by == region.name
 		          and entry.placement.kind == "field"
 		          and entry.placement.scalar is not None
-		          # `data_sized`, not `array_count or sized_by`: a length
-		          # written as arithmetic over a field -- `fragment[length -
-		          # 24]` -- has neither, so it fell through to the scalar
-		          # branch and DTLS's whole payload came back as one byte.
-		          # That is the fourth place `traverse.data_sized`'s docstring
-		          # says the question was asked and answered differently, and
-		          # it was still answering the old way (26.188).
-		          and (indexed_elements(entry.placement)
-		               or not _is_run(entry.placement))
+		          # No filter on what *kind* of run it is. Admitting only
+		          # `indexed_elements` let a run of values through and kept a
+		          # run of bytes out, so `dtls.record.sealed.fragment` -- the
+		          # entire encrypted payload -- got no accessor and no note in
+		          # this backend while the other three answered it (26.188).
 		          and (entry.placement.offset_bits is not None
 		               or self._offset_expression(struct, entry.placement)
 		               is not None)]
 		secret = [placement.path for placement in sealed
 		          if any(attr.name == "secret" for attr in placement.attrs)
 		          and _is_run(placement)]
+		# A `[secret]` run is answered once, by `secret` below. It reaches
+		# `inside` now that a byte run does, and the loop over `inside` writes
+		# the same note -- so without this the member would decline twice.
+		return [entry for entry in inside
+		        if entry.placement.path not in secret], secret
+
+	def _waived_interior(self, struct: ResolvedStruct,
+			region: Placement) -> list[str]:
+		"""`[allow_unverified_read]`: the interior on the ordinary view.
+
+		The members keep the spelling they would have anywhere else -- a
+		property, and `set_x(msg, value)` where a tag covers them -- because
+		nothing but the gate was ever special about them. What the waiver
+		removes is the type a caller had to hold first.
+
+		Written where the region is declared rather than left to the
+		capability map: 14.3 asks that the escape hatch be loud, and a reader
+		meets the region before they meet anything that reports on it.
+		"""
+		name = py_name(local_name(struct, region))
+		inside, secret = self._interior(struct, region)
+
+		lines = [
+			"",
+			f"\t# {region.path} is [allow_unverified_read]. The stage gate of",
+			"\t# section 14.3 is waived here, so the interior hangs off the",
+			f"\t# ordinary view below and there is no open_{name}() standing in",
+			"\t# front of it.",
+			"\t#",
+			"\t# Every accessor under this line reads bytes nobody has",
+			"\t# authenticated. That is what the attribute asks for, and it is",
+			"\t# spelled this loudly on purpose: take the attribute off and the",
+			"\t# interior goes back behind the gate, out of reach until the tag",
+			"\t# verifies.",
+		]
+		for entry in inside:
+			lines.extend(self._explained(struct, entry))
+		for path in secret:
+			lines.extend(["",
+			              f"\t# {path} is [secret]: no accessor is generated",
+			              "\t# for it at all (section 14.6)."])
+		return lines
+
+	def _gate(self, struct: ResolvedStruct, region: Placement) -> list[str]:
+		name   = py_name(local_name(struct, region))
+		holder = f"_{name}_gate"
+		inside, secret = self._interior(struct, region)
 
 		lines = [
 			"",
@@ -4536,6 +4601,14 @@ class Emitter:
 			"\t\twhere forging a gate does not compile -- Python has no access",
 			"\t\tcontrol, and `object.__new__` will make one of these whatever",
 			'\t\tthis class says. Section 14.3, as far as Python reaches."""',
+			"",
+			# `Gate._view` is typed as the base `View`, so an interior member
+			# whose length is a field of the enclosing struct -- read through
+			# this view, because it is plaintext at the same offsets (13.3) --
+			# is an attribute the checker cannot see. A bare annotation
+			# narrows it and adds no attribute at run time, which is what
+			# keeps `--strict` clean without a cast or an ignore.
+			f'\t\t_view: "{py_name(struct.name)}"',
 		]
 
 		for entry in inside:
@@ -4554,6 +4627,40 @@ class Emitter:
 			at = (None if placement.offset_bits is not None
 			      else through)
 
+			# Everything read inside the gate is read through its view,
+			# including the field that says how long a run is: it is
+			# plaintext at the same offsets, which is what makes reading it
+			# here not a reference to transform output (13.3).
+			def through_gate(text: str) -> str:
+				return text.replace("self.", "self._view.")
+
+			# A run of bytes. The bytes *are* the values, so it is a slice --
+			# the same answer `_opaque` gives outside a gate, and the same one
+			# C, C++ and Rust give inside one. Before this the member reached
+			# neither branch and was emitted as nothing at all, which is the
+			# one shape a reader cannot ask about.
+			if _is_run(placement) and scalar.bits == BITS_PER_BYTE \
+					and not indexed_elements(placement):
+				length = self._length_expression(struct, placement)
+				start  = through if through is not None else "0"
+				if length is None:
+					lines.extend(["",
+					              f"\t\t# {placement.path}: this backend cannot"
+					              " resolve its length."])
+					continue
+				lines.extend([
+					"", "\t\t@property",
+					f"\t\tdef {field_name}(self) -> memoryview:",
+					f'\t\t\t"""{placement.path}: the region\'s bytes, through'
+					' the gate."""',
+					f"\t\t\tstart = ({through_gate(start)})",
+					f"\t\t\tspan  = min(({through_gate(length)}),",
+					"\t\t\t\tmax(0, self._view._len - start))",
+					"\t\t\tat = self._view._at + start",
+					"\t\t\treturn self._view._msg.buffer[at:at + span]",
+				])
+				continue
+
 			# A run of values wider than a byte, inside the gate. It has no
 			# slice for the reason it has none outside one -- the bytes are
 			# not the values -- so it is the count and the indexed getter,
@@ -4569,13 +4676,6 @@ class Emitter:
 					              f"\t\t# {placement.path}: this backend cannot"
 					              " resolve its length."])
 					continue
-
-				# Everything read inside the gate is read through its view,
-				# including the field that says how long the run is: it is
-				# plaintext at the same offsets, which is what makes reading
-				# it here not a reference to transform output (13.3).
-				def through_gate(text: str) -> str:
-					return text.replace("self.", "self._view.")
 
 				load = self._load(placement, scalar,
 				                  f"({start}) + index * {width}")

@@ -368,6 +368,78 @@ def test_a_secret_field_gets_no_accessor_inside_the_gate() -> None:
 	assert "pub fn session_key" not in module
 
 
+def test_allow_unverified_read_leaves_no_gate_to_open() -> None:
+	"""The waiver of 14.3, which this backend used to accept and then ignore.
+
+	`[allow_unverified_read]` sets `stage = TransformTime` on the interior and
+	the capability map says so, but the module went on emitting a gate type and
+	an `open_` demanding a verification the schema had just said it did not
+	want. C has honoured the attribute since the machinery landed; this asks
+	the same of Rust, in the same three parts -- no gate, an ordinary accessor,
+	and a comment loud enough that the surrender is visible where it happened.
+	"""
+	module = emit(SEALED.replace("sealed(aead, nonce = nonce) {",
+	                             "sealed(aead, nonce = nonce)"
+	                             " [allow_unverified_read] {"))
+
+	assert "SSealedGate" not in module
+	assert "open_sealed" not in module
+	assert "pub fn sealed_kind(&self) -> u16" in module
+	assert "nothing has authenticated" in module
+
+	# The gate is the only thing given up. A secret field still gets no
+	# accessor (14.6), and the covered write still marks the tag stale (14.2)
+	# -- an unverified read is not a licence to drop the rest of section 14.
+	assert "pub fn session_key" not in module
+	assert "pub fn set_sealed_kind(&mut self, dirty: &mut Dirty," in module
+
+
+#: Two sealed regions in one struct, one of them waived. A nonce apiece: a
+#: repeated one under a single key is what `wellformed` refuses outright, and
+#: the refusal is right, so the schema below is the shape this can be asked in.
+TWO_REGIONS = """codec aead {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+impl aead extern "my_aead";
+
+struct s {
+	u8   hop;
+	authenticated { u8 na[12]; u8 nb[12]; }
+	sealed alpha(aead, nonce = na) [allow_unverified_read] {
+		u16  kind;
+	}
+	sealed beta(aead, nonce = nb) {
+		u16  code;
+	}
+	tag  u8[16];
+}
+"""
+
+
+def test_a_sibling_sealed_region_keeps_its_gate() -> None:
+	"""The waiver reaches the region it is written on and no further.
+
+	Two sealed regions in one struct, one waived: a backend that keyed the
+	decision on the struct rather than the placement would open both or
+	neither, and either answer is a security property applied to a region that
+	did not ask for it.
+	"""
+	module = emit(TWO_REGIONS)
+
+	assert "pub fn open_alpha" not in module
+	assert "SAlphaGate" not in module
+	assert "pub fn alpha_kind(&self) -> u16" in module
+
+	assert "pub fn open_beta(&self, verified: bool)" in module
+	assert "pub struct SBetaGate<'a>" in module
+	assert "pub fn code(&self) -> u16" in module
+
+
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
 def test_forging_a_gate_does_not_compile(tmp_path: Path) -> None:
 	"""The claim. If this starts compiling, the backend has lost the guarantee

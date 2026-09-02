@@ -34,6 +34,9 @@ LIBSITU  = ROOT / "build" / "host" / "runtime" / "libsitu.a"
 
 CPP_USE = '#include "unit.hpp"\nint main()\n{\n\tstd::uint8_t buf[64] = {0};\n\tsitu::rt::message msg(buf, sizeof buf);\n\tsitu::s p;\n\tif (situ::s::at(msg, 0, p) != situ::rt::err::ok) { return 1; }\n\n\tstd::uint16_t seen = 0;\n\tif (p.with_sealed(true, [&](situ::s::sealed_gate g) {\n\t\tseen = g.inner_kind();\n\t}) != situ::rt::err::ok) { return 1; }\n\n\treturn seen == 0 ? 0 : 1;\n}\n'
 CPP_FORGE = '#include "unit.hpp"\nint main()\n{\n\tstd::uint8_t buf[64] = {0};\n\tsitu_view_t raw{buf, sizeof buf, 0};\n\tsitu::s::sealed_gate forged(raw);\n\treturn static_cast<int>(forged.inner_kind());\n}\n'
+#: The same reach with the gate waived: no token, no callback, and the
+#: covered setter still taking the message.
+CPP_WAIVED = '#include "unit.hpp"\nint main()\n{\n\tstd::uint8_t buf[64] = {0};\n\tsitu::rt::message msg(buf, sizeof buf);\n\tsitu::s p;\n\tif (situ::s::at(msg, 0, p) != situ::rt::err::ok) { return 1; }\n\n\tp.set_sealed_inner_kind(msg, 7);\n\treturn p.sealed_inner_kind() == 7 ? 0 : 1;\n}\n'
 
 COMPOSE = '#include "unit.hpp"\nint main()\n{\n\talignas(4) volatile std::uint8_t block[8] = {0};\n\tsitu::ctrl r(block);\n\n\tr.write(r.read().with_enable(1).with_mode(5));\n\tauto w = r.read();\n\tif (w.enable() != 1 || w.mode() != 5) { return 1; }\n\n\tr.trigger_start();\n\tif (r.read().raw() != 0x2u) { return 1; }\n\n\tr.write(situ::ctrl::word(0xFFFFFFFFu));\n\tr.clear_error();\n\tif (r.read().raw() != 0x40u) { return 1; }\n\treturn 0;\n}\n'
 
@@ -427,6 +430,56 @@ def test_a_secret_field_gets_no_accessor_even_inside_the_gate() -> None:
 
 	assert "session_key is [secret]" in header
 	assert "session_key() const" not in header
+
+
+def test_allow_unverified_read_leaves_no_gate_and_says_so() -> None:
+	"""The waiver of 14.3, which this backend did not read.
+
+	`[allow_unverified_read]` sets `stage = TransformTime` on the interior --
+	the capability map says so, and `situc map` prints it -- so a backend that
+	builds the gate anyway is describing different bytes from the map. Worse,
+	the gate's own comments then say the interior "opens only once the tag has
+	verified", which is the opposite of what the schema asked for and of what
+	the map records.
+
+	So: no gate class, no opener, and the interior on the ordinary view. What
+	the waiver does *not* touch is the coverage obligation -- `inner_kind` is
+	still `Covered(tag)`, so its setter still takes the message and marks the
+	bit (14.2). Two separate claims, and only one of them was given up.
+	"""
+	header = emit(SEALED.replace(
+		"sealed(aes_gcm_128, nonce = nonce) {",
+		"sealed(aes_gcm_128, nonce = nonce) [allow_unverified_read] {"))
+
+	assert "class sealed_gate {" not in header
+	# The declaration, not the spelling: the note that replaces the gate
+	# names the opener it is telling the reader is absent.
+	assert "with_sealed(bool verified" not in header
+	assert "bytes nobody has authenticated" in header
+	assert "std::uint16_t sealed_inner_kind() const noexcept" in header
+	assert ("void set_sealed_inner_kind(::situ::rt::message &owner,"
+	        " std::uint16_t value) noexcept") in header
+
+	# The other half of 14.6 survives the waiver: giving up the stage gate is
+	# not giving up secrecy, and a `[secret]` field gets no accessor either
+	# way.
+	assert "session_key is [secret]" in header
+	assert "session_key() const" not in header
+
+	# And the gate is still built where nothing waived it, or this would pass
+	# by having removed the feature.
+	assert "class sealed_gate {" in emit(SEALED)
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_waived_interior_is_read_without_a_token(tmp_path: Path) -> None:
+	"""The accessor is real, not only a name in a comment."""
+	result = compiles(tmp_path, SEALED.replace(
+		"sealed(aes_gcm_128, nonce = nonce) {",
+		"sealed(aes_gcm_128, nonce = nonce) [allow_unverified_read] {"),
+		extra=CPP_WAIVED)
+
+	assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")

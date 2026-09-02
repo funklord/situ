@@ -18164,6 +18164,98 @@ The comparison walks the dataclasses now and shares no code with `unparse`, so
 print it** -- which is the only version of this check that does not rot the
 same way.
 
+### 26.196 The one attribute whose whole purpose is to give up a guarantee
+
+`[allow_unverified_read]` waives the stage gate of section 14.3. `edges.situ`
+says why it is spelled loudly: "It is the one construct in this language whose
+whole purpose is to give up a guarantee, so a schema that uses it should have
+to write it down."
+
+**Three of the four backends did not read it.** Only `codegen/c` consumed
+`Placement.unverified_ok`; C++, Python and Rust emitted the gate regardless,
+and their generated documentation said so in as many words -- Python's gate
+class docstring read "unverified.body: reachable only through a verified
+open", on a region the schema had declared readable without one.
+
+**The capability map is the arbiter, and it had already decided.** In
+`test/schema/edges.situ.map`:
+
+    unverified.body.seq   stage=TransformTime      <- the waiver took effect
+    sealed_run.body.vals  stage=VerifyGated        <- genuinely gated
+
+So the map said one thing about a member and three of four backends generated
+the other. This is 14.5's prohibition running the other way -- the code
+enforcing what the schema did not state -- and it is a portability break
+rather than a hole: a protocol that must read before it can verify compiles in
+C and cannot be written at all in the other three.
+
+**What each backend now emits** is C's shape: no gate type, no opener, the
+interior on the ordinary view, and a loud note saying the accessors run on
+bytes nobody has authenticated and that removing the attribute puts them back
+behind a verified open. The member is `body_seq` in all four -- the flattened
+local path, because on the ordinary view nothing else separates it from a
+`seq` the struct declares.
+
+**The waiver moves the interior; it does not widen it.** A `[secret]` run
+inside a waived region still gets no accessor and the 14.6 note, in every
+backend. And a sibling sealed region in the same struct keeps its gate, which
+is what pins the decision to the placement rather than the struct.
+
+**Checked as a whole-corpus diff, not as a reading.** Generating all 37
+schemas from a `HEAD` worktree and from the fixed tree, exactly one file
+differs per backend -- `edges` -- and within it the change is confined to
+`struct unverified`. `sealed_run`'s gate is byte-identical.
+
+### 26.197 The piece 26.188 said was owed
+
+26.188 closed with one member still unanswered: "Python emits nothing: its
+gate has no byte-run path at all ... The Python gate's byte-run accessor is
+the piece still owed." It is paid here, and the shape of the gap is worth
+recording because it is not the one that entry describes.
+
+Python's gate did have a run path. Its interior filter admitted
+`indexed_elements(placement) or not _is_run(placement)` -- **a run of values
+got in and a run of bytes did not**, because a byte run is a run whose
+elements are not indexed. So `dtls.record.sealed.fragment`, the entire
+encrypted payload of a DTLS record, reached neither branch and was emitted as
+nothing at all:
+
+    C       situ_record_sealed_fragment_len / _ptr
+    C++     ::situ::rt::bytes fragment() const
+    Rust    pub fn fragment(&self) -> &[u8]
+    Python  --
+
+The map is not silent about it. `example/dtls/dtls.situ.map` gives the member
+a full vector -- `size=Bounded(0, 16384) ... stage=VerifyGated
+auth=Covered(tag)` -- so this is the same disagreement as 26.196 with the
+sides swapped: there the map said a member was reachable and three backends
+gated it; here the map describes a member in full and one backend emits
+nothing for it at all.
+
+The bytes *are* the values for a byte run, so the answer is a slice -- the
+same one `_opaque` gives outside a gate, read through the gate's view because
+the length is plaintext at the same offsets (13.3). Executed rather than
+grepped: a five-byte payload written into a message and read back as
+`b"abcde"`, because an accessor that reaches the wrong bytes looks exactly
+like one that reaches the right ones.
+
+**Two smaller things fell out of it, and both were invisible before.**
+
+A `[secret]` run is a run, so it reached the interior list the moment byte
+runs did -- and it is already in the list of members that deliberately have
+none. Both write a note, so the member declined *twice*: one member, two
+findings, in a report whose whole job is to say what has no accessor. It is
+excluded from one of the two lists now, and a test counts the note.
+
+And the generated gate class would not type-check. `Gate._view` is the base
+`View`, so an interior member whose length is a field of the enclosing struct
+-- `min(nonneg(leaf(self._view.length) - 24), ...)` -- reads an attribute
+`--strict` cannot see. **This was latent in the existing indexed-run branch,
+which builds the same expression**; no schema had exercised it, so the path
+had never been checked. A bare `_view: "<struct>"` annotation on the emitted
+gate narrows it, adds no attribute at run time, and needs neither a cast nor
+an ignore.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -473,6 +473,106 @@ def test_a_secret_field_gets_no_accessor(tmp_path: Path) -> None:
 	assert "def session_key" not in module
 
 
+SEALED_RUN = """codec aead {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+impl aead extern "my_aead";
+
+struct s {
+	u8   hop;
+	u16  length [min = 4];
+	u8   nonce[12];
+	sealed(aead, nonce = nonce) {
+		u8  payload[length - 4];
+	}
+	tag  u8[16];
+}
+"""
+
+
+def test_a_byte_run_inside_the_gate_is_the_bytes(tmp_path: Path) -> None:
+	"""`dtls.record.sealed.fragment` in miniature, and it is executed.
+
+	A run whose length is arithmetic over a field has neither an
+	`array_count` nor a `sized_by`, so admitting only `indexed_elements` let
+	a run of *values* into the gate and kept a run of *bytes* out. DTLS's
+	whole encrypted payload got no accessor and no note in this backend
+	while C, C++ and Rust all answered it -- a member that simply vanishes,
+	which is the one shape a reader cannot ask about (26.188).
+
+	Read rather than grepped, because the length is computed through the
+	gate's own view and an accessor that reaches the wrong bytes looks
+	exactly like one that reaches the right ones.
+	"""
+	module = load(tmp_path, SEALED_RUN)
+	rt     = runtime()
+
+	# hop(1) length(2) nonce(12) payload(5) tag(16)
+	buf = bytearray(36)
+	buf[1:3]   = (9).to_bytes(2, "big")	# so `length - 4` is 5
+	buf[15:20] = b"abcde"
+
+	gate = module.s.at(rt.Message(buf), 0, len(buf)).open_sealed(True)
+
+	assert bytes(gate.payload) == b"abcde"
+
+
+def test_the_gate_declines_a_secret_run_exactly_once(tmp_path: Path) -> None:
+	"""The note above and the note below are the same member.
+
+	A `[secret]` run is a run, so it reaches the interior list now that byte
+	runs do -- and it is also in the list of members that deliberately have
+	no accessor. Both write a note, and two notes for one member is a report
+	that reads like two findings.
+	"""
+	module = emit(SEALED)
+
+	assert module.count("session_key is [secret]") == 1
+
+
+def test_allow_unverified_read_leaves_no_gate_behind(tmp_path: Path) -> None:
+	"""14.3's escape hatch, which for a long while only C honoured.
+
+	`[allow_unverified_read]` sets `stage = TransformTime` on the interior,
+	and the capability map is the arbiter. This backend emitted the gate
+	anyway -- so a schema that had given the guarantee up in C still had it
+	here, and the gate's own docstring told the reader the interior was
+	"reachable only through a verified open", which is the opposite of what
+	the schema says.
+
+	The waiver moves the interior; it does not widen it. `session_key` is
+	still `[secret]` and still gets nothing.
+	"""
+	body = SEALED.replace("sealed(aead, nonce = nonce) {",
+	                      "sealed(aead, nonce = nonce) [allow_unverified_read] {")
+	module = emit(body)
+
+	assert "_sealed_gate" not in module
+	assert "def open_sealed" not in module
+	assert "bytes nobody has" in module
+	assert "session_key is [secret]" in module
+	assert "def session_key" not in module
+
+	loaded = load(tmp_path, body, module_text=module)
+	rt     = runtime()
+	msg    = rt.Message(bytearray(128))
+	view   = loaded.s.at(msg)
+
+	# Read without opening anything: that is the whole of the waiver.
+	assert view.sealed_kind == 0
+
+	# And the write is the covered spelling, because a tag still covers it.
+	assert not view.tag_is_dirty()
+	view.set_sealed_kind(msg, 0x1234)
+	assert view.sealed_kind == 0x1234
+	assert view.tag_is_dirty()
+
+
 # -- the claim that matters --------------------------------------------------
 
 

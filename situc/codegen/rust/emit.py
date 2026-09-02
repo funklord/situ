@@ -444,7 +444,12 @@ class Emitter:
 			# offset from the outer view. C has demanded the gate since the
 			# machinery landed; this backend's gate holds a shared slice, so
 			# there is no write path through it to offer instead.
-			if placement.sealed_by is not None:
+			#
+			# Unless the region waived the gate, in which case there is no
+			# gate for the write to go through and the outer view is the
+			# only view there is -- which is what the map already says about
+			# the member, and what the C backend has always emitted.
+			if placement.sealed_by is not None and not placement.unverified_ok:
 				lines.extend([
 					"",
 					f"\t// No setter for `{placement.path}`: it is sealed, so"
@@ -490,11 +495,23 @@ class Emitter:
 				"\t\t\treturn;",
 				"\t\t}",
 			])
+			# Why the write belongs on the parent rather than somewhere else,
+			# which is a different answer for the two members that get here.
+			# A nested struct has a type of its own and that type's setter
+			# marks nothing; a waived region's interior has no type at all,
+			# so a sentence about one would be describing something absent.
+			because = ([
+				"\t/// marks the bit. The gate of 14.3 is waived here, so the",
+				"\t/// write is an ordinary one -- and nothing has",
+				"\t/// authenticated the bytes it lands in.",
+			] if placement.unverified_ok else [
+				"\t/// marks the bit. Its own type's setter cannot: the type may",
+				"\t/// sit where nothing covers it.",
+			])
 			lines.extend([
 				"",
 				f"\t/// `{placement.path}` is under {what}, so writing it here",
-				"\t/// marks the bit. Its own type's setter cannot: the type may",
-				"\t/// sit where nothing covers it.",
+				*because,
 				f"\tpub fn {name}(&mut self, dirty: &mut Dirty,"
 				f" value: {rtype}) {{",
 				*guard,
@@ -2034,6 +2051,8 @@ class Emitter:
 			# missing feature while sitting directly above the thing that supports
 			# it -- the same contradiction the coded-region note had.
 			if placement.kind == "sealed":
+				if placement.unverified_ok:
+					return self._waived(struct, placement)
 				return ["",
 				        f"\t// {placement.path} is sealed by"
 				        f" {placement.codec}: it has no accessor",
@@ -2467,8 +2486,68 @@ class Emitter:
 		return f"u{_storage_width(bits)}"
 
 	def _sealed(self, struct: ResolvedStruct) -> list[Placement]:
+		"""The sealed regions that still have a gate.
+
+		A region carrying `[allow_unverified_read]` is not one of them. The
+		attribute is written to give the gate up, so emitting a type and an
+		`open_` for it would put back exactly what the schema asked to be
+		rid of -- and the capability map, which says `stage=TransformTime`
+		about the interior, would be describing a different API from the one
+		this module offers. Those regions go to `_waived` instead.
+		"""
 		return [entry.placement for entry in struct.entries
-		        if entry.placement.kind == "sealed"]
+		        if entry.placement.kind == "sealed"
+		        and not entry.placement.unverified_ok]
+
+	def _interior(self, struct: ResolvedStruct,
+			region: Placement) -> list[Resolved]:
+		"""The members of one region that get an accessor of their own.
+
+		Not `offset_bits is not None`: a scalar behind a variable-length
+		member *inside* the region has an offset the message decides, and
+		dropping it left the member unreachable here and in C++ while C read
+		it through the gate.
+		"""
+		return [entry for entry in struct.entries
+		        if entry.placement.sealed_by == region.name
+		        and entry.placement.kind == "field"
+		        # Not a field of an element of a run: the element type has
+		        # its own accessors and the walk is how a caller reaches one.
+		        # Emitted here it read element zero at the region's base,
+		        # under the run's name.
+		        and "[]" not in entry.placement.path]
+
+	def _waived(self, struct: ResolvedStruct,
+			region: Placement) -> list[str]:
+		"""A sealed region whose gate the schema handed back (14.3).
+
+		`[allow_unverified_read]` is the one construct in this language whose
+		whole purpose is to surrender a guarantee, so there is no gate type,
+		no `open_`, and nothing between a caller and the plaintext. The
+		interior lands here instead: ordinary accessors in the enclosing
+		`impl`, beside the members outside the region.
+
+		The names keep the region in them, which is the one thing that
+		differs from a gated interior. Inside a gate `body.seq` is `seq()`,
+		because the gate's own type says which region it belongs to; out here
+		nothing does, and a schema with a `seq` of its own would have two
+		methods of that name on one type.
+		"""
+		lines = [
+			"",
+			f"\t// {region.path} carries `[allow_unverified_read]`, so the",
+			"\t// stage gate of 14.3 is not built: no gate type, no open, and",
+			"\t// no verification to pass. Every accessor below reads bytes",
+			"\t// that nothing has authenticated, at offsets the region's own",
+			"\t// plaintext decides.",
+			"\t//",
+			"\t// The attribute is the whole of what buys that. Delete it and",
+			"\t// the interior goes back behind a verified open, which is",
+			"\t// where 14.3 wants it and where every other region here is.",
+		]
+		for entry in self._interior(struct, region):
+			lines.extend(self._gated(struct, entry))
+		return lines
 
 	def _gate_opens(self, struct: ResolvedStruct) -> list[str]:
 		"""The only thing that hands out a gate, and only once verified."""
@@ -2536,18 +2615,7 @@ class Emitter:
 			name = c_name(local_name(struct, region))
 			gate = _pascal(f"{struct.name}_{name}_gate")
 
-			# Not `offset_bits is not None`: a scalar behind a variable-length
-			# member *inside* the region has an offset the message decides,
-			# and dropping it left the member unreachable here and in C++
-			# while C read it through the gate.
-			inside = [entry for entry in struct.entries
-			          if entry.placement.sealed_by == region.name
-			          and entry.placement.kind == "field"
-			          # Not a field of an element of a run: the element type
-			          # has its own accessors and the walk is how a caller
-			          # reaches one. Emitted here it read element zero at the
-			          # region's base, under the run's name.
-			          and "[]" not in entry.placement.path]
+			inside = self._interior(struct, region)
 
 			lines.extend([
 				f"/// {region.path}: reachable only through a verified open.",
@@ -2582,7 +2650,7 @@ class Emitter:
 		return lines
 
 	def _gate_name(self, struct: ResolvedStruct, placement: Placement) -> str:
-		"""What an interior member is called on the gate.
+		"""What an interior member's accessor is called.
 
 		The member's local name with the region's stripped, which is the same
 		derivation C spells out in full -- `situ_s_body_run_a_get` -- and what
@@ -2595,6 +2663,14 @@ class Emitter:
 		"""
 		local  = c_name(local_name(struct, placement))
 		region = c_name(placement.sealed_by or "")
+
+		# A waived region has no gate for the name to sit on: the accessor
+		# joins the enclosing struct's own, where the region is the only
+		# thing keeping `body.seq` apart from a `seq` the struct declares.
+		# So nothing is stripped, and the spelling is the one C uses.
+		if placement.unverified_ok:
+			return local
+
 		if region and local.startswith(f"{region}_"):
 			return local[len(region) + 1:]
 		return local
