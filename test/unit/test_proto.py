@@ -423,3 +423,59 @@ def test_the_committed_example_imports_to_the_same_shape() -> None:
 	for policy in ("unknown = preserve", "duplicate_tags = allowed",
 	               "tag_decode     = { field = tag >> 3, wire = tag & 0x7 }"):
 		assert policy in generated and policy in committed
+
+
+# -- what the fidelity report was not reporting (26.186) --------------------
+
+
+def test_a_type_this_file_cannot_resolve_is_a_loss() -> None:
+	"""The translation's fallback for an unknown type is "a nested message:
+	length-prefixed", and that is a guess.
+
+	The same enum field reads `wire = 0, type = colour` when the enum is
+	declared here and `wire = 2, type = u8` when it comes from an import --
+	and the second is wrong, because a varint is not a length-delimited run.
+	Both reported zero losses, which is what 19.2 says an importer must never
+	do: "an importer that silently produces a plausible-looking schema is
+	worse than no importer, because the user will trust it".
+	"""
+	here = imported('syntax = "proto2";\nenum Colour { RED = 0; }\n'
+	            'message M { optional Colour c = 1; }')
+	assert not here.losses, [held.construct for held in here.losses]
+
+	elsewhere = imported('syntax = "proto2";\nimport "colour.proto";\n'
+	                 'message M { optional Colour c = 1; }')
+	losses = [held.construct for held in elsewhere.losses]
+	assert 'field `c` of type `Colour`' in losses, losses
+
+	# The control that matters: a message declared in this file is a genuine
+	# nested message, the fallback is right for it, and it is not a loss.
+	nested = imported('syntax = "proto2";\nmessage Inner { optional int32 x = 1; }\n'
+	              'message M { optional Inner i = 1; }')
+	assert not nested.losses, [held.construct for held in nested.losses]
+
+
+def test_more_bytes_than_this_file_describes_is_a_loss() -> None:
+	"""`import`, `extensions` and `extend` each mean the wire carries fields
+	this file does not list.
+
+	All three were matched by `_RESERVED` -- one pattern named for the
+	harmless case, `reserved|option|extensions|import` -- and skipped in
+	silence with it.
+	"""
+	for source, want in (
+			('import "other.proto";\nmessage M { int32 a = 1; }',
+			 'import "other.proto"'),
+			('message M { extensions 100 to 199; int32 a = 1; }',
+			 "extensions 100 to 199"),
+			('extend M { int32 b = 2; }\nmessage M { int32 a = 1; }',
+			 "extend `M`")):
+		losses = [held.construct for held in imported(source).losses]
+		assert want in losses, f"{want} went unreported: {losses}"
+
+	# And the two that genuinely have no wire meaning stay silent: `reserved`
+	# forbids numbers nobody may use, and an `option` outside a field
+	# configures a generator rather than an encoding.
+	for source in ('message M { reserved 2, 15; int32 a = 1; }',
+	               'message M { option (x) = true; int32 a = 1; }'):
+		assert not imported(source).losses, source

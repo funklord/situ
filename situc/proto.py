@@ -132,7 +132,19 @@ _MAP       = re.compile(r"^\s*map\s*<\s*([A-Za-z0-9_.]+)\s*,\s*([A-Za-z0-9_.]+)\
 _FIELD     = re.compile(r"^\s*(optional|required|repeated)?\s*"
 	r"([A-Za-z0-9_.]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\d+)")
 _ENUM_VAL  = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?\d+)")
-_RESERVED  = re.compile(r"^\s*(reserved|option|extensions|import)\b")
+#: Statements with no wire-format meaning, which are skipped in silence
+#: because there is nothing to report: `reserved` forbids field numbers
+#: nobody may use, and an `option` outside a field configures a code
+#: generator rather than an encoding.
+_RESERVED  = re.compile(r"^\s*(reserved|option)\b")
+
+#: Statements that mean *there are more bytes on the wire than this file
+#: describes*, which is the one thing 19.2 says an importer must not hide.
+#: They were in `_RESERVED` above, swallowed by a pattern named for the
+#: harmless case (26.186).
+_IMPORT    = re.compile(r'^\s*import\s+(?:public\s+|weak\s+)?"([^"]+)"')
+_EXTENSIONS = re.compile(r"^\s*extensions\s+([0-9]+)\s*to\s*([0-9]+|max)")
+_EXTEND    = re.compile(r"^\s*extend\s+([A-Za-z_][A-Za-z0-9_.]*)")
 
 
 def _statements(text: str) -> list[tuple[int, str]]:
@@ -196,6 +208,39 @@ def read(text: str) -> Imported:
 			continue
 
 		if _RESERVED.match(raw):
+			continue
+
+		match = _IMPORT.match(raw)
+		if match:
+			result.losses.append(Loss(
+				number, f'import "{match.group(1)}"',
+				"this importer reads one file: the types that file defines "
+				"are not resolved, so a field using one is described by a "
+				"guess rather than by its declaration",
+				"import the referenced file separately, or paste the types "
+				"it defines into this one"))
+			continue
+
+		match = _EXTENSIONS.match(raw)
+		if match:
+			result.losses.append(Loss(
+				number, f"extensions {match.group(1)} to {match.group(2)}",
+				"the range is reserved for fields declared in other files, "
+				"so a message may carry fields this schema does not list",
+				"the tlv region keeps unknown fields; what is lost is their "
+				"names and types, not their bytes"))
+			continue
+
+		match = _EXTEND.match(raw)
+		if match:
+			result.losses.append(Loss(
+				number, f"extend `{match.group(1)}`",
+				"the fields it adds appear on the wire in the extended "
+				"message and are not listed there",
+				"declare them in the message itself, where the import can "
+				"see them"))
+			if line.endswith("{"):
+				stack.append("extend")
 			continue
 
 		match = _SERVICE.match(raw)
@@ -285,6 +330,31 @@ def read(text: str) -> Imported:
 			))
 			if oneof is not None:
 				message.oneofs[oneof].append(int(index))
+
+	# A field whose type is neither a scalar nor declared in this file. The
+	# translation's fallback is "a nested message: length-prefixed", which is
+	# a *guess*, and it is wrong whenever the name turns out to be an enum or
+	# a fixed-width type: the same enum field reads `wire = 0` when it is
+	# declared here and `wire = 2, type = u8` when it comes from an import.
+	# Reported rather than guessed in silence, because 19.2's whole argument
+	# is that "an importer that silently produces a plausible-looking schema
+	# is worse than no importer, because the user will trust it" (26.186).
+	declared = ({held.name for held in result.messages}
+	            | {held.name for held in result.enums})
+	for message in result.messages:
+		for held in message.fields:
+			bare = held.proto_type.rpartition(".")[2]
+			if held.proto_type in SCALARS or bare in declared \
+					or held.proto_type in declared:
+				continue
+			result.losses.append(Loss(
+				held.line,
+				f"field `{held.name}` of type `{held.proto_type}`",
+				"the type is not declared in this file, so its wire type is "
+				"a guess: it is described as a length-delimited message, and "
+				"an enum or a fixed-width type is neither",
+				"declare the type here, or check the guess against the file "
+				"that does declare it"))
 
 	if result.syntax == "proto3":
 		result.losses.append(Loss(
