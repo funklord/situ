@@ -17592,15 +17592,57 @@ offset is dynamic gives no constant to encode, so `resolve_in` returns
 wrongly. That is the same trade as the located member's: the packer says
 what it cannot do rather than emitting something that walks.
 
-**Why nothing caught it.** The README calls `situ-walk` "a fifth column in
-the differential check, answering the same questions as four compiled
-backends about the same hostile bytes", and that differential exists. It
-cannot see a base error over messages where both candidate offsets hold the
-same bytes -- and both cases read a *length* out of a header, so a test
-message that sets one length leaves the other zero. The wrong read returned
-0, the walk reported a short member, and a short member looks exactly like a
-short message.
+**Why nothing caught it: see 26.185.** The first answer written here was
+that the differential cannot see a base error over messages where both
+candidate offsets hold the same bytes. That is wrong, and it was wrong in the
+comfortable direction -- the differential draws *random* bytes, which
+separate offset 2 from offset 6 immediately. The real reason is structural
+and is recorded next.
 
+
+### 26.185 The differential compares the intersection, and the defects were outside it
+
+26.184 asked why five descriptions of one layout did not catch two of them
+disagreeing. The first answer was a guess that sounded like the others in this
+section -- that a differential over messages where both candidate offsets hold
+the same bytes cannot see a base error -- and **the guess was wrong**. The
+differential draws random bytes for twelve packets per schema and runs over 34
+of the 37 committed schemas; offsets 2 and 6 come apart on the first draw.
+
+**What is actually true is a property of the comparison, not of the bytes.**
+The walker and C are compared only where *both* speak about a member, and the
+docstring says so and says why: "a member the walker answers and C never
+mentions is a difference in what was asked, not in the answer". That is right.
+It also means the intersection is the whole of the coverage, and **the two
+defective members were each outside it, for two different reasons**:
+
+- **`packet.sealed.body` is not rendered by the walker at all.** A sealed
+  region's interior is behind a gate, and `Image.regions` says the walker
+  "does not render" those. So C could have been asked and the walker never
+  answered.
+- **`bmp.pixels` is rendered by the walker and not asked of C.** The compiled
+  header has `situ_bitmap_file_pixels_view` -- a *view* accessor, because a
+  located member is reached from the message rather than from the frame -- and
+  the differ's probe asks about scalars. So the walker answered and C was
+  never asked.
+
+**The constructs most likely to be wrong are the ones only one side speaks
+about**, and that is not a coincidence: a construct is unusual enough to be
+got wrong for the same reason it is unusual enough to be missing from one
+side's probe. A sealed interior and a data-placed run are exactly the two
+shapes that reach only one description.
+
+The existing coverage floor counts what the walker's subset reaches, per
+schema, and stops the suite going green while rendering nothing. It counts
+*one* side. **Nothing counts the intersection**, which is the number that
+would have shown this: a corpus where the walker renders plenty and C is asked
+about a different plenty can have a small overlap and a healthy-looking floor.
+
+Recorded rather than built. Measuring the intersection means running the C
+differ for every schema, which is the 55-second half of this file and needs
+all four toolchains, and the shape of the fix -- probe views as well as
+scalars, render a sealed interior, or count and floor the overlap -- is a
+choice about what the fifth column is *for*.
 
 ## 27. Questions, and how they were settled
 
