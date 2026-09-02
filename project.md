@@ -17825,6 +17825,56 @@ own dispatch. The three defects it found are all in code paths that bypass
 parallel dispatch with hand-rolled predicates. **A shared decision point only
 helps where it is called.**
 
+### 26.189 Two remedies that could not be taken
+
+`situc explain` prints a `remedy` per weakening, and a remedy is advice --
+which is a prediction about a schema that does not exist yet, the same class
+of claim as the advisor's `yields`. An agent tested 52 of the 54 rules that
+carry one by building a schema that fires the rule, taking the advice, and
+comparing the axis. **47 held.** Two did not, and both are recorded here.
+
+**`unbounded-size` described one of the five shapes it fires on.** It said
+"give the driving length field a `[max = N]`". Across the tree it fires 49
+times:
+
+    19  a delimited scan          `max N` after `until`
+    18  a `[remaining]` member    only the enclosing frame bounds it
+    10  an aggregate              whatever inside it is unbounded
+     1  a `while` run             `max N` on the run
+     1  driven by a length field  `[max = N]` -- the old text, right once
+
+For the delimited case the compiler refuses the advice in as many words:
+"`[max]` means nothing here ... a size cap is spelled `max N` after `until`".
+So the most common shape it fires on is the one where taking its advice
+literally does not parse -- and the neighbouring `delimited-member` and
+`unbounded-scan` rows were already giving the right answer alongside the
+wrong one.
+
+**`reserved-unknown` promised something the backend does not do.** It offered
+"`[preserve]` to carry the bits through without accepting them as free", and
+`[preserve]` does neither. It and `[unknown]` generate byte-identical code,
+neither emits a constraint check, and only `[must_be_zero]` does. What
+`[preserve]` actually does is exclude the bits from canonical comparison
+(1189) -- a claim about what a *rewriter* owes, not something the generated
+code performs. Saying the code carries them was the schema stating what the
+generated code does not enforce, which is 14.5's own prohibition turned on
+the document that states it.
+
+Both are now worded as what they are, and both have a test that fails on the
+old wording. The `[preserve]` one is pinned twice: the remedy's text, and the
+generated C being identical to `[unknown]`'s -- because the wording is only
+true for as long as that stays so.
+
+**The measurement matters more than the two findings.** 47 of 52 remedies do
+exactly what they say, which is the number that makes the two worth fixing
+rather than the module worth distrusting. And one of the two was found by
+counting: the claim "not one of the 49 has a driving length field" was the
+agent's, and checking it here gave 19 -- because `sized_by` holds the
+sentinel `"remaining"` and a truthiness test counts it as a field name. The
+honest count is one. **A truthy sentinel read as a value**, which is the
+third time this session a measurement has been wrong in the direction of the
+thing it was measuring.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
