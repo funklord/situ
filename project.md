@@ -18050,6 +18050,44 @@ point: **a constant in a file no test loads is exactly where the fourth
 statement of a number goes unchecked.** Each of the four, changed on its own,
 turns it red.
 
+### 26.194 Half a gate nobody had watched fail
+
+`codegen/c/tamper.py` exists because an adopter said a gate nobody has
+watched fail is not evidence, and it opens by saying so. It generates two
+claims, not one:
+
+  * every byte the schema declares covered is a byte your verifier notices;
+  * and, for a fixed layout, **no byte outside it is** -- "which is what
+    catches a verifier covering more than the schema says".
+
+`test_tamper.py` calls itself "its own control pair" and runs an honest XOR
+verifier and a `lying` one that ignores the last covered byte. That is a
+control for the first claim. **For the second there was none.**
+`test_a_fixed_layout_gets_both_halves` asserts the string `"And only those"`
+appears in the generated text, and nothing ever ran the loop against a
+verifier it should catch.
+
+The half works -- a `greedy` verifier that folds `hop` at offset 0 into its
+checksum is caught, at byte 0, exactly as the header promises. So this is not
+a defect found; it is **the module's own standard applied to the module**, and
+the gap is what the standard is about. The greedy verifier is the third
+control now.
+
+**The two sabotages are the point, because they come apart.** Dropping the
+whole `if fixed:` block turns both tests red. Leaving the block emitted and
+neutering only its failure branch -- `if (0 && !verify(...))` -- turns *only
+the executable one* red: the string is still in the text, so the assertion
+that reads the text still passes. **A check that reads generated code can see
+that a branch was emitted and cannot see that it was disarmed.** That is the
+same shape as 26.190 one level up, and it is why the run is the control and
+the grep is not.
+
+The first attempt at that second sabotage did not match its anchor and the
+suite passed unchanged, which I briefly read as the sabotage failing. It is
+the third time this session: **a sabotage whose anchor misses reports exactly
+what a sabotage the code survives reports.** The habit that catches it is
+asserting the anchor matched before believing the result.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -6,11 +6,16 @@ covered byte flipped one at a time, the caller's verifier required to refuse
 each, and -- for a fixed layout -- every uncovered byte flipped and required
 to change nothing.
 
-The executable test here is its own control pair: an honest XOR verifier
-survives every flip, and a lying one that ignores the last covered byte is
-caught with `failed_at` naming that byte's exact offset. A harness only the
-honest half exercised could pass vacuously; the liar is what proves the
-flips reach the verifier.
+The executable test here is its own control, and it needs one per direction
+because the harness makes two claims. An honest XOR verifier survives every
+flip. A lying one that ignores the last covered byte is caught with
+`failed_at` naming that byte's exact offset -- that is the covered half. A
+greedy one that notices a byte outside every covered span is caught at that
+byte -- that is the "and only those" half, which for a long time was
+asserted only as a string in the generated text and never run against a
+verifier it should catch. A harness only the honest half exercised could
+pass vacuously; each liar is what proves one half's flips reach the
+verifier.
 """
 
 from __future__ import annotations
@@ -75,8 +80,8 @@ def test_a_dynamic_layout_gets_only_the_covered_half() -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
-def test_the_harness_passes_honesty_and_catches_a_liar(tmp_path: Path) -> None:
-	"""Run, not read, with the liar as the control on the run."""
+def test_the_harness_passes_honesty_and_catches_both_liars(tmp_path: Path) -> None:
+	"""Run, not read, with a liar per direction as the control on the run."""
 	schema   = parse_text(FIXED)
 	resolved = resolve(schema, solve(schema))
 
@@ -120,6 +125,20 @@ static int lying(situ_view_t view, void *ctx)
 	return tag[0] == x && tag[1] == (uint8_t)~x;
 }
 
+/* The other direction: covers one byte more than the schema says. `hop` at
+ * offset 0 is outside every covered span and outside the tag, and this
+ * verifier notices it -- which the "and only those" half exists to catch. */
+static int greedy(situ_view_t view, void *ctx)
+{
+	uint8_t x;
+
+	(void)ctx;
+	if (!checksum(view, &x, 0)) return 0;
+	x ^= view.base[0];
+	const uint8_t *tag = situ_s_tag_ptr(view);
+	return tag[0] == x && tag[1] == (uint8_t)~x;
+}
+
 int main(void)
 {
 	uint8_t  buf[6] = {0x55, 0x12, 0x34, 0x99, 0, 0};
@@ -134,7 +153,14 @@ int main(void)
 	if (situ_s_tamper(buf, 6, lying, 0, &failed) != SITU_ERR_CONSTRAINT) {
 		return 2;
 	}
-	return failed == 3 ? 0 : 3;	/* `b` sits at offset 3 */
+	if (failed != 3) return 3;	/* `b` sits at offset 3 */
+
+	x = 0x12 ^ 0x34 ^ 0x99 ^ 0x55;
+	buf[4] = x; buf[5] = (uint8_t)~x;
+	if (situ_s_tamper(buf, 6, greedy, 0, &failed) != SITU_ERR_CONSTRAINT) {
+		return 4;
+	}
+	return failed == 0 ? 0 : 5;	/* `hop` sits at offset 0 */
 }
 """, encoding="ascii")
 
