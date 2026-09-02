@@ -71,7 +71,7 @@ struct image_enum_value size=16
 
 struct image_header size=20
   @0x0000   4         u8         magic  little
-  @0x0004   2         u16        format_version  little must_eq=2
+  @0x0004   2         u16        format_version  little must_eq=4
   @0x0006   2         u16        flags  little
   @0x0008   4         u32        image_bytes  little
   @0x000c   4         u32        section_count  little

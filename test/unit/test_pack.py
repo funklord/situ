@@ -22,6 +22,7 @@ not to be sufficient for a parse.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -39,6 +40,9 @@ from situc.parser import parse_text
 from situc.resolve import ResolvedSchema, resolve
 
 from every_schema import ROOT, SCHEMAS, ids
+
+sys.path.insert(0, str(ROOT))
+from walker import image as image_reader                # noqa: E402
 
 IMAGE_SCHEMA = ROOT / "std" / "image.situ"
 
@@ -78,21 +82,45 @@ def image_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 		sys.path.remove(str(tmp))
 
 
+def directory(module: ModuleType,
+              blob: bytes) -> list[tuple[int, int, int, int]]:
+	"""Every directory entry in order, as (kind, offset, count, stride).
+
+	A list rather than a dict, and that is the whole point of it: a dict
+	keyed by kind is what both walkers build, so a second section under a
+	tag replaces the first there and disappears from any test that looks
+	through one. Two `strings = 4` sections shipped for exactly that long.
+	"""
+	msg  = module.Message(bytearray(blob))
+	head = module.image.at(msg).head
+	out = []
+	for i in range(head.section_count):
+		at = module.image_section(
+			msg, head.section_offset + i * packer.SECTION_BYTES,
+			packer.SECTION_BYTES)
+		out.append((int(at.kind), at.offset, at.count, at.stride))
+	return out
+
+
 def sections(module: ModuleType, blob: bytes) -> dict[int, tuple[int, int, int]]:
 	"""The section directory, read through the generated accessors.
 
 	kind -> (offset, count, stride). A walker does exactly this and then
 	keeps the kinds it knows, which is what makes the format extensible.
+
+	`std/image.situ` declares each tag once, so building the table is only
+	lossless while that holds -- and where it does not, a walker keeps the
+	last entry and the first section is unreachable. Refused here rather
+	than collapsed, so that every test reading a directory sees a duplicate
+	instead of quietly reading whichever section came last.
 	"""
-	msg  = module.Message(bytearray(blob))
-	head = module.image.at(msg).head
-	found = {}
-	for i in range(head.section_count):
-		at = module.image_section(
-			msg, head.section_offset + i * packer.SECTION_BYTES,
-			packer.SECTION_BYTES)
-		found[int(at.kind)] = (at.offset, at.count, at.stride)
-	return found
+	entries = directory(module, blob)
+	kinds   = [kind for kind, _off, _count, _stride in entries]
+	repeated = sorted({kind for kind in kinds if kinds.count(kind) > 1})
+	assert not repeated, \
+		f"two sections share a tag {repeated}; a walker keeps only the last"
+	return {kind: (off, count, stride)
+	        for kind, off, count, stride in entries}
 
 
 def records(module: ModuleType, blob: bytes, view: type, kind: int,
@@ -161,6 +189,49 @@ def test_the_image_schema_packs_and_reads_back(image_module: ModuleType) -> None
 	assert len(seen["placements"]) == coverage.placements
 	assert coverage.structs > 0 and coverage.placements > 0
 
+
+
+def test_the_format_version_is_one_number_in_four_places() -> None:
+	"""The schema, the writer, and both walkers, compared against each other.
+
+	`std/image.situ` opens by naming four things that protect it -- `gen-fuzz`
+	fuzzes the parser, `situc wire` pins the format, `map --check` catches a
+	layout change, the differential compares four backends reading one image.
+	Not one of them compares the schema to the code that writes an image, and
+	the version drifted through two bumps because of it: the schema said
+	`[must_eq = 2]` while all three of the others said 4, so C's generated
+	`validate` rejected every image the packer has ever produced, and the wire
+	signature faithfully pinned a version no image has ever carried.
+
+	The round-trip above cannot see it -- it reads the field the packer wrote
+	and compares it to the constant that wrote it, which agrees with itself
+	whatever the schema says. This asks the other three.
+
+	The C walker's copy is read out of its source because nothing imports it.
+	That is the point rather than a shortcut: a constant in a file no test
+	loads is exactly where the fourth statement of a number goes unchecked.
+	"""
+	schema = parse_text(IMAGE_SCHEMA.read_text(encoding="ascii"))
+	declared: list[int] = []
+	for decl in schema.decls:
+		if not isinstance(decl, ast.StructDecl) or decl.name != "image_header":
+			continue
+		for member in decl.members:
+			if not isinstance(member, ast.Field) or member.name != "format_version":
+				continue
+			for attr in member.attrs:
+				if attr.name == "must_eq":
+					assert isinstance(attr.value, ast.IntLiteral)
+					declared.append(attr.value.value)
+	assert len(declared) == 1, "the schema states the version exactly once"
+
+	walk_c = (ROOT / "walker" / "c" / "situ_walk.c").read_text(encoding="ascii")
+	found  = re.findall(r"u16_at\(image \+ 4\) != (\d+)u", walk_c)
+	assert len(found) == 1, "the C walker states the version exactly once"
+
+	assert declared[0] == packer.FORMAT_VERSION
+	assert image_reader.FORMAT_VERSION == packer.FORMAT_VERSION
+	assert int(found[0]) == packer.FORMAT_VERSION
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_every_schema_packs_and_reads_back(path: Path,
@@ -232,6 +303,29 @@ def test_the_packer_says_what_it_could_not_encode() -> None:
 	assert coverage.expressions == 1, "the size expression was not encoded"
 	assert coverage.unencodable == {}
 	assert coverage.placements == 2
+
+
+def test_a_relation_the_planner_refuses_is_reported() -> None:
+	"""A relation dropped in silence is the shape `Coverage` exists to stop.
+
+	`situc pack` runs no backend, so nothing else in the command says a word
+	about a relation `situc.relation` refuses -- the image simply does not
+	carry it, and the report read exactly as it does for a schema that
+	declares none. The planner's own reason is what goes in, because it is
+	the one already written and a second wording here would be a second
+	opinion about why.
+	"""
+	schema, resolved = _resolved(
+		"target buffer;\nendian big;\n"
+		"struct msg { u64 wide; i8 narrow; }\n"
+		"relation pairs(a: msg, b: msg) { must b.wide == a.narrow; }\n")
+	_, coverage = packer.pack(schema, resolved)
+
+	assert coverage.relations == 0, "the image encoded a refused relation"
+	assert "relation pairs" in coverage.unencodable, \
+		"a relation left the schema and reached no image, and nothing said so"
+	why = coverage.unencodable["relation pairs"]
+	assert "unsigned" in why and "signed" in why, why
 
 
 def test_the_whole_tree_encodes_every_expression_it_carries() -> None:
@@ -307,8 +401,33 @@ def test_an_expression_outside_section_10_is_refused() -> None:
 			lambda path: (0, 0))
 
 
+#: Schemas this file packs both ways, and whether each has a *core* string
+#: pool -- one a walk needs in order to function, as against the tail's.
+#: `std/image.situ` has no codec, no varint and no relation, so it has no
+#: core pool at all: the test that was meant to hold the tail additive ran
+#: only on that, and could not have seen the tail's own pool shadowing a
+#: core one. The two examples are here so that it can.
+POOLED: tuple[tuple[Path, bool], ...] = (
+	(IMAGE_SCHEMA, False),
+	(ROOT / "example" / "packet" / "packet.situ", True),	# codec aes_gcm_128
+	(ROOT / "example" / "dns" / "dns.situ", True),		# relation reply_to
+)
+
+
+def _pooled_string(blob: bytes, found: dict[int, tuple[int, int, int]],
+                   offset: int) -> str:
+	"""The string at `offset` in the image's one string pool."""
+	assert packer.SECTION_STRINGS in found, "the image carries no strings"
+	at, count, stride = found[packer.SECTION_STRINGS]
+	pool = blob[at:at + count * stride]
+	end  = pool.find(b"\0", offset)
+	return pool[offset:end if end >= 0 else len(pool)].decode("ascii")
+
+
+@pytest.mark.parametrize("source, pooled", POOLED,
+                         ids=[path.stem for path, _ in POOLED])
 def test_the_metadata_tail_is_optional_and_additive(
-		image_module: ModuleType) -> None:
+		image_module: ModuleType, source: Path, pooled: bool) -> None:
 	"""`--metadata` adds sections; it does not change the core's content.
 
 	26.33 recorded that the two consumers pull opposite ways, and the split
@@ -317,8 +436,18 @@ def test_the_metadata_tail_is_optional_and_additive(
 	longer "the bare image is a prefix" -- adding directory entries shifts
 	every body -- so the invariant that carries the claim is that each core
 	section's *bytes* are identical, which is what a walker reads.
+
+	The string pool is the one section that grows, because the tail interns
+	into it rather than opening a second `strings = 4` a walker would keep
+	instead of the core one. Additive means something exact there: the core
+	pool is a *prefix* of the merged one, so every offset a core section
+	holds names the same string with the tail as without it.
+
+	The core set is taken as "every tag but the tail's", rather than listed:
+	a list is what left `strings` out of it, and a section added later would
+	be left out the same way.
 	"""
-	schema, resolved = _resolved(IMAGE_SCHEMA.read_text(encoding="ascii"))
+	schema, resolved = _resolved(source.read_text(encoding="ascii"))
 	bare, _ = packer.pack(schema, resolved, metadata=False)
 	full, _ = packer.pack(schema, resolved, metadata=True)
 
@@ -328,15 +457,22 @@ def test_the_metadata_tail_is_optional_and_additive(
 
 	bare_at = sections(image_module, bare)
 	full_at = sections(image_module, full)
-	core = {packer.SECTION_STRUCTS, packer.SECTION_PLACEMENTS,
-	        packer.SECTION_CODE, packer.SECTION_ARMS,
-	        packer.SECTION_DELIMITERS, packer.SECTION_REGIONS,
-	        packer.SECTION_CODECS, packer.SECTION_VARINTS,
-	        packer.SECTION_TLVS, packer.SECTION_INDEXES}
+	tail = {packer.SECTION_NAMES, packer.SECTION_VECTORS}
+	core = set(bare_at) - tail
 
-	assert core & set(bare_at) == core & set(full_at), \
+	assert (packer.SECTION_STRINGS in core) is pooled, \
+		"this schema no longer says what it was chosen to say about the pool"
+	assert packer.SECTION_STRINGS in full_at, \
+		"the tail's own names went into no pool"
+
+	# The pool is the one section the tail may add to, and the one it may
+	# bring into existence: a schema with no codec, no varint and no
+	# relation needs no strings to be walked and has none until names are
+	# asked for. Everything else the tail must leave exactly as it was.
+	pool = {packer.SECTION_STRINGS}
+	assert core - pool == set(full_at) - tail - pool, \
 		"the tail added or removed a core section"
-	for kind in sorted(core & set(bare_at)):
+	for kind in sorted(core - pool):
 		a_off, a_count, a_stride = bare_at[kind]
 		b_off, b_count, b_stride = full_at[kind]
 		assert (a_count, a_stride) == (b_count, b_stride), kind
@@ -344,8 +480,66 @@ def test_the_metadata_tail_is_optional_and_additive(
 			full[b_off:b_off + b_count * b_stride], \
 			f"core section {kind} differs between bare and --metadata"
 
+	if pooled:
+		a_off, a_count, a_stride = bare_at[packer.SECTION_STRINGS]
+		b_off, b_count, b_stride = full_at[packer.SECTION_STRINGS]
+		assert a_stride == b_stride
+		assert full[b_off:b_off + b_count * b_stride].startswith(
+			bare[a_off:a_off + a_count * a_stride]), \
+			"the tail moved the core pool's strings"
+
 	assert packer.SECTION_NAMES not in bare_at
 	assert packer.SECTION_NAMES in full_at
+
+
+def test_the_image_carries_one_string_pool_and_the_tail_shares_it(
+		image_module: ModuleType) -> None:
+	"""Two sections cannot share a tag, and the tail's pool did.
+
+	`std/image.situ` declares exactly one `strings = 4`, and both walkers
+	read the directory into a table keyed by kind -- `found[kind] = ...` in
+	walker/image.py, a field per tag in walker/c/situ_walk.c. So the tail's
+	own pool did not sit beside the core one, it replaced it: with
+	`--metadata`, every offset the core sections hold resolved against the
+	names pool. dns's relation `reply_to` read back as `dns_header` and
+	packet's codec `aes_gcm_128` as `header`.
+
+	Read through `directory` rather than `sections`, because a dict is what
+	hid it: the collapse a walker performs is the bug, so the test has to
+	look at the entries the packer wrote.
+	"""
+	for source, _ in POOLED:
+		schema, resolved = _resolved(source.read_text(encoding="ascii"))
+		for metadata in (False, True):
+			blob, _ = packer.pack(schema, resolved, metadata=metadata)
+			kinds = [kind for kind, _o, _c, _s
+			         in directory(image_module, blob)]
+			assert len(kinds) == len(set(kinds)), \
+				f"{source.name} --metadata={metadata}: a tag twice: {kinds}"
+
+	# ...and the strings the core points at are the core's, with the tail
+	# present. The offset is read out of the section that holds it, so this
+	# fails if the pools are ever swapped rather than merged.
+	schema, resolved = _resolved(
+		(ROOT / "example" / "dns" / "dns.situ").read_text(encoding="ascii"))
+	full, _ = packer.pack(schema, resolved, metadata=True)
+	found   = sections(image_module, full)
+	relations = records(image_module, full, image_module.image_relation,
+	                    packer.SECTION_RELATIONS, found)
+	assert relations, "dns no longer carries a relation"
+	assert [_pooled_string(full, found, r.name) for r in relations] \
+		== ["reply_to"]
+
+	schema, resolved = _resolved(
+		(ROOT / "example" / "packet" / "packet.situ").read_text(
+			encoding="ascii"))
+	full, _ = packer.pack(schema, resolved, metadata=True)
+	found   = sections(image_module, full)
+	codecs  = records(image_module, full, image_module.image_codec,
+	                  packer.SECTION_CODECS, found)
+	assert codecs, "packet no longer carries a codec"
+	assert [_pooled_string(full, found, c.name) for c in codecs] \
+		== ["aes_gcm_128"]
 
 
 def test_the_metadata_tail_carries_the_names_and_the_vectors(

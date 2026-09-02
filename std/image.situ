@@ -111,7 +111,7 @@ enum image_offset_base : u8 {
 
 struct image_header {
 	u8   magic[4];                    // "SITU"
-	u16  format_version [must_eq = 2];
+	u16  format_version [must_eq = 4];
 	u16  flags;                       // bit 0: the metadata sections are present
 	u32  image_bytes;                 // the whole image, header included
 	u32  section_count;

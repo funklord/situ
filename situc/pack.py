@@ -524,11 +524,17 @@ def _u32(value: int | None) -> int:
 
 
 class _Pool:
-	"""The core string pool: the strings a walk needs in order to function.
+	"""The image's one string pool, in the order the strings were needed.
 
-	Codec and varint encoding names live here rather than in the metadata
-	tail, because a walker cannot dispatch a transform it cannot identify.
-	The tail carries the strings needed only to print.
+	The core comes first: codec and varint encoding names, and a relation's,
+	because a walker cannot dispatch a transform it cannot identify. The
+	tail's names -- struct and placement paths, wanted only to print --
+	intern into the same pool under `--metadata`, after the core has, so the
+	core's offsets are the same either way.
+
+	One pool rather than two because the image has one `strings = 4` section
+	and a walker keeps the last entry under a tag: a second pool did not sit
+	beside this one, it replaced it.
 	"""
 
 	def __init__(self) -> None:
@@ -596,6 +602,23 @@ def _assemble(sections: list[tuple[int, bytes, int]], metadata: bool) -> bytes:
 	afterwards except the total length, which cannot be known earlier.
 	"""
 	live = [(kind, blob, stride) for kind, blob, stride in sections]
+
+	# One entry per tag. `std/image.situ` declares each `image_section_tag`
+	# once, and every walker reads the directory into a table keyed by kind
+	# -- `found[kind] = ...` in walker/image.py, a field per tag in
+	# walker/c/situ_walk.c. A second entry under a tag therefore does not add
+	# to the first, it silently replaces it, and the section that was written
+	# first is unreachable. That is how the metadata string pool came to
+	# shadow the core one, so the invariant is checked here rather than left
+	# to whoever notices the wrong string.
+	seen: set[int] = set()
+	for kind, _blob, _stride in live:
+		if kind in seen:
+			raise PackError(
+				f"two sections carry tag {kind}; a walker keeps the last "
+				f"and the first is unreachable")
+		seen.add(kind)
+
 	body_at = HEADER_BYTES + len(live) * SECTION_BYTES
 
 	directory, bodies, at = bytearray(), bytearray(), body_at
@@ -1455,9 +1478,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					"compares arrays, and the image's expression VM reads "
 					"scalars")
 				continue
-		except RelationRefused:
-			# Not expressible at all; the backends have said so already and
-			# this is not the place to repeat the reason.
+		except RelationRefused as why:
+			# Not expressible at all. Recorded rather than dropped in
+			# silence: `situc pack` runs no backend, so nothing else in this
+			# command has said anything, and `Coverage` exists because an
+			# image is opaque. A relation that vanished between the schema
+			# and the image with no line naming it is the shape 26.76 keeps
+			# finding -- a report that reads clean over something it dropped.
+			coverage.unencodable[f"relation {decl.name}"] = str(why)
 			continue
 
 		first = len(musts_blob) // RELATION_MUST_BYTES
@@ -1546,10 +1574,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		)
 	sections[1] = (SECTION_PLACEMENTS, bytes(placements_blob), PLACEMENT_BYTES)
 
+	# The tail interns into the *core* pool rather than opening one of its
+	# own under the same tag. Interning it after everything the core needs
+	# leaves every core offset where it was -- the merged pool begins with
+	# the core pool, byte for byte -- so `--metadata` stays additive and a
+	# codec name, a varint encoding name or a relation's name resolves to
+	# the same string with the tail as without it.
+	tail = _metadata(order, rows, resolved, strings) if metadata else []
 	if strings.data:
 		sections.append((SECTION_STRINGS, bytes(strings.data), 1))
-	if metadata:
-		sections.extend(_metadata(order, rows, resolved))
+	sections.extend(tail)
 
 	out = _assemble(sections, metadata)
 	coverage.structs    = len(order)
@@ -1566,7 +1600,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 def _metadata(order: list[tuple[str, ResolvedStruct]],
               rows: list[tuple[str, Placement]],
-              resolved: ResolvedSchema) -> list[tuple[int, bytes, int]]:
+              resolved: ResolvedSchema,
+              pool: _Pool) -> list[tuple[int, bytes, int]]:
 	"""The optional tail, as sections: the names and the capability vectors.
 
 	These are what a walk needs in order to be *read*, not in order to work,
@@ -1576,8 +1611,16 @@ def _metadata(order: list[tuple[str, ResolvedStruct]],
 	Returned as directory entries rather than one blob so that the tail is
 	made of ordinary sections: a walker that wants names and not vectors
 	takes one and skips the other, with no tail-specific parsing at all.
+
+	The names go into the caller's pool -- the core one -- because the image
+	has exactly one string section and a walker keeps the last entry under a
+	tag. A pool of its own here was a second `strings = 4`, which shadowed
+	the core pool rather than adding to it: with `--metadata`, dns's relation
+	named `reply_to` read back as `dns_header`, and packet's codec name
+	`aes_gcm_128` as `header`. Interning here rather than there also means
+	the tail's offsets are the merged pool's, which is the pool a walker
+	loading this image has.
 	"""
-	pool = _Pool()
 	names = bytearray()
 	for name, _ in order:
 		names += _struct.pack("<I", pool.intern(name))
@@ -1606,10 +1649,7 @@ def _metadata(order: list[tuple[str, ResolvedStruct]],
 			vectors.append(domain.index(shown)
 			               if shown is not None and shown in domain else 0xFF)
 
-	out: list[tuple[int, bytes, int]] = [
+	return [
 		(SECTION_NAMES, bytes(names), 4),
 		(SECTION_VECTORS, bytes(vectors), len(list(Axis))),
 	]
-	if pool.data:
-		out.append((SECTION_STRINGS, bytes(pool.data), 1))
-	return out

@@ -17963,6 +17963,93 @@ construct had no real format behind it (26.143), and it is still the only one.
 A signature blind spot survives exactly as long as the sample that would have
 shown it, and one schema is how long this one lasted.
 
+### 26.192 Two sections under one tag, and the pool that shadowed the pool
+
+`--metadata` opened a string pool of its own and appended it as
+`SECTION_STRINGS` -- the same `strings = 4` the core pool had already been
+written under. `std/image.situ` declares each `image_section_tag` once, and
+both walkers read the directory into a table keyed by kind: `found[kind] =
+(offset, records, stride)` in `walker/image.py`, one field per tag in
+`walker/c/situ_walk.c`. **A second section under a tag does not sit beside the
+first, it replaces it.**
+
+So with `--metadata` the core pool was unreachable, and every core string
+resolved into the tail's pool at the same offset. Measured, not argued:
+
+    example/dns      tags [.. 4, 12, 13, 4]   offset 0 -> 'dns_header'   was 'reply_to'
+    example/packet   tags [.. 4, 12, 13, 4]   offset 0 -> 'header'       was 'aes_gcm_128'
+
+The second is the one that bites. A codec name is in the *core* pool for a
+stated reason -- "a walker cannot dispatch a transform it cannot identify" --
+and a walker asking which codec guards `packet.sealed` was handed the name of
+a struct. It would not have failed; it would have dispatched on the wrong
+string.
+
+**The tail interns into the core pool now, after the core has finished with
+it, so the merged pool begins with the core pool byte for byte.** Checked
+against the previous packer as a second module: **37 of 37 bare images
+byte-identical**, 35 metadata images changed. `--metadata` is additive in the
+sense the name claims, which it was not before.
+
+`FORMAT_VERSION` does not move, and should not. No tag, stride or record
+meaning changed. What changed is that an image now carries one strings section
+instead of two, the first of which no walker could read.
+
+**And `_assemble` refuses a repeated tag now.** The invariant was in the
+format all along and was enforced nowhere, which is why it was broken by an
+append. A duplicate raises `PackError` naming the tag rather than being found
+by whoever notices a wrong string.
+
+**Separately, a relation the planner could not encode vanished in silence.**
+`except RelationRefused: continue` dropped it with a comment saying the
+backends had already given the reason -- but `situc pack` runs no backend, so
+nothing in that command said anything. `Coverage.unencodable` exists precisely
+because an image is opaque. It carries the refusal now, and the pre-existing
+"non-empty unencodable means exit 1" rule makes it visible. No committed
+schema is affected; all 37 pack with `unencodable` empty.
+
+### 26.193 The image's own schema said version 2, and nothing had ever asked
+
+`std/image.situ` opens by naming what protects it: "`gen-fuzz` fuzzes the
+image parser, `situc wire` pins the format, `map --check` catches a layout
+change nobody meant, and the differential check compares four backends reading
+one image." Four mechanisms, and **the schema had said `format_version
+[must_eq = 2]` since version 2, through two bumps**, while
+
+    situc/pack.py        FORMAT_VERSION = 4     writes it
+    walker/image.py      FORMAT_VERSION = 4     refuses anything else
+    walker/c/situ_walk.c u16_at(image+4) != 4u  refuses anything else
+
+The consequence, generated and read rather than reasoned about: C's `validate`
+for `image_header` compiles to `if (situ_image_header_format_version_get(view)
+!= 2)`. **Every image the packer has ever produced fails its own schema's
+check.** And `situc wire` did its job perfectly -- `std/image.situ.wire` line
+74 records `must_eq=2`, faithfully pinning a version no image has ever
+carried.
+
+**None of the four could have caught it, and the reason is the same in each
+case.** All four are closed loops over the schema: the fuzzer, the signature,
+the map and the differential all ask whether the *generated code* agrees with
+the *schema*, and it did. The packer is hand-written Python that no generated
+code checks and that reads no constraint out of the schema it implements.
+
+**The round-trip test could not catch it either, and it looked like it
+should.** `test_the_image_schema_packs_and_reads_back` asserts `seen["version"]
+== packer.FORMAT_VERSION` -- reading the field the packer wrote and comparing
+it to the constant that wrote it. That agrees with itself whatever the schema
+says. Its neighbouring fixture goes further and states the promise outright:
+"Generated rather than committed, so that editing the schema and forgetting
+the packer fails here instead of drifting." It generates *accessors*, which
+read; the Python backend emits no constraint validator at all, so there was
+nothing in that module to fail.
+
+The schema now says 4, and one test reads the number out of all four files and
+compares them. The C walker's copy is read out of its source with a regular
+expression, because nothing imports it -- which is not a shortcut but the
+point: **a constant in a file no test loads is exactly where the fourth
+statement of a number goes unchecked.** Each of the four, changed on its own,
+turns it red.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
