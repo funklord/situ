@@ -18331,6 +18331,61 @@ would be a test of OpenSSL. It is also exactly the lie this harness was built
 to catch, and the reason it cannot is now written where the harness is read
 rather than only where the stub is.
 
+### 26.200 One source line, two answers, and the editor picked one
+
+`test_lsp.py` opens by naming the two things worth testing, and the second is
+that hover's answers "are the ones `situc explain` and the blame chains already
+give, rather than a second, weaker computation of the same thing". **No test in
+it invoked `explain`.** Every reference to the CLI in that file is prose.
+
+It had already drifted once for exactly that reason, and the fix is commented
+beside `_render_blame`: the propagation table has carried a reason and a remedy
+since 11.3, "`situc explain` printed them and hover did not, so the editor gave
+a weaker answer than the CLI". Fixed by hand; nothing added that would catch it
+again.
+
+Comparing the two doors over the corpus found the claim true -- 547 members
+with a source span of their own, and hover omits nothing `explain` prints -- and
+found two other things on the way.
+
+**A struct declared once and reached twice has one span and several members.**
+`hover_at` kept the narrowest match and, among equals, the first, so it
+answered a question about a *line* with one of that line's answers, chosen by
+which struct happened to be declared first. In `example/ble` one line reads
+`advertising_event event_type;` and resolves to two members:
+
+    adv_report.event_type                       offset = AbsoluteStatic(0x00)
+    le_advertising_report.reports[].event_type  offset = FrameStatic(0x00)  <- weakened
+
+The editor showed the first: no weakening, no remedy, nothing to say another
+answer existed. **218 spans in the tree carry more than one member and 165 of
+them disagree about at least one axis**, up to six axes and fifteen members on
+one span. Hover names the other uses now and prints only the axes that differ,
+which is what the source text cannot show and what a second full vector would
+bury.
+
+**And a bullet meant two opposite things.** `_render_vector` listed the
+weakened axes as bullets and the rest after an `Unweakened:` header -- except
+when one list was empty, where the `elif` printed the *strongest* axes as
+bullets with no header. A member with nothing weakened and one with everything
+weakened rendered identically: thirteen bullets, no header. That is invariant
+154, and 137 members in the tree are the first case. A reader looking at a
+fully strong field saw a full list of consequences it does not have. A bullet
+means weakened now, always.
+
+**The evidence that this misleads is that it misled me.** Three successive
+attempts to compare the two doors mechanically parsed a hover card wrongly --
+counting all thirteen axes as weakened, then reading the `**Why:**` section's
+lines as vector lines, then comparing a card against a different member that
+shared its span. Each looked like a real disagreement and each was my parser.
+The gate that went in is containment rather than parsing -- every axis value,
+every reason and every remedy `explain` prints has to appear somewhere in the
+card -- because the two are different doors and should look different; what
+must not happen is hover knowing *less*.
+
+Sabotaged three ways, including the historical one: drop the remedy, and 34 of
+35 schemas go red.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

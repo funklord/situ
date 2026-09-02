@@ -162,25 +162,38 @@ def hover_at(analysis: Analysis, line: int, character: int) -> str | None:
 	if analysis.resolved is None:
 		return None
 
-	offset = _offset_of(analysis.source, line, character)
-	best   = None
+	offset  = _offset_of(analysis.source, line, character)
+	matches: list[tuple[int, Any]] = []
 
 	for struct in analysis.resolved.structs.values():
 		for entry in struct.entries:
 			span = getattr(entry.placement, "span", None)
 			if span is None or not span.start <= offset < span.end:
 				continue
-			# The narrowest match: a nested field's span sits inside its
-			# parent's, and the cursor is on the inner one.
-			if best is None or (span.end - span.start) < best[0]:
-				best = (span.end - span.start, entry)
+			matches.append((span.end - span.start, entry))
 
-	if best is None:
+	if not matches:
 		return None
-	return _render_vector(best[1])
+
+	# The narrowest match: a nested field's span sits inside its parent's,
+	# and the cursor is on the inner one.
+	#
+	# `min` and then *all* of them, rather than the first: a struct declared
+	# once and used twice resolves to one member per use, and every one of
+	# them has this same source span. Keeping only the first showed one
+	# vector and said nothing about the other, and they are not the same
+	# vector -- `adv_report.event_type` is `offset = AbsoluteStatic(0x00)`
+	# and unweakened, while `le_advertising_report.reports[].event_type` is
+	# `FrameStatic(0x00)`, weakened, with a remedy. One line of source, and
+	# the editor answered with whichever struct happened to be declared
+	# first. Across the tree 218 spans carry more than one member and 165 of
+	# those disagree about at least one axis.
+	narrowest = min(width for width, _ in matches)
+	chosen    = [entry for width, entry in matches if width == narrowest]
+	return _render_vector(chosen[0], chosen[1:])
 
 
-def _render_vector(entry: Any) -> str:
+def _render_vector(entry: Any, others: list[Any] | None = None) -> str:
 	from situc.capability import Axis
 
 	placement = entry.placement
@@ -193,15 +206,48 @@ def _render_vector(entry: Any) -> str:
 		text  = f"`{axis.value}` = {value.render()}"
 		(weakened if _is_weakened(entry, axis) else strongest).append(text)
 
+	# A bullet means weakened, always. The `elif` here used to render the
+	# strongest axes as bullets too, so a member with *nothing* weakened and
+	# one with *everything* weakened produced the same thirteen bullets and
+	# no `Unweakened:` line -- two opposite states with identical evidence,
+	# which is invariant 154. 137 members in the tree are the first case and
+	# none is the second, so what a reader actually saw was a full list of
+	# consequences on a field that has none. It misread as weakenings three
+	# times over while this was being measured, which is the evidence.
 	lines.extend(f"- {text}" for text in weakened)
 	if weakened and strongest:
 		lines.append("")
+	if strongest:
 		lines.append("Unweakened: " + ", ".join(strongest))
-	elif strongest:
-		lines.extend(f"- {text}" for text in strongest)
 
 	lines.extend(_render_blame(entry))
+	lines.extend(_render_other_uses(entry, others or []))
 	return "\n".join(lines)
+
+
+def _render_other_uses(entry: Any, others: list[Any]) -> list[str]:
+	"""The same source line's other members, and where they disagree.
+
+	Only the axes that differ, and only their values: a full vector each
+	would be thirteen lines fifteen times over on the worst span in the tree,
+	and what the reader cannot get anywhere else is which axis moved. Where
+	nothing differs the use is still named, because "this member is reached
+	twice" is itself the thing the source text does not show.
+	"""
+	from situc.capability import Axis
+
+	if not others:
+		return []
+
+	lines = ["", "**Also reached as:**"]
+	for other in others:
+		differs = [f"`{axis.value}` = {other.vector.get(axis).render()}"
+		           for axis in Axis
+		           if other.vector.get(axis).render()
+		           != entry.vector.get(axis).render()]
+		detail = ", ".join(differs) if differs else "the same vector"
+		lines.append(f"- `{other.placement.path}` -- {detail}")
+	return lines
 
 
 def _render_blame(entry: Any) -> list[str]:

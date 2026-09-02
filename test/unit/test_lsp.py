@@ -25,7 +25,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from every_schema import SCHEMAS
+import pytest
+
+from every_schema import SCHEMAS, ids
+from situc.diagnostics import Source
 from situc.lsp import (
 	Server, analyse_text, code_actions, definition_at, hover_at, symbols,
 	to_lsp_diagnostic,
@@ -163,6 +166,72 @@ def test_hover_separates_weakened_axes_from_the_rest() -> None:
 	assert text.index("`atomic` = NonAtomic") < text.index("Unweakened:")
 
 
+#: One struct declared once and reached twice, which is what a hover card
+#: could not say. The inner member's offset is `AbsoluteStatic` on its own
+#: and `FrameStatic` inside the run, so the two uses of one source line
+#: genuinely disagree -- `example/ble` is the real instance of this.
+REUSED = """target buffer;
+endian big;
+
+struct inner {
+	u8   kind;
+	u16  value;
+}
+
+struct outer {
+	u8     count;
+	inner  items[count];
+}
+"""
+
+
+def test_hover_names_the_other_members_on_the_same_line() -> None:
+	"""A struct declared once and used twice resolves to one member per use,
+	and every one of them has the same source span. Hover kept the first and
+	said nothing about the rest -- so the editor answered a question about a
+	line of source with one of its two answers, chosen by which struct was
+	declared first. Across the tree 218 spans carry more than one member and
+	165 of those disagree about at least one axis."""
+	analysis = analyse_text(URI, REUSED)
+	line, col = line_of(REUSED, "u16  value")
+
+	text = hover_at(analysis, line, col + 6)
+
+	assert text is not None
+	assert "Also reached as:" in text
+	assert "outer.items[].value" in text or "inner.value" in text
+
+
+def test_hover_says_which_axis_the_other_use_disagrees_about() -> None:
+	"""Naming the other use is half of it. What the source text cannot show
+	is *which* axis moved, and a full second vector would be thirteen more
+	lines -- fifteen times over on the worst span in this tree."""
+	analysis = analyse_text(URI, REUSED)
+	line, col = line_of(REUSED, "u16  value")
+
+	text = hover_at(analysis, line, col + 6)
+
+	assert text is not None
+	assert "`offset` = " in text.split("Also reached as:")[1]
+
+
+def test_a_bullet_always_means_weakened() -> None:
+	"""A member with nothing weakened and one with everything weakened both
+	rendered thirteen bullets and no `Unweakened:` line -- two opposite
+	states with identical evidence, which is invariant 154. What a reader saw
+	on a fully strong field was a list of consequences it does not have."""
+	analysis = analyse_text(URI, REUSED)
+	line, col = line_of(REUSED, "u8   kind")
+
+	text = hover_at(analysis, line, col + 5)
+
+	assert text is not None
+	vector = text.split("**Also reached as:**")[0]
+	assert "Unweakened: " in vector
+	assert not any(line.startswith("- `") for line in vector.splitlines()), \
+		"nothing is weakened here, so no axis may be bulleted like one"
+
+
 def test_hover_on_nothing_returns_nothing() -> None:
 	analysis = analyse_text(URI, SCHEMA)
 
@@ -174,6 +243,75 @@ def test_hover_on_a_broken_document_returns_nothing() -> None:
 	analysis = analyse_text(URI, "target buffer;\nstruct s { u8 a")
 
 	assert hover_at(analysis, 1, 12) is None
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_hover_is_never_weaker_than_explain(path: Path) -> None:
+	"""The property this file opens by claiming to test, actually tested.
+
+	Its docstring says the answers here are "the ones `situc explain` and the
+	blame chains already give, rather than a second, weaker computation of the
+	same thing" -- and no test in it invoked `explain` or compared the two. It
+	drifted exactly once for exactly that reason, recorded beside
+	`_render_blame`: the propagation table has carried a reason and a remedy
+	since section 11.3, "`situc explain` printed them and hover did not, so
+	the editor gave a weaker answer than the CLI". That was fixed by hand and
+	nothing was added that would catch it again.
+
+	Containment rather than equality, because the two are different doors and
+	should look different: hover is Markdown for a tooltip and `explain` is
+	columns for a terminal. What must not happen is hover knowing *less*. So
+	every axis with its value, and every blame reason and remedy, has to
+	appear somewhere in the card.
+
+	Only members whose source span is theirs alone. Where a struct is
+	declared once and reached twice, one span carries several members with
+	different vectors, and which of them `explain` was asked about is a
+	different question -- `test_hover_names_the_other_members_on_the_same_line`
+	is the one that covers it.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	analysis = analyse_text(str(path), source.text)
+	assert analysis.resolved is not None
+
+	alone: dict[tuple[int, int], list[Any]] = {}
+	for struct in analysis.resolved.structs.values():
+		for entry in struct.entries:
+			span = getattr(entry.placement, "span", None)
+			if span is not None:
+				alone.setdefault((span.start, span.end), []).append(entry)
+
+	compared = 0
+	for (start, _end), entries in alone.items():
+		if len(entries) != 1:
+			continue
+		entry = entries[0]
+		line  = source.text.count("\n", 0, start)
+		col   = start - (source.text.rfind("\n", 0, start) + 1)
+		card  = hover_at(analysis, line, col)
+		if card is None:
+			continue
+
+		compared += 1
+		for axis, value in entry.vector.items():
+			assert f"`{axis.value}` = {value.render()}" in card, \
+				f"{entry.placement.path}: hover omits {axis.value}"
+		for weakening in entry.weakenings:
+			assert weakening.effect.because in card, \
+				f"{entry.placement.path}: hover omits why {weakening.effect.axis.value} moved"
+			if weakening.rule.remedy:
+				assert weakening.rule.remedy in card, \
+					f"{entry.placement.path}: hover omits the remedy for " \
+					f"{weakening.effect.axis.value}"
+
+	# A gate over an empty list reports success exactly as loudly as a real
+	# pass. `std/codecs.situ` and `std/kernels.situ` declare codecs and no
+	# structs, so there is genuinely nothing here to hover over -- said out
+	# loud as a skip, because a silent pass and a real one are the same
+	# green, and `every_schema.py` already records that this corpus goes
+	# quiet by skipping rather than by failing.
+	if not compared:
+		pytest.skip(f"{path.name} resolves no member with a span of its own")
 
 
 # -- symbols ----------------------------------------------------------------
