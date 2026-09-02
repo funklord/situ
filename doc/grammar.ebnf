@@ -17,13 +17,16 @@
 
 schema		= { directive | decl } ;
 
-directive	= "target" target_kind ";"
+directive	= "target" target_kind [ "append" ] ";"
 	| "endian" endian ";"
 	| "bit_order" bitorder ";"
 	| "strictness" "=" strictness ";"
 	| "import" string ";" ;
 
-target_kind	= "buffer" | "mmio" ;
+target_kind	= "buffer" | "mmio" | "file" ;
+(* Section 8.1, decision 0047. `file` sets `effect = EffectOnWrite` on every
+ * member; `append` makes the top-level extent growable and every address
+ * `Unstable`, and is refused on the two targets that cannot grow. *)
 endian		= "big" | "little" | "native" ;
 bitorder	= "msb_first" | "lsb_first" ;
 strictness	= "strict" | "lenient" ;
@@ -59,7 +62,12 @@ enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
 
 struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 
-member		= field | reserved | marker_field | block | variant | tag_field ;
+member		= field | reserved | marker_field | block | variant | tag_field
+	| pad ;
+
+(* Section 8.4, decision 0043. Aligns the offset to the next multiple of n;
+ * it occupies whatever that costs and shows nothing. *)
+pad		= "pad_to" "(" digits ")" ";" ;
 
 field		= [ radix ] type_ref ident [ array_spec ] [ until | repeat ]
 		  [ located ] [ pin ] [ attrs ] ";" ;
@@ -124,10 +132,19 @@ bitfield	= "bit" ;		(* single bit; uN < 8 also bit-packed *)
 codec_decl	= "codec" ident "{" { codec_prop ";" } "}" ;
 codec_prop	= "length_preserving"
 	| "expansion" "=" ( "+" digits | "unbounded" | ratio )
-	| "granularity" "=" ( "byte" | "block" "(" digits ")" | "stream" )
-	| [ "not" ] "seekable"
+	| "granularity" "=" granularity
+	| [ "not" ] "seekable" [ "=" seekable ]
 	| "authenticated" | "invertible" | "deterministic"
+	| "systematic" | "error_propagating"
+	| "tag_bytes" "=" digits | "nonce_bytes" "=" digits
 	| "kernel" "=" kernel ;
+
+(* Decision 0038. The two sizes are the primitive's, and are what let the
+ * compiler check a schema's own `tag` and `nonce` fields against it. *)
+granularity	= "byte" | "stream"
+	| "bit" "(" digits ")" | "symbol" "(" digits ")"
+	| "block" "(" digits ")" ;
+seekable	= "linear" | "permuted" | "blockwise" "(" digits ")" ;
 
 (* Section 13.4. A kernel derives both the signature and the implementation,
  * which is the whole difference between the two codec tiers. *)
@@ -187,6 +204,7 @@ varint_decl	= "varint_type" ident "{" { varint_prop ";" } "}" ;
 varint_prop	= "encoding" "=" ident
 	| "transform" "=" ident
 	| "max_bits" "=" digits
+	| "max_bytes" "=" digits
 	| "minimal" ;
 
 (* Section 8.3. Exactly two members, named `little` and `big`: naming them
@@ -236,6 +254,7 @@ index_arg	= "base" "=" ( "region" | "message" | ident )
 	| attr ;
 capability_expr	= ident "(" expr { "," expr } ")" | expr ;
 ratio		= "ratio_exact" "(" digits "," digits ")"
+	| "ratio_padded" "(" digits "," digits ")"
 	| "ratio_bounded" "(" digits "," digits ")" ;
 ident		= letter { letter | digit | "_" } ;
 digits		= digit { digit | "_" } ;

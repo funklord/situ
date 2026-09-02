@@ -390,13 +390,13 @@ resolve. A struct with two regions of a kind names them:
 ```ebnf
 schema        = { directive | decl } ;
 
-directive     = "target"     target_kind ";"
+directive     = "target"     target_kind [ "append" ] ";"
               | "endian"     endian ";"
               | "strictness" "=" strictness ";"
               | "bit_order"  bitorder ";"
               | "import"     string ";" ;
 
-target_kind   = "buffer" | "mmio" ;
+target_kind   = "buffer" | "mmio" | "file" ;
 endian        = "big" | "little" | "native" ;
 bitorder      = "msb_first" | "lsb_first" ;
 strictness    = "strict" | "lenient" ;
@@ -427,7 +427,8 @@ enum_body     = { ident "=" expr "," } [ "default" "=" ("error"|"pass") ] ;
 
 struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
-member        = field | reserved | block | variant | tag_field ;
+member        = field | reserved | block | variant | tag_field | pad ;
+pad           = "pad_to" "(" digits ")" ";" ;        (* section 8.4 *)
 
 field         = [ radix ] type_ref ident [ array_spec ] [ until | repeat ]
                 [ pin ] [ attrs ] ";" ;
@@ -524,9 +525,17 @@ bitfield      = "bit" ;               (* single bit; uN < 8 also bit-packed *)
 codec_decl    = "codec" ident "{" { codec_prop ";" } "}" ;
 codec_prop    = "length_preserving"
               | "expansion" "=" ( "+" digits | "unbounded" | ratio )
-              | "granularity" "=" ( "byte" | "block" "(" digits ")" | "stream" )
-              | [ "not" ] "seekable"
-              | "authenticated" | "invertible" | "deterministic" ;
+              | "granularity" "=" granularity
+              | [ "not" ] "seekable" [ "=" seekable ]
+              | "authenticated" | "invertible" | "deterministic"
+              | "systematic" | "error_propagating"
+              | "tag_bytes" "=" digits | "nonce_bytes" "=" digits ;
+granularity   = "byte" | "stream" | "bit" "(" digits ")"
+              | "symbol" "(" digits ")" | "block" "(" digits ")" ;
+seekable      = "linear" | "permuted" | "blockwise" "(" digits ")" ;
+ratio         = "ratio_exact"  "(" digits "," digits ")"
+              | "ratio_padded" "(" digits "," digits ")"
+              | "ratio_bounded" "(" digits "," digits ")" ;
 
 requirement   = ( "require" | "assert" ) capability_expr ";" ;
 
@@ -18498,6 +18507,48 @@ answer would bless one reading, and the case has no subject in the corpus, so a
 test would have to invent one. What is settled is that the question is now
 written down next to the measurement, instead of being a sentence in a decision
 record that three implementations quietly answer another way.
+
+### 26.203 Two grammars, one hand, and nine spellings neither knew
+
+`test_grammar_sync.py` holds `doc/grammar.ebnf` to `project.md` section 7, and
+its docstring is clear-eyed about why: "Two copies of a grammar disagree
+eventually. The file is only safe to keep if a reader knows which one is the
+bug." It was written after a commit added the `invariant` production to
+section 7 and forgot the extracted copy.
+
+**They did not disagree. They agreed, and both trailed the parser.** Nine
+spellings the compiler accepts were named in neither file:
+
+    file  append  pad_to  tag_bytes  nonce_bytes
+    max_bytes  systematic  error_propagating  ratio_padded
+
+plus `granularity = bit(N)` and `symbol(N)`, and the whole
+`seekable = linear | permuted | blockwise(N)` form -- `codec_prop` had
+`[ "not" ] "seekable"` and no way to say which. Every one of them is used by a
+committed schema, except `target file` and `append`, which no schema has
+adopted yet and which this session added.
+
+The guidelines' sentence is exactly this: **two documents agreeing are one
+witness if the same hand wrote both.** The test between them can only catch
+one of the two ways they rot, and it is the less likely way.
+
+**The third witness is the code**, and it is now a test. Four AST enums --
+`TargetKind`, `Granularity`, `Seekable`, `Expansion` -- are what the parser
+turns source text into inside an *enumerated* production, so every member of
+them is a spelling somebody can type and the grammar has to name it. Two are
+spelled differently from their value (`expansion = +16` for
+`Expansion.add`, `not seekable` for `Seekable.none`) and both are listed by
+name rather than skipped by a rule, so a member that stops being surface
+syntax has to be removed from the list rather than quietly passing a filter.
+
+**What is deliberately not gated is the attribute vocabulary.** `attr = ident
+[ "=" expr ]` is generic on purpose -- the grammar does not claim to enumerate
+attribute names, and `wellformed.py` is what checks a name is one situ knows.
+Measuring "32 of 49 attribute names are absent from the grammar" and calling
+it a gap was my own false positive, caught by reading the production rather
+than the count. The README's attribute table is where that vocabulary is held
+to `PLACED_ATTRS`, which is a different check in a different place because it
+is a different claim.
 
 ## 27. Questions, and how they were settled
 
