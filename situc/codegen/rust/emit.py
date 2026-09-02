@@ -1955,7 +1955,19 @@ class Emitter:
 				f"\t\t{inner}::new(&self.bytes[at..at + {inner}::SIZE])",
 				"\t}",
 			]
-		return []
+
+		# Said rather than skipped, for C's stated reason: "a header that
+		# simply lacked the accessor would leave a reader looking for a
+		# typo". This returned `[]`, so an arm whose type has no measurable
+		# extent appeared in the generated Rust as neither an accessor nor a
+		# note -- and the test comparing what the four backends refuse could
+		# not see it, because an empty refusal set reads as "emitted it"
+		# (26.190).
+		return [
+			f"\t// No accessor for `{placement.path}`: one "
+			f"`{placement.type_name}` has no extent this backend can "
+			f"compute, so the arm cannot be reached into yet.",
+		]
 
 	def _getter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		bounds = self._value_bounds(struct, entry.placement) \

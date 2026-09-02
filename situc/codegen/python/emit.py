@@ -2047,7 +2047,21 @@ class Emitter:
 				f"\t\treturn {inner}(self._msg, self._at + ({start}),",
 				f"\t\t\t{inner}.SIZE_BYTES)",
 			]
-		return []
+
+		# Said rather than skipped, which is C's rule next door: "a header
+		# that simply lacked the accessor would leave a reader looking for a
+		# typo". This returned `[]`, so an arm whose type has no measurable
+		# extent -- `packet.body.publish` in `example/mqtt`, and four more --
+		# appeared in the generated Python as neither an accessor nor a note.
+		# C and C++ both wrote one; this backend and Rust wrote nothing, and
+		# the test that compares what the four refuse could not see the
+		# difference because an empty refusal set reads as "emitted it"
+		# (26.190).
+		return [
+			f"\t# No accessor for `{placement.path}`: one "
+			f"`{placement.type_name}` has no extent this backend can "
+			f"compute, so the arm cannot be reached into yet.",
+		]
 
 	def _nested_text_values(self, struct: ResolvedStruct) -> list[str]:
 		"""The non-failing read of a *nested* text number.

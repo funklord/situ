@@ -17875,6 +17875,61 @@ honest count is one. **A truthy sentinel read as a value**, which is the
 third time this session a measurement has been wrong in the direction of the
 thing it was measuring.
 
+### 26.190 The gate that compared four empty sets
+
+`test_backends_refuse_the_same_members` asks the question its name gives:
+which members does each backend decline an accessor to, and where do the four
+disagree. It scores a member "refused" by finding one of eleven phrases near
+its path.
+
+**Python and Rust wrote no phrase at all.** `_arm_member` ended in a bare
+`return []` in both, so a variant arm whose type has no computable extent --
+`packet.body.publish` and three more in `example/mqtt`, plus
+`nl_message.body.rest` -- appeared in their output as **neither an accessor
+nor a note**. `project.md` names that as the worst case: "not an accessor, and
+not the note saying why. A member that simply vanishes is the one shape a
+reader cannot ask about."
+
+C and C++ both wrote one, in phrasings the list did not hold. So all four
+refusal sets were empty for those members, `0 < len(refusing) < len(sets)`
+was false, and the assertion passed. **A gate over an empty list reports
+success exactly as loudly as a real pass** -- the sentence this session
+started from, in the test written to catch this class.
+
+Both backends say why now, naming the member. And the fix taught two things
+worth keeping.
+
+**Widening the phrase list reported divergences that were not there.** Adding
+C's "cannot be measured" and C++'s "not a shape this backend reaches into
+yet" made the gate fail on six members -- and measuring each one directly,
+`packet.body.puback` has **two definitions in C++** and four in C. Those two
+notes name a *type* rather than a member, and the scoring takes any path
+within 120 characters before a phrase, so a neighbouring arm's path was swept
+in. The phrases stayed out; what the gate cannot see is recorded here instead
+of being papered over by widening the window.
+
+**And a note that names its member first needs the window pointed the other
+way.** Reading backwards from "No accessor for `x`" picks up whatever was
+emitted above it: it reported `nl_message.body.terminator` as refused by
+Python while all four backends define it. `NAMES_ITS_MEMBER` is the rule, and
+removing it turns netlink red, so it is load-bearing rather than tidy.
+
+**One real divergence remains, and it is exempt rather than resolved.** For
+those five members C emits an *offset* accessor -- where the arm starts, which
+it can compute -- and the other three emit nothing. Measured, not inferred:
+one definition in C, none in cpp, python or rust. Either that offset is a
+capability the other three should have, or it is one C should not offer for an
+arm nobody can frame, and **that is a decision about what a backend owes**.
+`EXEMPT` carries it with the reason so the gate stays honest about the other
+39 schemas rather than being switched off.
+
+**The floor is 10 and I guessed 90.** The first version asserted a corpus-wide
+count taken from an agent's table of *notes emitted*, which is a different
+number from refusals *scored*. It failed immediately, which is the only reason
+it was not committed as a floor nothing could reach. Ten, all of them mqtt and
+netlink -- small for a corpus of forty, and honest: most of what the emitters
+decline they decline in words this scoring cannot attribute to a member.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

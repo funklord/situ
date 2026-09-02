@@ -52,7 +52,33 @@ REFUSALS = (
 	"not a struct",
 	"No index for",
 	"No offset cache",
+	# Python and Rust wrote *nothing* for a variant arm whose type has no
+	# computable extent, so their refusal sets were empty, the comparison
+	# compared nothing, and the assertion passed -- a gate over an empty list
+	# reporting success as loudly as a real pass. They say this now (26.190).
+	#
+	# Only this one was added. C's "cannot be measured" and C++'s "not a
+	# shape this backend reaches into yet" are also unlisted, and adding them
+	# reported divergences that are not there: the scoring takes any path
+	# within 120 characters before a phrase, and those two notes name a
+	# *type* rather than the member, so a neighbouring arm's path is swept in
+	# -- `packet.body.puback` was reported as refused by C++ while C++ emits
+	# two definitions for it. This phrase names its own member, so it cannot
+	# bleed. What the gate still cannot see is recorded in 26.190 rather than
+	# papered over by widening the window.
+	"No accessor for",
 )
+
+#: Phrases that name their member *after* themselves rather than before.
+#:
+#: The window below reaches 120 characters back and 40 forward, because a
+#: note like "`x` cannot be measured" trails the path it is about. A note
+#: that opens with the path -- "No accessor for `x`: ..." -- is the other
+#: shape, and reading backwards from it sweeps in whatever member happened
+#: to be emitted just above. That reported `nl_message.body.terminator` as
+#: refused by Python while all four backends define it, and
+#: `packet.body.puback` as refused by C++ while C++ defines two (26.190).
+NAMES_ITS_MEMBER = frozenset({"No accessor for"})
 
 #: `struct.member`, and the synthesised `<reservedN>` the compiler names an
 #: unnamed field. Matched against the schema's own paths afterwards, because
@@ -69,6 +95,25 @@ EXEMPT = {
 	# Python means loading a shared object from a path this generator would
 	# have to invent. The note names the symbol and the size instead.
 	("python", "data_block.body"): "no decode: the codec is C's (0017)",
+
+	# An arm whose type has no computable extent. C emits an *offset*
+	# accessor -- where the arm starts, which it can compute -- and the other
+	# three emit nothing; C++ says so in a note, Python and Rust said nothing
+	# at all until 26.190. Measured rather than inferred: for
+	# `packet.body.publish`, C defines one function and cpp, python and rust
+	# define none.
+	#
+	# Exempt rather than resolved, and the difference matters. Either C's
+	# offset accessor is a capability the other three should have, or it is
+	# one C should not offer for an arm nobody can frame -- and that is a
+	# decision about what a backend owes, not a defect with an obvious fix.
+	# Recorded here so the gate stays honest about the other 39 schemas
+	# instead of being switched off, and named in 26.190 as open.
+	("c", "packet.body.publish"):     "C emits an offset accessor, the other three nothing",
+	("c", "packet.body.subscribe"):   "C emits an offset accessor, the other three nothing",
+	("c", "packet.body.suback"):      "C emits an offset accessor, the other three nothing",
+	("c", "packet.body.unsubscribe"): "C emits an offset accessor, the other three nothing",
+	("c", "nl_message.body.rest"):    "C emits an offset accessor, the other three nothing",
 }
 
 
@@ -85,7 +130,9 @@ def refused(text: str, paths: set[str]) -> set[str]:
 
 	for phrase in REFUSALS:
 		for match in re.finditer(re.escape(phrase), flat):
-			window = flat[max(0, match.start() - 120):match.end() + 40]
+			window = (flat[match.end():match.end() + 80]
+			          if phrase in NAMES_ITS_MEMBER
+			          else flat[max(0, match.start() - 120):match.end() + 40])
 
 			# `required` declines to *frame the struct*, naming no member --
 			# "one of its members has no length this can compute" (20.3). The
@@ -248,3 +295,53 @@ def test_the_exemptions_are_still_divergences() -> None:
 	assert not stale, (
 		f"exempted but no longer a divergence: {sorted(set(stale))}"
 	)
+
+
+def test_no_backend_declines_a_member_in_silence() -> None:
+	"""A member that simply vanishes is the shape a reader cannot ask about.
+
+	Python and Rust ended `_arm_member` in a bare `return []`, so an arm
+	whose type has no computable extent -- `packet.body.publish` and four
+	more -- appeared in their output as neither an accessor nor a note,
+	while C and C++ both wrote one. `project.md` names that as the worst
+	case: "not an accessor, and not the note saying why".
+
+	Checked directly rather than through the comparison above, because those
+	five members are `EXEMPT` there and an exemption skips the member
+	entirely -- so the comparison can no longer see whether they are
+	mentioned at all.
+	"""
+	texts, paths = emitted(ROOT / "example/mqtt/mqtt.situ")
+
+	for member in ("packet.body.publish", "packet.body.subscribe"):
+		assert member in paths, member
+		for backend, text in texts.items():
+			flat = re.sub(r"\s*\n\s*[/*#]*\s*", " ", text)
+			assert member in flat, (
+				f"{backend} mentions `{member}` nowhere: not an accessor, and "
+				f"not the note saying why")
+
+
+def test_the_comparison_sees_refusals_at_all() -> None:
+	"""The floor that stops this file passing over an empty list.
+
+	Every set was empty for the members that diverged, so the comparison
+	compared nothing and the assertion held -- a gate over an empty list
+	reports success exactly as loudly as a real pass. This counts what the
+	scoring actually finds across the corpus, so a phrase falling out of
+	`REFUSALS`, or an emitter dropping its note, shows up here rather than as
+	a quieter pass.
+	"""
+	seen = 0
+	for path in SCHEMAS:
+		texts, paths = emitted(path)
+		seen += sum(len(refused(text, paths)) for text in texts.values())
+
+	# Ten, and all ten are mqtt (8) and netlink (2) -- the two schemas with an
+	# arm whose type has no computable extent. That is a small number for a
+	# corpus of forty, and it is the honest one: most of what the emitters
+	# decline they decline by writing a note this scoring cannot attribute to
+	# a member, which is the limit 26.190 records rather than papers over.
+	assert seen >= 10, (
+		f"the scoring finds {seen} refusals across the corpus, down from 10; "
+		f"a phrase has left REFUSALS or an emitter has stopped writing one")
