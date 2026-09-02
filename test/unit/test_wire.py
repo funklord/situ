@@ -470,6 +470,96 @@ def test_moving_the_version_field_is_visible() -> None:
 	assert found.breaking
 
 
+INDEXED = """
+struct cell { u16 tag; u8 body; }
+struct wider { u32 tag; }
+struct s {
+	u8  page;
+	u16 n;
+	u16 m;
+	indexed(offset_type = u16, count = n, base = page) {
+		cell cells[];
+	}
+}
+"""
+
+
+def test_it_records_how_an_indexed_regions_table_is_read() -> None:
+	"""The tenth edit of this kind, found while fixing the other nine. An
+	`indexed` region's member line says where the table starts and that its
+	length is decided by the data, which is true of every offset table there
+	could be: `IndexTable` was read by every backend and by nothing here."""
+	text = signature(INDEXED)
+
+	assert "cells index entry: 2" in text
+	assert "cells index base: member page" in text
+
+	# The other two the table holds, on the member line where they already
+	# were: `_index` states neither, and these are why.
+	assert "cell       cells  sized-by=n" in text
+
+
+@pytest.mark.parametrize("edit", [
+	("base = page", "base = region"),	# the region's own first byte
+	("base = page", "base = message"),	# anywhere in the frame
+	("base = page", "base = m"),		# a different member's first byte
+])
+def test_moving_an_indexed_regions_offset_base_is_visible(
+		edit: tuple[str, str]) -> None:
+	"""Decision 0024, and the edit the previous pass named and left: every
+	cell in every SQLite page moves and no offset, width, name or fact on any
+	member line changes."""
+	assert signature(INDEXED) != signature(INDEXED.replace(*edit))
+
+	found = verdict(INDEXED, INDEXED.replace(*edit))
+	assert found.breaking
+	assert "every element it reaches is somewhere else" in detail(found)
+
+
+def test_changing_an_index_entry_width_is_visible() -> None:
+	"""Each offset is read out of twice as many bytes and the table is twice
+	as long, so every element moves. The member line records the table's lower
+	bound, which is `count * entry` and is zero for a count the data gives --
+	so both widths render as `0..`."""
+	wide = INDEXED.replace("offset_type = u16", "offset_type = u32")
+	assert signature(INDEXED) != signature(wide)
+
+	found = verdict(INDEXED, wide)
+	assert found.breaking
+	assert "`cells index entry` 2 -> 4" in detail(found)
+
+
+def test_an_index_count_from_another_field_is_visible() -> None:
+	"""Not on an `index` line: the count is where a length always is in this
+	file, and stating it twice would report one change under two headings."""
+	other = INDEXED.replace("count = n", "count = m")
+	assert signature(INDEXED) != signature(other)
+	assert verdict(INDEXED, other).findings
+
+
+def test_an_index_count_given_as_a_literal_is_visible() -> None:
+	"""Where no field gives it there is no `sized-by=` either, and the table's
+	extent is the whole of the record: `count * entry`, which the width column
+	carries because the entry width is now recorded beside it."""
+	four = INDEXED.replace("count = n", "count = 4")
+	five = INDEXED.replace("count = n", "count = 5")
+
+	assert "8.." in signature(four)
+	assert signature(four) != signature(five)
+	assert verdict(four, five).findings
+
+
+def test_an_indexed_regions_element_type_is_visible() -> None:
+	"""Also not on an `index` line: an element type is a type, and the member
+	line's type column is what `_compare_member` compares."""
+	swapped = INDEXED.replace("cell cells[]", "wider cells[]")
+	assert signature(INDEXED) != signature(swapped)
+
+	found = verdict(INDEXED, swapped)
+	assert found.breaking
+	assert "cell -> wider" in detail(found)
+
+
 # -- the comparison, where it said the opposite of what it meant ------------
 
 
@@ -529,7 +619,7 @@ def test_declaring_a_version_field_moves_no_bytes() -> None:
 	assert kinds(found) == {"api"}
 
 
-@pytest.mark.parametrize("body", [ARM_A, TLV, WHILE, SELF_AS % "0"])
+@pytest.mark.parametrize("body", [ARM_A, TLV, INDEXED, WHILE, SELF_AS % "0"])
 def test_the_lines_beneath_the_members_are_not_members(body: str) -> None:
 	"""The positional comparison walks the member lines by index, so a line
 	that is not a member and is counted as one slides every member after it

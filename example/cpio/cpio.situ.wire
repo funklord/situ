@@ -10,9 +10,10 @@
 # the data decides rather than the schema.
 #
 # A construct whose contract is a list rather than an extent -- a
-# variant's arms, a tlv region's grammar, the bytes a tag covers --
-# states it on `name what: value` lines below the members, one line per
-# entry so that a diff names the entry that moved.
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
 
 endian big
 target buffer

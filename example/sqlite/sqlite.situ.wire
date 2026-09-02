@@ -10,9 +10,10 @@
 # the data decides rather than the schema.
 #
 # A construct whose contract is a list rather than an extent -- a
-# variant's arms, a tlv region's grammar, the bytes a tag covers --
-# states it on `name what: value` lines below the members, one line per
-# entry so that a diff names the entry that moved.
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
 
 endian big
 target buffer
@@ -26,6 +27,8 @@ struct btree_leaf_page size=8..
   @0x0005   2         u16        content_start  big
   @0x0007   1         u8         fragmented_free
   @0x0008   0..       table_leaf_cell cells  sized-by=cell_count
+  cells index entry: 2
+  cells index base: member page_type
 
 struct table_leaf_cell size=2..18446744073709551633
   @0x0000   1..9      sqlite_varint payload_size  varint=sqlite_varint

@@ -17930,6 +17930,39 @@ it was not committed as a floor nothing could reach. Ten, all of them mqtt and
 netlink -- small for a corpus of forty, and honest: most of what the emitters
 decline they decline in words this scoring cannot attribute to a member.
 
+### 26.191 The third construct of a class the signature knew about
+
+The wire signature states a construct "whose contract is a list rather than an
+extent" on its own lines, and its docstring names the reason: a variant's arms
+and a tlv region's grammar decide which bytes a peer reads as what, and neither
+shows up in an offset or a width. **There are three such constructs and it
+carried two.** An `indexed` region's offset table -- section 9.3, decision 0024
+-- was the one left out.
+
+So both of the table's own facts were invisible. Verified by sabotage, on the
+one schema in the tree that has an `indexed` region:
+
+    base = page_type -> region     signature byte-identical
+    offset_type = u16 -> u32       signature byte-identical
+
+The first moves every cell in every page. The second changes both how far the
+table runs and which bytes each offset is read out of. Both are the
+INTERPRETATION shape exactly: the table is where it was, holds the same
+numbers, and the bytes those numbers name are somewhere else. `--check` now
+calls each `breaking` and exits 1.
+
+**Two of the table's four facts are deliberately not repeated, and the reason
+is a property of the diff rather than of brevity.** The element type is the
+member line's type column and the count arrives as `sized-by=`; state either
+again and one change prints twice under two headings that disagree -- a member
+fact whose value moved is `backward`, an annotation's is `breaking`. What is
+left is the pair with nowhere else to live.
+
+**The corpus exercises `indexed` once.** `example/sqlite` exists because the
+construct had no real format behind it (26.143), and it is still the only one.
+A signature blind spot survives exactly as long as the sample that would have
+shown it, and one schema is how long this one lasted.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

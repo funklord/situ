@@ -28,7 +28,8 @@ from dataclasses import dataclass
 from pathlib import PurePath
 
 from situc import ast
-from situc.layout import Arm, BITS_PER_BYTE, KnownTag, Placement, ValueRule
+from situc.layout import (
+	Arm, BITS_PER_BYTE, IndexTable, KnownTag, Placement, ValueRule)
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import own_members
 
@@ -57,9 +58,10 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 		"# the data decides rather than the schema.",
 		"#",
 		"# A construct whose contract is a list rather than an extent -- a",
-		"# variant's arms, a tlv region's grammar, the bytes a tag covers --",
-		"# states it on `name what: value` lines below the members, one line per",
-		"# entry so that a diff names the entry that moved.",
+		"# variant's arms, a tlv region's grammar, an indexed region's offset",
+		"# table, the bytes a tag covers -- states it on `name what: value`",
+		"# lines below the members, one line per entry so that a diff names the",
+		"# entry that moved.",
 	]
 
 	lines.extend(_directives(schema))
@@ -336,14 +338,15 @@ def _attribute_facts(placement: Placement) -> list[str]:
 def _composites(struct: ResolvedStruct) -> list[str]:
 	"""The constructs whose contract is a list rather than an extent.
 
-	A variant and a tlv region each get one member line, and that line says
-	where the construct starts and how wide it can be -- which is the same
-	whatever the discriminant selects and whatever the grammar says. Swapping
-	two arms of `keystore.params` rewrote eighty-two lines of generated C and
-	no byte of this file; so did moving a protobuf tag from 1 to 7, changing
-	`tag >> 3` to `tag >> 4`, and halving wire type 1's value. Every one of
-	those is a peer reading different bytes as a different thing, which is the
-	whole subject.
+	A variant, a tlv region and an `indexed` one each get one member line, and
+	that line says where the construct starts and how wide it can be -- which
+	is the same whatever the discriminant selects, whatever the grammar says
+	and wherever the offsets are measured from. Swapping two arms of
+	`keystore.params` rewrote eighty-two lines of generated C and no byte of
+	this file; so did moving a protobuf tag from 1 to 7, changing `tag >> 3`
+	to `tag >> 4`, halving wire type 1's value, and moving `sqlite.cells` from
+	`base = page_type` to `base = region`. Every one of those is a peer
+	reading different bytes as a different thing, which is the whole subject.
 
 	Rendered as one line per entry rather than as fact tokens on the member
 	line, for the reason `_coverage` is: an arm list is 21 entries in modbus
@@ -358,6 +361,8 @@ def _composites(struct: ResolvedStruct) -> list[str]:
 			lines.extend(_arms(struct, held))
 		elif held.kind == "tlv":
 			lines.extend(_tlv(held))
+		elif held.kind == "indexed":
+			lines.extend(_index(held))
 	return lines
 
 
@@ -474,6 +479,54 @@ def _known_tag(known: KnownTag) -> str:
 	if known.repeated:
 		parts.append("repeated")
 	return " ".join(parts)
+
+
+def _index(placement: Placement) -> list[str]:
+	"""How an `indexed` region's offset table is read (section 9.3).
+
+	Two lines, which are the two facts the member line has no room for. The
+	other two the table holds are already on it and are deliberately not
+	repeated here: a fact stated twice is a change reported twice, and the two
+	reports do not agree -- a member fact whose value moved is `backward` by
+	`_changed_constraint` and an annotation whose value moved is `breaking`
+	below, so one change would print under both headings. The element type is
+	the member line's type column, which `_compare_member` compares. The count
+	is `sized-by=` where a field gives it; where a literal does, the table's
+	own extent is `count * entry`, so the width column carries it as soon as
+	the entry width is recorded, which is the first line below.
+
+	What is left is the pair that decides where every element in every message
+	is. `entry` is how wide one slot is, so it says both how far the table
+	runs and which bytes an offset is read out of. `base` is decision 0024:
+	the same two bytes name a different byte of the message measured from the
+	region, from the message, or from a member declared before it. Neither
+	survived into the layout this file reads -- `sqlite.cells` moving from
+	`base = page_type` to `base = region` moved every cell in every page and
+	produced a byte-identical signature.
+	"""
+	table = placement.index_table
+	if table is None:
+		return []
+
+	name = placement.name
+	# In bytes, the unit every width in this file is written in. Always whole:
+	# `place_indexed` refuses an offset type that is not a whole-byte scalar,
+	# so there is no bit-width form to render here.
+	return [
+		f"  {name} index entry: {table.entry_bits // BITS_PER_BYTE}",
+		f"  {name} index base: {_index_base(table)}",
+	]
+
+
+def _index_base(table: IndexTable) -> str:
+	"""What an offset is measured from, with the member named where one is.
+
+	The kind is always written, `member` included, so that a member called
+	`region` cannot be read as the region itself.
+	"""
+	if table.base == "member":
+		return f"member {table.base_member}"
+	return table.base
 
 
 def _coverage(struct: ResolvedStruct) -> list[str]:
@@ -1104,6 +1157,18 @@ def _annotation_changed(name: str, key: str, was: str, now: str) -> Finding:
 			"breaking", name,
 			f"`{key}` {was} -> {now}; the arm is chosen by a different field, "
 			"so the same discriminant selects a different layout")
+
+	if _what(key) == "index":
+		# The INTERPRETATION shape, and the reason this is breaking rather
+		# than a narrowing either way: the table is exactly where it was and
+		# holds the same numbers, and the bytes those numbers name are
+		# somewhere else. An offset base that moves (0024) and an entry width
+		# that changes are the same finding in that respect -- neither admits
+		# or refuses a message, both hand the receiver different elements.
+		return Finding(
+			"breaking", name,
+			f"`{key}` {was} -> {now}; the table is where it was and every "
+			"element it reaches is somewhere else")
 
 	return Finding(
 		"breaking", name,
