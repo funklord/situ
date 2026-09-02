@@ -306,12 +306,14 @@ def test_hover_is_never_weaker_than_explain(path: Path) -> None:
 
 	# A gate over an empty list reports success exactly as loudly as a real
 	# pass. `std/codecs.situ` and `std/kernels.situ` declare codecs and no
-	# structs, so there is genuinely nothing here to hover over -- said out
-	# loud as a skip, because a silent pass and a real one are the same
-	# green, and `every_schema.py` already records that this corpus goes
-	# quiet by skipping rather than by failing.
+	# structs, so there is genuinely nothing here to hover over -- asserted
+	# rather than skipped, so that "nothing was compared" has to be *because*
+	# there was nothing, and a schema that stops resolving members fails here
+	# instead of going quiet. A skip would also be a skip CI cannot account
+	# for, and its allow-list is deliberately narrow.
 	if not compared:
-		pytest.skip(f"{path.name} resolves no member with a span of its own")
+		assert not analysis.resolved.structs, \
+			f"{path.name}: nothing was compared, and it declares structs"
 
 
 # -- symbols ----------------------------------------------------------------
