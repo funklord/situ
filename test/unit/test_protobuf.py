@@ -25,7 +25,8 @@ from situc.parser import parse
 from situc.propagate import Weakening
 from situc.resolve import ResolvedSchema, resolve
 
-SCHEMA = Path(__file__).resolve().parents[2] / "example" / "protobuf" / "protobuf.situ"
+SCHEMA  = Path(__file__).resolve().parents[2] / "example" / "protobuf" / "protobuf.situ"
+PROJECT = Path(__file__).resolve().parents[2] / "project.md"
 
 
 @pytest.fixture(scope="module")
@@ -73,6 +74,39 @@ def test_the_region_is_not_canonical(resolved: ResolvedSchema) -> None:
 	entry = resolved.find("proto_message.fields")
 	assert entry is not None
 	assert entry.vector.get(Axis.CANONICAL) == Value("NonCanonical")
+
+
+def test_the_mutate_row_is_the_one_the_document_and_the_compiler_disagree_on(
+		resolved: ResolvedSchema) -> None:
+	"""The row 9.7 states, nothing checked, and the two sides answer apart.
+
+	Every other line of the acceptance block above has a test. `mutate` had
+	none, and it is the line that drifted: the document says
+	`RewriteRequired` and the compiler says `InPlaceSlack`, which is
+	*stronger*. The `tlv` rule sets it deliberately -- "an item is rewritten
+	in place only at the same size, and an append needs slack" -- and
+	`RewriteRequired` is what a codec region gets, where any write
+	re-transforms the whole thing. The implementation's reasoning holds and
+	the acceptance block looks like it predates the rule.
+
+	**This test pins the disagreement rather than either side of it.** A
+	normative "which the compiler must produce" is not something to quietly
+	edit to match what is produced, and asserting only the compiler's answer
+	would read as settling it. So both sides are read, and the test fires
+	when *either* moves -- which is what an open question is owed by a suite
+	that cannot decide it.
+
+	Delete this and give `mutate` an ordinary row-test once the holder has
+	settled which is right (26.172).
+	"""
+	entry = resolved.find("proto_message.fields")
+	assert entry is not None
+	assert entry.vector.get(Axis.MUTATE) == Value("InPlaceSlack")
+
+	stated = [line for line in PROJECT.read_text(encoding="ascii").splitlines()
+	          if line.startswith("proto_message.fields ")]
+	assert len(stated) == 1, "9.7 states this row exactly once"
+	assert "mutate=RewriteRequired" in stated[0]
 
 
 # -- the five causes --------------------------------------------------------

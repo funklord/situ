@@ -18256,6 +18256,34 @@ had never been checked. A bare `_view: "<struct>"` annotation on the emitted
 gate narrows it, adds no attribute at run time, and needs neither a cast nor
 an ignore.
 
+### 26.198 Five rows checked, one not, and the sixth is the one that drifted
+
+26.172 left the protobuf acceptance block open: section 9.7 states an outcome
+"which the compiler must produce" and says `proto_message.fields
+mutate=RewriteRequired`, while the compiler says `InPlaceSlack`. It closed with
+"Nothing checked it either way, which is why it could differ at all."
+
+**That turns out to be exact rather than approximate.** `test_protobuf.py`
+opens by calling itself "the gate on phase 7" and tests the block row by row --
+`size`, `offset`, `access`, `address`, `canonical`, then each of the five named
+causes of non-canonicity, "because *five causes* passing while one of them is
+wrong would be worse than failing". Six rows in the block, five with a test.
+**`mutate` is the one with none, and `mutate` is the one that disagrees.** Not
+a coincidence: an unchecked row is exactly the row free to drift.
+
+**The disagreement is pinned, not settled.** Which side is right is the
+holder's -- `InPlaceSlack` is the stronger claim and the `tlv` rule sets it for
+a stated reason, but a normative "must produce" is not something to quietly
+edit to match what is produced, and a test asserting only the compiler's answer
+would read as settling it. So the test reads **both** sides: the compiler's
+vector, and the row as `project.md` states it. It fires when either moves,
+which is what an open question is owed by a suite that cannot decide it, and it
+says in its own docstring to be replaced by an ordinary row-test once the
+question is answered.
+
+Sabotaged from both directions -- editing 9.7's row to match the compiler, and
+making the `tlv` rule emit `RewriteRequired` -- and it goes red for each.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
