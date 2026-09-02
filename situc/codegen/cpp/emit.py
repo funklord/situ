@@ -72,6 +72,27 @@ from situc import __version__
 WORD_WIDTHS = (8, 16, 32, 64)
 
 
+
+def _is_run(placement: Placement) -> bool:
+	"""A member whose bytes are a run rather than one value.
+
+	Three spellings, and the sealed-gate emitters knew two: a counted array,
+	a member sized by a named field, and a member sized by *arithmetic over*
+	one. The third has neither `array_count` nor `sized_by`, so
+	`fragment[length - 24]` -- DTLS's whole encrypted payload -- fell through
+	to the scalar branch and came back as a single byte in three backends
+	while C read it correctly (26.188).
+
+	`data_sized` alone is not the predicate: it is false for a *fixed* array,
+	which is a run all the same, and substituting it dropped `[secret]`
+	byte arrays out of the gate's own list. The union is what "is a run"
+	means here.
+	"""
+	return (placement.array_count is not None
+	        or placement.sized_by is not None
+	        or data_sized(placement))
+
+
 @dataclass
 class Generated:
 	"""What a schema compiles to. One file: C++ needs no second one here."""
@@ -683,14 +704,19 @@ class Emitter:
 		           # base, under a name that reads as the run's field.
 		           and "[]" not in entry.placement.path
 		           and entry.placement.scalar is not None
-		           and entry.placement.array_count is None
-		           and entry.placement.sized_by is None]
+		           # `_is_run`, not the two spellings it knew: a member sized
+		           # by arithmetic has neither, so it appeared here *and* in
+		           # `rest` below once that learned the third -- two accessors
+		           # of one name (26.188).
+		           and not _is_run(entry.placement)]
 
 		rest    = [entry.placement for entry in struct.entries
 		           if entry.placement.sealed_by == region.name
 		           and entry.placement.kind == "field"
-		           and (entry.placement.array_count is not None
-		                or entry.placement.sized_by is not None)]
+		           # `data_sized`: see the note in the Python emitter. A
+		           # length written as arithmetic over a field has neither an
+		           # `array_count` nor a `sized_by` (26.188).
+		           and _is_run(entry.placement)]
 		secret  = [placement.path for placement in rest
 		           if any(attr.name == "secret" for attr in placement.attrs)]
 		skipped = [placement.path for placement in rest

@@ -64,6 +64,27 @@ from situc.unparse import expr_to_source as unparse_expr
 from situc import __version__
 
 
+
+def _is_run(placement: Placement) -> bool:
+	"""A member whose bytes are a run rather than one value.
+
+	Three spellings, and the sealed-gate emitters knew two: a counted array,
+	a member sized by a named field, and a member sized by *arithmetic over*
+	one. The third has neither `array_count` nor `sized_by`, so
+	`fragment[length - 24]` -- DTLS's whole encrypted payload -- fell through
+	to the scalar branch and came back as a single byte in three backends
+	while C read it correctly (26.188).
+
+	`data_sized` alone is not the predicate: it is false for a *fixed* array,
+	which is a run all the same, and substituting it dropped `[secret]`
+	byte arrays out of the gate's own list. The union is what "is a run"
+	means here.
+	"""
+	return (placement.array_count is not None
+	        or placement.sized_by is not None
+	        or data_sized(placement))
+
+
 def _byte_order(endian: ast.Endian | None) -> str:
 	"""The `int.from_bytes` order argument, as source.
 
@@ -4476,16 +4497,21 @@ class Emitter:
 		          if entry.placement.sealed_by == region.name
 		          and entry.placement.kind == "field"
 		          and entry.placement.scalar is not None
+		          # `data_sized`, not `array_count or sized_by`: a length
+		          # written as arithmetic over a field -- `fragment[length -
+		          # 24]` -- has neither, so it fell through to the scalar
+		          # branch and DTLS's whole payload came back as one byte.
+		          # That is the fourth place `traverse.data_sized`'s docstring
+		          # says the question was asked and answered differently, and
+		          # it was still answering the old way (26.188).
 		          and (indexed_elements(entry.placement)
-		               or (entry.placement.array_count is None
-		                   and entry.placement.sized_by is None))
+		               or not _is_run(entry.placement))
 		          and (entry.placement.offset_bits is not None
 		               or self._offset_expression(struct, entry.placement)
 		               is not None)]
 		secret = [placement.path for placement in sealed
 		          if any(attr.name == "secret" for attr in placement.attrs)
-		          and (placement.array_count is not None
-		               or placement.sized_by is not None)]
+		          and _is_run(placement)]
 
 		lines = [
 			"",
