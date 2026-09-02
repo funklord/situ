@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: protobuf.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,9 +8,31 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 endian little
 target buffer
 
+varint pb_varint : leb128 bits=64 bytes=10
+
 struct proto_message size=0..
   @0x0000   0..       tlv        fields
+  fields tlv tag: pb_varint
+  fields tlv decode field: tag >> 3
+  fields tlv decode wire: tag & 0x7
+  fields tlv identity: field
+  fields tlv select: wire
+  fields tlv size 0: self_delimiting
+  fields tlv size 1: fixed 8
+  fields tlv size 2: prefixed pb_varint
+  fields tlv size 5: fixed 4
+  fields tlv size default: error
+  fields tlv known 1: user_id wire=0 type=pb_varint
+  fields tlv known 2: username wire=2 type=u8
+  fields tlv known 3: score wire=5 type=f32
+  fields tlv duplicates: allowed
+  fields tlv unknown: preserve

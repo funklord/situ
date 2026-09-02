@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: ipv6ext.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 endian big
 target buffer
@@ -18,8 +23,8 @@ enum next_header : u8 unknown=pass
 struct ext_header size=8..2048
   @0x0000   1         next_header next
   @0x0001   1         u8         hdr_ext_len
-  @0x0002   6..2046   u8         data  big
+  @0x0002   6..2046   u8         data  big sized-by=(hdr_ext_len+1)*8-2
 
 struct packet_tail size=8..
-  @0x0000   8..16384  ext_header chain  big
+  @0x0000   8..16384  ext_header chain  big while=next==0||next==43||next==44||next==60 while-max=8
   ~         0..       u8         payload  sized-by=remaining

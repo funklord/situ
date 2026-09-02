@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: modbus.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 endian big
 target buffer
@@ -51,10 +56,44 @@ struct read_write_request size=9..264
 struct request size=5..265
   @0x0000   1         function_code function
   @0x0001   4..264    variant    body
+  body switch: function
+  body case 1: read_coils read_request
+  body case 2: read_inputs read_request
+  body case 3: read_holding read_request
+  body case 4: read_input read_request
+  body case 5: write_coil write_single
+  body case 6: write_register write_single
+  body case 15: write_coils write_multiple_request
+  body case 16: write_registers write_multiple_request
+  body case 22: mask_write mask_write_request
+  body case 23: read_write read_write_request
+  body case default: error
 
 struct response size=2..257
   @0x0000   1         function_code function
   @0x0001   1..256    variant    body
+  body switch: function
+  body case 1: read_coils read_response
+  body case 2: read_inputs read_response
+  body case 3: read_holding read_response
+  body case 4: read_input read_response
+  body case 5: write_coil write_single
+  body case 6: write_register write_single
+  body case 15: write_coils write_multiple_response
+  body case 16: write_registers write_multiple_response
+  body case 22: mask_write mask_write_request
+  body case 23: read_write read_response
+  body case 129: e01 exception_response
+  body case 130: e02 exception_response
+  body case 131: e03 exception_response
+  body case 132: e04 exception_response
+  body case 133: e05 exception_response
+  body case 134: e06 exception_response
+  body case 143: e0f exception_response
+  body case 144: e10 exception_response
+  body case 150: e16 exception_response
+  body case 151: e17 exception_response
+  body case default: error
 
 struct write_multiple_request size=5..260
   @0x0000   2         u16        start_address  big

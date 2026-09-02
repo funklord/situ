@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: mqtt.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,10 +8,17 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 bit_order msb_first
 endian big
 target buffer
+
+varint remaining_length : leb128 bits=28 bytes=4
 
 enum control_kind : u4 unknown=error
   connect=1 connack=2 publish=3 puback=4 pubrec=5 pubrel=6 pubcomp=7 subscribe=8 suback=9 unsubscribe=10 unsuback=11 pingreq=12 pingresp=13 disconnect=14
@@ -43,6 +50,18 @@ struct connect_body size=12..327695
   ~         0..131074 variant    will
   ~         0..65537  variant    user_name
   ~         0..65537  variant    password
+  will switch: will_flag
+  will case 0: will_absent nothing
+  will case 1: will_present will_message
+  will case default: error
+  user_name switch: user_name_flag
+  user_name case 0: user_absent nothing
+  user_name case 1: user_present mqtt_string
+  user_name case default: error
+  password switch: password_flag
+  password case 0: password_absent nothing
+  password case 1: password_present mqtt_string
+  password case default: error
 
 struct ident_body size=2
   @0x0000   2         u16        packet_id  big
@@ -58,6 +77,34 @@ struct packet size=2..
   @0x0000:4 4bit      u4         flags  msb_first
   @0x0001   1..4      remaining_length length  varint=remaining_length
   ~         0..       variant    body
+  body switch: kind
+  body case 1: connect connect_body
+  body case 2: connack connack_body
+  body case 3: publish publish_body
+  body case 4: puback ident_body
+  body case 5: pubrec ident_body
+  body case 6: pubrel ident_body
+  body case 7: pubcomp ident_body
+  body case 8: subscribe subscribe_body
+  body case 9: suback suback_body
+  body case 10: unsubscribe unsubscribe_body
+  body case 11: unsuback ident_body
+  body case 12: pingreq nothing
+  body case 13: pingresp nothing
+  body case 14: disconnect nothing
+  body case default: error
+  will switch: will_flag
+  will case 0: will_absent
+  will case 1: will_present
+  will case default: error
+  user_name switch: user_name_flag
+  user_name case 0: user_absent
+  user_name case 1: user_present
+  user_name case default: error
+  password switch: password_flag
+  password case 0: password_absent
+  password case 1: password_present
+  password case default: error
 
 struct publish_body size=2..
   @0x0000   2         u16        topic_length  big

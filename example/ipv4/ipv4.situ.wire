@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: ipv4.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 bit_order msb_first
 endian big
@@ -32,8 +37,8 @@ struct ipv4_header size=20..60
   @0x0006:3 13bit     u13        fragment_offset  big msb_first
   @0x0008   1         u8         time_to_live
   @0x0009   1         protocol   protocol
-  @0x000a   2         u8         header_checksum
+  @0x000a   2         u8         header_checksum  self_as=0
   @0x000c   4         ipv4_address source  big
   @0x0010   4         ipv4_address destination  big
-  @0x0014   0..40     u8         options
+  @0x0014   0..40     u8         options  sized-by=(ihl-5)*4
   header_checksum covers: <reserved0> destination octets dont_fragment dscp ecn fragment_offset header identification ihl more_fragments options protocol source octets time_to_live total_length version

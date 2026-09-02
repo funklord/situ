@@ -28,11 +28,18 @@ from dataclasses import dataclass
 from pathlib import PurePath
 
 from situc import ast
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import Arm, BITS_PER_BYTE, KnownTag, Placement, ValueRule
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import own_members
 
-FORMAT_VERSION = 0
+#: Bumped from 0, which 0041 kept because new facts on existing lines are
+#: what the fact list is for and a comparator ignores tokens it does not know.
+#: This adds new *kinds* of line -- the varint block, and the `name what: ...`
+#: lines a variant and a tlv region state their contract on -- and a v0
+#: comparator reading one of those counts it as a member, which slides every
+#: member after it by one position and reports the slide as a break. A reader
+#: that cannot tell the two apart has to be told, so the number moves.
+FORMAT_VERSION = 1
 
 
 def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
@@ -48,9 +55,15 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 		"# constraint a sender has to satisfy or a receiver may rely on.",
 		"# Positions are byte offsets, or byte:bit off a boundary; `~` marks one",
 		"# the data decides rather than the schema.",
+		"#",
+		"# A construct whose contract is a list rather than an extent -- a",
+		"# variant's arms, a tlv region's grammar, the bytes a tag covers --",
+		"# states it on `name what: value` lines below the members, one line per",
+		"# entry so that a diff names the entry that moved.",
 	]
 
 	lines.extend(_directives(schema))
+	lines.extend(_varints(schema))
 	lines.extend(_enums(schema, resolved))
 
 	for name in sorted(resolved.structs):
@@ -77,6 +90,36 @@ def _directives(schema: ast.Schema) -> list[str]:
 			found.append(f"target {decl.kind.value}")
 
 	return ["", *sorted(found)] if found else []
+
+
+def _varints(schema: ast.Schema) -> list[str]:
+	"""How each varint type spells a number.
+
+	Here for `_directives`' reason rather than `_enums`': the encoding *is* the
+	byte order of every value of the type, so `be128` -> `leb128` reads every
+	varint in every message backwards and leaves every offset, width and name
+	exactly where it was. The member line said `varint=sqlite_varint` and
+	stopped, which records the label on the change and not the change.
+
+	`bytes` is derived rather than declared for most types, and is here anyway:
+	it is the ceiling a receiver stops scanning at, so a format that declares a
+	shorter one (SQLite's nine) has told its peers something they act on.
+	"""
+	lines = []
+	for decl in schema.varints():
+		facts = [f"bits={decl.max_bits}", f"bytes={decl.max_bytes}"]
+		# Whether one number has one spelling. Without it a receiver must
+		# accept a padded encoding of a value it also sees unpadded, which is
+		# a fact about the bytes and not about the values they carry.
+		if decl.minimal:
+			facts.append("minimal")
+		if decl.transform is not None:
+			facts.append(decl.transform.value)
+		lines.extend([
+			"",
+			f"varint {decl.name} : {decl.encoding.value} {' '.join(facts)}",
+		])
+	return lines
 
 
 def _enums(schema: ast.Schema, resolved: ResolvedSchema) -> list[str]:
@@ -111,10 +154,33 @@ def _struct(struct: ResolvedStruct) -> list[str]:
 	else:
 		extent = f"size={layout.size_bytes}.."
 
-	lines = [f"struct {struct.name} {extent}"]
+	head    = f"struct {struct.name} {extent}"
+	version = _version_field(struct)
+	if version is not None:
+		head += f" version={version}"
+
+	lines = [head]
 	lines.extend(f"  {_member(placement)}" for placement in own_members(struct))
+	lines.extend(_composites(struct))
 	lines.extend(_coverage(struct))
 	return lines
+
+
+def _version_field(struct: ResolvedStruct) -> str | None:
+	"""Which member's value says which version a message is (19.4).
+
+	A property of the struct rather than of any one member, and the fact that
+	decides whether a `since` member's bytes are present at all. Moving the
+	version to another member leaves every offset, width and name identical
+	and makes the same bytes a different length of message, which is the shape
+	this file exists to catch. It is also what `_compare_member` leans on to
+	call an appended `since` member provably safe -- so the claim and the
+	field it rests on now travel together.
+	"""
+	for placement in own_members(struct):
+		if placement.version_field is not None:
+			return placement.version_field
+	return None
 
 
 def _member(placement: Placement) -> str:
@@ -170,6 +236,28 @@ def _constraints(placement: Placement) -> list[str]:
 		facts.append(f"endian-from={placement.marker}")
 	if placement.sized_by is not None:
 		facts.append(f"sized-by={placement.sized_by}")
+	# The same question -- where does the length come from -- where the answer
+	# is arithmetic rather than a name. `sized_by` holds a path and holds
+	# nothing at all for `u8 body[hi * 256 + lo]`, so the commonest shape there
+	# is (a length in units, or split across two fields) recorded no length:
+	# swapping `hi` and `lo` moves every payload boundary in every message and
+	# produced a byte-identical signature. One key for both, because a reader
+	# asks the same thing of either.
+	elif placement.size_expr is not None:
+		facts.append(f"sized-by={_squash(placement.size_expr)}")
+	# `at hdr.pixel_offset`: where the bytes *are*. `_position` renders `~` for
+	# this member exactly as it does for one the data merely displaced, and the
+	# two are different promises -- a displaced member follows the line above,
+	# and this one goes wherever a field says, however far that is from
+	# anything. The line above is not the reason, so it has to be stated.
+	if placement.located is not None:
+		facts.append(f"at={placement.located}")
+	# Where a run stops, which is the boundary between this member and the
+	# next. Nothing else ends one, so the condition is the width.
+	if placement.repeat_while is not None:
+		facts.append(f"while={_squash(placement.repeat_while)}")
+	if placement.repeat_cap is not None:
+		facts.append(f"while-max={placement.repeat_cap}")
 	# The alignment a pad promises (0043): a peer that pads to a different
 	# multiple disagrees about where the next field starts, so it is contract.
 	if placement.pad_to is not None:
@@ -207,12 +295,27 @@ def _constraints(placement: Placement) -> list[str]:
 	return facts
 
 
+def _squash(source: str) -> str:
+	"""Schema source as one fact token.
+
+	A fact is delimited by spaces, so an expression cannot keep its own. The
+	result is still the schema's arithmetic and still unambiguous -- what it
+	loses is the spacing, which no peer can observe.
+	"""
+	return "".join(source.split())
+
+
 #: Attributes a peer can observe in the bytes. `[secret]` and the register
 #: access modes are deliberately absent: they change the generated API and
 #: nothing a receiver could detect.
+#:
+#: `self_as` is here for `tag_prefix`'s reason (see `_coverage`): the value a
+#: checksum field is taken as while the sum runs over it is invisible in the
+#: structure, and two peers that disagree about it compute different sums over
+#: byte-identical messages.
 WIRE_ATTRS = (
 	"must_eq", "min", "max", "must_be_zero", "must_be_one",
-	"encoding", "nul_terminated",
+	"encoding", "nul_terminated", "self_as",
 )
 
 
@@ -228,6 +331,149 @@ def _attribute_facts(placement: Placement) -> list[str]:
 		else:
 			facts.append(f"{attr.name}={expr_to_source(attr.value)}")
 	return facts
+
+
+def _composites(struct: ResolvedStruct) -> list[str]:
+	"""The constructs whose contract is a list rather than an extent.
+
+	A variant and a tlv region each get one member line, and that line says
+	where the construct starts and how wide it can be -- which is the same
+	whatever the discriminant selects and whatever the grammar says. Swapping
+	two arms of `keystore.params` rewrote eighty-two lines of generated C and
+	no byte of this file; so did moving a protobuf tag from 1 to 7, changing
+	`tag >> 3` to `tag >> 4`, and halving wire type 1's value. Every one of
+	those is a peer reading different bytes as a different thing, which is the
+	whole subject.
+
+	Rendered as one line per entry rather than as fact tokens on the member
+	line, for the reason `_coverage` is: an arm list is 21 entries in modbus
+	and a grammar is fifteen in protobuf, and folded onto one line a changed
+	entry is a 600-character line that differs somewhere. This file's value is
+	the reviewable diff, so the entry is the unit.
+	"""
+	lines = []
+	for entry in struct.entries:
+		held = entry.placement
+		if held.kind == "variant":
+			lines.extend(_arms(struct, held))
+		elif held.kind == "tlv":
+			lines.extend(_tlv(held))
+	return lines
+
+
+def _arms(struct: ResolvedStruct, placement: Placement) -> list[str]:
+	"""Which discriminant value selects which arm, and what that arm is.
+
+	The mapping is the variant, and none of it survives into the member line:
+	`discriminant` and `arm_cases` were read by every backend and by nothing
+	here. The arm's *type* is named beside the member because an arm's members
+	appear in no member line of their own, so a swap to another struct of the
+	same worst case would otherwise be invisible too.
+	"""
+	by_path = {entry.placement.path: entry.placement for entry in struct.entries}
+	lines   = [f"  {placement.name} switch: {placement.discriminant}"]
+
+	# By the value on the wire rather than by declaration order, `default`
+	# last. Reordering the `case` clauses changes nothing a peer can observe,
+	# and a signature that churns for it teaches people to skim the diff --
+	# which is the one thing this file cannot survive.
+	for arm in sorted(placement.arm_cases, key=_arm_order):
+		label = "default" if arm.value is None else str(arm.value)
+		if arm.member is None:
+			# `default: error` selects nothing, and that is a wire fact in its
+			# own right: a discriminant with no arm is a message this build
+			# refuses rather than one it reads short.
+			lines.append(f"  {placement.name} case {label}: error")
+			continue
+
+		picked = by_path.get(arm.member)
+		named  = arm.member.rpartition(".")[2]
+		lines.append(f"  {placement.name} case {label}: {named}"
+		             + (f" {picked.type_name}" if picked is not None else ""))
+	return lines
+
+
+def _arm_order(arm: Arm) -> tuple[int, int]:
+	"""Discriminant order, with `default` after every value it stands in for."""
+	return (1, 0) if arm.value is None else (0, arm.value)
+
+
+def _rule_order(rule: ValueRule) -> tuple[int, int]:
+	return (1, 0) if rule.label is None else (0, rule.label)
+
+
+def _tlv(placement: Placement) -> list[str]:
+	"""How a tlv region's items are found, and what its tags mean.
+
+	Rendered in full rather than digested. A digest would say that the grammar
+	changed and refuse to say what, and this file is committed so that a
+	reviewer can read the change -- a fifteen-line block that a one-line edit
+	moves one line of is worth more than eight opaque hex digits. It stays
+	bounded because a grammar is written once per region: protobuf's is the
+	only one in the tree and it is fifteen lines. A `known` map of a hundred
+	tags would be a hundred lines, and would deserve them, being a hundred
+	separate promises.
+	"""
+	name    = placement.name
+	grammar = placement.tlv_grammar
+	lines   = []
+
+	# The tag's own type first: it is read before anything else in the item
+	# and a different varint reads a different tag out of the same bytes.
+	if placement.tlv_tag_varint is not None:
+		lines.append(f"  {name} tlv tag: {placement.tlv_tag_varint}")
+
+	if grammar is not None:
+		# Sorted throughout for `_arms`' reason: a decode part, a value rule
+		# and a known tag are each found by name, wire type or tag, so the
+		# order they were written in is not a fact about any message.
+		for part in sorted(grammar.tag_decode, key=lambda p: p.name):
+			lines.append(f"  {name} tlv decode {part.name}: {part.source}")
+		# Which decoded part a `known` key matches (0023). Matching the other
+		# one finds an item, and not the one asked for.
+		if grammar.identity is not None:
+			lines.append(f"  {name} tlv identity: {grammar.identity}")
+		if grammar.length_type is not None:
+			lines.append(f"  {name} tlv length: {grammar.length_type}")
+		if grammar.selector is not None:
+			lines.append(f"  {name} tlv select: {grammar.selector}")
+		for rule in sorted(grammar.rules, key=_rule_order):
+			label = "default" if rule.label is None else str(rule.label)
+			lines.append(f"  {name} tlv size {label}: {_value_rule(rule)}")
+		for known in sorted(grammar.known, key=lambda k: k.tag):
+			lines.append(f"  {name} tlv known {known.tag}: {_known_tag(known)}")
+
+	# The policies, which decide what a receiver does with what the grammar
+	# admits: whether a tag it does not know survives a round trip, and which
+	# of two items with one tag it believes.
+	if placement.tlv_duplicates is not None:
+		lines.append(f"  {name} tlv duplicates: {placement.tlv_duplicates}")
+	if placement.tlv_unknown is not None:
+		lines.append(f"  {name} tlv unknown: {placement.tlv_unknown}")
+	if placement.tlv_ordered:
+		lines.append(f"  {name} tlv ordered: yes")
+	return lines
+
+
+def _value_rule(rule: ValueRule) -> str:
+	"""One of section 9.5's four ways for a value to say where it ends."""
+	parts = [rule.kind]
+	if rule.size is not None:
+		parts.append(str(rule.size))
+	if rule.length_type is not None:
+		parts.append(rule.length_type)
+	return " ".join(parts)
+
+
+def _known_tag(known: KnownTag) -> str:
+	parts = [known.name]
+	if known.wire is not None:
+		parts.append(f"wire={known.wire}")
+	if known.type_name is not None:
+		parts.append(f"type={known.type_name}")
+	if known.repeated:
+		parts.append("repeated")
+	return " ".join(parts)
 
 
 def _coverage(struct: ResolvedStruct) -> list[str]:
@@ -370,8 +616,35 @@ def _compare_globals(before: str, after: str) -> list[Finding]:
 				f"{was} -> {now}: every multi-byte field in every message is "
 				f"read differently, and nothing about the structure says so"))
 
+	findings.extend(_compare_varints(before, after))
 	findings.extend(_compare_enums(before, after))
 	return findings
+
+
+def _compare_varints(before: str, after: str) -> list[Finding]:
+	"""A varint type respelled, which is a byte order under another name.
+
+	Only a changed declaration is reported: a type gained or lost changes the
+	type column of every member that used it, and `_compare_member` says so
+	once per member rather than once here.
+	"""
+	old = _parse_varints(before)
+	new = _parse_varints(after)
+
+	return [Finding(
+		"breaking", f"varint {name}",
+		f"{old[name]} -> {new[name]}; every value of this type is read "
+		"differently, and no offset, width or name moves")
+		for name in sorted(set(old) & set(new)) if old[name] != new[name]]
+
+
+def _parse_varints(text: str) -> dict[str, str]:
+	varints = {}
+	for line in text.splitlines():
+		if line.startswith("varint "):
+			name, _, spelling = line[len("varint "):].partition(" : ")
+			varints[name] = spelling
+	return varints
 
 
 def _directive_of(text: str, name: str) -> str | None:
@@ -452,22 +725,63 @@ def _parse_enums(text: str) -> dict[str, tuple[str, list[str]]]:
 	return enums
 
 
+def _is_annotation(line: str) -> bool:
+	"""Whether a line under a struct describes something other than a member.
+
+	`": "` is the marker, and it is safe because a member line cannot contain
+	one: its positions and widths spell a colon without a space after it
+	(`@0x0004:3`, `until:0d0a`), and its facts are `key=value` tokens that
+	`_squash` strips every space out of.
+	"""
+	return ": " in line
+
+
 def _compare_struct(name: str, old: list[str], new: list[str]) -> list[Finding]:
-	old_members = [line for line in old[1:] if " covers: " not in line]
-	new_members = [line for line in new[1:] if " covers: " not in line]
-	findings: list[Finding] = []
+	old_members = [line for line in old[1:] if not _is_annotation(line)]
+	new_members = [line for line in new[1:] if not _is_annotation(line)]
+	findings: list[Finding] = _compare_head(name, old[0], new[0])
 
 	reordered = _reordering(name, old_members, new_members)
 	if reordered is not None:
-		return [reordered, *_compare_coverage(name, old, new)]
+		return [*findings, reordered, *_compare_annotations(name, old, new)]
 
 	for index in range(max(len(old_members), len(new_members))):
 		was = old_members[index] if index < len(old_members) else None
 		now = new_members[index] if index < len(new_members) else None
 		findings.extend(_compare_member(name, index, was, now))
 
-	findings.extend(_compare_coverage(name, old, new))
+	findings.extend(_compare_annotations(name, old, new))
 	return findings
+
+
+def _compare_head(name: str, old: str, new: str) -> list[Finding]:
+	"""The struct line, which carries `version=` and nothing else compared here.
+
+	The extent is deliberately not: it is the sum of the member lines, and the
+	member comparison names which one moved. Which member carries the version
+	is not derivable from any of them.
+	"""
+	was = next((tok for tok in old.split() if tok.startswith("version=")), None)
+	now = next((tok for tok in new.split() if tok.startswith("version=")), None)
+
+	if was == now:
+		return []
+
+	# Gained or lost is not a break on its own, and saying so would be the
+	# double count this file's headings cannot afford. A `[since]` member with
+	# no version field is refused outright (19.4), so a struct that gained one
+	# had no optional bytes for it to gate yet, and one that lost it has none
+	# left -- and the members that went are reported as members.
+	if was is None or now is None:
+		return [Finding(
+			"api", name,
+			f"{was or 'no version field'} -> {now or 'no version field'}; no "
+			"bytes move, and no member's presence depended on it either side")]
+
+	return [Finding(
+		"breaking", name,
+		f"{was} -> {now}; an old receiver reads the version out of the other "
+		"field and disagrees about which of the optional bytes are there")]
 
 
 def _reordering(struct: str, old: list[str], new: list[str]) -> Finding | None:
@@ -537,10 +851,13 @@ def _compare_member(struct: str, index: int, was: str | None,
 	old_bits = was.split()
 	new_bits = now.split()
 
-	# Position and width are the contract. A rename at the same position and
-	# width is an API change, which is the whole reason this file records
-	# names at all.
-	if old_bits[:2] == new_bits[:2] and _facts_of(was) == _facts_of(now):
+	# Position, width and type are the contract. A rename at the same three is
+	# an API change, which is the whole reason this file records names at all
+	# -- and the type has to be one of the three. Compared on `[:2]` it was
+	# not, so `u16 a` -> `i16 a` matched the rename arm and reported
+	# "api-only ... renamed a -> a": the same bytes read as a different number,
+	# announced in the half of the output that says nothing on the wire moved.
+	if old_bits[:3] == new_bits[:3] and _facts_of(was) == _facts_of(now):
 		return [Finding("api", where,
 		                f"renamed {_name_of(was)} -> {_name_of(now)}; "
 		                "the bytes are identical")]
@@ -555,7 +872,20 @@ def _compare_member(struct: str, index: int, was: str | None,
 		                f"{old_bits[1]} -> {new_bits[1]}; every later field "
 		                "shifts for an old receiver")]
 
-	return _compare_facts(where, _name_of(was), _facts_of(was), _facts_of(now))
+	findings: list[Finding] = []
+	# A type change at one position and width is an interpretation change, in
+	# the sense `INTERPRETATION` means: the bytes are where they were and are
+	# a different value. Reported alongside the facts rather than instead of
+	# them, because unlike a move or a widening it shifts nothing after it, so
+	# the rest of the line is still worth reading.
+	if old_bits[2] != new_bits[2]:
+		findings.append(Finding(
+			"breaking", where,
+			f"{_name_of(now)} is {old_bits[2]} -> {new_bits[2]}; the same "
+			"bytes now mean something else"))
+
+	return findings + _compare_facts(where, _name_of(was),
+	                                 _facts_of(was), _facts_of(now))
 
 
 #: Facts that say what the bytes *are*, rather than which of them are allowed.
@@ -571,6 +901,11 @@ INTERPRETATION = (
 	"nonce=", "key=", "pad-to=",
 	"endian-from=", "quote=", "escape=", "trim", "fold-case",
 	"nul_terminated",
+	# Where the bytes are, where the run stops, and what the checksum field
+	# is worth while the sum runs over it. None of the three narrows a set of
+	# permitted values: each of them puts a different value in front of the
+	# receiver, or a different number of bytes.
+	"at=", "while=", "self_as=",
 )
 
 
@@ -591,6 +926,12 @@ def _compare_facts(where: str, name: str, was: set[str],
 	which of them are permitted. Reporting a byte-order flip as a relaxed
 	constraint said the same break twice in the reassuring half of the
 	output.
+
+	And neither applies to a constraint whose *value* moved, which is one
+	finding and not two. Decomposed into a gain and a loss, `[must_eq = 1]` ->
+	`[must_eq = 2]` printed "0 breaking, 2 compatible" under two headings that
+	each asserted the direction the other denied -- and for `must_eq` both
+	were wrong, there being no message the two sides both accept.
 	"""
 	findings = []
 	moved    = {fact for fact in (now - was) | (was - now)
@@ -603,18 +944,102 @@ def _compare_facts(where: str, name: str, was: set[str],
 			f"{' '.join(sorted(now & moved) or ['nothing'])}; the same bytes "
 			"now mean something else")]
 
-	for fact in sorted(now - was):
+	# Paired by key, so that a fact stated before and after is one finding
+	# about the value that moved rather than two about a token that came and
+	# a token that went.
+	dropped = {_key_of(fact): fact for fact in was - now}
+	added   = {_key_of(fact): fact for fact in now - was}
+
+	for key in sorted(set(dropped) & set(added)):
+		findings.append(_changed_constraint(where, name, key,
+		                                    dropped[key], added[key]))
+
+	for key in sorted(set(added) - set(dropped)):
 		findings.append(Finding(
 			"backward", where,
-			f"{name} gains `{fact}`; a new receiver may refuse a message an "
-			"old sender legitimately produces"))
-	for fact in sorted(was - now):
+			f"{name} gains `{added[key]}`; a new receiver may refuse a message "
+			"an old sender legitimately produces"))
+	for key in sorted(set(dropped) - set(added)):
 		findings.append(Finding(
 			"forward", where,
-			f"{name} drops `{fact}`; an old receiver may refuse a message a "
-			"new sender legitimately produces"))
+			f"{name} drops `{dropped[key]}`; an old receiver may refuse a "
+			"message a new sender legitimately produces"))
 
 	return findings
+
+
+def _key_of(fact: str) -> str:
+	"""The fact without its value. A flag is its own key."""
+	return fact.partition("=")[0]
+
+
+#: Constraints a changed value makes irreconcilable rather than merely
+#: narrower or wider.
+#:
+#: `must_eq` states the one value the field may hold, so two builds that name
+#: different ones share no message at all. `since` states the version the
+#: bytes appear at, so moving it makes the same message a different length to
+#: a peer at any version between the two.
+IRRECONCILABLE = ("must_eq", "since")
+
+#: Bounds, and which way each one tightens. `min` admits fewer values as it
+#: rises; every other bound here admits fewer as it falls.
+TIGHTENS_UP = ("min",)
+TIGHTENS_DOWN = ("max", "cap", "while-max")
+
+
+def _changed_constraint(where: str, name: str, key: str, was: str,
+		now: str) -> Finding:
+	"""One constraint whose value moved, classified by which way it moved.
+
+	Where the direction can be read off the numbers it is, because that is the
+	whole content of the backward/forward distinction. Where it cannot -- a
+	bound written as an expression, a key with no ordering -- the finding says
+	only what is known, and says it under `backward`, which is the heading that
+	warns rather than the one that reassures.
+	"""
+	if key in IRRECONCILABLE:
+		return Finding(
+			"breaking", where,
+			f"{name}: `{was}` -> `{now}`; no message satisfies both, so the "
+			"two builds share nothing a peer can send")
+
+	tighter = _tightened(key, was, now)
+	if tighter is True:
+		return Finding(
+			"backward", where,
+			f"{name}: `{was}` -> `{now}`, a tightening; a new receiver may "
+			"refuse a message an old sender legitimately produces")
+	if tighter is False:
+		return Finding(
+			"forward", where,
+			f"{name}: `{was}` -> `{now}`, a loosening; an old receiver may "
+			"refuse a message a new sender legitimately produces")
+
+	return Finding(
+		"backward", where,
+		f"{name}: `{was}` -> `{now}`; the two builds admit different messages, "
+		"and which of them refuses the other's is not read off the values")
+
+
+def _tightened(key: str, was: str, now: str) -> bool | None:
+	"""Whether the bound narrowed, or None where the values do not say.
+
+	`[max = n * 2]` is a bound whose value is an expression, and two spellings
+	of one are not ordered by anything this file can see.
+	"""
+	if key not in TIGHTENS_UP + TIGHTENS_DOWN:
+		return None
+	try:
+		old_value = int(was.partition("=")[2], 0)
+		new_value = int(now.partition("=")[2], 0)
+	except ValueError:
+		return None
+
+	if old_value == new_value:
+		return None
+	return (new_value > old_value) if key in TIGHTENS_UP else (
+		new_value < old_value)
 
 
 def _name_of(line: str) -> str:
@@ -626,46 +1051,97 @@ def _facts_of(line: str) -> set[str]:
 	return set(line.split()[4:])
 
 
-def _compare_coverage(name: str, old: list[str], new: list[str]) -> list[Finding]:
-	"""What each tag authenticates.
+def _compare_annotations(name: str, old: list[str],
+		new: list[str]) -> list[Finding]:
+	"""The lines that state a contract a member line has no room for.
 
-	Its own category because it is neither a parse break nor a cost: both
-	sides read the same values and the tag simply fails. A region that shrank
-	is worse than that -- the new build authenticates less than the old one
-	did, and `situc diff` called exactly that an improvement.
+	One dictionary keyed by everything left of the colon, so that an entry
+	changed, gained or lost is named as itself: `params case 2`, `fields tlv
+	size 1`, `checksum covers`. Which is the point of giving each entry a line
+	-- folded into one, a variant with twenty-one arms reports that something
+	about the arms differs.
 	"""
-	old_cover = {line.split(" covers: ")[0]: line.split(" covers: ")[1]
-	             for line in old if " covers: " in line}
-	new_cover = {line.split(" covers: ")[0]: line.split(" covers: ")[1]
-	             for line in new if " covers: " in line}
+	old_ann  = _annotations(old)
+	new_ann  = _annotations(new)
 	findings = []
 
-	for tag in sorted(set(old_cover) & set(new_cover)):
-		if old_cover[tag] == new_cover[tag]:
-			continue
-		was  = set(old_cover[tag].split())
-		now  = set(new_cover[tag].split())
-		lost = sorted(was - now)
-		detail = f"`{tag}` covers {old_cover[tag]} -> {new_cover[tag]}"
+	for key in sorted(set(old_ann) & set(new_ann)):
+		if old_ann[key] != new_ann[key]:
+			findings.append(_annotation_changed(name, key, old_ann[key],
+			                                    new_ann[key]))
+	for key in sorted(set(old_ann) - set(new_ann)):
+		findings.append(_annotation_lost(name, key, old_ann[key]))
+	for key in sorted(set(new_ann) - set(old_ann)):
+		findings.append(_annotation_gained(name, key, new_ann[key]))
+	return findings
+
+
+def _annotations(lines: list[str]) -> dict[str, str]:
+	return {line.split(": ", 1)[0]: line.split(": ", 1)[1]
+	        for line in lines if _is_annotation(line)}
+
+
+def _what(key: str) -> str:
+	"""Which construct an annotation belongs to: the word after the subject."""
+	parts = key.split()
+	return parts[1] if len(parts) > 1 else ""
+
+
+def _annotation_changed(name: str, key: str, was: str, now: str) -> Finding:
+	if _what(key) == "covers":
+		# Its own category because it is neither a parse break nor a cost:
+		# both sides read the same values and the tag simply fails. A region
+		# that shrank is worse than that -- the new build authenticates less
+		# than the old one did, and `situc diff` called that an improvement.
+		lost   = sorted(set(was.split()) - set(now.split()))
+		detail = f"`{key}` {was} -> {now}"
 		if lost:
 			detail += f"; it no longer authenticates {', '.join(lost)}"
-		findings.append(Finding("coverage", name, detail))
+		return Finding("coverage", name, detail)
 
-	for tag in sorted(set(old_cover) - set(new_cover)):
-		findings.append(Finding("coverage", name,
-		                        f"`{tag}` is gone; what it authenticated is "
-		                        "now unauthenticated"))
+	if _what(key) == "switch":
+		return Finding(
+			"breaking", name,
+			f"`{key}` {was} -> {now}; the arm is chosen by a different field, "
+			"so the same discriminant selects a different layout")
 
-	# Coverage that was not there before. Absent while only tags reached this
-	# function, because a new tag brings a new field and the member comparison
-	# already reports one. A `coded` region gaining a `covers` clause changes
-	# no member and no offset (14.1a), so without this the two signatures
-	# compared equal while the peers disagreed about which bytes to transform.
-	for tag in sorted(set(new_cover) - set(old_cover)):
-		findings.append(Finding("coverage", name,
-		                        f"`{tag}` now covers {new_cover[tag]}, which "
-		                        "nothing covered before"))
-	return findings
+	return Finding(
+		"breaking", name,
+		f"`{key}` {was} -> {now}; the bytes are where they were and are read "
+		"as something else")
+
+
+def _annotation_lost(name: str, key: str, was: str) -> Finding:
+	if _what(key) == "covers":
+		# Coverage that is simply gone. A `coded` region losing its `covers`
+		# changes no member and no offset (14.1a).
+		return Finding("coverage", name,
+		               f"`{key}` is gone; what it authenticated ({was}) is now "
+		               "unauthenticated")
+
+	return Finding(
+		"breaking", name,
+		f"`{key}` is gone; it said {was}, and an old sender still emits bytes "
+		"this build has nothing to read them with")
+
+
+def _annotation_gained(name: str, key: str, now: str) -> Finding:
+	if _what(key) == "covers":
+		# Absent while only tags reached this function, because a new tag
+		# brings a new field and the member comparison already reports one. A
+		# `coded` region gaining a `covers` clause changes no member and no
+		# offset, so without this the two signatures compared equal while the
+		# peers disagreed about which bytes to transform.
+		return Finding("coverage", name,
+		               f"`{key}` now {now}, which nothing covered before")
+
+	# An arm, a tag or a value rule the old build had no case for. A new
+	# sender may use it; an old receiver refuses or preserves it, on the
+	# policy it was built with -- which is the backward direction exactly.
+	return Finding(
+		"backward", name,
+		f"`{key}` now {now}, which nothing said before; a new sender may emit "
+		"bytes an old receiver has no rule for")
 
 
 def render_verdict(verdict: Verdict) -> str:

@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: edges.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,10 +8,17 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 bit_order msb_first
 endian big
 target buffer
+
+varint edge_varint : be128 bits=64 bytes=9
 
 enum dialect : u8 unknown=error
   plain=1 extended=2
@@ -24,21 +31,25 @@ enum arm_shape : u8 unknown=error
 
 struct arithmetic size=14..43
   @0x0000   1         u8         units  min=1 max=4
-  @0x0001   1..3      u8         halved
-  ~         1..3      u8         modulo
-  ~         2..8      u8         shifted  big
-  ~         1..3      u8         dropped
-  ~         1..4      u8         masked
-  ~         1..8      u8         flipped
-  ~         1..3      u8         clamped
-  ~         2..4      u8         raised  big
-  ~         1..4      u8         padded
+  @0x0001   1..3      u8         halved  sized-by=units/2+1
+  ~         1..3      u8         modulo  sized-by=units%3+1
+  ~         2..8      u8         shifted  big sized-by=units<<1
+  ~         1..3      u8         dropped  sized-by=units>>1|1
+  ~         1..4      u8         masked  sized-by=(units&3)+1
+  ~         1..8      u8         flipped  sized-by=(units^1)+1
+  ~         1..3      u8         clamped  sized-by=min(units,3)
+  ~         2..4      u8         raised  big sized-by=max(units,2)
+  ~         1..4      u8         padded  sized-by=align_up(units,4)-units+1
   ~         2         u16        tail  big
 
 struct arm_run size=2..8
   @0x0000   1         arm_shape  which
   @0x0001   1         u8         n  max=3
   @0x0002   0..6      variant    body
+  body switch: which
+  body case 17: wide u16
+  body case 34: pinned i16
+  body case 51: raw u8
 
 struct beacon size=3
   @0x0000   2         u16        seq  big
@@ -49,7 +60,7 @@ struct beat size=2
   @0x0001   1         u8         payload
 
 struct beats size=4..14
-  @0x0000   2..12     beat       pulse  big
+  @0x0000   2..12     beat       pulse  big while=kind==0x33 while-max=6
   ~         2         u16        after  big
 
 struct coded_run size=2..512
@@ -57,7 +68,7 @@ struct coded_run size=2..512
   @0x0001   0..510    doubling   body  codec=doubling
   ~         1         u8         trailer
 
-struct constrained size=1..5
+struct constrained size=1..5 version=rev
   @0x0000   1         u8         rev
   @0x0001   2         u16        magic  big since=2 must_eq=0x1234
   @0x0003   1         dialect    how  since=3
@@ -90,6 +101,9 @@ struct equalized size=11
   @0x0000   1         arm_kind   which
   @0x0001   8         variant    body
   @0x0009   2         u16        tail  big
+  body switch: which
+  body case 17: tiny u8
+  body case 34: big u8
 
 struct escaped_run size=1..
   @0x0000   until:2c  u8         field  escape=0x5c cap=64
@@ -144,10 +158,10 @@ struct labelled size=22
 struct link size=4..1024
   @0x0000   1         u8         kind
   @0x0001   1         u8         units
-  @0x0002   2..1022   u8         body  big
+  @0x0002   2..1022   u8         body  big sized-by=(units+1)*4-2
 
 struct linked size=4..
-  @0x0000   4..6144   link       chain  big
+  @0x0000   4..6144   link       chain  big while=kind==0x11||kind==0x22 while-max=6
   ~         0..       u8         tail  sized-by=remaining
 
 struct marked size=5..17
@@ -245,10 +259,10 @@ struct unverified size=19
 
 struct varint_driver size=5..36893488147419103243
   @0x0000   1..9      edge_varint n  varint=edge_varint
-  ~         2..36893488147419103232 u16        d  big
+  ~         2..36893488147419103232 u16        d  big sized-by=n+1
   ~         2         u16        tail  big
 
-struct versioned size=3..9
+struct versioned size=3..9 version=ver
   @0x0000   1         u8         ver
   @0x0001   2         u16        length  big
   @0x0003   4         u32        flags  big since=2
@@ -257,7 +271,7 @@ struct versioned size=3..9
 struct wide_run size=7..31
   @0x0000   1         u8         n  max=4
   @0x0001   0..8      u16        a  sized-by=n
-  ~         4..20     i32        b  big
+  ~         4..20     i32        b  big sized-by=n+1
   ~         2         u16        tail  big
 
 struct wire::framed_body size=3

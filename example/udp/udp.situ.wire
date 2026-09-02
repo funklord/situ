@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: udp.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 endian big
 target buffer
@@ -16,8 +21,8 @@ struct udp_header size=8..65535
   @0x0000   2         u16        source_port  big
   @0x0002   2         u16        destination_port  big
   @0x0004   2         u16        length  big min=8
-  @0x0006   2         u8         checksum
-  @0x0008   0..65527  u8         payload
+  @0x0006   2         u8         checksum  self_as=0
+  @0x0008   0..65527  u8         payload  sized-by=length-8
   checksum covers: udp_pseudo_header(prefix) destination_port length payload source_port summed
 
 struct udp_pseudo_header size=12

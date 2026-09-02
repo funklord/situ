@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: ble.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 endian little
 target buffer
@@ -24,7 +29,7 @@ enum ad_type : u8 unknown=pass
 struct ad_structure size=2..256
   @0x0000   1         u8         length  min=1
   @0x0001   1         ad_type    type
-  @0x0002   0..254    u8         value
+  @0x0002   0..254    u8         value  sized-by=length-1
 
 struct adv_report size=10..41
   @0x0000   1         advertising_event event_type

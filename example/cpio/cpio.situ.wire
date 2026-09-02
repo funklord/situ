@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: cpio.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 endian big
 target buffer
@@ -15,9 +20,9 @@ target buffer
 struct cpio_entry size=111..4294971507
   @0x0000   110       cpio_header header  big
   @0x006e   1..4096   u8         name  sized-by=header.namesize nul_terminated
-  ~         0..3      u8         <reserved0>
+  ~         0..3      u8         <reserved0>  sized-by=align_up(HEADER_BYTES+header.namesize,4)-(HEADER_BYTES+header.namesize)
   ~         0..4294967295 u8         data  sized-by=header.filesize
-  ~         0..3      u8         <reserved1>
+  ~         0..3      u8         <reserved1>  sized-by=align_up(header.filesize,4)-header.filesize
 
 struct cpio_header size=110
   @0x0000   6         u32        magic  big radix=10 min=70701 max=70702

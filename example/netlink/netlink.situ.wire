@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: netlink.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 endian native
 target buffer
@@ -32,13 +37,19 @@ struct nl_message size=20..
   @0x0008   4         u32        nlmsg_seq  native
   @0x000c   4         u32        nlmsg_pid  native
   @0x0010   0..4294967279 variant    body
-  ~         4..       nlattr     attrs  native
+  ~         4..       nlattr     attrs  native while=nla_len>=4
+  body switch: nlmsg_type
+  body case 2: err nlmsgerr
+  body case 3: terminator i32
+  body case 20: new_addr ifaddrmsg
+  body case 21: del_addr ifaddrmsg
+  body case default: rest opaque
 
 struct nlattr size=4..65538
   @0x0000   2         u16        nla_len  native min=4
   @0x0002   2         ifa_attr   nla_type  native
-  @0x0004   0..65531  u8         payload
-  ~         0..3      u8         <reserved0>  must_be_zero
+  @0x0004   0..65531  u8         payload  sized-by=nla_len-4
+  ~         0..3      u8         <reserved0>  sized-by=align_up(nla_len,4)-nla_len must_be_zero
 
 struct nlmsgerr size=20
   @0x0000   4         i32        error  native

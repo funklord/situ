@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: tcp.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 bit_order msb_first
 endian big
@@ -29,9 +34,9 @@ struct tcp_header size=20..
   @0x000d:6 1bit      bit        syn  msb_first
   @0x000d:7 1bit      bit        fin  msb_first
   @0x000e   2         u16        window  big
-  @0x0010   2         u8         checksum
+  @0x0010   2         u8         checksum  self_as=0
   @0x0012   2         u16        urgent_pointer  big
-  @0x0014   0..40     u8         options
+  @0x0014   0..40     u8         options  sized-by=(data_offset-5)*4
   ~         0..       u8         payload  sized-by=remaining
   checksum covers: tcp_pseudo_header(prefix) <reserved0> ack acknowledgement cwr data_offset destination_port ece fin options payload push reset sequence source_port summed syn urgent urgent_pointer window
 

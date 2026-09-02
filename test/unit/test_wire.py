@@ -247,3 +247,292 @@ def test_appending_without_one_is_only_probably_safe() -> None:
 
 def test_the_signature_records_which_version_a_member_arrived_in() -> None:
 	assert "since=2" in signature(V2)
+
+
+# -- the constructs the signature was blind to ------------------------------
+#
+# Nine kinds of edit changed the generated parser and left this file
+# byte-identical, so the committed-signature gate stayed green through all of
+# them. Each test below is one of those edits, and the property asserted is
+# the weakest one that would have caught it: the two schemas do not produce
+# the same contract.
+
+ARM_A = """
+enum k : u8 { a = 1, b = 2 }
+struct pa { u32 x; }
+struct pb { u32 y; }
+struct s {
+	k v;
+	variant body switch (v) {
+		case k.a: pa first;
+		case k.b: pb second;
+		default: error;
+	}
+}
+"""
+ARM_B = ARM_A.replace("case k.a: pa first;", "case k.a: pb second;") \
+             .replace("case k.b: pb second;\n\t\tdefault",
+                      "case k.b: pa first;\n\t\tdefault")
+
+
+def test_it_records_which_discriminant_value_selects_which_arm() -> None:
+	"""`Placement.discriminant` and `arm_cases` are what every backend reads
+	to emit the dispatch, and nothing here read either. The member line says
+	where the variant starts and how wide it can be, which is the same
+	sentence whichever arm each value picks."""
+	text = signature(ARM_A)
+
+	assert "body switch: v" in text
+	assert "body case 1: first pa" in text
+	assert "body case 2: second pb" in text
+	assert "body case default: error" in text
+
+
+def test_swapping_two_variant_arms_is_visible() -> None:
+	"""Both arms are four bytes, so the member line is identical either way
+	and the whole of the change is in the mapping. In `example/keystore` the
+	same edit moved eighty-two lines of generated C and no byte of this
+	file."""
+	assert signature(ARM_A) != signature(ARM_B)
+
+	found = verdict(ARM_A, ARM_B)
+	assert found.breaking
+
+
+TLV = """
+varint_type pv { encoding = leb128; max_bits = 64; }
+struct s {
+	tlv fields (
+		tag_type   = pv,
+		tag_decode = { field = tag >> 3, wire = tag & 0x7 },
+		tag_identity = field,
+		value_size = switch (wire) {
+			case 0: self_delimiting,
+			case 1: 8,
+			case 2: prefixed(pv),
+			default: error,
+		},
+		duplicate_tags = allowed,
+		known = { 1 : { name = who, wire = 0, type = pv } },
+		unknown = preserve
+	);
+}
+"""
+
+
+def test_it_records_the_tlv_grammar() -> None:
+	"""The whole contract of `example/protobuf` was one line reading
+	`@0x0000 0.. tlv fields`: tag type, decode, identity, value sizes, the
+	known tag map and both policies were recorded nowhere."""
+	text = signature(TLV)
+
+	assert "fields tlv tag: pv" in text
+	assert "fields tlv decode field: tag >> 3" in text
+	assert "fields tlv decode wire: tag & 0x7" in text
+	assert "fields tlv identity: field" in text
+	assert "fields tlv size 1: fixed 8" in text
+	assert "fields tlv size 2: prefixed pv" in text
+	assert "fields tlv size default: error" in text
+	assert "fields tlv known 1: who wire=0 type=pv" in text
+	assert "fields tlv duplicates: allowed" in text
+	assert "fields tlv unknown: preserve" in text
+
+
+@pytest.mark.parametrize("edit", [
+	("known = { 1 :", "known = { 7 :"),		# the tag itself moves
+	("tag >> 3", "tag >> 4"),			# every tag decodes differently
+	("case 1: 8,", "case 1: 4,"),			# wire type 1 is half as wide
+	("tag_identity = field", "tag_identity = wire"),	# `known` matches the other part
+	("duplicate_tags = allowed", "duplicate_tags = error"),
+	("unknown = preserve", "unknown = skip"),
+])
+def test_a_changed_tlv_grammar_is_visible(edit: tuple[str, str]) -> None:
+	"""Each of these changes which bytes an item occupies, or which field an
+	item is. None of them touched a member line."""
+	assert signature(TLV) != signature(TLV.replace(*edit))
+
+
+def test_it_records_where_a_located_member_sits() -> None:
+	"""`_position` renders `~` here, and its comment says the member above is
+	what fixes it. True of a member the data displaced and false of this one,
+	which goes wherever `off` says however far that is from anything."""
+	text = signature("struct s { u32 off; u32 other; u8 body[4] at off; }")
+
+	assert "at=off" in text
+
+
+def test_a_relocated_member_is_visible() -> None:
+	"""`example/bmp`'s `pixels` is placed by `file.pixel_offset`. Pointing it
+	at another field of the same width moves every byte of the image and left
+	the signature alone."""
+	found = verdict("struct s { u32 off; u32 other; u8 body[4] at off; }",
+	                "struct s { u32 off; u32 other; u8 body[4] at other; }")
+
+	assert found.breaking
+	assert "the same bytes now mean something else" in detail(found)
+
+
+WHILE = """
+struct hdr { u8 kind; u8 rest; }
+struct s { hdr chain[] while (kind == 0x11) max 4; u8 tail[remaining]; }
+"""
+
+
+def test_it_records_what_ends_a_run() -> None:
+	text = signature(WHILE)
+
+	assert "while=kind==0x11" in text
+	assert "while-max=4" in text
+
+
+def test_a_changed_while_condition_is_visible() -> None:
+	"""Nothing but the condition ends a run, so it is the boundary between
+	this member and the next. `example/ipv6ext` changes eight lines of C for
+	it and produced an identical signature."""
+	edited = WHILE.replace("kind == 0x11", "kind == 0x22")
+
+	assert signature(WHILE) != signature(edited)
+	assert verdict(WHILE, edited).breaking
+
+
+SELF_AS = ("struct s { authenticated r { u8 hop; "
+           "checksum u8 sum[2] covers(r) [self_as = %s]; u16 q; } }")
+
+
+def test_it_records_what_a_checksum_field_is_taken_as() -> None:
+	"""`_coverage` records `tag_prefix` and says why: it is invisible in the
+	structure. `self_as` is the same fact on the same construct."""
+	assert "self_as=0" in signature(SELF_AS % "0")
+
+
+def test_a_changed_self_as_is_visible() -> None:
+	"""Two peers computing different sums over byte-identical messages, with
+	every offset, width and name the same on both sides."""
+	found = verdict(SELF_AS % "0", SELF_AS % "0xffff")
+
+	assert found.breaking
+	assert "the same bytes now mean something else" in detail(found)
+
+
+VARINT = ("varint_type v { encoding = %s; max_bits = 64; }\n"
+          "struct s { v n; u8 d[n]; }")
+
+
+def test_it_records_a_varints_own_encoding() -> None:
+	"""`varint=<name>` recorded the label on the change and not the change.
+	`_directives` puts byte order first for this exact reason, and a varint's
+	encoding is a byte order that the directive does not cover."""
+	text = signature(VARINT % "be128")
+
+	assert "varint v : be128 bits=64 bytes=10" in text
+
+
+def test_changing_a_varints_encoding_is_breaking() -> None:
+	"""`example/sqlite` reads every varint in the file backwards under this
+	edit, and nothing about the structure says so."""
+	found = verdict(VARINT % "be128", VARINT % "leb128")
+
+	assert found.breaking
+	assert "be128" in detail(found) and "leb128" in detail(found)
+
+
+def test_it_records_a_computed_array_length() -> None:
+	"""`sized_by` holds a path and holds nothing for arithmetic over one, so
+	the commonest shape there is -- a length split across two fields --
+	recorded no length at all."""
+	text = signature("struct s { u8 hi; u8 lo; u8 body[hi * 256 + lo]; }")
+
+	assert "sized-by=hi*256+lo" in text
+
+
+def test_swapping_the_halves_of_a_length_is_visible() -> None:
+	"""Every payload boundary in every message moves, and before this the two
+	signatures were byte-identical."""
+	found = verdict("struct s { u8 hi; u8 lo; u8 body[hi * 256 + lo]; }",
+	                "struct s { u8 hi; u8 lo; u8 body[lo * 256 + hi]; }")
+
+	assert found.breaking
+	assert "the same bytes now mean something else" in detail(found)
+
+
+def test_it_records_which_member_carries_the_version() -> None:
+	assert "version=ver" in signature(
+		"struct m [version = ver] { u8 ver; u8 rev; u16 length; }")
+
+
+def test_moving_the_version_field_is_visible() -> None:
+	"""Which field a receiver reads the version out of decides whether a
+	`since` member's bytes are there at all -- and this file leans on it to
+	call an appended member provably safe."""
+	found = verdict("struct m [version = ver] { u8 ver; u8 rev; u16 n; }",
+	                "struct m [version = rev] { u8 ver; u8 rev; u16 n; }")
+
+	assert found.breaking
+
+
+# -- the comparison, where it said the opposite of what it meant ------------
+
+
+def test_a_changed_type_is_not_a_rename() -> None:
+	"""`_compare_member` compared `line.split()[:2]`, so the type column was
+	never looked at and `u16` -> `i16` matched the rename arm: "api-only ...
+	renamed a -> a", in the half of the output that says nothing moved. The
+	same bytes are a different number."""
+	found = verdict("struct s { u16 a; }", "struct s { i16 a; }")
+
+	assert found.breaking
+	assert "api" not in kinds(found)
+	assert "u16 -> i16" in detail(found)
+
+
+def test_a_changed_constraint_value_is_one_finding() -> None:
+	"""Decomposed into a gain and a loss it printed "0 breaking, 2
+	compatible" under two headings that each asserted the direction the other
+	denied -- and for `must_eq` both were wrong, there being no message the
+	two builds both accept."""
+	found = verdict("struct s { u16 n [must_eq = 1]; }",
+	                "struct s { u16 n [must_eq = 2]; }")
+
+	assert len(found.findings) == 1
+	assert found.breaking
+	assert "no message satisfies both" in detail(found)
+
+
+def test_a_narrowed_bound_is_a_tightening_and_says_so() -> None:
+	found = verdict("struct s { u16 n [max = 100]; }",
+	                "struct s { u16 n [max = 50]; }")
+
+	assert len(found.findings) == 1
+	assert kinds(found) == {"backward"}
+	assert "a tightening" in detail(found)
+
+
+def test_a_widened_bound_is_a_loosening_and_says_so() -> None:
+	found = verdict("struct s { u16 n [max = 100]; }",
+	                "struct s { u16 n [max = 200]; }")
+
+	assert len(found.findings) == 1
+	assert kinds(found) == {"forward"}
+	assert "a loosening" in detail(found)
+
+
+def test_declaring_a_version_field_moves_no_bytes() -> None:
+	"""Gaining or losing the declaration is not the break that moving it is:
+	`[since]` with no version field is refused outright (19.4), so a struct
+	that gained one had no optional bytes for it to gate. Reported as breaking
+	it would have been the same break counted twice, once here and once per
+	member that went."""
+	found = verdict("struct m { u8 ver; u16 n; }",
+	                "struct m [version = ver] { u8 ver; u16 n; }")
+
+	assert not found.breaking
+	assert kinds(found) == {"api"}
+
+
+@pytest.mark.parametrize("body", [ARM_A, TLV, WHILE, SELF_AS % "0"])
+def test_the_lines_beneath_the_members_are_not_members(body: str) -> None:
+	"""The positional comparison walks the member lines by index, so a line
+	that is not a member and is counted as one slides every member after it
+	and reports the slide as a break. A schema compared with itself is the
+	test that says the two kinds are told apart."""
+	assert not wire.compare(signature(body), signature(body)).findings

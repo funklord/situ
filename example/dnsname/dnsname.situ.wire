@@ -1,4 +1,4 @@
-# situ wire signature v0
+# situ wire signature v1
 # schema: dnsname.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -8,6 +8,11 @@
 # constraint a sender has to satisfy or a receiver may rely on.
 # Positions are byte offsets, or byte:bit off a boundary; `~` marks one
 # the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, the bytes a tag covers --
+# states it on `name what: value` lines below the members, one line per
+# entry so that a diff names the entry that moved.
 
 bit_order msb_first
 endian big
@@ -25,11 +30,23 @@ struct label size=1..64
   @0x0000   2bit      u2         form  msb_first
   @0x0000:2 6bit      u6         rest  msb_first
   @0x0001   0..63     variant    body
+  body switch: form
+  body case 0: text u8
+  body case 3: pointer_low u8
+  body case default: error
 
 struct name size=1..8192
-  @0x0000   1..8192   label      labels
+  @0x0000   1..8192   label      labels  while=form==0&&rest!=0 while-max=128
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
 
 struct question size=5..8196
   @0x0000   1..8192   name       qname
   ~         2         u16        qtype  big
   ~         2         u16        qclass  big
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
