@@ -1010,20 +1010,25 @@ static archive and is the deliverable, since nothing in the tree links it,
 and that walker/c's program is called situ-walk-c rather than `c`.
 
 That covers `make` and `make walk-c`. **fmake also understands `.situ`**,
-so `fmake test` builds eleven of the twelve generated test programs with
-no further configuration -- it runs situc for a schema when something
-includes the header that schema would write, and skips the rest rather
-than compiling thirty-seven of them. Named individually they pass.
+so the generated C suite needs no configuration either:
 
-The twelfth does not link. `test_kernels` wants `situ_base16_decode` and
-its neighbours, which `situc gen-derived` writes into `kernels_derived.c`
--- a second artifact family over the same schema, and fmake understands
-`situc build` only. Because one target fails, `fmake test` stops without
-running the eleven that built, so **`make test` and `make check` remain
-how this project's suite is run.** The Makefile also compiles each test
-twice, once checked and once released, to prove the checked assertions
-compile out; that is a build rather than a configuration, and fmake is
-not attempting it.
+    python3 ~/src/fmake/fmake test    # all twelve, and they pass
+
+It runs situc for a schema when something includes the header that schema
+would write -- and for the two commands whose output is the schema's own
+code, `build` and `gen-derived`, which is what `test_kernels` needs. The
+other thirty-odd schemas are skipped rather than compiled, and the
+`gen-checks` family is left alone on the grounds that a build system
+conjuring test programs nobody asked for is inventing work.
+
+**What stays with make is the rest of `make test` and all of `make
+check`.** `test-py` is pytest over the compiler, which is most of this
+project and is not C at all. The Makefile also compiles each generated
+test twice, once checked and once released, to prove the checked
+assertions compile out -- that is a build rather than a configuration, and
+fmake is not attempting it. So `make check` is still what has to pass
+before a commit; fmake builds this tree and runs its C tests, which is a
+different and smaller claim.
 
 `test` and `check` are not the same target and the difference matters.
 `make test` is pytest plus the generated C, which is the fast one to run while

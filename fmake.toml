@@ -23,16 +23,13 @@ sources = ["runtime/c/situ.c"]
 [target.c]
 name = "situ-walk-c"
 
-# Nothing here configures the generated C suite, and none is needed: fmake
-# understands .situ, runs situc for a schema when some source includes the
-# header that schema would write, and builds eleven of the twelve test
-# programs unaided. Named individually they pass.
+# Nothing here configures the generated C suite, and none is needed. fmake
+# understands .situ: it runs situc for a schema when some source includes
+# the header that schema would write, and it runs both of the commands
+# whose output is the schema's own code -- `build` and `gen-derived`. All
+# twelve test programs build and pass under `fmake test`.
 #
-# The twelfth is test_kernels, which wants situ_base16_decode and its
-# neighbours. Those come from `situc gen-derived`, which writes
-# kernels_derived.c -- a second artifact family over the same schema, where
-# fmake understands `situc build`. One failing target stops `fmake test`
-# before it runs the eleven that built, so `make test` and `make check` are
-# still how the suite is run; the Makefile's double compilation, checked and
-# released, is a build rather than a configuration either way.
+# The Python suite and the Makefile's double compilation, checked and
+# released, are not attempted and are not configuration. `make check` is
+# still what has to pass before a commit.
 # See README, "Building and testing".
