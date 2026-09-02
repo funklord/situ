@@ -570,3 +570,73 @@ def test_a_located_run_is_sized_from_the_nested_field() -> None:
 
 	assert based_probe("example/bmp/bmp.situ", "bitmap_file",
 	                   "bitmap_file.pixels", bytes(message)) == 4
+
+
+#: Lines the walker's listing carries that are not members: a validation
+#: verdict, and the note for a struct no view can be taken of.
+NOT_A_MEMBER = frozenset({"validate", "no-view"})
+
+
+def compared_members() -> tuple[int, int, int]:
+	"""What C is asked, what the walker renders, and the overlap.
+
+	Both sides statically: `differ.asks` is what the generated probe asks
+	about, and `report.listing` is what the walker answers. No compilation,
+	so this runs everywhere rather than only where four toolchains do.
+	"""
+	from situc.codegen import differ
+
+	asked_total = walked_total = both_total = 0
+	for path in SCHEMAS:
+		parsed   = parse_text(path.read_text(encoding="ascii"))
+		resolved = resolve(parsed, solve(parsed))
+		names    = {held.name for held in resolved.structs.values()}
+		asked    = {(held.name, ask.local)
+		            for held in differ.structs_of(resolved)
+		            for ask in differ.asks(held, names, resolved.structs)}
+
+		blob, _ = packer.pack(parsed, resolved, metadata=True)
+		image   = load(blob)
+		walked, where = set(), ""
+		for line in report.listing(image, bytes(range(1, 97))).split("\n"):
+			if line.startswith("-- "):
+				where = line[3:]
+				continue
+			if line.strip() and line.split()[0] not in NOT_A_MEMBER:
+				walked.add((where, line.split()[0]))
+
+		asked_total  += len(asked)
+		walked_total += len(walked)
+		both_total   += len(asked & walked)
+	return asked_total, walked_total, both_total
+
+
+def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
+	"""The fifth column is worth having only where both columns speak.
+
+	`test_the_walker_agrees_with_the_compiled_backends` compares a member
+	only where C and the walker both answer, which is right -- a member one
+	side never mentions is a difference in what was asked. It also means the
+	overlap *is* the coverage, and nothing counted it. The floor beside this
+	one counts what the walker's subset reaches, which is one side.
+
+	26.184 lived in the gap. `packet.sealed.body` is not rendered by the
+	walker, because a sealed interior sits behind a gate it does not render;
+	`bmp.pixels` is rendered and never asked of C, because a located member
+	gets a view accessor and the probe asks about scalars. Both were wrong
+	for a year and both were outside the comparison -- and that is not a
+	coincidence, since a construct is unusual enough to be got wrong for the
+	same reason it is unusual enough to be missing from a probe.
+
+	Two floors, because either alone can be met while the other rots: a
+	count, so the overlap cannot shrink, and a share of what C asks, so
+	adding schemas that only one side speaks about cannot dilute it.
+	"""
+	asked, walked, both = compared_members()
+
+	assert both >= 460, (
+		f"the differential compares {both} members, down from 464; "
+		f"C asks about {asked} and the walker renders {walked}")
+	assert both * 100 >= asked * 85, (
+		f"only {100 * both // asked}% of what C asks is compared, "
+		f"down from 89%")

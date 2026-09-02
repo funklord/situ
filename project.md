@@ -17638,11 +17638,34 @@ schema, and stops the suite going green while rendering nothing. It counts
 would have shown this: a corpus where the walker renders plenty and C is asked
 about a different plenty can have a small overlap and a healthy-looking floor.
 
-Recorded rather than built. Measuring the intersection means running the C
-differ for every schema, which is the 55-second half of this file and needs
-all four toolchains, and the shape of the fix -- probe views as well as
-scalars, render a sealed interior, or count and floor the overlap -- is a
-choice about what the fifth column is *for*.
+**It is counted now, and it was cheap after all.** Running the C differ is
+not needed to know what it *asks*: `differ.asks` is the same function the
+generated probe is built from, and `report.listing` is what the walker
+answers, so both sides are available statically and the measurement runs
+everywhere rather than only where four toolchains do.
+
+    C asks about       521
+    walker renders     593
+    compared (both)    464
+
+That is 89% of what C asks and 78% of what the walker renders. **186
+member-answers exist on exactly one side and are never compared** -- 57 asked
+of C and never rendered, 129 rendered and never asked -- and `bmp.pixels` and
+`packet.sealed.body` are two of the 186.
+
+Two floors, because either alone can be met while the other rots: the count,
+so the overlap cannot shrink, and its share of what C asks, so adding schemas
+only one side speaks about cannot dilute it. The rendering artefacts
+`validate` and `no-view` are excluded by name -- counting them inflated the
+walker's side to 751 on the first pass, which is the same overcount as
+81-against-36 an hour earlier and was caught the same way, by a number that
+did not fit.
+
+**Closing the gap is still a design choice and is not made here.** Probing
+views as well as scalars, rendering a sealed interior, or accepting the
+overlap as the honest limit are three different answers about what the fifth
+column is *for*. What is settled is that the number can no longer move
+without saying so.
 
 ## 27. Questions, and how they were settled
 
