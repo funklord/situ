@@ -258,6 +258,51 @@ def test_a_bounded_ratio_is_checked_as_a_bound() -> None:
 	assert "assert_true(out_len <= (in_len * 255u + 253u) / 254u);" in text
 
 
+def test_an_authenticated_claim_says_what_checks_it_instead() -> None:
+	"""The four AEADs guarding every sealed region got neither.
+
+	Every other declared property here gets a test or a note saying why the
+	compiler cannot write one, and the emitting loop says what a builder that
+	returns nothing reads as: "silence would read as coverage". This one
+	returned nothing while claiming the strongest thing a codec can claim.
+	"""
+	text = codec_tests("codec c { length_preserving; authenticated; }")
+
+	assert "`authenticated` is declared and nothing here" in text
+	assert "section 14.2" in text
+
+
+def test_an_authenticated_codec_that_carries_its_tag_is_told_to_attack_it() -> None:
+	"""Where the expansion accounts for `tag_bytes` the tag is in the output,
+	so `decode` of a modified one must refuse -- a cheap falsifier, and one
+	that is not written because no codec here is that shape. The note says so
+	rather than reading like the case above."""
+	text = codec_tests("codec c { expansion = +16; tag_bytes = 16;"
+	                   " authenticated; }")
+
+	assert "must refuse" in text
+	assert "nothing here" not in text
+
+
+def test_an_error_propagating_claim_gets_a_note_too() -> None:
+	"""Falsifiable at this ABI and measured that way for derived codecs
+	(26.150). No tier-1 codec here declares it, so the note is the whole of
+	what a generated suite can honestly say."""
+	text = codec_tests("codec c { length_preserving; error_propagating; }")
+
+	assert "`error_propagating` is declared and nothing" in text
+
+
+def test_a_codec_claiming_neither_gets_neither_note() -> None:
+	"""Silence is right for a property the signature does not claim -- that is
+	what every other builder does -- so the notes must not fire on a codec
+	that says nothing about either."""
+	text = codec_tests("codec c { length_preserving; }")
+
+	assert "`authenticated` is declared" not in text
+	assert "`error_propagating` is declared" not in text
+
+
 def test_unbounded_expansion_gets_no_length_test() -> None:
 	"""It claims nothing about extent, so there is nothing to falsify. Saying
 	so beats emitting a test that always passes."""

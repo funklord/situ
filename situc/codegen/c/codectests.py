@@ -169,7 +169,8 @@ def _codec_suite(codec: ast.CodecDecl,
 	names: list[str] = []
 
 	for builder in (_length_test, _deterministic_test, _invertible_test,
-	                _seekable_test, _systematic_test, _granularity_test):
+	                _seekable_test, _systematic_test, _granularity_test,
+	                _authenticated_note, _error_propagating_note):
 		body, name = builder(codec, encode, decode)
 
 		# A builder with no test may still have something to say -- that the
@@ -400,6 +401,69 @@ def _systematic_test(codec: ast.CodecDecl, encode: str,
 		"\tassert_memory_equal(output, input, sizeof(input));",
 		"}",
 	], name)
+
+
+def _authenticated_note(codec: ast.CodecDecl, encode: str,
+		decode: str) -> tuple[list[str], str | None]:
+	"""`authenticated`: why this harness cannot attack it, and what does.
+
+	Every other declared property here gets a test or a note saying why not.
+	This one got neither, on the four AEADs that guard every sealed region in
+	the tree -- and the loop above says what that reads as: "silence would
+	read as coverage".
+
+	It is genuinely not falsifiable at this ABI, for two compounding reasons.
+	The tier-1 ABI (13.2a) passes bytes in and bytes out and names no key and
+	no nonce -- deliberately, because "no construct here names a key". And a
+	codec that is `length_preserving` cannot carry a tag in its own output at
+	all, so the tag is a *field*, which is 14.2's machinery and 13.5's own
+	answer for this row: "see 14.2". All four are that combination.
+
+	Where a codec's expansion does account for `tag_bytes`, the tag is in the
+	output and `decode` of a corrupted one must refuse -- which is a cheap
+	falsifier and is not written here, because no codec in this repository is
+	that shape and generated code nobody has watched fail is not evidence.
+	"""
+	if not codec.authenticated:
+		return ([], None)
+
+	carries_tag = (codec.tag_bytes is not None
+	               and codec.expansion is not ast.Expansion.PRESERVING)
+	if carries_tag:
+		return ([f"/* {codec.name}: `authenticated` is declared and the",
+		         " * expansion accounts for the tag, so `decode` of a modified",
+		         " * output must refuse. No test is generated for it yet;",
+		         " * attack it by hand. */"], None)
+
+	return ([f"/* {codec.name}: `authenticated` is declared and nothing here",
+	         " * attacks it. The tier-1 ABI carries no key and no nonce, and a",
+	         " * length-preserving transform has nowhere in its own output to",
+	         " * put a tag -- so the tag is a schema field, and what checks it",
+	         " * is section 14.2's coverage and staleness machinery, not this",
+	         " * harness. `tag_bytes` is checked against that field by the",
+	         " * compiler (decision 0038). */"], None)
+
+
+def _error_propagating_note(codec: ast.CodecDecl, encode: str,
+		decode: str) -> tuple[list[str], str | None]:
+	"""`error_propagating`: where it is measured, which is not here.
+
+	Falsifiable in principle at this ABI -- corrupt one unit of the coded
+	stream, decode, count how much of the plaintext comes back wrong -- and
+	measured exactly that way for *derived* codecs, where the property is
+	computed from the kernel description rather than asserted (26.150). No
+	tier-1 codec in this repository declares it, so a generated test here
+	would have no implementation to attack. The note is what stops the
+	absence reading as coverage.
+	"""
+	if not codec.error_propagating:
+		return ([], None)
+
+	return ([f"/* {codec.name}: `error_propagating` is declared and nothing",
+	         " * here attacks it. Corrupt one unit of the coded stream, decode,",
+	         " * and count the damaged plaintext units -- which is how the",
+	         " * derived codecs are measured. Do it by hand for this one. */"],
+	        None)
 
 
 def _granularity_test(codec: ast.CodecDecl, encode: str,

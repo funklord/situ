@@ -18284,6 +18284,53 @@ question is answered.
 Sabotaged from both directions -- editing 9.7's row to match the compiler, and
 making the `tlv` rule emit `RewriteRequired` -- and it goes red for each.
 
+### 26.199 Two claims the falsifier never attacked, and never said so
+
+`codegen/c/codectests.py` exists to "generate the tests that would falsify a
+lying codec signature", and its docstring says "**Each declared property gets
+the cheap falsifying test** from the section 13.1 table". Its emitting loop is
+sharper still, about what a builder returning nothing means:
+
+> A builder with no test may still have something to say -- that the signature
+> claims nothing here, or that the claim cannot be checked mechanically. Both
+> are worth emitting: **silence would read as coverage**.
+
+Six builders, eight declarable properties. **`authenticated` and
+`error_propagating` had no builder at all**, so a codec claiming either got
+neither a test nor a note -- and `authenticated` is claimed by four extern
+codecs, which are the AEADs guarding every sealed region in the tree.
+
+**Neither is a test that was owed, and that is the finding.** `authenticated`
+is genuinely unfalsifiable at the tier-1 ABI, for two compounding reasons: the
+ABI passes bytes in and bytes out and names no key and no nonce -- deliberately,
+because "no construct here names a key" -- and a `length_preserving` codec has
+nowhere in its own output to put a tag, so the tag is a *field* and 13.5's
+answer for this row is already "see 14.2". All four are that combination.
+`error_propagating` is falsifiable here in principle and is measured that way
+for *derived* codecs (26.150); no tier-1 codec declares it, so a generated test
+would have no implementation to attack.
+
+So the fix is the note in each case, which is what the loop's own comment asks
+for. The third branch is worth having separately: where a codec's expansion
+does account for `tag_bytes`, the tag *is* in the output and `decode` of a
+modified one must refuse -- a cheap falsifier, unwritten because nothing in the
+corpus is that shape, and the note says to attack it by hand rather than
+reading like the case that cannot be attacked at all.
+
+**All four branches are watched, including the two with no subject in the
+corpus.** A note that fires for nothing is indistinguishable from one that
+never fires, so the tests use synthetic signatures -- and each of the four
+sabotages takes down exactly the tests that claim it.
+
+**The tree contains a codec whose `authenticated` is a lie, and says so.**
+`test/generated/codec_impl.c`'s `my_sealing_aead` is XOR with a constant: "It
+authenticates nothing, which is the one property here that is a lie. It is a
+lie the schema tells too." That is deliberate and correct -- 13.1 is that situ
+describes properties and never algorithms, and a test needing real AES-GCM
+would be a test of OpenSSL. It is also exactly the lie this harness was built
+to catch, and the reason it cannot is now written where the harness is read
+rather than only where the stub is.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
