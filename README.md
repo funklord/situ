@@ -1009,13 +1009,21 @@ Python standard library:
 static archive and is the deliverable, since nothing in the tree links it,
 and that walker/c's program is called situ-walk-c rather than `c`.
 
-That covers `make` and `make walk-c`, and stops there. **The suite stays
-with make.** test/generated's programs are checked in and their headers are
-not -- situc writes those into the build tree from the schemas, each test is
-then compiled twice, and cmocka has to be found; `fmake test` compiles
-eleven files against headers that do not exist yet. Nothing about that is
-wrong in either tool, but it is a build rather than a configuration, so
-`make test` and `make check` are the way to run this project's tests.
+That covers `make` and `make walk-c`. **fmake also understands `.situ`**,
+so `fmake test` builds eleven of the twelve generated test programs with
+no further configuration -- it runs situc for a schema when something
+includes the header that schema would write, and skips the rest rather
+than compiling thirty-seven of them. Named individually they pass.
+
+The twelfth does not link. `test_kernels` wants `situ_base16_decode` and
+its neighbours, which `situc gen-derived` writes into `kernels_derived.c`
+-- a second artifact family over the same schema, and fmake understands
+`situc build` only. Because one target fails, `fmake test` stops without
+running the eleven that built, so **`make test` and `make check` remain
+how this project's suite is run.** The Makefile also compiles each test
+twice, once checked and once released, to prove the checked assertions
+compile out; that is a build rather than a configuration, and fmake is
+not attempting it.
 
 `test` and `check` are not the same target and the difference matters.
 `make test` is pytest plus the generated C, which is the fast one to run while
