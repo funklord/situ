@@ -1087,3 +1087,58 @@ def test_append_unsettles_every_address() -> None:
 	# a member before the variable one is stable.
 	assert axis_of(ON_A_FILE, "s.n", Axis.ADDRESS, FILE_PREAMBLE) \
 		== Value("Stable")
+
+
+# -- advice that can be taken (26.189) --------------------------------------
+
+
+def remedy_for(body: str, path: str, axis: Axis,
+		preamble: str = PREAMBLE) -> str:
+	found = entries(body, preamble)[path].blame(axis)
+	return " ".join(w.rule.remedy for w in found)
+
+
+def test_the_unbounded_remedy_names_the_construct_that_applies() -> None:
+	"""It fires on five shapes and described one of them.
+
+	Across the tree `unbounded-size` fires 49 times: 19 delimited scans, 18
+	`[remaining]` members, 10 aggregates inheriting the unboundedness from
+	something inside, one `while` run -- and **one** member actually driven
+	by a length field, which is the only case "give the driving length field
+	a `[max = N]`" fitted.
+
+	For a delimited member the compiler refuses that advice in as many
+	words, which is the sharpest form of advice that cannot be taken.
+	"""
+	said = remedy_for('struct s { u8 v; u8 line[] until "\\r\\n"; }',
+	                  "s.line", Axis.SIZE)
+	assert "after `until`" in said, said
+
+	# Why the old text was wrong, pinned rather than described: the literal
+	# advice does not parse.
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + "struct s { u8 rest[remaining] [max = 128]; }")
+	assert "`[max]` means nothing here" in refused.value.diagnostic.render()
+
+
+def test_preserve_excludes_bits_rather_than_carrying_them() -> None:
+	"""The remedy said `[preserve]` carries the bits through "without
+	accepting them as free". It does neither.
+
+	`[preserve]` and `[unknown]` generate byte-identical code and neither
+	emits a constraint check; only `[must_be_zero]` does. What `[preserve]`
+	does is exclude the bits from canonical comparison -- a claim about what
+	a rewriter owes, not something the generated code performs -- so the old
+	wording was a promise 14.5 forbids a schema to make.
+	"""
+	said = remedy_for("struct s { reserved u8 [unknown]; u8 a; }",
+	                  "s.<reserved0>", Axis.CANONICAL)
+	assert "carry the bits through" not in said, said
+	assert "excludes the bits from canonical comparison" in said, said
+	assert "the caller's to honour" in said, said
+
+	# And the axis behaviour the wording now describes.
+	assert axis_of("struct s { reserved u8 [unknown]; u8 a; }",
+	               "s.<reserved0>", Axis.CANONICAL) == Value("NonCanonical")
+	assert axis_of("struct s { reserved u8 [preserve]; u8 a; }",
+	               "s.<reserved0>", Axis.CANONICAL) == Value("Canonical")

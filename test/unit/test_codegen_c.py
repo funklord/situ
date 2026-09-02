@@ -3613,3 +3613,28 @@ def test_the_header_says_a_store_to_a_file_is_durable() -> None:
 
 def test_a_file_target_compiles_in_c(tmp_path: Path) -> None:
 	compile_generated(tmp_path, ON_A_FILE, FILE_TARGET)
+
+
+def test_preserve_and_unknown_generate_the_same_code() -> None:
+	"""Which is why the `reserved-unknown` remedy no longer says `[preserve]`
+	carries the bits through.
+
+	Only `[must_be_zero]` checks anything. `[preserve]` differs from
+	`[unknown]` in the capability map -- it excludes the bits from canonical
+	comparison (1189) -- and in nothing the backend emits, so a remedy
+	promising the generated code carries them was stating what the generated
+	code does not enforce (26.189).
+	"""
+	def emitted(attr: str) -> tuple[str, str]:
+		return emit(f"struct s {{ reserved u8 [{attr}]; u8 a; }}\n")
+
+	unknown_h, unknown_c   = emitted("unknown")
+	preserve_h, preserve_c = emitted("preserve")
+	zeroed_h,  zeroed_c    = emitted("must_be_zero")
+
+	assert unknown_c.replace("unknown", "X") == preserve_c.replace("preserve", "X")
+	assert unknown_h.replace("unknown", "X") == preserve_h.replace("preserve", "X")
+
+	# And the one that does check, does.
+	assert "SITU_ERR_CONSTRAINT" in zeroed_c
+	assert "SITU_ERR_CONSTRAINT" not in preserve_c

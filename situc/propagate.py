@@ -1094,8 +1094,20 @@ TABLE: tuple[Row, ...] = (
 			name      = "unbounded-size",
 			construct = "a member with no upper bound on its length",
 			effects   = (),		# see _unbounded_effects
-			remedy    = "give the driving length field a `[max = N]`, which makes "
-			            "the region statically allocatable",
+			# Named per construct, because this row fires on five shapes and
+			# the old text described one of them. Across the tree it fires 49
+			# times: 19 delimited scans, 18 `[remaining]` members, 10
+			# aggregates that inherit the unboundedness from something
+			# inside, one `while` run -- and **one** member actually driven by
+			# a length field, which is the only case "give the driving length
+			# field a `[max = N]`" fitted. For a delimited member the
+			# compiler refuses that advice outright: "`[max]` means nothing
+			# here ... a size cap is spelled `max N` after `until`" (26.189).
+			remedy    = "bound whatever decides the extent: `[max = N]` on a "
+			            "length field, `max N` after `until` for a scan, "
+			            "`max N` on a `while` run. A `[remaining]` member is "
+			            "bounded only by the frame it sits in, and an "
+			            "aggregate by whatever inside it is unbounded",
 		),
 		applies = _is_unbounded_size,
 	),
@@ -1396,9 +1408,20 @@ TABLE: tuple[Row, ...] = (
 			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
 			                    "unvalidated bits are a malleability surface: the "
 			                    "same value can be encoded with any of them set"),),
-			remedy    = "use `[must_be_zero]`, which is the default, or "
-			            "`[preserve]` to carry the bits through without accepting "
-			            "them as free",
+			# `[preserve]` does not carry anything through: it and
+			# `[unknown]` generate byte-identical code, neither emits a
+			# constraint check, and only `[must_be_zero]` does. What it does
+			# is exclude the bits from canonical comparison (1189), which is
+			# a claim about what a *rewriter* owes and not something the
+			# generated code performs -- so saying it "carries the bits
+			# through" was a promise 14.5 forbids the schema to make
+			# (26.189).
+			remedy    = "use `[must_be_zero]`, which is the default and is "
+			            "the only one of the three that checks anything. "
+			            "`[preserve]` excludes the bits from canonical "
+			            "comparison instead, on the understanding that a "
+			            "rewriter carries them unchanged -- which is the "
+			            "caller's to honour, not the generated code's",
 		),
 		applies = lambda context: context.reserved_unknown,
 	),
