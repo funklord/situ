@@ -73,8 +73,17 @@ def _scalars(image: Image, struct_index: int) -> list[int]:
 			continue			# a nested struct, not a scalar
 		if not placement.fixed:
 			continue			# a size the message decides
-		if not placement.offset_known:
-			continue			# an offset the message decides
+		# An offset the message decides is placed by walking the members
+		# before it, which this walker does and did not use here: the filter
+		# predates that and was the conservative choice when a wrong line was
+		# the risk. It no longer is -- the renderer already answers a member
+		# it cannot place by printing nothing, "absent rather than wrong" --
+		# so the bar is what the walk can reach rather than what the image
+		# states outright.
+		#
+		# It costs 17 scalars of differential coverage to skip them, and they
+		# are the ones after a variable-length member: `adv_report.rssi` sits
+		# behind `data[data_length]` and every backend answers it (26.185).
 		if index in image.delimiters:
 			continue			# ends at a delimiter, so a byte run
 		# Behind a *gate*, which is a `sealed` region and not any region.

@@ -634,9 +634,9 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	"""
 	asked, walked, both = compared_members()
 
-	assert both >= 460, (
-		f"the differential compares {both} members, down from 464; "
+	assert both >= 470, (
+		f"the differential compares {both} members, down from 477; "
 		f"C asks about {asked} and the walker renders {walked}")
-	assert both * 100 >= asked * 85, (
+	assert both * 100 >= asked * 88, (
 		f"only {100 * both // asked}% of what C asks is compared, "
-		f"down from 89%")
+		f"down from 91%")

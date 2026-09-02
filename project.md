@@ -17661,10 +17661,30 @@ walker's side to 751 on the first pass, which is the same overcount as
 81-against-36 an hour earlier and was caught the same way, by a number that
 did not fit.
 
-**Closing the gap is still a design choice and is not made here.** Probing
-views as well as scalars, rendering a sealed interior, or accepting the
-overlap as the honest limit are three different answers about what the fifth
-column is *for*. What is settled is that the number can no longer move
+**Part of the gap was not a design choice at all.** Enumerating the 57 asked
+of C and never rendered, 17 are plain scalars -- the simplest case there is --
+and the walker turns out to answer them perfectly. `adv_report.rssi` sits
+behind `data[data_length]`; ask the walker directly and it says offset 18,
+value 19. `report._scalars` was skipping them on `offset_known`, with the
+reason recorded beside it: "an offset the message decides", and "a wrong line
+is worse than a missing one".
+
+That was the conservative choice when it was written and is no longer the
+trade being made, because **the renderer already answers a member it cannot
+place by printing nothing** -- "absent rather than wrong", in its own words.
+So the bar is what the walk can reach rather than what the image states
+outright, and the filter was stricter than the thing it was protecting.
+
+    compared, before   464   (89% of what C asks)
+    compared, after    477   (91%)
+
+Thirteen more members compared, and **all thirteen agree with C** -- the
+differential passes over them, which is the answer that made the change worth
+making rather than merely wider. The floors move to 470 and 88%.
+
+**The rest of the gap is still a design choice and is not made here.** Probing
+views as well as scalars, and rendering a sealed interior, are answers about
+what the fifth column is *for*. What is settled is that the number cannot move
 without saying so.
 
 ## 27. Questions, and how they were settled
