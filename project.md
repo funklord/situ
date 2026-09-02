@@ -17687,6 +17687,144 @@ views as well as scalars, and rendering a sealed interior, are answers about
 what the fifth column is *for*. What is settled is that the number cannot move
 without saying so.
 
+### 26.186 The fidelity report was the feature, and it under-reported
+
+`situc/proto.py` opens with its own argument: "**The fidelity report is the
+feature.** Section 19.2 is blunt about it: an importer that silently produces
+a plausible-looking schema is worse than no importer, because the user will
+trust it. So every construct that cannot be represented is listed with its
+location and its reason."
+
+**Seven were not.** Found by feeding it constructs and asking which produced a
+`Loss`: `map`, `service`, `rpc` and `group` did; `import`, `import public`,
+`extensions`, `extend`, `reserved`, `option` and an unresolvable type name did
+not.
+
+**The worst is not a missing entry but a wrong answer.** `_wire_and_type` ends
+
+    # A nested message: length-prefixed, and its interior is another tlv.
+    return WIRE_LENGTH, "u8"
+
+and that comment states an assumption the code does not check. It is the
+fallback for *anything* not a scalar and not an enum declared here, including
+a name this file cannot resolve. The same enum field, twice:
+
+    enum declared here    1 : { name = c, wire = 0, type = colour },
+    same enum, imported   1 : { name = c, wire = 2, type = u8 },
+
+Both reported **zero losses**. A varint is not a length-delimited run, so the
+second describes bytes that are not there, and says the import was clean.
+
+**And one regex was named for the harmless case.** `_RESERVED` matched
+`reserved|option|extensions|import` and skipped all four in silence.
+`reserved` forbids numbers nobody may use and an `option` outside a field
+configures a generator, so those two are genuinely nothing. `extensions` and
+`import` are not: both mean **the wire carries fields this file does not
+list**, which is the one thing 19.2 says an importer must not hide. `extend`
+was swallowed by the field regex on the line after.
+
+All four now report, `reserved` and `option` still do not, and an
+unresolvable type is a loss naming the guess it would otherwise have made in
+silence. `example/protobuf/user.proto` still imports with no losses at all,
+which is the control: the change reports what was hidden and invents nothing.
+
+**A pattern named for one of its cases is a comment that runs.** `_RESERVED`
+read as "the reserved-word rule" and did the work of four rules, three of
+which nobody had decided were harmless -- the same shape as a sort key
+naming a constant, or a filter counting every process rather than the
+orphaned ones. The name said what the author was thinking about; the pattern
+said what it did.
+
+### 26.187 The diff called a regression neither direction, and a growth better
+
+`situc diff` is the tool 18.3 puts in review: "Regressions and improvements
+are both reported, and only regressions set the exit status." Three claims in
+`_parameter_change` were false, all on the "same base, different parameters"
+path, and none of them was tested -- the only parameter-direction tests cover
+`offset` (where "moved" is right) and `Bounded` maxima that happen to be whole
+bytes.
+
+**An alignment that weakened was reported as neither direction, and exited
+0.** `capability.py` puts `Axis.ALIGN` in `NUMERIC_STRENGTH` and states the
+rule beside it -- "`Aligned(8)` is stronger than `Aligned(2)`" -- and
+`_parameter_change` special-cased `SIZE` and fell through to "moved" for
+everything else. Moving a `u32` behind four bytes takes it from `Aligned(8)`
+to `Aligned(4)`, and **`situc build` refuses that same edit** when a `require
+aligned(s.v, 8)` names it. So the compiler called it a weakness and the diff
+called it a layout change: `0 regression(s), 0 improvement(s)`, exit 0. It is
+`1 regression(s), 1 improvement(s)`, exit 1, now.
+
+**A field that grew was an improvement whenever its size was sub-byte.**
+`render_size` writes whole bytes as `2` and anything else as `12bit`, and
+`_worst` was `int(tail) if tail.isdigit() else 0`. `"6bit".isdigit()` is
+False, so both sides collapsed to 0, `0 > 0` was False, and the `else` arm
+returned "strengthened". A `u4` becoming a `u6` was printed under
+**Improvements**; the same edit one byte wide was a regression. **The verdict
+turned on whether the size divided by eight.** `_worst` answers in bits now,
+which is the unit both spellings share, so a byte is worse than seven bits.
+
+**And "not measurably worse" was reported as "better".** `_parameter_change`
+had two outcomes for `SIZE`, so anything that was not a regression became an
+improvement. `Bounded(2, 10)` to `Bounded(4, 10)` doubles the minimum extent
+and leaves the maximum alone: neither is stronger -- `is_at_least` answers
+True in both directions -- and "moved" is what the offset case already says.
+There are three outcomes now.
+
+**Found by an agent sweeping this module for claims nothing measures**, with
+the reproductions run through the CLI rather than the unit level, and each
+verified here before it was believed. The shape is one this session has met
+repeatedly: a two-way branch where the third case is silently folded into the
+comfortable one, and a helper named `_worst` that was not computing a worst
+case.
+
+### 26.188 DTLS's whole payload came back as one byte, in three backends
+
+`traverse.data_sized` opens with the reason it exists: "**The one question,
+asked once.** It was asked in three places and answered differently in each",
+and names what that cost -- a length written as arithmetic over a field has
+neither an `array_count` nor a `sized_by`, and the places that tested only
+those two "handed back one byte and called it the field".
+
+**There was a fourth place, and it still had the old answer.** The sealed-gate
+emitters in C++, Python and Rust partitioned a region's interior with
+`array_count is not None or sized_by is not None`. `example/dtls`'s
+`u8 fragment[length - 24]` -- the entire encrypted payload of a DTLS record --
+has neither, so it landed in the scalar branch:
+
+    C       situ_record_sealed_fragment_len / _ptr        correct
+    C++     std::uint8_t fragment() const                 one byte
+    Rust    fn fragment(&self) -> u8                      one byte
+    Python  return self._view._read(21, 1, ...)           one byte
+
+A five-byte fragment read back as `170`. The map says
+`size=Bounded(0, 16384)`.
+
+**`data_sized` alone is not the predicate either**, and the suite said so
+within a minute: it is false for a *fixed* array, which is a run all the same,
+and substituting it dropped `[secret]` byte arrays out of the gate's own
+suppression list -- `test_a_secret_field_gets_no_accessor_even_inside_the_gate`
+went red. The union is what "is a run" means here, and it is `_is_run` in all
+three now.
+
+**And a partition has two halves.** Teaching `rest` the third spelling
+without teaching `inside` gave C++ two `fragment()` accessors of one name, a
+compile error the schema suite caught. A predicate used to split a set has to
+change on both sides or it is not a partition.
+
+C++ and Rust now emit a byte run through the gate, matching C. **Python emits
+nothing**: its gate has no byte-run path at all, only scalars and a secret
+suppression list, so the member moved from a wrong answer to no answer. That
+is the better of the two -- a wrong line is worse than a missing one -- and it
+is not parity. The Python gate's byte-run accessor is the piece still owed.
+
+**Found by an agent** sweeping the four backends for the parity claim, which
+turns out to be a claim about the *differ's* drivers rather than the
+emitters: `grep -rn classify situc/codegen/c/` finds nothing, and C has its
+own dispatch. The three defects it found are all in code paths that bypass
+`classify` in every backend -- the sealed gate and the variant arm, each a
+parallel dispatch with hand-rolled predicates. **A shared decision point only
+helps where it is called.**
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
