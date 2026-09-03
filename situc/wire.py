@@ -246,7 +246,14 @@ def _constraints(placement: Placement) -> list[str]:
 	# produced a byte-identical signature. One key for both, because a reader
 	# asks the same thing of either.
 	elif placement.size_expr is not None:
-		facts.append(f"sized-by={_squash(placement.size_expr)}")
+		# The shown form, not the stored one. This file is a contract a peer
+		# reads and diffs, and `size_expr` is parenthesised at every operator
+		# so that four host compilers cannot disagree about it -- a property
+		# of the *generated code*, which is nothing to do with the wire. A
+		# signature that churned to `sized-by=(length-8)` would be reporting
+		# a change no peer can observe.
+		facts.append(f"sized-by="
+		             f"{_squash(placement.size_shown or placement.size_expr)}")
 	# `at hdr.pixel_offset`: where the bytes *are*. `_position` renders `~` for
 	# this member exactly as it does for one the data merely displaced, and the
 	# two are different promises -- a displaced member follows the line above,
@@ -257,7 +264,8 @@ def _constraints(placement: Placement) -> list[str]:
 	# Where a run stops, which is the boundary between this member and the
 	# next. Nothing else ends one, so the condition is the width.
 	if placement.repeat_while is not None:
-		facts.append(f"while={_squash(placement.repeat_while)}")
+		facts.append(f"while="
+		             f"{_squash(placement.repeat_shown or placement.repeat_while)}")
 	if placement.repeat_cap is not None:
 		facts.append(f"while-max={placement.repeat_cap}")
 	# The alignment a pad promises (0043): a peer that pads to a different

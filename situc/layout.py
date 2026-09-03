@@ -306,6 +306,15 @@ class Placement:
 	#: length of zero for one of the commonest shapes there is -- a length
 	#: field counted in units rather than bytes.
 	size_expr: str | None		= None
+	#: The same two expressions as a reader would write them, for `situc doc`
+	#: and nothing else. `size_expr` and `repeat_while` are parenthesised at
+	#: every operator because they are handed to four host compilers whose
+	#: precedence tables are not all situ's -- correct, and `payload[(length
+	#: - 8)]` in a diagram whose whole point is to be read. The generated
+	#: code takes the safe form and the picture takes this one, rather than
+	#: one form being asked to be both.
+	size_shown: str | None		= None
+	repeat_shown: str | None	= None
 	#: `while (cond)`: the run ends after the element that fails this.
 	#: Held as source rather than as a tree, because every consumer of it
 	#: either renders it or hands it to a backend that renders it.
@@ -780,6 +789,7 @@ class Solver:
 			attrs         = member.attrs,
 			sized_by      = _path_of(member.size),
 			size_expr     = _expression_source(member.size),
+			size_shown    = _expression_source(member.size, explicit=False),
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
@@ -1600,6 +1610,7 @@ class Solver:
 			frame_relative = False,
 			sized_by       = self.sizing_field(member),
 			size_expr      = _size_source(member),
+			size_shown     = _size_source(member, explicit=False),
 			access_mode    = _access_mode(member, decl),
 			on_read        = _read_effect(member, decl),
 			on_write       = _side_effect(member.attrs, "on_write"),
@@ -1609,6 +1620,7 @@ class Solver:
 			dynamic_cause_size = state.cause[2] if state.cause else None,
 			delimiter          = member.until.delimiter if member.until else None,
 			repeat_while       = _repeat_source(member),
+			repeat_shown       = _repeat_source(member, explicit=False),
 			repeat_cap         = self._repeat_cap(member),
 			radix              = getattr(member, "radix", None),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
@@ -2671,13 +2683,16 @@ def _version_field(decl: ast.StructDecl) -> str | None:
 	return read(decl)
 
 
-def _size_source(member: ast.Field | ast.Reserved) -> str | None:
+def _size_source(member: ast.Field | ast.Reserved,
+		explicit: bool = True) -> str | None:
 	"""An array's size as source, when it is more than a field reference."""
 	array = getattr(member, "array", None)
-	return None if array is None else _expression_source(array.size)
+	return (None if array is None
+	        else _expression_source(array.size, explicit=explicit))
 
 
-def _expression_source(size: ast.Expr | None) -> str | None:
+def _expression_source(size: ast.Expr | None,
+		explicit: bool = True) -> str | None:
 	"""A declared size as source, when it is more than a field reference.
 
 	Shared with `place_opaque`, which had no version of this at all: an
@@ -2702,7 +2717,9 @@ def _expression_source(size: ast.Expr | None) -> str | None:
 	if not paths_in(size):
 		return None
 
-	return expr_to_source(size)
+	# `explicit=True`: this text is handed to four host compilers, whose
+	# precedence tables are not all situ's. See `expr_to_source`.
+	return expr_to_source(size, explicit=explicit)
 
 
 def _region_argument(region: ast.Member, name: str) -> str | None:
@@ -2722,11 +2739,16 @@ def _located_source(member: ast.Field | ast.Reserved) -> str | None:
 	return None if located is None else expr_to_source(located)
 
 
-def _repeat_source(member: ast.Field | ast.Reserved) -> str | None:
+def _repeat_source(member: ast.Field | ast.Reserved,
+		explicit: bool = True) -> str | None:
 	from situc.unparse import expr_to_source
 
 	repeat = getattr(member, "repeat", None)
-	return None if repeat is None else expr_to_source(repeat.predicate)
+	# `explicit=True` for `_expression_source`'s reason: a `while` predicate
+	# is the one place a *comparison* reaches a host compiler as text, and
+	# comparisons are exactly where Python and Rust disagree with situ.
+	return (None if repeat is None
+	        else expr_to_source(repeat.predicate, explicit=explicit))
 
 
 def _delimiter_byte(member: ast.Field | ast.Reserved, name: str) -> int | None:

@@ -18678,6 +18678,59 @@ it. **The first is the one that matters** -- a schema arriving in `example/`
 now fails here until somebody has asked the question once, which is the whole
 mechanism, and is what would have caught `tiff` on the day it was written.
 
+### 26.207 One schema, two meanings: the host's precedence table decided
+
+`layout` carries a `while` predicate and a computed size as **source text**,
+and each backend rewrites the leaf names and hands the rest to a host
+compiler. The text is parenthesised by `expr_to_source`, which parenthesises
+where *situ's* precedence requires -- and situ's table is C's.
+
+**Python's and Rust's are not.** They bind `&`, `^` and `|` tighter than the
+comparisons, where situ and C bind them looser. So this schema
+
+    e items[] while (kind & 3 == 2) max 6;
+
+emitted the same characters to all four, and they read them differently:
+
+    situ, C, C++    kind & (3 == 2)   which is `kind & 0`, false for every kind
+    Python, Rust    (kind & 3) == 2   true whenever the low two bits are 2
+
+Four backends, one layout, is the claim on the first page. Here it was four
+backends and two layouts, decided by whose parser saw the text.
+
+**Python has a second divergence**: it *chains* comparisons, so `a > b < c` is
+`(a > b) and (b < c)` and not `(a > b) < c`. Measured rather than reasoned --
+comparing situ's grouping against Python's reading of the same flat text finds
+**39 operator pairs that disagree**, in two families.
+
+**No committed schema writes one.** Thirty-three expressions are carried as
+text, eighteen have more than one operator, and not one mixes a bitwise
+operator with a comparison. That is 26.37's observation again, one level down:
+the sample was too small to show it, and the sample is what somebody happened
+to write up.
+
+**Every nested operator is parenthesised now**, rather than the pairs known to
+differ. A rule that brackets only where two named tables disagree has to be
+right about four languages and stay right; brackets everywhere are correct in
+any language that has them. The outermost pair is *not* emitted, because Rust
+refuses it -- `-D unused-parens` rejects `min(((a / 2) + 1))` and the suite
+compiles with `-D warnings`.
+
+**And the picture is not the code.** `situc doc` renders a diagram meant to be
+read, `situc wire` writes a contract a peer diffs, and the dissector explains
+what it declined -- none of which is handed to a compiler. Making them carry
+`payload[(length - 8)]` would have been noise in a diagram and, worse, would
+have churned every committed `.situ.wire` to record a property of *generated
+code* that no peer can observe. Those three take a shown form; the twelve
+consumers that emit host code take the safe one, which is the default so that
+a backend cannot get it wrong by forgetting.
+
+The regression test carries its own premise -- `eval("2 & 3 == 2") !=
+eval("2 & (3 == 2)")` -- so that if Python ever stopped disagreeing the test
+would be deleted rather than kept green over nothing. Both carried fields are
+exercised, which the first version was not: reverting the size path alone left
+it passing.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -1150,7 +1150,8 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return [
 		"",
 		f"-- How far `{placement.path}` reaches from `at`.",
-		f"-- The run ends after the element for which `{placement.repeat_while}`",
+		f"-- The run ends after the element for which"
+		f" `{placement.repeat_shown or placement.repeat_while}`",
 		"-- is false -- that element is part of it, the condition being asked",
 		"-- once it has been read.",
 		f"local function {name}(tvb, at, at_struct)",
@@ -1539,7 +1540,11 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# every member sized by arithmetic, `sized_by` holding a path and
 		# holding nothing for those -- a note naming the field it could not
 		# read, naming instead the fact that it had not looked.
-		written = placement.size_expr or placement.sized_by
+		# The shown form: this is a note for a person reading the dissector,
+		# and `size_expr` is parenthesised at every operator so that a host
+		# compiler cannot regroup it.
+		written = (placement.size_shown or placement.size_expr
+		           or placement.sized_by)
 		return [
 			f"\t-- {placement.path}: sized by `{written}`, which this",
 			"\t-- dissector cannot locate; the rest of the frame is shown raw",

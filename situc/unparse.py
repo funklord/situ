@@ -451,11 +451,38 @@ def _attrs_to_source(attrs: tuple[ast.Attr, ...]) -> str:
 	return f" [{rendered}]"
 
 
-def expr_to_source(expr: ast.Expr) -> str:
-	return _expr(expr, parent_binding=0)
+def expr_to_source(expr: ast.Expr, *, explicit: bool = False) -> str:
+	"""An expression as situ source.
+
+	`explicit` parenthesises every operator, and exists because this text is
+	not only read back by situ. `layout` carries a `while` predicate and a
+	computed size as *source*, and each backend rewrites the leaf names and
+	hands the rest to a host compiler -- which reparses it under its own
+	precedence table.
+
+	Situ's table is C's. Python's and Rust's are not: they bind `&`, `^` and
+	`|` tighter than the comparisons, where situ and C bind them looser. So
+	`kind & 3 == 2` is `kind & (3 == 2)` here and `(kind & 3) == 2` there --
+	one schema, two meanings, in the four backends whose agreement is the
+	whole claim. Python adds a second: it *chains* comparisons, so `a > b < c`
+	is `(a > b) and (b < c)` and not `(a > b) < c`.
+
+	Measured rather than reasoned: comparing situ's grouping against Python's
+	reading of the same flat text finds 39 operator pairs that disagree. No
+	committed schema writes one -- which is why nothing had noticed, and is
+	26.37's observation about this language's operators over again.
+
+	Every operator, rather than the pairs that are known to differ. A rule
+	that parenthesises only where two named tables disagree has to be right
+	about four languages and stay right; parentheses everywhere are correct
+	in any language that has them, and the cost is a few characters in
+	generated code nobody edits.
+	"""
+	return _expr(expr, parent_binding=0, explicit=explicit, wrap=False)
 
 
-def _expr(expr: ast.Expr, parent_binding: int) -> str:
+def _expr(expr: ast.Expr, parent_binding: int, explicit: bool = False,
+		wrap: bool = True) -> str:
 	if isinstance(expr, ast.IntLiteral):
 		return expr.text
 
@@ -469,27 +496,39 @@ def _expr(expr: ast.Expr, parent_binding: int) -> str:
 		return "remaining"
 
 	if isinstance(expr, ast.Access):
-		return f"{_expr(expr.base, _ATOM_BINDING)}.{expr.name}"
+		return f"{_expr(expr.base, _ATOM_BINDING, explicit)}.{expr.name}"
 
 	if isinstance(expr, ast.Index):
-		inner = "" if expr.index is None else expr_to_source(expr.index)
-		return f"{_expr(expr.base, _ATOM_BINDING)}[{inner}]"
+		inner = ("" if expr.index is None
+		         else expr_to_source(expr.index, explicit=explicit))
+		return f"{_expr(expr.base, _ATOM_BINDING, explicit)}[{inner}]"
 
 	if isinstance(expr, ast.Call):
-		args = ", ".join(expr_to_source(arg) for arg in expr.args)
+		args = ", ".join(expr_to_source(arg, explicit=explicit)
+		                 for arg in expr.args)
 		return f"{expr.name}({args})"
 
 	if isinstance(expr, ast.Unary):
-		rendered = f"{expr.op}{_expr(expr.operand, _UNARY_BINDING)}"
+		rendered = f"{expr.op}{_expr(expr.operand, _UNARY_BINDING, explicit)}"
+		if explicit:
+			return f"({rendered})" if wrap else rendered
 		return _wrap(rendered, _UNARY_BINDING, parent_binding)
 
 	if isinstance(expr, ast.Binary):
 		binding  = _BINDING[expr.op]
-		left     = _expr(expr.left, binding)
+		left     = _expr(expr.left, binding, explicit)
 		# The right operand of a left-associative operator needs a parenthesis
 		# at equal binding, or `a - (b - c)` would reparse as `(a - b) - c`.
-		right    = _expr(expr.right, binding + 1)
+		right    = _expr(expr.right, binding + 1, explicit)
 		rendered = f"{left} {expr.op} {right}"
+		if explicit:
+			# Not the outermost pair. Every *nested* operator is grouped, so
+			# no host's precedence can regroup it -- and the outer one is
+			# redundant by construction, because whatever encloses the whole
+			# expression already delimits it. Rust says so: `-D unused-parens`
+			# rejects `min(((a / 2) + 1))` and the suite compiles with
+			# `-D warnings`.
+			return f"({rendered})" if wrap else rendered
 		return _wrap(rendered, binding, parent_binding)
 
 	raise TypeError(f"cannot unparse {type(expr).__name__}")

@@ -526,7 +526,11 @@ def test_a_condition_keeps_its_logical_operators() -> None:
 	the repository, which is what the first version of the guard above did."""
 	text = emit(DNS_LABEL)
 
-	assert "(situ_uint(tvb, last, 1, false) % 64) ~= 0) then break end" in code(text)
+	# Anchored on the operators rather than on the bracketing: the emitted
+	# condition is parenthesised at every operator, because the same text
+	# reaches four host compilers whose precedence tables are not all
+	# situ's, and counting brackets here would test the renderer instead.
+	assert "(situ_uint(tvb, last, 1, false) % 64)" in code(text)
 	assert " and " in code(text) and "&&" not in code(text)
 
 

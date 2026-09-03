@@ -1681,11 +1681,14 @@ def test_a_while_run_is_walked_and_the_condition_asked_after() -> None:
 	header, _ = emit(CHAIN)
 
 	assert "situ_s_chain_count" in header
-	assert "situ_e_next_get(element) == 43" in header
+	assert "(situ_e_next_get(element) == 43)" in header
 	# The condition is tested after the cursor advances, so the failing
 	# element has already been counted.
 	body = header.split("situ_s_chain_count")[1]
-	assert body.index("n  = n + 1u") < body.index("if (!(situ_e_next_get")
+	# Anchored on the guard rather than on its parenthesisation: the point
+	# is the order of the two, and counting brackets here would make this
+	# a test of the renderer.
+	assert body.index("n  = n + 1u") < body.index("if (!(")
 
 
 def test_a_length_in_units_is_not_zero() -> None:
@@ -1697,7 +1700,12 @@ def test_a_length_in_units_is_not_zero() -> None:
 	# The leaf is bounded before the arithmetic (14.2b), so the read is
 	# wrapped -- the point here is the `* 8 - 2`, which is what a length
 	# in units means and what was once computed as a count.
-	assert "(situ_leaf_u64(situ_e_len_get(view)) + 1) * 8 - 2" in header
+	#
+	# Parenthesised at every operator because the text reaches a host
+	# compiler, whose precedence table is not situ's in two of the four
+	# backends. The grouping is the same one it always had; the parentheses
+	# are what stop it depending on who reads it.
+	assert "(((situ_leaf_u64(situ_e_len_get(view)) + 1) * 8) - 2)" in header
 
 
 def test_the_substitution_takes_the_longest_name_first() -> None:

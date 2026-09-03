@@ -181,7 +181,10 @@ def _label(struct: ResolvedStruct, placement: Placement) -> str:
 	# `[n + 1]` for it all along, so the diagram named a scalar and the table
 	# beside it named an array (invariant 69).
 	if placement.size_expr is not None:
-		return f"{local}[{placement.size_expr}]"
+		# `size_shown`, not `size_expr`: the picture is for reading and the
+		# stored form is parenthesised at every operator so that four host
+		# compilers cannot disagree about it.
+		return f"{local}[{placement.size_shown or placement.size_expr}]"
 	return local
 
 
@@ -416,7 +419,8 @@ def _size(placement: Placement) -> str:
 		# saying "(variable)". Three constructs above have their own comment
 		# recording this same mistake; the fourth is here because the
 		# predicate was `sized_by` rather than `traverse.data_sized`.
-		return f"[{placement.size_expr}]{_stride(placement)}"
+		return (f"[{placement.size_shown or placement.size_expr}]"
+		        f"{_stride(placement)}")
 	if placement.kind == "variant" and placement.discriminant is not None:
 		# The fixed-size branch below reported `size_bits`, which for a
 		# variant is the *smallest* arm -- printed as "0 bytes" beside a
@@ -425,7 +429,7 @@ def _size(placement: Placement) -> str:
 		# question nobody asked, which is the `array_count` lesson again.
 		return f"by {placement.discriminant}"
 	if placement.repeat_while is not None:
-		return f"while {placement.repeat_while}"
+		return f"while {placement.repeat_shown or placement.repeat_while}"
 	if placement.size_bits % BITS_PER_BYTE:
 		bits = placement.size_bits
 		return f"{bits} bit" if bits == 1 else f"{bits} bits"

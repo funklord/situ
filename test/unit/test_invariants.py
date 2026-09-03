@@ -512,14 +512,73 @@ def test_every_backend_walks_a_while_run(target: str) -> None:
 	assert "has not caught up" not in source
 
 
+#: A predicate situ and two of its four host languages read differently when
+#: it is written flat. situ's precedence is C's, so `&` binds looser than
+#: `==` and this is `kind & (3 == 2)` -- which is `kind & 0`, and false for
+#: every `kind`. Python and Rust bind `&` tighter, so the same characters are
+#: `(kind & 3) == 2` there, which is true whenever the low two bits are 2.
+#: Both text-carrying fields, because they are separate code paths: a `while`
+#: predicate and a computed size. `n | 1 == 1` is `n | (1 == 1)` here and
+#: `(n | 1) == 1` in Python, and both readings are lengths a schema may have,
+#: so the compiler accepts it either way and only the grouping decides which.
+REGROUPABLE = ("struct e { u8 kind; u8 len [max = 8]; u8 body[len]; }\n"
+               "struct s { u8 n [max = 32]; u8 pad[n | 1 == 1];"
+               " e items[] while (kind & 3 == 2) max 6; }\n")
+
+
+def test_a_hosts_precedence_cannot_regroup_an_expression() -> None:
+	"""A `while` predicate and a computed size reach a host compiler as
+	*text*, and the host reparses it under its own table.
+
+	situ's table is C's. Python's and Rust's are not, where a bitwise
+	operator meets a comparison; Python adds a second divergence by chaining
+	comparisons, so `a > b < c` is `(a > b) and (b < c)` and not
+	`(a > b) < c`. Comparing situ's grouping against Python's reading of the
+	same flat text finds 39 operator pairs that disagree.
+
+	No committed schema writes one, which is why nothing had noticed -- the
+	same sample-size argument 26.37 made about this language's operators, one
+	level down. The expression is parenthesised at every nested operator now,
+	which is correct in any language that has brackets and costs a few
+	characters in generated code nobody edits.
+	"""
+	# The premise, proved here rather than asserted: the flat text means
+	# something else in Python. If this ever stops being true the test below
+	# is checking nothing, and it should be deleted rather than kept green.
+	assert eval("2 & 3 == 2") != eval("2 & (3 == 2)")
+
+	schema   = parse_text(PREAMBLE + REGROUPABLE)
+	resolved = resolve(schema, solve(schema))
+
+	for target, (emit, _) in sorted(BACKENDS.items()):
+		source = "\n".join(emit(schema, resolved, "unit").files().values())
+		assert "(3 == 2)" in source, (
+			f"{target}: the predicate's comparison is not grouped, so the "
+			f"host decides what `kind & 3 == 2` means")
+		assert "& 3 == 2" not in source, (
+			f"{target}: emitted the flat predicate, which Python and Rust "
+			f"read as `(kind & 3) == 2` and situ reads as `kind & (3 == 2)`")
+		assert "(1 == 1)" in source, (
+			f"{target}: the *size* expression is not grouped; it is a second "
+			f"path and reverting it alone left this test green")
+		assert "| 1 == 1" not in source, f"{target}: flat size expression"
+
+
 #: How each backend spells reading `len` inside `(len + 1) * 8 - 2`. Written
 #: out rather than matched loosely, because the loose version passed on Rust
 #: while Rust emitted a one-byte scalar (invariant 26, again).
+#:
+#: Parenthesised at every nested operator: the expression reaches a host
+#: compiler as text, and Python's and Rust's precedence tables are not situ's
+#: where a bitwise operator meets a comparison. The grouping written here is
+#: the one situ always meant; the brackets are what stop it depending on who
+#: reads it. The outermost pair is absent because Rust's `-D unused-parens`
+#: refuses it.
 SIZED_BY_EXPRESSION = {
-	"c":      "(situ_leaf_u64(situ_e_len_get(view)) + 1) * 8 - 2",
-	"cpp":    "(::situ::rt::leaf_u(len()) + 1) * 8 - 2",
-	"python": "(leaf(self.len) + 1) * 8 - 2",
-	"rust":   "(situ_rt::leaf_u(self.len() as u64) + 1) * 8 - 2",
+	"c":      "((situ_leaf_u64(situ_e_len_get(view)) + 1) * 8) - 2",
+	"cpp":    "((::situ::rt::leaf_u(len()) + 1) * 8) - 2",
+	"python": "((leaf(self.len) + 1) * 8) - 2",
+	"rust":   "((situ_rt::leaf_u(self.len() as u64) + 1) * 8) - 2",
 }
 
 
@@ -762,8 +821,8 @@ def test_the_python_condition_is_python() -> None:
 
 	# The condition as *code*. `||` legitimately survives in the docstring
 	# that quotes the schema, which is what a looser assertion caught.
-	assert "if not (self.next == 43 or self.next == 44)" not in source
-	assert "if not (element.next == 43 or element.next == 44):" in source
+	assert "if not ((self.next == 43) or (self.next == 44))" not in source
+	assert "if not ((element.next == 43) or (element.next == 44)):" in source
 
 
 def test_the_rust_reads_are_widened() -> None:
