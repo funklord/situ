@@ -19490,6 +19490,44 @@ encoders writing a byte.
   `agree` asserts the pair match rather than picking one, and `code-style.md`
   records the 45 labels without standardising them.
 
+### 26.219 The refusal was not strictness, it was the only rule five can hold
+
+26.208 refused a division whose dividend may be negative and flagged the
+cost: `(n - 10) / 3 + 5` stops being writeable even though C computes it
+correctly, and the alternative -- carry the expression tree and emit
+`trunc_div(a, b)` where the languages part -- was "a larger change than I'd
+make unasked". 26.214 then had to carry the same rule into relations by
+hand, and left `<<` and `>>` open for the same reason.
+
+Settled by `doc/decision/0049-operations-the-backends-define-differently.md`,
+and the argument is not the one either entry expected.
+
+**Emulation fails on the fifth description, and not for a reason that can be
+argued away.** A `trunc_div` helper is easy in Python. The Lua dissector
+cannot have one: 0021 keeps `//` out of generated Lua because Wireshark
+bundles 5.2 in older builds, where it is a syntax error, and "a dissector
+that fails to load is worse than one that divides". `_UNSPELLABLE` already
+refuses `/` there for exactly this reason.
+
+So emulating buys agreement among four descriptions and leaves the fifth
+declining -- **which is the divergence the exercise exists to prevent, moved
+one description over.** A rule that four of five can follow is not a rule.
+The refusal is not a preference for strictness; it is the only policy all
+five can hold at once.
+
+That reframes both earlier entries. 26.208 recorded a narrowing and doubted
+it; the doubt was right to record and the narrowing was right to make, for a
+reason neither entry had -- the constraint that decides it is Lua's, not
+arithmetic's. **The record says so, so that if Wireshark's floor ever moves
+past 5.2 the right document is the one to revisit.**
+
+**And it names the shift rule as unbuilt rather than implying it exists.**
+`/` and `%` are refused on signed operands in both paths; a shift by an
+amount not provably below the operand width is decided and not yet
+implemented, with the range machinery `invariant.negative_value` uses named
+as what it needs. A decision record whose consequences read as though they
+have all landed is the shape 26.144's plugin slot spent weeks in.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
