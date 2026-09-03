@@ -18785,6 +18785,60 @@ reaches the branch where the bound is absent rather than merely negative --
 `_and_interval` widening to unknown for a possibly-negative operand, which is
 sound and deliberately imprecise, being the only way to get there.
 
+### 26.209 The offset is not the extent, and the map had already said so
+
+26.190 found five members where C emitted an accessor and the other three
+emitted nothing, and exempted them rather than resolving them: "either C's
+offset accessor is a capability the other three should have, or it is one C
+should not offer for an arm nobody can frame -- and that is a decision about
+what a backend owes."
+
+**The capability map answers it, and it is not a matter of taste.**
+`packet.body.publish` is `offset=Dynamic size=Unbounded`, and
+`packet.body.publish.topic_length` is `FrameStatic(0x00)`. The arm *has* an
+offset the message decides, and its members are at fixed offsets from there. A
+caller holding the offset can reach the interior; a caller holding nothing
+cannot. C had been right all along -- it emits the offset and then says "and
+one `publish_body` cannot be measured, so there is no sub-view to hand back",
+which is exactly the shape: give what you can compute, say what you cannot.
+
+C++, Python and Rust emit it now. Checked by running, not by reading: on the
+same MQTT packet with a one-byte and then a two-byte remaining-length varint,
+C and Python both answer 2 and then 3.
+
+**Four of the five were that case. The fifth was not, and the exemption's
+stated reason was wrong about it.** `nl_message.body.rest` is
+`default: opaque rest[nlmsg_len - 16]` at a *static* offset, and C emits
+nothing for it -- no offset, no bytes. The exemption said C emitted an offset
+accessor for this member as it does for mqtt's four; it does not. All four
+decline it together, which is agreement and never needed an exemption at all.
+The first cut of this fix gave three backends an offset C does not emit, which
+would have traded one divergence for another; it is restricted to a *struct*
+arm now.
+
+**Two things about the gate that found none of this.**
+
+It scores a refusal by finding a phrase near a member's path, so it can see
+that a backend *declined* and never that a backend *served*. Dropping the new
+accessor from Python or Rust leaves all 42 of its cases green -- which is why
+the guarantee is asserted directly in `test_invariants` instead, over the four
+backends by name, with the opposite case beside it so the restriction cannot
+quietly lapse.
+
+And the same wording sensitivity bit twice more. Python and Rust first
+declined `rest` with "No accessor for ...", which *is* in `REFUSALS`, while C
+and C++ said "not a shape this backend reaches into yet", which is not -- four
+backends declining one member in two phrasings, registering as a divergence
+that was not there. They say C's sentence verbatim now.
+
+**And the floor had to move for the best possible reason.** It asserted "at
+least ten refusals across the corpus", and all ten were these arms. Serving
+them leaves the scoring finding **nothing at all**, so the guard against a
+vacuous gate would itself have failed because the gate had been emptied by a
+fix. It floors what the comparison *examines* -- 1101 member paths -- and
+asserts the zero separately, as the current truth rather than as an absence
+somebody rediscovers.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

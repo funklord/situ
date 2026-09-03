@@ -96,24 +96,14 @@ EXEMPT = {
 	# have to invent. The note names the symbol and the size instead.
 	("python", "data_block.body"): "no decode: the codec is C's (0017)",
 
-	# An arm whose type has no computable extent. C emits an *offset*
-	# accessor -- where the arm starts, which it can compute -- and the other
-	# three emit nothing; C++ says so in a note, Python and Rust said nothing
-	# at all until 26.190. Measured rather than inferred: for
-	# `packet.body.publish`, C defines one function and cpp, python and rust
-	# define none.
-	#
-	# Exempt rather than resolved, and the difference matters. Either C's
-	# offset accessor is a capability the other three should have, or it is
-	# one C should not offer for an arm nobody can frame -- and that is a
-	# decision about what a backend owes, not a defect with an obvious fix.
-	# Recorded here so the gate stays honest about the other 39 schemas
-	# instead of being switched off, and named in 26.190 as open.
-	("c", "packet.body.publish"):     "C emits an offset accessor, the other three nothing",
-	("c", "packet.body.subscribe"):   "C emits an offset accessor, the other three nothing",
-	("c", "packet.body.suback"):      "C emits an offset accessor, the other three nothing",
-	("c", "packet.body.unsubscribe"): "C emits an offset accessor, the other three nothing",
-	("c", "nl_message.body.rest"):    "C emits an offset accessor, the other three nothing",
+	# The five arms whose type has no computable extent used to sit here:
+	# C emitted an offset accessor and the other three emitted nothing, and
+	# 26.190 left it exempt because "either C's offset accessor is a
+	# capability the other three should have, or it is one C should not
+	# offer". The capability map answers it -- `packet.body.publish` is
+	# `offset=Dynamic` and its members are `FrameStatic` from there -- so
+	# the other three emit it too now (26.209), and the exemption is gone
+	# rather than reworded.
 }
 
 
@@ -332,16 +322,37 @@ def test_the_comparison_sees_refusals_at_all() -> None:
 	`REFUSALS`, or an emitter dropping its note, shows up here rather than as
 	a quieter pass.
 	"""
-	seen = 0
+	seen = examined = 0
 	for path in SCHEMAS:
 		texts, paths = emitted(path)
-		seen += sum(len(refused(text, paths)) for text in texts.values())
+		examined += len(paths)
+		seen     += sum(len(refused(text, paths)) for text in texts.values())
 
-	# Ten, and all ten are mqtt (8) and netlink (2) -- the two schemas with an
-	# arm whose type has no computable extent. That is a small number for a
-	# corpus of forty, and it is the honest one: most of what the emitters
-	# decline they decline by writing a note this scoring cannot attribute to
-	# a member, which is the limit 26.190 records rather than papers over.
-	assert seen >= 10, (
-		f"the scoring finds {seen} refusals across the corpus, down from 10; "
-		f"a phrase has left REFUSALS or an emitter has stopped writing one")
+	# The floor is on what the comparison *examines*, not on what it finds,
+	# and the difference is the whole point.
+	#
+	# It used to be "at least ten refusals", and all ten were the mqtt and
+	# netlink arms whose type has no computable extent. 26.209 gave those an
+	# offset accessor in the three backends that had none, which is the right
+	# answer and left the scoring finding *nothing* -- so the floor that was
+	# guarding against a vacuous gate would itself have failed for the best
+	# possible reason, and raising or lowering it would have been noise
+	# either way.
+	#
+	# 1101 member paths is what four backends are compared over. That number
+	# cannot fall without a schema leaving the corpus or `emitted` breaking,
+	# and it is what stops this file passing because it read nothing.
+	assert examined >= 1100, (
+		f"the comparison examines {examined} member paths across the corpus, "
+		f"down from 1101; a schema has left SCHEMAS or `emitted` is failing")
+
+	# And the corpus currently holds no scored refusal at all, which is worth
+	# asserting rather than leaving as an absence somebody rediscovers. It is
+	# not "the backends refuse nothing": it is that what they refuse, they
+	# refuse in words this scoring cannot attribute to a member -- the limit
+	# 26.190 recorded and did not close. A refusal appearing here is a real
+	# finding and should be looked at, not silently absorbed.
+	assert seen == 0, (
+		f"the scoring now finds {seen} refusals where it found none. That is "
+		f"new information: either a backend has stopped emitting an accessor, "
+		f"or a note has been worded into REFUSALS' reach.")

@@ -2062,10 +2062,48 @@ class Emitter:
 		# the test that compares what the four refuse could not see the
 		# difference because an empty refusal set reads as "emitted it"
 		# (26.190).
+		# ...and the offset is not the extent. C has emitted one all along
+		# while the other three emitted nothing, which the four-backend gate
+		# recorded as a divergence it could not resolve (26.190). The map
+		# settles it: `packet.body.publish` is `offset=Dynamic`, so it has an
+		# offset the message decides, and the members inside it are
+		# `FrameStatic` from there. A caller holding the offset can reach
+		# them; a caller holding nothing cannot, which is the difference
+		# between a member that is hard to use and one that is absent.
+		#
+		# Unguarded, as C's is: it is arithmetic over the length fields ahead
+		# of the arm and says nothing about which arm is present. The
+		# docstring says so, because a reader who asks for it while another
+		# arm is selected gets a number that means nothing.
+		# Only where the arm names a *struct* whose extent cannot be computed,
+		# which is the case the map settles. `netlink`'s default arm is an
+		# `opaque rest[nlmsg_len - 16]` at a static offset, and C emits
+		# nothing for it at all -- so emitting an offset here would trade one
+		# divergence for another. All four decline that one together, which
+		# is agreement and needs no exemption.
+		if self.resolved.structs.get(placement.type_name or "") is None:
+			return [
+				# C's wording exactly, and C++'s. The four decline this
+				# member together, and the gate next door scores a refusal
+				# by finding a *phrase* -- so saying the same thing two
+				# ways registered as a divergence that is not there.
+				f"\t# ...and `{placement.name}` is not a shape this backend "
+				f"reaches into yet.",
+			]
+
 		return [
-			f"\t# No accessor for `{placement.path}`: one "
-			f"`{placement.type_name}` has no extent this backend can "
-			f"compute, so the arm cannot be reached into yet.",
+			f"\t# No view for `{placement.path}`: one "
+			f"`{placement.type_name}` is not measurable here, so nothing "
+			f"can say where it ends. Its offset is below.",
+			"", "\t@property",
+			f"\tdef {name}_offset(self) -> int:",
+			f'\t\t"""Where {placement.path} would start.',
+			"",
+			"\t\tArithmetic over the lengths ahead of it, so it is a number",
+			"\t\twhether or not this arm is the one present -- ask the",
+			"\t\tdiscriminant first. The members inside are at fixed offsets",
+			'\t\tfrom here, which is what this is for."""',
+			f"\t\treturn {start}",
 		]
 
 	def _nested_text_values(self, struct: ResolvedStruct) -> list[str]:

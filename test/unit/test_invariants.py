@@ -18,6 +18,7 @@ from typing import Callable, Protocol
 
 import pytest
 
+from every_schema import ROOT
 from situc.codegen.c.emit import generate as generate_c
 from situc.codegen.cpp.emit import generate as generate_cpp
 from situc.codegen.python.emit import generate as generate_py
@@ -70,6 +71,78 @@ def sources(body: str) -> dict[str, str]:
 	resolved = resolve(schema, solve(schema))
 	return {name: "\n".join(emit(schema, resolved, "unit").files().values())
 	        for name, (emit, _) in BACKENDS.items()}
+
+
+def from_disk(relative: str) -> dict[str, str]:
+	"""Every backend's output for a committed schema.
+
+	`sources` builds one from a fragment; these two tests need `example/mqtt`
+	and `example/netlink` as they stand, because the arms they are about are
+	what those protocols actually declare.
+	"""
+	path     = ROOT / relative
+	schema   = parse_text(path.read_text(encoding="ascii"))
+	resolved = resolve(schema, solve(schema))
+	return {name: "\n".join(emit(schema, resolved, "unit").files().values())
+	        for name, (emit, _) in BACKENDS.items()}
+
+
+
+#: A variant arm whose type is a struct the backend cannot measure, and the
+#: name every backend gives the offset accessor for it. C spells it
+#: `situ_packet_body_publish_offset` and the other three
+#: `body_publish_offset`, so the shorter one is a substring of all four.
+ARM_OFFSETS = (
+	("example/mqtt/mqtt.situ",       "body_publish_offset"),
+	("example/mqtt/mqtt.situ",       "body_subscribe_offset"),
+	("example/mqtt/mqtt.situ",       "body_suback_offset"),
+	("example/mqtt/mqtt.situ",       "body_unsubscribe_offset"),
+)
+
+
+@pytest.mark.parametrize("schema,accessor", ARM_OFFSETS,
+                         ids=[a for _, a in ARM_OFFSETS])
+def test_every_backend_offers_an_unmeasurable_arms_offset(
+		schema: str, accessor: str) -> None:
+	"""The offset is not the extent, and the four used to disagree about it.
+
+	C emitted `situ_packet_body_publish_offset` and the other three emitted
+	nothing; 26.190 recorded that as a divergence it could not resolve --
+	"either C's offset accessor is a capability the other three should have,
+	or it is one C should not offer". The capability map answers it:
+	`packet.body.publish` is `offset=Dynamic`, so it has an offset the
+	message decides, and `packet.body.publish.topic_length` is
+	`FrameStatic(0x00)` from there. A caller holding the offset can reach the
+	interior; a caller holding nothing cannot.
+
+	Asserted here rather than left to
+	`test_the_backends_refuse_the_same_members`, which cannot see it: that
+	file scores a *refusal* by finding a phrase near a member's path, so a
+	member nobody refuses and nobody serves scores the same as one all four
+	serve. Dropping the accessor from Python or Rust leaves all 42 of its
+	cases green.
+	"""
+	for backend, text in sorted(from_disk(schema).items()):
+		assert accessor in text, (
+			f"{backend} offers no offset for this arm; C has emitted one "
+			f"since before 26.190 and the map says the member has one")
+
+
+def test_an_opaque_arm_is_declined_by_all_four() -> None:
+	"""The other half of the same question, and the one that stops the fix
+	above from trading one divergence for another.
+
+	`netlink`'s default arm is `opaque rest[nlmsg_len - 16]` at a *static*
+	offset, and C emits nothing for it -- not the offset, not the bytes.
+	26.190's exemption said C emitted an offset accessor for this member as
+	it does for mqtt's four; it does not, and that half of the reason was
+	wrong. All four decline it together, which is agreement and needs no
+	exemption at all.
+	"""
+	for backend, text in sorted(
+			from_disk("example/netlink/netlink.situ").items()):
+		assert "body_rest_offset" not in text, (
+			f"{backend} offers an offset for an opaque arm that C does not")
 
 
 # -- what every backend must do ---------------------------------------------

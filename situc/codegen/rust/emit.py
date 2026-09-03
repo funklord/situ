@@ -1980,10 +1980,40 @@ class Emitter:
 		# note -- and the test comparing what the four backends refuse could
 		# not see it, because an empty refusal set reads as "emitted it"
 		# (26.190).
+		# ...and the offset is not the extent. C has emitted one all along
+		# while the other three emitted nothing, which the four-backend gate
+		# recorded as a divergence it could not resolve (26.190). The map
+		# settles it: `packet.body.publish` is `offset=Dynamic`, so it has an
+		# offset the message decides, and the members inside it are
+		# `FrameStatic` from there.
+		#
+		# Unguarded, as C's is: arithmetic over the lengths ahead of the arm,
+		# which says nothing about which arm is present. The doc comment says
+		# so.
+		# `_arm_member`'s Python twin explains the condition: only a struct
+		# arm whose extent cannot be computed, because C emits nothing for an
+		# `opaque` arm and matching it is what keeps the four together.
+		if self.resolved.structs.get(placement.type_name or "") is None:
+			return [
+				# C's wording exactly; see the Python twin.
+				f"\t// ...and `{placement.name}` is not a shape this backend "
+				f"reaches into yet.",
+			]
+
 		return [
-			f"\t// No accessor for `{placement.path}`: one "
-			f"`{placement.type_name}` has no extent this backend can "
-			f"compute, so the arm cannot be reached into yet.",
+			f"\t// No view for `{placement.path}`: one "
+			f"`{placement.type_name}` is not measurable here, so nothing "
+			f"can say where it ends. Its offset is below.",
+			"",
+			f"\t/// Where {placement.path} would start.",
+			"\t///",
+			"\t/// Arithmetic over the lengths ahead of it, so it is a number",
+			"\t/// whether or not this arm is the one present -- ask the",
+			"\t/// discriminant first. The members inside are at fixed",
+			"\t/// offsets from here, which is what this is for.",
+			f"\tpub fn {_ident(name + '_offset')}(&self) -> usize {{",
+			f"\t\t{start}",
+			"\t}",
 		]
 
 	def _getter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:

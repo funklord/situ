@@ -3967,8 +3967,37 @@ class Emitter:
 				"\t}",
 			]
 
-		return [*head, f"\t/* ...and `{placement.name}` is not a shape this"
-		        " backend reaches into yet. */"]
+		# ...but where it starts is arithmetic, and that is separable from
+		# framing it. C has emitted this offset all along while the other
+		# three emitted nothing, which the four-backend gate recorded as a
+		# divergence it could not resolve (26.190). The map settles it:
+		# `packet.body.publish` is `offset=Dynamic`, so it has an offset the
+		# message decides, and the members inside it are `FrameStatic` from
+		# there.
+		#
+		# Unguarded, as C's is: arithmetic over the lengths ahead of the arm,
+		# which says nothing about which arm is present.
+		# Only a struct arm whose extent cannot be computed. C emits nothing
+		# for `netlink`'s `opaque rest[...]` default arm, and emitting an
+		# offset here would trade the divergence this fixes for a new one.
+		if self.resolved.structs.get(placement.type_name or "") is None:
+			return [*head, f"\t/* ...and `{placement.name}` is not a shape this"
+			        " backend reaches into yet. */"]
+
+		return [
+			*head,
+			f"\t/* ...and `{placement.name}` is not a shape this backend",
+			"\t * reaches into yet, so there is no view to hand back. Where",
+			"\t * it starts is arithmetic, and its members are at fixed",
+			"\t * offsets from there.",
+			"\t *",
+			"\t * A number whether or not this arm is the one present: ask",
+			"\t * the discriminant first. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_offset() const noexcept",
+			"\t{",
+			f"\t\treturn {start};",
+			"\t}",
+		]
 
 	def _explained(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""One member, and where it has no setter, why.
