@@ -207,6 +207,80 @@ PROTO_TEXT = (
 )
 
 
+def tiff_corpus_little(tmp: Path) -> bytes:
+	"""A TIFF ImageMagick laid out, little-endian.
+
+	7x5 for `bmp_corpus`'s reason. The endianness is asked for rather than
+	taken, because the pair is the point: one schema, two byte orders, and a
+	marker in the first two bytes deciding which.
+	"""
+	return _tiff(tmp, "lsb", "7x5")
+
+
+def tiff_corpus_big(tmp: Path) -> bytes:
+	"""The same image, big-endian.
+
+	`endian_marker` is a first-class construct with exactly one example in
+	this tree (section 8.3), and until this nothing outside situ had ever
+	confirmed it reads either order correctly -- let alone both.
+
+	A different size, which is not decoration. The two images must not put
+	their IFD at the same offset, or `ifd_offset` replaced by the constant
+	218 satisfies both and the comparison cannot tell a field that was read
+	from a number that was typed. 7x5 lands at 218 and 13x11 at 866.
+	"""
+	return _tiff(tmp, "msb", "13x11")
+
+
+def _tiff(tmp: Path, endian: str, size: str) -> bytes:
+	made = tmp / f"made-{endian}.tif"
+	_run(["convert", "-size", size, "xc:red",
+	      "-define", f"tiff:endian={endian}", "TIFF:" + str(made)])
+	return made.read_bytes()
+
+
+def tiff_says(image: bytes, tmp: Path) -> dict[str, object]:
+	"""`file`'s TIFF line: the byte order, and how many IFD entries follow.
+
+	`direntries` is the fact worth having. It is not in the eight bytes situ
+	parses -- it sits *at* the offset those bytes carry -- so agreeing about
+	it means the marker resolved, the magic was where it should be and the
+	offset was read in the order the marker named. One number that only comes
+	out right if the whole header did.
+	"""
+	path = tmp / "read.tif"
+	path.write_bytes(image)
+	shown = _run(["file", "-b", str(path)])
+
+	facts: dict[str, object] = {}
+	for part in (piece.strip() for piece in shown.split(",")):
+		if part in ("little-endian", "big-endian"):
+			facts["little"] = part == "little-endian"
+		elif part.startswith("direntries="):
+			facts["direntries"] = int(part.split("=", 1)[1])
+	return facts
+
+
+def tiff_situ(module: object, image: bytes) -> dict[str, object]:
+	"""The same two facts, out of the generated accessors.
+
+	The entry count is read here rather than by the schema because the schema
+	stops at the header: `tiff_header` is eight bytes and the IFD is a
+	structure situ does not describe. What it does describe is where the IFD
+	is and which order to read it in, and that is exactly what this uses.
+	"""
+	from situ_runtime import Message
+
+	view = module.tiff_header.at(Message(bytearray(image)), 0)   # type: ignore[attr-defined]
+	little = bool(view.byte_order_is_little)
+	at     = int(view.ifd_offset)
+
+	assert int(view.magic) == 42, "not a TIFF, or the marker did not resolve"
+	count = (int.from_bytes(image[at:at + 2], "little") if little
+	         else int.from_bytes(image[at:at + 2], "big"))
+	return {"little": little, "direntries": count}
+
+
 def proto_corpus(tmp: Path) -> bytes:
 	proto = tmp / "user.proto"
 	proto.write_text((ROOT / "example" / "protobuf" / "user.proto")
@@ -921,6 +995,24 @@ ORACLES: tuple[Oracle, ...] = (
 		          "text-number path any example exercises."),
 	),
 	Oracle(
+		name   = "tiff",
+		schema = ROOT / "example" / "tiff" / "tiff.situ",
+		tool   = "convert",
+		why    = ("ImageMagick writes the file and `file` reads it back. "
+		          "`endian_marker` is the construct on trial: the same two "
+		          "bytes are 42 either way round, and the offset after them "
+		          "is only right if the marker resolved."),
+	),
+	Oracle(
+		name   = "tiff-be",
+		schema = ROOT / "example" / "tiff" / "tiff.situ",
+		tool   = "convert",
+		why    = ("The same image the other way round. One order alone "
+		          "cannot show a marker was read at all -- a backend that "
+		          "ignored it and guessed would still pass whichever guess "
+		          "it made."),
+	),
+	Oracle(
 		name   = "protobuf",
 		schema = ROOT / "example" / "protobuf" / "protobuf.situ",
 		tool   = "protoc",
@@ -1035,6 +1127,19 @@ LIES = {
 	        "\ti32          height;\n\ti32          width;"),
 	"bmp-file": ("\ti32          width;\n\ti32          height;",
 	             "\ti32          height;\n\ti32          width;"),
+	# Not a swap of two like-sized fields: `magic` is a u16 and `ifd_offset`
+	# a u32, so exchanging them moves both and the header still measures
+	# eight bytes, which is what `require size(tiff_header) == 8` insists on.
+	# The byte order still resolves -- the marker has not moved -- so an
+	# oracle comparing only that would not notice. `direntries` is what does.
+	"tiff":    ("\tu16            magic       [must_eq = 42];\n"
+	            "\tu32            ifd_offset;",
+	            "\tu32            ifd_offset;\n"
+	            "\tu16            magic       [must_eq = 42];"),
+	"tiff-be": ("\tu16            magic       [must_eq = 42];\n"
+	            "\tu32            ifd_offset;",
+	            "\tu32            ifd_offset;\n"
+	            "\tu16            magic       [must_eq = 42];"),
 	"ethernet": ("\tmac_address  destination;\n\tmac_address  source;",
 	             "\tmac_address  source;\n\tmac_address  destination;"),
 	# Two u16s, so the layout keeps its size and only the values move -- the
@@ -1078,6 +1183,8 @@ DRIVERS = {
 	"protobuf": (proto_corpus, proto_says, proto_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
+	"tiff":     (tiff_corpus_little, tiff_says, tiff_situ),
+	"tiff-be":  (tiff_corpus_big, tiff_says, tiff_situ),
 	"modbus":   (modbus_corpus, modbus_says, modbus_situ),
 	"mqtt":     (mqtt_corpus, mqtt_says, mqtt_situ),
 	"ethernet": (eth_corpus, eth_says, eth_situ),

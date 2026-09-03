@@ -18595,6 +18595,47 @@ Three table codecs stay unchecked and are named: the two Manchester line codes
 and FDDI's 4b/5b. Nothing in the standard library speaks them, and a
 hand-written vector for a line code would be this schema read twice.
 
+### 26.205 The construct with one example and no outside witness
+
+`endian_marker` is a first-class construct rather than a case of `endian
+native`, because TIFF's first two bytes say which order the rest of the file
+uses and the answer is in the data rather than in the machine (8.3). One
+schema in the tree uses it. Nothing outside situ had ever confirmed situ reads
+it right -- in either order, let alone both.
+
+The differential oracle covers fourteen pairings and has two completeness
+guards, one per codec family. **It has none for schemas**, so `tiff` being
+absent was silence rather than a decision. ImageMagick writes TIFF, `file`
+reads it, and both were already dependencies -- `bmp` uses `convert` for its
+corpus and `file` as a second oracle over the same bytes.
+
+**What is compared is one number that only comes out right if the whole header
+did.** `file` reports `direntries=N`, and that count is not in the eight bytes
+situ parses: it sits *at* the offset those bytes carry. Agreeing about it means
+the marker resolved, the magic was where it should have been, and the offset
+was read in the order the marker named. Both orders agree, and the entry count
+is 15 either way.
+
+**Two of my own sabotages caught the test being weaker than it looked.**
+Reading the count always little-endian fails, and ignoring the marker fails --
+but replacing `ifd_offset` with the constant 218 *passed*, because both images
+put their IFD at the same offset. A comparison that cannot tell a field that
+was read from a number that was typed is not comparing that field. The
+big-endian corpus is 13x11 now, which lands its IFD at 866, and the constant
+fails.
+
+That is the second time today: the base-codec oracle could not distinguish
+`base64` from `base64url` because RFC 4648's own vectors never reach symbols
+62 and 63. **Both were found by sabotaging a test that already passed**, and
+neither would have been found by reading it.
+
+**And the framework caught me.** `test_the_corpus_is_not_this_project_s_opinion`
+reads each corpus function's source for evidence it ran a tool, and my two
+delegate to a shared `_tiff` helper, so it failed -- exactly as intended, for a
+corpus body that shows no tool. Its rule already allows a helper; the helper
+had to be named. A guard that fires on a legitimate addition and forces the
+addition to say what it is doing is the kind that keeps working.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

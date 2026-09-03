@@ -1052,8 +1052,13 @@ def test_the_corpus_is_not_this_project_s_opinion() -> None:
 	# `_pymodbus(` is here because Modbus's independent implementation is a
 	# library rather than a command. The rule is "not written here", not
 	# "spawned a process".
+	# `_tiff(` is here for `_pymodbus(`'s reason and the opposite one: it is
+	# a helper that runs `convert`, and the two TIFF corpora differ only in
+	# the byte order and the size they ask it for. The guard caught the
+	# delegation when it was added, which is the guard working -- a corpus
+	# function whose body shows no tool is exactly what it is watching for.
 	elsewhere = ("subprocess", "_run(", "_randpkt(", "_pymodbus(",
-	             "_paho_packets(")
+	             "_paho_packets(", "_tiff(")
 
 	for oracle in ORACLES:
 		corpus = DRIVERS[oracle.name][0]
