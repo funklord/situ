@@ -1,4 +1,4 @@
-# 0043: pad_to(n) aligns the absolute offset, and is padding in the map
+# 0043: pad_to(n) aligns the offset, and is padding in the map
 
 Status: accepted
 Date: 2026-08-26
@@ -38,8 +38,9 @@ peer computing the other alignment reads the following field two bytes off.
 
 ## Decision
 
-**`pad_to(n)` aligns the absolute offset from the message base to the next
-multiple of n.** It is a member, written `pad_to(n);` where a field would go,
+**`pad_to(n)` aligns the offset to the next multiple of n**, measured from
+the containing struct's view base -- see the amendment below, which narrows
+"the message base" as first written. It is a member, written `pad_to(n);` where a field would go,
 and it occupies `align_up(offset, n) - offset` bytes -- a constant where the
 offset is static, a length expression over the preceding length fields where it
 is not, computed by the solver the same way every dynamic offset already is.
@@ -97,3 +98,40 @@ about.
 - 8.4's specified-but-unbuilt construct ships; the traffic-analysis
   `pad_random` beside it in 14.7 stays deferred, being a different thing (a
   variable pad to hide length, not a fixed pad to align).
+
+## Amendment, 2026-09-04: the base is the containing struct's, not the message's
+
+Everything above stands except one word. The fork this record was written to
+settle -- run-local against absolute -- is decided the way it says, and for
+the reason it gives: `pad_to` aligns *an offset*, not a run's own length, so
+the word means what it means in `[require_aligned]` and in the `align` axis.
+That is the decision and it does not move.
+
+What the record left loose is the base that offset is measured from, and it
+says "the message base". **It is the containing struct's view base.** For a
+top-level struct those are the same byte, which is why nothing noticed:
+`pickle_string`, `aligned_header` and `byte_run` are the tree's three
+pad-bearing structs and all three are top-level, so no schema has ever put
+the two readings in the situation this record exists to separate (26.202).
+
+**The layout model settles it, and not as a preference.** A struct's extent
+is a function of the struct alone -- `SIZE_FIXED`, `size(inner)` and every
+`situ_X_view(msg, offset)` depend on it. Measured: `struct inner { u8 n; u8
+data[n]; pad_to(4); u16 trailer; }` solves to the same 24..2088 bits at
+offset 0 and at offset 16. Under the message-base reading it could not, since
+`inner` at an odd offset would pad differently and its size would vary with
+where somebody nested it. `SIZE_FIXED` would be a lie for any struct
+containing padding, and `size(inner)` would stop being a property of `inner`.
+
+So the three implementations do not agree by accident. `walker/walk.py`,
+the generated C and the Lua dissector all align from the view they were
+handed, because that is the only base a struct's own arithmetic has.
+
+**The interoperability hazard this record opens with is unchanged, and the
+answer to it is composition.** A schema author writing `pad_to(4)` inside a
+struct someone else nests at an odd offset gets padding computed from a base
+they can see -- their own -- rather than from one they cannot. A format that
+truly aligns to the *message* aligns the nested struct itself, with
+`[require_aligned]` on the member that holds it, which is the axis for saying
+so and which a reader can check. Two mechanisms, each naming its own base,
+rather than one whose meaning depends on where it is used.

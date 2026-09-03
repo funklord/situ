@@ -76,28 +76,25 @@ def test_the_region_is_not_canonical(resolved: ResolvedSchema) -> None:
 	assert entry.vector.get(Axis.CANONICAL) == Value("NonCanonical")
 
 
-def test_the_mutate_row_is_the_one_the_document_and_the_compiler_disagree_on(
+def test_the_mutate_row_says_what_the_compiler_produces(
 		resolved: ResolvedSchema) -> None:
-	"""The row 9.7 states, nothing checked, and the two sides answer apart.
+	"""The sixth row of the acceptance block, settled and now agreeing.
 
-	Every other line of the acceptance block above has a test. `mutate` had
-	none, and it is the line that drifted: the document says
-	`RewriteRequired` and the compiler says `InPlaceSlack`, which is
-	*stronger*. The `tlv` rule sets it deliberately -- "an item is rewritten
-	in place only at the same size, and an append needs slack" -- and
-	`RewriteRequired` is what a codec region gets, where any write
-	re-transforms the whole thing. The implementation's reasoning holds and
-	the acceptance block looks like it predates the rule.
+	Every other line had a test and `mutate` had none, which is why it was
+	the line free to drift: the document said `RewriteRequired`, the
+	compiler said `InPlaceSlack`, and nothing compared them (26.198). The
+	holder settled it for the compiler, and the reasoning is the `tlv`
+	rule's own -- "an item is rewritten in place only at the same size, and
+	an append needs slack". `RewriteRequired` is what a *codec* region gets,
+	where a write re-transforms the whole thing; a TLV region does not
+	transform its bytes at all, so a same-size write lands in place. The
+	acceptance block predated the rule (26.217).
 
-	**This test pins the disagreement rather than either side of it.** A
-	normative "which the compiler must produce" is not something to quietly
-	edit to match what is produced, and asserting only the compiler's answer
-	would read as settling it. So both sides are read, and the test fires
-	when *either* moves -- which is what an open question is owed by a suite
-	that cannot decide it.
-
-	Delete this and give `mutate` an ordinary row-test once the holder has
-	settled which is right (26.172).
+	**Both sides are still read, and that is the point.** 9.7 is normative --
+	"which the compiler must produce" -- so a test asserting only the
+	compiler's answer would let the document drift again, silently, exactly
+	as it did. Reading both means the row and the implementation cannot part
+	without this failing, which is what an acceptance block is for.
 	"""
 	entry = resolved.find("proto_message.fields")
 	assert entry is not None
@@ -106,7 +103,8 @@ def test_the_mutate_row_is_the_one_the_document_and_the_compiler_disagree_on(
 	stated = [line for line in PROJECT.read_text(encoding="ascii").splitlines()
 	          if line.startswith("proto_message.fields ")]
 	assert len(stated) == 1, "9.7 states this row exactly once"
-	assert "mutate=RewriteRequired" in stated[0]
+	assert "mutate=InPlaceSlack" in stated[0], (
+		"9.7 is normative: the row and the compiler must say the same thing")
 
 
 # -- the five causes --------------------------------------------------------

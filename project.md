@@ -1618,7 +1618,7 @@ The expected capability outcome, which the compiler must produce and explain:
 
 ```
 proto_message           size=Unbounded  offset=AbsoluteStatic(0)
-proto_message.fields    access=Sequential  address=Unstable  mutate=RewriteRequired
+proto_message.fields    access=Sequential  address=Unstable  mutate=InPlaceSlack
 proto_message.fields[*] offset=Dynamic
 canonical = NonCanonical, five independent causes:
   - non-minimal varint encodings accepted (pb_varint has no `minimal`)
@@ -19334,6 +19334,60 @@ property is exactly what makes the entries unreadable to a phrase-level
 detector -- the same fact seen from two sides. It does not extend to a list
 of open questions, which is written as status and has no such pairing, so
 that one now carries a date.
+
+### 26.217 Two documents that said what the code does not, both settled
+
+The copyright holder settled the open items. Two were a normative document
+disagreeing with every implementation, and in both the implementations are
+right -- not by weight of numbers, but because in each case the document's
+reading is incompatible with something the language already relies on.
+
+**Section 9.7's `mutate` row.** The acceptance block said
+`proto_message.fields mutate=RewriteRequired`; the compiler says
+`InPlaceSlack`, which is *stronger*. 26.198 found it was the one row of six
+with no test, which is why it was the one free to drift. `RewriteRequired`
+is what a **codec** region gets, where a write re-transforms the whole
+thing -- and a TLV region does not transform its bytes at all, so a
+same-size write lands in place, which is exactly what the `tlv` rule says:
+"an item is rewritten in place only at the same size, and an append needs
+slack". The block predates the rule. The row now reads `InPlaceSlack`.
+
+The test that pinned the disagreement is replaced by one that pins the
+agreement, and it still reads **both** sides. 9.7 is normative -- "which
+the compiler must produce" -- so a test asserting only the compiler's answer
+would let the document drift again, silently, exactly as it did.
+
+**0043's `pad_to` base.** The record decided "the absolute offset from the
+message base"; `walker/walk.py`, the generated C and the Lua dissector all
+align from the containing struct's view base. 26.202 recorded the
+disagreement and left it, because the corpus cannot tell the two apart --
+all three pad-bearing structs are top-level, where the two bases are the
+same byte.
+
+**The layout model settles it.** A struct's extent is a function of the
+struct alone: `SIZE_FIXED`, `size(inner)`, and every
+`situ_X_view(msg, offset)` depend on it. Measured --
+`struct inner { u8 n; u8 data[n]; pad_to(4); u16 trailer; }` solves to the
+same 24..2088 bits at offset 0 and at offset 16. Under the message-base
+reading it could not: `inner` at an odd offset would pad differently, its
+size would vary with where somebody nested it, and `SIZE_FIXED` would be a
+lie for any struct containing padding. The three implementations do not
+agree by accident; they agree because the view they were handed is the only
+base a struct's own arithmetic has.
+
+0043 is amended rather than rewritten. **Its fork was run-local against
+absolute and that decision does not move** -- `pad_to` aligns an offset, not
+a run's own length, so the word still means what it means in
+`[require_aligned]` and in the `align` axis. What is narrowed is one word:
+the base is the containing struct's, and the amendment says why.
+
+**And the hazard 0043 opens with now has an answer rather than a rule.** An
+author writing `pad_to(4)` inside a struct someone else nests gets padding
+computed from a base they can see. A format that truly aligns to the message
+aligns the nested struct itself, with `[require_aligned]` on the member
+holding it -- the axis that exists for saying so, and one a reader can
+check. Two mechanisms each naming their own base, rather than one whose
+meaning depends on where it is used.
 
 ## 27. Questions, and how they were settled
 
