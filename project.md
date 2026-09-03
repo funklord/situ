@@ -19035,6 +19035,84 @@ simply not *the* Python, so the absence is invisible in a way "no rustc" is
 not. The remedy is a detector that does not need it, controlled by samples
 that prove it can fail. Both were already here.
 
+### 26.213 One invariant in the corpus, and three meanings for the rest
+
+The sweep in 26.212 asked which assertions never execute. The same instrument
+asks which *emitter branches* never execute, which 26.201 had already named as
+the thing worth worrying about: "an exemption nothing exercises is a
+code-generator branch nobody has watched".
+
+**The first answer was wrong, and wrong in the direction that flatters the
+finding.** Ten modules read as 100% unreached -- every driver backend,
+`epoll`, `poll`, `select`, `ppoll`, `blocking`, `io_uring`, `qt`, `asyncio`,
+`tokio` and `driver.py`, 278 statement lines. They are covered: their tests
+run the compiler as `subprocess.run([sys.executable, "-m", "situc.cli", ...])`
+and the child process had no monitor in it. Installing one through a
+`sitecustomize.py` on `PYTHONPATH` turned "20 of 20" into "2 of 20". **Nine
+tested backends were one report away from being called untested**, and the
+detector's blind spot was the same shape as the defects it was looking for.
+
+With the children traced, no emitter method is entered in some backends and
+never in others -- the four are exercised symmetrically. What is left is a
+handful entered in none of them, and they turn out to be one thing.
+
+**`situc/invariant.py` exists so that four backends cannot mean four things.**
+Its docstring: "C, C++, Python and Rust must agree on which expressions are
+evaluable, because a schema that derives a field in one of them and refuses
+in another is a schema that means two things." The *walk* is shared so the
+decision cannot differ; the *leaves* are each backend's own.
+
+The leaves for `offset`, `count`, `value` and `bound_literal` had never run.
+**The whole corpus holds one invariant** --
+`invariant derived.total == size(derived.a) + size(derived.b);` -- so of the
+three builtins the language admits, one had ever been evaluated, and of the
+four operators, one.
+
+**Asking the untried part of the vocabulary found a real divergence, and it
+is worse than the docstring's case.** For
+`invariant s.total == size(s.a) - size(s.b)` with a one-byte `a` and a
+four-byte `b`, measured by running the generated code:
+
+| backend | what happens |
+|---------|--------------|
+| C, C++  | writes **65533** -- `1u - 4u` unsigned, cast to `u16` |
+| Python  | raises `OverflowError: can't convert negative int to unsigned` |
+| Rust    | **does not compile**: rustc denies the `usize` overflow |
+
+One schema, three outcomes, and two of them silent. The docstring worried
+about one backend refusing what another derives; this is two backends
+computing a wrong number while a third will not build.
+
+**The refusal takes nothing away, which is what separates it from 26.208.**
+There, all four backends could compile the expression and merely disagreed
+about a negative dividend, so refusing narrowed the language and the decision
+was the holder's. Here situ was accepting a schema **for which it cannot
+generate valid Rust**. The strictest of the four already refuses it, at
+compile time. Saying so in the compiler makes it tell the truth about what it
+can emit rather than writing three different programs.
+
+It lives in `invariant.py` beside `bound_widening`, which is there for the
+same reason one construct over and whose docstring is the argument: "a caveat
+written in a message is not a guard in the compiler". It is raised in
+`resolve` rather than in a backend, because a schema with no correct spelling
+in Rust is not one `--target c` should accept either -- 0047 placed the
+file-extent refusal on the same reasoning.
+
+**The two kinds of "don't know" are the whole of the care in it.** The first
+cut refused four existing tests, because it treated *unevaluable* the same as
+*possibly negative*. `size(s.a) > 1` is not an invariant expression at all and
+already has an answer -- no recompute, and the generated code says which right
+side it could not evaluate, which is a better message than this one. So
+`_range` returns `None` for "not an invariant expression" and `(None, hi)` for
+"admissible, floor unprovable", and only the second is refused.
+
+**And the guard that would have caught it is the vocabulary, not the case.**
+`BUILTIN_CASES` and `OPERATOR_CASES` are checked against `BUILTINS` and
+`OPERATORS` themselves, so a fourth builtin cannot arrive without a case that
+exercises it in all four backends. Sabotaging Rust's `count` leaf to return
+`None` fails the `count` case and leaves `offset` and `size` green, which is
+the resolution the parametrisation is for.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

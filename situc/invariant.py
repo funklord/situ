@@ -277,6 +277,137 @@ def expression(struct: "ResolvedStruct", expr: ast.Expr,
 	return None
 
 
+def _range(struct: "ResolvedStruct",
+		expr: ast.Expr) -> tuple[int | None, int | None] | None:
+	"""What an invariant's expression can evaluate to, as `(low, high)`.
+
+	Two kinds of "don't know", and keeping them apart is the whole of the
+	care here. **`None` for the result** means this is not an invariant
+	expression at all -- a comparison, a call that is not a builtin, an
+	argument that is not a member. Those already have an answer: no
+	recompute, and the generated code says so. Refusing them here would
+	replace a good diagnostic with a worse one, which is what the first cut
+	of this did to four existing tests.
+
+	**`None` for the low end** means the expression is admissible and its
+	floor cannot be established, which for these purposes is the same as
+	negative: a bound nobody can produce cannot prove non-negativity.
+
+	The node handling is `expression`'s, case for case, deliberately: the two
+	must agree about which expressions exist or the check speaks about a
+	different language from the one being emitted.
+	"""
+	if isinstance(expr, ast.IntLiteral):
+		return expr.value, expr.value
+
+	if isinstance(expr, ast.Binary):
+		if expr.op not in OPERATORS:
+			return None
+		left  = _range(struct, expr.left)
+		right = _range(struct, expr.right)
+		if left is None or right is None:
+			return None
+		lo_l, hi_l = left
+		lo_r, hi_r = right
+
+		if expr.op == "+":
+			return (None if lo_l is None or lo_r is None else lo_l + lo_r,
+			        None if hi_l is None or hi_r is None else hi_l + hi_r)
+		if expr.op == "*":
+			return (None if lo_l is None or lo_r is None else lo_l * lo_r,
+			        None if hi_l is None or hi_r is None else hi_l * hi_r)
+		if expr.op == "-":
+			# The only operator that can leave the non-negative range, and
+			# so the only one whose low end needs the *other* side's high.
+			return (None if lo_l is None or hi_r is None else lo_l - hi_r,
+			        None if hi_l is None or lo_r is None else hi_l - lo_r)
+		# `/`: every operand here is non-negative or already refused, and a
+		# zero divisor is `expr.py`'s question rather than this one.
+		return (0 if lo_l is not None else None,
+		        None if hi_l is None or not lo_r else hi_l // lo_r)
+
+	if isinstance(expr, ast.Call):
+		# Lazily, as `error` is below: an ordinary import would close the
+		# `layout -> invariant -> layout` cycle this module's header keeps
+		# open.
+		from situc.layout import BITS_PER_BYTE
+
+		if expr.name not in BUILTINS or len(expr.args) != 1:
+			return None
+		placement = member(struct, expr.args[0])
+		if placement is None:
+			return None
+		if expr.name == "offset":
+			if placement.offset_bits is None:
+				return 0, None
+			return placement.offset_bytes, placement.offset_bytes
+		if expr.name == "size":
+			if not placement.is_fixed_size:
+				return 0, None
+			whole = placement.size_bits // BITS_PER_BYTE
+			return whole, whole
+		count = placement.array_count
+		return (0, None) if count is None else (count, count)
+
+	return None
+
+
+def negative_value(struct: "ResolvedStruct",
+		decl: ast.Invariant) -> Exception | None:
+	"""Refuse an invariant whose value can go negative, or None.
+
+	**The three backends disagree about what that even means**, and this was
+	found by asking them rather than by reading. For
+	`invariant s.total == size(s.a) - size(s.b)` with a one-byte `a` and a
+	four-byte `b`, C writes 65533, Python raises `OverflowError`, and Rust
+	does not compile at all -- `attempt to compute 1_usize - 4_usize, which
+	would overflow`, denied by default. One schema, three meanings, and two
+	of them silent.
+
+	This module's whole purpose is that they agree: "a schema that derives a
+	field in one of them and refuses in another is a schema that means two
+	things". So the refusal belongs here, next to `bound_widening`, which
+	exists for the same reason one construct over.
+
+	**And it takes nothing away.** situ was accepting a schema for which it
+	cannot generate valid Rust -- the strictest of the four already refuses
+	it, at compile time. Saying so in the compiler makes it tell the truth
+	about what it can emit, rather than emitting three different programs.
+
+	Nothing in the corpus reached this: the committed schemas hold one
+	invariant between them, using `size` and `+` (26.213).
+	"""
+	from situc.diagnostics import error
+
+	found = _range(struct, decl.expr)
+	if found is None:
+		# Not an invariant expression. `expression` returns None for it too,
+		# the field keeps `mutate = Immutable`, and the generated code says
+		# which right-hand side it could not evaluate. A better message than
+		# this one, and already written.
+		return None
+	low, _ = found
+	if low is not None and low >= 0:
+		return None
+
+	return error(
+		"this invariant can evaluate to a negative value, which the backends "
+		"do not agree about",
+		decl.expr.span,
+		label = "may be negative"
+		        if low is None else f"can be as low as {low}",
+		notes = ["C and C++ compute it in unsigned arithmetic and store what "
+		         "it wraps to, Python raises `OverflowError` writing it to an "
+		         "unsigned field, and Rust refuses to compile the subtraction "
+		         "at all",
+		         "an invariant says what a field *equals*, and every term it "
+		         "may use -- `offset`, `size`, `count` -- is non-negative, so "
+		         "only a subtraction can leave that range",
+		         "remedy: order the operands so the result cannot go "
+		         "negative, or add the constant that keeps it non-negative"],
+	)
+
+
 def derived(schema: ast.Schema, struct: "ResolvedStruct") -> list[ast.Invariant]:
 	"""The invariants this struct maintains, in declaration order."""
 	return [decl for decl in schema.invariants()

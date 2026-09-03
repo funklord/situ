@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from situc import ast
+from situc.invariant import negative_value
 from situc.capability import Axis, Value, Vector, meet_all
 from situc.diagnostics import error
 from situc.layout import BITS_PER_BYTE, Placement, SchemaLayout, StructLayout
@@ -84,6 +85,19 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 			# nothing (section 11.2).
 			vector  = _struct_vector(struct_layout, entries),
 		)
+
+	# After the loop, because it needs the resolved struct the loop builds --
+	# and here rather than in a backend, because a schema whose invariant has
+	# no correct spelling in Rust is not a schema `--target c` should accept
+	# either. 0047 placed the file-extent refusal on the same reasoning:
+	# `wellformed` reads the AST, and this needs what `solve` computed.
+	for stated in schema.invariants():
+		maintains = result.structs.get(stated.derived.partition(".")[0])
+		if maintains is None:
+			continue
+		refusal = negative_value(maintains, stated)
+		if refusal is not None:
+			raise refusal
 
 	return result
 

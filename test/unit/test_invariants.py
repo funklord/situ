@@ -28,6 +28,8 @@ from situc.parser import parse_text
 from situc import ast
 from situc.capability import Axis
 from situc.resolve import ResolvedSchema, resolve
+from situc.diagnostics import SituError
+from situc.invariant import BUILTINS, OPERATORS
 from situc.traverse import arm_members, obligations, own_members
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
@@ -231,6 +233,139 @@ def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
 		"written as \"not a struct\" and means \"no scalar and not a "
 		f"struct\", and {DECLINED_ARMS} was the whole of the evidence that "
 		"the two agree")
+
+
+#: One schema per builtin an invariant may use, keyed by the builtin. The keys
+#: are checked against `BUILTINS` below rather than trusted: the list that
+#: decides what is admissible and the list that exercises it are one list, or
+#: a builtin arrives with no test and nothing says so (invariant 34).
+#:
+#: Before this existed the whole corpus held **one** invariant, using `size`
+#: and `+`. `offset` and `count` were implemented four times each and
+#: evaluated by nothing (26.213).
+BUILTIN_CASES = {
+	"offset": ("where", "struct s {\n\tu16 where;\n\tu8 a;\n\tu8 b[4];\n}\n"
+	           "invariant s.where == offset(s.b);\n"),
+	"size":   ("total", "struct s {\n\tu16 total;\n\tu8 a;\n\tu32 b;\n}\n"
+	           "invariant s.total == size(s.a) + size(s.b);\n"),
+	"count":  ("n", "struct s {\n\tu16 n;\n\tu8 m;\n\tu8 items[m];\n}\n"
+	           "invariant s.n == count(s.items);\n"),
+}
+
+#: The same for the arithmetic. `-` takes the operands in the order that
+#: cannot go negative, which is the whole subject of the refusal tested below.
+OPERATOR_CASES = {
+	"+": "invariant s.total == size(s.b) + size(s.a);\n",
+	"-": "invariant s.total == size(s.b) - size(s.a);\n",
+	"*": "invariant s.total == size(s.b) * size(s.a);\n",
+	"/": "invariant s.total == size(s.b) / size(s.a);\n",
+}
+
+ARITHMETIC = "struct s {\n\tu16 total;\n\tu8 a;\n\tu32 b;\n}\n"
+
+
+def recomputes(text: str, backend: str, field: str) -> bool:
+	"""Whether `backend` emitted the recompute for `field`.
+
+	Four spellings of one thing, which is the reason this is a function: a
+	substring that happens to be common to all four would be met by a comment
+	mentioning the name, and every backend writes the field's name in prose
+	above the accessor.
+	"""
+	if backend == "c":
+		return f"situ_s_{field}_recompute(situ_msg_t" in text
+	if backend == "cpp":
+		return f"void recompute_{field}(" in text
+	if backend == "python":
+		return f"def recompute_{field}(self)" in text
+	return f"pub fn recompute_{field}(&mut self" in text
+
+
+def test_the_builtin_cases_are_the_builtins() -> None:
+	"""One list, so a fourth builtin cannot arrive without a case."""
+	assert set(BUILTIN_CASES) == set(BUILTINS)
+	assert set(OPERATOR_CASES) == set(OPERATORS)
+
+
+@pytest.mark.parametrize("builtin", sorted(BUILTIN_CASES))
+def test_every_invariant_builtin_is_evaluated_by_all_four(builtin: str) -> None:
+	"""`invariant.py` exists so the four agree about what is evaluable.
+
+	Its docstring says why: "a schema that derives a field in one of them and
+	refuses in another is a schema that means two things". The walk is shared
+	so the *decision* cannot differ -- but each backend supplies its own
+	leaves, and until this test the leaves for `offset` and `count` had never
+	run in any of the four.
+	"""
+	field, body = BUILTIN_CASES[builtin]
+	emitted = sources(body)
+	for backend in sorted(BACKENDS):
+		assert recomputes(emitted[backend], backend, field), (
+			f"{backend} emits no recompute for an invariant using "
+			f"`{builtin}`, which the other backends do")
+
+
+@pytest.mark.parametrize("op", sorted(OPERATOR_CASES))
+def test_every_invariant_operator_is_evaluated_by_all_four(op: str) -> None:
+	"""The same for `OPERATORS`, of which the corpus exercised `+` alone."""
+	emitted = sources(ARITHMETIC + OPERATOR_CASES[op])
+	for backend in sorted(BACKENDS):
+		assert recomputes(emitted[backend], backend, "total"), (
+			f"{backend} emits no recompute for an invariant using `{op}`")
+
+
+def test_python_floors_the_division_the_others_truncate() -> None:
+	"""`/` is integer division in all four, which Python's `/` is not.
+
+	Every operand an invariant may use is non-negative -- the refusal below
+	is what keeps it so -- and over non-negative values flooring and
+	truncating agree, so `//` is the right spelling rather than merely a
+	safe one.
+	"""
+	emitted = sources(ARITHMETIC + OPERATOR_CASES["/"])
+	assert "(4 // 1)" in emitted["python"]
+	assert "(4 / 1)" not in emitted["python"]
+
+
+def test_an_invariant_that_can_go_negative_is_refused() -> None:
+	"""One schema, three meanings, and two of them silent.
+
+	`size(s.a) - size(s.b)` with a one-byte `a` and a four-byte `b` is -3.
+	Measured by running the generated code rather than by reading it: C
+	writes **65533**, Python raises `OverflowError` from `_write`, and Rust
+	does not compile at all -- rustc denies `1_usize - 4_usize` as an
+	overflow by default.
+
+	So refusing takes nothing away. situ was accepting a schema for which it
+	cannot emit valid Rust, and the strictest of the four already refused it;
+	the compiler now says so before three different programs are written.
+
+	Nothing found this for as long as it existed because the corpus holds one
+	invariant, using `size` and `+` (26.213).
+	"""
+	with pytest.raises(SituError) as caught:
+		sources("struct s {\n\tu16 total;\n\tu8 a;\n\tu32 b;\n}\n"
+		        "invariant s.total == size(s.a) - size(s.b);\n")
+
+	rendered = caught.value.diagnostic.render()
+	assert "can evaluate to a negative value" in rendered
+	assert "can be as low as -3" in rendered
+	assert "Rust refuses to compile" in rendered
+
+
+def test_a_count_that_may_be_zero_cannot_have_one_taken_off_it() -> None:
+	"""The dynamic half, which no static folding can rescue.
+
+	`count(s.items)` is whatever the message says, so its low bound is zero
+	and `count(s.items) - 1` is -1 on an empty run. The refusal reports the
+	bound it computed rather than the operands, which is what distinguishes
+	this from the static case above.
+	"""
+	with pytest.raises(SituError) as caught:
+		sources("struct s {\n\tu16 last;\n\tu8 m;\n\tu8 items[m];\n}\n"
+		        "invariant s.last == count(s.items) - 1;\n")
+
+	assert "can be as low as -1" in caught.value.diagnostic.render()
 
 
 # -- what every backend must do ---------------------------------------------
