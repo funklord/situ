@@ -18550,6 +18550,51 @@ than the count. The README's attribute table is where that vocabulary is held
 to `PLACED_ATTRS`, which is a different check in a different place because it
 is a different claim.
 
+### 26.204 The oracle that existed to avoid situ-against-situ, and one family it never reached
+
+`test_differential_oracle.py` opens with the clearest statement of this
+session's whole subject, written before it:
+
+> Every other test of the generated code compares situ against situ -- four
+> backends against each other (which finds disagreement but not shared error),
+> the accessors against the capability map, the accessors against arbitrary
+> bytes. All of them are downstream of one schema written by one person
+> reading one specification. **This is the one that is not.**
+
+It grades its own evidence, too: `zlib.crc32` and `binascii.crc_hqx` are
+independent *implementations*, and a published check value is "weaker, and
+saying so matters: it comes from the same catalogue the kernel parameters were
+transcribed from, so it is not a second implementation". Fifteen polynomial
+codecs are oracled or excused by name, and
+`test_every_polynomial_codec_is_checked_or_excused` refuses the silence.
+
+**The table family had none of the three.** No independent implementation, no
+published value, no completeness guard -- and four of its eight members encode
+an RFC 4648 alphabet that the standard library implements. `base64` was
+compared only against situ's own derivation of the same table, which is one
+hand writing both sides. Where a derived codec is concerned that is exactly
+what `test/generated/Makefile` already says out loud: "Nothing supplies
+anything here -- both sides are generated, which is what a derived codec
+means."
+
+They are right. `base64`, `base64url`, `base32`, `base16` and `base16_lower`
+all agree with CPython, byte for byte, on RFC 4648's own vectors. That is the
+answer worth having, and it was not available before.
+
+**The first version of the test could not have told.** RFC 4648's published
+vectors are "f" through "foobar", and `base64` and `base64url` differ in
+exactly two symbols -- 62 and 63 -- which none of those inputs encodes to.
+Giving `base64url` the standard alphabet passed all seven. `bytes(range(256))`
+covers all 64 symbols, and the three alphabet swaps go red now.
+
+**A test whose vectors cannot distinguish the thing it names is a check that
+cannot fail**, and the only reason this one is not still in the tree is that
+the sabotage was run before the commit rather than after.
+
+Three table codecs stay unchecked and are named: the two Manchester line codes
+and FDDI's 4b/5b. Nothing in the standard library speaks them, and a
+hand-written vector for a line code would be this schema read twice.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

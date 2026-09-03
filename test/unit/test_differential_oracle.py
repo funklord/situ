@@ -17,6 +17,7 @@ a no-op is worth less than no test, because the suite still reports green.
 
 from __future__ import annotations
 
+import base64
 import binascii
 import ctypes
 import importlib
@@ -220,6 +221,109 @@ CRC_UNCHECKED = {
 	                        "check value and its own encode/decode shape",
 	"reed_solomon_64_56":   "as reed_solomon_255_223",
 }
+
+
+# The base-N codecs, against Python's own implementation of the same RFC.
+#
+# `base64` ships with CPython and is old enough and used enough that
+# disagreement means situ is wrong -- the same strength as `zlib.crc32`
+# above, and stronger than a check value, which comes from the catalogue the
+# parameters were transcribed from.
+#
+# The table family had none of the three. Fifteen polynomial codecs are
+# oracled or excused by name and a guard refuses the silence; eight table
+# codecs had no oracle, no published value and no guard, and four of them
+# encode an RFC 4648 alphabet that the standard library implements two lines
+# from here.
+#
+# `units` is the ABI's, not a convenience: a padded codec takes whole input
+# *bytes* and returns bytes, an exact one takes *bits* and returns bits. A
+# reader who gets that backwards sees a codec that looks wrong and is not,
+# which is what happened while this was being written.
+BASE_CASES = (
+	("base64",       "bytes", lambda data: base64.b64encode(data)),
+	("base64url",    "bytes", lambda data: base64.urlsafe_b64encode(data)),
+	("base32",       "bytes", lambda data: base64.b32encode(data)),
+	("base16",       "bits",  lambda data: binascii.hexlify(data).upper()),
+	("base16_lower", "bits",  lambda data: binascii.hexlify(data)),
+)
+
+#: A table codec no independent implementation reaches, and why. Named rather
+#: than absent, for `CRC_UNCHECKED`'s reason.
+TABLE_UNCHECKED = {
+	"manchester_802_3": "a line code, not a data encoding: nothing in the "
+	                    "standard library speaks it, and a hand-written "
+	                    "vector would be this schema read twice",
+	"manchester_thomas": "as manchester_802_3, with the transitions inverted",
+	"code_4b5b":        "as manchester_802_3; FDDI's 4b/5b table has no "
+	                    "implementation to hand",
+}
+
+
+@pytest.mark.parametrize("codec,unit,oracle", BASE_CASES,
+                         ids=[name for name, _, _ in BASE_CASES])
+def test_a_base_codec_agrees_with_pythons(
+	codec: str, unit: str, oracle: object, kernel_library: ctypes.CDLL,
+) -> None:
+	"""RFC 4648, encoded by situ and by CPython, over the RFC's own inputs.
+
+	The vectors are the ones RFC 4648 section 10 publishes -- "f", "fo",
+	"foo", "foob", "fooba", "foobar" -- because they are chosen to walk every
+	padding case, and a run of eight bytes after them so the unpadded path
+	gets more than one group.
+
+	And then every byte there is, which the RFC's own vectors do not reach
+	and this test needs: `base64` and `base64url` differ in exactly two
+	symbols, 62 and 63, and none of "foobar" encodes to either. Giving
+	`base64url` the standard alphabet passed all seven published vectors --
+	a sabotage the first version of this test survived, which is the whole
+	reason to run one. `bytes(range(256))` covers all 64 symbols.
+	"""
+	encode = getattr(kernel_library, f"situ_{codec}_encode")
+	encode.restype  = ctypes.c_uint32
+	encode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+	                   ctypes.POINTER(ctypes.c_uint8)]
+
+	for data in (b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar",
+	             bytes(range(8)), bytes(range(256))):
+		buf   = (ctypes.c_uint8 * len(data))(*data)
+		out   = (ctypes.c_uint8 * 512)()
+		units = len(data) if unit == "bytes" else len(data) * 8
+		count = int(encode(buf, units, out))
+		got   = bytes(out[:count // 8 if unit == "bits" else count])
+
+		assert got == oracle(data), (           # type: ignore[operator]
+			f"{codec}({data!r}): situ says {got!r}, Python says "
+			f"{oracle(data)!r}")                # type: ignore[operator]
+
+
+def test_every_table_codec_is_checked_or_excused() -> None:
+	"""The guard the polynomial family already has, for the other family.
+
+	`test_every_polynomial_codec_is_checked_or_excused` exists because a CRC
+	arriving with no oracle is silence that reads like coverage. A table
+	codec is no different, and had no such guard: four of the eight encode an
+	RFC the standard library implements, and none of the eight was compared
+	against anything but situ's own derivation of the same description --
+	which is one hand writing both sides.
+	"""
+	kernels = ROOT / "std" / "kernels.situ"
+	parsed  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	tables = {decl.name for decl in parsed.codecs()
+	          if decl.kernel is not None
+	          and decl.kernel.family is ast.KernelFamily.TABLE}
+	assert tables, "no table codecs found; this guard is reading the wrong thing"
+
+	oracled = {name for name, _, _ in BASE_CASES}
+	assert oracled <= tables, (
+		f"BASE_CASES names codecs std/kernels.situ does not declare: "
+		f"{sorted(oracled - tables)}")
+
+	silent = sorted(tables - oracled - set(TABLE_UNCHECKED))
+	assert not silent, (
+		f"{silent} are compared against nothing outside situ; oracle them or "
+		f"say in TABLE_UNCHECKED why they cannot be")
 
 
 @pytest.fixture(scope="module")
