@@ -1141,6 +1141,45 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 		"share above can be met by the dissector showing less")
 
 
+def test_every_value_a_condition_reads_is_unsigned() -> None:
+	"""What keeps `%` off `_UNSPELLABLE`, stated as a check.
+
+	`_UNSPELLABLE` lists the operators whose Lua spelling parts from the
+	compiled backends -- `/`, `^`, `<<`, `>>`, `&`, `|` -- and `%` is not on
+	it. That is correct, and only for a reason nothing said: Lua's `%` floors
+	where C truncates, and the two agree exactly while both operands are
+	non-negative. Every value `_read` emits is a `situ_uint`, so they are.
+
+	The coupling is worth a guard rather than a sentence, because the other
+	half of it is already half-true elsewhere: `situc gen-dissector` declares
+	`ProtoField.int64` for a signed member (26.210), so "the dissector never
+	reads a signed value" holds for *conditions* and not for the file. A
+	later change teaching `_read` the sign would be an improvement everywhere
+	except here, and would make `%` wrong silently.
+
+	Sabotaged by hand: with `situ_uint` swapped for a signed spelling in
+	`_read`, this fails and nothing else in the file does.
+	"""
+	from situc.dissector import _read
+
+	seen = 0
+	for path in SCHEMAS:
+		_source, resolved, _ = analyse(path)
+		for struct in resolved.structs.values():
+			for entry in struct.entries:
+				one = _read(entry.placement, "at")
+				if one is None:
+					continue
+				seen += 1
+				assert "situ_int" not in one, (
+					f"{entry.placement.path} reads as a signed value; `%` is "
+					"absent from `_UNSPELLABLE` on the ground that every "
+					"operand is non-negative")
+
+	# The population, so an empty sweep cannot pass as a clean one.
+	assert seen >= 500, f"only {seen} reads examined"
+
+
 @pytest.mark.skipif(LUA is None, reason="no Lua")
 def test_a_signed_member_is_shown_with_its_sign(tmp_path: Path) -> None:
 	"""Chosen bytes for the sign, because the differential can be met without
