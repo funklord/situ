@@ -18731,6 +18731,60 @@ would be deleted rather than kept green over nothing. Both carried fields are
 exercised, which the first version was not: reverting the size path alone left
 it passing.
 
+### 26.208 `/` is C's, and two of the four backends are not C
+
+`situc/expr.py` states the language's arithmetic in a comment above the table
+that implements it:
+
+> Integer division truncates toward zero, matching C rather than Python,
+> because these expressions describe layouts a C backend will reproduce.
+
+C, C++ and Rust reproduce it. **Python's `//` floors, and Lua's does too**, and
+the two answers differ exactly when the operands have opposite signs. The
+Python emitter knew half of this -- its docstring says `/` "meaning float
+division here and integer division everywhere else" -- and translated `/` to
+`//`, which fixes float-versus-integer and introduces floor-versus-truncate.
+`%` was not translated at all, and diverges further: Python's result takes the
+sign of the divisor, C's takes the sign of the dividend.
+
+**Run rather than argued.** `u8 a[(n - 10) / 3 + 5]` compiled, and on the same
+message with `n = 5`:
+
+    generated C       a length 4      ((5 - 10) / 3) + 5, truncating
+    generated Python  a length 3      ((5 - 10) // 3) + 5, flooring
+
+One byte, silently, in an array length -- the same shape as 26.207 one layer
+down: there the host regrouped the expression, here it evaluates the same
+grouping differently.
+
+**No committed schema is affected.** Two expressions in the tree use `/` or
+`%` -- `(units / 2) + 1` and `(units % 3) + 1` -- and both divide an unsigned
+field, where all four agree. Latent, again, for the reason 26.37 gave.
+
+**Refused rather than corrected, and that is the part to argue with.** Making
+Python and Lua spell a call instead of an operator needs the expression *tree*,
+and `layout` has already rendered it to source -- one string, shared by twelve
+consumers. So the compiler now refuses a `/` or `%` whose dividend the solver
+cannot prove non-negative, beside the "divisor may be zero" refusal that was
+already there, with the same shape of diagnostic and a remedy. Where the
+dividend is non-negative the four agree, which is every division any committed
+schema performs.
+
+**That narrows the language, and the alternative is a real one**: carry the
+tree on the placement, let each backend render it, and emit `trunc_div(a, b)`
+in the two that need it. That is a larger change than this session should make
+unasked, and it is the holder's to weigh -- the cost of the refusal is that
+`(n - 10) / 3 + 5` is no longer writeable even though C computes it correctly.
+
+**Three sabotages, and two of them passed at first.** Removing the check turns
+the tests red; restricting it to `/` did not, because the *size* check says
+"may be negative" too and my assertion was reading that instead of mine; and
+dropping `not left.lo_known` did not, because every case I had written has a
+known bound. The wording is asserted specifically now, and `(n & -1) / 3`
+reaches the branch where the bound is absent rather than merely negative --
+`_and_interval` widening to unknown for a possibly-negative operand, which is
+sound and deliberately imprecise, being the only way to get there.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

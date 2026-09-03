@@ -331,6 +331,33 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 				         "rule zero out"],
 			)
 
+		# And the dividend, for a reason that is about the backends rather
+		# than about arithmetic. `BINARY_OPS` below defines `/` and `%` as C
+		# does -- truncating toward zero -- "because these expressions
+		# describe layouts a C backend will reproduce". C, C++ and Rust
+		# reproduce it. Python's `//` and `%` *floor*, and Lua's do too, and
+		# the two answers differ exactly when the operands have opposite
+		# signs: `(n - 10) / 3 + 5` at n = 5 is 4 in C and 3 in Python, which
+		# is a one-byte difference in an array length.
+		#
+		# Refused rather than papered over, because the expression reaches a
+		# host compiler as text and making two of the four spell a call
+		# instead of an operator needs the tree this layout has already
+		# turned into source. Where the solver can prove the dividend
+		# non-negative the four agree, which is every committed schema.
+		if expr.op in ("/", "%") and (not left.lo_known or left.lo < 0):
+			raise error(
+				f"the left operand of `{expr.op}` may be negative",
+				expr.left.span,
+				label = f"range is {left.render()}",
+				notes = ["`/` and `%` truncate toward zero here, as in C -- "
+				         "and Python and Lua floor, so the backends would "
+				         "disagree about a negative dividend",
+				         "give it a lower bound: `[min = N]` on the fields it "
+				         "reads, or reorder so the subtraction cannot go "
+				         "below zero"],
+			)
+
 		rule = INTERVAL_RULES.get(expr.op)
 		if rule is None:
 			return Interval.unknown()

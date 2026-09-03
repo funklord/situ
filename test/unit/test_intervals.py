@@ -93,6 +93,64 @@ def test_a_size_with_no_derivable_lower_bound_is_refused() -> None:
 	assert "may be negative" in caught.value.diagnostic.render()
 
 
+def test_a_dividend_that_may_be_negative_is_refused() -> None:
+	"""`/` and `%` are C's here, and two of the four backends are not C's.
+
+	`BINARY_OPS` says why the language chose truncation toward zero: "these
+	expressions describe layouts a C backend will reproduce". C, C++ and Rust
+	reproduce it. Python's `//` and `%` floor, and Lua's do too, and the two
+	answers differ exactly when the operands have opposite signs.
+
+	Measured, and run rather than argued: `u8 a[(n - 10) / 3 + 5]` compiled,
+	and at n = 5 the generated C computed a length of 4 and the generated
+	Python computed 3.
+
+	Refused rather than corrected, because the expression reaches a host
+	compiler as *text* and making two of the four spell a call instead of an
+	operator needs the tree that `layout` has already rendered to source.
+	Where the dividend is provably non-negative all four agree, which is both
+	of the divisions any committed schema performs.
+	"""
+	with pytest.raises(SituError) as caught:
+		interval("(n - 10) / 3", "\tu8 n [min = 1, max = 100];\n")
+	rendered = caught.value.diagnostic.render()
+	assert "may be negative" in rendered
+	assert "truncate toward zero" in rendered
+
+
+def test_a_modulo_whose_dividend_may_be_negative_is_refused_too() -> None:
+	"""`%` diverges further than `/` does: Python's result takes the sign of
+	the *divisor* and C's takes the sign of the dividend, so they disagree on
+	the sign and not only on the magnitude."""
+	with pytest.raises(SituError) as caught:
+		interval("(n - 10) % 3", "\tu8 n [min = 1, max = 100];\n")
+	# The wording, not just "may be negative": the size check says that too,
+	# and it catches this expression a moment later for its own reasons. A
+	# looser assertion passed with `%` taken out of the rule entirely.
+	assert "truncate toward zero" in caught.value.diagnostic.render()
+
+
+def test_a_dividend_with_no_known_lower_bound_is_refused() -> None:
+	"""`lo_known` is the other half of the condition and was untested: an
+	interval that has widened to "no lower bound at all" is not the same as
+	one whose lower bound is negative, and only the second was exercised.
+	Dropping `not left.lo_known` left every test here green."""
+	with pytest.raises(SituError) as caught:
+		# `_and_interval` widens to unknown for a possibly-negative operand,
+		# which is sound and deliberately imprecise -- and is the only way to
+		# reach a dividend whose lower bound is not merely negative but
+		# absent.
+		interval("(n & -1) / 3", "\tu16 n;\n")
+	assert "truncate toward zero" in caught.value.diagnostic.render()
+
+
+def test_a_bounded_dividend_is_accepted() -> None:
+	"""The refusal is about the sign, not about the operator: bound the field
+	so the subtraction cannot go below zero and the four backends agree."""
+	assert interval("(n - 10) / 3", "\tu8 n [min = 10, max = 100];\n") \
+		== Interval(0, 30)
+
+
 def test_a_modulo_narrower_than_its_dividend_is_the_identity() -> None:
 	assert interval("n % 16", "\tu8 n [min = 2, max = 9];\n") == Interval(2, 9)
 
