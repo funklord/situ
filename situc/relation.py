@@ -371,14 +371,15 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 				length, negated)
 		else:
 			constraint.signed = _widen(operands, where)
-			_check(must.expr, constraint.locals_for, where)
+			_check(must.expr, constraint.locals_for, where, constraint.signed)
 
 		plans.append(constraint)
 
 	return plans
 
 
-def _check(expr: ast.Expr, locals_for: dict[str, str], where: str) -> None:
+def _check(expr: ast.Expr, locals_for: dict[str, str], where: str,
+		signed: bool = False) -> None:
 	"""Refuse anything a relation may not hold, before any backend sees it."""
 	if isinstance(expr, ast.IntLiteral):
 		return
@@ -387,14 +388,30 @@ def _check(expr: ast.Expr, locals_for: dict[str, str], where: str) -> None:
 	if isinstance(expr, ast.Binary):
 		if expr.op not in OPERATORS:
 			raise Refused(f"{where} uses `{expr.op}`, which a relation may not")
-		_check(expr.left, locals_for, where)
-		_check(expr.right, locals_for, where)
+		if signed and expr.op in ("/", "%"):
+			# Spelling `/` as `//` in Python is right for two non-negative
+			# operands and wrong for the rest: C, C++ and Rust truncate
+			# toward zero and Python floors, so `-7 / 2` is -3 there and -4
+			# here, and `-7 % 3` is -1 there and 2 here. Measured, not
+			# reasoned.
+			#
+			# 26.208 refused the same pair in a field expression for the same
+			# reason. Carrying it across is what `bound_widening` says should
+			# have happened for bounds and did not: a rule that exists in one
+			# path and not the next is a caveat, not a guard.
+			raise Refused(
+				f"{where} divides a signed value, and the backends do not "
+				f"agree what that means -- C, C++ and Rust truncate toward "
+				f"zero where Python floors, so `-7 / 2` is -3 in three of "
+				f"them and -4 in the fourth")
+		_check(expr.left, locals_for, where, signed)
+		_check(expr.right, locals_for, where, signed)
 		return
 	if isinstance(expr, ast.Unary):
 		if expr.op not in UNARY:
 			raise Refused(f"{where} uses unary `{expr.op}`, which a relation "
 			              f"may not")
-		_check(expr.operand, locals_for, where)
+		_check(expr.operand, locals_for, where, signed)
 		return
 	if isinstance(expr, ast.Call):
 		raise Refused(f"{where} calls `{expr.name}`; a relation compares values "
@@ -409,10 +426,23 @@ class Spelling:
 	logical_and: str = "&&"
 	logical_or: str = "||"
 	logical_not: str = "!"
+	#: How this language spells integer division. Python's `/` is float
+	#: division and every other backend's is integer, so a relation reading
+	#: `b.hdr.tweak / a.hdr.index` answered `1` in C, C++ and Rust and
+	#: `1.5 == 1` -- false -- in Python. The same message, the same relation,
+	#: opposite verdicts, which is the failure this module's header says the
+	#: shared refusals exist to prevent (26.214).
+	#:
+	#: The main Python emitter has spelled this `//` since 8.6.2 and names the
+	#: hazard in its own docstring. Relations never asked it. `bound_widening`
+	#: describes the identical shape one construct over: a rule that exists,
+	#: and a path that did not carry it across.
+	divide: str = "/"
 
 
 C_LIKE = Spelling()
-PYTHON = Spelling(logical_and="and", logical_or="or", logical_not="not ")
+PYTHON = Spelling(logical_and="and", logical_or="or", logical_not="not ",
+                  divide="//")
 
 
 def render(expr: ast.Expr, locals_for: dict[str, str],
@@ -430,7 +460,8 @@ def render(expr: ast.Expr, locals_for: dict[str, str],
 
 	if isinstance(expr, ast.Binary):
 		op = {"&&": spelling.logical_and,
-		      "||": spelling.logical_or}.get(expr.op, expr.op)
+		      "||": spelling.logical_or,
+		      "/":  spelling.divide}.get(expr.op, expr.op)
 		left  = render(expr.left, locals_for, spelling)
 		right = render(expr.right, locals_for, spelling)
 		return f"({left} {op} {right})"

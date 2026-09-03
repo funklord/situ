@@ -19113,6 +19113,68 @@ exercises it in all four backends. Sabotaging Rust's `count` leaf to return
 `None` fails the `count` case and leaves `offset` and `size` green, which is
 the resolution the parametrisation is for.
 
+### 26.214 The closed set nobody opened
+
+26.213 found a construct whose vocabulary the corpus barely touched.
+`relation.py` is built by explicit analogy to `invariant.py` -- its header
+says so -- so it was the next place to look, and its operator set carries a
+comment that reads as a prediction:
+
+> A closed set on purpose. An operator that reached four backends unchecked
+> because they happen to spell it alike is a silent difference waiting for
+> the first language that does not.
+
+**Eighteen binary operators and three unary. Four of the twenty-one appeared
+in any `must` clause in the tree** -- corpus and suite together, 22 clauses
+-- and they were `==`, `<`, `>` and `>=`. The whole corpus holds **one**
+relation, `dns`'s `reply_to`, which uses `==` twice.
+
+**Two of the seventeen untried ones do not mean the same thing in the four
+backends.**
+
+`/` is the plain defect. `Spelling` carries `logical_and`, `logical_or` and
+`logical_not` -- the three whose *text* differs -- and nothing for division,
+so Python got `/`, which is float division. Over two messages holding 3 and
+2, `must b.hdr.index / a.hdr.chunks == 1` is satisfied in C, C++ and Rust and
+**not satisfied in Python**: `(3 / 2) == 1` is `False` there and `1` in C,
+both run rather than reasoned. The same relation, the same bytes, opposite
+verdicts -- which is exactly what this module's header says the shared
+refusals exist to prevent, arriving from the direction it did not name.
+
+`%` is the signed half. All four spell it `%`, and Python's takes the sign of
+the divisor where C, C++ and Rust take the sign of the dividend: `-7 % 3` is
+2 against -1. `head.tweak` is an `i8` and a relation's operands widen to
+signed 64-bit whenever one of them is signed, so this is reachable rather
+than theoretical.
+
+**The fix is one line of spelling and one carried rule.** `Spelling` gains
+`divide`, and Python's is `//` -- which the main Python emitter has spelled
+that way since 8.6.2, with a docstring naming this exact hazard. Relations
+never asked it. That is `bound_widening`'s shape, one construct over, and its
+own docstring is the sentence for it: "a caveat written in a message is not a
+guard in the compiler".
+
+`//` is right for two non-negative operands and wrong for the rest, so the
+second half refuses `/` and `%` where the operands widen signed -- the rule
+26.208 made for a field expression, carried into the module where relation
+refusals are decided rather than left in one path. Unsigned division is
+untouched, and a test says so: without it, emptying the vocabulary would look
+like a fix.
+
+**And the guard is the vocabulary.** The new test is parametrised off
+`OPERATORS | UNARY` themselves, so a nineteenth operator cannot be added
+without a case exercising it in all four backends. All twenty-one emit
+everywhere now, which is the first time anything has asked.
+
+**One thing found and not fixed, because it is a decision rather than a
+defect.** `<<` and `>>` are in the set, and a shift amount is a field value.
+A shift of 64 or more is undefined in C, panics in a debug Rust build, and is
+an ordinary answer in Python. That is the same class of disagreement as the
+two above, and the remedies -- refuse a variable shift, or mask the amount
+and change what the operator means -- are both language decisions rather than
+corrections. Recorded here beside 26.208, which is the open question it
+belongs with.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

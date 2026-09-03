@@ -42,6 +42,7 @@ from situc.codegen.rust import edit as edit_rs
 from situc.codegen.rust import frame as frame_rs
 from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
+from situc.relation import OPERATORS, UNARY
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.pack import pack
@@ -364,6 +365,112 @@ def test_a_signed_operand_widens_everything_to_int64() -> None:
 		"\tmust b.hdr.tweak == a.hdr.msg;\n}\n")["t_relate.c"]
 
 	assert "int64_t situ_v_" in source
+
+
+#: A relation must read both messages, so every case here names `a` and `b`.
+#: The comparisons stand alone; everything else is wrapped in one, because a
+#: relation's clause is a predicate and `b.x + a.x` on its own is not.
+COMPARISONS = frozenset({"==", "!=", "<", "<=", ">", ">=", "&&", "||"})
+
+RELATE = {"c": relate, "cpp": relate_cpp, "python": relate_py,
+          "rust": relate_rs}
+
+
+def clause_for(op: str) -> str:
+	"""One `must` clause exercising `op`, over two messages."""
+	if op in COMPARISONS:
+		return f"b.hdr.index {op} a.hdr.chunks"
+	return f"(b.hdr.index {op} a.hdr.chunks) == 1"
+
+
+@pytest.mark.parametrize("op", sorted(OPERATORS | UNARY),
+                         ids=lambda op: {"/": "div", "%": "mod", "|": "or",
+                                         "&": "and", "^": "xor"}.get(op, op))
+def test_every_relation_operator_is_emitted_by_all_four(op: str) -> None:
+	"""The closed set, exercised, because being closed is not being checked.
+
+	`relation.py` says why it is closed: "An operator that reached four
+	backends unchecked because they happen to spell it alike is a silent
+	difference waiting for the first language that does not." That is what
+	happened. Before this test, four of the eighteen binary operators and
+	none of the three unary ones appeared in any `must` clause in the tree --
+	corpus and suite together -- and `/` was spelled `/` in Python, which is
+	float division (26.214).
+
+	Parametrised off `OPERATORS` and `UNARY` themselves so a nineteenth
+	cannot be added without a case: the set that decides what is admissible
+	and the set that exercises it are one set (invariant 34).
+	"""
+	clause = (f"({op}b.hdr.index) == a.hdr.chunks" if op in UNARY
+	          and op not in OPERATORS else clause_for(op))
+	schema, resolved = analysed(
+		f"relation r(a: frame, b: frame) {{\n\tmust {clause};\n}}\n")
+
+	assert not dict(relate.refusals(schema, resolved)), (
+		f"`{op}` is in the vocabulary and refused for these operands")
+	for backend, module in sorted(RELATE.items()):
+		assert module.generate(schema, resolved, "t"), (
+			f"{backend} emits nothing for a relation using `{op}`")
+
+
+def test_python_spells_relation_division_as_integer_division() -> None:
+	"""Python's `/` is float division and every other backend's is integer.
+
+	`must b.hdr.index / a.hdr.chunks == 1` over two messages holding 3 and 2
+	is `1 == 1` in C, C++ and Rust and `1.5 == 1` in Python -- the same
+	relation over the same bytes, satisfied by three backends and refused by
+	the fourth. Run rather than reasoned: `(3 / 2) == 1` is `False` in Python
+	and `1` in C.
+
+	The main Python emitter has spelled this `//` since 8.6.2 and its
+	docstring names the hazard. `Spelling` carried the three logical
+	operators across and not this one, which is `bound_widening`'s shape
+	exactly: a rule that exists in one path and not the next.
+	"""
+	python = relate_py.generate(*analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust b.hdr.index / a.hdr.chunks == 1;\n}\n"), "t")["t_relate.py"]
+
+	assert "//" in python
+	assert not any(" / " in line for line in python.splitlines()
+	               if "if not" in line)
+
+
+@pytest.mark.parametrize("op", ["/", "%"])
+def test_dividing_a_signed_value_in_a_relation_is_refused(op: str) -> None:
+	"""`//` is right for two non-negative operands and wrong for the rest.
+
+	C, C++ and Rust truncate toward zero where Python floors, so `-7 / 2` is
+	-3 in three of them and -4 in the fourth, and `-7 % 3` is -1 against 2.
+	26.208 refused the same pair in a field expression for the same reason;
+	this carries the rule into the module where relation refusals are
+	decided, rather than leaving it a caveat in one path.
+
+	`tweak` is the `i8`, so naming it is what makes the operands widen
+	signed.
+	"""
+	schema, resolved = analysed(
+		f"relation r(a: frame, b: frame) {{\n"
+		f"\tmust (b.hdr.tweak {op} a.hdr.index) == 1;\n}}\n")
+
+	names = dict(relate.refusals(schema, resolved))
+
+	assert "r" in names
+	assert "truncate toward zero" in names["r"]
+	assert relate.generate(schema, resolved, "t") == {}
+
+
+def test_dividing_unsigned_values_in_a_relation_is_not_refused() -> None:
+	"""The refusal above is about signedness, not about division.
+
+	Without this, emptying the vocabulary would look like a fix.
+	"""
+	schema, resolved = analysed(
+		"relation r(a: frame, b: frame) {\n"
+		"\tmust (b.hdr.index / a.hdr.chunks) == 1;\n}\n")
+
+	assert not dict(relate.refusals(schema, resolved))
+	assert relate.generate(schema, resolved, "t")
 
 
 def test_a_u64_against_a_signed_value_is_refused() -> None:
