@@ -19175,6 +19175,54 @@ and change what the operator means -- are both language decisions rather than
 corrections. Recorded here beside 26.208, which is the open question it
 belongs with.
 
+### 26.215 A third of the diagnostics have never been read
+
+The trace that answered 26.212 and 26.213 answers a third question: which
+`error(...)` and `Refused(...)` call sites does the suite never reach?
+
+**93 of 302.** A diagnostic that has never been produced is a sentence
+nobody has read in context -- its span, its label and its remedy note are
+prose no eye has checked against the case that produces them. `parser.py`
+holds 25 of the 93 and they are the ones that matter most, because a parser
+diagnostic fires on a mistake a *user* made: every one of those is a message
+somebody will read before anybody here has.
+
+**The line numbers had to be recomputed first, and that is the finding under
+the finding.** The first pass ran against a trace taken before three commits
+in this session, and reported five never-produced diagnostics in `resolve.py`
+that do not exist -- lines that had shifted under an edit. Re-running the
+trace removed all five. A stale coverage file is a confident wrong list, and
+the same instrument had already produced one today (26.213's ten driver
+modules).
+
+**Nine were produced and read. None was wrong.** That is the result rather
+than a disappointment: an empty register block, a register address that is
+not a literal, a register and a register block that do not close, a setting
+given `0`, a `struct` where a register belongs, an unknown impl kind, an
+`expansion` that is not a byte count. Each says what it should, at the span
+it should.
+
+One was worth checking closely rather than glancing at.
+`impl bogus crc32 derived for c` reports "unknown impl kind `crc32`", which
+looks like it names the wrong token and does not: the form is
+`impl <name> <kind>`, so `bogus` is the name and `crc32` lands in the kind
+position. A message naming a token the author did not expect is exactly the
+defect an unproduced diagnostic is most likely to carry, so the one that
+looked like it had it is the one to verify rather than assume.
+
+**Eight are pinned now**, as the message rather than as "it raised", because
+what a diagnostic-with-no-test loses is not the refusal -- something else
+would notice a parser that stopped refusing -- but the *wording*, which can
+drift indefinitely with nothing to see it. Sabotaging one message fails one
+case and leaves the other seven green.
+
+**The remaining 85 are a sized surface rather than an invisible one**, which
+is the honest state to leave them in. Many are internal consistency guards --
+"has no resolved layout", "has no placement" -- that a well-formed schema
+cannot reach, and those are not worth a schema built to trigger them. The
+list is reproducible: trace the suite with `sys.monitoring`, collect the
+`ast.Call` sites named `error`, `Refused` or `warning`, and subtract.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

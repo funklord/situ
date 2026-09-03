@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from situc import ast
@@ -156,6 +158,74 @@ def test_enum_default_is_error_when_unspecified() -> None:
 	decl = parse_text("enum E : u8 { a = 1, }").enums()[0]
 	assert decl.default is None
 	assert decl.effective_default is ast.EnumDefault.ERROR
+
+
+#: Diagnostics the parser can produce and nothing had ever produced.
+#:
+#: Found by tracing the suite and asking which `error(...)` call sites are
+#: never reached: 93 of the compiler's 302 are not, and the parser's 25 are
+#: the ones that matter most, because a parser diagnostic fires on a mistake
+#: a *user* made. Every one of those is a message someone will read before
+#: anybody here has (26.215).
+#:
+#: Each was produced and read before being pinned. None was wrong, which is
+#: the result rather than a disappointment -- what they lacked was a test,
+#: not correctness.
+NEVER_PRODUCED = [
+	("an empty register block",
+	 "target mmio;\nendian little;\nbit_order lsb_first;\n"
+	 "register_block dma {\n\twidth = 32;\n}\n",
+	 "a register block declares no registers"),
+	("a register address that is not a literal",
+	 "target mmio;\nendian little;\nbit_order lsb_first;\n"
+	 "register ctrl @ (1 + x) {\n\twidth = 32;\n\tbit e [rw];\n}\n",
+	 "a register address must be a literal"),
+	("a register that does not close",
+	 "target mmio;\nendian little;\nbit_order lsb_first;\n"
+	 "register ctrl @ 0x00 {\n\twidth = 32;\n",
+	 "unexpected end of file inside a register"),
+	("a register block that does not close",
+	 "target mmio;\nendian little;\nbit_order lsb_first;\n"
+	 "register_block dma {\n\twidth = 32;\n",
+	 "unexpected end of file inside a register block"),
+	("a setting given a non-positive literal",
+	 "target mmio;\nendian little;\nbit_order lsb_first;\n"
+	 "register ctrl @ 0x00 {\n\twidth = 0;\n\tbit e [rw];\n}\n",
+	 "`width` needs a positive literal"),
+	("something that is neither a register nor a default",
+	 "target mmio;\nendian little;\nbit_order lsb_first;\n"
+	 "register_block dma {\n\tstruct s { u8 a; }\n}\n",
+	 "expected a register or a default"),
+	("an impl naming a kind that is not one",
+	 "target buffer;\nendian big;\nbit_order msb_first;\n"
+	 "impl bogus crc32 derived for c;\n",
+	 "unknown impl kind"),
+	("an expansion that is not a byte count",
+	 "target buffer;\nendian big;\nbit_order msb_first;\n"
+	 "codec c { expansion = +x; }\n",
+	 "`expansion = +N` needs a literal byte count"),
+]
+
+
+@pytest.mark.parametrize(("label", "source", "says"), NEVER_PRODUCED,
+                         ids=[label for label, _s, _m in NEVER_PRODUCED])
+def test_a_diagnostic_nothing_had_produced(label: str, source: str,
+		says: str) -> None:
+	"""Each of these is a sentence a user reads and nobody here had.
+
+	Pinned as the message rather than only as "it raised", because the
+	failure worth catching is a refactor that keeps refusing and starts
+	saying something else -- and a diagnostic no test produces is one where
+	that goes unnoticed indefinitely.
+
+	`impl bogus crc32 derived for c` names `crc32` in its message and that is
+	right: the form is `impl <name> <kind>`, so `bogus` is the name and
+	`crc32` lands in the kind position. Checked, because a message naming a
+	token the author did not expect is exactly what an unproduced diagnostic
+	is likely to get wrong.
+	"""
+	with pytest.raises(SituError, match=re.escape(says)):
+		parse_text(source)
 
 
 def test_enum_backing_type_must_be_scalar() -> None:
