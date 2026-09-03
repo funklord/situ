@@ -19007,11 +19007,33 @@ reason, so there is no directory it could live in. Lowering the floor or
 carving an exception is a convention change and not one to make while
 running a diagnostic.
 
-Worth noting which gate caught that. The floor's parse test **skipped** --
-there is no `python3.11` on this machine -- and what refused the file was
-`mypy`, which reads `python_version = "3.11"` from `pyproject.toml` and does
-not need the interpreter to be installed. Two witnesses for one promise, and
-on this machine only the one that needs nothing installed was awake.
+Worth noting which gate caught that, and the first version of this entry got
+it wrong in a way worth leaving visible. It said two witnesses defend the
+floor and only one was awake. There are **three**, and two were awake.
+
+- `python_floor.below_floor` is **static**: `ast.parse(feature_version=...)`
+  for grammar, and a tokenizer pass for the PEP 701 f-string changes that
+  `feature_version` cannot see. It runs on any interpreter, and
+  `test_the_f_string_detector_finds_what_it_claims_to` controls it -- "every
+  module in this tree is clean, so they pass, and would pass just as loudly
+  if the detector were broken".
+- `mypy` reads `python_version = "3.11"` from `pyproject.toml` and needs no
+  interpreter either.
+- The parse test runs every module through the floor interpreter, and is the
+  one that skipped.
+
+So the layer that skipped is the redundant one, and the tree had already
+built the two that cannot skip. The division between them is what caught
+this file: `sys.monitoring` is *syntactically* fine on 3.11, so the static
+detector had nothing to say and only the type checker could refuse it.
+
+Which is the useful shape rather than the alarming one. A gate whose ability
+to run depends on having the thing it checks for is at its weakest exactly
+where that thing is missing -- and for a language floor those are the same
+machines on which the violation gets written, because you have *a* Python and
+simply not *the* Python, so the absence is invisible in a way "no rustc" is
+not. The remedy is a detector that does not need it, controlled by samples
+that prove it can fail. Both were already here.
 
 ## 27. Questions, and how they were settled
 
