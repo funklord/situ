@@ -18954,6 +18954,65 @@ half of why "one step wider" was the wrong generalisation. Neither error is a
 bias toward caution or toward reach, and both look identical from inside the
 sentence that makes them.
 
+### 26.212 Four vacuous gates, and the sweep that found no fifth
+
+26.194, 26.206, 26.209 and 26.211 are all the same defect: a check that
+inspected nothing and reported success as loudly as one that inspected
+something. Four in one session is a base rate worth acting on rather than
+noting, and the obvious question is how many more there are.
+
+**It is measurable rather than arguable.** An `assert` that never executes in
+a green run *is* a check over an empty set -- not a proxy for one. So:
+register a `sys.monitoring` callback for `LINE` events, record `(file, line)`
+for anything under `test/`, and return `DISABLE`, which retires that line's
+event permanently. The cost is then one event per distinct line rather than
+one per execution, and the suite runs at its ordinary speed -- 9m39s, against
+9m18s for the same run untraced. Afterwards, walk each test file's AST for
+`ast.Assert` nodes and subtract.
+
+**The instrument was controlled before its output was believed.** A probe
+file with an unreachable `assert False` inside `if seen:` and a reachable
+`assert not seen` on the next line: the first is reported, the second is not.
+Without that, "nine" is a number with no demonstrated ability to be wrong.
+
+**The answer is nine, and all nine are accounted for.** Over 83 test files,
+18043 distinct lines and 4427 assertions:
+
+- **Six** are parametrized over `FUTURE`, which is empty. That is not an
+  oversight and the tree already says so: `test_every_example_builds`
+  asserts `FUTURE == []` and `len(CURRENT) >= 12`, its docstring calls the
+  empty group the milestone it records, and it names what pins the
+  phase-gating machinery instead. The population is asserted; the
+  parametrized tests are the consequence.
+- **One** is the `KNOWN` branch in `test_composed_schemas`. `KNOWN` is empty,
+  the module docstring says "`KNOWN` is empty, and that is the claim", and a
+  separate assertion requires `set(KNOWN) <= drawn` -- so a waiver the sample
+  never draws is refused rather than forgotten.
+- **One** is the python-floor parse check, skipped because no `python3.11` is
+  installed here. One of the 38 skips, and the file says it is a claim worth
+  a check that sometimes skips.
+- **One** is `spec is not None` after `importlib` boilerplate.
+
+**So the four were outliers, not the visible part of a pattern.** That is the
+result, and it is worth as much as a finding would have been: the guards this
+session moved to asserting a population were the exceptions, and everywhere
+else the tree already did it -- in two of the four cases better than the fix
+that prompted looking.
+
+**The instrument is described here and not committed, and the project's own
+gate is why.** `tool/*.py` is inside `shipped_modules()`, so anything there
+must satisfy the declared Python floor; `sys.monitoring` is 3.12 and the
+floor is 3.11. `test/**/*.py` is inside `floor_modules()` for the same
+reason, so there is no directory it could live in. Lowering the floor or
+carving an exception is a convention change and not one to make while
+running a diagnostic.
+
+Worth noting which gate caught that. The floor's parse test **skipped** --
+there is no `python3.11` on this machine -- and what refused the file was
+`mypy`, which reads `python_version = "3.11"` from `pyproject.toml` and does
+not need the interpreter to be installed. Two witnesses for one promise, and
+on this machine only the one that needs nothing installed was awake.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
