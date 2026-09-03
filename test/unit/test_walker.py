@@ -393,6 +393,67 @@ def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
 				== f"validate {expected}", f"{backend}, on {label}"
 
 
+def test_a_minimal_text_number_is_refused_in_all_five(tmp_path: Path) -> None:
+	"""`[minimal]` on HTTP's status code, made to fail for the first time.
+
+	The two tests above mutate bytes because "a check that only ever sees
+	good input is not being asked anything". This is the check they left:
+	`example/http` declares `decimal u16 code until " " max 4 [minimal]`, so
+	the constraint is in the corpus and a real response satisfies it -- and
+	`walker/report`'s leading-zero and upper-case-hex branches had never been
+	taken by anything. A schema uses it, every test feeds it a valid code,
+	and the rejection was untried in all five descriptions.
+
+	Found by tracing the walker and asking which statements the suite never
+	reaches (26.216's instrument, pointed at the fifth description).
+
+	`0` on its own is the case that separates the rule from a paraphrase of
+	it: a single zero *is* the minimal spelling of zero, so the branch is
+	`len(digits) > 1 and digits[0] == "0"` rather than "starts with a zero".
+	A check that refused it would pass a test that only tried a padded code.
+
+	**And the padded code is `020`, not `0200`, because the first version of
+	this test proved nothing.** `max 4` caps the whole member, delimiter
+	included, so `0200 ` is five bytes and was refused for its length --
+	the same verdict by another route. Deleting the walker's leading-zero
+	branch left the test green. Three digits fit the cap, so `020` and `00`
+	can only be refused by the rule this is about, and deleting that branch
+	now fails.
+	"""
+	schema  = ROOT / "example" / "http" / "http.situ"
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	cases = {
+		"the status line a server writes":
+			(b"HTTP/1.1 200 OK\r\n", report.OK),
+		"a code padded with a leading zero":
+			(b"HTTP/1.1 020 OK\r\n", report.ERR_CONSTRAINT),
+		"two zeros, where only the first is spare":
+			(b"HTTP/1.1 00 OK\r\n", report.ERR_CONSTRAINT),
+		"a lone zero, which is minimal":
+			(b"HTTP/1.1 0 OK\r\n", report.OK),
+		"digits that are not":
+			(b"HTTP/1.1 2x0 OK\r\n", report.ERR_CONSTRAINT),
+	}
+
+	for label, (packet, expected) in cases.items():
+		walked = _by_member(report.listing(image, packet))
+		assert walked.get(("status_line", "validate")) \
+			== f"validate {expected}", f"the walk, on {label}"
+
+		for backend, argv in command.items():
+			found = _by_member(answers(argv, packet, tmp_path))
+			assert found.get(("status_line", "validate")) \
+				== f"validate {expected}", f"{backend}, on {label}"
+
+
 def test_a_struct_the_image_cannot_answer_for_says_so() -> None:
 	"""The other half of the `validate` bit, which the corpus stopped
 	exercising the moment it stopped needing to.
