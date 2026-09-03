@@ -13597,6 +13597,40 @@ the difference is a wrong answer nobody sees.**
    caught before commit and cost nothing, the sibling's was live for an hour
    in a document sixteen projects read.
 
+156. **A closed vocabulary is not a checked one, and the closing is what
+   makes it feel checked.** Two constructs here declare their admissible
+   operators as a frozen set, deliberately and with the reason written
+   beside them -- `relation.py` says "an operator that reached four backends
+   unchecked because they happen to spell it alike is a silent difference
+   waiting for the first language that does not". Both were right about the
+   hazard and neither was exercised: of three invariant builtins the corpus
+   evaluated one, and of twenty-one relation operators, four. Both harboured
+   a four-backend divergence in the untried part -- an invariant that writes
+   65533 in C, raises in Python and does not compile in Rust; a relation
+   satisfied by three backends and refused by the fourth because Python's
+   `/` is float division. The set being closed is what makes the omission
+   invisible: a reader checks that the vocabulary is bounded and stops,
+   because a bounded thing looks finished. The guard is to parametrise the
+   coverage off the vocabulary constant itself, so the set that decides what
+   is admissible and the set that exercises it are one set, and a nineteenth
+   operator cannot arrive without a case.
+
+157. **A detector's blind spot has the shape of the defect it hunts, and it
+   errs toward making the finding bigger.** Twice in one session, both times
+   in the direction that flattered the result. A trace for unexercised
+   code-generator branches reported ten driver modules at 100% unreached --
+   `epoll`, `io_uring`, `tokio`, `qt` and six more, 278 lines -- and every
+   one is covered by tests that run the compiler as a subprocess, which the
+   monitor did not follow. Nine tested backends were one report away from
+   being published as untested. Then a sweep for never-produced diagnostics
+   named five in `resolve.py` that do not exist, because the trace predated
+   three commits and the line numbers had moved. Neither error was random:
+   an instrument that measures reach under-reports reach, and under-reported
+   reach reads as a finding. The habit is to control the instrument on a
+   case whose answer is known -- an unreachable `assert False` above a
+   reachable one -- and to recompute the measurement after any edit to what
+   it measures, before believing a list it produces.
+
 ### 26.116 A struct named `protected`, and the keyword nobody checks
 
 Adding the `covers` case to `edges.situ` (14.1a) meant naming a struct, and the
@@ -19239,6 +19273,67 @@ is the honest state to leave them in. Many are internal consistency guards --
 cannot reach, and those are not worth a schema built to trigger them. The
 list is reproducible: trace the suite with `sys.monitoring`, collect the
 `ast.Call` sites named `error`, `Refused` or `warning`, and subtract.
+
+### 26.216 What this session did, and what it cost to find out
+
+Folded in because the method was carried in a session and a session is not
+a durable place. One instrument, pointed at four questions; two real
+defects, three clean negatives, and two self-inflicted wrong answers on the
+way.
+
+**The instrument.** `sys.monitoring` for `LINE` events, returning `DISABLE`
+from the callback so the cost is one event per distinct line rather than one
+per execution -- the suite runs at roughly its ordinary speed, 9m39s against
+9m18s untraced. A `sitecustomize.py` on `PYTHONPATH` puts the same monitor
+in every child process, which is what the first version lacked. Subtract the
+reached lines from what the AST says exists, and ask a different question by
+changing what is subtracted.
+
+**Four questions, and their answers.**
+
+- *Which assertions never execute?* Nine of 4427, over 83 files, and all
+  nine accounted for -- empty-by-design populations that the tree already
+  asserts are empty, one environment skip, one piece of `importlib`
+  boilerplate. **No finding**, and 26.212 records why that is worth as much
+  as one: four vacuous gates had been fixed in the same session, and the
+  sweep says they were outliers rather than the visible part of a pattern.
+- *Which emitter branches never execute?* After the subprocess correction,
+  the four backends are exercised symmetrically. What survived pointed at
+  `invariant.py`'s leaves, and through them at **26.213**.
+- *Which relation operators are exercised?* Four of twenty-one, and
+  **26.214**.
+- *Which diagnostics are never produced?* 93 of 302. Nine produced and read,
+  none wrong, eight pinned (**26.215**). **No defect**, and the remaining 85
+  are a sized surface with a reproducible method rather than an invisible
+  one.
+
+**The two defects share a shape and it is not the sweep's.** Both are a rule
+that exists in one path and not the next -- which `bound_widening`'s
+docstring had already named, one construct over: "a caveat written in a
+message is not a guard in the compiler". Python's main emitter has spelled
+`/` as `//` since 8.6.2 *and says why in its own docstring*; the relation
+path never asked it. 26.208 refused a signed division in a field expression;
+the relation path did not carry it. The sweep found where to look; the tree
+had already written down what would be found there.
+
+**What was checked and deliberately not changed**, because a session that
+only reports what it altered misrepresents what it did. section 9.7's `mutate` row
+is a normative claim the compiler contradicts, and the test that pins *both*
+sides is the right answer until the holder settles it. The dissector's `/`
+is refused rather than mis-spelled, by 0021's reasoning about Lua 5.2, and
+its `%` is safe by a property of `_read` -- now checked rather than assumed.
+`<<` and `>>` in a relation disagree across the four for a shift of 64 or
+more, and both remedies change what the operator means, so it is recorded
+beside 26.208 rather than decided.
+
+**And the register was audited rather than trusted** (26.144). A peer
+session's sweep for claims that outlived their subject found seven across
+four trees and none here, because every entry pairs a claim with its remedy
+in the same block and a reader cannot take one without the other. That
+property is exactly what makes the entries unreadable to a phrase-level
+detector -- the same fact seen from two sides. It does not extend to a list
+of open questions, which is written as status and has no such pairing, so
+that one now carries a date.
 
 ## 27. Questions, and how they were settled
 
