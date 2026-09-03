@@ -3162,9 +3162,18 @@ algorithm).
 
 ### 14.7 Padding and length hiding
 
-`pad_to(n)` and `pad_random(min, max)` for traffic-analysis resistance. Padding
-content policy is explicit (`zero`, `random`, `preserve`), and `zero` is
+`pad_to(n)` and `pad_random(min, max)` for traffic-analysis resistance.
+Padding content policy is explicit -- `zero` or `preserve` -- and `zero` is
 required for `require canonical`.
+
+**`random` was a third policy and 0045 removed it**, accepted 2026-09-04.
+Randomness is not a property of a message: a pad of random bytes and a pad of
+any other bytes are the same bytes, so a schema declaring `random` would state
+something the generated code cannot test, which is what 14.5 refuses in as
+many words. The sender's obligation to use a random source is real and is the
+caller's, beside the AEAD primitive and for the same reason. What `pad_random`
+contributes is the part nothing else expresses -- **bounds** -- plus a name the
+map and the wire signature can carry.
 
 Not in phase 8: 26.8's acceptance criteria do not reach these constructs, and
 the canonicity item they contribute -- padding whose content is unconstrained
@@ -4140,9 +4149,12 @@ through it and comparing bytes, rather than by inspecting what it emitted.
 to every target -- they are shifts and offsets, and there is no algorithm to
 get wrong -- but a codec is a real algorithm, and one that is correct beats
 four that are each nearly correct. Every other backend binds the C
-implementation through its own FFI. A per-language plugin slot exists for a
-native implementation where somebody eventually wants one, and is empty:
-`impl crc32 derived for rust;`. See
+implementation through its own FFI. A per-language plugin slot is
+*specified* for a native implementation where somebody eventually wants one,
+and has never been built: `impl crc32 derived for rust;` is 0017's syntax and
+the parser refuses the qualifier. This document and 0017 both said it
+"exists ... and is empty" until 2026-09-04, when `git log -S"derived for"`
+found no commit in the history that ever carried it. See
 `doc/decision/0017-codec-implementation-sourcing.md`, which also records what
 this costs -- generated Rust, C++ and Python that uses a codec links the C
 runtime, so "vendors trivially with no dependencies" stays true of situ's
@@ -15438,7 +15450,10 @@ greps and one parse.
 
 **Decisions waiting.**
 
-- **`doc/decision/0046-sub-byte-checksums.md` is `Status: proposed`.** A
+- ~~**`doc/decision/0046-sub-byte-checksums.md` is `Status: proposed`.**~~
+  **Accepted 2026-09-04**, on the reasoning it already carried and on
+  26.137's standing answer that a protocol needing something makes it work.
+  Not yet built. A
   checksum narrower than a byte is refused in two places, and USB's token
   packets, CAN's frames and MMC's commands each carry one. The record
   measures where the bytes assumption lives -- four places, from
@@ -15448,22 +15463,37 @@ greps and one parse.
   AEAD produces five bits and 14.3's stage gate hands out an interior on
   that tag. What makes it a decision rather than a task is that the emitted
   coverage API changes shape in four backends.
-- **`doc/decision/0045-pad-random.md` is `Status: proposed`.** It proposes
+- ~~**`doc/decision/0045-pad-random.md` is `Status: proposed`.**~~
+  **Accepted 2026-09-04**, and 14.7 has lost `random` accordingly: a schema
+  declaring it would state what the generated code cannot test, which is
+  14.5's rule and not a new one. Not yet built. It proposes
   that `pad_random(min, max)` be bounds and a name, and that 14.7's
   `random` content policy be dropped as unenforceable -- a schema cannot
   state what the generated code cannot test. Accepting or refusing it is
   the decision; nothing waits on code.
-- **0017's Rust question, narrowed.** Should `impl <codec> derived`
+- ~~**0017's Rust question, narrowed.**~~ **Answered 2026-09-04: yes, for
+  `derived` and only for `derived`.** "One implementation beats four nearly
+  correct ones" is an argument about a hand-written algorithm; a `derived`
+  codec has no author, being generated from a kernel description the
+  compiler holds, so four renderings are four spellings of one description
+  -- which is situ's thesis rather than the failure this guards against.
+  `ImplKind` has two members and the line falls between them: an `extern`
+  implementation is somebody's C and binding it stays right. What decides it
+  for Rust alone is the `#![no_std]`, no-C promise a codec currently breaks.
+  Not yet built. The original question: should `impl <codec> derived`
   generate native Rust rather than an `extern "C"` binding to the C one?
   Measured in its third amendment: `runtime/cpp/situ.hpp` includes
   `situ.h` already, so 0017's "C++ links C for free" holds; the Rust
   runtime is `#![no_std]` with no C dependency at all, so a codec
   introduces the first. C++ and Python are not part of the question.
-- **The plugin slot does not exist.** This document and 0017 both say
-  `impl crc32 derived for rust` "exists ... and is empty". The parser
-  refuses the qualifier and `ImplDecl` has no field to hold it. Designed
-  and never built, or built and dropped -- that is the question, and it
-  is not the same as the one above.
+- ~~**The plugin slot does not exist.**~~ **Closed 2026-09-04, and it was
+  a question about history rather than a decision.** Which of two things
+  happened -- designed and never built, or built and dropped -- is
+  answered by the repository: `git log --all -S"derived for"` matches no
+  commit, and `ImplDecl` has never carried a field to qualify a binding
+  by target. Never built. Both documents said the slot "exists ... and is
+  empty" and now say it is specified and unimplemented, which is what
+  0017's amendment had already measured without being able to date.
 - **`linear_block` knows one code.** `hamming_7_4`, and going further
   needs the generator matrix expressible in a schema, which is a language
   addition rather than a table entry.
@@ -15478,7 +15508,15 @@ greps and one parse.
   carried between items, which situ holds inside codecs and nowhere in
   the layout. Answering them separately is how a language grows two
   spellings for one idea.
-- **Where COBS, SLIP and PPP's frame delimiter belongs.** Their generated
+- ~~**Where COBS, SLIP and PPP's frame delimiter belongs.**~~ **Settled
+  2026-09-04 by `doc/decision/0048-a-codes-constant-overhead.md`: the
+  delimiter is the code's, and `ratio_bounded` gains a constant term.** Two
+  things decide it and neither is a preference -- a decoder finds the frame
+  end by the delimiter, so an encoder that omitted it would produce output
+  its own decoder cannot bound; and the emitted C already says "plus the
+  trailing delimiter" in the doc comment a caller reads, so the emitter
+  knows the number and only the machine-readable signature omits it. No
+  generated byte stream changes. The original statement: their generated
   encoders each write one byte more than the `ratio_bounded` their
   signature declares, so a consumer sizing from the published bound
   overruns by one on every encode. Either the signature gains the
@@ -19388,6 +19426,69 @@ aligns the nested struct itself, with `[require_aligned]` on the member
 holding it -- the axis that exists for saying so, and one a reader can
 check. Two mechanisms each naming their own base, rather than one whose
 meaning depends on where it is used.
+
+### 26.218 The register, settled: five closed, and three that are not mine
+
+The copyright holder settled the open items. Five of 26.144's entries close;
+three do not, and the reason differs in each case.
+
+**Closed by decision.** 0045 and 0046 are accepted on the reasoning they
+already carried -- 0045 because a `random` content policy would state what
+the generated code cannot test, which is 14.5's rule and not a new one, and
+0046 because 26.137 is the standing answer that a protocol needing something
+makes it work. 14.7 has lost `random`. Neither is built; accepting a record
+is not doing its work, and both say so in their status.
+
+**Closed by evidence, not preference.** 0017's Rust question turned on a
+distinction the record had not drawn: "one implementation beats four nearly
+correct ones" is an argument about a *hand-written algorithm*, and a
+`derived` codec has no author -- it is generated from a kernel description
+the compiler already holds, so four renderings are four spellings of one
+description. That is situ's thesis rather than the failure the record guards
+against, and `ImplKind`'s two members are where the line falls: an `extern`
+implementation is somebody's C and binding it stays right. What makes it
+Rust's question alone is the `#![no_std]`, no-C-dependency promise a codec
+currently breaks, which C++ does not have because `situ.hpp` includes
+`situ.h` already.
+
+**Closed by the repository.** The plugin slot asked which of two histories
+happened -- designed and never built, or built and dropped. `git log --all
+-S"derived for"` matches no commit and `ImplDecl` has never carried a field
+to qualify a binding by target, so: never built. Both documents said the
+slot "exists ... and is empty" and now say it is specified and
+unimplemented. **A question about the past is answerable and was left open
+for weeks as though it were a matter of judgement.**
+
+**Closed by a decision record, 0048.** The frame delimiter is the code's and
+`ratio_bounded` gains a constant term. A decoder finds the frame end by the
+delimiter, so an encoder that omitted it would produce output its own decoder
+cannot bound -- `decode(encode(x))` would not close within one buffer. And
+the emitted C already carries "plus the trailing delimiter" in the doc
+comment a caller reads: the emitter knows the constant and the header tells
+the truth, so this is a gap in what the signature can *express* rather than a
+disagreement about what a code does. No generated byte stream changes, which
+is the other half of why this branch and not the one that stops three
+encoders writing a byte.
+
+**Three stay open, and none of them is waiting on a preference.**
+
+- **`linear_block` knows one code.** Going further needs the generator
+  matrix expressible in a schema. That is a language addition -- work with a
+  design in front of it, not a decision that unblocks work.
+- **8b10b and CoAP.** 26.144 is right that answering them separately is how
+  a language grows two spellings for one idea, and the shared absence is
+  state carried between items, which situ holds inside codecs and nowhere in
+  the layout. Answering needs a record covering both and a design for where
+  that state lives. It is the one genuine design question left on the list.
+- **Which `copyright` file survives, and the switch-label style.** These are
+  not mine under any instruction that does not name them. A licensing
+  statement is a grant to other people and the guidelines are categorical
+  about not choosing between two of them; the style is a convention change,
+  which belongs to a deliberate pass signalled to the shared guidelines
+  rather than to the project that noticed it. Both resting states are
+  already deliberate and both are guarded -- `test_the_two_copyright_files_`
+  `agree` asserts the pair match rather than picking one, and `code-style.md`
+  records the 45 labels without standardising them.
 
 ## 27. Questions, and how they were settled
 

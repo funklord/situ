@@ -1,6 +1,6 @@
 # 0046: a checksum narrower than a byte, and where the bytes assumption lives
 
-Status: proposed
+Status: accepted 2026-09-04; not yet built
 Date: 2026-09-01
 Phase: unscheduled; found while making USB expressible (26.146, 26.148)
 

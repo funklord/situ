@@ -253,9 +253,13 @@ rather than empty: the parser refuses the qualifier outright --
 -- and `ImplDecl` carries `codec`, `kind` and `symbol`, with nothing to
 qualify them by target.
 
-That is flagged and not resolved here, because which side is wrong is a
-real question with an answer somebody holds: the syntax may have been
-designed and never built, or built and dropped. It does not change the
+**Resolved 2026-09-04: designed and never built.** The question was which
+of two histories happened, and the history is in the repository:
+`git log --all -S"derived for"` matches no commit, and `ImplDecl` has never
+carried a field to qualify a binding by target. So there is nothing to
+restore and nothing was lost -- the syntax is specified here and in
+project.md's summary, and the parser has never accepted it. Both documents
+said "exists ... and is empty" and now say what is true. It does not change the
 question above, which asks what the *default* should be for Rust. It does
 mean there is currently no override to fall back on, so today the C
 binding is not one choice among two -- it is the only one.
@@ -329,3 +333,39 @@ spent its first half restoring for the CRCs.
 **What is still not generated**: a stuffing code outside the five. The
 message says so by name now, so the next one is a gap somebody can see
 rather than a family they write off.
+
+## Amendment, 2026-09-04: `derived` generates natively; `extern` binds C
+
+The question this record's third amendment left open -- should
+`impl <codec> derived` generate native Rust rather than an `extern "C"`
+binding -- is answered **yes, for `derived` and only for `derived`**.
+
+**The principle this record rests on does not apply to a derived codec.**
+"One implementation that is correct beats four that are each nearly correct"
+is an argument about a *hand-written algorithm*, where four authors produce
+four sets of bugs. A `derived` implementation has no author: it is generated
+from a kernel description the compiler already holds, so four renderings are
+four spellings of one description. That is not the failure mode this record
+guards against -- it is situ's whole thesis, the same description emitted
+several ways and held together by a differential. The machinery that keeps
+them honest exists: `gen-codec-tests` writes property tests from the codec
+signature, and the four-backend comparison already runs.
+
+`ImplKind` has exactly two members, `DERIVED` and `EXTERN`, and the line
+falls between them. An `extern` implementation is somebody's C, and binding
+it is the only correct thing to do -- that half of this record is untouched.
+
+**What decides it for Rust specifically is a promise this record's own
+consequences record.** `runtime/rust/situ_rt.rs` is `#![no_std]`, no
+allocation, no panics in generated code, and has no C dependency at all. A
+codec introduces the first one, which makes "vendors trivially with no
+dependencies" false for the Rust target the moment a schema uses a CRC. C++
+does not have that problem -- `runtime/cpp/situ.hpp` includes `situ.h`
+already -- and Python's FFI is not a vendoring question. So the cost this
+removes is Rust's alone, which is why the question was Rust's alone.
+
+**Not yet built.** `situc/codegen/c/derived.py` is the only derived
+generator; a Rust one is the work this authorises, and a schema using a
+codec keeps linking the C runtime until it lands. The refusal in
+`gen-derived` that names the unsupported target is what should say so in the
+meantime.

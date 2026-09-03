@@ -1,6 +1,6 @@
 # 0045: `pad_random` is bounds and a name, and not a content policy
 
-Status: proposed
+Status: accepted 2026-09-04; not yet built
 Date: 2026-08-27
 Phase: after 0043, which built `pad_to` and deferred this
 
