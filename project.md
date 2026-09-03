@@ -15385,6 +15385,23 @@ Written down because it was carried in a session rather than in the tree,
 and a question nobody can find is one that gets answered twice or not at
 all. Each of these is the copyright holder's; none is blocked on work.
 
+**Checked against the tree on 2026-09-03, and every claim below still
+holds.** 0045 and 0046 both still say `Status: proposed`; the parser still
+answers `impl crc32 derived for rust` with "expected `;` after the impl
+binding, found `for`", so the plugin slot still does not exist; the
+delimiter guard still names three codecs, so a fourth would still fail it;
+and `8b10b` appears in `kernels.py` only in the docstring saying why it is
+not a table kernel, so it is still an absence rather than an entry.
+
+The date is the point rather than the result. **A register is written as
+status, not as history, so nothing in it goes stale loudly** -- unlike the
+entries above, where a claim and its remedy sit in the same block and a
+reader cannot take one without the other. A list of open questions has no
+such pairing: an item answered elsewhere simply keeps reading as open, and
+its cost falls on whoever picks it up believing it. That is worth a dated
+check rather than a standing assumption, and the check is cheap -- four
+greps and one parse.
+
 **Decisions waiting.**
 
 - **`doc/decision/0046-sub-byte-checksums.md` is `Status: proposed`.** A
