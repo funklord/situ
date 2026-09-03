@@ -18839,6 +18839,61 @@ fix. It floors what the comparison *examines* -- 1101 member paths -- and
 asserts the zero separately, as the current truth rather than as an absence
 somebody rediscovers.
 
+### 26.210 The exclusion the stub could have earned its way out of
+
+26.201's differential compares the dissector's rows with the walker's listing,
+and `_shown` held three `ProtoField` kinds out. Two of them are real: `bytes`
+and `string` are a member's raw bytes against the walker's `len=` and first
+byte, which is a difference in the question. The third was `int`, and its
+reason was about the harness:
+
+> `dissect.lua`'s `shown` reads every range with `uint()`, so a signed
+> member's row carries the stub's unsigned reading. Wireshark is what applies
+> the sign and there is no Wireshark here, so the difference belongs to the
+> stub rather than to the dissector.
+
+**Every clause of that is true, and it is still the wrong conclusion.** The
+difference did belong to the stub -- and the stub is in this tree, is 239
+lines, and already models a tvb, a tree, a sub-dissector and a masked field.
+An exclusion whose reason is "our own harness cannot do this yet" is a
+description of work, not a boundary between two questions.
+
+It applies the sign now, from the mask's bit width where there is a mask and
+the range's bytes where there is not. That is Wireshark's rule and it is
+situ's: `edges.trim` is `i5`, and the generated C reads
+`situ_sign_extend(situ_bits_get_msb(view.base, 0u, 5u), 5u)`. The two sides
+were never in dispute about the semantics; nothing had asked them.
+
+**2282 compared answers became 2361** -- 69% of what the dissector shows,
+now 72%. The rows were counted all along and moved from the held-out column
+into the compared one, which is the honest kind of coverage gain: the same
+buffers, the same eight packets per struct, no schema added.
+
+**All of them agree.** That is worth saying plainly, because a differential
+that finds nothing is the outcome a reader should be most suspicious of, and
+two sabotages settle it. Dropping the sign entirely disagrees in four
+schemas. Extending it from the container rather than from the field disagrees
+in `edges` alone, and says exactly what it is about: *the dissector shows 17
+and the walker reads -15*, which is `i5` behind the mask `0xf8`.
+
+**The coverage floor does not catch either sabotage, and that is correct.**
+Both go red as disagreements in the per-schema test, not as a shrunken
+intersection -- the floor is there for the opposite failure, an answer
+quietly leaving the comparison, and it now catches that too at 2340.
+
+**One case was worth chosen bytes rather than a corpus draw.** `image`'s four
+`i64` members reach `add_le`, where the extension is the one Lua's own
+integer has already done: `value - (top << 1)` leaves them alone because the
+shift is zero at 64 bits. `0x8000000000000000` little-endian reads as the
+most negative value there is, and nothing in `display` may disturb it. The
+random sweep does draw negatives at all four widths -- 12 of 53 at 16 bits, 7
+of 26 at 64 -- but it does not draw that one.
+
+**And the little-endian path shares the sign rather than restating it.** No
+schema in the tree hands `add_le` a masked field, so it has no mask arm; nine
+signed ones reach it, so it has no sign arm of its own either. One function,
+both readings, and no branch nothing exercises.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

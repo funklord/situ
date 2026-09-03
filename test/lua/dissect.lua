@@ -121,15 +121,24 @@ getmetatable(range("", 0, 0, 0)).Tvb = Tvb
 
 -- -- the tree -------------------------------------------------------------
 
---- What Wireshark displays for a field: the masked bits, shifted down.
-local function shown(field, item)
-	if field.kind == "bytes" then
-		return (item:bytes():gsub(".", function (byte)
-			return string.format("%02x", byte:byte())
-		end))
-	end
-
-	local value = item:uint()
+--- What Wireshark displays for a field: the masked bits, shifted down, and
+--- the sign applied where the field was declared a signed one.
+---
+--- The width the sign extends from is the field's own -- the mask's bit count
+--- where there is a mask, the range's bytes where there is not. That is
+--- Wireshark's rule and it is situ's: `edges.trim` is `i5`, and the generated
+--- C reads `situ_sign_extend(situ_bits_get_msb(view.base, 0u, 5u), 5u)`.
+---
+--- This stub read every range with `uint()`, so a signed member's row carried
+--- an unsigned number, and the walker differential held all fifteen of them
+--- out on the ground that the difference belonged to the stub rather than to
+--- the dissector. It did -- and a stub that can be made faithful is a worse
+--- reason to exclude an answer than to include it (26.210).
+---
+--- `value - (top << 1)` needs no case for a 64-bit field: the shift leaves
+--- zero, and `uint()` has already wrapped to Lua's two's-complement integer,
+--- which is the answer. `image`'s four `i64` members read through it.
+local function display(field, value, bits)
 	if field.mask then
 		value = value & field.mask
 		local mask = field.mask
@@ -137,8 +146,29 @@ local function shown(field, item)
 			value = value >> 1
 			mask  = mask >> 1
 		end
+		bits = 0
+		while mask ~= 0 do
+			bits = bits + 1
+			mask = mask >> 1
+		end
+	end
+
+	if field.kind == "int" then
+		local top = 1 << (bits - 1)
+		if value & top ~= 0 then
+			value = value - (top << 1)
+		end
 	end
 	return tostring(value)
+end
+
+local function shown(field, item)
+	if field.kind == "bytes" then
+		return (item:bytes():gsub(".", function (byte)
+			return string.format("%02x", byte:byte())
+		end))
+	end
+	return display(field, item:uint(), item.length * 8)
 end
 
 local Tree = {}
@@ -158,11 +188,14 @@ function Tree:add(field, item)
 	return tree()
 end
 
+--- No mask arm of its own: `display` has one, and no schema in the tree hands
+--- `add_le` a masked field. Nine signed ones reach it, which is why it shares
+--- the sign rather than restating it.
 Tree.add_le = function(self, field, item)
 	if field.abbr ~= nil and item ~= nil then
-		local value = item:le_uint()
-		rows[#rows + 1] = ("%s\t%d\t%d\t%d"):format(
-			field.abbr, item.base + item.offset, item.length, value)
+		rows[#rows + 1] = ("%s\t%d\t%d\t%s"):format(
+			field.abbr, item.base + item.offset, item.length,
+			display(field, item:le_uint(), item.length * 8))
 	end
 	return tree()
 end

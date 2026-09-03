@@ -934,7 +934,7 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 	is read at offset 0 of the whole buffer -- two answers about different
 	bytes, which is a difference in what was asked.
 
-	Of what is left, three `ProtoField` kinds are counted and not compared,
+	Of what is left, two `ProtoField` kinds are counted and not compared,
 	each because the two sides are making different claims rather than
 	disagreeing:
 
@@ -942,12 +942,18 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 	  walker answers `len=` and a first byte about the same member. Neither
 	  is wrong and neither is the other.
 	- `string` -- the same, for a member shown as text.
-	- `int` -- `dissect.lua`'s `shown` reads every range with `uint()`, so a
-	  signed member's row carries the stub's unsigned reading. Wireshark is
-	  what applies the sign and there is no Wireshark here, so the difference
-	  belongs to the stub rather than to the dissector. This cannot hide a
-	  signed member *declared* unsigned, which is the failure worth catching:
-	  that one has a `uint` kind, is compared, and disagrees.
+
+	`int` was a third, on the ground that `dissect.lua` read every range with
+	`uint()` and Wireshark is what applies the sign. That was true of the
+	stub and not of the dissector, and the stub is ours: it applies the sign
+	now, from the mask's width where there is a mask, so the fifteen signed
+	members in the corpus are compared like any other (26.210).
+
+	The old reason noted that the exclusion could not hide a signed member
+	*declared* unsigned, because that one gets a `uint` kind and disagrees.
+	The other direction it could hide, and no longer does: an unsigned member
+	declared signed is compared too, and reads negative where the walker does
+	not.
 	"""
 	total  = 0
 	values: dict[str, int] = {}
@@ -956,7 +962,7 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 		if not abbrev.startswith(proto + "."):
 			continue
 		total += 1
-		if not kinds.get(abbrev, "").startswith("uint"):
+		if not kinds.get(abbrev, "").startswith(("uint", "int")):
 			continue
 		local = abbrev.split(".")[-1]
 		# The same member shown twice in one packet. The walker has one
@@ -1101,8 +1107,14 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	cannot dilute it.
 
 	Measured over the 37 committed schemas: 3278 rows shown, 3940 member
-	lines walked, 2282 member-answers compared -- 69% of what the dissector
-	shows and 57% of what the walker renders.
+	lines walked, 2361 member-answers compared -- 72% of what the dissector
+	shows and 59% of what the walker renders.
+
+	Seventy-nine of those answers arrived when the stub learned to apply the
+	sign: the same rows, counted all along, moved from the held-out column
+	into the compared one. They cover all four widths and both readings --
+	`edges.trim` is `i5` behind a mask, `image`'s four `i64` members come
+	through `add_le` -- and negatives are drawn at every one of them.
 
 	The dissector shows 37 fewer rows than when this was first measured, and
 	that is the differential's first two findings being fixed rather than
@@ -1117,16 +1129,55 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 		walked   += result.walked
 		compared += result.compared
 
-	assert compared >= 2260, (
+	assert compared >= 2340, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 2282; the dissector shows {shown} rows and the walker "
+		f"down from 2361; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
-	assert compared * 100 >= shown * 68, (
+	assert compared * 100 >= shown * 71, (
 		f"{compared} of the dissector's {shown} rows are compared against "
-		f"the walker, down from 69%")
+		f"the walker, down from 72%")
 	assert walked >= 3940, (
 		f"the walker renders {walked} member lines, down from 3940; the "
 		"share above can be met by the dissector showing less")
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua")
+def test_a_signed_member_is_shown_with_its_sign(tmp_path: Path) -> None:
+	"""Chosen bytes for the sign, because the differential can be met without
+	it.
+
+	The corpus comparison catches both ways of getting this wrong -- dropping
+	the sign, and extending it from the container rather than from the field
+	-- and it catches them as *disagreements with the walker*, which is the
+	right evidence and is also evidence about the walker. These are the two
+	numbers on their own, so the stub can be held to them where nothing else
+	is running.
+
+	Three widths and both readings. `trim` is `i5` behind the mask `0xf8`, so
+	the byte `0xf8` is 31 in five bits and -1 as one of them; `scale` is the
+	three bits below it and stays unsigned. `epoch` is `i64` and comes through
+	`add_le`, where the extension is the one Lua's integer has already done --
+	`0x8000000000000000` little-endian is the most negative value there is,
+	and no arithmetic in `display` may disturb it.
+	"""
+	lua = tmp_path / "unit.lua"
+	lua.write_text(emit("struct s { i5 trim; u3 scale; i16 drift; }\n"),
+	               encoding="ascii")
+
+	_, rows = read_back(lua, "s", bytes([0xf8, 0xff, 0xff]))
+	assert rows == [("s.trim", 0, 1, "-1"), ("s.scale", 0, 1, "0"),
+	                ("s.drift", 1, 2, "-1")]
+
+	schema   = parse_text("target buffer;\nendian little;\n"
+	                      "bit_order msb_first;\nstruct t { i64 epoch; }\n")
+	resolved = resolve(schema, solve(schema))
+	little   = tmp_path / "little.lua"
+	little.write_text(generate(schema, resolved, "little"), encoding="ascii")
+
+	assert read_back(little, "t", bytes([0xff] * 8))[1] == [
+		("t.epoch", 0, 8, "-1")]
+	assert read_back(little, "t", bytes(7) + bytes([0x80]))[1] == [
+		("t.epoch", 0, 8, "-9223372036854775808")]
 
 
 @pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
