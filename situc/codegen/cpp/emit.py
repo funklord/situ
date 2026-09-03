@@ -3980,6 +3980,13 @@ class Emitter:
 		# Only a struct arm whose extent cannot be computed. C emits nothing
 		# for `netlink`'s `opaque rest[...]` default arm, and emitting an
 		# offset here would trade the divergence this fixes for a new one.
+		# The condition's text is "not a struct", which names every arm
+		# member whose type is not one -- twelve of the corpus's seventy. What
+		# it means is the one that reaches here, and the eleven scalar arms are
+		# spared not by this line but by the three branches above returning
+		# first. The two readings agree on a sample of one, `nl_message.body`'s
+		# `rest`; `test_the_arm_shapes_are_the_ones_the_condition_was_written_`
+		# `for` holds the population so a twelfth cannot arrive unnoticed.
 		if self.resolved.structs.get(placement.type_name or "") is None:
 			return [*head, f"\t/* ...and `{placement.name}` is not a shape this"
 			        " backend reaches into yet. */"]

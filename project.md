@@ -18894,6 +18894,66 @@ schema in the tree hands `add_le` a masked field, so it has no mask arm; nine
 signed ones reach it, so it has no sign arm of its own either. One function,
 both readings, and no branch nothing exercises.
 
+### 26.211 Coextensive, tested in one direction only
+
+26.210 fixed an exclusion that was one step *wider* than the thing it
+described: "the difference belongs to the stub rather than to the dissector"
+was true of a larger set than the set that had to be excluded, so it dropped
+79 comparable answers. Generalising that to "watch for a condition stated one
+step wider" is the wrong lesson, and the guidelines tree said so in the same
+afternoon, from the opposite instance: its own `doc_paths` docstring said
+"a document with no inventory table" for what is really "a document whose
+tables hold no paths" -- one step *narrower*, naming three documents' worth
+of a phenomenon whose true condition names those three and any future one.
+
+**The invariant is not width, it is coextensiveness, and it has to be tested
+in both directions.** So the condition 26.209 wrote was tested in one:
+
+    if self.resolved.structs.get(placement.type_name or "") is None:
+
+That reads "the arm is not a struct". A census of every variant-arm member in
+the corpus -- 70 of them, by the two facts the four backends branch on --
+says what it actually names:
+
+| n | arm member | reaches the branch |
+|--:|------------|--------------------|
+| 11 | scalar, not a struct  | no |
+|  1 | no scalar, not a struct | **yes** |
+| 42 | struct, fixed size    | no |
+| 16 | struct, unmeasurable  | no |
+
+**The text names twelve. The meaning is the second row alone.** It behaves
+correctly on the other eleven not because of anything this line says, but
+because three scalar branches above it return first. The two readings agree
+on a sample of one -- `nl_message.body.rest`, which is `opaque` and so has no
+scalar either -- and every claim made about that branch rests on it, "all
+four decline it together" included. That claim is still true. It was never
+evidence about the condition.
+
+**No divergence was introduced, and that is worth stating separately from the
+finding.** 26.209 added the serving path for struct arms and left the
+non-struct path byte-identical to what it was before. The gap is not a
+regression; it is a boundary that has had one witness for as long as the
+branch has existed, and the fix made it load-bearing without testing it.
+
+**What is added is the census, not an assertion about the empty cell.** A
+gate over an empty set reports success exactly as loudly as a real pass, so
+`test_the_arm_shapes_are_the_ones_the_condition_was_written_for` asserts the
+*population* -- the four cells and the one path in the last of them. A schema
+that introduces a scalar arm falling past all three scalar branches arrives
+as a failure addressed to whoever added it, instead of being absorbed by a
+condition that would catch it for the wrong reason. The fifth cell,
+`("scalar", "struct", ...)`, is absent rather than zero: a struct-typed
+member has no scalar, so nothing can reach it.
+
+**And the two cases are not the same size.** The dissector's was a criterion
+in code and cost 79 real comparisons; the guidelines' was prose describing
+code that was already right, and cost one wrong sentence in a commit message.
+Same shape, an order of magnitude apart in what it did -- which is the second
+half of why "one step wider" was the wrong generalisation. Neither error is a
+bias toward caution or toward reach, and both look identical from inside the
+sentence that makes them.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -28,7 +28,7 @@ from situc.parser import parse_text
 from situc import ast
 from situc.capability import Axis
 from situc.resolve import ResolvedSchema, resolve
-from situc.traverse import obligations
+from situc.traverse import arm_members, obligations, own_members
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
@@ -143,6 +143,94 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 			from_disk("example/netlink/netlink.situ").items()):
 		assert "body_rest_offset" not in text, (
 			f"{backend} offers an offset for an opaque arm that C does not")
+
+
+#: Every variant-arm member in the corpus, by the two facts the four backends
+#: branch on: whether the member has a scalar type, and whether its type name
+#: resolves to a struct. Counted on 2026-09-03 over the committed schemas.
+#:
+#: The fourth cell is the one this exists for. See the test below.
+ARM_SHAPES = {
+	("scalar", "not-struct", ""):                11,
+	("no-scalar", "struct", "fixed"):            42,
+	("no-scalar", "struct", "unmeasurable"):     16,
+	("no-scalar", "not-struct", ""):              1,
+}
+
+#: The whole of the last cell, by path. One member, and the condition that
+#: declines it is written about the *other* fact.
+DECLINED_ARMS = ("nl_message.body.rest",)
+
+
+def _arm_shapes() -> tuple[dict[tuple[str, str, str], int], list[str]]:
+	"""The census, recomputed from the resolved schemas."""
+	from collections import Counter
+
+	from every_schema import SCHEMAS
+	from situc.cli import analyse
+
+	cells: Counter[tuple[str, str, str]] = Counter()
+	declined: list[str] = []
+	for path in SCHEMAS:
+		_source, resolved, _ = analyse(path)
+		for _name, struct in sorted(resolved.structs.items()):
+			for variant in own_members(struct):
+				if variant.kind != "variant":
+					continue
+				for _arm, member in arm_members(struct, variant):
+					if member is None:
+						continue
+					nested = resolved.structs.get(member.type_name or "")
+					cell = (
+						"scalar" if member.scalar is not None else "no-scalar",
+						"struct" if nested is not None else "not-struct",
+						"" if nested is None else "fixed"
+						if nested.layout.is_fixed_size else "unmeasurable")
+					cells[cell] += 1
+					if cell == ("no-scalar", "not-struct", ""):
+						declined.append(member.path)
+	return dict(cells), sorted(declined)
+
+
+def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
+	"""The population behind the two tests above, named so it cannot change
+	in silence.
+
+	`_arm_member` declines an arm with `if structs.get(type_name) is None`,
+	and 26.209 restricted the offset accessor to a *struct* arm on the
+	strength of that reading. The condition's text names **12** of the
+	corpus's 70 arm members -- every one whose type is not a struct. What it
+	means is the last cell alone, and it behaves correctly on the other 11
+	only because three scalar branches return before control reaches it.
+
+	So the text and the meaning are not the same set, and the corpus holds
+	exactly one witness to the difference: `nl_message.body.rest`, which is
+	`opaque` and therefore has no scalar either. Every conclusion drawn about
+	that branch -- including "all four decline it together", which is true --
+	rests on a sample of one.
+
+	This does not assert the empty cell, because a gate over an empty set
+	reports success exactly as loudly as a real pass. It asserts the
+	*population*, so that a schema introducing a scalar arm that falls past
+	all three scalar branches arrives as a failure here, addressed to whoever
+	added it, rather than being absorbed by a condition that happens to
+	catch it for the wrong reason.
+
+	The four cells are also why `("scalar", "struct", ...)` is absent rather
+	than zero: a struct-typed member has no scalar, so that cell cannot be
+	reached at all.
+	"""
+	cells, declined = _arm_shapes()
+
+	assert cells == ARM_SHAPES, (
+		"the corpus's variant arms are no longer the shapes the arm-offset "
+		"condition was written against; a new cell, or a moved count, is a "
+		"case somebody has to look at rather than a number to update")
+	assert tuple(declined) == DECLINED_ARMS, (
+		"the members reaching the declining branch have changed; it is "
+		"written as \"not a struct\" and means \"no scalar and not a "
+		f"struct\", and {DECLINED_ARMS} was the whole of the evidence that "
+		"the two agree")
 
 
 # -- what every backend must do ---------------------------------------------
