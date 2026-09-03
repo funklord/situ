@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from every_schema import ROOT
+from every_schema import ROOT, SCHEMAS
 from oracles import DRIVERS, LIES, ORACLES, Oracle, have
 
 from situc import ast
@@ -1031,6 +1031,94 @@ def test_every_polynomial_codec_is_checked_or_excused() -> None:
 		f"project checks. Add it to CRC_CASES if the standard library "
 		f"implements it, to CRC_CHECK_VALUES with its published check value, "
 		f"or to CRC_UNCHECKED with the reason it can have neither")
+
+
+#: A schema this file compares against nothing, and why. Grouped by the kind
+#: of reason, because the three kinds are not equally final: the first can
+#: never change, the second changes the day a corpus appears, and the third is
+#: a property of the medium.
+#:
+#: Being named here is a decision a reader can see and argue with. Being in
+#: neither this nor `ORACLES` is the silence the guard below refuses -- and
+#: that silence is what left `tiff` uncompared while both tools it needed were
+#: already dependencies of this file (26.205).
+UNORACLED = {
+	# Designed here rather than described from elsewhere. There is no
+	# independent implementation, because there is no independent anything.
+	"message":   "project.md example 5.2, written for this repository",
+	"packet":    "project.md example 5.3, written for this repository",
+	"telemetry": "'designed rather than described', in its own first line",
+	"keystore":  "a private record; its own header says every other example "
+	             "directory is a public format and this one is not",
+	"edges":     "carries the constructs no worked example has (26.27)",
+	"header":    "as edges: a schema written to exercise this compiler",
+	"lenient":   "as edges",
+	"padded":    "as edges",
+	"image":     "situ's own packed image (0026). The only second reader is "
+	             "walker/c, which is also ours -- so it finds disagreement "
+	             "and not shared error, which is the distinction this file "
+	             "exists to make",
+	"codecs":    "codec property signatures, not a message format",
+	"kernels":   "as codecs -- and the codecs it derives are exactly what the "
+	             "CRC and base-N oracles above compare against zlib, "
+	             "binascii and base64",
+
+	# A third-party implementation exists and nothing on this machine can
+	# produce a corpus for it. `randpkt` writes eighteen packet types and none
+	# of these is one; a hand-written vector would be the schema read twice,
+	# which `test_the_corpus_is_not_this_project_s_opinion` refuses.
+	"ntp":       "tshark dissects NTP; randpkt cannot write one",
+	"dtls":      "as ntp",
+	"ble":       "as ntp",
+	"netlink":   "as ntp",
+	"http":      "as ntp",
+	"smtp":      "as ntp",
+	"ipv6ext":   "as ntp, and measured rather than assumed: `randpkt -t ipv6` "
+	             "fills the next-header byte with noise, so tshark reports no "
+	             "extension header at all and the comparison would be empty",
+	"dnsname":   "name compression is a sub-format of dns, which is oracled; "
+	             "tshark reads the compressed names there",
+	"pickle":    "Chromium's base::Pickle, which ships no tool that reads one",
+
+	# Not bytes on a wire, so no capture and no reader.
+	"register":  "an MMIO register map: a bus transaction, not a message",
+	"rtc":       "as register",
+	"slip":      "RFC 1055 framing, which no tool implements on its own",
+}
+
+
+def test_every_schema_is_oracled_or_excused() -> None:
+	"""The guard the two codec families have, for the corpus.
+
+	`test_every_polynomial_codec_is_checked_or_excused` and its table twin
+	refuse a codec that is compared against nothing. A schema was free to be,
+	and `tiff` was: `endian_marker` is a first-class construct with one
+	example, and the two tools needed to check it -- ImageMagick and `file`
+	-- were already used by this file for `bmp`. Nothing said so, because
+	nothing was counting.
+
+	Named by stem, so that a schema arriving in `example/` fails here until
+	somebody has asked the question once.
+	"""
+	oracled = {oracle.schema.stem for oracle in ORACLES}
+	present = {path.stem for path in SCHEMAS}
+
+	assert oracled <= present, (
+		f"ORACLES names schemas the corpus does not hold: "
+		f"{sorted(oracled - present)}")
+
+	stale = sorted(set(UNORACLED) - present)
+	assert not stale, (
+		f"UNORACLED excuses schemas that are gone: {stale}")
+
+	overlap = sorted(oracled & set(UNORACLED))
+	assert not overlap, (
+		f"{overlap} are both oracled and excused; the excuse is stale")
+
+	silent = sorted(present - oracled - set(UNORACLED))
+	assert not silent, (
+		f"{silent} are compared against nothing outside situ. Oracle them, "
+		f"or say in UNORACLED why they cannot be.")
 
 
 def test_the_corpus_is_not_this_project_s_opinion() -> None:

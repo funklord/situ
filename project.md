@@ -18636,6 +18636,48 @@ corpus body that shows no tool. Its rule already allows a helper; the helper
 had to be named. A guard that fires on a legitimate addition and forces the
 addition to say what it is doing is the kind that keeps working.
 
+### 26.206 Counting the corpus, not just the codecs
+
+26.205 found `tiff` uncompared and both tools it needed already imported by
+the file that should have compared it. The reason it went unnoticed is
+structural: `test_differential_oracle.py` counts *codecs* -- one guard for the
+polynomial family, one for the table family, each refusing a member that is
+compared against nothing -- and **nothing counted schemas**. Fourteen of
+thirty-seven were oracled and the other twenty-three were silence rather than
+decisions.
+
+They are named now, in three groups, because the three kinds of reason are not
+equally final.
+
+**Eleven have no independent implementation because there is no independent
+anything**: `message` and `packet` are project.md's own examples 5.2 and 5.3,
+`telemetry` says "designed rather than described" in its first line,
+`keystore`'s header says every other example directory is a public format and
+it is not, the four `test/schema` files exist to carry constructs no worked
+example has, and `std/`'s three are signatures rather than message formats.
+`std/image.situ` is the interesting one: it *has* a second reader in
+`walker/c`, and that is exactly the distinction this file was written about --
+a second implementation of ours finds disagreement and not shared error.
+
+**Eight have a third-party implementation and no corpus this machine can
+produce.** tshark dissects NTP, DTLS, BTLE, netlink, HTTP and SMTP; `randpkt`
+writes eighteen packet types and none of them is one of those, and a
+hand-written vector is the schema read twice -- which
+`test_the_corpus_is_not_this_project_s_opinion` refuses on purpose. `ipv6ext`
+is measured rather than assumed: `randpkt -t ipv6` fills the next-header byte
+with noise, so tshark reports no extension header at all and the comparison
+would be empty.
+
+**Three are not bytes on a wire**: two register maps, which are bus
+transactions rather than messages, and SLIP, which no tool implements alone.
+
+The guard refuses four things, each watched failing: a schema with neither an
+oracle nor an excuse, an excuse for a schema that is gone, a schema that is
+both oracled and excused, and an excuse deleted without an oracle to replace
+it. **The first is the one that matters** -- a schema arriving in `example/`
+now fails here until somebody has asked the question once, which is the whole
+mechanism, and is what would have caught `tiff` on the day it was written.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
