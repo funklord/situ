@@ -15450,6 +15450,19 @@ greps and one parse.
 
 **Decisions waiting.**
 
+- **`doc/decision/0050-external-arguments.md` is `Status: proposed`.**
+  Raised by the copyright holder: a format whose shape follows a fact the
+  message does not carry -- a negotiated cipher suite, a card class, a
+  block size. The record splits the question by *when* the argument is
+  known and by *what* it may affect, and proposes taking the cells that
+  cost nothing: `--define` for a generation-time `const`, and a
+  zero-width `parameter` member for a run-time one, with a parameter
+  allowed to move a member only where it is fixed for the stream. That
+  restriction is the fifth description's -- a per-message argument cannot
+  reach a Lua dissector, and 0049's rule is that four of five is not a
+  rule. `prefix(...)` is the precedent that the caller may know something
+  the message does not; `[since]` is the precedent that such a fact was
+  deliberately built never to move a byte.
 - ~~**`doc/decision/0046-sub-byte-checksums.md` is `Status: proposed`.**~~
   **Accepted 2026-09-04**, on the reasoning it already carried and on
   26.137's standing answer that a protocol needing something makes it work.
