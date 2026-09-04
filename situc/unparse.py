@@ -111,7 +111,13 @@ def _group(decl: ast.Decl) -> str:
 
 def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.TargetDirective):
-		return [f"target {decl.kind.value};"]
+		# `append` is part of the directive, not decoration: it says the
+		# message may grow at its end, which is what lets a coverage run to
+		# EOF. Dropped here, and nothing noticed because PNG is the tree's
+		# first `target file append` -- an unparser that loses a word can
+		# only be caught by a schema that uses it (26.244).
+		grows = " append" if decl.append else ""
+		return [f"target {decl.kind.value}{grows};"]
 
 	if isinstance(decl, ast.EndianDirective):
 		return [f"endian {decl.endian.value};"]

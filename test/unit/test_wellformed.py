@@ -1637,3 +1637,38 @@ def test_a_checksum_without_a_codec_is_unchanged() -> None:
 	"""The construct is opt-in: every checksum written before 0053 still
 	means what it meant, with the arithmetic in the caller."""
 	parse_text(checksum_schema(clause = ""), path="s.situ")
+
+
+# -- a literal is bytes, not text (0052) ------------------------------------
+
+
+@pytest.mark.parametrize("body,where", [
+	('struct S { u8 sig[4] [must_eq = "\\x89PNG"]; }', "must_eq"),
+	('struct S { preamble u8[4] = "\\x89PNG"; }',      "preamble"),
+	('enum m : u8[4] { png = "\\x89PNG" }\nstruct S { m t; }', "enum"),
+])
+def test_a_high_byte_in_a_literal_is_one_byte(body: str, where: str) -> None:
+	"""`\\xNN` is one byte, which is what the lexer's own docstring says.
+
+	All three constructs encoded the literal as UTF-8, so `\\x89` became two
+	bytes and a four-byte run was refused as five. It failed for exactly the
+	bytes a magic is most likely to contain -- PNG's signature could not be
+	written at all, and WOZ2's `\\x8d` counted double -- while every ASCII
+	test passed.
+
+	The tree already had the answer twice: `until` and the delimiter
+	attribute have always used latin-1. Three new copies of a decision made
+	twice is what `literal_bytes` now prevents.
+	"""
+	parse_text(body, path="s.situ")
+
+
+def test_a_literal_that_is_not_bytes_is_refused() -> None:
+	"""A code point above 255 is text, and text that needs an encoding is a
+	different member with an `[encoding]` on it.
+
+	Latin-1 is the boundary rather than ASCII: `\xe9` is one byte and fits,
+	which is why the refusal has to be tested with something that does not.
+	"""
+	assert "bytes" in rendered('struct S { u8 s[1] [must_eq = "\u4e2d"]; }')
+	assert "bytes" in rendered('struct S { preamble u8[1] = "\u4e2d"; }')

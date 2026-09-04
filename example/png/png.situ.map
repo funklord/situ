@@ -1,0 +1,26 @@
+# situ capability map v1
+# schema: png.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec crc32 derived expansion=+4 seekable=linear granularity=block systematic deterministic
+
+struct chunk size=12..2147483659 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical auth=Covered(crc) effect=EffectOnWrite
+  chunk.length                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=Unstable effect=EffectOnWrite
+  chunk.summed                           offset=AbsoluteStatic(0x04) size=Bounded(4, 2147483651) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable auth=Covered(crc) effect=EffectOnWrite
+  chunk.kind                             offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic address=Unstable canonical=NonCanonical auth=Covered(crc) effect=EffectOnWrite
+  chunk.data                             offset=AbsoluteStatic(0x08) size=Bounded(0, 2147483647) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(crc) effect=EffectOnWrite
+  chunk.crc                              offset=Dynamic size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable effect=EffectOnWrite
+
+struct png_signature size=8 address=Unstable atomic=NonAtomic effect=EffectOnWrite
+  png_signature.<reserved0>              offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=Unstable effect=EffectOnWrite

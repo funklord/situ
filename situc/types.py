@@ -264,3 +264,23 @@ def pinned_shown(expected: bytes) -> str:
 		else:
 			out.append(f"\\x{byte:02x}")
 	return "".join(out)
+
+
+def literal_bytes(text: str) -> bytes | None:
+	"""A string literal as the bytes it names, or None where it names none.
+
+	`latin-1`, so that `\\xNN` is one byte -- which is what the lexer's own
+	docstring says the escape means, and what `until` and the delimiter
+	attribute have always done. UTF-8 is the wrong answer and fails
+	silently for exactly the bytes a magic is most likely to contain:
+	`"\\x89PNG"` encodes to five bytes, so PNG's signature could not be
+	written and WOZ2's `\\x8d` counted double.
+
+	`None` where a code point will not fit in a byte. A byte run is bytes;
+	text that needs an encoding is a different member with an `[encoding]`
+	on it.
+	"""
+	try:
+		return text.encode("latin-1")
+	except UnicodeEncodeError:
+		return None

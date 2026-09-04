@@ -630,6 +630,7 @@ class Emitter:
 		read    = ("situ_get_le32"
 		           if placement.tag_codec_endian is ast.Endian.LITTLE
 		           else "situ_get_be32")
+		where   = self._base_expression(struct, placement)
 
 		return [
 			"",
@@ -668,11 +669,17 @@ class Emitter:
 			"\tif (e != SITU_OK) {",
 			"\t\treturn e;",
 			"\t}",
-			f"\tif (!situ_in_bounds(view, {placement.offset_bytes}u,"
-			f" {width}u)) {{",
+			# The stored sum's own offset, which is dynamic whenever the
+			# coverage is: PNG's crc follows a chunk whose length the
+			# message decides. Reading `offset_bytes` here asserted, and no
+			# synthetic schema reached it because a fixed-size region puts
+			# the checksum at a constant.
+			f"\tconst uint32_t crc_at = {where};",
+			"",
+			f"\tif (!situ_in_bounds(view, crc_at, {width}u)) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-			f"\treturn {read}(view.base + {placement.offset_bytes}u) == want",
+			f"\treturn {read}(view.base + crc_at) == want",
 			"\t       ? SITU_OK : SITU_ERR_CHECKSUM;",
 			"}",
 		]

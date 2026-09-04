@@ -19,7 +19,7 @@ import difflib
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
-from situc.types import NUMERIC_BOUNDS, ScalarKind, is_scalar_name
+from situc.types import NUMERIC_BOUNDS, ScalarKind, is_scalar_name, literal_bytes
 
 Structs = dict[str, ast.StructDecl]
 
@@ -1885,7 +1885,16 @@ def check_byte_enums(schema: ast.Schema) -> None:
 					notes = ["a byte-run enum names spans of bytes, so every "
 					         "arm is written out as one"])
 
-			held = member.value.value.encode("utf-8")
+			held = literal_bytes(member.value.value)
+			if held is None:
+				raise error(
+					f"`{member.name}` is not writable as bytes",
+					member.value.span,
+					label = "not bytes",
+					notes = ["a byte-run enum names spans of bytes, so an arm "
+					         "is written with `\\xNN` escapes where it is not "
+					         "printable"])
+
 			if len(held) != decl.width:
 				raise error(
 					f"`{member.name}` is {len(held)} byte(s) of a "
@@ -1925,7 +1934,17 @@ def check_byte_run_equality(schema: ast.Schema) -> None:
 						         "compile time"])
 
 				assert isinstance(attr.value, ast.StringLiteral)
-				held = len(attr.value.value.encode("utf-8"))
+				run = literal_bytes(attr.value.value)
+				if run is None:
+					raise error(
+						"`[must_eq]` on a byte run takes bytes",
+						attr.value.span,
+						label = "not writable as bytes",
+						notes = ["a byte run is bytes: write them as `\\xNN` "
+						         "escapes rather than as text an encoding "
+						         "would have to turn into bytes"])
+
+				held = len(run)
 				if held != size.value:
 					raise error(
 						f"`[must_eq]` pins {held} byte(s) of a "

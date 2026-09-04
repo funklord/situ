@@ -1,0 +1,90 @@
+// PNG, RFC 2083 -- the chunked image container.
+//
+// Here because it is the one real format that needs all three of 0052's and
+// 0053's constructs at once, and needs each of them for a different reason:
+//
+//   - an eight-byte signature nobody reads, which is `preamble`;
+//   - four-character chunk types, some named and the rest deliberately not,
+//     which is a byte-run enum with `default = pass`;
+//   - a CRC32 over each chunk's type and data, which is a `checksum` naming
+//     the codec that computes it.
+//
+// It also found a defect in the first of those. `\x89` is one byte and the
+// literal was being encoded as UTF-8, so PNG's own signature could not be
+// written -- eight bytes counted as nine. Every earlier test used ASCII
+// magics and passed.
+
+target file append;
+
+// PNG is big-endian throughout, which RFC 2083 calls "network byte order".
+endian big;
+bit_order msb_first;
+
+codec crc32 {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF, reflect);
+}
+impl crc32 derived;
+
+// The four critical chunk types, and `default = pass` because the rest are
+// the point of PNG's design: a decoder that does not recognise a chunk skips
+// it, and the fifth bit of the first byte says whether that is safe. Naming
+// them exhaustively would refuse every ancillary chunk a valid file may
+// carry -- so this enum is a vocabulary rather than a closed set, which is
+// exactly what `pass` is for.
+enum chunk_type : u8[4] {
+	ihdr = "IHDR",
+	plte = "PLTE",
+	idat = "IDAT",
+	iend = "IEND",
+	default = pass,
+}
+
+// The signature, which a reader checks and then never looks at again --
+// `preamble` rather than a field, so no accessor is generated for bytes
+// nobody has a use for.
+//
+// The run is worth reading: 0x89 is a high bit that fails a 7-bit transfer,
+// "PNG" names the format, CRLF then ^Z then LF catch the three ways a naive
+// file transfer damages a binary. It is a self-test, and none of it is data.
+struct png_signature {
+	preamble u8[8] = "\x89PNG\r\n\x1a\n";
+}
+
+require size(png_signature) == 8;
+require absolute_static(png_signature);
+
+// One chunk. The CRC covers the type and the data and *not* the length,
+// which is why the region starts where it does: RFC 2083 section 5.3 puts
+// the length outside the check on purpose, so that a corrupt length is
+// caught by the frame rather than by the checksum.
+struct chunk {
+	u32  length  [max = 2147483647];   // RFC 2083: at most 2^31 - 1
+
+	authenticated summed {
+		chunk_type  kind;
+		u8          data[length];
+	}
+
+	// Declared as coverage here rather than `covers(summed) is crc32`, and
+	// the reason is a limit rather than a choice. `gen-derived` emits C, so
+	// the binding is honoured by the C and C++ backends and refused by Rust
+	// and Python -- and every example in this directory is built by all four
+	// in the differential. Adding `is crc32` to this line is what a C or C++
+	// caller wants and is exercised by the compiler tests; a Rust or Python
+	// `gen-derived` is what would let it live here (0053).
+	checksum u8 crc[4] covers(summed);
+}
+
+require absolute_static(chunk.length);
+
+// A chunk is deliberately NOT canonical, and `require canonical(chunk)` was
+// tried here and refused, which is the solver saying so rather than a
+// comment claiming it. `default = pass` admits chunk types this schema does
+// not name, so more than one byte string is a valid `kind` to the same
+// reader -- which is what makes PNG extensible, and why a verifier must work
+// over received bytes rather than over anything it re-encoded.
+//
+// What is worth pinning instead is that the type is the bytes: no swap, no
+// decode, so a caller may point at it and compare it against a literal.
+require memory_identical(chunk.kind);

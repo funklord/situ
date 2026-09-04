@@ -239,6 +239,85 @@ def _tiff(tmp: Path, endian: str, size: str) -> bytes:
 	return made.read_bytes()
 
 
+
+def png_corpus(tmp: Path) -> bytes:
+	"""A PNG ImageMagick wrote.
+
+	Small, because what is on trial is the chunk walk rather than the image:
+	a 7x5 solid colour is a signature, an IHDR, one IDAT and an IEND, which
+	is every chunk shape this schema describes and four independent CRCs.
+	"""
+	made = tmp / "made.png"
+	_run(["convert", "-size", "7x5", "xc:red", "PNG:" + str(made)])
+	return made.read_bytes()
+
+
+def png_says(image: bytes, tmp: Path) -> list[object]:
+	"""Every chunk, and `zlib`'s CRC over the bytes PNG says are covered.
+
+	`zlib.crc32` is the independent implementation here, and it is a real
+	one: it is not situ's derived codec, it is the CRC every PNG encoder on
+	the planet was checked against, and the file was written by a third
+	tool. What the comparison is really asking is whether situ agrees about
+	*which bytes are covered* -- the length is outside the CRC and the CRC
+	field is outside it too, so a span that is one field wrong produces a
+	number that is entirely wrong.
+	"""
+	import zlib
+
+	del tmp
+	found: list[object] = []
+	at = 8					# past the signature
+	while at + 8 <= len(image):
+		length = int.from_bytes(image[at:at + 4], "big")
+		kind   = image[at + 4:at + 8]
+		body   = image[at + 8:at + 8 + length]
+		stored = int.from_bytes(image[at + 8 + length:at + 12 + length], "big")
+		found.append((kind.decode("latin-1"), length,
+		              zlib.crc32(kind + body) & 0xFFFFFFFF, stored))
+		at += 12 + length
+	return found
+
+
+def png_situ(module: object, image: bytes) -> list[object]:
+	"""The same chunks, walked through the generated accessors.
+
+	The CRC is computed by `zlib` over the span situ's `crc_covered` names,
+	so situ supplies the boundaries and something else supplies the
+	arithmetic. Three backends used to say that span ran to the end of the
+	buffer (26.244); against a real file that is a wrong number rather than
+	a wrong-looking one, and this is the check that would have said so.
+	"""
+	import zlib
+
+	from situ_runtime import Message
+
+	held = Message(bytearray(image))
+	sig  = module.png_signature.at(held, 0)		# type: ignore[attr-defined]
+	sig.validate()					# the eight-byte preamble
+
+	found: list[object] = []
+	at = 8
+	while at + 8 <= len(image):
+		# A chunk is not fixed-size, so its view is acquired with an extent:
+		# 12 bytes of frame plus the length this chunk declares.
+		length = int.from_bytes(image[at:at + 4], "big")
+		view = module.chunk.at(held, at, 12 + length)	# type: ignore[attr-defined]
+		view.validate()
+		# View-relative, so the chunk's own offset goes back on: `crc_covered`
+		# answers about the view it was asked of, not about the file.
+		start, count = view.crc_covered()
+		start += at
+		kind   = bytes(view.kind)
+		assert int(view.length) == length, "situ read a different length"
+		stored = int.from_bytes(bytes(view.crc), "big")
+		found.append((kind.decode("latin-1"), length,
+		              zlib.crc32(bytes(image[start:start + count])) & 0xFFFFFFFF,
+		              stored))
+		at += 12 + length
+	return found
+
+
 def tiff_says(image: bytes, tmp: Path) -> dict[str, object]:
 	"""`file`'s TIFF line: the byte order, and how many IFD entries follow.
 
@@ -995,6 +1074,17 @@ ORACLES: tuple[Oracle, ...] = (
 		          "text-number path any example exercises."),
 	),
 	Oracle(
+		name   = "png",
+		schema = ROOT / "example" / "png" / "png.situ",
+		tool   = "convert",
+		why    = ("ImageMagick writes the file and `zlib` checks the CRCs. "
+		          "situ supplies the boundaries and something else supplies "
+		          "the arithmetic, so what is on trial is which bytes a "
+		          "chunk's CRC covers -- the length is outside it and the "
+		          "CRC field is outside it too, and three backends used to "
+		          "say the span ran to the end of the buffer (26.244)."),
+	),
+	Oracle(
 		name   = "tiff",
 		schema = ROOT / "example" / "tiff" / "tiff.situ",
 		tool   = "convert",
@@ -1183,6 +1273,7 @@ DRIVERS = {
 	"protobuf": (proto_corpus, proto_says, proto_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
+	"png":      (png_corpus, png_says, png_situ),
 	"tiff":     (tiff_corpus_little, tiff_says, tiff_situ),
 	"tiff-be":  (tiff_corpus_big, tiff_says, tiff_situ),
 	"modbus":   (modbus_corpus, modbus_says, modbus_situ),

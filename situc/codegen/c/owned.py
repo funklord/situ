@@ -42,7 +42,7 @@ from situc.types import ScalarKind
 from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import own_entries
+from situc.traverse import own_entries, pinned_runs
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -379,6 +379,24 @@ def _encode_body(struct: ResolvedStruct, prefix: str,
 			# caller's buffer showing through, and broke the round-trip on
 			# every schema with a bit-packed reserved field. The round-trip
 			# test found it on the eighth random draw.
+			# A `preamble` is reserved whose content is stated rather than
+			# governed by a policy (0052), so writing zeros here put eight
+			# of them where PNG's signature belongs -- 26.241's defect one
+			# layer out, in the emitter that was never taught the
+			# construct. The round-trip test found it the day the example
+			# was written.
+			pinned = pinned_runs(placement)
+			if pinned is not None and len(pinned) == 1:
+				body = ", ".join(f"0x{byte:02X}u" for byte in pinned[0])
+				lines.extend([
+					"\t{",
+					f"\t\tstatic const uint8_t want[] = {{ {body} }};",
+					"",
+					f"\t\tmemcpy(data + {offset}u, want, sizeof want);",
+					"\t}",
+				])
+				continue
+
 			lines.extend(_reserved_write(placement))
 			continue
 
@@ -501,6 +519,19 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	for struct in structs:
 		name = ident(prefix, struct.name)
 		size = macro(prefix, struct.name, "SIZE_FIXED")
+		# A struct whose every member is a `preamble` has no owned fields, so
+		# neither `out` nor `in` is touched and `-Werror=unused-parameter`
+		# refuses the file. PNG's signature block is the first such struct
+		# in the tree; the parameters stay in the signature because the two
+		# functions are an interface, and a cast is what says "deliberately
+		# nothing to carry".
+		decoded = _decode_body(struct, prefix, enums, resolved)
+		encoded = _encode_body(struct, prefix, enums, resolved)
+		if not any("out->" in line for line in decoded):
+			decoded = ["\t(void)out;\t\t/* every member is a preamble */", *decoded]
+		if not any("in->" in line for line in encoded):
+			encoded = ["\t(void)in;\t\t/* every member is a preamble */", *encoded]
+
 		body.extend([
 			f"situ_err_t {name}_decode(const uint8_t *data, uint32_t len,",
 			f"                         {name}_t *out)",
@@ -509,7 +540,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			"",
-			*_decode_body(struct, prefix, enums, resolved),
+			*decoded,
 			"",
 			"\t/* Constraints are the view's to state and this reuses them",
 			"\t * rather than restating them: two checks of one schema is how",
@@ -534,7 +565,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			"",
-			*_encode_body(struct, prefix, enums, resolved),
+			*encoded,
 			"",
 			"\treturn SITU_OK;",
 			"}",

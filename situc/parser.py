@@ -19,7 +19,7 @@ from typing import TypeVar
 from situc import ast, kernels, namespaces, wellformed
 from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
-from situc.types import WidthError, lookup
+from situc.types import WidthError, lookup, literal_bytes
 
 
 EnumT = TypeVar("EnumT", bound=Enum)
@@ -1907,7 +1907,16 @@ class Parser:
 				notes = ["the bytes are the member -- there is no value to "
 				         "compute, and nothing may read it afterwards"])
 
-		held = literal.value.encode("utf-8")
+		held = literal_bytes(literal.value)
+		if held is None:
+			raise error(
+				"`preamble` takes bytes",
+				literal.span,
+				label = "not writable as bytes",
+				notes = ["a preamble is bytes: write them as `\\xNN` escapes "
+				         "rather than as text an encoding would have to turn "
+				         "into bytes"])
+
 		size = getattr(array, "size", None)
 		if array is None:
 			array = ast.ArraySpec(literal.span,

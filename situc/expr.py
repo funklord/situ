@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from situc import ast
+from situc.types import literal_bytes
 from situc.diagnostics import SituError, error
 
 # Builtins whose arguments are values rather than paths.
@@ -870,7 +871,19 @@ def _enum_bytes(member: ast.EnumMember, width: int) -> bytes:
 			notes = ["a byte-run enum names spans of bytes, so every arm is "
 			         "written out as one"])
 
-	held = member.value.value.encode("utf-8")
+	# `wellformed.check_byte_enums` has already refused a non-byte literal
+	# and a width mismatch; this is the fold, and it repeats both checks
+	# rather than assuming, because `build_env` is reachable from tests that
+	# do not run the front end.
+	held = literal_bytes(member.value.value)
+	if held is None:
+		raise error(
+			f"`{member.name}` is not writable as bytes",
+			member.value.span,
+			label = "not bytes",
+			notes = ["a byte-run enum names spans of bytes, so an arm is "
+			         "written with `\\xNN` escapes where it is not printable"])
+
 	if len(held) != width:
 		raise error(
 			f"`{member.name}` is {len(held)} byte(s) of a {width}-byte enum",

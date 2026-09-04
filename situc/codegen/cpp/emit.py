@@ -5032,11 +5032,12 @@ class Emitter:
 				f"\t\towner.clear_dirty(dirty_{name});",
 				"\t}",
 			])
-		lines.extend(self._checksum_codec(placement, name))
+		lines.extend(self._checksum_codec(struct, placement, name))
 
 		return lines
 
-	def _checksum_codec(self, placement: Placement, name: str) -> list[str]:
+	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
 		"""`is crc32` -- compute the sum, and compare it (0053).
 
 		C++ calls the C implementation `gen-derived` emits, which is the
@@ -5056,6 +5057,7 @@ class Emitter:
 		         if placement.tag_codec_endian is ast.Endian.LITTLE
 		         else "situ_get_be32")
 		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		where = self._offset_expression(struct, placement) or "0"
 		return [
 			"",
 			f"\t/* {placement.tag_codec} over the bytes {name}_covered()",
@@ -5087,11 +5089,13 @@ class Emitter:
 			"\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\treturn e;",
 			"\t\t}",
-			f"\t\tif (!situ_in_bounds(raw(), {placement.offset_bytes}u,"
-			f" {width}u)) {{",
+			# The stored sum's own offset, dynamic whenever the coverage is:
+			# PNG's crc follows a chunk whose length the message decides.
+			f"\t\tconst std::uint32_t crc_at = ({where});",
+			f"\t\tif (!situ_in_bounds(raw(), crc_at, {width}u)) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\treturn {read}(raw().base + {placement.offset_bytes}u)"
+			f"\t\treturn {read}(raw().base + crc_at)"
 			" == want",
 			"\t\t       ? ::situ::rt::err::ok : ::situ::rt::err::checksum;",
 			"\t}",
@@ -5110,8 +5114,32 @@ class Emitter:
 		members = [entry.placement for entry in own_entries(struct)]
 		index   = next((i for i, held in enumerate(members)
 		                if held.path == region.path), None)
-		if index is not None and index + 1 < len(members):
+
+		# An `authenticated` region is not one of them: it consumes no bytes
+		# of its own and names bytes its members already account for, so
+		# `own_members` drops it. Falling through to the view's limit here
+		# told a caller to sum every byte after the region -- for IPv4 that
+		# is the whole payload, and the committed example was wrong in this
+		# backend for as long as it has existed. C learned it from IPv4 and
+		# recorded it; nothing carried the lesson across (26.244).
+		if index is None:
+			inside = [i for i, held in enumerate(members)
+			          if region.name in held.regions]
+			if not inside:
+				return "raw_.limit"
+			index = inside[-1]
+
+		if index + 1 < len(members):
 			return self._offset_expression(struct, members[index + 1]) or "raw_.limit"
+
+		# Nothing follows, so the region ends where its last member does.
+		last   = members[index]
+		base   = self._offset_expression(struct, last)
+		length = self._length_expression(struct, last)
+		if base is not None and length is not None:
+			return f"({base} + ({length}))"
+		if last.is_fixed_size and last.offset_bits is not None:
+			return f"{last.offset_bytes + last.size_bits // BITS_PER_BYTE}u"
 		return "raw_.limit"
 
 	def _offsets(self, struct: ResolvedStruct) -> list[str]:

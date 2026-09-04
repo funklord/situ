@@ -22,7 +22,7 @@ from enum import Enum
 from situc import ast
 from situc import kernels
 from situc.ast import Schema
-from situc.types import pinned_shown
+from situc.types import pinned_shown, literal_bytes
 from math import lcm
 
 from situc.expr import Env
@@ -1443,8 +1443,11 @@ def pinned_runs(placement: Placement) -> tuple[bytes, ...] | None:
 	for attr in placement.attrs:
 		if attr.name != "must_eq" or not isinstance(attr.value, ast.StringLiteral):
 			continue
-		held = attr.value.value.encode("utf-8")
-		if len(held) == placement.array_count:
+		# The front end has refused a non-byte literal and a length that
+		# disagrees; both are re-asked here rather than assumed, because a
+		# `None` would otherwise reach four backends as a crash.
+		held = literal_bytes(attr.value.value)
+		if held is not None and len(held) == placement.array_count:
 			return (held,)
 	return None
 

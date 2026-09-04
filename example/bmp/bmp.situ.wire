@@ -27,7 +27,7 @@ struct bitmap_file size=54
   ~         0..4294967295 u8         pixels  sized-by=info.image_size at=file.pixel_offset
 
 struct bitmap_file_header size=14
-  @0x0000   2         u8         signature  little
+  @0x0000   2         u8         signature  little must_eq="BM"
   @0x0002   4         u32        file_size  little
   @0x0006   2         u16        <reserved0>  little must_be_zero
   @0x0008   2         u16        <reserved1>  little must_be_zero

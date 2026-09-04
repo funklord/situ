@@ -20686,6 +20686,89 @@ under `-Werror=switch` and refused the new code until it was handled, and
 vocabulary and fails when it falls behind. Both fired, neither needed
 looking for.
 
+### 26.244 Writing one real example found three bugs nothing else could
+
+The task was to use the new constructs in the examples where they are
+accurate. Three fitted: BMP's `signature[2]`, whose comment already argued
+for byte-run semantics while the field carried no check at all;
+`keystore.magic`, a `u32` with `[endian = big]` faking a run; and
+`std/image.situ`'s own `u8 magic[4]`, whose value was a **comment** --
+14.5 in the schema describing situ's own artifact.
+
+Three did not fit, and saying so is the finding. TIFF's `II`/`MM` is an
+`endian_marker`, which *selects* byte order; a byte-run enum would lose
+that. Ethernet's preamble is not in the captured frame. And **no example
+uses a checksum situ can derive** -- every one is the Internet checksum,
+which is not a polynomial, a table or a shift register, so
+`std/kernels.situ` has no kernel for it. Forcing `is crc32` onto an IPv4
+header would have been a false statement about the format.
+
+**So PNG was written, because it is the one real format that needs all
+three at once** and needs each for a different reason: an eight-byte
+signature nobody reads, four-character chunk types where the unnamed ones
+are the point, and a CRC32 per chunk. It found three defects in a day.
+
+**`\x89` was two bytes.** All three new constructs encoded their literal as
+UTF-8, so PNG's signature could not be written -- eight bytes counted as
+nine -- and WOZ2's `\x8d`, the magic that started this whole thread,
+counted double. Every earlier test used ASCII magics and passed. **The tree
+already had the answer twice**: `until` and the delimiter attribute have
+always used latin-1, which is what the lexer's own docstring says `\xNN`
+means. Three new copies of a decision made twice is what `literal_bytes`
+now prevents.
+
+**Three backends ended a covered region at the wrong byte.** C computes
+IPv4's as `20 + (ihl - 5) * 4`; C++, Rust and Python all said "to the end
+of the buffer". On a real datagram that is the whole payload. It is a
+**pre-existing defect on a committed example**, in three of four backends,
+for as long as those backends have existed -- and C's own `_region_end`
+carries a comment saying IPv4 taught it the case. **Nothing carried the
+lesson across.**
+
+Why it stayed invisible is the part worth keeping. Until 0053 nothing
+*computed* over the span: the caller did, so a wrong sum looked like the
+caller's bug. And the four-way differential compares what the backends
+decode, not what they say they cover -- so a wrong span is exactly the
+shape it cannot see. **PNG made it a wrong constant instead**, because its
+CRC field follows the region and the buffer's end is four bytes past it.
+
+**And the unparser silently dropped `append`.** PNG is the tree's first
+`target file append`, and a directive word that no schema uses is a word
+the round trip cannot check.
+
+**Then `--owned` wrote eight zeros where the signature belongs.** The owned
+encoder reached `must_be_zero`'s path for a `preamble`, because it is
+`reserved` and nobody had taught that emitter the difference -- 26.241's
+defect a third time, in the one emitter the construct's own work never
+touched. A struct whose every member is a preamble also has no owned
+fields, so `-Werror=unused-parameter` refused the file; the parameters stay
+in the signature, because the pair is an interface, and a cast says
+"deliberately nothing to carry".
+
+**The round trip could not guard the fix, and the sabotage is what said
+so.** That test draws random bytes, a signature is `[must_eq]`, and all 64
+draws were refused -- so it skips honestly and guards nothing about the
+bytes written. Reverting the fix left it green. **A skip is not a pass, and
+a test that skips on the case you just fixed is a test you do not have**;
+the direct assertion beside it exists because the sabotage passed.
+
+**The oracle is the strongest thing to come out of this.** ImageMagick
+writes the PNG and `zlib.crc32` checks each chunk, so situ supplies the
+boundaries and something else supplies the arithmetic -- which is exactly
+the question the covered-span bug got wrong. Reverted, it fails on all ten
+chunks of a real file, including the four ancillary types (`cHRM`, `bKGD`,
+`tIME`, `tEXt`) that the enum's `default = pass` admits and that no
+hand-written fixture would have contained.
+
+**The common shape: each of the three was reachable only by a schema
+nobody had written.** Not a missing test -- a missing *input*. A corpus
+assembled from what its authors already knew how to write cannot pose the
+case its authors did not know about, which is 26.219 and 26.234 arriving
+together, and the argument for writing a real format rather than a
+fixture. PNG's IEND chunk CRC is `0xAE426082`, a constant from the
+specification rather than from situ, and it is now what the C and C++
+tests check against.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

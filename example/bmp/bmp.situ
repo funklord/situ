@@ -16,10 +16,12 @@ target buffer;
 endian little;
 
 struct bitmap_file_header {
-	// "BM". A byte array rather than a u16, because it is a marker, not a
-	// number, and giving it a numeric type would make its value depend on
-	// endianness for no reason.
-	u8        signature[2];
+	// A byte array rather than a u16, because it is a marker, not a number,
+	// and giving it a numeric type would make its value depend on endianness
+	// for no reason. The bound says so directly now: a byte run compared
+	// against a byte run, which is one span comparison rather than two
+	// per-byte fields (0052).
+	u8        signature[2]  [must_eq = "BM"];
 	u32       file_size;
 	reserved  u16  [must_be_zero];
 	reserved  u16  [must_be_zero];

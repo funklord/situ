@@ -1261,10 +1261,35 @@ class Emitter:
 		members = [entry.placement for entry in own_entries(struct)]
 		index   = next((i for i, held in enumerate(members)
 		                if held.path == region.path), None)
-		if index is not None and index + 1 < len(members):
+		# An `authenticated` region is not one of them: it consumes no bytes
+		# of its own and names bytes its members already account for, so
+		# `own_members` drops it. Falling through to the buffer's end told a
+		# caller to sum every byte after the region -- for IPv4 that is the
+		# whole payload, and the committed example was wrong in this backend
+		# for as long as it has existed. C learned it from IPv4 and recorded
+		# it; nothing carried the lesson across (26.244).
+		if index is None:
+			inside = [i for i, held in enumerate(members)
+			          if region.name in held.regions]
+			if not inside:
+				return "self.bytes.len()"
+			index = inside[-1]
+
+		if index + 1 < len(members):
 			found = self._offset_expression(struct, members[index + 1])
 			if found is not None:
 				return self._unparen(found)
+
+		# Nothing follows, so the region ends where its last member does.
+		last   = members[index]
+		base   = self._offset_expression(struct, last)
+		length = self._length_expression(struct, last)
+		if base is not None and length is not None:
+			# `_unparen`, because `-D warnings` refuses an outer pair around
+			# an assigned value and every generated crate is built with it.
+			return self._unparen(f"({base} + ({length}))")
+		if last.is_fixed_size and last.offset_bits is not None:
+			return str(last.offset_bytes + last.size_bits // BITS_PER_BYTE)
 		return "self.bytes.len()"
 
 	def _holds(self, at: str, width: int, empty: str) -> list[str]:

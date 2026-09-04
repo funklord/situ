@@ -3946,3 +3946,80 @@ int main(void)
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_every_backend_ends_a_covered_region_at_the_same_byte() -> None:
+	"""IPv4's checksum covers its header, options included -- and stops.
+
+	Three backends said it ran to the end of the buffer. For a real datagram
+	that is the whole payload, so a caller summing `header_checksum_covered`
+	in C++, Rust or Python got a different number from one summing it in C,
+	on a committed example, for as long as those backends have existed.
+
+	It stayed invisible because nothing computed over the span: the caller
+	did, and a caller's wrong sum looks like a caller's bug. 0053 made
+	something compute, and PNG -- whose chunk CRC is followed by the CRC
+	field itself -- made the disagreement a wrong constant rather than a
+	wrong-looking one.
+
+	The assertion is the relationship rather than the expression: four
+	backends spell arithmetic differently and must agree about which byte
+	the region ends at.
+	"""
+	source, resolved, _ = analyse(ROOT / "example" / "ipv4" / "ipv4.situ")
+	parsed = parse(source)
+
+	from situc.codegen.c.emit import Emitter as CEmitter
+	from situc.codegen.cpp.emit import Emitter as CppEmitter
+	from situc.codegen.python.emit import Emitter as PyEmitter
+	from situc.codegen.rust.emit import Emitter as RsEmitter
+
+	held  = resolved.structs["ipv4_header"]
+	region = next(placement for placement in held.layout.placements
+	              if placement.name == "header")
+
+	# C and C++ take a symbol prefix and a namespace; the other two do not.
+	ends = {
+		"c":      CEmitter(parsed, resolved, "ipv4", "situ"),
+		"cpp":    CppEmitter(parsed, resolved, "ipv4", "situ"),
+		"python": PyEmitter(parsed, resolved, "ipv4"),
+		"rust":   RsEmitter(parsed, resolved, "ipv4"),
+	}
+	ends = {name: made._region_end(held, region)
+	        for name, made in ends.items()}
+
+	# None of them may fall back to "the rest of the buffer".
+	for name, text in ends.items():
+		assert "limit" not in text and "len()" not in text \
+			and "_len" not in text, f"{name} runs to the buffer's end: {text}"
+	# And each must read the field that decides it.
+	for name, text in ends.items():
+		assert "ihl" in text, f"{name} does not read ihl: {text}"
+
+
+def test_owned_encode_writes_a_preamble_rather_than_zeros() -> None:
+	"""`--owned` put eight zero bytes where PNG's signature belongs.
+
+	A preamble is `reserved` whose content is stated rather than governed by
+	a policy (0052), and the owned encoder was never taught the difference:
+	it reached the `must_be_zero` path and memset the run. That is 26.241's
+	defect one layer out, in an emitter the construct's own work never
+	touched.
+
+	A direct test because the round trip cannot reach it: that test draws
+	random bytes, a signature is `[must_eq]`, and every draw is refused --
+	so it skips honestly and guards nothing here. Confirmed by sabotage,
+	which is how this test came to exist.
+	"""
+	from situc.codegen.c import owned
+	from situc.layout import solve
+	from situc.resolve import resolve as resolve_schema
+
+	text   = ("target file append;\nendian big;\n"
+	          'struct S { preamble u8[8] = "\\x89PNG\\r\\n\\x1a\\n"; }\n')
+	schema = parse(Source("unit.situ", text))
+	files  = owned.generate(schema, resolve_schema(schema, solve(schema)), "unit")
+	source = "\n".join(files.values())
+	assert ("static const uint8_t want[] = { 0x89u, 0x50u, 0x4Eu, 0x47u,"
+	        " 0x0Du, 0x0Au, 0x1Au, 0x0Au };") in source
+	assert "memset(data + 0u, 0, 8u)" not in source

@@ -1,0 +1,33 @@
+# situ wire signature v1
+# schema: png.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target file
+
+enum chunk_type : u8[4] unknown=pass
+  ihdr="IHDR" plte="PLTE" idat="IDAT" iend="IEND"
+
+struct chunk size=12..2147483659
+  @0x0000   4         u32        length  big max=2147483647
+  @0x0004   4         chunk_type kind  big
+  @0x0008   0..2147483647 u8         data  sized-by=length
+  ~         4         u8         crc
+  crc covers: data kind summed
+
+struct png_signature size=8
+  @0x0000   8         u8         <reserved0>  big
