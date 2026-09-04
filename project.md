@@ -19935,6 +19935,45 @@ rather than changing what callers do. The chosen buffer makes the two
 readings disagree by construction: the bytes at 8 and at 10 are different,
 so a walker that regressed could not pass by coincidence.
 
+### 26.229 The construct seam, followed to three clean answers
+
+26.227 and 26.228 both came from one question -- which constructs does the
+corpus barely exercise -- so the rest of that list was worked through.
+Nothing more came out of it, which is worth the paragraph.
+
+**`indexed`'s offset base is packed correctly**, and the hypothesis that it
+was not was wrong in an instructive way. `_index_base` reads
+
+    {"region": 0, "message": 1}.get(str(base), 2)
+
+and `ast.IndexBase` is an `Enum`, so `str(IndexBase.REGION)` is
+`"IndexBase.REGION"` and the lookup should never match -- which would have
+recorded *member* for every table, in the unsafe direction 0024 is about.
+Measured: `region` packs 0, `message` 1, a member 2. The AST field holds the
+enum's *value*, a plain string, so `str()` is a no-op and the mapping works.
+**Checked before fixing, and the fix would have been a bug.** Third time this
+session a "defect" read off the code dissolved on execution.
+
+**The walker declines an indexed region, and says nothing about it.** It
+never reads the image's `INDEXES` section -- the constant is defined in
+`walker/image.py` and consumed nowhere -- so `sqlite`'s cell table produces
+no line at all in a listing, rather than a stated refusal. Honest in the
+sense that matters, since a wrong line is worse than a missing one; but the
+tree prefers a decline that names itself, and this one does not. Recorded
+rather than changed: adding a line moves the counts two differentials floor
+against, which is a cost the observation does not carry on its own.
+
+**The walker's relation arithmetic matches C, including the signs.**
+`report.relate` runs the bytecode VM rather than evaluating Python, and
+`vm._div` is `abs(a) // abs(b) * (1 if (a < 0) == (b < 0) else -1)` with
+`_mod` derived from it -- truncation toward zero, the same definition
+`expr.BINARY_OPS` carries and the reason 26.208 and 0049 exist. The one gap
+worth naming is that the walker's `relate` is asserted against written-out
+constants rather than against a compiled predicate, which is the weaker of
+the two available proofs and the one `test_walker` explicitly argues against
+elsewhere: "the four are five spellings of that module, so comparing against
+it would be asking one implementation whether it agrees with itself."
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
