@@ -377,9 +377,18 @@ RELATE = {"c": relate, "cpp": relate_cpp, "python": relate_py,
 
 
 def clause_for(op: str) -> str:
-	"""One `must` clause exercising `op`, over two messages."""
+	"""One `must` clause exercising `op`, over two messages.
+
+	A shift takes a *literal* amount. `a.hdr.chunks` is an unbounded `u8`,
+	which 0049 refuses because the backends do not agree about a shift of 64
+	or more -- so the vocabulary case would be testing that refusal rather
+	than the operator. The literal keeps this test about what it is about,
+	and the refusal has cases of its own below.
+	"""
 	if op in COMPARISONS:
 		return f"b.hdr.index {op} a.hdr.chunks"
+	if op in ("<<", ">>"):
+		return f"(b.hdr.index {op} 3) == a.hdr.chunks"
 	return f"(b.hdr.index {op} a.hdr.chunks) == 1"
 
 
@@ -457,6 +466,78 @@ def test_dividing_a_signed_value_in_a_relation_is_refused(op: str) -> None:
 
 	assert "r" in names
 	assert "truncate toward zero" in names["r"]
+	assert relate.generate(schema, resolved, "t") == {}
+
+
+#: The shift half of 0049, in the construct 26.214 measured it in. Its own
+#: schema rather than fields added to `HEAD`: every offset in that struct is
+#: asserted somewhere in this file, and widening it to carry two test fields
+#: failed 127 tests that had nothing to do with shifting.
+SHIFT_HEAD = """target buffer;
+endian big;
+bit_order msb_first;
+
+struct sh {
+	u16 msg;
+	u8  index;
+	u8  amount [max = 63];
+	u8  wide_amount;
+	u5  narrow;
+	u3  narrow_pad;
+}
+
+struct shframe { sh hdr; }
+"""
+
+SHIFTS = [
+	("a literal",              "(b.hdr.msg << 3) == a.hdr.msg",              True),
+	("a literal at the width", "(b.hdr.msg << 64) == a.hdr.msg",             False),
+	("an unbounded `u8`",      "(b.hdr.msg << a.hdr.wide_amount) == a.hdr.msg", False),
+	("a `u8` bounded to 63",   "(b.hdr.msg << a.hdr.amount) == a.hdr.msg",   True),
+	("a `u5`, bounded by its type",
+	                           "(b.hdr.msg << a.hdr.narrow) == a.hdr.msg",   True),
+	("an expression",          "(b.hdr.msg << (a.hdr.index + 1)) == a.hdr.msg", False),
+	("a right shift, unbounded",
+	                           "(b.hdr.msg >> a.hdr.wide_amount) == a.hdr.msg", False),
+]
+
+
+@pytest.mark.parametrize(("label", "clause", "allowed"), SHIFTS,
+                         ids=[label for label, _c, _a in SHIFTS])
+def test_a_relation_shift_must_be_provably_below_the_width(
+		label: str, clause: str, allowed: bool) -> None:
+	"""The same rule as the layout expression\'s, in the construct that
+	measured it.
+
+	A relation widens every operand to 64 bits before comparing, so 64 is
+	the width here too, and a shift at or above it is undefined in C, a
+	deny-by-default refusal in rustc, and an ordinary answer in Python.
+	26.214 found this beside the division divergence and left it, because
+	both remedies -- refuse, or mask the amount -- change what the operator
+	means. 0049 chose refusing, for the reason that decides the division
+	case: the Lua dissector cannot emulate, so a rule the other four can
+	follow is not a rule.
+
+	**An expression as the amount is refused rather than analysed.**
+	`a.hdr.index + 1` is bounded in fact, and proving it needs the interval
+	machinery a relation is checked without. Treating unknown as unprovable
+	is the conservative direction, and it is the one where a wrong answer
+	refuses a legal schema instead of emitting three programs.
+	"""
+	schema = parse_text(
+		SHIFT_HEAD + f"\nrelation r(a: shframe, b: shframe) {{\n"
+		f"\tmust {clause};\n}}\n")
+	wellformed.check(schema)
+	resolved = resolve(schema, solve(schema))
+	names    = dict(relate.refusals(schema, resolved))
+
+	if allowed:
+		assert "r" not in names, f"{label} should be emittable: {names.get('r')}"
+		assert relate.generate(schema, resolved, "t")
+		return
+
+	assert "r" in names
+	assert "not provably below 64" in names["r"]
 	assert relate.generate(schema, resolved, "t") == {}
 
 

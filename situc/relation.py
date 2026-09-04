@@ -283,6 +283,36 @@ def _leaf(path: str, placement: Placement) -> tuple[bool, int]:
 	return scalar.signed, scalar.bits
 
 
+def _amount_range(placement: Placement) -> tuple[int, int | None]:
+	"""What the value at `placement` can be, for the shift rule alone.
+
+	The type's own range, narrowed by a *literal* `[max]`, `[min]` or
+	`[must_eq]`. Deliberately narrower than `layout.constrain`, which folds
+	an arbitrary expression against the solver's environment: a relation is
+	checked without one, and an amount that needs an environment to bound is
+	not one a reader can see is bounded either.
+	"""
+	scalar = placement.scalar
+	if scalar is None:
+		return 0, None
+	if scalar.signed:
+		lo: int = -(1 << (scalar.bits - 1))
+		hi: int | None = (1 << (scalar.bits - 1)) - 1
+	else:
+		lo, hi = 0, (1 << scalar.bits) - 1
+
+	for attr in placement.attrs:
+		if not isinstance(attr.value, ast.IntLiteral):
+			continue
+		if attr.name == "must_eq":
+			return attr.value.value, attr.value.value
+		if attr.name == "max":
+			hi = attr.value.value if hi is None else min(hi, attr.value.value)
+		elif attr.name == "min":
+			lo = max(lo, attr.value.value)
+	return lo, hi
+
+
 def _widen(operands: list[tuple[bool, int]], where: str) -> bool:
 	"""Whether the constraint's operands widen as signed, or a refusal.
 
@@ -316,6 +346,8 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 		where      = f"constraint {number} of `{relation.name}`"
 		constraint = Constraint(expr=must.expr)
 		operands: list[tuple[bool, int]] = []
+		#: Path to what its value can be, for the shift rule in `_check`.
+		ranges: dict[str, tuple[int, int | None]] = {}
 		arrays     = _array_equality(must.expr, params, resolved, where)
 
 		for path in dict.fromkeys(paths_in(must.expr)):
@@ -349,6 +381,7 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 						constraint.locals_for[path] = target
 						break
 					operands.append(_leaf(path, placement))
+					ranges[path] = _amount_range(placement)
 					constraint.bindings.append(
 						Read(struct.name, component, source, target, path))
 					constraint.locals_for[path] = target
@@ -371,15 +404,41 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 				length, negated)
 		else:
 			constraint.signed = _widen(operands, where)
-			_check(must.expr, constraint.locals_for, where, constraint.signed)
+			_check(must.expr, constraint.locals_for, where, constraint.signed,
+			       ranges)
 
 		plans.append(constraint)
 
 	return plans
 
 
+def _shift_amount(expr: ast.Expr,
+		ranges: dict[str, tuple[int, int | None]] | None) -> tuple[int, int | None]:
+	"""What the right-hand side of a shift can evaluate to.
+
+	A literal is its own range. A path is what the field can hold, narrowed
+	by a literal bound. Anything else -- an expression, or a path the caller
+	did not collect -- is unknown, which the rule treats as unprovable rather
+	than as safe.
+	"""
+	if isinstance(expr, ast.IntLiteral):
+		return expr.value, expr.value
+	if isinstance(expr, (ast.Access, ast.NameRef)) and ranges is not None:
+		found = paths_in(expr)
+		if len(found) == 1 and found[0] in ranges:
+			return ranges[found[0]]
+	return 0, None
+
+
+#: A relation widens every operand to 64 bits before comparing, so a shift
+#: amount at or above this is undefined in C, refused by rustc and an ordinary
+#: answer in Python -- three behaviours for one schema (0049).
+SHIFT_WIDTH = 64
+
+
 def _check(expr: ast.Expr, locals_for: dict[str, str], where: str,
-		signed: bool = False) -> None:
+		signed: bool = False,
+		ranges: dict[str, tuple[int, int | None]] | None = None) -> None:
 	"""Refuse anything a relation may not hold, before any backend sees it."""
 	if isinstance(expr, ast.IntLiteral):
 		return
@@ -404,14 +463,23 @@ def _check(expr: ast.Expr, locals_for: dict[str, str], where: str,
 				f"agree what that means -- C, C++ and Rust truncate toward "
 				f"zero where Python floors, so `-7 / 2` is -3 in three of "
 				f"them and -4 in the fourth")
-		_check(expr.left, locals_for, where, signed)
-		_check(expr.right, locals_for, where, signed)
+		if expr.op in ("<<", ">>"):
+			low, high = _shift_amount(expr.right, ranges)
+			if low < 0 or high is None or high >= SHIFT_WIDTH:
+				raise Refused(
+					f"{where} shifts by an amount that is not provably below "
+					f"{SHIFT_WIDTH}, and the backends do not agree about one "
+					f"that is not -- C leaves it undefined, rustc refuses it, "
+					f"and Python answers; bound the field with `[max = 63]` or "
+					f"write a literal amount")
+		_check(expr.left, locals_for, where, signed, ranges)
+		_check(expr.right, locals_for, where, signed, ranges)
 		return
 	if isinstance(expr, ast.Unary):
 		if expr.op not in UNARY:
 			raise Refused(f"{where} uses unary `{expr.op}`, which a relation "
 			              f"may not")
-		_check(expr.operand, locals_for, where, signed)
+		_check(expr.operand, locals_for, where, signed, ranges)
 		return
 	if isinstance(expr, ast.Call):
 		raise Refused(f"{where} calls `{expr.name}`; a relation compares values "

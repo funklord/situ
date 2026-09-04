@@ -1,6 +1,6 @@
 # 0049: an operation the backends define differently is refused, not emulated
 
-Status: accepted 2026-09-04
+Status: accepted and built, 2026-09-04
 Date: 2026-09-04
 Phase: raised by 26.208 and 26.214, settled with the other open items
 
@@ -82,9 +82,21 @@ writing it down here rather than leaving it a diagnostic somebody meets.
   cannot go negative, or to bound the shift with `[max]`, both of which the
   diagnostics already suggest.
 - `/` and `%` on signed operands are refused in field expressions (26.208)
-  and in relations (26.214). The shift rule is **not yet built**: the
-  measurement is in 26.214 and the range machinery `invariant.negative_value`
-  uses is what it needs.
+  and in relations (26.214).
+- The shift rule is built in both, at a width of 64: the generated C widens
+  with `situ_leaf_u64` before it shifts, and a relation widens every operand
+  to a signed 64-bit value, so the bound is the same in both and is not the
+  field's own width. A literal amount, a `u5`, or a `u8` carrying
+  `[max = 63]` all pass; an unbounded `u8` does not, and neither does 64
+  itself. `layout.constrain` already folds `[max]` into the interval a field
+  expression is checked against, so the remedy the diagnostic names is one
+  the solver acts on -- checked, because a refusal suggesting a fix nothing
+  accepts sends the reader in a circle.
+- A relation refuses an *expression* as the amount rather than analysing it.
+  `a.hdr.index + 1` is bounded in fact, and proving it needs interval
+  machinery a relation is checked without. Unknown is treated as unprovable,
+  which is the direction where being wrong refuses a legal schema instead of
+  emitting three programs.
 - An invariant is unaffected: every term it may use -- `offset`, `size`,
   `count` -- is non-negative by construction, and `negative_value` refuses
   the one operator that can leave that range.

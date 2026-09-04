@@ -83,6 +83,13 @@ class Interval:
 		return f"[{low}, {'inf' if self.hi is None else self.hi}]"
 
 
+#: The width every operand of a layout expression is computed at. The
+#: generated C widens with `situ_leaf_u64` before it does anything else, so a
+#: shift amount at or above this is undefined there whatever the field's own
+#: width is (0049).
+SHIFT_WIDTH = 64
+
+
 def scalar_interval(bits: int, signed: bool) -> Interval:
 	"""What a field of this width can hold before any constraint narrows it."""
 	if signed:
@@ -356,6 +363,34 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 				         "give it a lower bound: `[min = N]` on the fields it "
 				         "reads, or reorder so the subtraction cannot go "
 				         "below zero"],
+			)
+
+		# And the shift amount, for the reason 0049 gives. The generated C
+		# widens every operand of a layout expression to 64 bits before
+		# shifting -- `situ_leaf_u64(...) >> 2` -- so the amount has to land
+		# in [0, 64). At or above the width it is undefined in C, a
+		# deny-by-default `arithmetic_overflow` in Rust, a panic in a debug
+		# build, and an ordinary answer in Python: four descriptions, three
+		# behaviours, none of them the schema's.
+		#
+		# `[max]` is what makes an amount provable, and the interval reaching
+		# here has already been narrowed by it -- `layout.constrain` folds
+		# `[max]`, `[min]` and `[must_eq]` into a field's range while
+		# solving -- so the remedy the note names is one the solver can act
+		# on.
+		if expr.op in ("<<", ">>") and (
+				not right.lo_known or right.lo < 0
+				or right.hi is None or right.hi >= SHIFT_WIDTH):
+			raise error(
+				f"the shift amount of `{expr.op}` is not provably below "
+				f"{SHIFT_WIDTH}",
+				expr.right.span,
+				label = f"range is {right.render()}",
+				notes = [f"a shift by {SHIFT_WIDTH} or more is undefined in C, "
+				         "refused outright by rustc, and an ordinary answer in "
+				         "Python, so the backends would not agree",
+				         "bound it with `[max = 63]` on the field it reads, or "
+				         "write a literal amount"],
 			)
 
 		rule = INTERVAL_RULES.get(expr.op)

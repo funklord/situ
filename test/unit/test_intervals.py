@@ -118,6 +118,51 @@ def test_a_dividend_that_may_be_negative_is_refused() -> None:
 	assert "truncate toward zero" in rendered
 
 
+#: A shift amount and whether the rule can prove it below 64. The remedy the
+#: diagnostic names is in here as a case, because a refusal that suggests a
+#: fix nothing accepts is worse than one that suggests nothing (0049).
+SHIFT_AMOUNTS = [
+	("a literal",                 "code >> 2",  "\tu8 code;\n",                  True),
+	("a literal at the width",    "code >> 64", "\tu8 code;\n",                  False),
+	("a negative literal",        "code >> -1", "\tu8 code;\n",                  False),
+	("an unbounded `u8`",         "code >> n",  "\tu8 code;\n\tu8 n;\n",         False),
+	("a `u8` bounded to 63",      "code >> n",  "\tu8 code;\n\tu8 n [max = 63];\n", True),
+	("a `u8` bounded to 64",      "code >> n",  "\tu8 code;\n\tu8 n [max = 64];\n", False),
+	("a `u16` bounded to 63",     "code >> n",  "\tu8 code;\n\tu16 n [max = 63];\n", True),
+]
+
+
+@pytest.mark.parametrize(("label", "source", "fields", "allowed"),
+                         SHIFT_AMOUNTS,
+                         ids=[label for label, _s, _f, _a in SHIFT_AMOUNTS])
+def test_a_shift_amount_must_be_provably_below_the_width(
+		label: str, source: str, fields: str, allowed: bool) -> None:
+	"""0049, built. A shift by 64 or more is undefined in C, refused
+	outright by rustc -- `deny(arithmetic_overflow)` -- a panic in a debug
+	build, and an ordinary answer in Python. Three behaviours for one schema,
+	and the schema says none of them.
+
+	64 and not the field's own width, because the generated C widens before
+	it shifts: `u8 body[(code >> 2) + 1]` emits
+	`situ_leaf_u64(situ_s_code_get(view)) >> 2`. A `u5` amount is provable on
+	its type alone; a `u8` is not, and 64 is the boundary rather than a
+	number over it.
+
+	**The `[max]` case is the one that earns the diagnostic.** The refusal
+	tells an author to bound the field, and `layout.constrain` folds `[max]`
+	into the interval that reaches this rule, so the advice works -- checked
+	here rather than assumed, because a remedy nothing accepts sends the
+	reader in a circle.
+	"""
+	if allowed:
+		interval(source, fields)
+		return
+
+	with pytest.raises(SituError) as caught:
+		interval(source, fields)
+	assert "not provably below 64" in caught.value.diagnostic.render()
+
+
 def test_a_modulo_whose_dividend_may_be_negative_is_refused_too() -> None:
 	"""`%` diverges further than `/` does: Python's result takes the sign of
 	the *divisor* and C's takes the sign of the dividend, so they disagree on

@@ -19528,6 +19528,48 @@ implemented, with the range machinery `invariant.negative_value` uses named
 as what it needs. A decision record whose consequences read as though they
 have all landed is the shape 26.144's plugin slot spent weeks in.
 
+### 26.220 The shift rule, built, and the width that is not the field's
+
+0049 decided that a shift is refused where the amount is not provably below
+the operand's width, and left it unbuilt. It is built now, in both places
+the decision names.
+
+**The width is 64 and it is not the field's own.** This is the part worth
+measuring rather than assuming: `u8 body[(code >> 2) + 1]` emits
+`situ_leaf_u64(situ_s_code_get(view)) >> 2`, so a layout expression is
+computed at 64 bits whatever the fields in it are; and a relation widens
+every operand to a signed 64-bit value before comparing, for the reason
+`_widen` already gives. One bound in both, and a rule keyed on each field's
+own width would have been wrong in the safe-looking direction -- accepting a
+shift of 16 on a `u8` that the generated code performs on a `uint64_t`.
+
+**64 is the boundary, not a number above it.** A shift *by* the width is
+undefined in C, not merely one past it, so `[max = 64]` is refused and
+`[max = 63]` is not. `expr.py` already carried a constant-folding guard
+saying "at most 64", which is off by one for a shift that reaches generated
+code -- that guard is about a fold whose result no scalar can hold and is
+left alone; the new rule is about the shift the backend performs.
+
+**The remedy is checked, not just suggested.** The diagnostic tells an
+author to bound the field, and `layout.constrain` folds `[max]`, `[min]` and
+`[must_eq]` into the interval that reaches the rule, so `[max = 63]` makes a
+`u8` amount pass. It is a case in the table rather than a sentence, because
+a refusal that suggests a fix nothing accepts sends the reader in a circle.
+A `u5` passes on its type alone, which is the same fact from the other end.
+
+**A relation refuses an expression as the amount rather than analysing it.**
+`a.hdr.index + 1` is bounded in fact and proving it needs interval machinery
+a relation is checked without. Unknown is unprovable, which is the direction
+where being wrong refuses a legal schema instead of emitting three programs.
+
+**And it caught one of this session's own tests, correctly.** 26.214's
+vocabulary case shifted by `a.hdr.chunks`, an unbounded `u8`, so the new
+rule refused it -- the case meant to exercise `<<` was exercising the
+refusal instead. It shifts by a literal now, and says why in the helper that
+builds it. The first attempt to give the shift cases their own fields added
+them to the shared `head`, which changed every offset in it and failed 127
+tests that had nothing to do with shifting; they have their own schema.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
