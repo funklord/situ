@@ -15450,6 +15450,19 @@ greps and one parse.
 
 **Decisions waiting.**
 
+- **`doc/decision/0051-messages-a-schema-carries.md` is
+  `Status: proposed`.** Raised by the copyright holder: a schema should be
+  able to say "when these fields hold, this is what it means", so that
+  `situ-edit` and a dissector can be helpful about a format without
+  format-specific callback code -- a sixth description of the layout, in a
+  place none of the five can check. Three things are missing and they are
+  separable: a predicate over several members of *one* message has no
+  spelling, a failed check has no identity, and a message is not always a
+  failure. The record proposes `when <predicate> <severity> <name>
+  "<text>"`, with the **identity as the contract and the text as a
+  default**, and it is flat by construction: evaluated once in `validate`
+  and at no other point, so no `when` can see another and an accessor stays
+  arithmetic. Accepting or refusing it is the decision.
 - **`doc/decision/0050-external-arguments.md` is `Status: proposed`.**
   Raised by the copyright holder: a format whose shape follows a fact the
   message does not carry -- a negotiated cipher suite, a card class, a
