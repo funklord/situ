@@ -20412,6 +20412,55 @@ the class for this. The instrument was wrong in both, and the code was right
 in both, which is the calibration `evidence.md` records: when a result
 surprises you, the apparatus is where the error usually is.
 
+### 26.239 The construct that seals names its algorithm; the one that summarises cannot
+
+0053, proposed, from respec's reader accepting a truncated image. Their
+diagnosis was right and this entry is what checking it turned up.
+
+**It is true of `tag` as well as `checksum`, which the report did not
+claim.** A tag over a sealed region generates `tag_covered()`,
+`tag_is_dirty()` and `tag_finalize()`, and a comment instructing the caller
+to *write the result through `tag_ptr()`*. Neither construct computes
+anything. `gen-tamper` does not either -- it takes a `situ_verify_fn` the
+caller supplies.
+
+**The asymmetry is in the AST and is an inheritance rather than a
+decision.** `Sealed` and `Coded` each carry a `codec` field and name their
+algorithm at the site -- `sealed(aes_gcm_256, nonce = nonce)`. `TagField`,
+which serves both `tag` and `checksum`, has no such field. `checksum` was
+defined as "`tag` with a non-cryptographic algorithm", and it inherited a
+shape designed around the one thing situ deliberately does not implement.
+
+**14.1 is right about the case it was written for and is being applied to a
+different one.** Situ declines to implement AEAD, and that is sound: no
+layout compiler should own constant-time behaviour or key handling. A CRC
+has no key, no secret-dependent branch, and **situ already generates it** --
+`std/kernels.situ` declares five polynomial codecs, each `impl ... derived`,
+and `gen-derived` emits a real table and function. Both halves exist and
+nothing joins them, so every caller writes the same three lines and respec's
+wrote none.
+
+**`derived` is the whole of the proposed restriction**, which is what makes
+this a wiring change rather than a reversal: tier 2 is already the set situ
+generates from a kernel description, so binding one to a checksum adds no
+implementation. A `tag` still may not name one, and 14.1 stands untouched
+for it.
+
+**The part that needed deciding rather than assuming is when it runs.**
+`validate` must not: it is a bounded constraint walk over a view, and a
+coverage running to EOF is a pass over the whole file. Folding it in would
+make a field check cost a file read and would reopen exactly the question
+0051 was written to close. So the check is a function the caller invokes at
+the flat model's one point, and `--refuse-ungenerated` is where a schema can
+insist it exists.
+
+**And respec's stated blocker was not the real one.** They believed the
+coverage could not be declared because their schema stops after the INFO
+chunk while the sum runs to EOF. `authenticated body { u8 rest[remaining]; }`
+under `target file` is exactly that region, accepted, with its interior
+deliberately undescribed. The half that was genuinely missing is the one
+above.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
