@@ -18,6 +18,7 @@ from situc.parser import parse_text
 from situc.resolve import ResolvedStruct, resolve
 from situc.traverse import (
 	Check, Member, byte_span, classify, classify_check, container_bits,
+	declared_value_bounds,
 	has_computable_extent, is_own_member, local_name, obligation, obligations,
 	own_members, span_bits,
 )
@@ -515,3 +516,46 @@ def test_arithmetic_over_a_field_is_variable_too() -> None:
 	"""`size_expr` rather than `sized_by`, and still the data deciding."""
 	assert kind_of("struct s { u8 len; u8 d[(len + 1) * 8 - 2]; }", "s", "d") \
 		is Member.VARIABLE
+
+
+# -- the value bounds a schema exports --------------------------------------
+
+
+def bounds_of(body: str, struct: str, field: str) -> tuple[int | None, int | None]:
+	schema   = parse_text(PREAMBLE + body)
+	layout   = solve(schema)
+	resolved = resolve(schema, layout)
+	held     = resolved.structs[struct]
+	for placement in own_members(held):
+		if local_name(held, placement) == field:
+			return declared_value_bounds(placement, layout.env)
+	raise AssertionError(f"no field {field}")
+
+
+def test_must_eq_exports_the_same_bounds_as_min_and_max() -> None:
+	"""One constraint written two ways generates one surface.
+
+	`[must_eq = 7]` is the point interval -- the solver reads it as
+	`Interval.point` -- so it is a floor and a ceiling at once. It exported
+	neither, while `[min = 7, max = 7]` exported both, so which attribute
+	the author reached for changed what a caller could compile against.
+
+	That matters for the reason the export exists at all: a caller
+	validating the value it is about to write (a CLI flag, a config key)
+	otherwise restates the number, and the restated one drifts.
+	"""
+	pair = "struct S { u32 a [min = 7, max = 7]; }"
+	eq   = "struct S { u32 a [must_eq = 7]; }"
+	assert bounds_of(eq, "S", "a") == (7, 7)
+	assert bounds_of(eq, "S", "a") == bounds_of(pair, "S", "a")
+
+
+def test_a_one_sided_bound_stays_one_sided() -> None:
+	"""The control: folding `must_eq` into both must not fill in the other
+	half of an ordinary `[max]`, which would export a floor nobody wrote."""
+	assert bounds_of("struct S { u32 a [max = 9]; }", "S", "a") == (None, 9)
+	assert bounds_of("struct S { u32 a [min = 3]; }", "S", "a") == (3, None)
+
+
+def test_a_field_with_no_bound_exports_none() -> None:
+	assert bounds_of("struct S { u32 a; }", "S", "a") == (None, None)

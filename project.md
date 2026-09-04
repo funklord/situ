@@ -20304,6 +20304,114 @@ whether the tree was sound.
 are each a reduction chosen before the answer was known, and each reported
 success for a run that had failed.
 
+### 26.237 Two attributes that parsed, and then were skipped
+
+The lens came from 26.233 and 26.235, which are one shape: situ stating
+something it does not do. `check_attribute_places` exists to catch exactly
+that for attributes, so the question was what it cannot see.
+
+**The detector had to be built to discriminate, not to find.** Comparing
+`_attribute_place`'s vocabulary against the parser's gave 26 attributes it
+has no opinion about, and that number is worth nothing -- most are checked
+somewhere else, by `check_registers` or the delimiter or policy guards. A
+query answers about the shape you described. So the test became the one the
+refusal's own message names: **generate C with the attribute and without it,
+and compare.** Byte-identical output is the definition already written into
+the diagnostic.
+
+Of 49 attributes, 41 are refused outright on a plain scalar, one changes the
+output, and seven changed nothing. Then the same sweep against `situc map`,
+because a capability change need not reach the C: `non_canonical` and
+`secret` both move the map, which is the positive control -- the detector can
+tell a read attribute from an unread one, and it was not assumed to.
+
+**`require_aligned` was a false positive, and the reason is worth more than
+the finding.** It is read, in `resolve.py`, and it refuses correctly -- the
+fixture was a `u32` at offset 0, where the demand is already satisfied, so
+nothing could differ. A probe tested only where the answer cannot separate
+reports "reads as nothing" about code that reads it perfectly. Two lines of
+control, a `u32` behind a `u8`, settled it.
+
+**What survived is two.**
+
+*`[timeout_ms]` and `[retries]` on a member.* They are read from a
+`relation`'s attrs and nowhere else. This is worse than an ordinary
+misplacement because of what the exchange check does with them: a relation
+stating `retries` without `timeout_ms` is **refused**, on the grounds that
+situ will not invent a retransmission interval the protocol did not state.
+Put both on a field and neither half means anything, and nothing says so --
+so the guard against half a policy is bypassed by writing the whole of one
+in the wrong place.
+
+*`[max]`, `[min]` and `[must_eq]` with no value.* The bracket syntax admits
+a bare name, because that is how `[secret]` is written, and
+`Solver.constrain` skips any attribute whose value is `None`. So `[max]`
+parses, narrows nothing, and leaves the field its full range while the
+schema claims a bound.
+
+**The three names are now one list.** `NUMERIC_BOUNDS` in `types.py`, read
+by the solver that narrows on them, by the guard from 26.236 that refuses a
+text bound, and by the new guard that refuses a missing one. Three uses of
+one set rather than three copies, which is invariant 13; 26.236 had just
+made the second copy and it lasted an hour.
+
+**And the wider gap is recorded rather than closed.** Situ checks an
+attribute's *place* and never its *arity*: `[secret = 7]` is accepted with
+the value ignored, and `[non_canonical = 7]` takes a number where a reason
+string belongs. Both directions of the same hole. Fixing it means declaring
+which attributes take a value and which are flags, across all 49 -- a
+vocabulary decision rather than a bug fix, and the wrong thing to settle
+while passing through. The two above are fixed because each was demonstrated
+against generated output; the rest is a finding.
+
+### 26.238 One constraint, two spellings, two generated surfaces
+
+The next lens after 26.237, and it came from asking what else drops a thing
+the schema said. The swallows are few and mostly deliberate; what the sweep
+actually turned up was in the function beside one of them.
+
+`declared_value_bounds` exports `[min]` and `[max]` as constants so that a
+caller validating the value it is about to write -- a CLI flag, a config
+key -- compiles against the schema's number instead of restating it. Its own
+docstring says why: the restated one drifts.
+
+**It reads two of the three names.** `[must_eq = 7]` is the point interval;
+the solver already reads it as `Interval.point`, so it is a floor and a
+ceiling at once. It exported neither. Measured:
+
+    u32 a [min = 7, max = 7]   VALUE_MIN 7   VALUE_MAX 7   CHECK
+    u32 a [must_eq = 7]                                    CHECK
+
+Same constraint, and which attribute the author reached for decided whether
+a caller had anything to compile against. `must_eq` is the likelier spelling
+of the two, so the gap fell on the common case.
+
+**This is the third consumer of the bounds vocabulary and the third to hold
+its own copy of it.** The solver's, the guard from 26.236, and this one --
+which is what `NUMERIC_BOUNDS` in `types.py` now is, read by all three
+(invariant 13). The fix folds `must_eq` into both names rather than
+inventing a third constant: a caller wants the number, and which attribute
+the author used is not their business.
+
+**Two instrument errors in one investigation, both caught before they were
+reported.** The first: a query comparing vocabularies said 26 attributes
+were unchecked, which is a fact about the query -- most are checked
+elsewhere. The second was worse, because it produced a finding-shaped
+sentence. A grep for the rendered constant used `[^a-z]*` between the name
+and the number, and Rust spells it `pub const A_VALUE_MIN: u32 = 7;` -- so
+the pattern could not match Rust by construction, and the reading was
+"three backends render this and Rust does not", against a docstring claiming
+four. Rust renders it. **A pattern that cannot match one member of the
+population reports that member as the finding**, and it is the most
+plausible-looking result the sweep produced.
+
+**What the two share is that the artifact was available.** Both were settled
+by looking at the generated file rather than by refining the query -- one
+`u32` behind a `u8` for `require_aligned` in 26.237, one `grep -i` without
+the class for this. The instrument was wrong in both, and the code was right
+in both, which is the calibration `evidence.md` records: when a result
+surprises you, the apparatus is where the error usually is.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

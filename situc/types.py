@@ -229,3 +229,15 @@ def is_scalar_name(name: str) -> bool:
 		return lookup(name) is not None
 	except WidthError:
 		return True
+
+
+#: The attributes that narrow a field's numeric range. `Solver.constrain`
+#: reads exactly these and skips everything else in the loop, and
+#: `check_attribute_values` refuses each one written without a value --
+#: `[max]` alone narrows nothing, so accepting it is the schema making a
+#: claim the generated code does not carry (14.5).
+#:
+#: One list rather than two: the guard that refuses a text bound and the
+#: guard that refuses a missing one are about the same three names, and
+#: two copies of that set would drift (invariant 13).
+NUMERIC_BOUNDS = frozenset({"must_eq", "max", "min"})

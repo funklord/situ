@@ -19,7 +19,7 @@ import difflib
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
-from situc.types import ScalarKind, is_scalar_name
+from situc.types import NUMERIC_BOUNDS, ScalarKind, is_scalar_name
 
 Structs = dict[str, ast.StructDecl]
 
@@ -61,6 +61,7 @@ def check(schema: ast.Schema) -> None:
 	check_tag_prefixes(schema)
 	check_coded_coverage(schema)
 	check_attribute_places(schema)
+	check_attribute_values(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
 	check_nonce_references(schema)
@@ -1377,6 +1378,19 @@ ACCESS_MODE_ATTRS = frozenset({
 	"rsvd",
 })
 
+#: Read from a `relation`'s attrs and never from a member's. `POLICY_ATTRS`
+#: is the same pair named where the exchange check reads it; this table is
+#: what makes writing one somewhere else a refusal rather than a no-op.
+#:
+#: It matters more than an ordinary misplacement because of what the
+#: exchange check does: a relation stating `retries` without `timeout_ms`
+#: is refused for stating half a policy. On a member neither half means
+#: anything, so an author gets no policy and no complaint.
+RELATION_ONLY_ATTRS = {
+	"timeout_ms": "a `relation`, which is where an exchange states its timing",
+	"retries":    "a `relation`, which is where an exchange states its timing",
+}
+
 #: Read from `decl.attrs` and never from a member's.
 STRUCT_ONLY_ATTRS = {
 	"allow_straddle":       "a struct, where a bit field may cross a byte",
@@ -1404,6 +1418,9 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 
 	if attr.name in STRUCT_ONLY_ATTRS:
 		return STRUCT_ONLY_ATTRS[attr.name]
+
+	if attr.name in RELATION_ONLY_ATTRS:
+		return RELATION_ONLY_ATTRS[attr.name]
 
 	# `[on_read = clear]` and `[on_write = trigger]` are SystemRDL side
 	# effects: `_read_effect` and `_side_effect` read them, and a bus is what
@@ -1804,6 +1821,34 @@ def check_attribute_places(schema: ast.Schema) -> None:
 					         "that states what the generated code does not "
 					         "enforce is worse than one that states nothing "
 					         "(project.md section 14.5)"],
+				)
+
+
+def check_attribute_values(schema: ast.Schema) -> None:
+	"""A bound with no value narrows nothing, so it is refused (14.5).
+
+	`[max]` parses -- the bracket syntax admits a bare name, because that is
+	how `[secret]` and `[minimal]` are written -- and `Solver.constrain`
+	skips any attribute whose value is `None`. So the field keeps its full
+	range and the schema says it does not. The three names are
+	`NUMERIC_BOUNDS`, shared with the solver that reads them.
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			for attr in getattr(member, "attrs", ()):
+				if attr.name not in NUMERIC_BOUNDS or attr.value is not None:
+					continue
+
+				raise error(
+					f"`[{attr.name}]` needs a value",
+					attr.span,
+					label = "no bound given",
+					notes = [f"`[{attr.name}]` narrows the field's range, and "
+					         f"without a number there is nothing to narrow it "
+					         f"to",
+					         "written like this it parses and is then skipped, "
+					         "so the generated code is byte-identical to the "
+					         "schema without it (project.md section 14.5)"],
 				)
 
 

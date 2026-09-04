@@ -1378,7 +1378,7 @@ def declared_value_bounds(placement: Placement,
 	computed at compile time is not a constant.
 	"""
 	from situc.expr import evaluate
-	from situc.types import ScalarKind
+	from situc.types import NUMERIC_BOUNDS, ScalarKind
 
 	if placement.kind != "field":
 		return (None, None)
@@ -1389,11 +1389,22 @@ def declared_value_bounds(placement: Placement,
 
 	found: dict[str, int] = {}
 	for attr in placement.attrs:
-		if attr.name in ("min", "max") and attr.value is not None:
-			try:
-				found[attr.name] = evaluate(attr.value, env)
-			except Exception:
-				continue
+		if attr.name not in NUMERIC_BOUNDS or attr.value is None:
+			continue
+		try:
+			value = evaluate(attr.value, env)
+		except Exception:	# noqa: BLE001 - not foldable, so not a constant
+			continue
+		# `[must_eq = n]` is the point interval, which is a floor and a
+		# ceiling at once -- the solver already reads it as `Interval.point`.
+		# Exporting it under both names rather than inventing a third is what
+		# keeps the two spellings of one constraint generating one surface
+		# (26.238); a caller filling this field wants the number, and which
+		# attribute the author reached for is not their business.
+		if attr.name == "must_eq":
+			found["min"] = found["max"] = value
+		else:
+			found[attr.name] = value
 	return (found.get("min"), found.get("max"))
 
 

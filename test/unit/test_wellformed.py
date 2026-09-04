@@ -13,6 +13,7 @@ from situc import wellformed
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import ATTRIBUTE_NAMES, parse_text
+from situc.types import NUMERIC_BOUNDS
 from situc.resolve import resolve
 from situc.unparse import unparse
 
@@ -1369,3 +1370,74 @@ def test_a_register_still_needs_mmio_under_a_file() -> None:
 	                "\treserved u31;\n"
 	                "}\n")
 	assert "needs `target mmio`" in text
+
+
+# -- an attribute that reads as nothing -------------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(wellformed.RELATION_ONLY_ATTRS))
+def test_a_policy_attribute_on_a_member_is_refused(name: str) -> None:
+	"""`[timeout_ms]` and `[retries]` are read from a `relation`'s attrs and
+	from nowhere else, so on a field they are accepted and skipped.
+
+	Worse than an ordinary misplacement, which is why it is a test rather
+	than a note. A relation stating `retries` without `timeout_ms` is
+	refused for stating half a retransmission policy -- situ will not invent
+	an interval. On a member neither half means anything and nothing said
+	so, so the author who wrote it got no policy and no complaint.
+	"""
+	assert "means nothing here" in rendered(
+		"struct S { u32 a [%s = 3]; }" % name)
+
+
+def test_a_policy_attribute_on_a_relation_is_still_read() -> None:
+	"""The control for the refusal above: it must not reach the place these
+	attributes belong, which is the one place a wrong `_attribute_place`
+	entry would break."""
+	schema = parse_text("""
+		struct H { u16 id; }
+		relation r(q: H, p: H) [timeout_ms = 5000, retries = 2] {
+			must p.id == q.id;
+		}
+	""", path="s.situ")
+	names = {attr.name for relation in schema.relations()
+	         for attr in relation.attrs}
+	assert {"timeout_ms", "retries"} <= names
+
+
+@pytest.mark.parametrize("name", sorted(NUMERIC_BOUNDS))
+def test_a_bound_with_no_value_is_refused(name: str) -> None:
+	"""`[max]` parses, because the bracket syntax admits a bare name -- that
+	is how `[secret]` is written -- and `Solver.constrain` skips any
+	attribute whose value is `None`. So the field kept its full range while
+	the schema said otherwise.
+
+	Found by generating C with the attribute and without it and comparing:
+	byte-identical output is the definition the refusal's own message uses.
+	"""
+	assert f"`[{name}]` needs a value" in rendered(
+		"struct S { u32 a [%s]; }" % name)
+
+
+@pytest.mark.parametrize("name", sorted(NUMERIC_BOUNDS))
+def test_a_bound_with_a_value_is_still_accepted(name: str) -> None:
+	"""The control: the refusal must be about the missing value and not
+	about the attribute."""
+	parse_text("struct S { u32 a [%s = 7]; }" % name, path="s.situ")
+
+
+def test_a_flag_attribute_still_takes_no_value() -> None:
+	"""`[secret]` is bare by design, so the refusal above must not be a rule
+	against bare attributes generally."""
+	parse_text("struct S { u32 a [secret]; }", path="s.situ")
+
+
+def test_the_bound_check_reaches_inside_a_block() -> None:
+	"""`_walk_members` descends, and a check that only saw a struct's top
+	level would pass a schema whose blocks hid the fault."""
+	assert "`[max]` needs a value" in rendered("""
+		struct S {
+			authenticated b { u32 a [max]; }
+			checksum u8 c[2] covers(b);
+		}
+	""")
