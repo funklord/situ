@@ -511,8 +511,17 @@ def _read_for_relation(view: View, index: int) -> int:
 	return read_scalar(view, index)
 
 
-def _validate(image: Image, view: View, struct_index: int) -> int | None:
+def _validate(image: Image, view: View, struct_index: int,
+		found: list[tuple[int, int]] | None = None) -> int | None:
 	"""What `validate` returns, or None where this image cannot say.
+
+	`found`, where a caller passes one, collects `(placement, check)` for
+	the failure that decided the answer -- the identity 0051 asks for. It is
+	recorded on the way out rather than reconstructed afterwards, because
+	the walk already knows which check answered and rebuilding it would be a
+	second implementation of the order this function's own docstring says
+	matters. `check` is `NONE` where the failure is not a declared check but
+	the frame running out under one.
 
 	The whole answer or nothing. Every other probe can be rendered for the
 	members the image describes and skipped for the rest, because each is a
@@ -524,6 +533,12 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 	frame does not reach is `BOUNDS` and a constraint that fails is
 	`CONSTRAINT`, and which comes first decides which is returned.
 	"""
+	def fail(code: int, index: int = NONE, check: int = NONE) -> int:
+		"""Record which check answered, then return its code."""
+		if found is not None:
+			found.append((index, check))
+		return code
+
 	if not image.structs[struct_index].validatable:
 		return None
 
@@ -548,7 +563,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 				if read_scalar(view, carries) < since:
 					continue
 			except Refused:
-				return ERR_BOUNDS
+				return fail(ERR_BOUNDS, index)
 
 		# Every member is *placed*, not only the constrained ones: a struct
 		# whose members after a coded region cannot be reached fails with
@@ -573,7 +588,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 			break
 		except Refused:
 			# The ordinary case: the frame does not reach it.
-			return ERR_BOUNDS
+			return fail(ERR_BOUNDS, index)
 
 		# A member of *fixed* size at a *dynamic* offset. Its offset is a
 		# sum of lengths the message chose, so the bounds check that
@@ -588,7 +603,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		placed = image.placements[index]
 		if placed.fixed and not placed.offset_known:
 			if view.at * 8 + at + wide > view.limit * 8:
-				return ERR_BOUNDS
+				return fail(ERR_BOUNDS, index)
 
 		# A run whose length the message declares has to fit the frame.
 		# The accessor clamps; `validate` is where a message that does not
@@ -599,7 +614,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		if any(check == FITS_FRAME
 		       for check, _ in image.constraints.get(index, ())):
 			if view.at * 8 + at + wide > view.limit * 8:
-				return ERR_BOUNDS
+				return fail(ERR_BOUNDS, index, FITS_FRAME)
 
 		# A nested member is `validate` called through, and its error is
 		# returned as it stands: C propagates the inner code rather than
@@ -630,9 +645,9 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		if any(check == TERMINATED for check, _ in held):
 			try:
 				if not scan(view, index)[1]:
-					return ERR_CONSTRAINT
+					return fail(ERR_CONSTRAINT, index, TERMINATED)
 			except Refused:
-				return ERR_BOUNDS
+				return fail(ERR_BOUNDS, index, TERMINATED)
 
 		if any(check == ARM_SELECTED for check, _ in held):
 			verdict = _arm_selects(image, view, index)
@@ -650,13 +665,13 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 			try:
 				digits = digits_of(view, index)
 			except Refused:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
 			if not digits:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
 			if len(digits) > 1 and digits[0:1] == b"0":
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
 			if against > 10 and any(0x41 <= one <= 0x46 for one in digits):
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
 
 		for check, against in held:
 			if check != DIGITS_VALID:
@@ -668,9 +683,9 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 			try:
 				value = parse_digits(view, index)
 			except Refused:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, DIGITS_VALID)
 			if value > against:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, DIGITS_VALID)
 
 		# The byte-run checks: a terminator inside the field, an
 		# encoding the bytes are actually in, and a reserved run that is
@@ -690,22 +705,22 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 				try:
 					content = scan(view, index)[0]
 				except Refused:
-					return ERR_BOUNDS
+					return fail(ERR_BOUNDS, index)
 			else:
 				content = wide // BITS_PER_BYTE
 			data = bytes(view.buffer[start:start + content])
 			if len(data) != content:
-				return ERR_BOUNDS
+				return fail(ERR_BOUNDS, index)
 			for check, against in span:
 				if check == NUL_TERMINATED and 0 not in data:
-					return ERR_CONSTRAINT
+					return fail(ERR_CONSTRAINT, index, NUL_TERMINATED)
 				if check == ZERO_RUN and any(data):
-					return ERR_CONSTRAINT
+					return fail(ERR_CONSTRAINT, index, ZERO_RUN)
 				if check != ENCODED_AS:
 					continue
 				if against == 0:
 					if any(one > 0x7F for one in data):
-						return ERR_CONSTRAINT
+						return fail(ERR_CONSTRAINT, index, ENCODED_AS)
 					continue
 				# Decoded rather than re-implemented. Each runtime validator
 				# -- `situ_utf8_valid`, `situ_utf16le_valid`,
@@ -718,7 +733,7 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 				try:
 					data.decode(codec)
 				except UnicodeDecodeError:
-					return ERR_CONSTRAINT
+					return fail(ERR_CONSTRAINT, index, ENCODED_AS)
 
 
 		value_checks = [pair for pair in held
@@ -731,24 +746,72 @@ def _validate(image: Image, view: View, struct_index: int) -> int | None:
 		try:
 			value = read_scalar(view, index)
 		except Refused:
-			return ERR_BOUNDS
+			return fail(ERR_BOUNDS, index)
 		for check, against in value_checks:
 			if check == MUST_EQ and value != against:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, check)
 			if check == MINIMUM and value < against:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, check)
 			if check == MAXIMUM and value > against:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, check)
 			if check == MUST_BE_ZERO and value != 0:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, check)
 			if check == MUST_BE_ONE and value != against:
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, check)
 			if check == ENUM_KNOWN \
 					and value not in image.enum_values.get(against, set()):
-				return ERR_CONSTRAINT
+				return fail(ERR_CONSTRAINT, index, check)
 			if check == FITS_FRAME:
 				continue		# handled above, before the value is read
 	return OK
+
+
+#: What `failed_check` answers with when a struct validates, and when the
+#: image cannot say. Distinguished, because "nothing failed" and "this
+#: walker cannot tell you" are the two states invariant 154 is about.
+CLEAN, CANNOT_SAY = "clean", "cannot-say"
+
+
+def failed_check(image: Image, view: View,
+		struct_index: int) -> tuple[str, str] | str:
+	"""Which check refused this struct, as `(member, check)`.
+
+	`CLEAN` where it validates and `CANNOT_SAY` where the image was packed
+	without every check this struct states -- the same two answers
+	`_validate` already separates, kept apart here for the reason it keeps
+	them apart there.
+
+	**The verdict is unchanged and this is a second question about it.**
+	`validate` returns a code and short-circuits, "because the first failure
+	is the answer"; this names that same first failure. Nothing re-runs: the
+	walk records the identity on its way out, so the two cannot disagree
+	about which check answered (0051, 26.231).
+	"""
+	found: list[tuple[int, int]] = []
+	verdict = _validate(image, view, struct_index, found)
+	if verdict is None:
+		return CANNOT_SAY
+	if verdict == OK:
+		return CLEAN
+	if not found:
+		return CANNOT_SAY
+	index, check = found[-1]
+	member = _local(image, index) if index != NONE else "?"
+	return member, CHECK_NAMES.get(check, "bounds")
+
+
+#: `image_check`, by name, for a reader. The numbers are the packer's and
+#: the names are what a consumer keys on -- 0051's split between an identity
+#: that is the contract and a rendering that is not.
+CHECK_NAMES = {
+	MUST_EQ: "must_eq", MINIMUM: "min", MAXIMUM: "max",
+	MUST_BE_ZERO: "must_be_zero", MUST_BE_ONE: "must_be_one",
+	ENUM_KNOWN: "enum_known", FITS_FRAME: "fits_frame",
+	TERMINATED: "terminated", NUL_TERMINATED: "nul_terminated",
+	ENCODED_AS: "encoding", ZERO_RUN: "zero_run",
+	DIGITS_VALID: "digits", DIGITS_MINIMAL: "digits_minimal",
+	ARM_SELECTED: "arm_selected",
+}
 
 
 def _arm_selects(image: Image, view: View, index: int) -> int:

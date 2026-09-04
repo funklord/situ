@@ -393,6 +393,86 @@ def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
 				== f"validate {expected}", f"{backend}, on {label}"
 
 
+def test_every_refusal_in_validate_names_the_check_that_made_it() -> None:
+	"""The completeness of 0051's identity, checked rather than hoped for.
+
+	`_validate` refuses in twenty-five places and each one knows which check
+	answered. Routing them through `fail()` is mechanical, and *missing one*
+	is silent: that check would simply report no identity, which is the
+	shape invariant 154 is about -- a failure with no name and a failure
+	nobody recorded render alike.
+
+	So the rule is asserted over the syntax rather than over behaviour. A
+	bare `return ERR_BOUNDS` or `return ERR_CONSTRAINT` anywhere in
+	`_validate` fails here, which is what makes a *new* check added later
+	carry its identity or say so out loud (26.231).
+	"""
+	import ast as _ast
+
+	source = (ROOT / "walker" / "report.py").read_text(encoding="utf-8")
+	tree   = _ast.parse(source)
+	fn     = next(node for node in _ast.walk(tree)
+	              if isinstance(node, _ast.FunctionDef)
+	              and node.name == "_validate")
+
+	bare = []
+	for node in _ast.walk(fn):
+		if not isinstance(node, _ast.Return) or node.value is None:
+			continue
+		if isinstance(node.value, _ast.Name) and node.value.id in (
+				"ERR_BOUNDS", "ERR_CONSTRAINT"):
+			bare.append(node.lineno)
+
+	assert not bare, (
+		"these refusals do not record which check made them, so "
+		f"`failed_check` cannot name them: lines {bare}")
+
+	# And the sink is actually reached: a body of `fail(...)` calls that
+	# nothing appends to would pass the check above and answer nothing.
+	calls = sum(1 for node in _ast.walk(fn)
+	            if isinstance(node, _ast.Call)
+	            and isinstance(node.func, _ast.Name) and node.func.id == "fail")
+	assert calls >= 25, f"only {calls} refusals route through `fail`"
+
+
+def test_the_walker_names_the_check_that_refused(tmp_path: Path) -> None:
+	"""`udp_header` states two checks of different kinds, and they are told
+	apart by member *and* by kind.
+
+	`[min = 8]` on the length is a constraint; the payload fitting the frame
+	is a bounds question, and 26.201's reason for keeping those apart is why
+	the pair is worth one test: the two answer with different codes and a
+	caller that only had the code could not say which member either was
+	about.
+
+	The verdict is asserted beside the identity on every case. `validate`
+	short-circuits and this reports the failure that decided it, so a change
+	that made them disagree about *which* is the failure worth catching.
+	"""
+	schema   = ROOT / "example" / "udp" / "udp.situ"
+	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	si = next(i for i in range(len(image.structs))
+	          if image.struct_name(i) == "udp_header")
+
+	cases = {
+		"a real datagram":  (bytes([0, 53, 0, 53, 0, 12, 0, 0, 1, 2, 3, 4]),
+		                     report.OK, report.CLEAN),
+		"length below min": (bytes([0, 53, 0, 53, 0, 4, 0, 0, 1, 2, 3, 4]),
+		                     report.ERR_CONSTRAINT, ("length", "min")),
+		"length past the frame":
+		                    (bytes([0, 53, 0, 53, 0, 99, 0, 0, 1, 2, 3, 4]),
+		                     report.ERR_BOUNDS, ("payload", "fits_frame")),
+	}
+	for label, (packet, verdict, which) in cases.items():
+		view = acquire(image, packet, si)
+		assert report._validate(image, view, si) == verdict, label
+		assert report.failed_check(image, view, si) == which, label
+
+
 #: A located member inside a *nested* struct, which the corpus cannot provide:
 #: `bmp`'s `pixels at file.pixel_offset` is the tree's one `at expr`, and
 #: `bitmap_file` is top level, so the message base and the view base are the

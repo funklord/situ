@@ -20070,6 +20070,53 @@ an `offset` answer for it -- 26.209's question about an arm's offset is the
 nearest precedent -- and its view-constructor change is the same API-shape
 cost 0046 carries, which is an argument for landing those two together.
 
+### 26.231 The walker names the check that refused, and nothing else changed
+
+0051's identity half, built: `report.failed_check` answers `(member,
+check)` -- `("length", "min")`, `("payload", "fits_frame")` -- where before
+there was only `2` and `1`.
+
+**Recorded on the way out, not reconstructed afterwards.** The obvious
+implementation is a second pass that re-runs the checks and reports the
+first that fails; it is also the wrong one, because `_validate`'s own
+docstring says "order matters because the first failure is the answer", and
+a second walk is a second implementation of that order. The walk appends
+`(placement, check)` as it returns, so the verdict and the name cannot
+disagree about which check answered.
+
+**`validate` is untouched** -- same signature, same codes, same short
+circuit. The identity is a second question about the same call, which is
+what keeps both differentials comparing `validate N` exactly as they did.
+
+Shown rather than argued, and by the artefact rather than by a suite:
+`report.listing` was run over 222 buffers across the corpus with the change
+in and with it out, and the two hash to the same
+`71f67f54549626af3f1dd1d89a910466`. That is the property at risk stated
+directly -- the differentials compare those listings, so listings that do
+not move cannot move them -- and it cost seconds where the suite was
+taking an hour under a loaded machine.
+
+**The completeness is checked at the syntax, because missing a site is
+silent.** Twenty-five refusals each know which check answered, and one left
+un-instrumented would simply report no name -- a failure with no identity
+and a failure nobody recorded rendering alike, which is 154. So a test
+walks `_validate`'s AST and refuses a bare `return ERR_BOUNDS` or `return
+ERR_CONSTRAINT`, and counts the `fail(...)` calls so a body of them that
+nothing appends to cannot pass either. Two sabotages, caught by two
+different tests: dropping one identity fails the syntax guard, and making
+the sink record `NONE` fails the behaviour one.
+
+**What this does not do, stated because a record whose consequences read as
+landed is the shape the plugin slot spent weeks in.** The generated code
+still answers only a code: the four backends build `validate` from
+pre-rendered *lines* across `_fits_check`, `_arm_fits_check`,
+`_arm_validation` and `_member_checks`, so giving those an identity is a
+refactor in each, not an edit. The editor does not call `validate` at all,
+and `situc verify` is a different implementation in `situc/verify.py`
+rather than a caller of this one. So the knowledge is now usable and
+nothing uses it yet -- which is what 0051 called this half, and the
+consumers are the next one.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
