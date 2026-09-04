@@ -393,6 +393,81 @@ def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
 				== f"validate {expected}", f"{backend}, on {label}"
 
 
+#: A located member inside a *nested* struct, which the corpus cannot provide:
+#: `bmp`'s `pixels at file.pixel_offset` is the tree's one `at expr`, and
+#: `bitmap_file` is top level, so the message base and the view base are the
+#: same byte in the only case anything walks (26.228).
+LOCATED_SCHEMA = """target buffer;
+endian big;
+bit_order msb_first;
+
+struct head {
+	u16  where;
+	u16  count;
+}
+
+struct inner {
+	head  h;
+	u8    blob[h.count] at h.where;
+}
+
+struct outer {
+	u16    lead;
+	inner  body;
+}
+"""
+
+
+def test_a_located_member_is_measured_from_the_message(tmp_path: Path) -> None:
+	"""9.8, held to: "`at expr` places a member where a field says, measured
+	from the start of the *message*".
+
+	The generated C says it in one line -- `out->base = msg->base + at` --
+	and this walker said `view.at + at`, which is the same byte only where
+	the view starts at zero. With `inner` at offset 2 and `where = 8`, C read
+	from 8 and the walker read from 10: `aabbcc` against `ccddee`, two bytes
+	off, which is the interoperability break 0043 opens by describing for the
+	other base question.
+
+	Held against the compiled backend rather than a number written here, and
+	the buffer is chosen so the two answers cannot coincide: the bytes at 8
+	and at 10 differ.
+	"""
+	schema = tmp_path / "loc.situ"
+	schema.write_text(LOCATED_SCHEMA, encoding="ascii")
+
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = parse_text(LOCATED_SCHEMA)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	packet = bytes([0, 0, 0, 8, 0, 3, 0, 0,
+	                0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00])
+
+	si = next(i for i in range(len(image.structs))
+	          if image.struct_name(i) == "inner")
+	shape = image.structs[si]
+	blob_index = shape.first_placement + shape.placement_count - 1
+
+	# `inner` where it actually sits inside `outer`, built the way
+	# `report._validate` builds a nested view.
+	inner = walk_module.View(image, packet, si, 2, len(packet))
+	assert walk_module.read_bytes(inner, blob_index) == bytes(
+		[0xAA, 0xBB, 0xCC])
+
+	# And the corpus case still agrees, where the two bases coincide.
+	for backend, argv in sorted(command.items()):
+		found = _by_member(answers(argv, packet, tmp_path))
+		walked = _by_member(report.listing(image, packet))
+		for key in walked.keys() & found.keys():
+			assert walked[key] == found[key], (
+				f"{backend} and the walker disagree about {key}")
+
+
 #: `bit_order lsb_first` with a bit-packed member, which the corpus cannot
 #: provide: the one schema declaring it is `example/register`, and a register
 #: is a bus transaction rather than bytes off a wire, so no walk acquires one

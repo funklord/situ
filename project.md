@@ -19898,6 +19898,43 @@ settles which. The corpus cannot help -- `test/schema/edges.situ` is the
 only schema with a namespace, it holds one struct, and nothing references
 it.
 
+### 26.228 `at expr` measured from the wrong base
+
+Section 9.8 is unambiguous: "`at expr` places a member where a field says,
+measured from the start of the *message*", and 11.3's table repeats it --
+"`base = message`: the start of the message, as `at expr` means it".
+
+The generated C says it in one line, `out->base = msg->base + at`. **The
+walker said `view.at + at`**, which is the same byte only where the view
+starts at zero.
+
+    struct inner { head h; u8 blob[h.count] at h.where; }
+    struct outer { u16 lead; inner body; }
+
+`inner` sits at offset 2 and `where` is 8. C reads from 8 and answered
+`aabbcc`; the walker read from 10 and answered `ccddee`. **Two bytes off**,
+which is the interoperability break 0043 opens by describing for the other
+base question -- the padding lands, the bytes parse, and the reader is
+looking at the wrong field.
+
+**The corpus cannot tell.** `bmp`'s `pixels at file.pixel_offset` is the
+tree's one `at expr`, 0047 having already recorded that "section 9.8 names
+three formats that wanted it and the tree exercises one". `bitmap_file` is
+top level, so `view.at` is zero and the two bases are the same byte in the
+only case anything walks.
+
+**Found by asking which constructs the corpus barely exercises**, which is
+the seam that produced 26.227 an hour earlier: one committed user, and the
+user is the shape that cannot distinguish the readings. The two findings
+share more than that -- in both, a rule is stated normatively, one
+description follows it, and the description nobody compares does not.
+
+`offset_bits` answers "from the view's base" and every caller adds `view.at`
+back, so the fix converts the message-relative value into that contract
+rather than changing what callers do. The chosen buffer makes the two
+readings disagree by construction: the bytes at 8 and at 10 are different,
+so a walker that regressed could not pass by coincidence.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

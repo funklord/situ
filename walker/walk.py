@@ -99,7 +99,16 @@ def offset_bits(view: View, index: int) -> int:
 	"""
 	placement = view.image.placements[index]
 	if placement.located_code != NONE:
-		return _evaluate(view, placement.located_code) * BITS_PER_BYTE
+		# `at expr` is measured from the start of the *message* (9.8), and
+		# this function answers from the view's base -- every caller adds
+		# `view.at` back. The two are the same byte only for a top-level
+		# struct, which is every located member the corpus has: `bmp`'s
+		# `pixels at file.pixel_offset` is the tree's one `at expr`, and
+		# `bitmap_file` is acquired at zero. Nested, this walker read two
+		# bytes past where the generated C read, which is the interoperability
+		# break 0043 describes for the other base question (26.228).
+		return (_evaluate(view, placement.located_code) - view.at) \
+			* BITS_PER_BYTE
 	if placement.offset_known:
 		return placement.offset_bits
 
