@@ -15450,8 +15450,9 @@ greps and one parse.
 
 **Decisions waiting.**
 
-- **`doc/decision/0051-messages-a-schema-carries.md` is
-  `Status: proposed`.** Raised by the copyright holder: a schema should be
+- ~~**`doc/decision/0051-messages-a-schema-carries.md` is
+  `Status: proposed`.**~~ **Accepted 2026-09-04, not yet built.** Raised
+  by the copyright holder: a schema should be
   able to say "when these fields hold, this is what it means", so that
   `situ-edit` and a dissector can be helpful about a format without
   format-specific callback code -- a sixth description of the layout, in a
@@ -15463,8 +15464,9 @@ greps and one parse.
   default**, and it is flat by construction: evaluated once in `validate`
   and at no other point, so no `when` can see another and an accessor stays
   arithmetic. Accepting or refusing it is the decision.
-- **`doc/decision/0050-external-arguments.md` is `Status: proposed`.**
-  Raised by the copyright holder: a format whose shape follows a fact the
+- ~~**`doc/decision/0050-external-arguments.md` is
+  `Status: proposed`.**~~ **Accepted 2026-09-04, not yet built.** Raised
+  by the copyright holder: a format whose shape follows a fact the
   message does not carry -- a negotiated cipher suite, a card class, a
   block size. The record splits the question by *when* the argument is
   known and by *what* it may affect, and proposes taking the cells that
@@ -19999,6 +20001,74 @@ constants rather than against a compiled predicate, which is the weaker of
 the two available proofs and the one `test_walker` explicitly argues against
 elsewhere: "the four are five spellings of that module, so comparing against
 it would be asking one implementation whether it agrees with itself."
+
+### 26.230 Two constructs accepted, and what each is waiting on
+
+0050 and 0051 are accepted, not built. Both came from the copyright holder
+in one sitting, and they turned out to be the same question asked twice:
+**what may a schema say that the bytes do not.**
+
+**0050, external arguments.** A format whose shape follows a fact the
+message does not carry -- a negotiated cipher suite, a card class, a block
+size. `prefix(...)` was already the precedent that a caller may know
+something the message does not, and `const` already parsed with no way to
+set one from outside. The design crosses two axes, *when* the argument is
+known against *what* it may affect, and takes the cells that cost nothing:
+`--define` for a generation-time `const`, and `parameter u8 name;` as a
+zero-width member so that sizes, `at expr`, `[since]`, `require` and
+`invariant` read it through machinery that already exists. A parameter may
+decide meaning freely and may move a member only under `[stream]`, because
+a per-message argument cannot reach a Lua dissector and 0049 settled that
+four of five is not a rule.
+
+**0051, messages a schema carries.** A schema should be able to say "when
+these fields hold, this is what it means", so a dissector and `situ-edit`
+can be helpful about a format without format-specific callback code --
+which is a sixth description of the layout, in a place none of the five can
+check. Three separable gaps: no predicate over several members of one
+message, no identity for a failed check, and no notion of a message that is
+not a failure.
+
+**The holder's constraint is what made 0051 a design rather than a
+feature.** The first draft left "when does this run" open, and the answer
+returned was: flat, once, at the most useful time. situ already had exactly
+one such point -- `validate` is "one line about the whole struct", the
+caller invokes it, and it recurses into nested structs, so validating a
+file's top-level struct is "the end of processing the buffer" already
+spelled. Pinning `when` there makes the model flat *by construction*: no
+evaluation on an accessor call, so a getter stays arithmetic; no `when`
+reading another, so no order and no cascade; no `on_read` form, because
+that is the `effect` axis and means something else.
+
+Reading `_validate` to place it turned up the wrinkle that decides the API.
+It short-circuits -- "order matters because the first failure is the
+answer" -- which is right for a verdict and wrong for collecting messages,
+so the messages come from a sibling that does not stop and that a caller
+who wants none never links.
+
+**Two things worth carrying out of both records.**
+
+*The identity is the contract; the text is a default.* The `_SCALE` split,
+for the reason `_scale_macros` already gives about fixed point: the exact
+fact belongs in the header and the rendering needs a type -- here a locale,
+a log format and a flash budget -- situ cannot choose. It also answers
+localisation without inventing any.
+
+*And for once the Lua dissector is the description that gains most.* 0049
+and 0050 both turn on it being the one that cannot follow; Wireshark's
+expert info is 0051's construct exactly, and `gen-dissector` emits none
+today.
+
+**The hazard is stated rather than left to be discovered.** situ cannot
+check prose. A `note` that says something false about the format is shown
+with the compiler's authority behind it, and nothing in the tree can catch
+it -- the first construct where a schema asserts something no check can
+hold it to, which is 14.5's rule pointed the other way.
+
+Neither is built. 0050's `parameter` has no position, so the lattice needs
+an `offset` answer for it -- 26.209's question about an arm's offset is the
+nearest precedent -- and its view-constructor change is the same API-shape
+cost 0046 carries, which is an argument for landing those two together.
 
 ## 27. Questions, and how they were settled
 

@@ -1,6 +1,6 @@
 # 0050: external arguments, and which of them a schema may take
 
-Status: proposed
+Status: accepted 2026-09-04; not yet built
 Date: 2026-09-04
 Phase: raised by the copyright holder while reading 15.2
 

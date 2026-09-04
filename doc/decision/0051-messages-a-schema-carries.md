@@ -1,6 +1,6 @@
 # 0051: messages a schema carries, and who renders them
 
-Status: proposed
+Status: accepted 2026-09-04; not yet built
 Date: 2026-09-04
 Phase: raised by the copyright holder, after 0050
 
