@@ -66,6 +66,16 @@ from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
+#: A refusal that names no member -- a member noted rather than walked, or a
+#: struct that validates. Distinguished from any real id, because "nothing
+#: refused" and "something refused with no name" are the two states invariant
+#: 154 is about.
+_NO_CHECK = "0xFFFFFFFFu"
+
+#: A line that leaves `validate` with a refusal. Every one of them is inside
+#: exactly one member's group, so the identity to record is that member's.
+_REFUSES = re.compile(r"\s*return SITU_ERR_\w+;\s*$")
+
 
 @dataclass
 class Generated:
@@ -6087,13 +6097,30 @@ class Emitter:
 		return lines
 
 	def _validate_decl(self, struct: ResolvedStruct) -> list[str]:
-		return [
+		ids = [member for member, _ in self._check_groups(struct) if member]
+		lines = [
 			"",
 			"/* Check every constraint this schema states: [must_eq], [max],",
 			" * [min], and the reserved-bit policy. Called on parse under",
 			" * SITU_CHECKED, and available explicitly in any build. */",
 			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}(situ_view_t view);",
 		]
+		if not ids:
+			return lines
+
+		lines.extend([
+			"",
+			"/* The same walk, naming the member that refused. `*which` is one",
+			" * of the ids below on a refusal and unchanged otherwise; NULL",
+			" * asks for the verdict alone. The id is the contract and the",
+			" * name is a macro, so nothing here costs a string (0051). */",
+			f"situ_err_t {ident(self.prefix, struct.name, 'check')}"
+			"(situ_view_t view, uint32_t *which);",
+		])
+		lines.extend(
+			f"#define {macro(self.prefix, struct.name, member, 'CHECK')} {at}u"
+			for at, member in enumerate(ids))
+		return lines
 
 	def source(self) -> str:
 		lines = [
@@ -6108,15 +6135,53 @@ class Emitter:
 
 		return "\n".join(lines) + "\n"
 
+	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
+		"""One group per member that `validate` says anything about.
+
+		The identity 0051 asks for, at the granularity C can give it without
+		restructuring four line-emitting helpers: `_checks_for` is called per
+		entry, so the *member* is known here, while the check *kind* is
+		decided inside `_member_checks`' own dispatch and is a later slice.
+		"Which field refused" is the half a caller asks first and the half
+		the walker already agrees about (26.232).
+
+		A group with no refusal in it -- a member that is noted and not
+		walked -- is numbered nothing, because an id nothing can report is
+		an id that means "did not happen" and "has no name" at once.
+		"""
+		groups = []
+		for entry in struct.entries:
+			lines = self._checks_for(struct, entry)
+			if not any(_REFUSES.match(one) for one in lines):
+				groups.append(("", lines))
+				continue
+			groups.append((c_name(self._local(struct, entry.placement)), lines))
+		return groups
+
 	def _validate_body(self, struct: ResolvedStruct) -> list[str]:
-		lines = [
-			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}(situ_view_t view)",
+		named  = ident(self.prefix, struct.name, "check")
+		lines  = [
+			f"situ_err_t {named}(situ_view_t view, uint32_t *which)",
 			"{",
+			"\t/* One place rather than a guard at every refusal: a caller",
+			"\t * that does not want the identity passes NULL, and the",
+			"\t * refusals below stay one line each. */",
+			"\tuint32_t sink;",
+			"",
+			"\tif (which == NULL) {",
+			"\t\twhich = &sink;",
+			"\t}",
+			f"\t*which = {_NO_CHECK};",
 		]
 
 		checks = []
-		for entry in struct.entries:
-			checks.extend(self._checks_for(struct, entry))
+		for at, (member, group) in enumerate(self._check_groups(struct)):
+			for one in group:
+				if member and _REFUSES.match(one):
+					indent = one[:len(one) - len(one.lstrip("\t"))]
+					checks.append(f"{indent}*which = "
+					              f"{macro(self.prefix, struct.name, member, 'CHECK')};")
+				checks.append(one)
 
 		# A check may be a comment and nothing else -- an array of structs is
 		# noted rather than walked -- and a body of comments still leaves the
@@ -6129,7 +6194,13 @@ class Emitter:
 			lines.append("\t(void)view;")
 		lines.extend(checks)
 
-		lines.extend(["\treturn SITU_OK;", "}", ""])
+		lines.extend([
+			"\treturn SITU_OK;", "}", "",
+			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}(situ_view_t view)",
+			"{",
+			f"\treturn {named}(view, NULL);",
+			"}", "",
+		])
 		return lines
 
 	def _checks_for(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:

@@ -20117,6 +20117,45 @@ rather than a caller of this one. So the knowledge is now usable and
 nothing uses it yet -- which is what 0051 called this half, and the
 consumers are the next one.
 
+### 26.232 C names the member that refused, and `validate` is a wrapper
+
+26.231 gave the walker 0051's identity; this is the same answer from the
+description the differential can hold it against.
+
+`situ_S_check(view, &which)` reports which member refused, `validate`
+becomes `return situ_S_check(view, NULL)`, and the ids are macros --
+`#define SITU_UDP_HEADER_LENGTH_CHECK 0u`. Run against a real datagram:
+`[min = 8]` violated gives verdict 2 and `LENGTH`, a declared length past
+the frame gives verdict 1 and `PAYLOAD`, and a good one gives 0 and the
+no-check sentinel. Those are the members the walker names for the same
+bytes.
+
+**At the member and not yet the check kind, and the reason is where the
+lines come from.** `_checks_for` is called once per entry, so the *member*
+is known where a group is assembled; the *kind* is decided several
+dispatches down inside `_member_checks`, which returns rendered lines
+rather than structured checks. Giving those an identity is a refactor of
+four line-emitting helpers rather than an edit, and "which field refused"
+is the half a caller asks first. The walker already answers both, so the
+comparison is between C's member and the walker's member.
+
+**One place rather than a guard at every refusal.** `which` may be NULL,
+and rather than test it at each of the returns the function points it at a
+local sink once. That keeps every refusal one line, which is what makes
+the rewrite mechanical enough to trust: a group is one member's lines, and
+every `return SITU_ERR_...` inside it takes that member's id.
+
+**A struct that states no constraint gains no ids and no `check`.** An id
+nothing can report would mean "did not happen" and "has no name" at once,
+which is 154, so the header carries `validate` alone.
+
+**And the demonstration was wrong before the code was.** The first probe
+printed `which=999` after a refusal, which reads as an identity that never
+landed; the call and the read were both arguments to one `printf`, whose
+evaluation order is unspecified, so `which` was read before the call that
+set it. The generated C was right and the test of it was not -- the third
+time this session a defect read off an artefact dissolved on execution.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

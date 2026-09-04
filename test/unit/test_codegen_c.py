@@ -71,6 +71,59 @@ def test_header_has_an_include_guard() -> None:
 	assert header.rstrip().endswith("#endif /* SITU_UNIT_H */")
 
 
+def test_validate_names_the_member_that_refused() -> None:
+	"""0051's identity, at the granularity C can give it (26.232).
+
+	`validate` keeps its signature and becomes a wrapper, so every existing
+	caller is untouched; `check` is the same walk with somewhere to put the
+	answer. `NULL` asks for the verdict alone, which is what makes the
+	identity cost nothing to a caller that does not want it.
+
+	The ids are macros rather than strings: the name is the contract and a
+	`switch` on it costs no bytes, which is the split 0051 takes from the
+	`_SCALE` macros for fixed point.
+	"""
+	header, source = emit("struct S { u8 a [max = 3]; u8 b [must_eq = 7]; }")
+
+	assert "#define SITU_S_A_CHECK 0u" in header
+	assert "#define SITU_S_B_CHECK 1u" in header
+	assert "situ_err_t situ_S_check(situ_view_t view, uint32_t *which);" in header
+
+	# The verdict path is one walk, not two: `validate` delegates.
+	assert "return situ_S_check(view, NULL);" in source
+	# And each refusal records the member before it leaves.
+	assert "*which = SITU_S_A_CHECK;" in source
+	assert "*which = SITU_S_B_CHECK;" in source
+
+
+def test_a_struct_with_nothing_to_check_gains_no_ids() -> None:
+	"""An id nothing can report would mean "did not happen" and "has no
+	name" at once, which is 154. A struct that states no constraint gets
+	`validate` and no `check`."""
+	header, _ = emit("struct S { u8 a; u8 b; }")
+
+	assert "situ_err_t situ_S_validate(situ_view_t view);" in header
+	assert "_CHECK " not in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_identity_walk_compiles(tmp_path: Path) -> None:
+	"""Under the project's own flags, which is where an unused `sink` or a
+	macro that is not an integer constant would show."""
+	compile_generated(tmp_path,
+	         "struct S { u8 a [max = 3]; u16 b [must_eq = 7]; }",
+	         extra="""
+#include "unit.h"
+unsigned probe(situ_view_t view)
+{
+	uint32_t which = 0;
+	(void)situ_S_check(view, &which);
+	(void)situ_S_check(view, NULL);
+	return which == SITU_S_A_CHECK ? 1u : 0u;
+}
+""")
+
+
 def test_size_constants_are_emitted() -> None:
 	"""So callers can size static buffers without running the compiler."""
 	header, _ = emit("struct S { u8 a; u32 b; }")
