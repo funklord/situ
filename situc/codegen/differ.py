@@ -422,10 +422,15 @@ def writes(struct: ResolvedStruct,
 	    four signatures differ by design (14.2);
 	  * a versioned one's refuses, and the read probe already asks that;
 	  * an enum takes its own type in two languages and an integer in two;
-	  * a signed one needs a value in range, and a pattern that fits every
-	    width is what makes the comparison worth anything;
 	  * BCD and fixed point convert on the way in, so a pattern is not a
 	    value they can hold.
+
+	A signed member was on that list until 2026-09-04, for a reason that was
+	about the pattern rather than the member: `_pattern` produced a value no
+	signed field of that width could hold, and `rustc` refused
+	`set_poll(239)` on an `i8` outright. It maps the same bits into range
+	now, so the byte order still shows and the write is negative -- which is
+	the half of the range the old pattern could never reach (26.225).
 	"""
 	# A field whose value decides where a later member starts writes through
 	# a setter that takes the message and bumps its generation (12.3), so its
@@ -465,7 +470,7 @@ def writes(struct: ResolvedStruct,
 			continue
 		if placement.marker is not None or placement.radix is not None:
 			continue
-		if scalar.signed or scalar.is_bcd or scalar.is_fixed_point:
+		if scalar.is_bcd or scalar.is_fixed_point:
 			continue
 		# `_SCALAR_TYPES` and nothing else, packed or not: a bit-packed
 		# *enum* is still an enum, and its setter takes the enum type in two
@@ -488,8 +493,8 @@ def writes(struct: ResolvedStruct,
 		if placement.covered_by and not covers:
 			continue		# an invariant's obligation, not a tag's
 		found.append(Ask(kind, c_name(local_name(struct, placement)),
-		                 _pattern(scalar.bits), 0, False,
-		                 inside=tuple(covers)))
+		                 _pattern(scalar.bits, scalar.signed), 0,
+		                 scalar.signed, inside=tuple(covers)))
 
 	# And a covered field of a *nested* struct, which the loop above cannot
 	# see: `own_entries` drops a dotted path. Its setter is on the parent in
@@ -524,20 +529,32 @@ def writes(struct: ResolvedStruct,
 			continue
 
 		found.append(Ask(Probe.COVERED, c_name(local_name(struct, placement)),
-		                 _pattern(scalar.bits), 0, False,
-		                 inside=tuple(covers)))
+		                 _pattern(scalar.bits, scalar.signed), 0,
+		                 scalar.signed, inside=tuple(covers)))
 
 	return found
 
 
-def _pattern(bits: int) -> int:
+def _pattern(bits: int, signed: bool = False) -> int:
 	"""A value that fits `bits` and shows a byte order when it does not.
 
 	`0x0123456789ABCDEF` truncated: a `u32` written little end first lands as
 	`EF CD AB 89` and big end first as `89 AB CD EF`, and the two are not each
 	other reversed by accident.
+
+	**The same bits, read as two's complement, for a signed field.** `0xEF`
+	is -17 in an `i8`, and storing -17 lays down `0xEF` -- so the byte-order
+	property the pattern exists for is untouched, and the write is a negative
+	one, which is the half of the signed range a positive pattern never
+	reaches. Signed members were excluded from this pass outright until
+	2026-09-04 on the ground that "a signed one needs a value in range";
+	that is true of the *pattern*, not of the member, and mapping it is a
+	line (26.225).
 	"""
-	return 0x0123456789ABCDEF & ((1 << bits) - 1)
+	raw = 0x0123456789ABCDEF & ((1 << bits) - 1)
+	if signed and raw >= (1 << (bits - 1)):
+		return raw - (1 << bits)
+	return raw
 
 
 def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
@@ -775,6 +792,18 @@ def _c_writes(resolved: ResolvedSchema, prefix: str) -> list[str]:
 					"(&msg) ? 1 : 0);",
 				])
 				continue
+			# `%llu` on a negative value prints its unsigned
+			# reinterpretation, and Python and Rust print theirs signed --
+			# a disagreement in the *probe* rather than in the backends,
+			# which is what kept signed members out of this pass at all
+			# (26.225).
+			if ask.signed:
+				lines.extend([
+					f"\t\t\t{setter}(view, {ask.count});",
+					f'\t\t\tprintf("{ask.local} <- %lld\\n",'
+					f' (long long){getter}(view));',
+				])
+				continue
 			lines.extend([
 				f"\t\t\t{setter}(view, {ask.count}u);",
 				f'\t\t\tprintf("{ask.local} <- %llu\\n",'
@@ -997,6 +1026,15 @@ def _cpp_writes(resolved: ResolvedSchema) -> list[str]:
 					f"\t\t\t\t::situ::{name}::"
 					f"{bare_name(ask.inside[0])}_is_dirty(msg)"
 					" ? 1 : 0);",
+				])
+				continue
+			# The same signed/unsigned split C makes next door, and for
+			# the same reason (26.225).
+			if ask.signed:
+				lines.extend([
+					f"\t\t\tview.set_{call}({ask.count});",
+					f'\t\t\tstd::printf("{ask.local} <- %lld\\n",',
+					f"\t\t\t\tstatic_cast<long long>(view.{call}()));",
 				])
 				continue
 			lines.extend([

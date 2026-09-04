@@ -19764,6 +19764,47 @@ axis worth sweeping next is not "which kinds are excluded from the probe" but
 "which fields of a placement change a value, and does every description
 apply each".
 
+### 26.225 The write pass never wrote a negative number
+
+`codegen/differ`'s write pass sets every writable scalar to a pattern and
+compares what the four backends read back and leave in the buffer. It
+excluded signed members, and its docstring gave the reason: "a signed one
+needs a value in range, and a pattern that fits every width is what makes
+the comparison worth anything."
+
+**That is true of the pattern and not of the member.** `_pattern` truncates
+`0x0123456789ABCDEF` to the field's width, which no signed field of that
+width can hold -- `rustc` refuses `set_poll(239)` on an `i8` outright, with
+`deny(overflowing_literals)`. Reading the same bits as two's complement fits
+the type and stores identically: `0xEF` is -17 in an `i8`, and writing -17
+lays down `0xEF`. The byte-order property the pattern exists for is
+untouched, and the write is now a *negative* one -- the half of the signed
+range a positive pattern can never reach.
+
+**The second half of the exclusion was real and had to be built.** With the
+literal in range the four still disagreed, and not about behaviour: C printed
+`poll <- 18446744073709551599`, which is -17 through `%llu`, while Python and
+Rust printed `-17` from a getter that knows its own type. That is exactly
+what the docstring means by "a shape whose *probe* would differ rather than
+whose behaviour would" -- and it is a property of the probe, so it is the
+probe that changes. C and C++ print `%lld` for a signed ask; Python and Rust
+already did the right thing.
+
+**No bug. That is the result and it was measured twice.** Before touching
+the probe, all four were checked by hand on `i5`, `i8` and `i16` at -3, -8
+and -1234: C, C++ and Rust go through the same masking runtime helpers, and
+Python's `_set_bits` agrees byte for byte. After, the corpus differential
+passes with `poll <- -17`, `precision <- -17` and `value <- -12817` in the
+probe -- three negative writes in two schemas that nothing had ever
+performed.
+
+**Worth writing down because the exclusion was reasoned and still wrong.**
+It named a real obstacle, stated it accurately, and stopped one step short of
+asking whether the obstacle could be removed -- which is 26.210's shape
+exactly: "a stub that can be made faithful is a worse reason to exclude an
+answer than to include it". Both were an exclusion whose justification
+described the tooling rather than the thing being tested.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
