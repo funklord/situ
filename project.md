@@ -19570,6 +19570,43 @@ builds it. The first attempt to give the shift cases their own fields added
 them to the shared `head`, which changed every offset in it and failed 127
 tests that had nothing to do with shifting; they have their own schema.
 
+### 26.221 The ladder's one gate had never refused anything
+
+`layers.floor` answers which rung a schema needs, and returns `edit` where a
+region sits behind a codec that expands without a bound -- 0031's case E,
+where the measure pass *is* the work, so rung 1 has nowhere to put the
+output. `--layer view` refuses such a schema, and that refusal is the only
+enforcement the ladder has.
+
+**Every committed schema has `floor = view`.** Not one has an allocating
+region, so `floor`'s `edit` branch, `allocating()` returning non-empty,
+`allocates()` answering True, and the CLI's refusal had all never run. Three
+callers depend on the answer -- `capmap` prints it, the CLI gates on it, and
+`require no_alloc(X)` is discharged from it -- and `allocates`'s own
+docstring says the ladder is what made `no_alloc` "a question rather than a
+tautology". Measured, it was still a tautology, because nothing in the tree
+could make it answer yes.
+
+**Built the case and the gate is correct.** `--layer view` refuses with a
+diagnostic naming the member, why the rung cannot take it, and which rung
+can; `--layer edit` builds the same schema. Both halves are asserted,
+because a gate that refused at every rung would pass the first test and be
+useless -- 154's shape, two states rendered alike.
+
+**And the test that checks `allocates` was wrong until a sabotage said so.**
+Its docstring claimed a case stopping the prefix match from becoming a
+substring match, and the case it named -- `payload.trailer` against a needy
+`payload.body` -- does not discriminate: replacing
+`one == path or one.startswith(f"{path}.")` with a plain
+`one.startswith(path)` leaves it answering correctly. `payload.bod` is the
+path that is a *string* prefix without being a *path* prefix, and it is the
+one that fails. **The claim in the docstring was the thing being tested, and
+it was not being tested.** Written down because this is the second time in
+one session that a case chosen to demonstrate a rule turned out to be
+explicable by something else -- the first was a padded HTTP status code
+refused for its length rather than for its leading zero (26.216's fold notes
+the same discipline catching the same shape).
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -14,7 +14,9 @@ from every_schema import ROOT
 from every_schema import SCHEMAS as ALL_SCHEMAS
 from every_schema import ids
 import situc
+from situc import layers
 from situc.cli import COPYRIGHT, build_parser, main
+from situc.parser import parse_text
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -824,6 +826,105 @@ relation answers(query: msg, reply: msg) {
 	must reply.tag >= query.tag;
 }
 """
+
+
+#: A schema whose codec expands without a bound, which is 0031's case E: the
+#: measure pass *is* the work, so rung 1 has nowhere to put the output.
+#:
+#: **No committed schema has one.** `layers.floor` returns "view" for every
+#: one of the tree's schemas, so its `edit` branch, `allocating()` returning
+#: non-empty, and `allocates()` answering True had never run -- and neither
+#: had the refusal below, which is the gate that makes the ladder mean
+#: anything (26.221).
+ALLOCATING = """target buffer;
+endian big;
+bit_order msb_first;
+
+codec squash {
+	expansion = unbounded;
+	granularity = stream;
+	not seekable;
+	invertible;
+}
+
+impl squash extern "my_squash";
+
+struct payload {
+	u8  n;
+	coded body(squash) {
+		u8 content[n];
+	}
+	u8  trailer;
+}
+"""
+
+
+def test_the_lowest_rung_refuses_what_it_cannot_put_anywhere(
+		tmp_path: Path) -> None:
+	"""The ladder's one enforcement, produced for the first time.
+
+	`--layer view` is rung 1 and emits no storage. A region behind a codec
+	with unbounded expansion has an extent nothing knows until the transform
+	has run, so rung 1 cannot hold the result -- which is the whole reason
+	decision 0032 has a second rung.
+
+	The diagnostic is asserted rather than only the exit, because this one
+	had never been produced: it names the member, why the rung cannot take
+	it, and which rung can. A refusal nobody has read is a sentence nobody
+	has checked.
+	"""
+	schema = tmp_path / "a.situ"
+	schema.write_text(ALLOCATING, encoding="ascii")
+
+	with pytest.raises(SystemExit) as refused:
+		main(["build", str(schema), "--target", "c", "--layer", "view",
+		      "--out", str(tmp_path / "out")])
+
+	said = str(refused.value)
+	assert "--layer view cannot emit `payload.body`" in said
+	assert "expands without a bound" in said
+	assert "--layer edit" in said
+
+
+def test_the_rung_above_it_takes_the_same_schema(tmp_path: Path) -> None:
+	"""The other half, without which the refusal could be unconditional.
+
+	A gate that refused at every rung would pass the test above and be
+	useless, which is 154's shape: two states rendered alike.
+	"""
+	schema = tmp_path / "a.situ"
+	schema.write_text(ALLOCATING, encoding="ascii")
+	out = tmp_path / "out"
+
+	assert main(["build", str(schema), "--target", "c", "--layer", "edit",
+	             "--out", str(out)]) == 0
+	assert (out / "a.h").exists()
+
+
+def test_the_floor_is_the_rung_the_schema_needs() -> None:
+	"""`floor` and `allocating` themselves, since the CLI is one caller of
+	three -- `capmap` prints the answer and `require no_alloc(X)` is
+	discharged from it, and a wrong answer there is silent.
+
+	`allocates` is asked about a member, its struct, and two paths that are
+	neither. The prefix match answers the first two without the caller
+	saying which it meant; `payload.bod` is what holds it to a *path* prefix
+	rather than a string one, and it is the case that discriminates.
+	Sabotaged: replacing `one == path or one.startswith(f"{path}.")` with a
+	plain `one.startswith(path)` leaves `payload.trailer` answering
+	correctly and only `payload.bod` goes wrong, so a test without it passes
+	over the defect it was written for.
+	"""
+	schema = parse_text(ALLOCATING)
+
+	assert layers.unbounded_codecs(schema) == {"squash"}
+	assert layers.allocating(schema) == {"payload.body"}
+	assert layers.floor(schema) == "edit"
+
+	assert layers.allocates(schema, None, "payload.body") is True   # type: ignore[arg-type]
+	assert layers.allocates(schema, None, "payload") is True        # type: ignore[arg-type]
+	assert layers.allocates(schema, None, "payload.trailer") is False  # type: ignore[arg-type]
+	assert layers.allocates(schema, None, "payload.bod") is False      # type: ignore[arg-type]
 
 
 def test_an_ungenerated_relation_is_a_notice_by_default(
