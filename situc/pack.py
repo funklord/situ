@@ -1544,9 +1544,19 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags |= MARKER_GOVERNED
 		if placement.tag_covers:
 			flags |= IS_TAG
+		# Bit 3 is packed decimal, and its digit count shares `radix_digits`
+		# with a text number's for the reason `_signed` gives one axis over:
+		# "which of those is right is not something a walk can infer from the
+		# bytes, so it is a fact the image has to state" (26.81). The image
+		# did not state this one, so the walker read `bcd2 seconds` holding
+		# 0x45 as 69 where C read 45, and rejected a valid DS1307 reading
+		# that C accepted (26.222).
+		scalar = placement.scalar
+		is_bcd = scalar is not None and scalar.is_bcd
 		text = (1 if placement.radix_minimal else 0) \
 			| (2 if placement.trimmed else 0) \
-			| (4 if placement.case_insensitive else 0)
+			| (4 if placement.case_insensitive else 0) \
+			| (8 if is_bcd else 0)
 		placements_blob += _struct.pack(
 			"<BBBB",
 			_kind_of(placement),
@@ -1567,7 +1577,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			_u32(repeat_at.get(placement.path)),
 			placement.radix or 0,
 			text,
-			min(placement.array_count or 0, 0xFFFF) if placement.radix else 0,
+			(min(placement.array_count or 0, 0xFFFF) if placement.radix
+			 else scalar.digits if is_bcd and scalar is not None else 0),
 			min(placement.since or 0, 0xFFFF),
 			min(placement.repeat_cap or 0, 0xFFFF),
 			min(placement.pad_to or 0, 0xFFFF),

@@ -19607,6 +19607,80 @@ explicable by something else -- the first was a padded HTTP status code
 refused for its length rather than for its leading zero (26.216's fold notes
 the same discipline catching the same shape).
 
+### 26.222 Packed decimal read as bits, and a valid clock refused
+
+`_signed` in `walker/walk.py` carries the sentence this entry is about,
+written for a different axis: "the image did not carry signedness at all
+until this walker read a BMP and disagreed with C about `i32 width` ...
+which of those is right is not something a walk can infer from the bytes, so
+it is a fact the image has to state" (26.81).
+
+**The image did not carry packed decimal either.** No `bcd` in
+`walker/`, none in `situc/pack.py`, none in `std/image.situ` -- so the
+walker read a BCD member as the integer its bits spell, and could not have
+done otherwise.
+
+Measured on a real DS1307 reading, 2026-09-04 at 01:23:45:
+
+| field   | C  | walker |
+|---------|---:|-------:|
+| seconds | 45 |     69 |
+| minutes | 23 |     35 |
+| year    | 26 |     38 |
+| validate | 0 |      2 |
+
+**The walker rejected a message the generated C accepted.** Not a display
+difference: `[max = 59]` is checked against the value, so a valid clock
+reads as `ERR_CONSTRAINT` from `report.listing` and from `situ verify`.
+Values under ten agree -- `hours 1`, `day 4`, `month 9` -- which is what
+makes the wrong answers look plausible.
+
+**Nothing could see it, and the reason is 26.185's own lesson.** The
+walker-vs-C differential compares `walked.keys() & compiled.keys()`, and
+C's side comes from `codegen/differ`, whose `_SCALAR_TYPES` allow-list has
+no `bcd*` in it. A member kind absent from the probe is a member kind where
+the fifth description can be wrong forever.
+
+**Two things about the repair are worth more than the repair.**
+
+*The skip that looked like the cause was not.* `differ` also had a bare
+`if scalar.is_bcd: continue` a few lines above the allow-list check.
+Deleting it changed nothing -- the allow-list excluded BCD anyway -- and
+both differentials stayed green, which reads exactly like a fix. What
+closed the hole was adding `bcd1`..`bcd16` to `_SCALAR_TYPES`. A sabotage
+caught the difference: with only the skip removed, reverting the walker fix
+still passed.
+
+*And the first decode was wrong in the way this entry is about.* It stopped
+at a nibble above nine, on the reasoning that the bytes can hold what the
+format cannot mean. `situ_bcd_decode` multiplies out regardless -- `0x2F`
+at two digits is 35 -- and the differential caught it on the fourth random
+buffer: `day 0` against `day 35`. The reasoning may even be better than the
+runtime's. It is not what the four backends do, and **a fifth description
+inventing its own answer for malformed input is the whole defect being
+repaired**, one level down. The walker mirrors `situ_bcd_decode` verbatim.
+
+`text_flags` bit 3 carries it and `radix_digits` carries the digit count,
+which needed no new bytes: both are counts of digits, and `flags` was
+full -- bits 6 and 7 are `IS_TAG` and `PINNED`, which `std/image.situ`
+documents as neither.
+
+**And a third description turned out to be answering a different question,
+which the fix exposed rather than caused.** With the walker decoding, the
+Lua dissector disagreed -- and it is right: `gen-dissector` declares a BCD
+member `base.HEX` deliberately, because "the nibbles of a packed decimal
+field read as the digits they spell, so 0x12345678 is the number a reader
+wants to see". It shows the *digits*; the walker shows the *number*. Held
+out of that differential for the reason `bytes` and `string` already are,
+and the display base is what marks them, since every other field is
+`base.DEC`.
+
+The comparison falls from 2361 answers to 2305, and the floor with it. That
+is coverage **withdrawn** rather than lost, which is a distinction worth
+keeping sharp: 26.209 records a floor that had to move because a fix
+emptied what it counted, and this is the same shape from the other side --
+a fix revealing that two sides were never answering one question.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

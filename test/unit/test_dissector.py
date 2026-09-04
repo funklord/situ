@@ -905,7 +905,8 @@ NOT_A_MEMBER = frozenset({"validate", "no-view"})
 #: emitted text rather than off a row, because `dissect.lua` prints the value
 #: and not the kind it printed it as -- and the kind is what decides whether
 #: the row is an integer at all.
-PROTOFIELD = re.compile(r'ProtoField\.(\w+)\("([^"]+)"')
+PROTOFIELD = re.compile(
+	r'ProtoField\.(\w+)\("([^"]+)",\s*"[^"]*"(?:,\s*(base\.\w+))?')
 
 
 class Comparison(NamedTuple):
@@ -924,7 +925,7 @@ class Comparison(NamedTuple):
 
 
 def _shown(rows: list[tuple[str, int, int, str]], proto: str,
-		kinds: dict[str, str]) -> tuple[int, dict[str, int]]:
+		kinds: dict[str, tuple[str, str]]) -> tuple[int, dict[str, int]]:
 	"""What the dissector showed about `proto` itself: how much, and which of
 	it is an integer a walker's reading can be held against.
 
@@ -962,7 +963,18 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 		if not abbrev.startswith(proto + "."):
 			continue
 		total += 1
-		if not kinds.get(abbrev, "").startswith(("uint", "int")):
+		kind, base = kinds.get(abbrev, ("", ""))
+		if not kind.startswith(("uint", "int")):
+			continue
+		# A packed-decimal member, which `gen-dissector` declares `base.HEX`
+		# deliberately: "the nibbles of a packed decimal field read as the
+		# digits they spell, so 0x12345678 is the number a reader wants to
+		# see". So the dissector shows the *digits* and the walker shows the
+		# *number* they spell -- 0x45 against 45 -- and neither is wrong.
+		# That is the same difference-in-what-was-asked `bytes` and `string`
+		# are held out for, and it is the only thing `base.HEX` marks, since
+		# every other field is `base.DEC` (26.222).
+		if base == "base.HEX":
 			continue
 		local = abbrev.split(".")[-1]
 		# The same member shown twice in one packet. The walker has one
@@ -1029,7 +1041,8 @@ def compare(schema: Path) -> Comparison:
 	text    = generate(parsed, resolved, schema.stem)
 	blob, _ = packer.pack(parsed, resolved, metadata=True)
 	image   = load(blob)
-	kinds   = {abbrev: kind for kind, abbrev in PROTOFIELD.findall(text)}
+	kinds   = {abbrev: (kind, base)
+	           for kind, abbrev, base in PROTOFIELD.findall(text)}
 
 	shown = walked = compared = 0
 	differ: list[str] = []
@@ -1107,8 +1120,15 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	cannot dilute it.
 
 	Measured over the 37 committed schemas: 3278 rows shown, 3940 member
-	lines walked, 2361 member-answers compared -- 72% of what the dissector
-	shows and 59% of what the walker renders.
+	lines walked, 2305 member-answers compared -- 70% of what the dissector
+	shows and 58% of what the walker renders.
+
+	It was 2361 until `rtc`'s seven packed-decimal members were held out.
+	That is coverage *withdrawn* rather than lost, and the distinction is
+	the one this file keeps making: the dissector declares them `base.HEX`
+	on purpose, so it shows the digits and the walker shows the number they
+	spell -- 0x45 against 45 -- and comparing those would report a
+	disagreement that is not there (26.222).
 
 	Seventy-nine of those answers arrived when the stub learned to apply the
 	sign: the same rows, counted all along, moved from the held-out column
@@ -1129,13 +1149,13 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 		walked   += result.walked
 		compared += result.compared
 
-	assert compared >= 2340, (
+	assert compared >= 2285, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 2361; the dissector shows {shown} rows and the walker "
+		f"down from 2305; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
-	assert compared * 100 >= shown * 71, (
+	assert compared * 100 >= shown * 69, (
 		f"{compared} of the dissector's {shown} rows are compared against "
-		f"the walker, down from 72%")
+		f"the walker, down from 70%")
 	assert walked >= 3940, (
 		f"the walker renders {walked} member lines, down from 3940; the "
 		"share above can be met by the dissector showing less")

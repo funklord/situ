@@ -309,8 +309,6 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# byte order rather than holding a value.
 			if placement.marker is not None or placement.radix is not None:
 				continue
-			if scalar.is_bcd:
-				continue
 			if placement.type_name not in _SCALAR_TYPES:
 				continue
 			found.append(Ask(Probe.SCALAR, local))
@@ -642,6 +640,14 @@ def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
 _SCALAR_TYPES = frozenset({
 	"u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "bit",
 	*(f"u{n}" for n in range(2, 64)), *(f"i{n}" for n in range(2, 64)),
+	# Packed decimal. Held out by this list rather than by a decision until
+	# 2026-09-04: an explicit `is_bcd` skip above it was redundant, so
+	# deleting that skip changed nothing and looked like it had. What kept
+	# BCD out of both differentials was the absence of a name here, and what
+	# it cost is 26.222 -- a walker reading `0x45` as 69 where all four
+	# backends read 45, invisible because C's side of the comparison never
+	# mentioned the member.
+	*(f"bcd{n}" for n in range(1, 17)),
 })
 
 

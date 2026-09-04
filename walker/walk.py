@@ -565,8 +565,8 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 	if start % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
 		first = view.at + start // BITS_PER_BYTE
 		raw   = view.buffer[first:first + width // BITS_PER_BYTE]
-		return _signed(int.from_bytes(raw, _order(placement)), width,
-		               placement.signed)
+		return _decoded(_signed(int.from_bytes(raw, _order(placement)), width,
+		                        placement.signed), placement)
 
 	# Bit-packed: gather the bytes the value touches and shift it out. The
 	# block covers whole bytes, so the value sits `after` bits from its end.
@@ -574,8 +574,8 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 	last  = (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 	block = int.from_bytes(view.buffer[view.at + first:view.at + last], "big")
 	after = last * BITS_PER_BYTE - end
-	return _signed((block >> after) & ((1 << width) - 1), width,
-	               placement.signed)
+	return _decoded(_signed((block >> after) & ((1 << width) - 1), width,
+	                        placement.signed), placement)
 
 
 def _order(placement: Placement) -> Literal["little", "big"]:
@@ -593,6 +593,41 @@ def _order(placement: Placement) -> Literal["little", "big"]:
 	if placement.endian == NATIVE:
 		return "little" if sys.byteorder == "little" else "big"
 	return "big"
+
+
+#: `text_flags` bit 3: the value is packed decimal, a digit per nibble.
+BCD = 1 << 3
+
+
+def _decoded(value: int, placement: "Placement") -> int:
+	"""Packed decimal read as the number its nibbles spell.
+
+	The same omission `_signed` records one axis over, and found the same
+	way: the image did not carry it, so this walker read `bcd2 seconds`
+	holding 0x45 as **69** where the generated C read **45** -- and then
+	refused a valid DS1307 reading against `[max = 59]` that C accepted.
+	Neither differential could see it: `codegen/differ` skips a BCD member
+	outright, so C's side of the comparison never mentions one and the
+	intersection the walker is held to never contains it (26.222).
+
+	**`situ_bcd_decode` verbatim, including what it does with a nibble above
+	nine.** The runtime multiplies out whatever the nibbles hold --
+	`value * 10 + nibble` for `digits` of them -- so `0x2F` at two digits is
+	35, not a refusal. The first version of this stopped at such a nibble on
+	the reasoning that the bytes can hold what the format cannot mean, and
+	the differential caught it on the fourth random buffer: the walker said
+	`day 0` where C said `day 35`. That reasoning may even be better; it is
+	not what the four backends do, and a fifth description inventing its own
+	answer for malformed input is the whole defect this function exists to
+	repair.
+	"""
+	if not placement.text_flags & BCD:
+		return value
+
+	out = 0
+	for shift in range((placement.radix_digits or 0) - 1, -1, -1):
+		out = out * 10 + ((value >> (4 * shift)) & 0xF)
+	return out
 
 
 def _signed(value: int, width: int, is_signed: bool) -> int:

@@ -203,7 +203,13 @@ struct image_placement {
 	u8   text_flags;                  // bit 0: minimal (no leading zeros)
 	                                  // bit 1: trimmed
 	                                  // bit 2: case_insensitive
-	u16  radix_digits;                // digits the field holds, or 0
+	                                  // bit 3: packed decimal (BCD), whose
+	                                  //        digit count is in
+	                                  //        `radix_digits`
+	u16  radix_digits;                // digits the field holds, or 0 --
+	                                  // for a text number and for packed
+	                                  // decimal alike, since both are a
+	                                  // count of digits
 	u16  since;                       // `[since = N]`, or 0 for always
 	u16  repeat_cap;                  // `while (...) max N`, or 0 for none
 }
