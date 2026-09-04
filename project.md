@@ -19849,6 +19849,55 @@ register, which gets no `Proto`.
 `0xAB` read from the low end is `low 3, high 21` in the generated C, in the
 walker since 26.224, and in the dissector all along.
 
+### 26.227 A rule stated twice, tested once, and implemented nowhere
+
+`doc/decision/0012-namespaces.md` is accepted and says:
+
+> **Unqualified names resolve in the current namespace and nowhere else.**
+> No fallback to the enclosing file. A fallback is a guess, and a schema
+> that silently picked the wrong `header` would produce a layout that looks
+> right and is not.
+
+`situc/namespaces.py`'s module docstring says it again. **`_flatten_one`
+says otherwise, in one line:**
+
+    return qualify(namespace.name, name) if name in declared else name
+
+A name the namespace does not declare keeps its file-wide meaning, so an
+unqualified `outsider` inside `namespace a` binds to the top-level
+`outsider` -- measured: `a::m.o` resolves, and `a::m` is sized from the
+outer struct.
+
+**The test written for this asks the other direction.**
+`test_an_unqualified_name_resolves_in_its_own_namespace` opens "No fallback
+is the point", then checks that a struct *outside* every namespace cannot
+see a type *inside* one. That is a different rule, it is correctly refused,
+and it is true whatever the fallback does. 26.198's shape exactly: five
+rows checked, and the one that drifted is the one nobody wrote an assertion
+for.
+
+**Pinned rather than settled, because neither side is obviously right.**
+
+The code is safe *today*: a local name wins, so the wrong `header` 0012
+warns about is never picked while both exist -- checked, and `a::H` beats a
+top-level `H`. What the fallback costs is deferred: adding an `a::H` later
+re-binds an existing unqualified `H` inside `a` and changes the layout with
+no edit to the struct that reads it. That is 0012's hazard, one commit
+removed.
+
+And the fallback is load-bearing in a way 0012 does not discuss. `name_of`
+rewrites *every* name a declaration carries, not only type references, so
+`u8 body[n]` reaches its sibling field through the same `else name` branch.
+Refusing wholesale would refuse every length expression; implementing the
+rule means threading the file's own names into the pass and refusing only a
+*type* reference, which is a real change to what compiles.
+
+So the disagreement is pinned the way 26.198 pinned section 9.7's `mutate`
+row: the test reads both sides and fires when either moves, and the holder
+settles which. The corpus cannot help -- `test/schema/edges.situ` is the
+only schema with a namespace, it holds one struct, and nothing references
+it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

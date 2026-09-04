@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from every_schema import ROOT
 from situc import ast
 from situc.codegen.c import generate
 from situc.diagnostics import SituError
@@ -90,6 +91,58 @@ def test_an_unqualified_name_resolves_in_its_own_namespace() -> None:
 	struct t { kind k; }
 	""")
 	assert "unknown type `kind`" in rendered
+
+
+def test_the_fallback_the_documents_forbid_and_the_code_allows() -> None:
+	"""Decision 0012 and `namespaces.py` both state a rule the code does not
+	implement, and the test above says it checks it and does not.
+
+	0012: "**Unqualified names resolve in the current namespace and nowhere
+	else.** No fallback to the enclosing file. A fallback is a guess, and a
+	schema that silently picked the wrong `header` would produce a layout
+	that looks right and is not." The module docstring says the same.
+
+	`_flatten_one` says otherwise in one line --
+	`qualify(namespace.name, name) if name in declared else name` -- so a
+	name the namespace does not declare keeps its file-wide meaning. An
+	unqualified `H` inside `namespace a` binds to a top-level `H`.
+
+	**The test above was written for this and asks the other direction.**
+	`test_an_unqualified_name_resolves_in_its_own_namespace` says "No
+	fallback is the point", then checks that a struct *outside* every
+	namespace cannot see a type *inside* one -- which is a different rule,
+	correctly refused, and true whatever the fallback does. 26.198's shape:
+	the assertion that would have caught it is the one nobody wrote.
+
+	**Neither side is obviously right, which is why this pins the
+	disagreement rather than either half of it.** The code is safe today: a
+	local name wins, so the "wrong `header`" 0012 warns about is not picked
+	while both exist. What the fallback does cost is later --- adding an
+	`a::H` re-binds an existing unqualified `H` inside `a` and changes the
+	layout with no edit to the struct that reads it. And the fallback is
+	load-bearing in a way 0012 does not discuss: `name_of` rewrites *every*
+	name, so `u8 body[n]` reads a sibling field through the same `else name`
+	branch, and refusing it wholesale would refuse every length expression.
+
+	Delete this and give the rule an ordinary test once the holder has
+	settled which of the two moves (26.227).
+	"""
+	held = paths("""struct outsider { u16 a; u16 b; }
+	namespace a {
+		struct m { outsider o; u8 t; }
+	}
+	""")
+
+	# The code: an unqualified name inside `a` reached the enclosing file.
+	assert "a::m.o" in held
+
+	# The documents: both say it should not have. Whitespace is normalised
+	# because both wrap the sentence, and 0012 breaks it between "No" and
+	# "fallback" -- a line break is not a difference of opinion.
+	for path in (ROOT / "doc" / "decision" / "0012-namespaces.md",
+	             ROOT / "situc" / "namespaces.py"):
+		text = " ".join(path.read_text(encoding="utf-8").lower().split())
+		assert "no fallback to the enclosing file" in text, path.name
 
 
 def test_a_qualified_name_reaches_across_namespaces() -> None:
