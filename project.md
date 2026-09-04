@@ -19716,6 +19716,54 @@ were at least consistent with each other. The evidence came from a
 *differential*, which reads; nothing in the tree writes through the walker,
 so nothing objected.
 
+### 26.224 The image said which end the bits start from
+
+Two entries above, packed decimal was a fact the image did not carry. This
+is the other half of that shape and the more embarrassing one: **the image
+has carried `bit_order` since it was written, and `walker/walk.py` never
+mentions it.**
+
+`_read_at`'s bit-packed branch does msb-first arithmetic unconditionally --
+`after = last * 8 - end`, shift, mask -- while C picks between
+`situ_bits_get_msb` and `situ_bits_get_lsb` on the same field. For
+`u3 low; u5 high;` over the byte `0xAB` under `bit_order lsb_first`:
+
+| | low | high |
+|---|----:|-----:|
+| C | 3 | 21 |
+| walker | 5 | 11 |
+
+Two descriptions of one byte, differing about every field in it.
+
+**The corpus cannot produce the case, and the reason is precise rather than
+accidental.** One schema in the tree declares `lsb_first`:
+`example/register`. A register is a bus transaction rather than bytes off a
+wire, so no walk acquires one and no `Proto` is emitted for one -- the single
+schema exercising the axis is the single kind both differentials exclude by
+construction.
+
+**Fixed in both directions at once, which is the only thing 26.223 taught
+that was worth keeping.** `situ_bits_set_lsb` clears and sets from the other
+end too, so a walker reading one way and writing the other would round-trip
+within itself and still disagree with every backend about the bytes. Writing
+`low = 3, high = 21` now leaves `0xAB`, which is what C's setters leave.
+
+**Held against the compiled backend, not against a number written in the
+test.** The corpus differential gives the reason: the four are five spellings
+of `traverse.py`, so a hand-written expectation would be asking the walker
+whether it agrees with itself. The schema is written to `tmp_path` and built
+four ways rather than added to `test/schema/`, because every schema there
+carries committed `.map` and `.wire` artifacts and is compiled into the C
+test build -- a wider change than this fix earns.
+
+**Three bugs in two days, all one shape.** Signedness (26.81), packed decimal
+(26.222) and now bit order: a per-member fact that decides what the bytes
+*mean*, where the compiled backends consult it and the fifth description does
+not. Two of the three were carried by the image and simply not read. The
+axis worth sweeping next is not "which kinds are excluded from the probe" but
+"which fields of a placement change a value, and does every description
+apply each".
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

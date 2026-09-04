@@ -393,6 +393,88 @@ def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
 				== f"validate {expected}", f"{backend}, on {label}"
 
 
+#: `bit_order lsb_first` with a bit-packed member, which the corpus cannot
+#: provide: the one schema declaring it is `example/register`, and a register
+#: is a bus transaction rather than bytes off a wire, so no walk acquires one
+#: and neither differential sees it (26.224).
+LSB_FIRST_SCHEMA = """target buffer;
+endian big;
+bit_order lsb_first;
+
+struct packed {
+	u3   low;
+	u5   high;
+	u16  tail;
+}
+"""
+
+
+def test_the_walker_reads_bits_from_the_end_the_schema_says(
+		tmp_path: Path) -> None:
+	"""`bit_order` was carried by the image and consulted by nothing here.
+
+	C picks between `situ_bits_get_msb` and `situ_bits_get_lsb` on the very
+	same field. This walker did the msb arithmetic whatever the image said,
+	so over `0xAB` it answered `low 5, high 11` where C answered `3` and
+	`21` -- two descriptions of one byte, differing on every field of it.
+
+	Held against the compiled backend rather than against a number written
+	here, for the reason the corpus differential gives: the four are five
+	spellings of `traverse.py`, and a hand-written expectation would be
+	asking this module whether it agrees with itself.
+	"""
+	schema = tmp_path / "lsb.situ"
+	schema.write_text(LSB_FIRST_SCHEMA, encoding="ascii")
+
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = parse_text(LSB_FIRST_SCHEMA)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	for packet in (bytes([0xAB, 0x00, 0x00, 0x00]),
+	               bytes([0xFF, 0xFF, 0xFF, 0xFF]),
+	               bytes([0x01, 0x80, 0x00, 0x00])):
+		walked = _by_member(report.listing(image, packet))
+		for backend, argv in sorted(command.items()):
+			found = _by_member(answers(argv, packet, tmp_path))
+			for key in walked.keys() & found.keys():
+				assert walked[key] == found[key], (
+					f"{backend} and the walker disagree about {key} on "
+					f"{packet.hex()}: {found[key]!r} against {walked[key]!r}")
+
+
+def test_an_lsb_first_write_lands_where_the_backends_put_it(
+		tmp_path: Path) -> None:
+	"""The mirror, kept beside the read for 26.223's reason.
+
+	`situ_bits_set_lsb` clears and sets from the other end too, so a walker
+	that read one way and wrote the other would round-trip within itself and
+	still disagree with every backend about the bytes.
+	"""
+	schema = tmp_path / "lsb.situ"
+	schema.write_text(LSB_FIRST_SCHEMA, encoding="ascii")
+
+	parsed   = parse_text(LSB_FIRST_SCHEMA)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	buffer = bytearray(4)
+	view   = acquire(image, buffer, 0)
+	walk_module.write_scalar(view, 0, 3)
+	walk_module.write_scalar(view, 1, 21)
+
+	# What `situ_packed_low_set(v, 3)` and `situ_packed_high_set(v, 21)`
+	# leave behind, which is the byte the read case starts from.
+	assert buffer[0] == 0xAB
+	assert read_scalar(view, 0) == 3
+	assert read_scalar(view, 1) == 21
+
+
 def test_packed_decimal_survives_a_write_and_reads_back(tmp_path: Path) -> None:
 	"""The write path, which nothing had executed.
 

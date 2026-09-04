@@ -552,6 +552,20 @@ def _write_at(buffer: bytearray, view: View, index: int, start: int,
 	first = start // BITS_PER_BYTE
 	last  = (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 	span  = buffer[view.at + first:view.at + last]
+
+	# `situ_bits_set_lsb`'s mirror, and here for 26.223's reason rather than
+	# because a test asked: a transformation on the way in and its inverse on
+	# the way out are one fact, and fixing only the direction the evidence
+	# came from leaves the other silently wrong.
+	if placement.bit_order == LSB_FIRST:
+		skip = start - first * BITS_PER_BYTE
+		mask = ((1 << width) - 1) << skip
+		acc  = int.from_bytes(span, "little")
+		acc  = (acc & ~mask) | (raw << skip)
+		buffer[view.at + first:view.at + last] = \
+			acc.to_bytes(last - first, "little")
+		return
+
 	block = int.from_bytes(span, "big")
 	after = last * BITS_PER_BYTE - end
 	mask  = ((1 << width) - 1) << after
@@ -580,12 +594,24 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 
 	# Bit-packed: gather the bytes the value touches and shift it out. The
 	# block covers whole bytes, so the value sits `after` bits from its end.
+	#
+	# **Which end depends on `bit_order`**, and this read was msb-first
+	# whatever the image said until 2026-09-04. C picks between
+	# `situ_bits_get_msb` and `situ_bits_get_lsb` on the same field, and for
+	# `u3 low; u5 high;` over `0xAB` under `lsb_first` it answers 3 and 21
+	# where this answered 5 and 11. The image has carried `bit_order` since
+	# it was written; nothing here consulted it, and the one schema in the
+	# tree that declares `lsb_first` is a `register`, which is the one kind
+	# no walk acquires (26.224).
 	first = start // BITS_PER_BYTE
 	last  = (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 	block = int.from_bytes(view.buffer[view.at + first:view.at + last], "big")
-	after = last * BITS_PER_BYTE - end
-	return _decoded(_signed((block >> after) & ((1 << width) - 1), width,
-	                        placement.signed), placement)
+	if placement.bit_order == LSB_FIRST:
+		bits = _bits_lsb(block, last - first, start - first * BITS_PER_BYTE,
+		                 width)
+	else:
+		bits = (block >> (last * BITS_PER_BYTE - end)) & ((1 << width) - 1)
+	return _decoded(_signed(bits, width, placement.signed), placement)
 
 
 def _order(placement: Placement) -> Literal["little", "big"]:
@@ -603,6 +629,22 @@ def _order(placement: Placement) -> Literal["little", "big"]:
 	if placement.endian == NATIVE:
 		return "little" if sys.byteorder == "little" else "big"
 	return "big"
+
+
+#: `image_bit_order`: 0 unset, 1 msb_first, 2 lsb_first.
+LSB_FIRST = 2
+
+
+def _bits_lsb(block: int, span: int, skip: int, width: int) -> int:
+	"""`situ_bits_get_lsb`, over a block already assembled big-endian.
+
+	The runtime assembles the span the other way round -- earlier bytes carry
+	the *less* significant bits -- so the two agree once the block is
+	reversed. Reversing here rather than assembling twice keeps one read of
+	the buffer, which is what `_read_at` is split out to have.
+	"""
+	little = int.from_bytes(block.to_bytes(span, "big"), "little")
+	return (little >> skip) & ((1 << width) - 1)
 
 
 #: `text_flags` bit 3: the value is packed decimal, a digit per nibble.
