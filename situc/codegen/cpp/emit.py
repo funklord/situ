@@ -56,6 +56,7 @@ from situc.traverse import (
 	decode_bound, decode_ratio, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
+	pinned_run,
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
 	is_run,
@@ -65,7 +66,7 @@ from situc.traverse import (
 	preceding_parts,
 	obligations, own_entries, own_members,
 )
-from situc.types import ScalarKind, ScalarType, lookup
+from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
 from situc import __version__
 
@@ -5552,6 +5553,13 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 
+		# 0052: a byte run pinned to a literal is one comparison rather than
+		# one per byte, and it sits above the dispatch because
+		# `classify_check` calls such a member an array.
+		pinned = pinned_run(placement)
+		if pinned is not None:
+			return self._pinned_run_check(struct, placement, pinned)
+
 		check = classify_check(struct, placement, self.structs)
 
 		if check is Check.NOTHING:
@@ -5685,6 +5693,36 @@ class Emitter:
 			"\t\t\t}",
 			"\t\t\tif (got == ::situ::rt::err::ok) {",
 			*[f"\t{line}" for line in checks],
+			"\t\t\t}",
+			"\t\t}",
+		]
+
+	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
+			expected: bytes) -> list[str]:
+		"""`[must_eq = "WOZ2"]`: the run against the literal, as written.
+
+		An index loop rather than `std::equal`, which would need `<algorithm>`
+		and `<iterator>` in every generated header for one comparison. The
+		reserved run beside it is a loop for the same reason.
+		"""
+		shown = pinned_shown(expected)
+		body  = ", ".join(f"0x{byte:02X}" for byte in expected)
+		# The bytes rather than the accessor: a `preamble` is anonymous and
+		# has none, which is what makes it inaccessible (0052). Calling
+		# `reserved0()` named nothing and would not have compiled.
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return [f"\t\t/* {placement.path}: this backend cannot resolve"
+			        " where the pinned bytes are. */"]
+		return [
+			f'\t\t/* {placement.path} [must_eq = "{shown}"] */',
+			"\t\t{",
+			f"\t\t\tstatic constexpr std::uint8_t want[] = {{ {body} }};",
+			f"\t\t\tconst std::uint32_t at = ({start});",
+			f"\t\t\tfor (std::uint32_t i = 0; i < {len(expected)}u; ++i) {{",
+			"\t\t\t\tif (raw_.base[at + i] != want[i]) {",
+			"\t\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t\t}",
 			"\t\t\t}",
 			"\t\t}",
 		]

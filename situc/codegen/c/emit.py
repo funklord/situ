@@ -43,6 +43,7 @@ from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
 	Check, arm_members, arm_of, classify_check, containment_order,
+	pinned_run,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
 	is_own_member,
@@ -61,7 +62,7 @@ from situc.traverse import (
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
-from situc.types import ScalarKind, ScalarType, lookup
+from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -6407,6 +6408,14 @@ class Emitter:
 		# and a run's reserved padding is exactly that: `attrs[].<reserved0>`
 		# appears in this struct's entries because the map names it, and its
 		# length expression reads a field of the *element*.
+		# 0052: `u8 sig[4] [must_eq = "WOZ2"]` is one span comparison. It sits
+		# above the reserved run because both are byte loops over a fixed
+		# count and only the expected bytes differ -- and below the variant
+		# and delimiter cases, which are about members this one cannot be.
+		pinned = pinned_run(placement)
+		if pinned is not None:
+			return self._pinned_run_check(struct, placement, pinned)
+
 		if scalar is not None and placement.kind == "reserved" \
 				and "." not in placement.path[len(struct.name) + 1:] \
 				and (placement.array_count is not None
@@ -6734,6 +6743,34 @@ class Emitter:
 			f"\tif (!situ_{named}_valid((view.base) + {placement.offset_bytes}u,"
 			f" {count})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
+	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
+			expected: bytes) -> list[str]:
+		"""`[must_eq = "WOZ2"]` on a byte run: one comparison, one check id.
+
+		The per-byte spelling this replaces generated a load and a branch per
+		byte, an invented member name per byte, and a comment rendering the
+		magic in decimal -- so a reader holding the format reference could
+		not see that the two were the same thing (0052). The literal is
+		emitted as written for exactly that reason.
+		"""
+		base = self._base_expression(struct, placement)
+		shown = pinned_shown(expected)
+		body = ", ".join(f"0x{byte:02X}u" for byte in expected)
+		return [
+			f'\t/* {placement.path} [must_eq = "{shown}"] */',
+			"\t{",
+			f"\t\tstatic const uint8_t want[] = {{ {body} }};",
+			f"\t\tconst uint32_t at = {base};",
+			"\t\tuint32_t i;",
+			"",
+			f"\t\tfor (i = 0; i < {len(expected)}u; i++) {{",
+			"\t\t\tif ((view.base)[at + i] != want[i]) {",
+			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t}",
+			"\t\t}",
 			"\t}",
 		]
 

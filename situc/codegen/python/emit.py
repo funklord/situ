@@ -50,6 +50,7 @@ from situc.traverse import (
 	decode_bound, region_extent, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
+	pinned_run,
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
 	is_run,
@@ -59,7 +60,7 @@ from situc.traverse import (
 	preceding_parts,
 	obligations, own_entries, own_members,
 )
-from situc.types import ScalarType, lookup
+from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
 from situc import __version__
 
@@ -4326,6 +4327,13 @@ class Emitter:
 
 		check = classify_check(struct, placement, self.structs)
 
+		# 0052: a byte run pinned to a literal is one comparison. Above the
+		# dispatch because `classify_check` calls such a member an array, and
+		# an array's check is an encoding and a terminator it has neither of.
+		pinned = pinned_run(placement)
+		if pinned is not None:
+			return self._pinned_run_check(struct, placement, pinned)
+
 		if check is Check.DISCRIMINANT:
 			return self._discriminant_check(struct, placement)
 		if check is Check.DELIMITED:
@@ -4416,6 +4424,34 @@ class Emitter:
 			]
 
 		return lines
+
+	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
+			expected: bytes) -> list[str]:
+		"""`[must_eq = "WOZ2"]`: the run equals the literal, or it does not.
+
+		One comparison rather than one per byte, and the literal is rendered
+		as written so a reader can hold it against a format reference (0052).
+		"""
+		shown = pinned_shown(expected)
+		# Read the bytes rather than the accessor, because a `preamble` has
+		# none: it is anonymous, which is what makes it inaccessible (0052).
+		# Naming `reserved0()` compiled here and in two other backends and
+		# referred to nothing -- caught by generating a preamble and looking,
+		# not by reading the emitter.
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return [f"\t\t# {placement.path}: this backend cannot resolve"
+			        " where the pinned bytes are."]
+		return [
+			f'\t\t# {placement.path} [must_eq = "{shown}"]',
+			"\t\tself._check()",
+			f"\t\tat = self._at + ({start})",
+			f"\t\tif bytes(self._msg.buffer[at:at + {len(expected)}]) "
+			f"!= {expected!r}:",
+			f"\t\t\traise ConstraintError(f\"{placement.path} is "
+			f'{{bytes(self._msg.buffer[at:at + {len(expected)}])!r}}, '
+			f'must_eq {expected!r}")',
+		]
 
 	def _reserved_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

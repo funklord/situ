@@ -31,6 +31,7 @@ VARINTS, TLVS, INDEXES             = 9, 10, 11
 NAMES, VECTORS, MARKERS            = 12, 13, 14
 CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
 RELATIONS, RELATION_MUSTS = 18, 19
+PINNED_RUNS = 20
 
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
@@ -188,6 +189,12 @@ class Image:
 	#: walker skips rather than a load that fails.
 	relations: list[Relation]		= field(default_factory=list)
 	strings: bytes				= b""
+	#: Row -> the bytes a `[must_eq]` on a byte run pins (0052). A
+	#: constraint's `value` is the row rather than the bytes, because
+	#: `image_constraint` carries an `i64` and a byte run packed into one
+	#: would have an endianness the literal does not.
+	pinned_runs: list[bytes]		= field(default_factory=list)
+
 	#: placement index -> the bytes it ends at, from the delimiter table.
 	delimiters: dict[int, bytes]		= field(default_factory=dict)
 	#: placement index -> (quote, escape, cap), each `none` where the format
@@ -328,6 +335,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				                    musts_at + (first + j) * musts_stride)[0]
 				for j in range(count))
 			image.relations.append(Relation(name, request, response, musts))
+
+	if PINNED_RUNS in found:
+		at, records, stride = found[PINNED_RUNS]
+		for i in range(records):
+			_where, length = _struct.unpack_from("<IB", blob, at + i * stride)
+			start = at + i * stride + 5
+			image.pinned_runs.append(blob[start:start + length])
 
 	if DELIMITERS in found:
 		at, records, stride = found[DELIMITERS]

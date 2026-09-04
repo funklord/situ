@@ -64,6 +64,7 @@ enum image_section_tag : u32 {
 	versions     = 17,
 	relations    = 18,
 	relation_musts = 19,
+	pinned_runs  = 20,     // the bytes a `[must_eq]` on a byte run pins
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -328,6 +329,13 @@ enum image_check : u8 {
 	                      // whose content runs off the end
 	encoded_as   = 12,    // the bytes have to be in the encoding the schema
 	                      // names. `value` is which: 0 ascii, 1 utf8
+	pinned_run   = 14,    // a byte run equals the literal it is pinned to.
+	                      // `value` is the row in the pinned table holding
+	                      // those bytes: `image_constraint` carries an `i64`
+	                      // and a byte run packed into one would have an
+	                      // endianness the literal does not, which is the
+	                      // confusion 0024 is about. Indirection for the same
+	                      // reason `enum_known` uses it
 	zero_run     = 13,    // every byte of a reserved *run* is zero. The
 	                      // scalar form is `must_be_zero`; this is the one
 	                      // whose length the message computes, which is why
@@ -340,6 +348,20 @@ struct image_constraint {
 	i64  value;
 	image_check  check;
 	u8   constraint_pad[3];
+}
+
+// The bytes a `[must_eq]` on a byte run pins (0052). Inline rather than into
+// the string table, on `image_delimiter`'s model: these are bytes rather than
+// text, a magic is short, and a walk comparing them wants them contiguous.
+//
+// 27 octets is the cap, which is not a language limit -- the front end takes
+// a literal of any length -- so the packer disowns the check for a longer run
+// rather than truncating it. Truncating would validate a prefix and report a
+// whole match, which is the failure this construct exists to make impossible.
+struct image_pinned {
+	u32  placement;
+	u8   length;
+	u8   octets[27];
 }
 
 // The values an enum names, so membership is a question a walk can answer.
@@ -420,6 +442,7 @@ require absolute_static(image_codec);
 require absolute_static(image_varint);
 require absolute_static(image_tlv);
 require absolute_static(image_constraint);
+require absolute_static(image_pinned);
 require absolute_static(image_enum_value);
 require absolute_static(image_version);
 require absolute_static(image_marker);
@@ -438,6 +461,7 @@ require size(image_codec) == 4;
 require size(image_varint) == 12;
 require size(image_tlv) == 12;
 require size(image_constraint) == 16;
+require size(image_pinned) == 32;
 require size(image_enum_value) == 16;
 require size(image_marker) == 16;
 require size(image_index) == 16;

@@ -1441,3 +1441,84 @@ def test_the_bound_check_reaches_inside_a_block() -> None:
 			checksum u8 c[2] covers(b);
 		}
 	""")
+
+
+# -- a byte run pinned to a literal (0052) ----------------------------------
+
+
+def test_a_byte_run_may_be_pinned_to_a_literal() -> None:
+	"""The construct three schemas needed and none could write.
+
+	Before this, `[must_eq]` on an array was refused outright, so a magic was
+	one field per byte -- six loads, six branches, six invented member names,
+	and comments rendering the bytes in decimal.
+	"""
+	parse_text('struct S { u8 sig[4] [must_eq = "WOZ2"]; }', path="s.situ")
+
+
+def test_a_pinned_run_must_match_its_declared_length() -> None:
+	"""The one mistake this construct invites and the per-byte spelling could
+	not make: writing four fields, you count them."""
+	assert "pins 5 byte(s) of a 4-byte run" in rendered(
+		'struct S { u8 sig[4] [must_eq = "WOZ22"]; }')
+	assert "pins 3 byte(s) of a 4-byte run" in rendered(
+		'struct S { u8 sig[4] [must_eq = "WOZ"]; }')
+
+
+def test_only_a_byte_element_may_be_pinned() -> None:
+	"""A span of wider scalars has an endianness the literal does not, which
+	is the confusion 0024 is about -- so `u16 sig[2] [must_eq = "BM"]` is
+	refused rather than silently picking a byte order."""
+	assert "means nothing here" in rendered(
+		'struct S { u16 sig[2] [must_eq = "BM"]; }')
+
+
+def test_a_numeric_bound_on_a_run_is_still_refused() -> None:
+	"""The exception is `must_eq` against a literal, not arrays generally.
+	An ordering on a span is not a thing this language defines."""
+	assert "means nothing here" in rendered(
+		"struct S { u8 sig[4] [must_eq = 7]; }")
+	assert "means nothing here" in rendered(
+		'struct S { u8 sig[4] [max = 7]; }')
+
+
+# -- preamble: fixed bytes nobody may read (0052) ---------------------------
+
+
+def test_a_preamble_pins_bytes_and_has_no_name() -> None:
+	"""Anonymous is what makes it inaccessible: there is no name for an
+	accessor to be called."""
+	schema = parse_text('struct S { preamble u8[4] = "WOZ2"; u32 n; }',
+	                    path="s.situ")
+	member = list(schema.structs())[0].members[0]
+	assert member.pinned == b"WOZ2"
+
+
+def test_a_preamble_may_omit_its_length() -> None:
+	"""The literal already says how many bytes there are, so requiring the
+	author to repeat the count is a second place to be wrong."""
+	schema = parse_text('struct S { preamble u8 = "BM"; u32 n; }', path="s.situ")
+	assert list(schema.structs())[0].members[0].pinned == b"BM"
+
+
+def test_a_preamble_length_must_agree_with_its_literal() -> None:
+	assert "pins 3 byte(s) of a 4-byte run" in rendered(
+		'struct S { preamble u8[4] = "WOZ"; }')
+
+
+def test_a_preamble_is_a_run_of_bytes() -> None:
+	"""A literal has no byte order to give a wider element (0024)."""
+	assert "`preamble` is a run of bytes, found `u16`" in rendered(
+		'struct S { preamble u16[2] = "BM"; }')
+
+
+def test_a_preamble_needs_a_literal() -> None:
+	assert "`preamble` is pinned to a literal" in rendered(
+		"struct S { preamble u8[4] = 7; }")
+
+
+def test_a_reserved_run_is_still_a_policy_not_a_value() -> None:
+	"""The two vocabularies must not merge, which is 26.233. `preamble` is
+	the spelling for stated content; `reserved` keeps its policies."""
+	assert "a `reserved` member states its content as a policy" in rendered(
+		"struct S { reserved u8[4] [must_eq = 3]; }")

@@ -200,6 +200,13 @@ class Placement:
 	# accessors need no special case -- `data_sized` asks about those two and
 	# never about the extent interval.
 	pinned_bits: int | None		= None
+	# `preamble u8[4] = "WOZ2"` -- the bytes a preamble is pinned to (0052).
+	# Carried rather than derived from `attrs`, because a preamble states its
+	# content where a `reserved` states a policy, and the two must not be one
+	# vocabulary: `reserved [must_eq = N]` is refused for exactly that reason
+	# (26.233). `kind` is "reserved", so every no-accessor rule already
+	# applies; this is only what the bytes must be.
+	pinned_run: bytes | None	= None
 	# `pad_to(n)` alignment in bytes (0043). The member is padding to the next
 	# multiple of n from the message base; its length is a constant where the
 	# offset is static and `align_up(offset, n) - offset` where it is not, so
@@ -1581,6 +1588,7 @@ class Solver:
 			size_bits      = total.lo,
 			size_max_bits  = total.hi,
 			pinned_bits    = pinned.lo if pinned is not None else None,
+			pinned_run     = getattr(member, "pinned", None),
 			scalar         = scalar,
 			endian         = local.endian,
 			bit_order      = local.bit_order,

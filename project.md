@@ -20461,6 +20461,117 @@ under `target file` is exactly that region, accepted, with its interior
 deliberately undescribed. The half that was genuinely missing is the one
 above.
 
+### 26.240 A magic is one comparison now, in four backends and not the fifth
+
+0052's first construct, built: `u8 sig[4] [must_eq = "WOZ2"]` compares the
+span and takes one check id. The front end refuses a literal whose length
+disagrees with the run, and refuses an element wider than a byte -- a span
+of wider scalars has an endianness the literal does not, which is 0024.
+
+**The generated comment renders the literal as written**, which was the
+half of the record that sounded cosmetic and is not. The per-byte spelling
+printed `141`, `87`, `79`, `90`, so a reader with the format reference open
+could not see that the header and the reference were the same thing. The
+wire signature picked it up for free: `must_eq="WOZ2"`.
+
+**One decision, five readers.** `traverse.pinned_run` answers what a member
+pins, and the four backends and the packer read it. Writing it four times
+is how the four bugs of 26.225 to 26.228 happened.
+
+**Every backend was verified by running the generated code, and that is
+what caught the one real defect.** The Python emitter raised
+`SituError(Err.CONSTRAINT, ...)` -- a spelling that module does not have,
+so the generated code would have died with a `NameError` on the first bad
+message. Reading it found nothing wrong; executing it did. C, C++ and Rust
+were compiled under the project's own flags, Rust with `-D warnings`, and
+each was checked against bytes that match and bytes that do not.
+
+**And the fifth description was lying.** The walker answered `clean` for
+bytes all four backends refuse. Not `cannot-say` -- `clean`, the safe-looking
+answer, which is the one failure a differential cannot catch: it compares
+what both sides speak about, and it cannot see a disagreement nobody
+expresses. The image has no record that can carry the expected bytes, since
+`image_constraint` holds an `i64` and packing a byte run into one is the
+same endianness confusion the construct itself refuses. The packer disowns
+the check now, so the walk says `cannot-say`.
+
+**That the mechanism already existed is the uncomfortable part.** `whole =
+False # a check this image does not carry yet` was already in the packer,
+and the pinned run simply did not reach it -- it classifies as an array, and
+the array branch treats "no encoding, no terminator, no reserved policy" as
+"no check". So the honest machinery was there and the new construct walked
+past it. **A construct added to a language inherits every classifier's
+default, and a default that means "nothing to check" is indistinguishable
+from "nothing I know about".**
+
+**The corpus schema went in with the construct rather than after it.**
+`test/schema/edges.situ` exists for constructs nothing else exercises, and
+its own header already makes 26.234's argument: a construct the language
+offers and nothing exercises has never had its generated code run. It is
+also now the tree's only `cannot-say`, so the honest half of 154 is tested
+where it was not before.
+
+### 26.241 The image carries the bytes, and a preamble states its content
+
+Two of 0052's three constructs are now built and the fifth description
+speaks about both.
+
+**`image_pinned`, on `image_delimiter`'s model.** A section of `{placement,
+length, octets[27]}`, with a constraint's `value` holding the row rather
+than the bytes -- `image_constraint` carries an `i64`, and a byte run packed
+into one has an endianness the literal does not. The walk validates a pinned
+run now instead of declining, and names the member and the check when it
+refuses.
+
+**The cap is the record's, not the language's, and that decides the
+behaviour.** A run longer than 27 octets is disowned and answers
+`cannot-say`. It is never truncated, because a truncated compare passes a
+prefix and reports a whole match -- the exact failure the construct exists
+to make impossible, reintroduced by the thing that carries it.
+
+**`preamble u8[4] = "WOZ2"` is one node with `reserved`.** The only thing
+that differs is what the bytes must be, so a separate node would have
+duplicated placement, layout and four backends' no-accessor rules to say so.
+It is anonymous, which is what makes it inaccessible: there is no name for
+an accessor to be called. The vocabularies stay apart -- `reserved [must_eq
+= N]` is still refused (26.233) -- because a preamble carries its bytes on
+the placement rather than in `attrs`.
+
+**Its first version enforced the opposite of what it said.** A preamble is
+`kind == "reserved"`, so `_reserved_policy` defaulted it to `must_be_zero`
+and `preamble u8[4] = "WOZ2"` compiled to "every byte is zero" under a
+comment saying so. That is 26.233 exactly, arriving through the construct
+added to fix it -- and it is 26.240's lesson twice in two entries: **a
+construct added to a language inherits every classifier's default, and the
+defaults were written for the members that existed.**
+
+**Three of the four backends called an accessor that does not exist.** C++,
+Rust and Python emitted `reserved0()`, because the pinned-run emitter was
+written against a named field and a preamble has no name. C was right by
+accident -- it reads a base expression rather than an accessor. Two of the
+three would not have compiled and Python would have raised `AttributeError`
+on the first bad message. Reading the emitters found nothing; generating a
+preamble and looking found it in one command.
+
+**And a control byte in a literal broke the generated Rust.**
+`bytes.decode(..., "backslashreplace")` escapes what is *not* ASCII and
+leaves what is, so a CRLF preamble rendered as a real carriage return and
+line feed. In a `//` comment that ends the comment and makes the rest of
+the line code. It broke exactly one backend -- the one whose comments are
+not delimited -- and it was in all four.
+
+The renderer is `types.pinned_shown` now, escaping anything outside
+printable ASCII, and it lives in `types.py` rather than `traverse.py`
+because `layout` imports `unparse`, so an unparser reaching for `traverse`
+is a cycle. **The unparser needed it at all because a preamble that prints
+as `reserved` round-trips into a run checked for zeros** -- the schema
+saying one thing and the tree another, which the round-trip test caught.
+
+**Every one of these was found by generating and running, not by reading.**
+The corpus schema is why: `edges.situ` exists for constructs nothing else
+exercises, and a CRLF preamble in it broke a Rust build that no amount of
+reading the emitter would have questioned.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

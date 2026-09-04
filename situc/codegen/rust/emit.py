@@ -43,7 +43,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	codec_entry_point,
-	declared_value_bounds, pinned_bytes,
+	declared_value_bounds, pinned_bytes, pinned_run,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
 	decode_bound, decode_ratio,
@@ -61,7 +61,7 @@ from situc.traverse import (
 	preceding_parts,
 	obligations, own_entries, own_members,
 )
-from situc.types import ScalarType, lookup
+from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
 from situc import __version__
 
@@ -5254,6 +5254,14 @@ class Emitter:
 			# dynamically placed field.
 			checks.extend(self._fits_check(struct, placement))
 
+			# 0052: a byte run pinned to a literal is one comparison, above
+			# the dispatch because `classify_check` calls it an array.
+			pinned = pinned_run(placement)
+			if pinned is not None:
+				checks.extend(self._pinned_run_check(struct, placement,
+				                                    name, pinned))
+				continue
+
 			if check is Check.NOTHING:
 				continue
 			if check is Check.DISCRIMINANT:
@@ -5440,6 +5448,29 @@ class Emitter:
 			f".iter().any(|&b| b != {want}) {{",
 			"\t\t\t\treturn Err(Error::Constraint);",
 			"\t\t\t}",
+			"\t\t}",
+		]
+
+	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
+			name: str, expected: bytes) -> list[str]:
+		"""`[must_eq = "WOZ2"]`: the run against the literal, as written.
+
+		Rust compares slices with `!=`, so this is the one backend where the
+		comparison is a single expression rather than a loop.
+		"""
+		shown = pinned_shown(expected)
+		body  = ", ".join(f"0x{byte:02X}" for byte in expected)
+		# The bytes rather than the accessor: a `preamble` is anonymous and
+		# has none, which is what makes it inaccessible (0052).
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return [f"\t\t// {placement.path}: this backend cannot resolve"
+			        " where the pinned bytes are."]
+		return [
+			f'\t\t// {placement.path} [must_eq = "{shown}"]',
+			f"\t\tlet at = ({start}) as usize;",
+			f"\t\tif &self.bytes[at..at + {len(expected)}] != &[{body}] {{",
+			"\t\t\treturn Err(Error::Constraint);",
 			"\t\t}",
 		]
 

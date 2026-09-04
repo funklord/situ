@@ -1145,6 +1145,8 @@ class Parser:
 				return self.parse_marker_field()
 			if token.text == "reserved":
 				return self.parse_reserved()
+			if token.text == "preamble":
+				return self.parse_preamble()
 			if token.text == "pad_to":
 				return self.parse_pad()
 			if token.text == "positional":
@@ -1813,6 +1815,64 @@ class Parser:
 		attrs = self.parse_attrs()
 		self.expect_symbol(";", "after the reserved declaration")
 		return ast.Reserved(self.span_from(start), type_ref, array, attrs)
+
+	def parse_preamble(self) -> ast.Reserved:
+		"""`preamble u8[4] = "WOZ2";` -- fixed bytes nobody may read (0052).
+
+		A reserved run whose content is stated rather than governed by a
+		policy. Anonymous like `reserved`, which is what makes it
+		inaccessible: there is no name for an accessor to be called.
+
+		`u8` only, and for the reason the byte-run `[must_eq]` is: a span of
+		wider scalars has an endianness the literal does not (0024).
+		"""
+		start    = self.advance()
+		type_ref = self.parse_type_ref()
+		if type_ref.name != "u8":
+			raise error(
+				f"`preamble` is a run of bytes, found `{type_ref.name}`",
+				type_ref.span,
+				label = "not `u8`",
+				notes = ["a preamble is stated as a literal, and a literal "
+				         "has no byte order to give a wider element",
+				         "spell it `u8[n]` and write the bytes out"])
+
+		array = self.parse_array_spec()
+		self.expect_symbol("=", "after the preamble's type")
+		literal = self.parse_expr()
+		if not isinstance(literal, ast.StringLiteral):
+			raise error(
+				"`preamble` is pinned to a literal",
+				literal.span,
+				label = "expected a byte string here",
+				notes = ["the bytes are the member -- there is no value to "
+				         "compute, and nothing may read it afterwards"])
+
+		held = literal.value.encode("utf-8")
+		size = getattr(array, "size", None)
+		if array is None:
+			array = ast.ArraySpec(literal.span,
+			                      ast.IntLiteral(literal.span, len(held),
+			                                     str(len(held))))
+		elif not isinstance(size, ast.IntLiteral):
+			raise error(
+				"`preamble` needs a fixed length",
+				array.span,
+				label = "the run's length is not a constant",
+				notes = ["a literal pins exactly as many bytes as it holds"])
+		elif size.value != len(held):
+			raise error(
+				f"`preamble` pins {len(held)} byte(s) of a "
+				f"{size.value}-byte run",
+				literal.span,
+				label = f"{len(held)} byte(s) here",
+				notes = [f"the run is declared `[{size.value}]`, so the "
+				         f"literal has to be {size.value} bytes long"])
+
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after the preamble declaration")
+		return ast.Reserved(self.span_from(start), type_ref, array, attrs,
+		                    pinned = held)
 
 	def parse_text_field(self) -> ast.Field:
 		"""`decimal u32 n until ":"` -- a number written as digits.

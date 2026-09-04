@@ -22,6 +22,7 @@ from enum import Enum
 from situc import ast
 from situc import kernels
 from situc.ast import Schema
+from situc.types import pinned_shown
 from math import lcm
 
 from situc.expr import Env
@@ -1406,6 +1407,42 @@ def declared_value_bounds(placement: Placement,
 		else:
 			found[attr.name] = value
 	return (found.get("min"), found.get("max"))
+
+
+def pinned_run(placement: Placement) -> bytes | None:
+	"""The bytes `[must_eq = "WOZ2"]` pins on a byte run, or None (0052).
+
+	The decision layer answers this once so the backends and the walkers
+	spell one rule. Narrow by construction, and the narrowness is the point:
+	the element must be a single byte, because a span of wider scalars has an
+	endianness the literal does not (0024), and the count must be known, so
+	that the comparison is a fixed loop rather than a scan.
+
+	`wellformed.check_byte_run_equality` has already refused a literal whose
+	length disagrees with the run, so a caller may treat the two as equal.
+	"""
+	from situc.layout import BITS_PER_BYTE
+
+	# A preamble is a reserved run whose content is stated rather than
+	# governed by a policy (0052). It carries its bytes on the placement
+	# rather than in `attrs`, because `reserved [must_eq = N]` is refused --
+	# the two vocabularies must not merge (26.233).
+	if placement.pinned_run is not None:
+		return placement.pinned_run
+
+	if placement.kind != "field" or placement.array_count is None:
+		return None
+	scalar = placement.scalar
+	if scalar is None or scalar.bits != BITS_PER_BYTE:
+		return None
+
+	for attr in placement.attrs:
+		if attr.name != "must_eq" or not isinstance(attr.value, ast.StringLiteral):
+			continue
+		held = attr.value.value.encode("utf-8")
+		if len(held) == placement.array_count:
+			return held
+	return None
 
 
 def pad_alignment(placement: Placement) -> int | None:

@@ -56,6 +56,12 @@ INDEX_BYTES	= 16
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
+#: `image_pinned`: a placement, a length, and the bytes it pins. The cap is
+#: the record's rather than the language's, so a longer run is disowned
+#: instead of truncated -- a truncated compare would pass a prefix and
+#: report a whole match.
+PINNED_BYTES	= 32
+PINNED_OCTETS	= 27
 
 #: The `against` value an ENCODED_AS (kind 12) constraint carries per encoding
 #: name -- the image's contract with both walkers, which read the same codes
@@ -89,6 +95,7 @@ SECTION_ENUM_VALUES	= 16
 SECTION_VERSIONS	= 17
 SECTION_RELATIONS	= 18
 SECTION_RELATION_MUSTS	= 19
+SECTION_PINNED_RUNS	= 20
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
 
@@ -921,6 +928,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	constraints_blob = bytearray()
 	enum_blob        = bytearray()
 	enum_ids: dict[str, int] = {}
+	#: `image_pinned` rows, in the order they were written. A constraint's
+	#: `value` is the index into this, which is what `enum_known` does with
+	#: the value table and for the same reason: the payload is not a number.
+	pinned_blob = bytearray()
+	pinned_rows: list[int] = []
 	# A nested member is `validate` called through, so the parent can answer
 	# exactly when the child can. That is a fixed point rather than one
 	# pass: a struct three deep settles only after the one below it does, so
@@ -1104,6 +1116,34 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# is a value comparison; this one cannot be, which is why
 				# it is a kind of its own. `preserve` and `unknown` say
 				# nothing is checked, as they do for a scalar.
+				# 0052's pinned run. The four code backends compare the
+				# span; this image has no record that can carry the
+				# expected bytes -- `image_constraint` holds an `i64`, and
+				# encoding a byte run into one is the endianness confusion
+				# 0024 is about. So the honest answer is that this walk
+				# cannot speak for the struct, not that it passed.
+				#
+				# Without this the walker reported `clean` for bytes all
+				# four backends refuse, which is worse than saying nothing:
+				# a fifth description agreeing wrongly is what the
+				# differential exists to catch, and it cannot catch a
+				# disagreement nobody expresses (154).
+				pinned = traverse.pinned_run(placement)
+				if pinned is not None:
+					# Longer than the record holds: disown rather than
+					# truncate. A truncated compare passes a prefix and
+					# reports a whole match, which is the failure this
+					# construct exists to make impossible.
+					if len(pinned) > PINNED_OCTETS:
+						whole = False
+						continue
+					pinned_blob += _struct.pack(
+						f"<IB{PINNED_OCTETS}s", at, len(pinned), pinned)
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, len(pinned_rows), 14)
+					pinned_rows.append(at)
+					continue
+
 				if placement.kind == "reserved":
 					policies = {a.name for a in placement.attrs}
 					if policies & {"preserve", "unknown"}:
@@ -1521,7 +1561,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES),
 			(SECTION_VERSIONS, versions_blob, VERSION_BYTES),
 			(SECTION_RELATIONS, relations_blob, RELATION_BYTES),
-			(SECTION_RELATION_MUSTS, musts_blob, RELATION_MUST_BYTES)):
+			(SECTION_RELATION_MUSTS, musts_blob, RELATION_MUST_BYTES),
+			(SECTION_PINNED_RUNS, pinned_blob, PINNED_BYTES)):
 		if blob:
 			sections.append((section, bytes(blob), stride))
 

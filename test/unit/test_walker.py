@@ -983,3 +983,60 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	assert both * 100 >= asked * 88, (
 		f"only {100 * both // asked}% of what C asks is compared, "
 		f"down from 91%")
+
+
+def test_the_walk_checks_a_pinned_byte_run() -> None:
+	"""The fifth description agrees with the four (0052).
+
+	Worth the test for what it replaced. Before the image carried these
+	bytes, the walk answered `clean` for a run that does not match -- not
+	`cannot-say`, the safe-looking answer, which is the one failure a
+	differential structurally cannot catch: it compares what both sides
+	speak about, and cannot see a disagreement nobody expresses.
+
+	The bytes travel by row rather than by value, because `image_constraint`
+	holds an `i64` and a byte run packed into one would have an endianness
+	the literal does not -- the same confusion the construct itself refuses
+	at the front end.
+	"""
+	source   = 'struct S { u8 sig[4] [must_eq = "WOZ2"]; u32 n; }'
+	parsed   = parse_text("target buffer;\nendian big;\n"
+	                      "bit_order msb_first;\n" + source)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	si = next(i for i in range(len(image.structs))
+	          if image.struct_name(i) == "S")
+
+	view = acquire(image, b"WOZ2\x00\x00\x00\x01", si)
+	assert report.failed_check(image, view, si) == report.CLEAN
+
+	view = acquire(image, b"WOZ1\x00\x00\x00\x01", si)
+	assert report.failed_check(image, view, si) == ("sig", "must_eq")
+
+	# One byte, at the end, so a comparison that stopped early passes.
+	view = acquire(image, b"WOZ3\x00\x00\x00\x01", si)
+	assert report.failed_check(image, view, si) == ("sig", "must_eq")
+
+
+def test_a_pinned_run_too_long_for_the_record_is_disowned() -> None:
+	"""The cap is the image record's, not the language's, so the packer
+	declines rather than truncating.
+
+	A truncated compare would pass a prefix and report a whole match, which
+	is precisely the failure this construct exists to make impossible -- so
+	the walk has to say `cannot-say` rather than carry 27 of 40 bytes.
+	"""
+	long = "A" * 40
+	source   = f'struct S {{ u8 sig[40] [must_eq = "{long}"]; }}'
+	parsed   = parse_text("target buffer;\nendian big;\n"
+	                      "bit_order msb_first;\n" + source)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	si = next(i for i in range(len(image.structs))
+	          if image.struct_name(i) == "S")
+	view = acquire(image, ("B" * 40).encode("ascii"), si)
+	assert report.failed_check(image, view, si) == report.CANNOT_SAY

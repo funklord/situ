@@ -1,6 +1,6 @@
 # 0052: a byte run as a value
 
-Status: proposed
+Status: accepted 2026-09-04; two of three constructs built
 Date: 2026-09-04
 Phase: raised by the copyright holder, from three schemas in one week
 
@@ -151,5 +151,35 @@ with no accessor is `access` at its bottom, and whether that is an existing
 lattice value or a new one is not decided here. It is the one part of this
 record that needs the lattice consulted before it is built.
 
-**Nothing here is built.** This record is the spelling and the argument for
-it, written while three schemas that needed it are still fresh.
+**The byte-run `[must_eq]` is built.** All four code backends compare the
+span and take one check id; the front end refuses a literal whose length
+disagrees with the run, and refuses an element wider than a byte. Each
+backend was verified by compiling and running the generated code rather
+than by reading it -- which is how a Python emitter that raised
+`SituError(Err.CONSTRAINT, ...)`, a spelling that module does not have, was
+caught. `test/schema/edges.situ` carries the tree's only instance, that
+file existing for exactly this.
+
+**`preamble` is built, and the image carries both.** A preamble is one node
+with `reserved` rather than a kind of its own: the only thing that differs
+is what the bytes must be, and a separate node would have duplicated
+placement, layout and every backend's no-accessor rule to say so. It is
+anonymous, which is what makes it inaccessible -- there is no name for an
+accessor to be called. The two vocabularies stay apart, so `reserved
+[must_eq = N]` is still refused.
+
+**The walker agrees rather than declining.** `image_pinned` carries the bytes
+inline on `image_delimiter`'s model, and a constraint's `value` is the row
+rather than the bytes -- `image_constraint` holds an `i64`, and packing a
+byte run into one is the endianness confusion this record already cites
+0024 for.
+
+Before that section existed the walk answered `clean` for bytes all four
+backends refuse. Not `cannot-say` -- `clean`, the safe-looking answer,
+which is the one failure a differential structurally cannot catch. The
+record's 27-octet cap is the record's rather than the language's, so a
+longer run is disowned and answers `cannot-say`, never truncated: a
+truncated compare passes a prefix and reports a whole match, which is the
+failure this construct exists to make impossible.
+
+**`enum : u8[k]` is not built.**

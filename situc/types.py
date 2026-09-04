@@ -241,3 +241,26 @@ def is_scalar_name(name: str) -> bool:
 #: guard that refuses a missing one are about the same three names, and
 #: two copies of that set would drift (invariant 13).
 NUMERIC_BOUNDS = frozenset({"must_eq", "max", "min"})
+
+
+def pinned_shown(expected: bytes) -> str:
+	"""A pinned run rendered for a comment, on one line and in ASCII.
+
+	`bytes.decode(..., "backslashreplace")` is not this: it escapes bytes
+	that are not ASCII and leaves the ones that are, so a CRLF preamble came
+	through as a real carriage return and line feed. Embedded in a `//`
+	comment that ends the comment and makes the rest of the line code --
+	which is exactly what it did, in Rust, in four backends at once.
+
+	The bytes are the point of this construct, so the rendering has to be
+	reversible by eye and can never be a newline.
+	"""
+	out = []
+	for byte in expected:
+		if byte == 0x5C:			# a backslash escapes itself
+			out.append("\\\\")
+		elif 0x20 <= byte < 0x7F and byte != 0x22:
+			out.append(chr(byte))
+		else:
+			out.append(f"\\x{byte:02x}")
+	return "".join(out)

@@ -70,6 +70,11 @@ struct image_marker size=16 repr=ValueConverted atomic=NonAtomic
   image_marker.little_value              offset=AbsoluteStatic(0x04) size=Fixed(8) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
   image_marker.marker_pad                offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
+struct image_pinned size=32 repr=ValueConverted atomic=NonAtomic
+  image_pinned.placement                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_pinned.length                    offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  image_pinned.octets                    offset=AbsoluteStatic(0x05) size=Fixed(27) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
 struct image_placement size=48 repr=ValueConverted
   image_placement.kind                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   image_placement.endian                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

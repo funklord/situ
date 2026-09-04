@@ -273,6 +273,16 @@ class Reserved(Member):
 	array: ArraySpec | None		= None
 	attrs: tuple[Attr, ...]		= ()
 	until: Until | None		= None
+	#: `preamble u8[4] = "WOZ2";` -- the bytes this run is pinned to (0052).
+	#: A preamble is a reserved run whose content is stated rather than
+	#: governed by a policy, so it shares every other property: anonymous,
+	#: therefore no accessor, and checked on validate.
+	#:
+	#: `None` is an ordinary `reserved`. The two are one node because the
+	#: only thing that differs is what the bytes must be, and a separate
+	#: node would have duplicated placement, layout and every backend's
+	#: no-accessor rule to say so.
+	pinned: bytes | None		= None
 
 
 @dataclass(frozen=True)

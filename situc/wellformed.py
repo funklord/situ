@@ -62,6 +62,7 @@ def check(schema: ast.Schema) -> None:
 	check_coded_coverage(schema)
 	check_attribute_places(schema)
 	check_attribute_values(schema)
+	check_byte_run_equality(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
 	check_nonce_references(schema)
@@ -1596,7 +1597,15 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 		# version of this rule.
 		if getattr(member, "radix", None) is not None:
 			return None
+		# A byte run compared against a byte run is the one array case that
+		# means something, and it is 0052's first construct: `u8 sig[4]
+		# [must_eq = "WOZ2"]` is one span comparison, not four. `min` and
+		# `max` stay refused here -- an ordering on a span is not a thing
+		# this language defines -- so the exception is `must_eq` with a
+		# literal, and everything else in the branch is unchanged.
 		if getattr(member, "array", None) is not None:
+			if _is_byte_run_equality(member, attr):
+				return None
 			return ("a scalar field -- an array has no single value to bound, "
 			        "and a size cap is spelled `max N` after `until`")
 		if getattr(member, "until", None) is not None:
@@ -1791,6 +1800,65 @@ def check_region_arguments(schema: ast.Schema) -> None:
 					label = "read by nothing",
 					notes = notes,
 				)
+
+
+def _is_byte_run_equality(member: ast.Member, attr: ast.Attr) -> bool:
+	"""`u8 sig[4] [must_eq = "WOZ2"]` -- a byte run pinned to a byte run.
+
+	Narrow on purpose. The element has to be `u8`, because a span of wider
+	scalars has an endianness and the literal does not, which is the
+	confusion 0024 is about; and the value has to be a literal, because the
+	comparison is against bytes rather than against a number a caller could
+	have computed.
+	"""
+	if attr.name != "must_eq" or not isinstance(attr.value, ast.StringLiteral):
+		return False
+	if getattr(member, "until", None) is not None:
+		return False
+	type_ref = getattr(member, "type_ref", None)
+	return getattr(type_ref, "name", None) == "u8"
+
+
+def check_byte_run_equality(schema: ast.Schema) -> None:
+	"""The literal has to be exactly as long as the run it pins (0052).
+
+	A magic that is the wrong length is the one mistake this construct
+	invites, and it is the mistake the per-byte spelling could not make --
+	writing four fields, you count them. The refusal names both numbers,
+	because "expected 4" without "got 5" sends the author to the wrong end.
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			for attr in getattr(member, "attrs", ()):
+				if not _is_byte_run_equality(member, attr):
+					continue
+
+				array = getattr(member, "array", None)
+				size  = getattr(array, "size", None)
+				if not isinstance(size, ast.IntLiteral):
+					raise error(
+						"`[must_eq]` on a byte run needs a fixed length",
+						attr.span,
+						label = "the run's length is not a constant",
+						notes = ["a literal pins exactly as many bytes as it "
+						         "holds, so the run has to be that long at "
+						         "compile time"])
+
+				assert isinstance(attr.value, ast.StringLiteral)
+				held = len(attr.value.value.encode("utf-8"))
+				if held != size.value:
+					raise error(
+						f"`[must_eq]` pins {held} byte(s) of a "
+						f"{size.value}-byte run",
+						attr.value.span,
+						label = f"{held} byte(s) here",
+						notes = [f"`{getattr(member, 'name', '?')}` is "
+						         f"declared `[{size.value}]`, so the literal "
+						         f"has to be "
+						         f"{size.value} bytes long",
+						         "widen the run or shorten the literal -- a "
+						         "partial match is not what this construct "
+						         "means"])
 
 
 def _region_word(member: ast.Member) -> str:

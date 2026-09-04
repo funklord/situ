@@ -12,6 +12,7 @@ starting point for `situc doc`.
 from __future__ import annotations
 
 from situc import ast, namespaces
+from situc.types import pinned_shown
 
 # Loosest first, matching parser.PRECEDENCE. A child is parenthesised only when
 # it binds more loosely than its parent, so the output stays readable and still
@@ -371,6 +372,15 @@ def member_to_source(member: ast.Member) -> str:
 		return f"tlv {member.name} ({_args_to_source(member.args)});"
 
 	if isinstance(member, ast.Reserved):
+		# A preamble is a reserved run whose content is stated rather than
+		# governed by a policy (0052), so it prints as what it was written
+		# as. Printing it as `reserved` would round-trip to a run checked
+		# for zeros -- the schema saying one thing and the tree another.
+		if member.pinned is not None:
+			return (f"preamble {member.type_ref.name}"
+			        f"{_array_to_source(member.array)} = "
+			        f'"{pinned_shown(member.pinned)}"'
+			        f"{_attrs_to_source(member.attrs)};")
 		return (f"reserved {member.type_ref.name}{_array_to_source(member.array)}"
 		        f"{_attrs_to_source(member.attrs)};")
 

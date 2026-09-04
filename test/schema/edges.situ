@@ -32,9 +32,24 @@ struct edges [allow_straddle] {
 	// The same, signed, so element addressing and sign extension are exercised
 	// together rather than one masking the other.
 	i32  deltas[2];
+
+	// A byte run pinned to a literal (0052). The only one in the tree: every
+	// magic anybody had written before this was one `[must_eq]` per byte, so
+	// the span comparison the four backends now emit had nothing to run
+	// against. It is also what the packer refuses to carry -- the image has
+	// no record for the expected bytes -- so this member is why `edges`
+	// answers `cannot-say` rather than `clean`, which is the honest half of
+	// 154 and would otherwise have been untested too.
+	u8   sig[4] [must_eq = "WOZ2"];
+
+	// A preamble: fixed bytes that no accessor reaches (0052). The tree's
+	// only inaccessible-and-pinned member, and the only reserved run whose
+	// content is stated rather than governed by a policy -- so it is also
+	// what keeps the two vocabularies from merging, which 26.233 is about.
+	preamble u8[2] = "\x0d\x0a";
 }
 
-require size(edges) == 19;
+require size(edges) == 25;
 require in_place(edges.trim);
 require in_place(edges.channel);
 

@@ -462,6 +462,7 @@ MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
 DIGITS_VALID, DIGITS_MINIMAL = 9, 10
 NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
+PINNED_RUN = 14
 
 #: `situ_err_t` again: an unknown discriminant is a message this build
 #: cannot read rather than one that breaks a rule.
@@ -694,7 +695,8 @@ def _validate(image: Image, view: View, struct_index: int,
 		# -- and why the capacity is the member's own size and not
 		# something the constraint has to carry.
 		span = [pair for pair in held
-		        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN)]
+		        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN,
+		                       PINNED_RUN)]
 		if span:
 			start = view.at + at // BITS_PER_BYTE
 			# A delimited member's `wide` is content *plus* its delimiter,
@@ -716,6 +718,14 @@ def _validate(image: Image, view: View, struct_index: int,
 					return fail(ERR_CONSTRAINT, index, NUL_TERMINATED)
 				if check == ZERO_RUN and any(data):
 					return fail(ERR_CONSTRAINT, index, ZERO_RUN)
+				# `against` is the row rather than the bytes: a byte run
+				# packed into an `i64` would have an endianness the literal
+				# does not (0052). The length was checked against the run at
+				# compile time, so a mismatch here is the message's.
+				if check == PINNED_RUN:
+					if data != image.pinned_runs[against]:
+						return fail(ERR_CONSTRAINT, index, PINNED_RUN)
+					continue
 				if check != ENCODED_AS:
 					continue
 				if against == 0:
@@ -740,7 +750,8 @@ def _validate(image: Image, view: View, struct_index: int,
 		                if pair[0] not in (FITS_FRAME, TERMINATED,
 		                                   ARM_SELECTED, DIGITS_VALID,
 		                                   DIGITS_MINIMAL, NUL_TERMINATED,
-		                                   ENCODED_AS, ZERO_RUN)]
+		                                   ENCODED_AS, ZERO_RUN,
+		                                   PINNED_RUN)]
 		if not value_checks:
 			continue
 		try:
@@ -808,7 +819,7 @@ CHECK_NAMES = {
 	MUST_BE_ZERO: "must_be_zero", MUST_BE_ONE: "must_be_one",
 	ENUM_KNOWN: "enum_known", FITS_FRAME: "fits_frame",
 	TERMINATED: "terminated", NUL_TERMINATED: "nul_terminated",
-	ENCODED_AS: "encoding", ZERO_RUN: "zero_run",
+	ENCODED_AS: "encoding", ZERO_RUN: "zero_run", PINNED_RUN: "must_eq",
 	DIGITS_VALID: "digits", DIGITS_MINIMAL: "digits_minimal",
 	ARM_SELECTED: "arm_selected",
 }

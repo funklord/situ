@@ -90,13 +90,15 @@ struct derived size=13
   @0x0009   4         u8         tag
   tag covers: body sequence
 
-struct edges size=19
+struct edges size=25
   @0x0000   5bit      i5         trim  msb_first
   @0x0000:5 3bit      u3         scale  msb_first
   @0x0001   12bit     i12        offset  big msb_first
   @0x0002:4 4bit      u4         channel  msb_first
   @0x0003   8         u16        samples  big
   @0x000b   8         i32        deltas  big
+  @0x0013   4         u8         sig  big must_eq="WOZ2"
+  @0x0017   2         u8         <reserved0>  big
 
 struct equalized size=11
   @0x0000   1         arm_kind   which

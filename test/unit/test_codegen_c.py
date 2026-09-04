@@ -3753,3 +3753,94 @@ def test_preserve_and_unknown_generate_the_same_code() -> None:
 	# And the one that does check, does.
 	assert "SITU_ERR_CONSTRAINT" in zeroed_c
 	assert "SITU_ERR_CONSTRAINT" not in preserve_c
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_pinned_byte_run_is_one_comparison_and_one_id(tmp_path: Path) -> None:
+	"""0052, end to end: the run is compared as a span, the refusal carries
+	one check id, and the comment renders the literal as written.
+
+	The last of those is not cosmetic. The per-byte spelling this replaces
+	printed `141`, `87`, `79` -- so a reader holding the format reference
+	beside the header could not see the two were the same thing.
+	"""
+	header, source = emit('struct S { u8 sig[4] [must_eq = "WOZ2"]; u32 n; }')
+	assert '/* S.sig [must_eq = "WOZ2"] */' in source
+	assert "static const uint8_t want[] = { 0x57u, 0x4Fu, 0x5Au, 0x32u };" \
+		in source
+	# One fact, one id -- the whole argument against desugaring to per-byte
+	# checks, which would have given a four-byte magic four of them.
+	assert "#define SITU_S_SIG_CHECK 0u" in header
+	assert "#define SITU_S_SIG_1_CHECK" not in header
+
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t good[8] = { 'W','O','Z','2', 0,0,0,1 };
+	uint8_t bad[8]  = { 'W','O','Z','1', 0,0,0,1 };
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    which;
+
+	situ_msg_init(&msg, good, sizeof good);
+	if (situ_S_view(&msg, 0, &view) != SITU_OK)             return 1;
+	which = 0xabcdu;
+	if (situ_S_check(view, &which) != SITU_OK)              return 2;
+	if (which != 0xFFFFFFFFu)                               return 3;
+
+	situ_msg_init(&msg, bad, sizeof bad);
+	if (situ_S_view(&msg, 0, &view) != SITU_OK)             return 4;
+	which = 0xabcdu;
+	if (situ_S_check(view, &which) != SITU_ERR_CONSTRAINT)  return 5;
+	if (which != SITU_S_SIG_CHECK)                          return 6;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_a_preamble_is_checked_and_gets_no_accessor(tmp_path: Path) -> None:
+	"""Inaccessible and fixed, which is what a preamble is for (0052).
+
+	Two assertions and the second is the construct: `reserved` already
+	generates no accessor because it is anonymous, so what had to be built
+	is the check -- and the first version of it inherited `reserved`'s
+	default policy and compiled `= "WOZ2"` into "every byte is zero", the
+	26.233 defect arriving through a construct added to fix it.
+	"""
+	header, source = emit('struct S { preamble u8[4] = "WOZ2"; u32 n; }')
+	assert 'must_eq = "WOZ2"' in source
+	assert "must_be_zero" not in source
+	assert "static const uint8_t want[] = { 0x57u, 0x4Fu, 0x5Au, 0x32u };" \
+		in source
+	# The named field keeps its accessors; the preamble has none to keep.
+	assert "situ_S_n_get" in header
+	assert "situ_S_reserved0" not in header
+
+
+def test_a_pinned_run_comment_stays_on_one_line(tmp_path: Path) -> None:
+	"""A control byte in the literal must not end the comment it is in.
+
+	`backslashreplace` escapes non-ASCII and leaves ASCII alone, so a CRLF
+	preamble rendered as a real carriage return and line feed -- which in a
+	`//` comment ends the comment and makes the rest of the line code. It
+	broke the Rust build of the corpus schema, in the one backend whose
+	comments are not delimited, and it would have shipped in four.
+	"""
+	_, source = emit('struct S { preamble u8[2] = "\\x0d\\x0a"; u32 n; }')
+	assert 'must_eq = "\\x0d\\x0a"' in source
+	for line in source.splitlines():
+		assert "\r" not in line
