@@ -1843,6 +1843,12 @@ class Solver:
 			         else scalar_interval(inner.scalar.bits, inner.scalar.signed))
 			state.fields[f"{name}.{tail}"] = self.constrain(held, inner.attrs)
 
+	#: The attributes `constrain` reads as numbers, and the only ones a text
+	#: value is wrong for. Other attributes take a string legitimately --
+	#: `[non_canonical = "why"]` carries a reason -- so the guard below is
+	#: scoped to this set rather than to "the value is a string" (26.236).
+	_NUMERIC_BOUNDS = frozenset({"must_eq", "max", "min"})
+
 	def constrain(self, base: Interval, attrs: tuple[ast.Attr, ...]) -> Interval:
 		"""Narrow a field's range by the constraints it declares.
 
@@ -1863,7 +1869,8 @@ class Solver:
 			# no reading of it is an integer**, so swallowing it let
 			# `situc map` exit 0 on a schema `situc build` exits 1 on, and
 			# the map is the artefact `--check` diffs in review (26.233).
-			if isinstance(attr.value, ast.StringLiteral):
+			if (attr.name in self._NUMERIC_BOUNDS
+					and isinstance(attr.value, ast.StringLiteral)):
 				raise error(
 					f"`[{attr.name}]` compares a value, and this is text",
 					attr.value.span,

@@ -20267,6 +20267,43 @@ removing the entry write fails it.
 is 157. The identity work was about naming refusals, so its tests were about
 refusals, and the gap it left was the case where nothing refuses.
 
+### 26.236 A guard whose every clause was true, over the wrong set
+
+26.233's second fix refused a text value where a number was expected. It
+refused too much: `[non_canonical = "reason"]` legitimately carries a
+string, and four tests in `test_propagate.py` went red.
+
+**The condition was `isinstance(attr.value, ast.StringLiteral)`, and every
+word of that is true of the case it was written for.** `u16 [must_eq =
+"BM"]` *is* an attribute holding a string. What the sentence does not say is
+which attributes the function reads as numbers, and `constrain` reads
+exactly three -- `must_eq`, `max`, `min`. Everything else in the loop it
+guards is skipped. So the guard was one step wider than the population, and
+one step wider is where comparable cases get swept in.
+
+The fix names the set beside the loop that uses it, so the two cannot drift:
+`_NUMERIC_BOUNDS = frozenset({"must_eq", "max", "min"})`. A guard scoped to
+"the attributes this code treats as integers" is coextensive with the
+mistake it catches; one scoped to "the value is a string" is not.
+
+**It was caught by the full suite and would not have been caught by any of
+the checks run before the commit.** The touched test files passed, the C
+codegen tests passed, mypy was clean, both style gates were green -- and
+none of them covers `test_propagate.py`. The commit went out on four green
+signals that were all real and none of which was the one that mattered.
+
+**And the failure was nearly invisible a second time.** The suite ran as
+`pytest test -q 2>&1 | tail -4`, and the harness reported `exit code 0`,
+because a pipeline exits with `tail`'s status. The last four lines happened
+to include the FAILED summary, so reading the output caught what the status
+had hidden. Piping a check's output before knowing it passed is the trap
+`evidence.md` names, met here in the one command whose whole job was to say
+whether the tree was sound.
+
+**Both halves are the same error.** Running a subset and reading a summary
+are each a reduction chosen before the answer was known, and each reported
+success for a run that had failed.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
