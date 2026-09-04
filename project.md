@@ -20189,6 +20189,49 @@ bound is not a thing you write once you know `reserved` takes policies. The
 gate over the case nobody posed reports success exactly as loudly as a real
 pass.
 
+### 26.234 The magic situ cannot write, found by three schemas independently
+
+0052, proposed. situ has no spelling for "these four bytes are `WOZ2`", and
+every route was tried against the front end rather than assumed: `[must_eq]`
+on an array, a numeric `must_eq` on a two-byte field, `enum : u8[2]`, `enum
+: u16` with a text arm, a bare `= "WOZ2"`, and a `magic` keyword. Six
+refusals, six different messages.
+
+**The witness that matters is the one from outside.** Three schemas needed
+this in a week -- a WOZ2 header, a BMP header, and a header written by a
+reader with the format reference open and no knowledge of this project's
+habits. All three independently arrived at one field per byte, which is what
+the language teaches a competent author to write when the right spelling
+does not exist. A corpus cannot produce that evidence, because everything in
+it was written by someone who already knew which spellings work.
+
+**The cost was generated rather than argued.** Six accessor calls, six
+branches, six check ids for one fact, and six invented member names for
+bytes no caller reads. The worse half is the comments: they render `141`,
+`87`, `79`, `90`, `10`, `13`, because a scalar bound is a number and a
+number prints in decimal. Nothing in the generated code says `WOZ2`, so a
+reader holding the reference beside the header cannot see they are the same
+thing.
+
+**Three constructs, because these are three facts.** A byte-run `[must_eq]`
+compiling to one span comparison and taking one check id; `enum : u8[k]`
+with byte-run arms, which is not sugar for a `u16` because a span has no
+endianness and 0024 is about exactly that confusion; and `preamble`, fixed
+bytes that generate no accessor -- `reserved`'s sibling, saying "content is
+these bytes" where `reserved` says "content is governed by a policy".
+
+**It follows 26.233 and is the other half of it.** The refusal landed there
+closes the door an author was reaching through: wanting
+inaccessible-and-fixed, they found the inaccessible construct and hung a
+value on it. Refusing the miscompile is right and leaves them with nothing,
+so the spelling belongs in the same motion as the refusal.
+
+**And the construct owes the differential a schema.** A byte-run bound is a
+per-member fact deciding what bytes mean, which is the shape of all four
+bugs in 26.225 through 26.228 -- each invisible because no corpus schema
+could pose it. Adding the construct without a corpus schema that uses it
+would build the blind spot in with it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
