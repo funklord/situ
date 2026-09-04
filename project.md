@@ -19681,6 +19681,41 @@ keeping sharp: 26.209 records a floor that had to move because a fix
 emptied what it counted, and this is the same shape from the other side --
 a fix revealing that two sides were never answering one question.
 
+### 26.223 The half-fix that broke a round trip nothing was running
+
+26.222 taught the walker to decode packed decimal and left `write_scalar`
+storing the value raw. **That is worse than either half alone.** Before it,
+read and write were both raw: they agreed with each other and both disagreed
+with C. After it, storing 45 wrote `0x2D` and reading answered 33 -- a round
+trip that had been consistent stopped being one.
+
+Found by asking the same question the previous entry ended on: which member
+kinds does no differential compare. The write path is not a member kind, but
+it is the same blind spot one axis over -- `walk.py`'s bit-packed store is
+among the lines the coverage sweep reports unreached, so nothing in the suite
+had ever executed it.
+
+### 26.223 The half-fix that broke a round trip nobody ran
+verbatim, as the read is `situ_bcd_decode` verbatim. C's setter is
+`situ_bits_set_msb(..., situ_bcd_encode(value, 2u))`, so the two now perform
+the same store rather than two stores that agree on readback.
+
+**The range check moved with it, and the boundary is the part worth having.**
+`bcd2 seconds [bits = 7]` reaches 79, not 99 and not 127: 80 encodes to
+`0x80` and seven bits cannot hold it. The schema comment already said so --
+"the *field* stops at 79 whatever `bcd2` would allow" -- and C emits it as a
+`_MAX` macro. In the walker it falls out of encoding and then measuring what
+was encoded, so the rule is stated once rather than restated in a second
+place that could drift from the first.
+
+**The general shape, which is the reason to write this down.** A
+transformation on the way in and its inverse on the way out are one fact, and
+a session that fixes the direction its evidence came from will leave the
+other silently wrong -- more wrong than before, because the two directions
+were at least consistent with each other. The evidence came from a
+*differential*, which reads; nothing in the tree writes through the walker,
+so nothing objected.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

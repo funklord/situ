@@ -494,8 +494,18 @@ def write_scalar(view: View, index: int, value: int) -> None:
 	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
 		raise Refused("the frame does not reach this member")
 
+	# Packed decimal is range-checked on what it *stores*, not on what the
+	# bits could hold: `bcd2 [bits = 7]` reaches 79 and not 127, because 80
+	# encodes to 0x80 and the field is seven bits. C says the same number in
+	# a `_MAX` macro; here it falls out of encoding and then measuring, which
+	# needs no second statement of the rule.
+	stored = _encoded(value, placement)
 	low, high = _range(width, placement.signed)
-	if not low <= value <= high:
+	if placement.text_flags & BCD:
+		if value < 0 or stored > high:
+			raise Refused(f"{value} does not fit a {width}-bit packed decimal "
+			              f"member of {placement.radix_digits} digit(s)")
+	elif not low <= value <= high:
 		raise Refused(f"{value} does not fit a {width}-bit "
 		              f"{'signed' if placement.signed else 'unsigned'} member "
 		              f"({low} to {high})")
@@ -510,7 +520,7 @@ def write_scalar(view: View, index: int, value: int) -> None:
 		raise Refused("this view is over immutable bytes; a write needs a "
 		              "`bytearray`")
 
-	_write_at(buffer, view, index, start, width, value)
+	_write_at(buffer, view, index, start, width, stored)
 
 
 def _range(width: int, is_signed: bool) -> tuple[int, int]:
@@ -628,6 +638,25 @@ def _decoded(value: int, placement: "Placement") -> int:
 	for shift in range((placement.radix_digits or 0) - 1, -1, -1):
 		out = out * 10 + ((value >> (4 * shift)) & 0xF)
 	return out
+
+
+def _encoded(value: int, placement: "Placement") -> int:
+	"""`_decoded`'s mirror: `situ_bcd_encode`, verbatim.
+
+	Needed because fixing only the read side broke the walker's own round
+	trip. Before packed decimal was carried at all, read and write were both
+	raw and agreed with each other while both disagreed with C; teaching the
+	reader to decode without teaching the writer to encode left `write 45`
+	storing 0x2D and `read` answering 33 (26.223).
+	"""
+	if not placement.text_flags & BCD:
+		return value
+
+	packed = 0
+	for digit in range(placement.radix_digits or 0):
+		packed |= (value % 10) << (4 * digit)
+		value //= 10
+	return packed
 
 
 def _signed(value: int, width: int, is_signed: bool) -> int:

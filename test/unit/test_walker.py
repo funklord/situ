@@ -393,6 +393,51 @@ def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
 				== f"validate {expected}", f"{backend}, on {label}"
 
 
+def test_packed_decimal_survives_a_write_and_reads_back(tmp_path: Path) -> None:
+	"""The write path, which nothing had executed.
+
+	26.222 taught the walker to *decode* packed decimal and left the store
+	raw, which is worse than either half alone: before it, read and write
+	were both raw and agreed with each other while both disagreed with C;
+	after it, storing 45 wrote 0x2D and reading answered 33. A round trip
+	that was consistent became one that was not, in a path the suite never
+	ran -- `walk.py`'s bit-packed store is one of the lines the coverage
+	sweep reported unreached (26.223).
+
+	**The boundary is the interesting assertion.** `bcd2 seconds
+	[bits = 7]` stops at 79, not at 99 and not at 127: 80 encodes to 0x80
+	and seven bits cannot hold it. The schema comment says exactly that --
+	"the *field* stops at 79 whatever `bcd2` would allow" -- and C emits it
+	as a `_MAX` macro. Here it falls out of encoding and then measuring, so
+	the rule is stated once rather than twice.
+	"""
+	schema   = ROOT / "example" / "rtc" / "rtc.situ"
+	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	buffer = bytearray(8)
+	view   = acquire(image, buffer, 0)
+
+	# `wall_clock.seconds`: seven bits under the halt bit, two BCD digits.
+	seconds = next(i for i, place in enumerate(image.placements)
+	               if place.text_flags & walk_module.BCD)
+
+	for value in (0, 9, 45, 59, 79):
+		walk_module.write_scalar(view, seconds, value)
+		assert read_scalar(view, seconds) == value, f"round trip of {value}"
+
+	# Stored as the digits spell it, which is what makes C's setter and this
+	# one the same store rather than two that happen to agree on readback.
+	walk_module.write_scalar(view, seconds, 45)
+	assert buffer[0] == 0x45
+
+	for refused in (80, 99):
+		with pytest.raises(Refused, match="packed decimal"):
+			walk_module.write_scalar(view, seconds, refused)
+
+
 def test_a_minimal_text_number_is_refused_in_all_five(tmp_path: Path) -> None:
 	"""`[minimal]` on HTTP's status code, made to fail for the first time.
 
