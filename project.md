@@ -20232,6 +20232,41 @@ bugs in 26.225 through 26.228 -- each invisible because no corpus schema
 could pose it. Adding the construct without a corpus schema that uses it
 would build the blind spot in with it.
 
+### 26.235 The generated comment that disagreed with the generated code
+
+Found while checking the README's claims against real output rather than
+against memory, which is the only reason it was found at all.
+
+`situ_S_check`'s header comment said `*which` holds an id on a refusal and
+is **"unchanged otherwise"**. The function writes `*which = 0xFFFFFFFFu` on
+entry, unconditionally. So a caller who seeds `which` with a value of their
+own and reads it back after `SITU_OK` gets the sentinel, and the header told
+them they would not.
+
+**This is 14.5 in situ's own output.** A description that states what the
+code does not do is worse than one that states nothing, and the description
+here is a comment situ writes into every header it emits. It is the same
+defect as 26.233's `reserved [must_eq]` -- a comment and a schema agreeing
+with each other and both disagreeing with the code -- one layer out, in the
+generator rather than in a schema.
+
+**The code was right and the comment was wrong**, which is 154's direction:
+writing the sentinel makes "nothing refused" a value with a name, where
+leaving `*which` alone would make "clean" and "the caller never initialised
+it" the same observation. The comment now says the sentinel is written
+either way and that a caller must not expect their own value to survive.
+
+**Nothing pinned the success case.** All three identity tests asked what
+happens on a *refusal* -- which member, which macro, does it compile. The
+one behaviour a caller reads the comment to learn was the one behaviour no
+test looked at, so the comment could say anything. It now has a test that
+seeds `which` with `0xabcd`, walks clean bytes and requires the sentinel;
+removing the entry write fails it.
+
+**And the detector's blind spot had the shape of the thing it hunts**, which
+is 157. The identity work was about naming refusals, so its tests were about
+refusals, and the gap it left was the case where nothing refuses.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -1,5 +1,7 @@
 # situ
 
+**One description, infinite possibilities.**
+
 Situ describes the exact byte layout of data that already has a binary
 representation -- wire protocols, packet formats, on-disk records,
 memory-mapped registers -- and generates accessors for it in C, C++, Rust and
@@ -1163,6 +1165,16 @@ text files a reviewer can read.
   than being a separate one, and it is the boundary of the derived tier rather
   than of codecs generally: a transform that keeps its output the size of its
   input, or expands it by a computable amount, situ generates.
+- **No checksum computation from a `checksum` member.** `checksum u8 crc[4]
+  covers(R)` declares two things -- which bytes are covered, and that a write
+  to them makes the sum stale -- and neither of them is the arithmetic. A
+  `checksum` member names no codec, so nothing joins it to an implementation:
+  `[codec = crc32]` is an unknown attribute and there is no `with` clause.
+  Situ will generate the algorithm, from a kernel description, if you ask it
+  separately -- `situc gen-derived` over `std/kernels.situ` emits a real
+  `situ_crc32_table[256]` and `situ_crc32()` -- but wiring that function to
+  that member is the caller's line of code today. Read the declaration as
+  coverage and staleness, not as a check that runs.
 - No behaviour the schema did not state. Situ describes conversations where a
   schema says so, and generates the machinery only when `--layer` asks for it,
   but it never supplies a fact nobody declared -- no default timeout, no
@@ -1305,6 +1317,64 @@ and `walker.report.SUPPORTED` is the subset the walker renders. Note what an
 interpreter cannot do, which is make an operation *absent*: under a walker the
 capability map stops being the shape of the interface and becomes data a
 caller may consult.
+
+## Recent additions, including the incomplete ones
+
+Situ's own rule is that a description which states what the generated code
+does not enforce is worse than one that states nothing (section 14.5). The
+same rule applied to this file means saying which of the following runs
+today and which is a written-down design.
+
+**Built.**
+
+- **A failed check has a name.** `situ_S_check(view, &which)` reports *which
+  member* refused, with the ids as macros -- `#define
+  SITU_UDP_HEADER_LENGTH_CHECK 0u` -- and `validate` becomes
+  `return situ_S_check(view, NULL)`. The Python walker answers the same
+  question through `report.failed_check()`, returning `(member, check)` or
+  the clean and cannot-say sentinels, so the two descriptions can be held
+  against each other on the same bytes. It names the member and not yet the
+  check *kind*, and C++, Rust and Python have not been given it.
+- **Operations the backends define differently are refused.** A shift whose
+  amount cannot be proved inside `0..63`, and signed `/` and `%`, no longer
+  compile: C leaves them undefined or implementation-defined where Python
+  and Rust each pick something, so an expression that means four things in
+  five backends is a defect in the schema rather than a portability note
+  (decision 0049).
+- **A file target.** `target file` describes a format read from and written
+  to a file rather than a mapped buffer, which is what lets the coverage of
+  a whole-file checksum be named -- `authenticated body { u8 rest[remaining]; }`
+  is a region running to EOF whose interior is deliberately undescribed
+  (decision 0047).
+- **BCD is in the differential.** Packed decimal was excluded from the
+  cross-backend comparison by an allow-list, which hid three separate bugs
+  in the walker's reading and writing of it. It is included now.
+
+**Designed and accepted, not yet built.**
+
+- **External arguments** (decision 0050). A format whose shape follows a
+  fact the message does not carry -- a negotiated cipher suite, a card
+  class, a block size. `prefix(...)` was already the precedent that a caller
+  may know something the message does not. The spelling is a `parameter`
+  declaration and a `--define` flag.
+- **Messages a schema carries** (decision 0051). A schema should be able to
+  say what a violation *means*, not only that one happened: today every
+  bound collapses into `SITU_ERR_CONSTRAINT` and generated code carries no
+  strings at all. The model is deliberately flat -- the checks run once, at
+  the end of processing a buffer, rather than at points scattered through a
+  traversal. The identity half is built, as above; the `when` construct and
+  the text are not.
+
+**Proposed.**
+
+- **A byte run as a value** (decision 0052). Situ has no spelling for "these
+  four bytes are `WOZ2`" -- not `[must_eq]` on an array, not `enum : u8[2]`,
+  not a bare `= "WOZ2"`. The only available route is one field per byte,
+  which three unrelated schemas arrived at independently, and it generates
+  six branches and six invented member names for one fact, with comments
+  that render the magic in decimal. The record proposes a byte-run
+  `[must_eq]`, an `enum : u8[k]` whose arms are byte runs, and `preamble`
+  for fixed bytes that generate no accessor at all.
 
 ## Reading further
 

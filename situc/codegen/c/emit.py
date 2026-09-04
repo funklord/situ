@@ -6111,9 +6111,11 @@ class Emitter:
 		lines.extend([
 			"",
 			"/* The same walk, naming the member that refused. `*which` is one",
-			" * of the ids below on a refusal and unchanged otherwise; NULL",
-			" * asks for the verdict alone. The id is the contract and the",
-			" * name is a macro, so nothing here costs a string (0051). */",
+			" * of the ids below on a refusal and 0xFFFFFFFF when nothing",
+			" * refused -- it is written either way, so a caller must not",
+			" * expect its own value to survive the call. NULL asks for",
+			" * the verdict alone. The id is the contract and the name is",
+			" * a macro, so nothing here costs a string (0051). */",
 			f"situ_err_t {ident(self.prefix, struct.name, 'check')}"
 			"(situ_view_t view, uint32_t *which);",
 		])

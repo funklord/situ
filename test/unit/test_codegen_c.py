@@ -124,6 +124,60 @@ unsigned probe(situ_view_t view)
 """)
 
 
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_identity_is_written_on_a_clean_walk_too(tmp_path: Path) -> None:
+	"""`*which` is set on entry, so a clean walk leaves the no-check sentinel
+	rather than the caller's own value.
+
+	Worth running rather than reading: the header used to say "unchanged
+	otherwise", which is what a caller would reasonably build on -- seed
+	`which` with something of your own and read it back after an OK. The
+	code had always written the sentinel. Nothing compared the two until
+	this test, because every existing one asked what happens on a refusal.
+	"""
+	header, source = emit("struct S { u8 a [max = 3]; }")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t     raw[4];
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    which;
+
+	memset(raw, 0, sizeof raw);
+	situ_msg_init(&msg, raw, sizeof raw);
+	if (situ_S_view(&msg, 0, &view) != SITU_OK)              return 1;
+
+	/* Clean: the verdict is OK and the identity is the sentinel, not the
+	 * 0xabcd this caller put there. */
+	which = 0xabcdu;
+	if (situ_S_check(view, &which) != SITU_OK)               return 2;
+	if (which != 0xFFFFFFFFu)                                return 3;
+
+	/* Refusing: the identity is the member's id. */
+	raw[0] = 9;
+	which = 0xabcdu;
+	if (situ_S_check(view, &which) == SITU_OK)               return 4;
+	if (which != SITU_S_A_CHECK)                             return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
 def test_size_constants_are_emitted() -> None:
 	"""So callers can size static buffers without running the compiler."""
 	header, _ = emit("struct S { u8 a; u32 b; }")
