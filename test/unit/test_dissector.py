@@ -57,8 +57,14 @@ HARNESS = ROOT / "test" / "lua" / "dissect.lua"
 from situc.dissector import LUA_KEYWORDS
 
 
-def emit(body: str) -> str:
-	schema   = parse_text(PREAMBLE + body)
+def emit(body: str, preamble: str = PREAMBLE) -> str:
+	"""The dissector for `body`, under `preamble`'s directives.
+
+	The preamble is a parameter because `bit_order` is one of them and is
+	the only way to reach `_bitmask`'s lsb-first arm from a test: the tree's
+	one `lsb_first` schema is a register, which gets no `Proto`.
+	"""
+	schema   = parse_text(preamble + body)
 	resolved = resolve(schema, solve(schema))
 	return generate(schema, resolved, "unit")
 
@@ -1159,6 +1165,41 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	assert walked >= 3940, (
 		f"the walker renders {walked} member lines, down from 3940; the "
 		"share above can be met by the dissector showing less")
+
+
+def test_a_bit_field_is_masked_from_the_end_the_schema_says(
+		tmp_path: Path) -> None:
+	"""`bit_order lsb_first`, which no committed schema can show here.
+
+	`_bitmask` shifts by `skip` for lsb-first and by `span - skip - size` for
+	msb-first, and it is right -- checked because the *walker* had the same
+	choice to make and never made it, reading every bit field msb-first
+	whatever the image said (26.224). One schema in the tree declares
+	`lsb_first` and it is `example/register`, which gets no `Proto` at all,
+	so this path is reachable only from a schema written for it.
+
+	`0xAB` is `0b10101011`. Read from the low end, `u3 low` is `0b011` and
+	`u5 high` is `0b10101`: 3 and 21, which is what the generated C answers
+	and what the walker answers now. Read from the high end they would be 5
+	and 11, which is what a mask built the other way would show.
+	"""
+	source = emit("struct s {\n\tu3 low;\n\tu5 high;\n\tu16 tail;\n}\n",
+	              preamble="target buffer;\nendian big;\n"
+	                       "bit_order lsb_first;\n")
+
+	# The masks say it before anything runs: the low three bits and the top
+	# five, rather than the other way round.
+	assert 'ProtoField.uint8("s.low", "low", base.DEC, nil, 0x7)' in source
+	assert 'ProtoField.uint8("s.high", "high", base.DEC, nil, 0xf8)' in source
+
+	if LUA is None:
+		return
+	lua = tmp_path / "unit.lua"
+	lua.write_text(source, encoding="ascii")
+	_, rows = read_back(lua, "s", bytes([0xAB, 0x00, 0x00]))
+
+	assert [(a, v) for a, _o, _l, v in rows][:2] == [
+		("s.low", "3"), ("s.high", "21")]
 
 
 def test_every_value_a_condition_reads_is_unsigned() -> None:

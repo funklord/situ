@@ -19805,6 +19805,50 @@ exactly: "a stub that can be made faithful is a worse reason to exclude an
 answer than to include it". Both were an exclusion whose justification
 described the tooling rather than the thing being tested.
 
+### 26.226 Two sweeps that found nothing, and the description that was right
+
+26.224 ended by naming the packer as the next place to look, on the ground
+that it sits upstream of every description. It is clean, and so is the seam
+beside it. Both are recorded because a session that reports only its hits
+misdescribes what it did.
+
+**The packer says what `resolve` computed.** Two representations of one
+layout by different code -- `layout`/`resolve` against `pack` plus
+`walker/image` -- compared field by field over the corpus: **670 placements,
+every field the image carries**, offsets, sizes, element and array counts,
+`since`, `repeat_cap`, `pad_to`, bit order, byte order, radix, and the
+signed, marker-governed and tag flags. No disagreement.
+
+Six differences turned out to be one deliberate clamp. `_u32` stores
+`min(value, NONE - 1)`, so a `size_max_bits` above 32 bits lands as
+`0xFFFFFFFE` -- `bmp`'s pixel run, `sqlite`'s payload and four others whose
+theoretical maxima are absurd. It is unobservable: the walker reads
+`size_max_bits` only where `pinned` is set, which is an explicit
+`[size = N]` and always small.
+
+The first two versions of that check reported dozens of disagreements and
+both were the instrument. One paired the image against `sorted(structs)`
+rather than against the image's own struct table; the other compared every
+*flattened* placement against a struct's *own* members. Invariant 157, twice
+in one sitting, and both times the shape of the output -- values shifted by a
+constant -- was what gave it away rather than any single line being obviously
+wrong.
+
+**The committed artefacts are current.** All 37 `.situ.map` and all 37
+`.situ.wire` files regenerate byte-identical. Those gates work.
+
+**And the dissector already had the bug the walker had.** `_bitmask` shifts
+by `skip` for lsb-first and by `span - skip - size` otherwise -- the choice
+the walker never made. Checked rather than assumed, because the previous
+entry's finding is exactly the kind that travels: the same fact, needed by
+five descriptions, is a fact four of them can each get wrong separately.
+This one was right, and is now pinned, because the path is reachable only
+from a schema written for it -- the tree's one `lsb_first` schema is a
+register, which gets no `Proto`.
+
+`0xAB` read from the low end is `low 3, high 21` in the generated C, in the
+walker since 26.224, and in the dissector all along.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
