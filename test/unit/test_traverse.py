@@ -561,24 +561,29 @@ def test_a_field_with_no_bound_exports_none() -> None:
 	assert bounds_of("struct S { u32 a; }", "S", "a") == (None, None)
 
 
-def test_pinned_run_reads_a_byte_run_and_nothing_else() -> None:
+def test_pinned_runs_reads_a_byte_run_and_nothing_else() -> None:
 	"""One rule for four backends and the packer (0052).
+
+	A tuple rather than one run, because the same question is asked of a
+	byte-run enum: what may this member hold. One alternative or six is the
+	only difference between a pinned magic and an enum's membership.
 
 	The narrowness is the decision rather than an implementation limit: a
 	span of wider scalars has an endianness the literal does not, so `u16
 	sig[2]` answers None even where the front end would have let it through.
 	"""
-	from situc.traverse import pinned_run
+	from situc.traverse import pinned_runs
 
-	def run_of(body: str, field: str) -> bytes | None:
+	def run_of(body: str, field: str) -> tuple[bytes, ...] | None:
 		schema   = parse_text(PREAMBLE + body)
 		resolved = resolve(schema, solve(schema))
 		held     = resolved.structs["S"]
 		for placement in own_members(held):
 			if local_name(held, placement) == field:
-				return pinned_run(placement)
+				return pinned_runs(placement)
 		raise AssertionError(field)
 
-	assert run_of('struct S { u8 sig[4] [must_eq = "WOZ2"]; }', "sig") == b"WOZ2"
+	assert run_of('struct S { u8 sig[4] [must_eq = "WOZ2"]; }', "sig") \
+		== (b"WOZ2",)
 	assert run_of("struct S { u8 sig[4]; }", "sig") is None
 	assert run_of("struct S { u32 a [must_eq = 7]; }", "a") is None

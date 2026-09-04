@@ -723,7 +723,16 @@ def _validate(image: Image, view: View, struct_index: int,
 				# does not (0052). The length was checked against the run at
 				# compile time, so a mismatch here is the message's.
 				if check == PINNED_RUN:
-					if data != image.pinned_runs[against]:
+					arms = image.pinned_runs.get(index, [])
+					# `against` is how many the packer wrote. A different
+					# number here means this walk misread the section, which
+					# is not the same as the message being wrong -- so it is
+					# an error about the image rather than a refusal.
+					if len(arms) != against:
+						raise Refused(
+							f"placement {index}: {against} pinned run(s) "
+							f"declared, {len(arms)} found")
+					if data not in arms:
 						return fail(ERR_CONSTRAINT, index, PINNED_RUN)
 					continue
 				if check != ENCODED_AS:

@@ -1409,8 +1409,12 @@ def declared_value_bounds(placement: Placement,
 	return (found.get("min"), found.get("max"))
 
 
-def pinned_run(placement: Placement) -> bytes | None:
-	"""The bytes `[must_eq = "WOZ2"]` pins on a byte run, or None (0052).
+def pinned_runs(placement: Placement) -> tuple[bytes, ...] | None:
+	"""The byte runs this member may hold, or None where it holds none.
+
+	One for a `[must_eq]` or a `preamble`, and one per arm for a field typed
+	by a byte-run enum (0052) -- the same question asked of a set rather
+	than a value, which is why it is one function.
 
 	The decision layer answers this once so the backends and the walkers
 	spell one rule. Narrow by construction, and the narrowness is the point:
@@ -1427,8 +1431,8 @@ def pinned_run(placement: Placement) -> bytes | None:
 	# governed by a policy (0052). It carries its bytes on the placement
 	# rather than in `attrs`, because `reserved [must_eq = N]` is refused --
 	# the two vocabularies must not merge (26.233).
-	if placement.pinned_run is not None:
-		return placement.pinned_run
+	if placement.pinned_runs is not None:
+		return placement.pinned_runs
 
 	if placement.kind != "field" or placement.array_count is None:
 		return None
@@ -1441,7 +1445,7 @@ def pinned_run(placement: Placement) -> bytes | None:
 			continue
 		held = attr.value.value.encode("utf-8")
 		if len(held) == placement.array_count:
-			return held
+			return (held,)
 	return None
 
 

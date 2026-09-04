@@ -4212,11 +4212,17 @@ Principles:
   by inspecting generated code for constant offsets.
 - **Errors are return codes**, never `errno`, never longjmp. A single
   `situ_err_t` enum with distinct codes per failure class: bounds, constraint,
-  version, tag, stage, stale, truncated. `test_the_failure_classes_match_the_runtimes`
+  version, tag, stage, stale, truncated, checksum.
+  `test_the_failure_classes_match_the_runtimes`
   holds this list to `runtime/c/situ.h` and holds the other three runtimes to
   it as well -- a class C can report and Rust cannot is a condition a Rust
   consumer has no way to express, and `truncated` had to be added to four
   runtimes by hand to find that out.
+- **`checksum` is not `tag`.** A tag that fails to verify is a hostile or
+  corrupt message and a caller should treat it as an attack; a checksum
+  mismatch is corruption or truncation, and a receiver that logs the two the
+  same way reports a disk error as an attack (0053). The same distinction
+  `stage` already draws against `tag`, one step further out.
 - **`truncated` is not `bounds`.** The bytes so far are a valid prefix and more
   are needed, which a stream reader sees on every partial read; bounds means a
   read went outside the buffer, which is a bug or an attack. A receiver that
@@ -20571,6 +20577,114 @@ saying one thing and the tree another, which the round-trip test caught.
 The corpus schema is why: `edges.situ` exists for constructs nothing else
 exercises, and a CRLF preamble in it broke a Rust build that no amount of
 reading the emitter would have questioned.
+
+### 26.242 A signature has no byte order, so the enum has no integer
+
+0052 is built. `enum signature : u8[2] { bmp = "BM", pe = "MZ" }` names
+spans, and a field typed by one is two bytes whose value must be an arm.
+
+**The width is on the backing type because that is what it describes.**
+How wide one value of this enum is. And a field typed by one is normalised
+into the run it denotes immediately after parsing, rather than teaching the
+solver a second way for a member to have a count -- every downstream reader
+already knows what `u8[2]` means, and a second mechanism is one half of
+them would have missed.
+
+**Membership turned out to be the pinned-run check asked of a set.** That
+is why this construct cost so much less than the two before it: one
+emitter per backend, one image section, one walker branch, all already
+written. A `[must_eq]` and a `preamble` pin one alternative; an enum pins
+one per arm. `default = pass` pins none, because it says unknown values are
+accepted and a check emitted anyway would refuse messages the schema
+admits.
+
+**No backend enumerates anything.** There is no integer to enumerate, and
+giving the arm one would hand it the byte order the construct exists to
+avoid -- `"BM"` is 0x424D or 0x4D42 depending on which way you read it, and
+a format reference writes signatures as text precisely because the
+question does not arise. So C emits `situ_m_bmp[2]` and `situ_m_is_known`,
+and the other three their own spelling of the same pair.
+
+**Four defects, and each was found by a different instrument.**
+
+*mypy*: `Env` gained a field and two positional constructions shifted
+silently. They are keyword calls now -- a six-field dataclass is not a
+shape anybody should have to count.
+
+*The compiler*: two pinned members in one Rust `validate` declared `WANT`
+twice in one scope. `let` would have shadowed happily; a `const` does not,
+so the check is a block now.
+
+*`-D warnings`*: a `pub use m as M;` alias nothing used. Dropped rather
+than allowed, since the module already carries the schema's name.
+
+*The corpus*: `situc wire` crashed on the new enum, because it reads
+`env.enums` and a byte-run enum is deliberately not there. It renders the
+arms as written now, which matters more in that file than anywhere -- the
+wire signature is the document a reader checks the bytes against, and a
+number in it would put back the byte order the construct removed.
+
+**`env.byte_enums` is separate from `env.enums` on purpose**, and the crash
+is the argument for it: every reader that wants an integer fails loudly
+instead of getting a plausible wrong one.
+
+### 26.243 The checksum computes itself, in the two backends that can
+
+0053, built. `checksum u8 crc[4] covers(body) is crc32;` generates
+`crc_compute` and `crc_check`, and respec's scenario closes: a truncated or
+corrupted image is refused by the layer whose job is to say an image is not
+what it claims.
+
+**`SITU_ERR_CHECKSUM` rather than `SITU_ERR_TAG`**, which is the same
+distinction `stage` already draws one step further out. A tag that fails to
+verify is a hostile or corrupt message; a checksum mismatch is corruption or
+truncation. A receiver that cannot tell them apart logs a disk error as an
+attack.
+
+**Neither is called by `validate`.** A coverage may run to the end of the
+message, so folding it in would make a field check cost a file read and
+would reopen the question 0051 was written to close. The walker therefore
+agrees by doing nothing, which is correct rather than a gap.
+
+**Built for C and C++, refused by Rust and Python, and the split is the
+construct's shape rather than a staging decision.** `gen-derived` emits C.
+C has the implementation and C++ calls it across a linkage it already has;
+Rust and Python have no derived codec at all, so a binding there generates
+a call to a function no file in their language defines -- clean output,
+correct-looking, failing at the first call. That is 26.241's accessor bug
+one layer out, and 17.0 says refuse rather than surprise. **So it is
+deliberately not in the corpus**: the four-way differential builds every
+corpus schema in every backend, and two refuse this one by design.
+
+**Four things the work turned up, and three were mine.**
+
+*The byte order belongs to the codec's output, not the member.* Setting
+`Placement.endian` from the scope to give the backend somewhere to read it
+put `big` on a `u8[2]` in eight committed wire signatures -- describing an
+order a byte run does not have. It is `tag_codec_endian` now, and the
+member's own `endian` stays None. WOZ2 stores its CRC little-endian and PNG
+stores its big, so guessing would be right for one format and silently
+wrong for the other.
+
+*A probe that declares what the generated code owes is a test of the
+probe.* The first C probe declared `situ_crc32` itself, which would have
+hidden a header that failed to declare it.
+
+*And the fix for that went into the wrong backend.* Removing the hand
+declaration showed C was already fine -- the codec's own block declares it
+-- so the emitter gained a second, redundant one. C++ was the backend with
+the gap, and its fix belonged in `_codec_prototypes`, whose docstring
+already said why: a linkage specification is not allowed in a block. **The
+sabotage is what found it**: removing the new declaration changed nothing,
+because the real one was thirty lines further up and had been there all
+along.
+
+*The runtimes police themselves.* `situ_err_str`'s switch is exhaustive
+under `-Werror=switch` and refused the new code until it was handled, and
+`test_the_failure_classes_match_the_runtimes` holds `project.md` section
+20.2 to the C enum -- so the document is the fifth mirror of the error
+vocabulary and fails when it falls behind. Both fired, neither needed
+looking for.
 
 ## 27. Questions, and how they were settled
 

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
-from situc.diagnostics import Diagnostic
+from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
@@ -43,7 +43,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	codec_entry_point,
-	declared_value_bounds, pinned_bytes, pinned_run,
+	declared_value_bounds, pinned_bytes, pinned_runs,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
 	decode_bound, decode_ratio,
@@ -282,7 +282,40 @@ class Emitter:
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries)
 
+	def _byte_enum(self, decl: ast.EnumDecl) -> list[str]:
+		"""A byte-run enum: named spans rather than a `#[repr]` enum (0052).
+
+		There is no integer to enumerate, and giving it one would give the
+		arm a byte order the literal does not have.
+		"""
+		arms  = self.resolved.layout.env.byte_enums[decl.name]
+		width = decl.width or 0
+		lines = [
+			f"/// enum {decl.name} : {decl.backing.name}[{width}] --"
+			f" unknown values are {decl.effective_default.value}.",
+			f"pub mod {decl.name} {{",
+		]
+		for arm, run in arms.items():
+			body = ", ".join(f"0x{byte:02X}" for byte in run)
+			lines.append(f"\tpub const {arm.upper()}: [u8; {width}]"
+			             f" = [{body}];")
+		rows = ", ".join(arm.upper() for arm in arms)
+		lines.extend([
+			"",
+			f"\tpub const KNOWN: [[u8; {width}]; {len(arms)}] = [{rows}];",
+			"",
+			f"\t/// Whether {width} bytes name a member of `{decl.name}`.",
+			"\t#[must_use]",
+			"\tpub fn is_known(bytes: &[u8]) -> bool {",
+			"\t\tKNOWN.iter().any(|arm| arm == bytes)",
+			"\t}",
+			"}",
+		])
+		return lines
+
 	def _enum(self, decl: ast.EnumDecl) -> list[str]:
+		if decl.width is not None:
+			return self._byte_enum(decl)
 		values  = self.resolved.layout.env.enums[decl.name]
 		backing = decl.backing.scalar
 		assert backing is not None
@@ -1195,8 +1228,30 @@ class Emitter:
 				f"DIRTY_{name.upper()})",
 				"\t}",
 			])
+			self._refuse_checksum_codec(placement)
 
 		return lines
+
+	def _refuse_checksum_codec(self, placement: Placement) -> None:
+		"""`is crc32` needs an implementation, and `gen-derived` emits C.
+
+		Refused rather than emitted as a call to a function no Rust file
+		defines -- 17.0's rule, and the accessor bug of 26.241 avoided one
+		layer out.
+		"""
+		if placement.tag_codec is None:
+			return
+
+		raise error(
+			f"`is {placement.tag_codec}` needs a derived codec this backend "
+			f"cannot generate",
+			placement.span,
+			label = "no Rust implementation of this codec",
+			notes = ["`situc gen-derived` emits C, so the binding is honoured "
+			         "by `--target c` and by C++ through it",
+			         "drop the `is` clause to keep the coverage and compute "
+			         "the sum in the caller, which is what a checksum did "
+			         "before 0053"])
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts."""
@@ -5256,7 +5311,7 @@ class Emitter:
 
 			# 0052: a byte run pinned to a literal is one comparison, above
 			# the dispatch because `classify_check` calls it an array.
-			pinned = pinned_run(placement)
+			pinned = pinned_runs(placement)
 			if pinned is not None:
 				checks.extend(self._pinned_run_check(struct, placement,
 				                                    name, pinned))
@@ -5452,25 +5507,36 @@ class Emitter:
 		]
 
 	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
-			name: str, expected: bytes) -> list[str]:
+			name: str, expected: tuple[bytes, ...]) -> list[str]:
 		"""`[must_eq = "WOZ2"]`: the run against the literal, as written.
 
 		Rust compares slices with `!=`, so this is the one backend where the
 		comparison is a single expression rather than a loop.
 		"""
-		shown = pinned_shown(expected)
-		body  = ", ".join(f"0x{byte:02X}" for byte in expected)
+		shown = " | ".join(f'"{pinned_shown(run)}"' for run in expected)
+		width = len(expected[0])
+		rows  = ", ".join(
+			"[" + ", ".join(f"0x{byte:02X}" for byte in run) + "]"
+			for run in expected)
 		# The bytes rather than the accessor: a `preamble` is anonymous and
 		# has none, which is what makes it inaccessible (0052).
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return [f"\t\t// {placement.path}: this backend cannot resolve"
 			        " where the pinned bytes are."]
+		# A block per check: two pinned members in one `validate` otherwise
+		# declare `WANT` twice in one scope, which is an error rather than
+		# the shadowing `let` would have got away with.
 		return [
-			f'\t\t// {placement.path} [must_eq = "{shown}"]',
-			f"\t\tlet at = ({start}) as usize;",
-			f"\t\tif &self.bytes[at..at + {len(expected)}] != &[{body}] {{",
-			"\t\t\treturn Err(Error::Constraint);",
+			f"\t\t// {placement.path} [must_eq = {shown}]",
+			"\t\t{",
+			f"\t\t\tconst WANT: [[u8; {width}]; {len(expected)}]"
+			f" = [{rows}];",
+			f"\t\t\tlet at = ({start}) as usize;",
+			f"\t\t\tif !WANT.iter().any(|arm| "
+			f"arm == &self.bytes[at..at + {width}]) {{",
+			"\t\t\t\treturn Err(Error::Constraint);",
+			"\t\t\t}",
 			"\t\t}",
 		]
 

@@ -43,7 +43,7 @@ from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
 	Check, arm_members, arm_of, classify_check, containment_order,
-	pinned_run,
+	pinned_runs,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
 	is_own_member,
@@ -200,6 +200,9 @@ class Emitter:
 		]
 
 	def _enum(self, decl: ast.EnumDecl) -> list[str]:
+		if decl.width is not None:
+			return self._byte_enum(decl)
+
 		backing = decl.backing.scalar
 		assert backing is not None
 		values = self.resolved.layout.env.enums[decl.name]
@@ -215,6 +218,57 @@ class Emitter:
 			             f" = {values[member.name]},")
 		lines.append(f"}} {ident(self.prefix, decl.name)}_t;")
 		lines.extend(self._enum_is_known(decl))
+		return lines
+
+	def _byte_enum(self, decl: ast.EnumDecl) -> list[str]:
+		"""A byte-run enum: named spans, not a C enum (0052).
+
+		There is no integer to enumerate. `"BM"` as a number is 0x424D or
+		0x4D42 depending on byte order, and a signature has none -- which is
+		the whole reason the construct exists, so inventing one here to get a
+		C `enum` out of it would undo it.
+		"""
+		arms  = self.resolved.layout.env.byte_enums[decl.name]
+		width = decl.width or 0
+		lines = [
+			"",
+			f"/* enum {decl.name} : {decl.backing.name}[{width}]"
+			f" -- unknown values are {decl.effective_default.value} */",
+		]
+		for name, run in arms.items():
+			body = ", ".join(f"0x{byte:02X}u" for byte in run)
+			lines.append(
+				f"static const uint8_t {ident(self.prefix, decl.name, name)}"
+				f"[{width}] = {{ {body} }};")
+
+		# An inline loop rather than `memcmp`, which would put `<string.h>`
+		# in every generated header for one comparison, and rather than a
+		# new runtime helper, which would be a runtime change for a
+		# construct that does not need one.
+		lines.extend([
+			"",
+			f"/** Whether {width} bytes name a member of `{decl.name}`. */",
+			f"static inline int {ident(self.prefix, decl.name, 'is_known')}"
+			"(const uint8_t *bytes)",
+			"{",
+			f"\tstatic const uint8_t *const arms[] = {{",
+		])
+		for name in arms:
+			lines.append(f"\t\t{ident(self.prefix, decl.name, name)},")
+		lines.extend([
+			"\t};",
+			"\tsize_t a;",
+			f"\tuint32_t i;",
+			"",
+			f"\tfor (a = 0; a < sizeof arms / sizeof arms[0]; a++) {{",
+			f"\t\tfor (i = 0; i < {width}u; i++) {{",
+			"\t\t\tif (bytes[i] != arms[a][i]) break;",
+			"\t\t}",
+			f"\t\tif (i == {width}u) return 1;",
+			"\t}",
+			"\treturn 0;",
+			"}",
+		])
 		return lines
 
 	def _enum_is_known(self, decl: ast.EnumDecl) -> list[str]:
@@ -546,8 +600,82 @@ class Emitter:
 			f"\tsitu_msg_clear_dirty(msg, {self._tag_bit(struct, name)});",
 			"}",
 		])
+		lines.extend(self._checksum_codec(struct, placement, local))
 
 		return lines
+
+	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
+			local: str) -> list[str]:
+		"""`is crc32` -- compute the sum, and compare it (0053).
+
+		Two functions rather than one, because they answer different
+		questions: a writer wants the value to store, and a reader wants a
+		verdict. Both read the coverage through the same `_covered` helper
+		the caller would have used, so a schema that changes what is covered
+		changes both without either being re-derived.
+
+		Neither is called by `validate`. A coverage running to EOF is a pass
+		over the whole message, and folding that into a constraint walk
+		would make a field check cost a file read -- 0051 settled that the
+		model is flat and runs once, at the end.
+		"""
+		if placement.tag_codec is None:
+			return []
+
+		covered = ident(self.prefix, struct.name, local, "covered")
+		compute = ident(self.prefix, struct.name, local, "compute")
+		check   = ident(self.prefix, struct.name, local, "check")
+		codec   = ident(self.prefix, placement.tag_codec)
+		width   = (placement.size_bits or 0) // BITS_PER_BYTE
+		read    = ("situ_get_le32"
+		           if placement.tag_codec_endian is ast.Endian.LITTLE
+		           else "situ_get_be32")
+
+		return [
+			"",
+			f"/** {placement.tag_codec} over the bytes"
+			f" {covered}() names.",
+			" *",
+			" * Not called by `validate`: the coverage may run to the end of",
+			" * the message, and a constraint walk that costs a file read is",
+			" * not the flat model 0051 settled on. Call it where the caller",
+			" * has the whole message.",
+			" */",
+			f"static inline situ_err_t {compute}(situ_view_t view,"
+			" uint32_t *out)",
+			"{",
+			"\tuint32_t at, n;",
+			f"\tconst situ_err_t e = {covered}(view, &at, &n);",
+			"",
+			"\tif (e != SITU_OK) {",
+			"\t\treturn e;",
+			"\t}",
+			f"\t*out = {codec}(view.base + at, n);",
+			"\treturn SITU_OK;",
+			"}",
+			"",
+			f"/** Whether the stored {placement.tag_codec} matches the bytes.",
+			" *",
+			" * `SITU_ERR_CHECKSUM` on a mismatch, which is deliberately not",
+			" * `SITU_ERR_TAG`: that one means a cryptographic gate refused,",
+			" * and this means the message is corrupt or truncated.",
+			" */",
+			f"static inline situ_err_t {check}(situ_view_t view)",
+			"{",
+			"\tuint32_t want;",
+			f"\tconst situ_err_t e = {compute}(view, &want);",
+			"",
+			"\tif (e != SITU_OK) {",
+			"\t\treturn e;",
+			"\t}",
+			f"\tif (!situ_in_bounds(view, {placement.offset_bytes}u,"
+			f" {width}u)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			f"\treturn {read}(view.base + {placement.offset_bytes}u) == want",
+			"\t       ? SITU_OK : SITU_ERR_CHECKSUM;",
+			"}",
+		]
 
 	def _self_as_hole(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -6412,7 +6540,7 @@ class Emitter:
 		# above the reserved run because both are byte loops over a fixed
 		# count and only the expected bytes differ -- and below the variant
 		# and delimiter cases, which are about members this one cannot be.
-		pinned = pinned_run(placement)
+		pinned = pinned_runs(placement)
 		if pinned is not None:
 			return self._pinned_run_check(struct, placement, pinned)
 
@@ -6747,7 +6875,7 @@ class Emitter:
 		]
 
 	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
-			expected: bytes) -> list[str]:
+			expected: tuple[bytes, ...]) -> list[str]:
 		"""`[must_eq = "WOZ2"]` on a byte run: one comparison, one check id.
 
 		The per-byte spelling this replaces generated a load and a branch per
@@ -6756,20 +6884,37 @@ class Emitter:
 		not see that the two were the same thing (0052). The literal is
 		emitted as written for exactly that reason.
 		"""
-		base = self._base_expression(struct, placement)
-		shown = pinned_shown(expected)
-		body = ", ".join(f"0x{byte:02X}u" for byte in expected)
+		base  = self._base_expression(struct, placement)
+		width = len(expected[0])
+		shown = " | ".join(f'"{pinned_shown(run)}"' for run in expected)
+		rows  = ",\n".join(
+			"\t\t\t{ " + ", ".join(f"0x{byte:02X}u" for byte in run) + " }"
+			for run in expected)
+		# One `want` per alternative and a match flag, rather than a chain of
+		# comparisons: a byte-run enum with six arms is six rows and the same
+		# two loops, and the generated code stays the shape a reader can
+		# check against the schema.
 		return [
-			f'\t/* {placement.path} [must_eq = "{shown}"] */',
+			f"\t/* {placement.path} [must_eq = {shown}] */",
 			"\t{",
-			f"\t\tstatic const uint8_t want[] = {{ {body} }};",
+			f"\t\tstatic const uint8_t want[][{width}] = {{",
+			rows + ",",
+			"\t\t};",
 			f"\t\tconst uint32_t at = {base};",
-			"\t\tuint32_t i;",
+			"\t\tuint32_t a, i;",
+			"\t\tint matched = 0;",
 			"",
-			f"\t\tfor (i = 0; i < {len(expected)}u; i++) {{",
-			"\t\t\tif ((view.base)[at + i] != want[i]) {",
-			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			f"\t\tfor (a = 0; a < {len(expected)}u && !matched; a++) {{",
+			"\t\t\tmatched = 1;",
+			f"\t\t\tfor (i = 0; i < {width}u; i++) {{",
+			"\t\t\t\tif ((view.base)[at + i] != want[a][i]) {",
+			"\t\t\t\t\tmatched = 0;",
+			"\t\t\t\t\tbreak;",
+			"\t\t\t\t}",
 			"\t\t\t}",
+			"\t\t}",
+			"\t\tif (!matched) {",
+			"\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t}",
 			"\t}",
 		]

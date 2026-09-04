@@ -56,7 +56,7 @@ from situc.traverse import (
 	decode_bound, decode_ratio, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
 	classify_check, declares_its_own_length,
-	pinned_run,
+	pinned_runs,
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
 	is_run,
@@ -189,7 +189,51 @@ class Emitter:
 
 	# -- enums ---------------------------------------------------------
 
+	def _byte_enum(self, decl: ast.EnumDecl) -> list[str]:
+		"""A byte-run enum: named spans rather than an `enum class` (0052).
+
+		There is no integer to enumerate, and inventing one would give the
+		arm a byte order the literal does not have.
+		"""
+		arms  = self.resolved.layout.env.byte_enums[decl.name]
+		width = decl.width or 0
+		lines = [
+			"",
+			f"/* enum {decl.name} : {decl.backing.name}[{width}]"
+			f" -- unknown values are {decl.effective_default.value} */",
+			f"namespace {c_name(decl.name)} {{",
+		]
+		for name, run in arms.items():
+			body = ", ".join(f"0x{byte:02X}" for byte in run)
+			lines.append(f"\tinline constexpr std::uint8_t {name}[{width}]"
+			             f" = {{ {body} }};")
+		lines.extend([
+			"",
+			f"\t[[nodiscard]] inline bool is_known"
+			"(const std::uint8_t *bytes) noexcept",
+			"\t{",
+			f"\t\tstatic constexpr const std::uint8_t *arms[] = {{",
+		])
+		for name in arms:
+			lines.append(f"\t\t\t{name},")
+		lines.extend([
+			"\t\t};",
+			"\t\tfor (const std::uint8_t *arm : arms) {",
+			f"\t\t\tstd::uint32_t i = 0;",
+			f"\t\t\tfor (; i < {width}u; ++i) {{",
+			"\t\t\t\tif (bytes[i] != arm[i]) break;",
+			"\t\t\t}",
+			f"\t\t\tif (i == {width}u) return true;",
+			"\t\t}",
+			"\t\treturn false;",
+			"\t}",
+			f"}}  // namespace {c_name(decl.name)}",
+		])
+		return lines
+
 	def _enum(self, decl: ast.EnumDecl) -> list[str]:
+		if decl.width is not None:
+			return self._byte_enum(decl)
 		backing = decl.backing.scalar
 		assert backing is not None
 		values = self.resolved.layout.env.enums[decl.name]
@@ -2764,7 +2808,15 @@ class Emitter:
 			if held.codec and held.kind == "coded"
 			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
 
-		if not wanted and not tier_one:
+		# 0053's computed checksums. `gen-derived` emits C for these too,
+		# and the same rule sends the declaration here: the first version
+		# put it inside the class, where a linkage specification is not
+		# allowed -- which this function's own docstring already said.
+		checksums = sorted({
+			held.tag_codec for struct in self.resolved.structs.values()
+			for held in own_members(struct) if held.tag_codec})
+
+		if not wanted and not tier_one and not checksums:
 			return []
 
 		# `bits` or `len` after the kernel's own unit: a `table` decoder counts
@@ -2785,6 +2837,9 @@ class Emitter:
 			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
 
 		return ['extern "C" {', *[
+			f"std::uint32_t situ_{c_name(name)}(const std::uint8_t *data,"
+			" std::uint32_t len);"
+			for name in checksums], *[
 			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
 			f" std::uint32_t {counted(name)}, std::uint8_t *out);"
 			for name in wanted], *[
@@ -4977,8 +5032,70 @@ class Emitter:
 				f"\t\towner.clear_dirty(dirty_{name});",
 				"\t}",
 			])
+		lines.extend(self._checksum_codec(placement, name))
 
 		return lines
+
+	def _checksum_codec(self, placement: Placement, name: str) -> list[str]:
+		"""`is crc32` -- compute the sum, and compare it (0053).
+
+		C++ calls the C implementation `gen-derived` emits, which is the
+		only place a derived codec exists: this backend already links the C
+		runtime, so the binding costs it nothing that C does not pay. Rust
+		and Python refuse the construct instead, because they would be
+		calling a function no file in their language defines.
+
+		Neither is called by `validate`: a coverage may run to the end of
+		the message, and a constraint walk that costs a file read is not the
+		flat model 0051 settled on.
+		"""
+		if placement.tag_codec is None:
+			return []
+
+		read  = ("situ_get_le32"
+		         if placement.tag_codec_endian is ast.Endian.LITTLE
+		         else "situ_get_be32")
+		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		return [
+			"",
+			f"\t/* {placement.tag_codec} over the bytes {name}_covered()",
+			"\t * names. Not called by validate: the coverage may run to the",
+			"\t * end of the message, and a constraint walk that costs a file",
+			"\t * read is not the flat model 0051 settled on. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_compute("
+			"std::uint32_t &out) const noexcept",
+			"\t{",
+			"\t\tstd::uint32_t at = 0, n = 0;",
+			f"\t\tconst ::situ::rt::err e = {name}_covered(at, n);",
+			"",
+			"\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\treturn e;",
+			"\t\t}",
+			f"\t\tout = ::situ_{c_name(placement.tag_codec)}"
+			"(raw().base + at, n);",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+			"",
+			f"\t/* Whether the stored {placement.tag_codec} matches. Not",
+			"\t * `err::tag`: that means a cryptographic gate refused, and",
+			"\t * this means the message is corrupt or truncated. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_check() const noexcept",
+			"\t{",
+			"\t\tstd::uint32_t want = 0;",
+			f"\t\tconst ::situ::rt::err e = {name}_compute(want);",
+			"",
+			"\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\treturn e;",
+			"\t\t}",
+			f"\t\tif (!situ_in_bounds(raw(), {placement.offset_bytes}u,"
+			f" {width}u)) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\treturn {read}(raw().base + {placement.offset_bytes}u)"
+			" == want",
+			"\t\t       ? ::situ::rt::err::ok : ::situ::rt::err::checksum;",
+			"\t}",
+		]
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts.
@@ -5556,7 +5673,7 @@ class Emitter:
 		# 0052: a byte run pinned to a literal is one comparison rather than
 		# one per byte, and it sits above the dispatch because
 		# `classify_check` calls such a member an array.
-		pinned = pinned_run(placement)
+		pinned = pinned_runs(placement)
 		if pinned is not None:
 			return self._pinned_run_check(struct, placement, pinned)
 
@@ -5698,15 +5815,18 @@ class Emitter:
 		]
 
 	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
-			expected: bytes) -> list[str]:
+			expected: tuple[bytes, ...]) -> list[str]:
 		"""`[must_eq = "WOZ2"]`: the run against the literal, as written.
 
 		An index loop rather than `std::equal`, which would need `<algorithm>`
 		and `<iterator>` in every generated header for one comparison. The
 		reserved run beside it is a loop for the same reason.
 		"""
-		shown = pinned_shown(expected)
-		body  = ", ".join(f"0x{byte:02X}" for byte in expected)
+		shown = " | ".join(f'"{pinned_shown(run)}"' for run in expected)
+		width = len(expected[0])
+		rows  = ",\n".join(
+			"\t\t\t\t{ " + ", ".join(f"0x{byte:02X}" for byte in run) + " }"
+			for run in expected)
 		# The bytes rather than the accessor: a `preamble` is anonymous and
 		# has none, which is what makes it inaccessible (0052). Calling
 		# `reserved0()` named nothing and would not have compiled.
@@ -5715,14 +5835,25 @@ class Emitter:
 			return [f"\t\t/* {placement.path}: this backend cannot resolve"
 			        " where the pinned bytes are. */"]
 		return [
-			f'\t\t/* {placement.path} [must_eq = "{shown}"] */',
+			f"\t\t/* {placement.path} [must_eq = {shown}] */",
 			"\t\t{",
-			f"\t\t\tstatic constexpr std::uint8_t want[] = {{ {body} }};",
+			f"\t\t\tstatic constexpr std::uint8_t want[][{width}] = {{",
+			rows + ",",
+			"\t\t\t};",
 			f"\t\t\tconst std::uint32_t at = ({start});",
-			f"\t\t\tfor (std::uint32_t i = 0; i < {len(expected)}u; ++i) {{",
-			"\t\t\t\tif (raw_.base[at + i] != want[i]) {",
-			"\t\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\tbool matched = false;",
+			f"\t\t\tfor (std::size_t a = 0; a < {len(expected)}u"
+			" && !matched; ++a) {",
+			"\t\t\t\tmatched = true;",
+			f"\t\t\t\tfor (std::uint32_t i = 0; i < {width}u; ++i) {{",
+			"\t\t\t\t\tif (raw_.base[at + i] != want[a][i]) {",
+			"\t\t\t\t\t\tmatched = false;",
+			"\t\t\t\t\t\tbreak;",
+			"\t\t\t\t\t}",
 			"\t\t\t\t}",
+			"\t\t\t}",
+			"\t\t\tif (!matched) {",
+			"\t\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t\t}",
 			"\t\t}",
 		]

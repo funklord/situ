@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from situc.diagnostics import SituError
 from situc.codegen.rust import generate as generate_rs
 from situc.layout import solve
 from situc.parser import parse_text
@@ -1925,3 +1926,27 @@ def test_a_relation_keyed_on_an_enum_compiles(tmp_path: Path) -> None:
 		 str(src / "lib.rs"), "-o", str(tmp_path / "out.rlib")],
 		capture_output=True, text=True)
 	assert compiled.returncode == 0, compiled.stderr
+
+
+def test_a_checksum_codec_is_refused_rather_than_called(tmp_path: Path) -> None:
+	"""`gen-derived` emits C, so Rust has no implementation to call (0053).
+
+	Refused per 17.0 rather than emitted as a call to a function no Rust
+	file defines -- which is the accessor bug of 26.241 one layer out: it
+	generates, it reads correctly, and it fails at the first call.
+	"""
+	with pytest.raises(SituError) as caught:
+		emit("""
+codec crc32 {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF, reflect);
+}
+impl crc32 derived;
+
+struct S {
+	checksum u8 crc[4] covers(body) is crc32;
+	authenticated body { u8 rest[remaining]; }
+}
+""", preamble="target file append;\nendian little;\nbit_order msb_first;\n")
+	assert "needs a derived codec this backend cannot generate" \
+		in str(caught.value)

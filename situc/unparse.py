@@ -262,7 +262,11 @@ def codec_granularity(decl: ast.CodecDecl) -> str:
 
 
 def _enum_lines(decl: ast.EnumDecl) -> list[str]:
-	lines = [f"enum {decl.name} : {decl.backing.name} {{"]
+	# The width belongs to the backing type, because that is what it
+	# describes: how wide one value of this enum is (0052). Dropping it
+	# round-trips a byte-run enum into a scalar one whose arms are strings.
+	width = "" if decl.width is None else f"[{decl.width}]"
+	lines = [f"enum {decl.name} : {decl.backing.name}{width} {{"]
 	for member in decl.members:
 		lines.append(f"\t{member.name} = {expr_to_source(member.value)},")
 	if decl.default is not None:

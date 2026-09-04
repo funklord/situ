@@ -928,11 +928,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	constraints_blob = bytearray()
 	enum_blob        = bytearray()
 	enum_ids: dict[str, int] = {}
-	#: `image_pinned` rows, in the order they were written. A constraint's
-	#: `value` is the index into this, which is what `enum_known` does with
-	#: the value table and for the same reason: the payload is not a number.
+	#: `image_pinned` rows, keyed by placement. A member with several
+	#: alternatives -- a byte-run enum -- writes one row per arm, and the
+	#: constraint carries how many rather than an index, so a walk that
+	#: gathers a different number knows it misread the section.
 	pinned_blob = bytearray()
-	pinned_rows: list[int] = []
 	# A nested member is `validate` called through, so the parent can answer
 	# exactly when the child can. That is a fixed point rather than one
 	# pass: a struct three deep settles only after the one below it does, so
@@ -1128,20 +1128,27 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# a fifth description agreeing wrongly is what the
 				# differential exists to catch, and it cannot catch a
 				# disagreement nobody expresses (154).
-				pinned = traverse.pinned_run(placement)
+				pinned = traverse.pinned_runs(placement)
 				if pinned is not None:
 					# Longer than the record holds: disown rather than
 					# truncate. A truncated compare passes a prefix and
 					# reports a whole match, which is the failure this
 					# construct exists to make impossible.
-					if len(pinned) > PINNED_OCTETS:
+					if any(len(run) > PINNED_OCTETS for run in pinned):
 						whole = False
 						continue
-					pinned_blob += _struct.pack(
-						f"<IB{PINNED_OCTETS}s", at, len(pinned), pinned)
+					# One row per alternative, all keyed by this placement:
+					# a `[must_eq]` or a `preamble` writes one and a
+					# byte-run enum writes one per arm, so the walk gathers
+					# a group rather than following an index. The
+					# constraint's `value` is the count, which is a
+					# self-check -- a walk that finds a different number of
+					# rows has read the section wrongly.
+					for run in pinned:
+						pinned_blob += _struct.pack(
+							f"<IB{PINNED_OCTETS}s", at, len(run), run)
 					constraints_blob += _struct.pack(
-						"<IqBxxx", at, len(pinned_rows), 14)
-					pinned_rows.append(at)
+						"<IqBxxx", at, len(pinned), 14)
 					continue
 
 				if placement.kind == "reserved":

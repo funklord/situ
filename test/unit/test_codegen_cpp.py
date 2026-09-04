@@ -2631,3 +2631,36 @@ def test_value_bounds_stay_out_of_the_wrong_domains() -> None:
 	bound would be a constant in the wrong domain -- worse than none."""
 	source = emit("struct s { q8_8 trim [max = 100]; u8 pad; }")
 	assert "value_max" not in source
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")
+def test_a_checksum_computes_and_compares_itself(tmp_path: Path) -> None:
+	"""0053 in C++, which calls the C implementation `gen-derived` emits.
+
+	The declaration goes in `_codec_prototypes` at file scope, not beside
+	the function: a linkage specification is not allowed in a block, which
+	that helper's own docstring already said before this needed it.
+	"""
+	header = emit("""
+codec crc32 {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF, reflect);
+}
+impl crc32 derived;
+
+struct S {
+	u8 sig[4] [must_eq = "WOZ2"];
+	checksum u8 crc[4] covers(body) is crc32;
+	authenticated body { u8 rest[remaining]; }
+}
+""", preamble="target file append;\nendian little;\nbit_order msb_first;\n")
+
+	assert "crc_compute" in header
+	assert "crc_check" in header
+	# At file scope, inside the `extern "C"` block, not in the class.
+	assert 'extern "C" {' in header
+	assert ("std::uint32_t situ_crc32(const std::uint8_t *data,"
+	        " std::uint32_t len);") in header
+	# The schema says `endian little`, and the codec's output is a number.
+	assert "situ_get_le32" in header
+	assert "err::checksum" in header

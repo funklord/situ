@@ -42,6 +42,10 @@ pub enum Error {
 	/// partial read, which is why it is separate from `Bounds` -- that one
 	/// means a read went outside the buffer, which is a bug or an attack.
 	Truncated,
+	/// A checksum does not match the bytes it covers. Distinct from `Tag`,
+	/// which means a cryptographic gate refused: this says the message is
+	/// corrupt or truncated.
+	Checksum,
 }
 
 impl Error {
@@ -60,6 +64,7 @@ impl Error {
 			4 => Error::Tag,
 			5 => Error::Stage,
 			7 => Error::Truncated,
+			8 => Error::Checksum,
 			_ => Error::Constraint,
 		}
 	}

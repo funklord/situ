@@ -12,6 +12,15 @@ target buffer;
 endian big;
 bit_order msb_first;
 
+// A byte-run enum (0052). The tree's only one, and the only enum whose arms
+// are spans rather than numbers -- so it is what keeps `env.byte_enums`
+// apart from `env.enums`, and what proves the membership check is the same
+// construct as a pinned run asked of a set rather than a value.
+enum signature : u8[2] {
+	bmp = "BM",
+	pe  = "MZ",
+}
+
 struct edges [allow_straddle] {
 	// A signed bit-packed field. Every signed field in the examples is a whole
 	// number of bytes, so `situ_sign_extend` on the bit-packed path was emitted
@@ -47,9 +56,13 @@ struct edges [allow_straddle] {
 	// content is stated rather than governed by a policy -- so it is also
 	// what keeps the two vocabularies from merging, which 26.233 is about.
 	preamble u8[2] = "\x0d\x0a";
+
+	// A field typed by that enum: two bytes, and validate refuses anything
+	// that is neither arm.
+	signature  kind;
 }
 
-require size(edges) == 25;
+require size(edges) == 27;
 require in_place(edges.trim);
 require in_place(edges.channel);
 

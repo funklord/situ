@@ -127,6 +127,16 @@ class StageError(SituError):
 	"""
 
 
+class ChecksumError(SituError):
+	"""A checksum does not match the bytes it covers (0053).
+
+	Its own class rather than a `TagError`, and the distinction is the one
+	`StageError` already draws: a tag that fails to verify is a hostile or
+	corrupt message, and a checksum mismatch is corruption or truncation.
+	A receiver that cannot tell them apart logs a disk error as an attack.
+	"""
+
+
 class TagError(SituError):
 	"""A sealed region was opened without a verified tag."""
 

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import PurePath
 
 from situc import ast
+from situc.types import pinned_shown
 from situc.layout import (
 	Arm, BITS_PER_BYTE, IndexTable, KnownTag, Placement, ValueRule)
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -135,12 +136,23 @@ def _enums(schema: ast.Schema, resolved: ResolvedSchema) -> list[str]:
 	"""
 	lines = []
 	for decl in schema.enums():
-		values = resolved.layout.env.enums[decl.name]
-		listed = " ".join(f"{member.name}={values[member.name]}"
-		                  for member in decl.members)
+		# A byte-run enum's arms are spans, and the signature prints them as
+		# written: the point of the construct is that a signature has no
+		# byte order, so rendering `BM` as a number here would put one back
+		# in the one document a reader checks the wire against (0052).
+		if decl.width is not None:
+			runs   = resolved.layout.env.byte_enums[decl.name]
+			listed = " ".join(f'{name}="{pinned_shown(run)}"'
+			                  for name, run in runs.items())
+			width  = f"[{decl.width}]"
+		else:
+			values = resolved.layout.env.enums[decl.name]
+			listed = " ".join(f"{member.name}={values[member.name]}"
+			                  for member in decl.members)
+			width  = ""
 		lines.extend([
 			"",
-			f"enum {decl.name} : {decl.backing.name} "
+			f"enum {decl.name} : {decl.backing.name}{width} "
 			f"unknown={decl.effective_default.value}",
 			f"  {listed}" if listed else "  (no members)",
 		])

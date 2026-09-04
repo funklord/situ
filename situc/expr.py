@@ -541,6 +541,10 @@ class Env:
 
 	consts: dict[str, int]			= field(default_factory=dict)
 	enums: dict[str, dict[str, int]]	= field(default_factory=dict)
+	#: `enum format : u8[2] { bmp = "BM" }` -- arms that are spans rather
+	#: than numbers (0052). Kept apart from `enums` so that nothing can get
+	#: an integer out of one: there is no correct integer to get.
+	byte_enums: dict[str, dict[str, bytes]]	= field(default_factory=dict)
 	layout: Callable[[str, str], int | None] | None = None
 	# Fields whose interval is known, keyed by the path an expression would use
 	# to name them. Populated by the solver as it walks a struct, so a size
@@ -553,10 +557,17 @@ class Env:
 
 	def with_layout(self, resolver: Callable[[str, str], int | None],
 			explain: Callable[[str, str], tuple[str, str]] | None = None) -> Env:
-		return Env(self.consts, self.enums, resolver, self.fields, explain)
+		# Keyword rather than positional: a field added to `Env` shifted
+		# these silently, and a dataclass with six of them is a shape
+		# nobody should have to count.
+		return Env(consts = self.consts, enums = self.enums,
+		           byte_enums = self.byte_enums, layout = resolver,
+		           fields = self.fields, explain = explain)
 
 	def with_fields(self, fields: dict[str, Interval]) -> Env:
-		return Env(self.consts, self.enums, self.layout, fields, self.explain)
+		return Env(consts = self.consts, enums = self.enums,
+		           byte_enums = self.byte_enums, layout = self.layout,
+		           fields = fields, explain = self.explain)
 
 
 def evaluate(expr: ast.Expr, env: Env) -> int:
@@ -828,6 +839,17 @@ def build_env(schema: ast.Schema) -> Env:
 
 	for decl in schema.decls:
 		if isinstance(decl, ast.EnumDecl):
+			# A byte-run enum's arms are literals rather than numbers, and
+			# there is deliberately no integer to fall back on: `"BM"` as a
+			# `u16` is 0x424D or 0x4D42 depending on endianness, and a
+			# signature has no byte order (0052). They live in `byte_enums`
+			# so that nothing reading `env.enums` can get a number out of
+			# one by accident.
+			if decl.width is not None:
+				env.byte_enums[decl.name] = {
+					member.name: _enum_bytes(member, decl.width)
+					for member in decl.members}
+				continue
 			members: dict[str, int] = {}
 			for member in decl.members:
 				members[member.name] = evaluate(member.value, env)
@@ -836,6 +858,29 @@ def build_env(schema: ast.Schema) -> Env:
 			env.consts[decl.name] = _const_value(decl, env)
 
 	return env
+
+
+def _enum_bytes(member: ast.EnumMember, width: int) -> bytes:
+	"""One arm of a byte-run enum, checked against the declared width."""
+	if not isinstance(member.value, ast.StringLiteral):
+		raise error(
+			f"`{member.name}` is not a byte string",
+			member.value.span,
+			label = "expected a literal here",
+			notes = ["a byte-run enum names spans of bytes, so every arm is "
+			         "written out as one"])
+
+	held = member.value.value.encode("utf-8")
+	if len(held) != width:
+		raise error(
+			f"`{member.name}` is {len(held)} byte(s) of a {width}-byte enum",
+			member.value.span,
+			label = f"{len(held)} byte(s) here",
+			notes = [f"every arm of this enum is {width} bytes, because that "
+			         f"is how wide one value of it is",
+			         "an enum whose arms differ in length is a grammar, not "
+			         "a value"])
+	return held
 
 
 def _const_value(decl: ast.ConstDecl, env: Env) -> int:

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.capability import Axis
 from situc.codegen.c.names import c_name
-from situc.diagnostics import Diagnostic
+from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
@@ -50,7 +50,7 @@ from situc.traverse import (
 	decode_bound, region_extent, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
-	pinned_run,
+	pinned_runs,
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
 	is_run,
@@ -305,7 +305,38 @@ class Emitter:
 
 	# -- enums ---------------------------------------------------------
 
+	def _byte_enum(self, decl: ast.EnumDecl) -> list[str]:
+		"""A byte-run enum: named spans rather than an `IntEnum` (0052).
+
+		There is no integer to enumerate -- `"BM"` as a number depends on
+		byte order and a signature has none -- so the arms are bytes and
+		membership is a set.
+		"""
+		arms = self.resolved.layout.env.byte_enums[decl.name]
+		lines = [
+			"",
+			f"class {py_name(decl.name)}:",
+			f'\t"""enum {decl.name} : {decl.backing.name}[{decl.width}]'
+			f' -- unknown values are {decl.effective_default.value}."""',
+			"",
+		]
+		for name, run in arms.items():
+			lines.append(f"\t{name.upper()} = {run!r}")
+		lines.extend([
+			"",
+			f"\tKNOWN = frozenset({{"
+			+ ", ".join(f"{run!r}" for run in arms.values()) + "})",
+			"",
+			"\t@staticmethod",
+			"\tdef is_known(data: bytes) -> bool:",
+			f"\t\treturn bytes(data) in {py_name(decl.name)}.KNOWN",
+		])
+		return lines
+
+
 	def _enum(self, decl: ast.EnumDecl) -> list[str]:
+		if decl.width is not None:
+			return self._byte_enum(decl)
 		values = self.resolved.layout.env.enums[decl.name]
 		lines  = [
 			"",
@@ -1444,8 +1475,35 @@ class Emitter:
 				f'\t\t"""Say it does again, once it has been recomputed."""',
 				f"\t\tself._msg.clear_dirty({bit})",
 			])
+			lines.extend(self._checksum_codec(placement, name))
 
 		return lines
+
+	def _checksum_codec(self, placement: Placement, name: str) -> list[str]:
+		"""`is crc32` -- refused for this backend, and said so (0053).
+
+		The binding needs the codec's *implementation*, and `gen-derived`
+		emits C. A Python accessor calling a `crc32` that no Python file
+		defines is the accessor bug of 26.241 one layer out: it generates,
+		it reads correctly, and it fails at the first call.
+
+		So this refuses, per 17.0 -- a construct situ cannot represent is an
+		error rather than a surprise later. The schema is fine and the C
+		backend honours it; what is missing is a Python `gen-derived`.
+		"""
+		if placement.tag_codec is None:
+			return []
+
+		raise error(
+			f"`is {placement.tag_codec}` needs a derived codec this backend "
+			f"cannot generate",
+			placement.span,
+			label = "no Python implementation of this codec",
+			notes = ["`situc gen-derived` emits C, so the binding is honoured "
+			         "by `--target c` and by C++ through it",
+			         "drop the `is` clause to keep the coverage and compute "
+			         "the sum in the caller, which is what a checksum did "
+			         "before 0053"])
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts."""
@@ -4330,7 +4388,7 @@ class Emitter:
 		# 0052: a byte run pinned to a literal is one comparison. Above the
 		# dispatch because `classify_check` calls such a member an array, and
 		# an array's check is an encoding and a terminator it has neither of.
-		pinned = pinned_run(placement)
+		pinned = pinned_runs(placement)
 		if pinned is not None:
 			return self._pinned_run_check(struct, placement, pinned)
 
@@ -4426,13 +4484,13 @@ class Emitter:
 		return lines
 
 	def _pinned_run_check(self, struct: ResolvedStruct, placement: Placement,
-			expected: bytes) -> list[str]:
+			expected: tuple[bytes, ...]) -> list[str]:
 		"""`[must_eq = "WOZ2"]`: the run equals the literal, or it does not.
 
 		One comparison rather than one per byte, and the literal is rendered
 		as written so a reader can hold it against a format reference (0052).
 		"""
-		shown = pinned_shown(expected)
+		shown = " | ".join(f'\'{pinned_shown(run)}\'' for run in expected)
 		# Read the bytes rather than the accessor, because a `preamble` has
 		# none: it is anonymous, which is what makes it inaccessible (0052).
 		# Naming `reserved0()` compiled here and in two other backends and
@@ -4442,15 +4500,18 @@ class Emitter:
 		if start is None:
 			return [f"\t\t# {placement.path}: this backend cannot resolve"
 			        " where the pinned bytes are."]
+		width = len(expected[0])
+		held  = f"bytes(self._msg.buffer[at:at + {width}])"
+		# `in` over a tuple rather than a chain of comparisons: one arm and
+		# six read the same, which is what makes a byte-run enum the same
+		# construct as a pinned run rather than a second one.
 		return [
-			f'\t\t# {placement.path} [must_eq = "{shown}"]',
+			f"\t\t# {placement.path} [must_eq = {shown}]",
 			"\t\tself._check()",
 			f"\t\tat = self._at + ({start})",
-			f"\t\tif bytes(self._msg.buffer[at:at + {len(expected)}]) "
-			f"!= {expected!r}:",
+			f"\t\tif {held} not in {tuple(expected)!r}:",
 			f"\t\t\traise ConstraintError(f\"{placement.path} is "
-			f'{{bytes(self._msg.buffer[at:at + {len(expected)}])!r}}, '
-			f'must_eq {expected!r}")',
+			f'{{{held}!r}}, must_eq {shown}")',
 		]
 
 	def _reserved_check(self, struct: ResolvedStruct,

@@ -8,6 +8,7 @@ catches a -Wconversion regression.
 
 from __future__ import annotations
 
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -3766,8 +3767,8 @@ def test_a_pinned_byte_run_is_one_comparison_and_one_id(tmp_path: Path) -> None:
 	"""
 	header, source = emit('struct S { u8 sig[4] [must_eq = "WOZ2"]; u32 n; }')
 	assert '/* S.sig [must_eq = "WOZ2"] */' in source
-	assert "static const uint8_t want[] = { 0x57u, 0x4Fu, 0x5Au, 0x32u };" \
-		in source
+	assert "static const uint8_t want[][4] = {" in source
+	assert "{ 0x57u, 0x4Fu, 0x5Au, 0x32u }" in source
 	# One fact, one id -- the whole argument against desugaring to per-byte
 	# checks, which would have given a four-byte magic four of them.
 	assert "#define SITU_S_SIG_CHECK 0u" in header
@@ -3824,8 +3825,8 @@ def test_a_preamble_is_checked_and_gets_no_accessor(tmp_path: Path) -> None:
 	header, source = emit('struct S { preamble u8[4] = "WOZ2"; u32 n; }')
 	assert 'must_eq = "WOZ2"' in source
 	assert "must_be_zero" not in source
-	assert "static const uint8_t want[] = { 0x57u, 0x4Fu, 0x5Au, 0x32u };" \
-		in source
+	assert "static const uint8_t want[][4] = {" in source
+	assert "{ 0x57u, 0x4Fu, 0x5Au, 0x32u }" in source
 	# The named field keeps its accessors; the preamble has none to keep.
 	assert "situ_S_n_get" in header
 	assert "situ_S_reserved0" not in header
@@ -3844,3 +3845,104 @@ def test_a_pinned_run_comment_stays_on_one_line(tmp_path: Path) -> None:
 	assert 'must_eq = "\\x0d\\x0a"' in source
 	for line in source.splitlines():
 		assert "\r" not in line
+
+
+CHECKSUM_SCHEMA = """
+codec crc32 {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF, reflect);
+}
+impl crc32 derived;
+
+struct S {
+	u8 sig[4] [must_eq = "WOZ2"];
+	checksum u8 crc[4] covers(body) is crc32;
+	authenticated body { u8 rest[remaining]; }
+}
+"""
+
+CHECKSUM_PREAMBLE = "target file append;\nendian little;\nbit_order msb_first;\n"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_checksum_computes_and_compares_itself(tmp_path: Path) -> None:
+	"""0053, end to end against a real CRC.
+
+	respec's reader accepted a truncated image because `covers(R)` declares
+	coverage and staleness and never the arithmetic. Both halves existed --
+	`gen-derived` emits a real `situ_crc32`, and the coverage was already
+	computed -- and nothing joined them.
+
+	The probe deliberately does not declare `situ_crc32` itself, so that the
+	header is what has to. C already declared it, from the codec's own
+	block; C++ did not, and the first attempt at a fix added a second
+	declaration here rather than reading what was already emitted. Only
+	removing it again showed which backend had the gap.
+	"""
+	header, source = emit(CHECKSUM_SCHEMA, preamble=CHECKSUM_PREAMBLE)
+	assert "situ_S_crc_compute" in header
+	assert "situ_S_crc_check" in header
+	assert "uint32_t situ_crc32(const uint8_t *data, uint32_t len);" in header
+	# The schema says `endian little`, and the codec's output is a number.
+	assert "situ_get_le32" in header
+	# `validate` must not have grown a pass over the whole message.
+	assert "situ_S_crc_check" not in source.split("situ_S_check")[-1]
+
+	# `gen-derived` writes the implementation; `build` writes the header it
+	# includes. Both, because the probe links the first and compiles the
+	# second.
+	for command in ("build", "gen-derived"):
+		made = subprocess.run(
+			[sys.executable, "-m", "situc", command,
+			 *(("--target", "c") if command == "build" else ()),
+			 "--out", str(tmp_path), str(ROOT / "std" / "kernels.situ")],
+			capture_output=True, text=True)
+		assert made.returncode == 0, made.stderr
+
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t buf[16];
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    want;
+
+	memcpy(buf, "WOZ2", 4);
+	memset(buf + 4, 0, 4);
+	memcpy(buf + 8, "hello!!!", 8);
+
+	situ_msg_init(&msg, buf, sizeof buf);
+	if (situ_S_view(&msg, 0, sizeof buf, &view) != SITU_OK)  return 1;
+	if (situ_S_crc_compute(view, &want) != SITU_OK)          return 2;
+	/* Independently: the covered span is everything after the header. */
+	if (want != situ_crc32(buf + 8, 8))                      return 3;
+	/* Stored zero, so the comparison must refuse -- and with its own code. */
+	if (situ_S_crc_check(view) != SITU_ERR_CHECKSUM)         return 4;
+	/* Stored little-endian, as the schema says, and it must pass. */
+	buf[4] = (uint8_t)(want & 0xFFu);
+	buf[5] = (uint8_t)((want >> 8) & 0xFFu);
+	buf[6] = (uint8_t)((want >> 16) & 0xFFu);
+	buf[7] = (uint8_t)((want >> 24) & 0xFFu);
+	if (situ_S_crc_check(view) != SITU_OK)                   return 5;
+	/* One covered byte flipped, and it must refuse again -- which is the
+	   whole finding: a corrupt image read as fine before this. */
+	buf[9] ^= 0x01u;
+	if (situ_S_crc_check(view) != SITU_ERR_CHECKSUM)         return 6;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(tmp_path / "kernels_derived.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0

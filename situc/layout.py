@@ -200,13 +200,16 @@ class Placement:
 	# accessors need no special case -- `data_sized` asks about those two and
 	# never about the extent interval.
 	pinned_bits: int | None		= None
-	# `preamble u8[4] = "WOZ2"` -- the bytes a preamble is pinned to (0052).
+	# The byte runs this member may hold (0052). One for a `preamble`, and
+	# one per arm for a field typed by a byte-run enum -- which is the same
+	# question asked of a set rather than a value, so it is one field and
+	# one check rather than two of each.
 	# Carried rather than derived from `attrs`, because a preamble states its
 	# content where a `reserved` states a policy, and the two must not be one
 	# vocabulary: `reserved [must_eq = N]` is refused for exactly that reason
 	# (26.233). `kind` is "reserved", so every no-accessor rule already
 	# applies; this is only what the bytes must be.
-	pinned_run: bytes | None	= None
+	pinned_runs: tuple[bytes, ...] | None	= None
 	# `pad_to(n)` alignment in bytes (0043). The member is padding to the next
 	# multiple of n from the message base; its length is a constant where the
 	# offset is static and `align_up(offset, n) - offset` where it is not, so
@@ -282,6 +285,19 @@ class Placement:
 	# before this message's, and which this message does not contain
 	# (section 14.2a). TCP's and UDP's pseudo-header.
 	tag_prefix: str | None		= None
+	# For a checksum: the derived codec that computes it, where the schema
+	# names one (0053). `None` leaves the arithmetic with the caller, which
+	# is what every checksum did before and what a `tag` still does.
+	tag_codec: str | None		= None
+	# The byte order the codec's OUTPUT is stored in, where a checksum names
+	# one. Distinct from `endian`, which stays None because a checksum's own
+	# bytes have no byte order -- they are the value. What has one is the
+	# number the codec produces: WOZ2 stores its CRC little-endian and PNG
+	# stores its big.
+	#
+	# Setting `endian` instead put `big` on a `u8[2]` in eight committed wire
+	# signatures, describing an order the member does not have.
+	tag_codec_endian: ast.Endian | None	= None
 	# For a `coded` placement: the sibling regions its transform also runs
 	# over, beyond its own extent (section 14.1a). Unlike `tag_covers` this is
 	# never inferred -- empty means the region covers only itself.
@@ -1152,7 +1168,15 @@ class Solver:
 			size_bits     = bits,
 			size_max_bits = bits,
 			scalar        = scalar,
+			# A tag's bytes have no byte order: they are the value. Setting
+			# the scope's here to give 0053's computed checksum somewhere to
+			# read it from was wrong twice over -- it put `big` on a `u8[2]`
+			# in eight committed wire signatures, describing an order the
+			# member does not have. What has one is the codec's OUTPUT, so
+			# that goes in `tag_codec_endian` and this stays None.
 			endian        = None,
+			tag_codec     = member.codec,
+			tag_codec_endian = scope.endian if member.codec else None,
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			attrs         = member.attrs,
@@ -1588,7 +1612,7 @@ class Solver:
 			size_bits      = total.lo,
 			size_max_bits  = total.hi,
 			pinned_bits    = pinned.lo if pinned is not None else None,
-			pinned_run     = getattr(member, "pinned", None),
+			pinned_runs    = self._pinned_runs(member),
 			scalar         = scalar,
 			endian         = local.endian,
 			bit_order      = local.bit_order,
@@ -1990,6 +2014,26 @@ class Solver:
 			))
 
 	# -- widths -----------------------------------------------------------
+
+	def _pinned_runs(self, member: ast.Field | ast.Reserved
+			) -> tuple[bytes, ...] | None:
+		"""The byte runs this member may hold, or None where it is not one.
+
+		A `preamble` states one. A field typed by a byte-run enum may hold
+		any arm -- unless the enum's default is `pass`, which says unknown
+		values are accepted and is therefore no check at all.
+		"""
+		pinned = getattr(member, "pinned", None)
+		if pinned is not None:
+			return (pinned,)
+
+		arms = self.result.env.byte_enums.get(member.type_ref.name)
+		if arms is None:
+			return None
+		enum = self.enums.get(member.type_ref.name)
+		if enum is not None and enum.default is ast.EnumDefault.PASS:
+			return None
+		return tuple(arms.values())
 
 	def effective_scalar(self, member: ast.Field | ast.Reserved,
 			scope: Scope) -> ScalarType | None:

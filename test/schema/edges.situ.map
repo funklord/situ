@@ -83,7 +83,7 @@ struct derived size=13 mutate=Immutable repr=ValueConverted atomic=NonAtomic aut
   derived.sequence                       offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(tag)
   derived.tag                            offset=AbsoluteStatic(0x09) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
-struct edges size=25 repr=ValueConverted atomic=NonAtomic
+struct edges size=27 repr=ValueConverted atomic=NonAtomic
   edges.trim                             offset=AbsoluteStatic(0x00) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   edges.scale                            offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   edges.offset                           offset=AbsoluteStatic(0x01) size=Fixed(12bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
@@ -92,6 +92,7 @@ struct edges size=25 repr=ValueConverted atomic=NonAtomic
   edges.deltas                           offset=AbsoluteStatic(0x0B) size=Fixed(8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   edges.sig                              offset=AbsoluteStatic(0x13) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   edges.<reserved0>                      offset=AbsoluteStatic(0x17) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  edges.kind                             offset=AbsoluteStatic(0x19) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
 struct equalized size=11 repr=ValueConverted atomic=NonAtomic
   equalized.which                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

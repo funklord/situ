@@ -71,6 +71,7 @@ const char *situ_err_str(situ_err_t err)
 	case SITU_ERR_STAGE:		return "stage gate not passed";
 	case SITU_ERR_STALE:		return "stale view";
 	case SITU_ERR_TRUNCATED:	return "incomplete: more bytes needed";
+	case SITU_ERR_CHECKSUM:		return "checksum mismatch";
 	}
 	return "unknown error";
 }

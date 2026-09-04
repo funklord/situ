@@ -189,11 +189,12 @@ class Image:
 	#: walker skips rather than a load that fails.
 	relations: list[Relation]		= field(default_factory=list)
 	strings: bytes				= b""
-	#: Row -> the bytes a `[must_eq]` on a byte run pins (0052). A
-	#: constraint's `value` is the row rather than the bytes, because
-	#: `image_constraint` carries an `i64` and a byte run packed into one
-	#: would have an endianness the literal does not.
-	pinned_runs: list[bytes]		= field(default_factory=list)
+	#: placement index -> the byte runs it may hold (0052). One for a
+	#: `[must_eq]` or a `preamble`, one per arm for a byte-run enum. Keyed
+	#: by placement rather than by row because the alternatives are a set:
+	#: the check is membership, and a constraint carries the count so a
+	#: walk that gathers a different number knows it misread the section.
+	pinned_runs: dict[int, list[bytes]]	= field(default_factory=dict)
 
 	#: placement index -> the bytes it ends at, from the delimiter table.
 	delimiters: dict[int, bytes]		= field(default_factory=dict)
@@ -339,9 +340,10 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if PINNED_RUNS in found:
 		at, records, stride = found[PINNED_RUNS]
 		for i in range(records):
-			_where, length = _struct.unpack_from("<IB", blob, at + i * stride)
+			where, length = _struct.unpack_from("<IB", blob, at + i * stride)
 			start = at + i * stride + 5
-			image.pinned_runs.append(blob[start:start + length])
+			image.pinned_runs.setdefault(where, []).append(
+				blob[start:start + length])
 
 	if DELIMITERS in found:
 		at, records, stride = found[DELIMITERS]

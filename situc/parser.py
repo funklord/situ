@@ -11,7 +11,7 @@ diagnostics are the product.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from collections.abc import Callable
 from typing import TypeVar
@@ -280,6 +280,7 @@ class Parser:
 		"""
 		namespaces.flatten(schema)
 		kernels.resolve_signatures(schema)
+		_widen_byte_enum_fields(schema)
 		wellformed.check(schema)
 		return schema
 
@@ -612,6 +613,33 @@ class Parser:
 				         "(project.md section 8.7)"],
 			)
 
+		# `enum format : u8[2] { bmp = "BM" }` -- a byte run rather than a
+		# scalar (0052). The brackets sit on the backing type because that
+		# is what they describe: how wide one value of this enum is.
+		width: int | None = None
+		if self.current.is_symbol("["):
+			span = self.current.span
+			self.advance()
+			size = self.parse_expr()
+			self.expect_symbol("]", "after the enum's element count")
+			if not isinstance(size, ast.IntLiteral) or size.value < 1:
+				raise error(
+					"an enum's element count is a positive literal",
+					span,
+					label = "expected a number here",
+					notes = ["the count fixes how wide one value of this "
+					         "enum is, so it cannot be computed"])
+			if backing.name != "u8":
+				raise error(
+					f"a byte-run enum is backed by `u8`, found "
+					f"`{backing.name}`",
+					backing.span,
+					label = "not `u8`",
+					notes = ["the arms are literals, and a literal has no "
+					         "byte order to give a wider element",
+					         "an enum over wider values needs no brackets"])
+			width = size.value
+
 		self.expect_symbol("{", "to open the enum body")
 
 		members: list[ast.EnumMember] = []
@@ -628,7 +656,7 @@ class Parser:
 
 		self.expect_symbol("}", "to close the enum body")
 		return ast.EnumDecl(self.span_from(start), name.text, backing,
-		                    tuple(members), default)
+		                    tuple(members), default, width)
 
 	def parse_enum_member(self) -> ast.EnumMember:
 		name = self.expect_ident("an enum member name")
@@ -1345,11 +1373,42 @@ class Parser:
 		# After `covers`, because it names bytes the algorithm reaches before
 		# this message's and reads as the same question continued (14.2a).
 		prefix = self.parse_prefix()
+		# And after `prefix`, because the codec runs over both: the prefix
+		# is bytes it reaches before this message's (0053).
+		codec  = self.parse_checksum_codec(start.text)
 		attrs  = self.parse_attrs()
 		self.expect_symbol(";", f"after the {start.text} declaration")
 
 		return ast.TagField(self.span_from(start), name, type_ref, array,
-		                    covers, kind, attrs, prefix)
+		                    covers, kind, attrs, prefix, codec)
+
+	def parse_checksum_codec(self, keyword: str) -> str | None:
+		"""`is crc32`, naming the codec that computes this checksum (0053).
+
+		Refused on a `tag` here rather than in `wellformed`, because the
+		word is only meaningful on the one construct: situ does not
+		implement AEAD, and 14.1 is right about that. What it does implement
+		is every `derived` codec, which is the case 14.1 was not written
+		about.
+		"""
+		if not (self.current.kind is TokenKind.IDENT
+				and self.current.text == "is"):
+			return None
+
+		span = self.advance().span
+		name = self.expect_ident("a codec name")
+		if keyword != "checksum":
+			raise error(
+				"a `tag` does not name the codec that computes it",
+				span,
+				label = "only a `checksum` may",
+				notes = ["situ does not implement authenticated encryption: "
+				         "constant-time behaviour and key handling are not a "
+				         "layout compiler's to own (section 14.1)",
+				         "a checksum over a `derived` codec is the other "
+				         "case -- no key, and situ already generates the "
+				         "algorithm from its kernel description"])
+		return name.text
 
 	def parse_prefix(self) -> str | None:
 		"""`prefix(udp_pseudo)`, or nothing.
@@ -2405,3 +2464,43 @@ def parse(source: Source) -> ast.Schema:
 
 def parse_text(text: str, path: str = "<input>") -> ast.Schema:
 	return parse(Source(path, text))
+
+
+def _widen_byte_enum_fields(schema: ast.Schema) -> None:
+	"""A field typed by a byte-run enum is the run it denotes (0052).
+
+	`enum format : u8[2]` says how wide one value is, so `format kind;` is
+	two bytes. Rewriting it here rather than teaching the solver is
+	deliberate: every downstream reader -- layout, the four backends, the
+	packer, the walkers -- already knows what `u8[2]` means, and the
+	alternative was a second way for a member to have a count that half of
+	them would have missed.
+
+	Runs after `namespaces.flatten`, so the enum names are the flat ones a
+	field's `type_ref` will actually carry.
+	"""
+	widths = {decl.name: decl.width for decl in schema.enums()
+	          if decl.width is not None}
+	if not widths:
+		return
+
+	def widen(members: tuple[ast.Member, ...]) -> tuple[ast.Member, ...]:
+		out: list[ast.Member] = []
+		for member in members:
+			held = getattr(member, "members", None)
+			if held is not None:
+				member = replace(member, members = widen(held))  # type: ignore[type-var]
+			if isinstance(member, ast.Field):
+				width = widths.get(member.type_ref.name)
+				if width is not None and member.array is None:
+					span = member.type_ref.span
+					member = replace(member, array = ast.ArraySpec(
+						span, ast.IntLiteral(span, width, str(width))))
+			out.append(member)
+		return tuple(out)
+
+	# `decls` is the mutable handle; a `StructDecl` is frozen, so the struct
+	# is replaced rather than edited.
+	for i, decl in enumerate(schema.decls):
+		if isinstance(decl, ast.StructDecl):
+			schema.decls[i] = replace(decl, members = widen(decl.members))

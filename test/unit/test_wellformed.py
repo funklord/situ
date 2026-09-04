@@ -1522,3 +1522,118 @@ def test_a_reserved_run_is_still_a_policy_not_a_value() -> None:
 	the spelling for stated content; `reserved` keeps its policies."""
 	assert "a `reserved` member states its content as a policy" in rendered(
 		"struct S { reserved u8[4] [must_eq = 3]; }")
+
+
+# -- a byte-run enum (0052) -------------------------------------------------
+
+
+def test_a_byte_run_enum_names_spans() -> None:
+	"""`enum format : u8[2] { bmp = "BM" }` -- the construct the copyright
+	holder asked for by name.
+
+	Not sugar for a `u16`: `"BM"` as one is 0x424D or 0x4D42 depending on
+	endianness, and an author writing a signature is not thinking about byte
+	order at all. A span has none, so the arm means the same under both --
+	which is why every format reference writes signatures as text.
+	"""
+	schema = parse_text('enum m : u8[2] { bmp = "BM", pe = "MZ" }\n'
+	                    "struct S { m t; }", path="s.situ")
+	enum = next(iter(schema.enums()))
+	assert enum.width == 2
+
+
+def test_a_byte_run_enum_field_is_the_run_it_denotes() -> None:
+	"""The field declares no array and is two bytes, because the enum says
+	how wide one of its values is."""
+	schema = parse_text('enum m : u8[2] { bmp = "BM" }\nstruct S { m t; }',
+	                    path="s.situ")
+	field = list(schema.structs())[0].members[0]
+	assert field.array is not None
+	assert field.array.size.value == 2
+
+
+def test_every_arm_is_as_wide_as_the_enum() -> None:
+	"""An enum whose arms differ in length is a grammar, not a value."""
+	assert "is 3 byte(s) of a 2-byte enum" in rendered(
+		'enum m : u8[2] { bmp = "BMP" }\nstruct S { m t; }')
+
+
+def test_a_byte_run_enum_is_backed_by_u8() -> None:
+	assert "a byte-run enum is backed by `u8`" in rendered(
+		'enum m : u16[2] { bmp = "BM" }\nstruct S { m t; }')
+
+
+def test_a_byte_run_enum_arm_is_a_literal() -> None:
+	assert "is not a byte string" in rendered(
+		'enum m : u8[2] { bmp = 7 }\nstruct S { m t; }')
+
+
+def test_an_ordinary_enum_still_refuses_a_string_arm() -> None:
+	"""The brackets are what makes the arms bytes, so without them a string
+	is still not an integer.
+
+	Refused when the values are folded rather than in the front end, which
+	is where it has always been -- the byte-run checks are earlier because
+	they are about a construct's own vocabulary, and this is about an
+	expression that does not evaluate.
+	"""
+	schema = parse_text('enum m : u16 { bmp = "BM" }\nstruct S { m t; }',
+	                    path="s.situ")
+	with pytest.raises(SituError) as caught:
+		solve(schema)
+	assert "a string is not an integer expression" in str(caught.value)
+
+
+# -- a checksum that computes itself (0053) ---------------------------------
+
+
+CODEC = """
+codec crc32 {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
+	                    xorout = 0xFFFFFFFF, reflect);
+}
+"""
+
+
+def checksum_schema(impl: str = "impl crc32 derived;",
+		clause: str = "is crc32", keyword: str = "checksum") -> str:
+	return (f"target file append;\nendian little;\n{CODEC}{impl}\n"
+	        f"struct S {{\n"
+	        f"\t{keyword} u8 crc[4] covers(body) {clause};\n"
+	        f"\tauthenticated body {{ u8 rest[remaining]; }}\n}}\n")
+
+
+def test_a_checksum_may_name_a_derived_codec() -> None:
+	"""respec's finding: `covers(R)` declares coverage and staleness and
+	never the arithmetic, so a truncated image read as fine."""
+	parse_text(checksum_schema(), path="s.situ")
+
+
+def test_a_tag_may_not_name_a_codec() -> None:
+	"""14.1 stands for tags: situ does not implement AEAD, and constant-time
+	behaviour and key handling are not a layout compiler's to own."""
+	assert "a `tag` does not name the codec that computes it" in rendered(
+		checksum_schema(keyword = "tag"))
+
+
+def test_the_codec_must_be_derived() -> None:
+	"""`derived` is the tier situ already generates, which is what makes
+	this a wiring change rather than a reversal of 14.1. An `extern` codec
+	is the caller's function."""
+	assert "is not a derived codec" in rendered(
+		checksum_schema(impl = 'impl crc32 extern "my_crc";'))
+
+
+def test_the_codec_must_have_an_implementation() -> None:
+	assert "has no implementation" in rendered(checksum_schema(impl = ""))
+
+
+def test_the_codec_must_exist() -> None:
+	assert "no codec named `crc99`" in rendered(
+		checksum_schema(clause = "is crc99"))
+
+
+def test_a_checksum_without_a_codec_is_unchanged() -> None:
+	"""The construct is opt-in: every checksum written before 0053 still
+	means what it meant, with the arithmetic in the caller."""
+	parse_text(checksum_schema(clause = ""), path="s.situ")

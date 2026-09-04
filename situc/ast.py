@@ -722,6 +722,14 @@ class TagField(Member):
 	#: already the caller's (14.1), so this widens *which bytes are covered*
 	#: and nothing else.
 	prefix: str | None		= None
+	#: `checksum u8 crc[4] covers(body) is crc32;` -- the codec that
+	#: computes this checksum, or None where the caller does (0053).
+	#:
+	#: A `tag` may not carry one: situ declines to implement AEAD, and 14.1
+	#: is right about that. A checksum over a `derived` codec is the case
+	#: 14.1 was not written about -- no key, no secret-dependent branch, and
+	#: situ already generates the algorithm from a kernel description.
+	codec: str | None		= None
 
 	@property
 	def infers_coverage(self) -> bool:
@@ -859,6 +867,16 @@ class EnumDecl(Decl):
 	backing: TypeRef
 	members: tuple[EnumMember, ...]
 	default: EnumDefault | None = None
+	#: `enum format : u8[2] { bmp = "BM" }` -- the element count where the
+	#: backing is a byte run rather than a scalar (0052). `None` is an
+	#: ordinary enum.
+	#:
+	#: Not sugar for a `u16`: `"BM"` as a `u16` is 0x424D or 0x4D42
+	#: depending on endianness, and an author writing a *signature* is not
+	#: thinking about byte order at all. A span has none, so the arm means
+	#: the same thing under both -- which is why every format reference
+	#: writes signatures as text.
+	width: int | None = None
 
 	@property
 	def effective_default(self) -> EnumDefault:

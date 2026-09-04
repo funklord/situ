@@ -1,6 +1,6 @@
 # 0052: a byte run as a value
 
-Status: accepted 2026-09-04; two of three constructs built
+Status: accepted 2026-09-04; built
 Date: 2026-09-04
 Phase: raised by the copyright holder, from three schemas in one week
 
@@ -182,4 +182,20 @@ longer run is disowned and answers `cannot-say`, never truncated: a
 truncated compare passes a prefix and reports a whole match, which is the
 failure this construct exists to make impossible.
 
-**`enum : u8[k]` is not built.**
+**`enum : u8[k]` is built.** The width sits on the backing type, because
+that is what it describes: how wide one value of this enum is. A field
+typed by one is normalised into the run it denotes right after parsing --
+every downstream reader already knows what `u8[2]` means, and teaching the
+solver a second way for a member to have a count is a way half of them
+would have missed.
+
+Membership is the pinned-run check asked of a set rather than a value, so
+it is one construct in the emitters and one section in the image: a
+`[must_eq]` or a `preamble` writes one alternative and an enum writes one
+per arm. `default = pass` says unknown values are accepted, so it carries
+no check at all.
+
+Each backend names the arms rather than enumerating them -- there is no
+integer to enumerate, and inventing one would give the arm the byte order
+the construct exists to avoid. C emits `situ_m_bmp[2]` and
+`situ_m_is_known`, and the others their own spelling of the same pair.

@@ -73,6 +73,10 @@ SUFFIXES = frozenset({
 	# and x_value_max class constants, so a schema field of either name would
 	# collide with them the same way x_len collides with a getter.
 	"value_min", "value_max",
+	# A checksum naming the codec that computes it makes x_compute and
+	# x_check (0053), so a schema field of either name would collide with
+	# them the same way.
+	"compute", "check",
 })
 
 

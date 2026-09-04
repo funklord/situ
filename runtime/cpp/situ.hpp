@@ -53,6 +53,7 @@ enum class err : int {
 	 * went outside the buffer -- a bug or an attack. Conflating them makes a
 	 * receiver treat normal progress as hostile. */
 	truncated  = SITU_ERR_TRUNCATED,
+	checksum   = SITU_ERR_CHECKSUM,
 };
 
 constexpr bool ok(err e) noexcept { return e == err::ok; }

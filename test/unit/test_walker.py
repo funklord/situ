@@ -1040,3 +1040,49 @@ def test_a_pinned_run_too_long_for_the_record_is_disowned() -> None:
 	          if image.struct_name(i) == "S")
 	view = acquire(image, ("B" * 40).encode("ascii"), si)
 	assert report.failed_check(image, view, si) == report.CANNOT_SAY
+
+
+def test_the_walk_checks_a_byte_run_enum() -> None:
+	"""Membership over a set of spans, agreed by the fifth description.
+
+	The same construct as a pinned run asked of a set rather than a value,
+	which is why the image carries one `image_pinned` row per arm keyed by
+	the placement rather than an index per member. The constraint carries
+	how many, so a walk that gathers a different number knows it misread the
+	section rather than reporting the message wrong.
+	"""
+	source   = ('enum m : u8[2] { bmp = "BM", pe = "MZ" }\n'
+	            "struct S { m t; u32 n; }")
+	parsed   = parse_text("target buffer;\nendian big;\n"
+	                      "bit_order msb_first;\n" + source)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	si = next(i for i in range(len(image.structs))
+	          if image.struct_name(i) == "S")
+
+	for arm in (b"BM", b"MZ"):
+		view = acquire(image, arm + b"\x00\x00\x00\x01", si)
+		assert report.failed_check(image, view, si) == report.CLEAN, arm
+
+	view = acquire(image, b"ZZ\x00\x00\x00\x01", si)
+	assert report.failed_check(image, view, si) == ("t", "must_eq")
+
+
+def test_a_pass_default_enum_carries_no_membership_check() -> None:
+	"""`default = pass` says unknown values are accepted, so there is
+	nothing to check -- and a check emitted anyway would refuse messages the
+	schema admits."""
+	source   = ('enum m : u8[2] { bmp = "BM", default = pass }\n'
+	            "struct S { m t; u32 n; }")
+	parsed   = parse_text("target buffer;\nendian big;\n"
+	                      "bit_order msb_first;\n" + source)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	si = next(i for i in range(len(image.structs))
+	          if image.struct_name(i) == "S")
+	view = acquire(image, b"ZZ\x00\x00\x00\x01", si)
+	assert report.failed_check(image, view, si) == report.CLEAN

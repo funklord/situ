@@ -63,6 +63,8 @@ def check(schema: ast.Schema) -> None:
 	check_attribute_places(schema)
 	check_attribute_values(schema)
 	check_byte_run_equality(schema)
+	check_byte_enums(schema)
+	check_checksum_codecs(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
 	check_nonce_references(schema)
@@ -1817,6 +1819,84 @@ def _is_byte_run_equality(member: ast.Member, attr: ast.Attr) -> bool:
 		return False
 	type_ref = getattr(member, "type_ref", None)
 	return getattr(type_ref, "name", None) == "u8"
+
+
+def check_checksum_codecs(schema: ast.Schema) -> None:
+	"""A checksum may name a codec, and only a `derived` one (0053).
+
+	`derived` is the tier situ already generates from a kernel description,
+	so binding one adds no implementation situ did not have -- which is what
+	makes this a wiring change rather than a reversal of 14.1. An `extern`
+	codec is the caller's function, and a checksum naming one would be
+	asking situ to call something it cannot see.
+	"""
+	kinds = {impl.codec: impl.kind for impl in schema.impls()}
+	known = {decl.name for decl in schema.codecs()}
+
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			if not isinstance(member, ast.TagField) or member.codec is None:
+				continue
+
+			if member.codec not in known:
+				raise error(
+					f"no codec named `{member.codec}`",
+					member.span,
+					label = "not a codec this schema declares",
+					notes = ["a checksum's codec is one the schema declares, "
+					         "so that its kernel is visible here"])
+
+			kind = kinds.get(member.codec)
+			if kind is None:
+				raise error(
+					f"`{member.codec}` has no implementation",
+					member.span,
+					label = "declared, but never implemented",
+					notes = [f"add `impl {member.codec} derived;` where its "
+					         f"kernel description is enough to generate it"])
+
+			if kind is not ast.ImplKind.DERIVED:
+				raise error(
+					f"`{member.codec}` is not a derived codec",
+					member.span,
+					label = "an `extern` implementation is the caller's",
+					notes = ["a checksum situ computes has to be one situ "
+					         "generates, which is what `derived` means",
+					         "leave the codec off and compute it in the "
+					         "caller, as every checksum did before 0053"])
+
+
+def check_byte_enums(schema: ast.Schema) -> None:
+	"""A byte-run enum's arms are literals, all of its declared width (0052).
+
+	In the front end rather than where the values are folded, so that the
+	author hears it as a schema error like every other vocabulary mistake
+	instead of from inside the solver.
+	"""
+	for decl in schema.enums():
+		if decl.width is None:
+			continue
+		for member in decl.members:
+			if not isinstance(member.value, ast.StringLiteral):
+				raise error(
+					f"`{member.name}` is not a byte string",
+					member.value.span,
+					label = "expected a literal here",
+					notes = ["a byte-run enum names spans of bytes, so every "
+					         "arm is written out as one"])
+
+			held = member.value.value.encode("utf-8")
+			if len(held) != decl.width:
+				raise error(
+					f"`{member.name}` is {len(held)} byte(s) of a "
+					f"{decl.width}-byte enum",
+					member.value.span,
+					label = f"{len(held)} byte(s) here",
+					notes = [f"every arm of `{decl.name}` is {decl.width} "
+					         f"bytes, because that is how wide one value of "
+					         f"it is",
+					         "an enum whose arms differ in length is a "
+					         "grammar, not a value"])
 
 
 def check_byte_run_equality(schema: ast.Schema) -> None:

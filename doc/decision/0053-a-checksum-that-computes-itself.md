@@ -1,6 +1,6 @@
 # 0053: a checksum that computes itself
 
-Status: proposed
+Status: accepted 2026-09-04; built for C and C++
 Date: 2026-09-04
 Phase: raised by respec, from a reader whose image validated and was corrupt
 
@@ -133,7 +133,20 @@ existing rule about the error enum.
 **It does not change what `tag` does**, so nothing in the keystore or dtls
 examples moves. The tamper harness and the sealed gate are untouched.
 
-**Nothing here is built.** The corpus has no schema exercising a bound
-checksum, and by 26.234's argument that is part of the work rather than a
-follow-up: a construct added without a corpus schema that uses it is a
-construct the differential cannot pose a case for.
+**Built for C and C++, and refused by Rust and Python.** That split is not
+a staging decision: `situc gen-derived` emits C, so C has the
+implementation and C++ calls it across the linkage it already has. Rust and
+Python have no derived codec at all, so a binding there would generate a
+call to a function no file in their language defines -- which generates
+cleanly, reads correctly, and fails at the first call. They refuse, per
+17.0.
+
+**So this construct is deliberately not in the corpus**, and that is a
+departure from 26.234 with a reason: the four-way differential builds every
+corpus schema in every backend, and two of them refuse this one by design.
+It is tested directly in the two backends that implement it instead --
+against a real CRC, with the value checked against an independent
+`situ_crc32` call, the comparison watched refusing a zeroed sum, accepting
+a correctly stored one, and refusing again after one covered byte is
+flipped. What would put it in the corpus is a Rust or Python
+`gen-derived`.
