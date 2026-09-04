@@ -1857,6 +1857,20 @@ class Solver:
 		for attr in attrs:
 			if attr.value is None:
 				continue
+			# A value that is not a compile-time constant narrows nothing and
+			# is somebody else's to refuse -- `[max = n]` naming a sibling is
+			# read by the bound machinery, not here. **A string is different:
+			# no reading of it is an integer**, so swallowing it let
+			# `situc map` exit 0 on a schema `situc build` exits 1 on, and
+			# the map is the artefact `--check` diffs in review (26.233).
+			if isinstance(attr.value, ast.StringLiteral):
+				raise error(
+					f"`[{attr.name}]` compares a value, and this is text",
+					attr.value.span,
+					label = "expected a number here",
+					notes = ["a byte string has no single value to compare "
+					         "against -- for a magic or a signature the "
+					         "bytes are the member, not a bound on it"])
 			try:
 				value = evaluate(attr.value, env)
 			except SituError:

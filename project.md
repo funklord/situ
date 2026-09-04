@@ -20156,6 +20156,39 @@ evaluation order is unspecified, so `which` was read before the call that
 set it. The generated C was right and the test of it was not -- the third
 time this session a defect read off an artefact dissolved on execution.
 
+### 26.233 Two bounds accepted where the answer was a refusal
+
+A schema pasted from outside found both of these in one reading, which is
+the argument for reading schemas nobody here wrote.
+
+**`reserved [must_eq = 3]` compiled to the opposite of what it said.** A
+`reserved` member states its content as a policy -- `[must_be_zero]`,
+`[must_be_one]`, `[preserve]`, `[unknown]` -- and a value bound is a
+different vocabulary pointed at the same field. It was accepted, and what
+came out was `!= 0` under a comment reading `[must_be_zero]`: the default
+policy, enforcing zero, on a member whose author had written 3. That is
+14.5's failure exactly, with the schema and the generated comment agreeing
+with each other and both disagreeing with the code. `wellformed` now names
+the four policies in the refusal, because the author who wrote `must_eq`
+wanted one of them and the message should say which words exist.
+
+**`map` exited 0 where `build` exited 1.** `u16 [must_eq = "BM"]` -- a
+number bound holding text -- was refused by the codegen path and passed by
+the mapping one, because `layout.constrain` wraps its work in
+`except SituError: continue`. That is a swallow that turns a diagnostic
+into silence, and the two commands are supposed to be one front end
+disagreeing about nothing. The refusal is now raised before the swallow can
+reach it, and the note says what the author probably meant: for a magic the
+bytes *are* the member, not a bound on it.
+
+**Both were found by a schema that had never been run here, and neither by
+the corpus.** 26.219's shape again -- the corpus cannot pose a case its
+authors did not think to write, and every schema in it was written by
+someone who already knew which spellings work. A `reserved` with a value
+bound is not a thing you write once you know `reserved` takes policies. The
+gate over the case nobody posed reports success exactly as loudly as a real
+pass.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -909,6 +909,34 @@ def test_must_be_zero_is_placed_on_reserved_members() -> None:
 	           path="s.situ")
 
 
+def test_a_value_bound_on_a_reserved_member_is_refused() -> None:
+	"""The other direction of the test above, and it was a silent lie.
+
+	`must_be_zero` on an ordinary field promised a check nothing made, and
+	0041 placed it for that. The mirror was worse and nothing caught it:
+	`reserved u16 [must_eq = 0x4D42]` was accepted, and `_reserved_policy`
+	reads only `must_be_zero`, `must_be_one`, `preserve` and `unknown` --
+	defaulting to the first. So the generated C compared the bytes against
+	**zero**, under a comment reading `[must_be_zero]`. Not the constraint
+	ignored but its opposite enforced, and unreadable from the emitted
+	source too (26.233).
+
+	A reserved member states its content as a policy; `[must_eq]` is the
+	spelling for an ordinary field. Both halves are asserted so the pair
+	cannot drift into agreeing.
+	"""
+	for attr in ("must_eq = 0x4D42", "min = 1", "max = 9"):
+		text = rendered(BUFFER + f"struct b {{ reserved u16 [{attr}]; }}\n")
+		assert "means nothing here" in text, attr
+		assert "states its content as a policy" in text, attr
+
+	# The policies themselves stay legal, and so does a bound on a field.
+	parse_text(BUFFER + "struct b { reserved u16 [must_be_zero]; u8 a; }\n",
+	           path="s.situ")
+	parse_text(BUFFER + "struct b { u16 x [must_eq = 5]; u8 a; }\n",
+	           path="s.situ")
+
+
 def test_the_four_held_attributes_are_placed() -> None:
 	"""0041's other three, each refused where every backend ignores it and
 	accepted where its consumer reads it. The unplaced set closes at the two

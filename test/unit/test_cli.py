@@ -828,6 +828,42 @@ relation answers(query: msg, reply: msg) {
 """
 
 
+def test_map_and_build_agree_about_a_schema_being_valid(tmp_path: Path) -> None:
+	"""They did not, and the map is the artefact review reads.
+
+	`u16 signature [must_eq = "BM"]` exited 0 from `situc map` and 1 from
+	`situc build`. `layout.constrain` evaluates an attribute's value and
+	swallows `SituError` -- right for a value that is not a compile-time
+	constant, since `[max = n]` naming a sibling is read elsewhere, and
+	wrong for a string, of which no reading is an integer. So the map was
+	produced with the constraint silently dropped, and `situc map --check`
+	would have passed a schema that cannot be built (26.233).
+
+	Asserted as *agreement* rather than as one refusal, because either
+	command alone can be right while the pair is not -- which is the state
+	this was in.
+	"""
+	schema = tmp_path / "m.situ"
+	schema.write_text(
+		"target buffer;\nendian little;\nbit_order msb_first;\n\n"
+		'struct h { u16 signature [must_eq = "BM"]; u8 rest[2]; }\n',
+		encoding="ascii")
+
+	assert main(["map", str(schema)]) != 0
+	assert main(["build", str(schema), "--target", "c",
+	             "--out", str(tmp_path / "out")]) != 0
+
+	# And a number is accepted by both, so the refusal is about the text.
+	schema.write_text(
+		"target buffer;\nendian little;\nbit_order msb_first;\n\n"
+		"struct h { u16 signature [must_eq = 0x4D42]; u8 rest[2]; }\n",
+		encoding="ascii")
+
+	assert main(["map", str(schema)]) == 0
+	assert main(["build", str(schema), "--target", "c",
+	             "--out", str(tmp_path / "out")]) == 0
+
+
 #: A schema whose codec expands without a bound, which is 0031's case E: the
 #: measure pass *is* the work, so rung 1 has nowhere to put the output.
 #:

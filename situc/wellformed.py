@@ -1556,6 +1556,21 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 	# delimited run's size cap is `until ... max N`, which is syntax rather
 	# than this attribute -- both measured inert.
 	if attr.name in ("min", "max", "must_eq"):
+		# A `reserved` member states its content as a *policy*, and the
+		# emitters read only that: `_reserved_policy` looks for
+		# `must_be_zero`, `must_be_one`, `preserve` or `unknown` and defaults
+		# to the first. So `reserved u16 [must_eq = 0x4D42]` was accepted and
+		# compiled to `!= 0` -- not the constraint ignored but its opposite
+		# enforced, under a comment reading `[must_be_zero]`. The rule this
+		# file exists for, failing in the worst direction (26.233).
+		#
+		# `must_be_zero`'s own message says which way the two spellings go:
+		# a policy on a reserved, `[must_eq]` on an ordinary field.
+		if isinstance(member, ast.Reserved):
+			return ("an ordinary field -- a `reserved` member states its "
+			        "content as a policy, one of `[must_be_zero]`, "
+			        "`[must_be_one]`, `[preserve]` or `[unknown]`")
+
 		# A *text number* is the exception, and it is the whole reason this
 		# rule cannot key on the brackets alone: `decimal u32 magic[6]` is a
 		# six-character number with one value, not six numbers, so the
