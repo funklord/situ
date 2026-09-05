@@ -21346,6 +21346,75 @@ initialised and reported `which=0`, which is `MAGIC` -- a wrong member, in
 a finding about reporting the wrong member. A second program with a
 distinctive sentinel, reading after the call, gave the real answer.
 
+### 26.259 One schema, one language building it and three raising
+
+`u8 head[2]` after any variable-length member. `situc wire` accepts it and
+records it in the contract, C emits a correct `situ_v_head_offset(view)`
+-- and C++, Python and Rust each die with
+
+    AssertionError: offset is dynamic
+
+from `Placement.offset_bytes`, which asserts rather than refusing. It is
+respec's class again at a fourth site: the front end accepts a construct
+a backend cannot build, and the failure is a traceback where every other
+refusal situ gives is a diagnostic.
+
+**The machinery was already there and this one branch did not use it.** A
+*scalar* after a variable-length member works in all four -- C++ writes
+`v.tail at Dynamic` and folds the offset with `situ_advance_u32` -- and
+`_offset_expression` is the helper that produces it, asked from about ten
+places in each backend. The byte-array branch read the raw property
+instead. So this was never a missing capability, only a call site that
+did not ask.
+
+**What made it invisible is the corpus, again.** No schema in `example/`,
+`test/schema/` or `std/` places a byte array after a variable-length
+member, so all four backends compiled every schema in the tree and three
+of them could not compile a four-line one. `edges.situ` has
+`placed_run` now, whose `tag` sits after the array precisely so that a
+backend getting the array's offset wrong misplaces something a test
+reads.
+
+**And the fix was narrowed after measuring it.** The first version bound
+a local `at` in Rust for every byte array, which rewrote fifteen schemas'
+generated Rust to say what it already said. The static case keeps its
+literal arithmetic, so the corpus output is byte-identical to HEAD in all
+three backends and the diff is confined to the shape that used to crash.
+Checked by generating the whole corpus from a worktree at HEAD and
+comparing: 15 files differed before narrowing, 0 after.
+
+The same sweep found eleven more of the class, recorded separately: the
+headline is that `offset_bytes` asserting is one root, and every member
+kind whose emitter reaches it behind a variable-length member inherits
+it.
+
+**And putting it in the corpus caught two more, in this very fix, before
+the suite finished.** `placed_run` reached the four-way differential and
+it failed twice:
+
+    19-byte buffer, n=32, so `label[2]` resolves to offset 33
+      c, rust, python   label len=0 first=-1
+      cpp               label len=2 first=0
+
+C++ was handing back two bytes from the BASE of the frame because the
+real ones were not there, which is 26.27's fault exactly and worse than
+refusing. Then, one run later:
+
+    51-byte buffer, n=49, so `label[2]` starts at 50 with one byte left
+      c, cpp, rust      label len=0 first=-1
+      python            label len=1 first=68
+
+A Python slice past the end truncates rather than refusing, so a short
+answer looked like a real one. Both use their own backend's existing
+idiom now -- `situ_in_bounds(...) ? ... : bytes()` and
+`if not (self._len - offset >= N)` -- applied to the dynamic case only.
+
+**That is the argument for adding the construct rather than writing a
+test.** A test written here would have asserted what its author believed
+about a fix he had just written. The differential asked four
+implementations the same question over pseudo-random buffers and found
+where they parted, twice, in the half-hour after the construct arrived.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

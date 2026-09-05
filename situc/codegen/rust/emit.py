@@ -2487,19 +2487,39 @@ class Emitter:
 			if scalar is None or scalar.bits != BITS_PER_BYTE:
 				return self._struct_array(struct, placement)
 			count = placement.array_count or 0
-			start = placement.offset_bytes
+			# `_offset_expression`, not `offset_bytes`, which asserts on a
+			# member the message places -- so `u8 head[2]` after any
+			# variable-length member raised `offset is dynamic` rather than
+			# building, a shape C has always handled. The bound is bound to a
+			# local because the end is `at + count` in Rust once `at` stops
+			# being a literal this backend can add to in Python.
+			start = self._offset_expression(struct, placement)
+			if start is None:
+				return ["", f"\t// {placement.path}: its offset is a sum this"
+				        " backend cannot render."]
+			# A static offset keeps the literal arithmetic it always had, so
+			# this fix shows up only where the shape was refused before: a
+			# local for every array would have rewritten fifteen schemas'
+			# Rust to say the same thing.
+			if placement.offset_bits is not None:
+				at, bind = str(placement.offset_bytes), []
+				end = str(placement.offset_bytes + count)
+			else:
+				at, bind = "at", [f"\t\tlet at = {start};"]
+				end = f"at + {count}"
 			lines = [
 				"",
 				f"\t/// {placement.path}: {count} bytes. A slice, so the length",
 				"\t/// travels with the pointer and cannot be lost.",
 				f"\tpub fn {name}(&self) -> &[u8] {{",
+				*bind,
 				# Empty where they are not all here, for the reason the text
 				# digits above give: a struct built over what is left of a
 				# short message has no acquiring check behind it.
-				f"\t\tif self.bytes.len() < {start + count} {{",
+				f"\t\tif self.bytes.len() < {end} {{",
 				"\t\t\treturn &[];",
 				"\t\t}",
-				f"\t\t&self.bytes[{start}..{start + count}]",
+				f"\t\t&self.bytes[{at}..{end}]",
 				"\t}",
 			]
 			if any(attr.name == "nul_terminated" for attr in placement.attrs):

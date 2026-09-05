@@ -277,6 +277,22 @@ struct beats {
 // one element is exactly what eats them, so a run that stops in the wrong
 // place shows up as their values moving rather than as a count nobody reads.
 // `remaining > 4` leaves precisely the four bytes they occupy.
+// A fixed-size byte array placed after a variable-length member. Ordinary
+// enough that no worked example happens to have it, which is exactly why it
+// is here: C emitted a correct offset function for it from the start, and
+// C++, Python and Rust each read `Placement.offset_bytes` -- which asserts
+// on a member the message places -- and died with `offset is dynamic`. One
+// schema, building in one language and raising a traceback in three.
+//
+// `tag` is the assertion: it sits after the run, so a backend that gets
+// `label`'s dynamic offset wrong misplaces it too.
+struct placed_run {
+	u8   n;
+	u8   body[n];
+	u8   label[2];
+	u16  tag;
+}
+
 struct hop {
 	u8  kind;
 	u8  value;

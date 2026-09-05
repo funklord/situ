@@ -3055,11 +3055,37 @@ class Emitter:
 				f" + index * {nested}.SIZE_BYTES, {nested}.SIZE_BYTES)",
 			]
 
+		# `_offset_expression`, not `offset_bytes`, which asserts on a member
+		# the message places. Every other accessor asks it; this branch read
+		# the property, so `u8 head[2]` after any variable-length member
+		# raised `offset is dynamic` rather than building -- a shape C has
+		# always handled and no corpus schema happens to carry.
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t# {placement.path}: its offset is a sum this"
+			        " backend cannot render."]
+
+		# A static offset sits inside the minimum the view already checked.
+		# A dynamic one is a sum the message chose, and a Python slice past
+		# the end TRUNCATES rather than refusing -- so a `label[2]` starting
+		# one byte from the end came back as one byte, where C, C++ and Rust
+		# all answer empty. The differential caught it on a 51-byte buffer
+		# the same run it caught C++ handing back the frame's base. Same
+		# guard the scalar path uses, and the same reason.
+		guard = ([] if placement.offset_bits is not None else [
+			f"\t\tif not (self._len - ({start}) >= {count}):",
+			"\t\t\t# Its offset is a sum of lengths the message chose, and",
+			"\t\t\t# the frame does not reach it. `validate` reports such a",
+			"\t\t\t# message; a short slice would be a quiet wrong answer.",
+			"\t\t\treturn self._msg.buffer[0:0]",
+		])
+
 		lines = [
 			"", "\t@property", f"\tdef {name}(self) -> memoryview:",
 			f'\t\t"""{placement.path}: {count} bytes, zero copy and writable."""',
 			"\t\tself._check()",
-			f"\t\tstart = self._at + {placement.offset_bytes}",
+			*guard,
+			f"\t\tstart = self._at + {start}",
 			f"\t\treturn self._msg.buffer[start:start + {count}]",
 		]
 

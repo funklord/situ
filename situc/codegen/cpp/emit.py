@@ -5504,14 +5504,39 @@ class Emitter:
 			return ["", f"\t/* {placement.path}: element type"
 			        f" {placement.type_name} is not in the static subset yet. */"]
 
+		# `_offset_expression` rather than `offset_bytes`, which asserts on a
+		# member the message places. Every other accessor here already asks
+		# it; this branch read the raw property, so `u8 head[2]` after any
+		# variable-length member -- an ordinary shape no corpus schema
+		# happens to have -- crashed with `offset is dynamic` instead of
+		# building. C had the guard already, so one schema built in one
+		# language and raised a traceback in three.
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t/* {placement.path}: its offset is a sum this"
+			        " backend cannot render. */"]
+
+		# A static offset is inside `SIZE_MIN`, which the view already
+		# checked, so it keeps the unguarded span it always had. A dynamic
+		# one is a sum the message chose and can land anywhere: the four-way
+		# differential caught this within a run of adding it, C++ answering
+		# `len=2 first=0` for a `label[2]` placed at 33 in a 19-byte frame
+		# while C, Rust and Python all said empty. Handing a caller bytes
+		# from the base of the frame because the real ones are not there is
+		# 26.27's fault exactly, and worse than refusing.
+		body = (f"::situ::rt::bytes(raw_.base + {start}, {count})"
+		        if placement.offset_bits is not None else
+		        f"situ_in_bounds(raw(), {start}, {count}u)"
+		        f" ? ::situ::rt::bytes(raw_.base + {start}, {count})"
+		        f" : ::situ::rt::bytes()")
+
 		lines = [
 			"",
 			f"\t/* {placement.path}: {count} bytes, MemoryIdentical, so the",
 			"\t * pointer and the length travel together. */",
 			f"\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t{",
-			f"\t\treturn ::situ::rt::bytes(raw_.base + {placement.offset_bytes},"
-			f" {count});",
+			f"\t\treturn {body};",
 			"\t}",
 		]
 
@@ -5521,7 +5546,7 @@ class Emitter:
 				f"\t/* Content length: to the first zero byte, or {count}. */",
 				f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
 				"\t{",
-				f"\t\treturn situ_nul_len(raw_.base + {placement.offset_bytes},"
+				f"\t\treturn situ_nul_len(raw_.base + {start},"
 				f" {count});",
 				"\t}",
 			])

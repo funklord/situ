@@ -207,6 +207,12 @@ struct placed size=7
   @0x0002   4         u32        second  big
   @0x0006   1         u8         after
 
+struct placed_run size=5..260
+  @0x0000   1         u8         n
+  @0x0001   0..255    u8         body  sized-by=n
+  ~         2         u8         label  big
+  ~         2         u16        tag  big
+
 struct quoted_row size=1..
   @0x0000   until:2c  u8         field  quote=0x22
   ~         0..       u8         rest  sized-by=remaining
