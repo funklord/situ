@@ -834,19 +834,37 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 
 	Four branches declined a member by returning a comment and leaving `at`
 	where it was, and the walk carried on placing every member after it at a
-	cursor that was now wrong. `beats` is `beat pulse[] while (kind == 0x33)
-	max 6; u16 after;` -- the run is declined, and `after` was then shown at
-	offset 0 on every packet, where C walks the run first and the walker
-	reads it at 2.
+	cursor that was now wrong. `segments` is `segment parts[count]; u16
+	after;` over an element of no fixed size, and `coded_run`'s body has a
+	length this cannot render: both still decline, and nothing after them is
+	placed.
+
+	`beats` was the third and is now the control, which is the half worth
+	keeping. `beat pulse[] while (kind == 0x33) max 6; u16 after;` was
+	declined because `traverse.extent_parts` answers None for a fixed struct
+	-- there being nothing to compute -- and the dissector read that as
+	nothing computable, so a run of two-byte elements dissected as `elements
+	of no size this dissector can compute`, which was false. A fixed element
+	is walked with a constant stride now.
+
+	Both halves are asserted because either alone admits the other's bug: an
+	abstention test passes when everything abstains, and a placement test
+	passes when nothing does. Two states, one piece of evidence, told apart
+	(invariant 154).
 	"""
 	source, resolved, _ = analyse(ROOT / "test" / "schema" / "edges.situ")
 	lua = generate(parse(source), resolved, "edges")
 
-	assert "beats.after: not shown" in lua
+	assert "segments.after: not shown" in lua
 	assert "coded_run.trailer: not shown" in lua
 
-	body = lua[lua.index("function beats.dissector"):]
-	assert "subtree:add(beats_f.after" not in body[:body.index("\nend")]
+	body = lua[lua.index("function segments.dissector"):]
+	assert "subtree:add(segments_f.after" not in body[:body.index("\nend")]
+
+	beats = lua[lua.index("function beats.dissector"):]
+	beats = beats[:beats.index("\nend")]
+	assert "local size = 2" in beats, "a fixed element walks by its constant"
+	assert "subtree:add(beats_f.after" in beats
 
 
 @pytest.mark.skipif(LUA is None, reason="no Lua")

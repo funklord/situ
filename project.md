@@ -21193,6 +21193,112 @@ it wanted -- generated output before and after one file's change -- is had
 by copying the package aside and reverting one file in the copy, which is
 what it did for every comparison after the first.
 
+### 26.254 One construct, six descriptions, and five of them wrong
+
+`chunk chunks[] while (remaining > 8)` is the shape a stream with no count
+and no sentinel has to use, and 26.253 fixed it in the four compiled
+backends. It was wrong in the other two, and wrong differently in each.
+
+**The dissector abstained, and its reason was false.** It printed
+`elements of no size this dissector can compute` for an element that is
+eight bytes. `traverse.extent_parts` returns None for two unrelated
+reasons -- a FIXED struct, because there is nothing to compute, and an
+unmeasurable one, because there is nothing to compute it from -- and the
+consumer read the first as the second. Invariant 154's case exactly: two
+states, one piece of evidence. The four compiled backends had the fixed
+arm already, C walking the same run with `SITU_CHUNK_SIZE_FIXED`, so this
+was the fifth description missing a decision the other four shared.
+
+**Then it abstained again, for the condition.** With the stride fixed the
+run still declined, because the dissector's `_over_fields` never gained
+the `extra` name table 26.253 gave the other four, so `remaining`
+resolved nowhere and the whole condition was refused. A gap in one
+description is invisible to a differential that compares only what both
+sides speak about.
+
+**And it blamed the size for it.** Those two refusals shared one message,
+so a condition situ cannot render reported an element whose size is a
+constant. A specific wrong cause sends the next person somewhere, which
+is worse than a vague one; they are separate messages now.
+
+**Both walkers took one element too many.** `_evaluate(sub,
+placement.repeat_code)` measured `remaining` from the element's START
+rather than from past it -- the only `_evaluate` in `walk.py` that did not
+say where `remaining` begins. A `while` is a post-condition, so the cursor
+has already passed the element the condition asks about. On a 40-byte
+frame it took four eight-byte elements where the other five take three,
+**swallowing the two members after the run**: `crc` and `marker` were
+absent from the report and the message was called malformed. The C walker
+had it too, passing `left` -- which correctly frames the element -- as
+`remaining` as well.
+
+**None of this was caught because nothing used it.** Six `while` runs
+exist in the corpus and every condition read a plain field of the element
+(`nla_len >= 4`, `kind == 0x11`, `separator == 0x2D`). The construct
+reached the wire contract and no test. So `edges.situ` gains `hops`, whose
+`trail` and `mark` are the assertion rather than decoration: an overrun by
+one element is exactly what eats them. `structs_of` gives every acquirable
+struct a section, so the four-way differential now probes `step count`,
+`trail` and `mark` on 48 buffers, and
+`test_the_walker_agrees_with_the_compiled_backends` compares the walker to
+C line by line. Sabotaged back to the pre-advance read, that test fails;
+with the fix it passes.
+
+**The probe that proves it has to be `remaining > 8`, not `> 0`.** Three
+chunks under `> 0` gives three either way, the walk's own bound stopping
+it regardless. This is 26.253's lesson arriving a second time, and it cost
+seven minutes here: the first fixture used `remaining`, which the
+dissector was refusing for the *condition*, so it could not tell a fixed
+element from a variable one in that backend at all. `while (length > 0)`
+on the same pair discriminates.
+
+### 26.255 A byte has no byte order
+
+`_host_order` answered `placement.endian is NATIVE` and nothing else, so
+netlink's `ifa_family`, `ifa_prefixlen`, `ifa_flags` and `ifa_scope` -- four
+`u8` fields -- were drawn as opaque `ProtoField.bytes` under "the capture
+does not record which machine wrote these". One byte reads the same on
+every machine there has ever been.
+
+`endian native` is a fact about a MULTI-byte number. The width is not the
+whole test either: a byte-wide field straddling two bytes does draw from
+two, so the guard asks whether the field lies entirely inside one byte.
+Measured across every schema in the corpus, exactly one dissector changes.
+
+### 26.256 A run that is not unrolled does not move the cursor
+
+`_uncomputable` exists because four branches declined a member by
+returning a comment and leaving `at` where it was, so everything after was
+placed with confidence at a wrong offset. The delimited-run-of-records
+branch was still doing it: it says honestly that it does not walk the run,
+and then let the walk continue.
+
+`edges.kv_block` is the one instance in the corpus, and it is the bad kind.
+`payload` was emitted as `subtree:add(kv_block_f.payload, tvb(at))` with
+`at` still 0 -- the whole frame, INCLUDING the `entries` run it follows,
+shown as the payload field. A wrong line is worse than a missing one, and
+this file says so three hundred lines above the branch that did it.
+
+### 26.257 The traceback respec reported, still available under another name
+
+26.253 resolved `remaining` and called the second fault the worse one:
+`UnknownName` is meant to be caught by a caller that then declines the
+member, "and on the `repeat_while` path nobody catches it." That half was
+not fixed, only the one name that had been reported.
+
+`situc wire` accepts `while (chunk.length > 0)` and records it in the
+contract; `situc build` dies with `situc.names.UnknownName: 'chunk.length'`
+for every backend -- a traceback where every other refusal situ gives is a
+diagnostic, which is respec's complaint verbatim.
+
+`_check_one_repeat` validates `path.rpartition(".")[2]`, the LAST component
+only, so a qualified path whose tail happens to be a real field of the
+element passes. A fully bogus name (`foo.bar`) is refused properly, and so
+is a genuinely nested one (`h.len`) -- dotted paths are not supported in a
+condition at all. **So the spellings that got past the check were exactly
+the spellings that crashed.** Six while-runs in the corpus, none dotted, so
+refusing them costs nothing.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

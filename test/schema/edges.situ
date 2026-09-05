@@ -260,6 +260,34 @@ struct beats {
 	u16   after;
 }
 
+// The same run asking `remaining` rather than a field of the element. A
+// stream with no count and no sentinel has nothing else to stop on, and a
+// `while` is a post-condition, so `remaining` is the bytes after the element
+// just read -- which is exactly "is there another one".
+//
+// Here because six descriptions disagreed about it and no schema in the tree
+// used it, so nothing disagreed out loud. The four compiled backends raised
+// `UnknownName` and had to be told by a report from outside the repository;
+// the dissector answered `elements of no size this dissector can compute`,
+// which was false, `hop` being two bytes; and both walkers measured
+// `remaining` from the element's start rather than past it, taking one
+// element more than everyone else.
+//
+// `trail` and `mark` are the assertion rather than decoration: an overrun by
+// one element is exactly what eats them, so a run that stops in the wrong
+// place shows up as their values moving rather than as a count nobody reads.
+// `remaining > 4` leaves precisely the four bytes they occupy.
+struct hop {
+	u8  kind;
+	u8  value;
+}
+
+struct hops {
+	hop  step[] while (remaining > 4);
+	u16  trail;
+	u16  mark;
+}
+
 // A *counted* run of variable-length elements: the count says how many, and
 // each element says how long it is. There is no stride to multiply and no
 // span function, so the run is walked and nothing here returns the total --

@@ -956,7 +956,16 @@ def _while_walk(view: View, index: int) -> tuple[int, int]:
 			break
 		count += 1
 		at    += extent
-		if not _evaluate(sub, placement.repeat_code):
+		# From past the element, not from its start. A `while` is a
+		# post-condition -- it asks about the element just read -- so
+		# `remaining` is what is left after it, which is what the four
+		# compiled backends and the dissector all measure. Evaluated on
+		# `sub`, whose base is the element, that is `extent` bytes along:
+		# without it a run over a 40-byte frame took four 8-byte elements
+		# where every other description takes three, swallowing the two
+		# members after the run. The only `_evaluate` here that did not
+		# say where `remaining` starts.
+		if not _evaluate(sub, placement.repeat_code, extent):
 			break
 	return count, at - start
 

@@ -502,6 +502,28 @@ def _check_one_repeat(struct: ast.StructDecl, member: ast.Field | ast.Reserved,
 		)
 
 	for path in paths_in(repeat.predicate):
+		# Before the check below, which reads only the last component: a
+		# qualified path whose tail happens to be a field of the element
+		# passed here and then reached a backend that cannot rewrite it,
+		# raising `UnknownName` as a traceback -- the very complaint that
+		# brought `remaining` here (26.253), still available under any
+		# other spelling. A dotted path is not supported in a condition at
+		# all, so the ones that got this far were exactly the ones that
+		# crashed.
+		if "." in path:
+			raise error(
+				f"`{path}` is a qualified name, and a run condition names "
+				f"the element's own fields",
+				repeat.span,
+				label = "not a field of the element",
+				notes = [
+					f"the condition is evaluated against one `"
+					f"{member.type_ref.name}`, so its fields are named "
+					f"without a qualifier: `{path.rpartition('.')[2]}`",
+					"a field of a nested struct is not reachable from a "
+					"condition, whatever it is called",
+				],
+			)
 		field = path.rpartition(".")[2]
 		found = _find_member(element, field)
 		if found is not None and (

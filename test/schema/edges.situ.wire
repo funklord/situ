@@ -128,6 +128,15 @@ struct framed_tail size=6..10
   ~         3         beacon     head  big
   ~         2         u16        tail  big
 
+struct hop size=2
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         value
+
+struct hops size=6..
+  @0x0000   2..       hop        step  big while=remaining>4
+  ~         2         u16        trail  big
+  ~         2         u16        mark  big
+
 struct hp_packet size=6
   @0x0000   1         u8         first
   @0x0001   1         masking    pn  codec=masking

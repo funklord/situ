@@ -849,8 +849,15 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 
 		walk_ctx ctx  = {image, from, left, held.type_struct, depth + 1u};
 		int64_t  more = 0;
+		/* `left` frames the element, so the predicate can read the element's
+		 * own fields. `remaining` is a different quantity: a `while` is a
+		 * post-condition, so it is what is left AFTER the element, which is
+		 * `len - at` now that `at` has advanced. Passing `left` for both made
+		 * this take one element more than the four compiled backends and the
+		 * dissector -- on a 40-byte frame, four eight-byte elements where the
+		 * others take three, swallowing the two members after the run. */
 		err = situ_walk_eval(image, held.repeat_code, ctx_load, &ctx,
-		                     (int64_t)left, &more);
+		                     (int64_t)(len - at), &more);
 		if (err != SITU_WALK_OK || more == 0) {
 			break;
 		}

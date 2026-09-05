@@ -480,7 +480,21 @@ def _host_order(placement: Placement) -> bool:
 	order test was `is LITTLE`, so a native field was read big-endian in
 	silence. A promise nobody checked, which is section 0's rule 6 again.
 	"""
-	return placement.endian is ast.Endian.NATIVE
+	if placement.endian is not ast.Endian.NATIVE:
+		return False
+	# A field lying entirely inside one byte has no byte order to not know.
+	# `endian native` is a fact about a MULTI-byte number, and asking the
+	# question of a `u8` answered yes: netlink's `ifa_family`, `ifa_prefixlen`,
+	# `ifa_flags` and `ifa_scope` were all drawn as opaque bytes under "the
+	# capture does not record which machine wrote these", when one byte reads
+	# the same on every machine there has ever been. The offset matters as
+	# well as the width, because a byte-wide field straddling two bytes does
+	# draw from two.
+	size, offset = placement.size_bits, placement.offset_bits
+	if size is not None and offset is not None and size <= BITS_PER_BYTE \
+			and offset % BITS_PER_BYTE + size <= BITS_PER_BYTE:
+		return False
+	return True
 
 
 def _enum_names(resolved: ResolvedSchema) -> frozenset[str]:
@@ -1021,8 +1035,17 @@ _CONSTS: dict[str, int] = {}
 _UNSPELLABLE = re.compile(r"/|\^|<<|>>|(?<!&)&(?!&)|(?<!\|)\|(?!\|)")
 
 
-def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
+def _over_fields(struct: ResolvedStruct, source: str, base: str,
+		extra: dict[str, str] | None = None) -> str | None:
 	"""A schema expression rewritten as Lua reads over `base`.
+
+	`extra` carries names that are not fields of `struct` -- `remaining` is
+	the only one, and only a repeat-while asks for it. The four code backends
+	took this parameter when respec reported `remaining` reaching `wire` and
+	dying in the backends; the dissector is the fifth description and was not
+	given it then, so it declined the whole condition and the run came out as
+	a comment. A gap in one description is invisible to a differential that
+	compares only what both sides speak about.
 
 	`align_up` comes out as `math.floor` arithmetic rather than as `//`, for
 	decision 0021's reason: Wireshark bundles Lua 5.2 in older builds, `//`
@@ -1048,6 +1071,8 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str) -> str | None:
 
 	for name, value in _CONSTS.items():
 		reads.setdefault(name, str(value))
+	if extra is not None:
+		reads.update(extra)
 
 	if not reads:
 		return None
@@ -1125,7 +1150,7 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return []
 
 	element = resolved.structs.get(placement.type_name or "")
-	if element is None or not _extent_terms(resolved, element):
+	if element is None or _element_stride(resolved, element) is None:
 		return []
 
 	# A run the message *counts*, whose elements each say how long they are.
@@ -1140,7 +1165,8 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# Not None past the `counted` return above: a run is one or the other, and
 	# `wellformed` refuses a member that says twice where its run ends.
 	assert placement.repeat_while is not None
-	if _over_fields(element, placement.repeat_while, "last") is None:
+	if _over_fields(element, placement.repeat_while, "last",
+			RUN_EXTRA) is None:
 		return []
 	condition = _run_condition(resolved, struct, placement)
 
@@ -1159,7 +1185,7 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 		"	local start = at",
 		"	local n = 0",
 		f"	while at < tvb:len(){guard} do",
-		f"		local size = {_extent_name(element)}(tvb, at)",
+		f"		local size = {_element_stride(resolved, element)}",
 		"		if size == 0 or at + size > tvb:len() then break end",
 		"		local last = at",
 		"		n = n + 1",
@@ -1173,6 +1199,30 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 def _extent_name(struct: ResolvedStruct) -> str:
 	return f"{_lua(struct.name)}_extent"
+
+
+def _element_stride(resolved: ResolvedSchema,
+		element: ResolvedStruct) -> str | None:
+	"""One element's size in bytes, as Lua over `tvb` and `at`.
+
+	`traverse.extent_parts` answers None for two different structs: a fixed
+	one, because there is nothing to compute, and an unmeasurable one,
+	because there is nothing to compute it from. Reading the first as the
+	second is what made a `while` run over fixed elements dissect as
+	`elements of no size this dissector can compute` -- which was false, the
+	element being eight bytes. Two states with one piece of evidence, which
+	invariant 154 says to tell apart rather than to collapse.
+
+	The four code backends had the fixed arm already: C walks the same run
+	with `SITU_CHUNK_SIZE_FIXED`. This is that arm in Lua, and the reason it
+	is a function rather than a line at each site is that three sites ask.
+	"""
+	if element.layout.is_fixed_size:
+		return (str(element.layout.size_bytes)
+		        if element.layout.is_byte_sized else None)
+	if _extent_terms(resolved, element) is None:
+		return None
+	return f"{_extent_name(element)}(tvb, at)"
 
 
 def _counted_span(resolved: ResolvedSchema, struct: ResolvedStruct,
@@ -1437,6 +1487,28 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return lines
 
 
+def _run_declined(resolved: ResolvedSchema, placement: Placement,
+		element: ResolvedStruct | None) -> str:
+	"""Why a `while` run is not walked, in the reader's terms.
+
+	One message covered two refusals: an element whose size this cannot
+	compute, and a *condition* it cannot render. They want opposite looks --
+	the first sends a reader to the element, the second to the operator --
+	and a run over a two-byte element reported the size as the reason. A
+	specific wrong cause is more actionable than a vague one and sends the
+	next person somewhere, which is why it is worth separating rather than
+	softening.
+	"""
+	if element is None:
+		return "elements of a type this dissector does not know"
+	if _element_stride(resolved, element) is None:
+		return "elements of no size this dissector can compute"
+	if placement.repeat_while is not None and _over_fields(
+			element, placement.repeat_while, "last", RUN_EXTRA) is None:
+		return "a condition this dissector cannot render"
+	return "elements of no size this dissector can compute"
+
+
 def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement, field: str, seek: list[str]) -> list[str]:
 	"""A `while` run, walked and dissected element by element.
@@ -1453,7 +1525,7 @@ def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 		        "\t-- capture does not record which machine wrote it."]
 	if element is None or not _run_span(resolved, struct, placement):
 		return _uncomputable(placement.path,
-		                     "elements of no size this dissector can compute")
+		                     _run_declined(resolved, placement, element))
 
 	cap   = placement.repeat_cap
 	guard = "" if cap is None else f" and n < {cap}"
@@ -1461,7 +1533,7 @@ def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 		f"\t-- {placement.path}: walked, not indexed", *seek,
 		"\tlocal n = 0",
 		f"\twhile at < tvb:len(){guard} do",
-		f"\t\tlocal size = {_extent_name(element)}(tvb, at)",
+		f"\t\tlocal size = {_element_stride(resolved, element)}",
 		"\t\tif size == 0 or at + size > tvb:len() then break end",
 		"\t\tlocal last = at",
 		"\t\tn = n + 1",
@@ -1474,10 +1546,25 @@ def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 	]
 
 
+#: What `remaining` means where a repeat-while asks it: the bytes after the
+#: element just read, the condition being asked once the cursor has passed it.
+#:
+#: The other four saturate -- `situ_remaining_u32` in C, `saturating_sub` in
+#: Rust, `max(0, ...)` in Python -- and this does not, because it cannot go
+#: negative and because spelling it `math.max` here does not survive. Both
+#: walks break when `at + size > tvb:len()`, so `at` is at most the length
+#: after the advance the condition is asked about. And the builtin expansion
+#: rewrites `max` wherever it finds one, including inside what it has just
+#: produced, which is `math.math.max` (invariant 53) -- the same trap
+#: `situ_digits` carries a comment about.
+RUN_EXTRA = {"remaining": "(tvb:len() - at)"}
+
+
 def _run_condition(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> str:
 	element = resolved.structs[placement.type_name or ""]
-	source  = _over_fields(element, placement.repeat_while or "", "last")
+	source  = _over_fields(element, placement.repeat_while or "", "last",
+	                       RUN_EXTRA)
 	assert source is not None, "_run_span checks this first"
 	return translate_operators(source, conj=" and ", disj=" or ",
 	                           ne=" ~= ", neg="not ")
@@ -1498,11 +1585,17 @@ def _delimited(resolved: ResolvedSchema, struct: ResolvedStruct,
 	assert delim is not None
 
 	if placement.type_name in resolved.structs:
+		# `_LOST` because this advances `at` by nothing: the scan that
+		# would find the terminator is the walk being declined. Without it
+		# `edges.kv_block.payload` was drawn from offset 0 -- over the
+		# `entries` run it follows rather than after it -- which is the
+		# confident wrong line `_uncomputable` exists to prevent.
 		return [
 			f"\t-- {placement.path}: a run of {placement.type_name} to "
 			f"{render_delimiter(delim)}.",
 			"\t-- Not unrolled: the terminator ends the run rather than each",
 			"\t-- element, so where it stops is a walk this does not do.",
+			_LOST,
 		]
 
 	bytes_ = ", ".join(str(byte) for byte in delim)
