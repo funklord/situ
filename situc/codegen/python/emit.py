@@ -223,7 +223,8 @@ class Emitter:
 			*(["from collections.abc import Iterator", ""]
 			  if self._tlv_items() else []),
 			"from situ_runtime import (",
-			"\tBoundsError, ConstraintError, Gate, Message, TruncatedError,",
+			"\tBoundsError, ChecksumError, ConstraintError, Gate, Message,",
+			"\tTruncatedError,",
 			"\tVersionError, View,",
 			"\tacquire,",
 			"\tadvance,",
@@ -248,6 +249,8 @@ class Emitter:
 		exported += [py_name(name) for name in sorted(self.structs)]
 		lines.extend(f'\t"{name}",' for name in exported)
 		lines.extend(["]", ""])
+
+		lines.extend(self._derived_codecs())
 
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
@@ -1479,31 +1482,75 @@ class Emitter:
 
 		return lines
 
+	def _derived_codecs(self) -> list[str]:
+		"""The implementations a `checksum ... is <codec>` needs, inline.
+
+		C leaves these to `gen-derived` and the linker. Python has no
+		linker, and expecting a name from a module this file cannot import
+		would invent a path convention the caller has to satisfy -- so the
+		function is defined in the module that calls it (0053).
+
+		Only where a checksum names one, and once per codec however many
+		checksums name it.
+		"""
+		from situc.codegen.python import derived as kernels
+
+		wanted = sorted({placement.tag_codec
+		                 for struct in self.resolved.structs.values()
+		                 for placement in struct.layout.placements
+		                 if placement.tag_codec})
+		if not wanted:
+			return []
+
+		lines: list[str] = []
+		for decl in self.schema.codecs():
+			if decl.name not in wanted:
+				continue
+			body = kernels._for_kernel(decl, "situ")
+			assert body is not None, (
+				f"{decl.name}: wellformed admits only `derived` codecs here, "
+				f"and this backend generates every family that can reach it")
+			lines.extend(body)
+		return lines
+
 	def _checksum_codec(self, placement: Placement, name: str) -> list[str]:
-		"""`is crc32` -- refused for this backend, and said so (0053).
+		"""`is crc32` -- compute the sum, and compare it (0053).
 
-		The binding needs the codec's *implementation*, and `gen-derived`
-		emits C. A Python accessor calling a `crc32` that no Python file
-		defines is the accessor bug of 26.241 one layer out: it generates,
-		it reads correctly, and it fails at the first call.
+		The implementation is defined in this module by `_derived_codecs`,
+		so the call is a plain one and the file is self-contained.
 
-		So this refuses, per 17.0 -- a construct situ cannot represent is an
-		error rather than a surprise later. The schema is fine and the C
-		backend honours it; what is missing is a Python `gen-derived`.
+		Neither is called by `validate`: a coverage may run to the end of
+		the message, and a constraint walk that costs a file read is not the
+		flat model 0051 settled on.
 		"""
 		if placement.tag_codec is None:
 			return []
 
-		raise error(
-			f"`is {placement.tag_codec}` needs a derived codec this backend "
-			f"cannot generate",
-			placement.span,
-			label = "no Python implementation of this codec",
-			notes = ["`situc gen-derived` emits C, so the binding is honoured "
-			         "by `--target c` and by C++ through it",
-			         "drop the `is` clause to keep the coverage and compute "
-			         "the sum in the caller, which is what a checksum did "
-			         "before 0053"])
+		order = ("little" if placement.tag_codec_endian is ast.Endian.LITTLE
+		         else "big")
+		codec = py_name(placement.tag_codec)
+		return [
+			"",
+			f"\tdef {name}_compute(self) -> int:",
+			f'\t\t"""{placement.tag_codec} over the bytes'
+			f' `{name}_covered` names."""',
+			f"\t\tat, n = self.{name}_covered()",
+			f"\t\treturn {codec}("
+			"bytes(self._msg.buffer[self._at + at:self._at + at + n]))",
+			"",
+			f"\tdef {name}_check(self) -> None:",
+			'\t\t"""Raise `ChecksumError` where the stored sum disagrees.',
+			"",
+			"\t\tNot a `TagError`: that one means a cryptographic gate",
+			"\t\trefused, and this means the message is corrupt or",
+			'\t\ttruncated."""',
+			f"\t\tstored = int.from_bytes(bytes(self.{name}), \"{order}\")",
+			f"\t\tfound  = self.{name}_compute()",
+			"\t\tif stored != found:",
+			f"\t\t\traise ChecksumError("
+			f'f"{placement.path}: stored {{stored:#x}}, '
+			'computed {found:#x}")',
+		]
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts."""

@@ -20818,6 +20818,65 @@ be refused by the Rust and Python backends, and the corpus builds every
 example in all four. What this closes is the description; what it waits on
 is the same thing PNG's CRC waits on.
 
+### 26.246 Three languages, one polynomial
+
+`gen-derived` emitted C, so 0053's `checksum ... is <codec>` was honoured
+by two backends and refused by two. It has Rust and Python backends now,
+for the two families a checksum can name -- `polynomial` and
+`ones_complement`. The other five decline with a note, exactly as C does
+for a kernel it cannot generate.
+
+**The arithmetic moved before the second backend was written.**
+`kernel_math` holds the CRC table, the accumulator width, the reversal and
+the reflected start; three renderers read it. Writing the table twice is
+invariant 13's failure with a worse ending than usual -- two backends whose
+digests differ for a reason no test would name -- and this tree has already
+paid for four copies of a struct walk. The refactor was proved by
+regenerating the C and diffing: identical.
+
+**Where the implementation goes is a language question, not a taste one.**
+C leaves it to `gen-derived` and the linker, which is how C joins
+translation units. Rust and Python have no such culture: expecting a symbol
+from a module the generated file cannot name would invent a path
+convention the caller then has to satisfy. Those two emit the codec into
+the module that calls it, once per codec, and only where a checksum names
+one.
+
+**Rust's type system found something C hides.** An eight-bit reflected CRC
+shifts its register right by eight, and `u8 >> 8` is a compile-time
+overflow that rustc refuses. C emits the same shift and is correct, because
+`crc >> 8` on a `uint8_t` promotes to `int` and evaluates to zero. The
+expression reduces to one table lookup at that width in both directions,
+which is what all three now emit -- and it took a stricter language to make
+anybody notice that the term was always zero.
+
+**Python's divergence is the same shape from the other side.** A Python
+integer does not wrap, so `crc << 8` grows without bound and every width is
+masked, 64 included. In C and Rust the mask is a narrow-width correction
+and the machine word does the rest; in Python the mask *is* the word.
+
+**`[self_as]` is refused rather than computed, and that is the remaining
+limit.** A checksum inside its own coverage says its own bytes read as zero
+while the algorithm runs. A generated `compute` reads the span as it
+stands, so it would sum the stored value and be wrong for every message --
+and a wrong checksum is worse than an absent one, because it looks like a
+verdict. IPv4, ICMP and UDP are all that shape and keep the caller's
+arithmetic; PNG's CRC is outside what it covers and binds.
+
+**The oracle got stronger by the same change.** It compared `zlib`'s CRC
+over the span situ named, so situ supplied boundaries and something else
+supplied arithmetic -- which was enough to catch 26.244. Now the schema
+computes its own sum and `zlib` checks the whole answer: situ's table,
+situ's loop and situ's span against an implementation nobody here wrote.
+Inverting the reflection flag in the Python codec fails it.
+
+**And the verification that mattered was not the vectors.** Thirteen CRCs
+agreeing with a table this repository generated is one witness asked
+twice. What settles it is a bit-at-a-time reference written from the
+parameters in `std/kernels.situ` rather than from `crc_table`, agreeing
+with all thirteen over nine inputs -- with a deliberately wrong `xorout`
+shown to separate them, so the cross-check is known able to fail.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

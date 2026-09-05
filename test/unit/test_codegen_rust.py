@@ -1928,15 +1928,17 @@ def test_a_relation_keyed_on_an_enum_compiles(tmp_path: Path) -> None:
 	assert compiled.returncode == 0, compiled.stderr
 
 
-def test_a_checksum_codec_is_refused_rather_than_called(tmp_path: Path) -> None:
-	"""`gen-derived` emits C, so Rust has no implementation to call (0053).
+def test_a_checksum_codec_is_generated_inline() -> None:
+	"""`is crc32` in Rust (0053), which this backend used to refuse.
 
-	Refused per 17.0 rather than emitted as a call to a function no Rust
-	file defines -- which is the accessor bug of 26.241 one layer out: it
-	generates, it reads correctly, and it fails at the first call.
+	It refused because `gen-derived` emitted only C, so a Rust caller would
+	have been handed a call to a function no Rust file defines -- clean
+	output that fails at the first call. There is a Rust `gen-derived` now,
+	and the implementation goes into the module that uses it rather than
+	being expected from a path this file cannot name: C joins translation
+	units with a linker and Rust has no such culture.
 	"""
-	with pytest.raises(SituError) as caught:
-		emit("""
+	text = emit("""
 codec crc32 {
 	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF,
 	                    xorout = 0xFFFFFFFF, reflect);
@@ -1948,5 +1950,25 @@ struct S {
 	authenticated body { u8 rest[remaining]; }
 }
 """, preamble="target file append;\nendian little;\nbit_order msb_first;\n")
-	assert "needs a derived codec this backend cannot generate" \
-		in str(caught.value)
+
+	# The implementation, in this module rather than expected from another.
+	assert "pub fn crc32(data: &[u8]) -> u32" in text
+	assert "static CRC32_TABLE: [u32; 256]" in text
+	# And the pair the binding is for.
+	assert "pub fn crc_compute(&self) -> Result<u32>" in text
+	assert "pub fn crc_check(&self) -> Result<()>" in text
+	assert "Error::Checksum" in text
+	# The schema says `endian little`, and the stored sum is a number.
+	assert "from_le_bytes" in text
+
+
+def test_a_schema_binding_no_codec_carries_no_implementation() -> None:
+	"""The inline implementation is emitted only where a checksum names one.
+
+	Otherwise every generated module in the tree would carry a CRC table
+	nothing calls, which `-D warnings` would not refuse and a reader would
+	rightly wonder about.
+	"""
+	text = emit("struct S { u16 a; }")
+	assert "CRC32_TABLE" not in text
+	assert "pub fn crc32" not in text

@@ -29,10 +29,12 @@ from situc import ast
 from situc.codegen.c.names import ident, macro
 from situc.traverse import DERIVED_STUFFING as DERIVED_STUFFING
 from situc.traverse import table_is_padded
+from situc.codegen.kernel_math import (WORD_WIDTHS, accumulator,
+                                       crc_start, crc_table, crc_width,
+                                       number, reverse)
 from situc.layout import BITS_PER_BYTE
 from situc import __version__
 
-WORD_WIDTHS = (8, 16, 32, 64)
 
 
 def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
@@ -140,14 +142,14 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				lines.extend(_rs_declarations(decl, prefix))
 				continue
 
-			width = _width(decl)
+			width = crc_width(decl)
 			if width is None:
 				continue
 			lines.extend([
 				"",
 				f"/* `{decl.name}`: derived from a polynomial kernel. */",
 				f"#define {macro(prefix, decl.name, 'WIDTH')} {width}u",
-				f"uint{_accumulator(width)}_t {ident(prefix, decl.name)}"
+				f"uint{accumulator(width)}_t {ident(prefix, decl.name)}"
 				"(const uint8_t *data, uint32_t len);",
 			])
 		elif decl.kernel.family is ast.KernelFamily.TABLE:
@@ -197,7 +199,7 @@ def pair_of(decl: ast.CodecDecl, prefix: str = "situ") -> tuple[str, str] | None
 	if family is ast.KernelFamily.STUFFING and _named_code(decl) not in DERIVED_STUFFING:
 		return None
 	if family is ast.KernelFamily.TABLE and _symbol_map(
-			decl, _number(decl, "input_bits"), _number(decl, "output_bits")) is None:
+			decl, number(decl, "input_bits"), number(decl, "output_bits")) is None:
 		return None
 
 	return (ident(prefix, decl.name, "encode"), ident(prefix, decl.name, "decode"))
@@ -363,46 +365,6 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 
-def _width(decl: ast.CodecDecl) -> int | None:
-	"""A CRC width this can generate: any whole number of bytes up to eight.
-
-	It was the four C word widths, so a 24-bit CRC derived a correct signature
-	-- `+3 bytes`, systematic, seekable -- and generated nothing, with a note
-	telling the author to supply it themselves. Bluetooth LE's link-layer CRC
-	is 24 bits, which is how the gap was noticed; CRC-24/OpenPGP, CRC-40/GSM
-	and the 12-bit telemetry CRCs are the same shape.
-
-	Nothing about the algorithm needed the width to be a word. The table is
-	computed either way, and what a non-word width needs is an accumulator
-	wider than itself and a mask after every shift -- which `_accumulator`
-	and the emitter below now do.
-	"""
-	kernel = decl.kernel
-	assert kernel is not None
-	value = kernel.argument("width")
-	width = value.value if isinstance(value, ast.IntLiteral) else None
-	if width is None or width % 8 or not 8 <= width <= 64:
-		return None
-	return width
-
-
-def _accumulator(width: int) -> int:
-	"""The C word that holds a `width`-bit CRC: the next one up, or its own.
-
-	A 24-bit CRC accumulates in a `uint32_t`, and every shift is masked back
-	to 24 bits. There is no `uint24_t`, and inventing a struct for one would
-	buy nothing a mask does not.
-	"""
-	return next(word for word in WORD_WIDTHS if word >= width)
-
-
-def _number(decl: ast.CodecDecl, name: str, default: int = 0) -> int:
-	kernel = decl.kernel
-	assert kernel is not None
-	value = kernel.argument(name)
-	return value.value if isinstance(value, ast.IntLiteral) else default
-
-
 def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""A table-driven CRC, with the table computed rather than copied.
 
@@ -411,13 +373,13 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	variant is a point in that space, so generating from it means a variant
 	nobody has written down works exactly as well as a famous one.
 	"""
-	width = _width(decl)
+	width = crc_width(decl)
 	if width is None:
 		return None
 
-	poly    = _number(decl, "poly")
-	init    = _number(decl, "init")
-	xorout  = _number(decl, "xorout")
+	poly    = number(decl, "poly")
+	init    = number(decl, "init")
+	xorout  = number(decl, "xorout")
 	kernel  = decl.kernel
 	assert kernel is not None
 	reflect = kernel.flag("reflect")
@@ -425,8 +387,8 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	if not poly:
 		return None
 
-	table  = _crc_table(width, poly, reflect)
-	held   = _accumulator(width)
+	table  = crc_table(width, poly, reflect)
+	held   = accumulator(width)
 	word   = f"uint{held}_t"
 	name   = ident(prefix, decl.name)
 	mask   = (1 << width) - 1
@@ -456,13 +418,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	lines.append("};")
 	lines.append("")
-	# A reflected CRC runs the register the other way round, so it *starts*
-	# the other way round: the initial value is the catalogue's, bit-reversed.
-	# Emitting it as written was right for every reflected CRC in the library
-	# -- CRC-32 and CRC-16/MODBUS both start all-ones, which is its own
-	# reverse -- and wrong for the first one that does not. CRC-24/BLE starts
-	# at 0x555555 and came out as 0xD39857 where the catalogue says 0xC25A56.
-	started = _reverse(init, width) if reflect else init
+	started = crc_start(init, width, reflect)
 
 	lines.append(f"{word} {name}(const uint8_t *data, uint32_t len)")
 	lines.append("{")
@@ -489,43 +445,6 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	return lines
 
 
-def _crc_table(width: int, poly: int, reflect: bool) -> list[int]:
-	"""One byte's worth of the polynomial division, for each possible byte.
-
-	Reflected variants run the division the other way round, which is the same
-	arithmetic over the bit-reversed polynomial. Doing it here rather than
-	reversing bits at run time is what keeps the generated loop one table
-	lookup wide.
-	"""
-	mask  = (1 << width) - 1
-	table = []
-
-	if reflect:
-		reversed_poly = _reverse(poly, width)
-		for byte in range(256):
-			crc = byte
-			for _ in range(8):
-				crc = (crc >> 1) ^ (reversed_poly if crc & 1 else 0)
-			table.append(crc & mask)
-		return table
-
-	top = 1 << (width - 1)
-	for byte in range(256):
-		crc = (byte << (width - 8)) & mask
-		for _ in range(8):
-			crc = ((crc << 1) ^ poly) & mask if crc & top else (crc << 1) & mask
-		table.append(crc)
-	return table
-
-
-def _reverse(value: int, width: int) -> int:
-	result = 0
-	for _ in range(width):
-		result = (result << 1) | (value & 1)
-		value >>= 1
-	return result
-
-
 # ---------------------------------------------------------------------------
 # Table: line codes
 # ---------------------------------------------------------------------------
@@ -549,8 +468,8 @@ def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	kernel = decl.kernel
 	assert kernel is not None
 
-	inputs  = _number(decl, "input_bits")
-	outputs = _number(decl, "output_bits")
+	inputs  = number(decl, "input_bits")
+	outputs = number(decl, "output_bits")
 	mapping = _symbol_map(decl, inputs, outputs)
 
 	if mapping is None or inputs > 8 or outputs > 16:
@@ -836,9 +755,9 @@ NAMED_CODES: dict[str, list[int]] = {
 
 
 def _rs_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
-	n = _number(decl, "n")
-	k = _number(decl, "k")
-	if _number(decl, "field") != 256 or not n or not k:
+	n = number(decl, "n")
+	k = number(decl, "k")
+	if number(decl, "field") != 256 or not n or not k:
 		return []
 
 	return [
@@ -869,7 +788,7 @@ def _byte_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
 			f"/* `{decl.name}`: a block interleaver. Length-preserving, and the",
 			" * input length must be a whole number of blocks. */",
 			f"#define {macro(prefix, decl.name, 'BLOCK')} "
-			f"{_number(decl, 'rows') * _number(decl, 'columns')}u",
+			f"{number(decl, 'rows') * number(decl, 'columns')}u",
 			f"uint32_t {ident(prefix, decl.name, 'encode')}"
 			"(const uint8_t *in, uint32_t len, uint8_t *out);",
 			f"uint32_t {ident(prefix, decl.name, 'decode')}"
@@ -943,8 +862,8 @@ def _permutation(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	if kernel.argument("rows") is None:
 		return None
 
-	rows    = _number(decl, "rows")
-	columns = _number(decl, "columns")
+	rows    = number(decl, "rows")
+	columns = number(decl, "columns")
 	block   = rows * columns
 	name    = ident(prefix, decl.name)
 
@@ -1149,9 +1068,9 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	kernel = decl.kernel
 	assert kernel is not None
 
-	taps  = _number(decl, "taps")
-	width = _number(decl, "width", 16)
-	seed  = _number(decl, "seed", (1 << width) - 1)
+	taps  = number(decl, "taps")
+	width = number(decl, "width", 16)
+	seed  = number(decl, "seed", (1 << width) - 1)
 
 	if not taps or not 1 <= width <= WORD_WIDTHS[-1]:
 		return None
@@ -1160,7 +1079,7 @@ def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	additive = isinstance(source, ast.NameRef) and source.name == "input"
 	complemented = kernel.flag("complement_feedback")
 	name  = ident(prefix, decl.name)
-	held  = _accumulator(width)
+	held  = accumulator(width)
 	word  = f"uint{held}_t"
 
 	# Only the multiplicative path shifts *left*, so only it can push a bit
@@ -1793,15 +1712,15 @@ def _gf_tables(field: int, primitive: int) -> tuple[list[int], list[int]]:
 
 
 def _reed_solomon(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
-	field = _number(decl, "field")
-	n     = _number(decl, "n")
-	k     = _number(decl, "k")
+	field = number(decl, "field")
+	n     = number(decl, "n")
+	k     = number(decl, "k")
 
 	if field != 256 or not n or not k:
 		return None
 
-	primitive  = _number(decl, "primitive", 0x11D)
-	first_root = _number(decl, "first_root", 0)
+	primitive  = number(decl, "primitive", 0x11D)
+	first_root = number(decl, "first_root", 0)
 	nroots     = n - k
 	size       = field - 1
 

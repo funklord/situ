@@ -66,14 +66,17 @@ struct chunk {
 		u8          data[length];
 	}
 
-	// Declared as coverage here rather than `covers(summed) is crc32`, and
-	// the reason is a limit rather than a choice. `gen-derived` emits C, so
-	// the binding is honoured by the C and C++ backends and refused by Rust
-	// and Python -- and every example in this directory is built by all four
-	// in the differential. Adding `is crc32` to this line is what a C or C++
-	// caller wants and is exercised by the compiler tests; a Rust or Python
-	// `gen-derived` is what would let it live here (0053).
-	checksum u8 crc[4] covers(summed);
+	// `is crc32` names the codec that computes it, so all four backends
+	// generate a `crc_compute` and a `crc_check` rather than leaving the
+	// arithmetic with the caller (0053). This example could not carry the
+	// clause until Rust and Python had a `gen-derived` of their own.
+	//
+	// It works here and is refused on IPv4, ICMP and UDP, for a reason
+	// worth knowing: those carry `[self_as = 0]` because their checksum
+	// sits inside its own coverage, and a generated `compute` reads the
+	// span as it stands. PNG's CRC is outside the region it covers, so
+	// there is no hole to substitute.
+	checksum u8 crc[4] covers(summed) is crc32;
 }
 
 require absolute_static(chunk.length);

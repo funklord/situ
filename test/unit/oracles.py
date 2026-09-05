@@ -282,11 +282,13 @@ def png_says(image: bytes, tmp: Path) -> list[object]:
 def png_situ(module: object, image: bytes) -> list[object]:
 	"""The same chunks, walked through the generated accessors.
 
-	The CRC is computed by `zlib` over the span situ's `crc_covered` names,
-	so situ supplies the boundaries and something else supplies the
-	arithmetic. Three backends used to say that span ran to the end of the
-	buffer (26.244); against a real file that is a wrong number rather than
-	a wrong-looking one, and this is the check that would have said so.
+	situ's own `crc_compute` now, rather than `zlib` over the span situ
+	names. When this was written the Python backend had no derived codec to
+	call, so the oracle supplied the arithmetic and checked only the
+	boundaries -- which was enough to catch 26.244's covered-span bug. With
+	a Python `gen-derived` the schema computes its own sum, so what `zlib`
+	checks is the whole answer: situ's table, situ's loop and situ's span
+	against an implementation nobody here wrote.
 	"""
 	import zlib
 
@@ -308,12 +310,12 @@ def png_situ(module: object, image: bytes) -> list[object]:
 		# answers about the view it was asked of, not about the file.
 		start, count = view.crc_covered()
 		start += at
+		del count
 		kind   = bytes(view.kind)
 		assert int(view.length) == length, "situ read a different length"
 		stored = int.from_bytes(bytes(view.crc), "big")
 		found.append((kind.decode("latin-1"), length,
-		              zlib.crc32(bytes(image[start:start + count])) & 0xFFFFFFFF,
-		              stored))
+		              view.crc_compute(), stored))
 		at += 12 + length
 	return found
 

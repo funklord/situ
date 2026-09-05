@@ -196,6 +196,8 @@ def build_parser() -> argparse.ArgumentParser:
 	derived_cmd.add_argument("schema", type=Path)
 	derived_cmd.add_argument("--out", type=Path, default=Path("."))
 	derived_cmd.add_argument("--prefix", default="situ")
+	derived_cmd.add_argument("--target", choices=("c", "rust", "python"),
+	                         default="c")
 
 	checks_cmd = sub.add_parser(
 		"gen-checks",
@@ -909,15 +911,27 @@ def cmd_gen_derived(args: argparse.Namespace) -> int:
 	tiers: a tier-1 signature is a promise nobody checked, and a tier-2 one is
 	computed from the same source as the code.
 	"""
-	from situc.codegen.c import derived
+	# Rust and Python generate two families -- polynomial and
+	# ones_complement -- which is what a `checksum ... is <codec>` binding
+	# can name (0053). The other five decline with a note rather than
+	# emitting nothing, as C does for a kernel it cannot generate.
+	if args.target == "rust":
+		from situc.codegen.rust import derived as backend
+		suffix = "rs"
+	elif args.target == "python":
+		from situc.codegen.python import derived as backend  # type: ignore[no-redef]
+		suffix = "py"
+	else:
+		from situc.codegen.c import derived as backend       # type: ignore[no-redef]
+		suffix = "c"
 
 	source = read_source(args.schema)
 	schema = parse(source)
 	name   = args.schema.stem
-	text   = derived.generate(schema, name, args.prefix)
+	text   = backend.generate(schema, name, args.prefix)
 
 	args.out.mkdir(parents=True, exist_ok=True)
-	target = args.out / f"{name}_derived.c"
+	target = args.out / f"{name}_derived.{suffix}"
 	target.write_text(text, encoding="ascii")
 
 	count = sum(1 for impl in schema.impls()

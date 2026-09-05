@@ -1855,6 +1855,31 @@ def check_checksum_codecs(schema: ast.Schema) -> None:
 					notes = [f"add `impl {member.codec} derived;` where its "
 					         f"kernel description is enough to generate it"])
 
+			# `[self_as = 0]` says the checksum's own bytes read as zero
+			# while the algorithm runs over them, which is what lets a
+			# checksum sit inside its own coverage (14.2). A generated
+			# `compute` reads the covered span as it stands, so it would
+			# sum the stored value and produce a number that is wrong for
+			# every message -- IPv4, ICMP and UDP are all this shape.
+			#
+			# Refused rather than emitted, per 17.0: a wrong checksum is
+			# worse than an absent one, because it looks like a verdict.
+			# What lifts this is a `compute` that substitutes the hole,
+			# which the C backend already has machinery for.
+			if any(attr.name == "self_as" for attr in member.attrs):
+				raise error(
+					f"`is {member.codec}` cannot compute a checksum that "
+					f"covers itself",
+					member.span,
+					label = "`[self_as]` is not honoured by the generated "
+					        "computation",
+					notes = ["the sum would be taken over the stored bytes "
+					         "rather than over the zeros `[self_as]` names, "
+					         "so it would be wrong for every message",
+					         "drop the `is` clause and compute it in the "
+					         "caller, which is what a checksum did before "
+					         "0053"])
+
 			if kind is not ast.ImplKind.DERIVED:
 				raise error(
 					f"`{member.codec}` is not a derived codec",

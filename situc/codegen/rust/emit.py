@@ -235,6 +235,7 @@ class Emitter:
 
 	def module(self) -> str:
 		body: list[str] = list(self._codec_externs())
+		body.extend(self._derived_codecs())
 		for decl in self.schema.enums():
 			body.extend(self._enum(decl))
 		for name in sorted(self.structs):
@@ -1228,30 +1229,89 @@ class Emitter:
 				f"DIRTY_{name.upper()})",
 				"\t}",
 			])
-			self._refuse_checksum_codec(placement)
+			lines.extend(self._checksum_codec(struct, placement, name))
 
 		return lines
 
-	def _refuse_checksum_codec(self, placement: Placement) -> None:
-		"""`is crc32` needs an implementation, and `gen-derived` emits C.
+	def _derived_codecs(self) -> list[str]:
+		"""The implementations a `checksum ... is <codec>` needs, inline.
 
-		Refused rather than emitted as a call to a function no Rust file
-		defines -- 17.0's rule, and the accessor bug of 26.241 avoided one
-		layer out.
+		C leaves these to `gen-derived` and the linker, which is C's way of
+		joining two translation units. Rust has no such culture: expecting a
+		symbol from a module this file cannot name would invent a path
+		convention, and the caller would have to satisfy it. So the function
+		is emitted here, in the module that uses it (0053).
+
+		Only where a checksum names one. A schema that binds no codec gets
+		nothing, and a codec named by two checksums is emitted once.
+		"""
+		from situc.codegen.rust import derived as kernels
+
+		wanted = sorted({placement.tag_codec
+		                 for struct in self.resolved.structs.values()
+		                 for placement in struct.layout.placements
+		                 if placement.tag_codec})
+		if not wanted:
+			return []
+
+		lines: list[str] = []
+		for decl in self.schema.codecs():
+			if decl.name not in wanted:
+				continue
+			body = kernels._for_kernel(decl, "situ")
+			assert body is not None, (
+				f"{decl.name}: wellformed admits only `derived` codecs here, "
+				f"and this backend generates every family that can reach it")
+			lines.extend(body)
+		return lines
+
+	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
+		"""`is crc32` -- compute the sum, and compare it (0053).
+
+		The implementation is emitted into this module by
+		`_derived_codecs`, so the call is a plain one and the file is
+		self-contained.
+
+		Neither is called by `validate`: a coverage may run to the end of
+		the message, and a constraint walk that costs a file read is not the
+		flat model 0051 settled on.
 		"""
 		if placement.tag_codec is None:
-			return
+			return []
 
-		raise error(
-			f"`is {placement.tag_codec}` needs a derived codec this backend "
-			f"cannot generate",
-			placement.span,
-			label = "no Rust implementation of this codec",
-			notes = ["`situc gen-derived` emits C, so the binding is honoured "
-			         "by `--target c` and by C++ through it",
-			         "drop the `is` clause to keep the coverage and compute "
-			         "the sum in the caller, which is what a checksum did "
-			         "before 0053"])
+		codec  = placement.tag_codec.lower()
+		width  = (placement.size_bits or 0) // BITS_PER_BYTE
+		start  = self._offset_expression(struct, placement) or "0"
+		read   = ("from_le_bytes" if placement.tag_codec_endian
+		          is ast.Endian.LITTLE else "from_be_bytes")
+
+		return [
+			"",
+			f"\t/// {placement.tag_codec} over the bytes {name}_covered()",
+			"\t/// names. Not called by validate: the coverage may run to the",
+			"\t/// end of the message.",
+			"\tpub fn " + f"{name}_compute(&self) -> Result<u32> {{",
+			f"\t\tlet (at, n) = self.{name}_covered()?;",
+			f"\t\tOk(u32::from({codec}(&self.bytes[at as usize"
+			"..(at + n) as usize])))",
+			"\t}",
+			"",
+			f"\t/// Whether the stored {placement.tag_codec} matches. Not",
+			"\t/// `Error::Tag`: that means a cryptographic gate refused, and",
+			"\t/// this means the message is corrupt or truncated.",
+			f"\tpub fn {name}_check(&self) -> Result<()> {{",
+			f"\t\tlet want = self.{name}_compute()?;",
+			f"\t\tlet at = ({start}) as usize;",
+			f"\t\tif at + {width} > self.bytes.len() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tlet held = u{width * 8}::{read}("
+			f"self.bytes[at..at + {width}].try_into().unwrap());",
+			f"\t\tif u32::from(held) == want {{ Ok(()) }}"
+			" else { Err(Error::Checksum) }",
+			"\t}",
+		]
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts."""

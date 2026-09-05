@@ -1,6 +1,6 @@
 # 0053: a checksum that computes itself
 
-Status: accepted 2026-09-04; built for C and C++
+Status: accepted 2026-09-04; built for all four backends
 Date: 2026-09-04
 Phase: raised by respec, from a reader whose image validated and was corrupt
 
@@ -133,20 +133,25 @@ existing rule about the error enum.
 **It does not change what `tag` does**, so nothing in the keystore or dtls
 examples moves. The tamper harness and the sealed gate are untouched.
 
-**Built for C and C++, and refused by Rust and Python.** That split is not
-a staging decision: `situc gen-derived` emits C, so C has the
-implementation and C++ calls it across the linkage it already has. Rust and
-Python have no derived codec at all, so a binding there would generate a
-call to a function no file in their language defines -- which generates
-cleanly, reads correctly, and fails at the first call. They refuse, per
-17.0.
+**Built for all four backends.** C and C++ came first, because
+`gen-derived` emitted C and C++ calls it across the linkage it already has.
+Rust and Python refused the construct outright for a while, since a binding
+there would have generated a call to a function no file in their language
+defines -- clean output that fails at the first call. `gen-derived` has a
+Rust and a Python backend now, for the two families a checksum can name.
 
-**So this construct is deliberately not in the corpus**, and that is a
-departure from 26.234 with a reason: the four-way differential builds every
-corpus schema in every backend, and two of them refuse this one by design.
-It is tested directly in the two backends that implement it instead --
-against a real CRC, with the value checked against an independent
-`situ_crc32` call, the comparison watched refusing a zeroed sum, accepting
-a correctly stored one, and refusing again after one covered byte is
-flipped. What would put it in the corpus is a Rust or Python
-`gen-derived`.
+**Where the implementation goes differs by language, and it is not
+arbitrary.** C leaves it to `gen-derived` and the linker, because that is
+how C joins translation units. Rust and Python have no such culture:
+expecting a symbol from a module the generated file cannot name would
+invent a path convention the caller has to satisfy. So those two emit the
+codec into the module that calls it, once per codec however many checksums
+name it, and only where one is named.
+
+**`[self_as]` is refused, and that is the remaining limit.** A checksum
+that sits inside its own coverage says its own bytes read as zero while
+the algorithm runs (14.2). A generated `compute` reads the covered span as
+it stands, so it would sum the stored value and be wrong for every
+message. IPv4, ICMP and UDP are all that shape, so they keep the caller's
+arithmetic; PNG's CRC is outside the region it covers and binds. A
+`compute` that substitutes the hole is what lifts this.

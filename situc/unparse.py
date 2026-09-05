@@ -397,10 +397,16 @@ def member_to_source(member: ast.Member) -> str:
 	if isinstance(member, ast.TagField):
 		prefix = (f" prefix({member.prefix})"
 		          if member.prefix is not None else "")
+		# After `prefix`, which is where the parser reads it: the codec runs
+		# over the prefix as well as this message's bytes (0053). Dropped
+		# here at first, and the round trip caught it -- the same way it
+		# caught `target file append`, and for the same reason: a clause no
+		# schema used was a clause nothing round-tripped.
+		codec = f" is {member.codec}" if member.codec else ""
 		return (f"{member.kind.value} {member.type_ref.name}"
 		        f"{_region_name(member.name, member.kind.value)}"
 		        f"{_array_to_source(member.array)}{_covers_to_source(member.covers)}"
-		        f"{prefix}{_attrs_to_source(member.attrs)};")
+		        f"{prefix}{codec}{_attrs_to_source(member.attrs)};")
 
 	if isinstance(member, ast.Pad):
 		return f"pad_to({member.to}){_attrs_to_source(member.attrs)};"
