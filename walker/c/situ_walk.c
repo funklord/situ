@@ -234,6 +234,7 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 
 	out->kind         = at[0];
 	out->endian       = at[1];
+	out->bit_order    = at[2];
 	out->flags        = at[3];
 	out->offset_bits  = u32_at(at + 4);
 	out->size_bits    = u32_at(at + 8);
@@ -469,6 +470,11 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 /* `image_endian`: 1 big, 2 little. */
 #define ENDIAN_BIG    1u
 #define ENDIAN_LITTLE 2u
+
+/* `BIT_ORDER` in the packer: 0 where the schema states none, 1 msb-first,
+ * 2 lsb-first. Only the last needs naming, msb-first being what an unstated
+ * order means. */
+#define BIT_ORDER_LSB 2u
 
 /* Named in the header now, a caller needing the signedness to print a value
  * at all. Kept as the short spellings this file already reads by. */
@@ -1234,43 +1240,88 @@ static situ_walk_err offset_bits_deep(const situ_walk_image *image,
  * rather than the placement's, which is the whole of the difference: an
  * element is as wide as an element, and sign extension follows it.
  *
- * A member that does not start or end on a byte is refused rather than
- * assembled. The layout solver will not place a bit-packed field at a
- * dynamic offset, so the case this declines to render is one that cannot
- * arise -- and a walker that guessed at it would be inventing an answer for
- * a construct that has none. */
+ * A bit-packed member is assembled a bit at a time, from whichever end
+ * `bit_order` names. This refused every one of them instead, under a guard
+ * testing ALIGNMENT and a comment arguing about DYNAMIC OFFSETS -- two
+ * different claims, and the true one ("the solver will not place a
+ * bit-packed field at a dynamic offset") does not license the test that was
+ * written. So tcp's flags, dnsname's `u2 form`, and the same fields in
+ * ipv4, dns, ntp, mqtt and rtc were all declined, and everything a variant
+ * of theirs selects went with them (26.264).
+ *
+ * A bit at a time rather than a shifted block, because the block is not
+ * always shiftable: 64 bits at a 7-bit offset touch nine bytes, and no
+ * `uint64_t` holds them. `walk.py` assembles the block in arbitrary
+ * precision and can; this cannot, and sixty-four iterations cost nothing in
+ * a walker.
+ *
+ * Byte order is not consulted here and `walk.py` does not consult it
+ * either: a bit-packed field is defined by where its bits sit, not by which
+ * end its bytes start at. That is also why `endian native` -- refused for a
+ * whole-byte read, the capture not recording which machine wrote it -- is
+ * answerable for this one. */
 static situ_walk_err read_at(const uint8_t *message, uint32_t len,
                              const situ_walk_placement *held,
                              uint32_t start_bits, uint32_t width_bits,
                              uint64_t *out)
 {
-	if (start_bits % 8u || width_bits % 8u || width_bits == 0u
-	                || width_bits > 64u) {
+	if (width_bits == 0u || width_bits > 64u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
-
-	const uint32_t at    = start_bits / 8u;
-	const uint32_t width = width_bits / 8u;
-	if (at > len || width > len - at) {
+	if (start_bits > 0xffffffffu - width_bits) {
 		return SITU_WALK_BOUNDS;
 	}
 
 	uint64_t value = 0u;
-	if (held->endian == ENDIAN_LITTLE) {
-		for (uint32_t i = width; i > 0u; i--) {
-			value = (value << 8) | message[at + i - 1u];
+
+	if (start_bits % 8u || width_bits % 8u) {
+		/* The last byte the value touches has to be in the frame. */
+		const uint32_t last = (start_bits + width_bits + 7u) / 8u;
+		if (last > len) {
+			return SITU_WALK_BOUNDS;
 		}
-	} else if (held->endian == ENDIAN_BIG) {
-		for (uint32_t i = 0u; i < width; i++) {
-			value = (value << 8) | message[at + i];
+
+		for (uint32_t k = 0u; k < width_bits; k++) {
+			const uint32_t bit  = start_bits + k;
+			const uint32_t byte = bit / 8u;
+			uint32_t       got;
+
+			if (held->bit_order == BIT_ORDER_LSB) {
+				/* Earlier bits are the LESS significant ones, so the
+				 * k-th bit of the value is the k-th bit up from the
+				 * start, counted from each byte's low end. */
+				got = ((uint32_t)message[byte] >> (bit % 8u)) & 1u;
+				value |= (uint64_t)got << k;
+			} else {
+				got = ((uint32_t)message[byte] >> (7u - bit % 8u)) & 1u;
+				value = (value << 1) | (uint64_t)got;
+			}
 		}
 	} else {
-		/* `native` has no answer a walker can give: the capture and the
-		 * machine reading it are different machines. */
-		return SITU_WALK_UNSUPPORTED;
+		const uint32_t at    = start_bits / 8u;
+		const uint32_t width = width_bits / 8u;
+		if (at > len || width > len - at) {
+			return SITU_WALK_BOUNDS;
+		}
+
+		if (held->endian == ENDIAN_LITTLE) {
+			for (uint32_t i = width; i > 0u; i--) {
+				value = (value << 8) | message[at + i - 1u];
+			}
+		} else if (held->endian == ENDIAN_BIG) {
+			for (uint32_t i = 0u; i < width; i++) {
+				value = (value << 8) | message[at + i];
+			}
+		} else {
+			/* `native` has no answer a walker can give for a whole-byte
+			 * read: the capture and the machine reading it are different
+			 * machines. A bit-packed one is answered above, where the
+			 * question does not arise. */
+			return SITU_WALK_UNSUPPORTED;
+		}
 	}
 
-	if ((held->flags & FLAG_SIGNED) != 0u && width < 8u) {
+	if ((held->flags & FLAG_SIGNED) != 0u && width_bits < 64u) {
 		const uint64_t sign = (uint64_t)1 << (width_bits - 1u);
 		if (value & sign) {
 			value |= ~(((uint64_t)1 << width_bits) - 1u);

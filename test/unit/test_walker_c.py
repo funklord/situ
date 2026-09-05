@@ -478,6 +478,45 @@ def test_they_agree_about_an_endian_marker(tmp_path: Path) -> None:
 	assert c_markers(tmp_path, blob, big) == ["little=0", "refused"]
 
 
+_BITS_SCHEMA = """target buffer;
+endian big;
+bit_order BITORDER;
+
+struct s {
+	u3  low;
+	u5  high;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_bit_packed_field(tmp_path: Path) -> None:
+	"""A field that starts or ends inside a byte, from both ends.
+
+	This walker refused every one of them. The guard tested ALIGNMENT --
+	`start_bits % 8u || width_bits % 8u` -- while the comment above it
+	argued that the solver will not place a bit-packed field at a DYNAMIC
+	offset. Both sentences are true and the second does not license the
+	first, so tcp's flags, dnsname's `u2 form`, and the same fields in
+	ipv4, dns, ntp, mqtt and rtc were declined along with everything a
+	variant of theirs selects.
+
+	The numbers are `walk.py`'s own, from the comment recording the day it
+	learned to consult `bit_order`: "for `u3 low; u5 high;` over `0xAB`
+	under `lsb_first` it answers 3 and 21 where this answered 5 and 11".
+	Pinning them rather than only comparing the two readers is what makes
+	this a test of the values instead of a test that both were changed
+	together -- and they come from a specification neither reader wrote.
+	"""
+	for order, expected in (("msb_first", ["5", "11"]),
+	                        ("lsb_first", ["3", "21"])):
+		blob = _inline_image(_BITS_SCHEMA.replace("BITORDER", order))
+		message = bytes.fromhex("ab")
+
+		assert python_answers(blob, message) == expected, order
+		assert c_answers(tmp_path, blob, message) == expected, order
+
+
 _NESTED_SCHEMA = """target buffer;
 endian big;
 

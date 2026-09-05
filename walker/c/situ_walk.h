@@ -116,6 +116,11 @@ typedef struct {
 typedef struct {
 	uint8_t  kind;
 	uint8_t  endian;
+	/* Byte 2 of the placement row, which this walker skipped over for its
+	 * whole life: it read `flags` from byte 3 correctly and never looked at
+	 * the one before it. A bit-packed field cannot be assembled without it
+	 * (26.264). */
+	uint8_t  bit_order;
 	uint8_t  flags;
 	uint32_t offset_bits;
 	uint32_t size_bits;

@@ -21649,6 +21649,71 @@ this change and after it, and neither answer is obviously the right one
 -- reading a struct as a scalar is a question nobody has settled. The
 test pins both so the next reader meets it as a recorded gap.
 
+### 26.264 A guard that tested alignment under a comment about dynamism
+
+The C walker refused every bit-packed field:
+
+    if (start_bits % 8u || width_bits % 8u || width_bits == 0u
+                    || width_bits > 64u) {
+            return SITU_WALK_UNSUPPORTED;
+    }
+
+with this above it: "A member that does not start or end on a byte is
+refused rather than assembled. The layout solver will not place a
+bit-packed field at a dynamic offset, so the case this declines to render
+is one that cannot arise."
+
+**Both sentences are true and the second does not license the first.**
+The comment argues about DYNAMIC OFFSETS; the test is about BYTE
+ALIGNMENT. Every statically-placed bit field -- tcp's flags, dnsname's
+`u2 form` and `u6 rest`, and the same in ipv4, dns, ntp, mqtt and rtc --
+was refused too, along with everything a variant of theirs selects. A
+justification for a narrow case, written above a guard for a wide one.
+
+**The image had carried what was needed the whole time.** The placement
+row is `kind, endian, bit_order, flags`, and this walker read `flags`
+from byte 3 -- correctly skipping byte 2 and never looking at it. So no
+image change was needed; the byte was there.
+
+**Assembled a bit at a time, not as a shifted block.** `walk.py` reads
+the touched bytes as one integer and shifts, which it can because Python
+integers are arbitrary precision: 64 bits at a 7-bit offset touch nine
+bytes, and no `uint64_t` holds them. Sixty-four iterations cost nothing
+in a walker.
+
+**Byte order is not consulted, and `walk.py` does not consult it either.**
+A bit-packed field is defined by where its bits sit rather than by which
+end its bytes start at -- which is also why `endian native`, refused for
+a whole-byte read because the capture does not record which machine wrote
+it, is answerable for this one.
+
+**The test's numbers come from a specification neither reader wrote.**
+`walk.py`'s own comment records the day it learned to consult
+`bit_order`: "for `u3 low; u5 high;` over `0xAB` under `lsb_first` it
+answers 3 and 21 where this answered 5 and 11". Both orders are pinned to
+those four values rather than the two readers merely being compared,
+which would pass if both were changed together. Sabotaged two ways --
+refusing bit fields again, and ignoring `bit_order` so every read is
+msb-first -- and each is caught, the second only by the lsb case.
+
+**With 26.263 this makes dnsname walk in C.** `question` is `qname +17,
+qtype @17 = 1, qclass @19 = 1`, which is what the four backends and
+`walk.py` say. Neither fix reaches it alone: the nested extent needs
+`label`'s variant, and the variant switches on a bit-packed `form`.
+
+**Found by widening a comparison that existed for one schema.**
+`test_it_agrees_with_the_python_walker` uses `udp`. Run over the corpus,
+30 of 36 shapes agreed and 6 did not, every one of them Python answering
+where C refused. dnsname is closed by this and cpio, dtls, netlink,
+pickle and tcp are not.
+
+**tcp's is a different root and is left open deliberately.**
+`u8 options[(data_offset - 5) * 4]` goes negative on bytes nobody meant
+to send, and that schema's own comment says it "reads as zero rather than
+as a length (14.2b)". `walk.py` answers 0; the C walker refuses. That is
+the length VM's arithmetic rather than anything about bits, and folding
+it in here would have hidden it inside a change about something else.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
