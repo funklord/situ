@@ -21591,6 +21591,64 @@ enforces it is worse than no assertion: it reads as a checked invariant.
 Reported independently by a sweep before the corpus reached it, which is
 two instruments finding one defect and is how it should go.
 
+### 26.263 The C walker read a nested struct as its minimum
+
+`size_bits_deep` ended with a fallthrough:
+
+    if (held.size_code == SITU_WALK_NONE) {
+        *out = held.size_bits;
+        return SITU_WALK_OK;
+    }
+
+A member typed as a variable-length struct carries no length program,
+because its extent is the sum of its own members and only
+`struct_extent` knows it. So it landed here and was answered with
+`size_bits` -- the MINIMUM. **A minimum is not a refusal, so the walker
+answered rather than declining**, and everything after the member was
+placed from a length that was too short.
+
+Measured on `example/dnsname`, buffer
+`03777777076578616d706c6503636f6d0000010001`:
+
+    walk.py, and the four backends   qname +17,  qtype @17
+    the C walker                     qname +1,   qtype @1  = 30583
+
+Byte 1 is comfortably inside the frame, so nothing refused and nothing
+complained: a value was reported and the message was called well-formed.
+
+**`walk.py` already carried the fix and the comment describing this exact
+symptom** -- "`qtype` at byte 1 instead of 55 ... so `validate` said OK
+where C said BOUNDS". Two independent readers of one image, and only one
+of them had been corrected. That is the shape worth noticing: the second
+implementation of a thing does not inherit the first one's bug fixes, and
+nothing about it looks unfinished.
+
+The branch mirrors `walk.py`'s, including the two conditions that are
+easy to leave out. **A member of THIS struct**, tested first -- an arm is
+not one, and placing an arm walks the variant it belongs to, whose extent
+is that arm's, and the two recur until the stack ends. And **only where
+the image says the struct is measurable**: `struct_flags` bit 1, which
+the C walker had never read. Where it is not, no backend places what
+follows either, and the minimum is not a better guess than refusing.
+
+**dnsname still does not walk in C, for an unrelated reason, and saying
+so is the point.** `label` is `u2 form; u6 rest;` and the C walker
+refuses every bit-packed field: `situ_walk.c` guards on
+`start_bits % 8u || width_bits % 8u` while the comment above it justifies
+the guard by saying the solver will not place a bit-packed field at a
+dynamic offset. The guard tests ALIGNMENT and the comment argues about
+DYNAMISM, so every statically-placed bit field is refused too. The fix
+here is verified on a fixture that needs no bit reads; the bit-packed
+gap is its own entry to write.
+
+**One divergence survives this fix and is asserted rather than left to be
+rediscovered.** Asked for the struct-typed member's own *value*, C reads
+one byte and answers 3 where `walk.py` reads four and answers
+0x03616263. That is a different path from the extent, it disagreed before
+this change and after it, and neither answer is obviously the right one
+-- reading a struct as a scalar is a question nobody has settled. The
+test pins both so the next reader meets it as a recorded gap.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

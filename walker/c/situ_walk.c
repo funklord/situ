@@ -703,6 +703,18 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
  * Zero is an answer rather than a refusal. A `name` whose first label does not
  * fit holds no labels and is zero bytes long. The guard against a zero extent
  * belongs where it stops something, which is the walk below. */
+/* `image_struct.struct_flags`, at byte 12 of the entry.
+ *
+ * Bit 0: whether the image carries *every* check this struct needs. The
+ * packer sets it, and a walker that ignored it would report OK for a struct
+ * whose rules it was never given.
+ *
+ * Bit 1: whether one instance can be measured from its own bytes. A struct
+ * that ends at its frame rather than at a length it carries has no extent of
+ * its own, so nothing may descend into one. */
+#define STRUCT_VALIDATABLE 0x01u
+#define STRUCT_MEASURABLE  0x02u
+
 static situ_walk_err struct_extent(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
@@ -1010,6 +1022,64 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 	}
 
 	if (held.size_code == SITU_WALK_NONE) {
+		/* A member typed as a variable-length struct carries no length
+		 * program, because its extent is the sum of its own members and
+		 * only `struct_extent` knows it. Falling straight through to
+		 * `held.size_bits` answers the MINIMUM: dnsname's `qname` came
+		 * out one byte where the four backends and `walk.py` all say
+		 * seventeen, and `qtype` was then read at byte 1 -- comfortably
+		 * inside a frame it does not reach, so this walker reported a
+		 * value and called the message well-formed. `walk.py` records
+		 * that as a fault it had and fixed; this one still had it.
+		 *
+		 * A member of THIS struct, and the test comes first: an arm is
+		 * not one, and placing an arm walks the variant it belongs to,
+		 * whose extent is that arm's, and the two recur. */
+		uint32_t first = 0u;
+		uint32_t count = 0u;
+
+		err = situ_walk_members(image, shape, &first, &count);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+
+		if (held.type_struct != SITU_WALK_NONE
+		                && index >= first && index - first < count
+		                && held.type_struct < image->struct_count) {
+			const uint8_t *inner = image->structs
+			                       + held.type_struct * image->struct_stride;
+
+			if (u32_at(inner + 8) == SITU_WALK_NONE) {
+				/* Variable, so it has to be measured. Where the image
+				 * says it cannot be, no backend places what follows
+				 * either, and the minimum is not a better guess than
+				 * refusing. */
+				if ((u32_at(inner + 12) & STRUCT_MEASURABLE) == 0u) {
+					return SITU_WALK_UNSUPPORTED;
+				}
+
+				uint32_t at = 0u;
+				err = offset_bits_deep(image, message, len, shape, index,
+				                       depth, &at);
+				if (err != SITU_WALK_OK) {
+					return err;
+				}
+				at /= 8u;
+				if (at > len) {
+					return SITU_WALK_BOUNDS;
+				}
+
+				uint32_t extent = 0u;
+				err = struct_extent(image, message + at, len - at,
+				                    held.type_struct, depth + 1u, &extent);
+				if (err != SITU_WALK_OK) {
+					return err;
+				}
+				*out = extent * 8u;
+				return SITU_WALK_OK;
+			}
+		}
+
 		*out = held.size_bits;
 		return SITU_WALK_OK;
 	}
@@ -1530,11 +1600,6 @@ static int utf16_valid(const uint8_t *data, uint32_t len, int big)
 	}
 	return 1;
 }
-
-/* `image_struct.struct_flags` bit 0: whether the image carries *every* check
- * this struct needs. The packer sets it, and a walker that ignored it would
- * report OK for a struct whose rules it was never given. */
-#define STRUCT_VALIDATABLE 0x01u
 
 /* The first constraint row for a member, or NULL. Contiguous, like the arms
  * table and for the same reason. */

@@ -478,6 +478,64 @@ def test_they_agree_about_an_endian_marker(tmp_path: Path) -> None:
 	assert c_markers(tmp_path, blob, big) == ["little=0", "refused"]
 
 
+_NESTED_SCHEMA = """target buffer;
+endian big;
+
+struct inner {
+	u8  n;
+	u8  body[n];
+}
+
+struct outer {
+	inner  head;
+	u16    tail;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_nested_variable_struct(tmp_path: Path) -> None:
+	"""A member whose type is a struct with no single size.
+
+	It carries no length program, because its extent is the sum of its own
+	members and only `struct_extent` knows it. This walker fell through to
+	the placement's `size_bits`, which is the MINIMUM -- and a minimum is
+	not a refusal, so it answered. `head` came out one byte instead of
+	four, `tail` was read at offset 1 instead of 4, and 0x6162 was
+	reported as its value: inside the frame, so nothing complained.
+
+	`walk.py` carries this same fix and the comment recording the same
+	symptom on dnsname's `qname` -- one byte where it is seventeen, with
+	`qtype` read at 1. Two independent readers of one image, and only one
+	of them had been corrected.
+
+	The widths are pinned as well as compared. Agreement alone would hold
+	if both answered the minimum, which is exactly the state this came
+	from.
+	"""
+	blob    = _inline_image(_NESTED_SCHEMA)
+	message = bytes.fromhex("03616263beef")	# n=3, "abc", then 0xbeef
+
+	assert python_widths(blob, message, 1) == ["4", "2"]
+	assert c_widths(tmp_path, blob, message, 1) == ["4", "2"]
+
+	# `tail` read where the nested struct ends rather than where its
+	# minimum would have put it. 0x6162 was the old answer, and it is the
+	# one worth pinning: agreement on 0xbeef is what the offset being right
+	# looks like from outside.
+	assert c_answers(tmp_path, blob, message, 1)[1] == "48879"
+	assert python_answers(blob, message, 1)[1] == "48879"
+
+	# The two still differ about the struct-typed member ITSELF -- C reads
+	# one byte and answers 3, `walk.py` reads four and answers 0x03616263 --
+	# and that is a separate path from the extent this fixes, unchanged by
+	# it and disagreeing before it. Asserted here so the gap is recorded
+	# where somebody comparing the two will meet it, rather than left for
+	# the next reader to rediscover as a surprise.
+	assert c_answers(tmp_path, blob, message, 1)[0] == "3"
+	assert python_answers(blob, message, 1)[0] == "56713827"
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_they_agree_whether_a_tag_is_present(tmp_path: Path) -> None:
 	"""A tag's presence is whether its span is inside the frame -- the caller
