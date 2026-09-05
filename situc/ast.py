@@ -988,6 +988,12 @@ class KernelFamily(Enum):
 
 	TABLE       = "table"
 	POLYNOMIAL  = "polynomial"
+	#: One's-complement addition with end-around carry: RFC 1071, which is
+	#: the checksum IPv4, ICMP, UDP and TCP all carry. It is not a
+	#: polynomial -- there is no generator and no division -- so it had no
+	#: family here, and situ could describe every CRC in use while having
+	#: nothing to say about the sum on almost every packet (26.245).
+	ONES_COMPLEMENT = "ones_complement"
 	LINEAR      = "linear_block"
 	SHIFT       = "shift_register"
 	PERMUTATION = "permutation"

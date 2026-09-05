@@ -285,7 +285,77 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _linear_block(decl, prefix)
 	if kernel.family is ast.KernelFamily.SHIFT:
 		return _shift_register(decl, prefix)
+	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
+		return _ones_complement(decl, prefix)
 	return _stuffing(decl, prefix)
+
+
+# ---------------------------------------------------------------------------
+# One's complement: RFC 1071, the checksum on almost every packet
+# ---------------------------------------------------------------------------
+
+
+def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""RFC 1071's sum, which four of this repository's examples carry.
+
+	Sixteen lines and no table. The data is read as big-endian 16-bit words
+	and added into a wider accumulator, the carries are folded back until
+	none is left, and the result is complemented where the kernel says so.
+
+	Two details are the whole of the algorithm's reputation for being
+	fiddled. An odd trailing byte is the *high* half of a final word, not
+	the low one -- padding it the other way gives a number that is wrong for
+	every odd-length input and right for every test somebody wrote with an
+	even one. And the fold is a loop rather than a single add, because
+	folding once can carry again.
+
+	The sum is order-independent over 16-bit words, which is why a protocol
+	may compute it over a pseudo-header and a payload separately and add the
+	halves. That property is the reason RFC 1071 exists as a document rather
+	than a line of code, and nothing here needs to do anything to preserve
+	it.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	name       = ident(prefix, decl.name)
+	complement = kernel.flag("complement")
+	final      = "(uint16_t)(~sum & 0xFFFFu)" if complement \
+		else "(uint16_t)(sum & 0xFFFFu)"
+
+	return [
+		"",
+		f"/* {decl.name}: RFC 1071, one's-complement sum with end-around",
+		" * carry" + (", complemented" if complement else "") + ". */",
+		f"uint16_t {name}(const uint8_t *data, uint32_t len)",
+		"{",
+		"\t/* 64 bits, so the accumulator cannot overflow for any length a",
+		"\t * uint32_t can express: at most 2^31 words of 0xFFFF is about",
+		"\t * 1.4e14, and 2^64 is 1.8e19. A uint32_t held 65537 words and",
+		"\t * wrapped on the next one -- 128 KiB, which no IP datagram",
+		"\t * reaches and any file does. */",
+		"\tuint64_t sum = 0;",
+		"\tuint32_t i;",
+		"",
+		"\tfor (i = 0; i + 1u < len; i += 2u) {",
+		"\t\tsum += (uint64_t)(((uint32_t)data[i] << 8) | data[i + 1u]);",
+		"\t}",
+		"\tif (i < len) {",
+		"\t\t/* The odd byte is the high half of a final word. Padding it",
+		"\t\t * low is wrong for every odd length and right for every",
+		"\t\t * even-length test anybody writes. */",
+		"\t\tsum += (uint64_t)((uint32_t)data[i] << 8);",
+		"\t}",
+		"",
+		"\t/* A loop rather than one add, because a fold can carry again --",
+		"\t * which a 64-bit accumulator makes reachable rather than",
+		"\t * theoretical. */",
+		"\twhile (sum >> 16) {",
+		"\t\tsum = (sum & 0xFFFFu) + (sum >> 16);",
+		"\t}",
+		f"\treturn {final};",
+		"}",
+	]
 
 
 # ---------------------------------------------------------------------------

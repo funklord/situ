@@ -37,6 +37,7 @@ codec framed unbound expansion=ratio_exact(2,1) seekable=permuted granularity=bl
 codec hamming_7_4 derived expansion=ratio_exact(7,4) seekable=linear granularity=bit(4) systematic invertible deterministic
 codec hdlc_bit_stuffing derived expansion=ratio_bounded(6,5) seekable=none granularity=bit(1) invertible deterministic
 codec interleave_16 derived length_preserving seekable=permuted granularity=byte invertible deterministic
+codec internet_checksum derived expansion=+2 seekable=linear granularity=block systematic deterministic
 codec manchester_802_3 derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
 codec manchester_thomas derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
 codec nrzi_transition_on_one derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating

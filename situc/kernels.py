@@ -136,6 +136,7 @@ KERNEL_ARGUMENTS: dict[ast.KernelFamily, frozenset[str]] = {
 		"n", "k", "standard_form", "code"}),
 	ast.KernelFamily.SHIFT:       frozenset({
 		"taps", "width", "seed", "feedback", "complement_feedback"}),
+	ast.KernelFamily.ONES_COMPLEMENT: frozenset({"width", "complement"}),
 	ast.KernelFamily.PERMUTATION: frozenset({"rows", "columns", "span"}),
 	ast.KernelFamily.STUFFING:    frozenset({
 		"worst_case", "per", "unit", "code"}),
@@ -329,6 +330,56 @@ def _polynomial(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 			label = "not a whole number of bytes",
 			notes = ["a checksum is appended as bytes; a width that is not a "
 			         "multiple of eight has no byte string to append"],
+		)
+
+	return Derived(
+		expansion        = ast.Expansion.FIXED_ADD,
+		expansion_add    = width // 8,
+		seekable         = ast.Seekable.LINEAR,
+		granularity      = ast.Granularity.BLOCK,
+		granularity_size = None,
+		systematic       = True,
+		invertible       = False,		# a digest cannot be undone
+		deterministic    = True,
+	)
+
+
+def _ones_complement(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
+	"""RFC 1071's checksum: one's-complement addition, end-around carry.
+
+	Not a polynomial. There is no generator and no division -- the data is
+	read as a sequence of big-endian words and added, the carries are folded
+	back in, and the result is complemented. That is why it had no family
+	here for so long: every CRC fitted `polynomial`, and the sum on almost
+	every packet on the internet fitted nothing.
+
+	The signature is a CRC's, and for the same reasons: the data is left
+	verbatim with a digest appended, so it is systematic, the digest cannot
+	be undone, and a field under it is read with no decode at all.
+	"""
+	width = _positive(kernel, "width", decl)
+	if width % 8:
+		raise error(
+			f"`{decl.name}` has a {width}-bit checksum kernel",
+			kernel.span,
+			label = "not a whole number of bytes",
+			notes = ["the sum is stored as bytes; a width that is not a "
+			         "multiple of eight has no byte string to store"],
+		)
+
+	# 16 is RFC 1071 and is what every protocol using this carries. Wider is
+	# arithmetically fine and has no deployed user, so it is refused rather
+	# than generated untested -- 17.0 prefers a refusal to a surprise.
+	if width != 16:
+		raise error(
+			f"`{decl.name}` is a {width}-bit one's-complement sum",
+			kernel.span,
+			label = "only 16 is implemented",
+			notes = ["RFC 1071 defines the 16-bit sum, and it is what IPv4, "
+			         "ICMP, UDP and TCP all carry",
+			         "a wider one is arithmetically sound and has no user "
+			         "here, so it is refused rather than generated and never "
+			         "run against anything"],
 		)
 
 	return Derived(
@@ -655,6 +706,7 @@ STUFFING_BOUNDS: dict[str, tuple[int, int]] = {
 #: a protocol under design, and such a codec needs none of this.
 KERNEL_REQUIRED_FOR_DERIVED: dict[ast.KernelFamily, tuple[str, ...]] = {
 	ast.KernelFamily.SHIFT: ("taps", "width", "seed"),
+	ast.KernelFamily.ONES_COMPLEMENT: ("width",),
 }
 
 
@@ -670,6 +722,7 @@ _FAMILIES = {
 	ast.KernelFamily.POLYNOMIAL:  _polynomial,
 	ast.KernelFamily.LINEAR:      _linear_block,
 	ast.KernelFamily.SHIFT:       _shift_register,
+	ast.KernelFamily.ONES_COMPLEMENT: _ones_complement,
 	ast.KernelFamily.PERMUTATION: _permutation,
 	ast.KernelFamily.STUFFING:    _stuffing,
 }

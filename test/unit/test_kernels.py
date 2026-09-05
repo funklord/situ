@@ -845,6 +845,7 @@ codec manch    { kernel = table(input_bits = 1, output_bits = 2,
                                 code = manchester_802_3); }
 codec crc      { kernel = polynomial(width = 16, poly = 0x1021,
                                      init = 0xFFFF); }
+codec sum16    { kernel = ones_complement(width = 16, complement); }
 
 impl inter derived;
 impl manch derived;
@@ -854,6 +855,7 @@ impl additive derived;
 impl selfsync derived;
 impl cobs derived;
 impl hdlc derived;
+impl sum16 derived;
 
 struct s { u8 a; }
 """
@@ -1176,3 +1178,91 @@ def test_a_padded_region_passes_its_decoder_bytes() -> None:
 
 	assert "situ_b64_decode(situ_s_body_ptr(view),\n\t\tencoded, out)" in header
 	assert "encoded * 8u" not in header
+
+
+@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler")
+def test_the_internet_checksum_matches_rfc_1071(tmp_path: Path) -> None:
+	"""Three vectors from outside situ, because a checksum agreeing with
+	itself is worth nothing.
+
+	RFC 1071 section 3 sums a byte sequence by hand and gives the result;
+	the IPv4 header is a real one with a published checksum; and the odd
+	length is where the fiddly half of the algorithm shows -- a trailing
+	byte is the HIGH half of a final word, and padding it low is right for
+	every even-length test anybody writes and wrong for every odd one.
+
+	A fourth vector is 128 KiB, and it is here because the first three did
+	not guard the fold: replacing the `while` with an `if` left all three
+	green. Below 65537 words a single fold is correct for every input, so
+	nothing shorter can distinguish them. Trying to break the code is what
+	found that -- and found, on the way, that the `uint32_t` accumulator
+	this was first written with overflows one word past the same point.
+
+	Situ could describe every CRC in practical use and had nothing to say
+	about the sum on almost every packet on the internet, because it is not
+	a polynomial and there was no family for it (26.245).
+	"""
+	schema = parse_text("endian big;\n"
+	                    "codec internet_checksum {\n"
+	                    "\tkernel = ones_complement(width = 16, complement);\n"
+	                    "}\nimpl internet_checksum derived;\n"
+	                    "struct s { u16 a; }\n")
+	(tmp_path / "unit.c").write_text(derived.generate(schema, "unit"),
+	                                 encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <stdint.h>
+uint16_t situ_internet_checksum(const uint8_t *data, uint32_t len);
+
+int main(void)
+{
+	static const uint8_t rfc[8]  = { 0x00, 0x01, 0xf2, 0x03,
+	                                 0xf4, 0xf5, 0xf6, 0xf7 };
+	static const uint8_t head[20] = {
+		0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00,
+		0x40, 0x11, 0x00, 0x00, 0xc0, 0xa8, 0x00, 0x01,
+		0xc0, 0xa8, 0x00, 0xc7 };
+	static const uint8_t odd[3]  = { 'a', 'b', 'c' };
+
+	if (situ_internet_checksum(rfc,  sizeof rfc)  != 0x220du) return 1;
+	if (situ_internet_checksum(head, sizeof head) != 0xb861u) return 2;
+	if (situ_internet_checksum(odd,  sizeof odd)  != 0x3b9du) return 3;
+
+	/* Two things at once, and they need different sizes, so this is the
+	   larger.
+
+	   65537 words of 0xffff sum to 0xffffffff, whose first fold carries
+	   again -- below that a single `if` is correct for every input, so
+	   nothing shorter distinguishes it from the `while`.
+
+	   65538 is one word further and is where a uint32_t accumulator wraps.
+	   At exactly 65537 it holds 0xffffffff and does not, so a vector sized
+	   for the fold alone passes with the narrow accumulator restored. Both
+	   sabotages were run; this is the size that fails under either. */
+	{
+		static uint8_t big[131076];
+		uint32_t k;
+
+		for (k = 0; k < sizeof big; k++) {
+			big[k] = 0xffu;
+		}
+		if (situ_internet_checksum(big, sizeof big) != 0x0000u) return 4;
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	# The generated file includes the schema's header for its integer types;
+	# the probe declares the one function it calls, so nothing else is needed.
+	source = (tmp_path / "unit.c").read_text(encoding="ascii")
+	(tmp_path / "unit.c").write_text(
+		source.replace('#include "unit.h"', "#include <stdint.h>"),
+		encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wconversion",
+		 "-Wsign-conversion", str(tmp_path / "probe.c"),
+		 str(tmp_path / "unit.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0

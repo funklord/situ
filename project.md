@@ -20769,6 +20769,55 @@ fixture. PNG's IEND chunk CRC is `0xAE426082`, a constant from the
 specification rather than from situ, and it is now what the C and C++
 tests check against.
 
+### 26.245 Every CRC anybody uses, and not the sum on almost every packet
+
+Asked where the Internet checksum is described, the answer was nowhere.
+Not in `std/codecs.situ`, not in `std/kernels.situ`, and no kernel family
+could have held it: the six were `table`, `polynomial`, `linear_block`,
+`shift_register`, `permutation` and `stuffing`, and RFC 1071's sum is none
+of them -- there is no generator and no division.
+
+So situ could describe thirteen CRCs including several nobody has deployed
+in years, while having nothing to say about the checksum IPv4, ICMP, UDP
+and TCP all carry. Four of its own examples declare one, and all four left
+the arithmetic with the caller because there was no arithmetic to name.
+
+**`ones_complement` is the seventh family**, and the survey in 13.4 that
+bounded the set at six is what makes adding one worth recording rather
+than just doing: the claim was that essentially every line code, FEC,
+scrambler and framing code in use is one of the six or a pipeline of them.
+That is still true. A checksum is none of those things, and the survey
+never looked for one.
+
+**Three vectors from outside situ**, because a checksum agreeing with
+itself is worth nothing: RFC 1071 section 3's own hand-worked example, a
+real IPv4 header with a published checksum, and an odd-length input --
+that last because a trailing byte is the HIGH half of a final word, and
+padding it low is right for every even-length test anybody writes.
+
+**Then trying to break it found a bug in it.** The odd-byte sabotage
+failed the test; replacing the carry loop with a single fold did not. No
+input under 65537 words can tell them apart, so the loop was unguarded --
+and sizing a vector that could reach it showed the accumulator I had
+written, a `uint32_t`, holds exactly 65537 words of 0xFFFF and wraps on
+the next one. **A comment claiming the loop was needed, and an accumulator
+that overflowed one word past where the loop first mattered, in the same
+sixteen lines.** It is `uint64_t` now, which cannot overflow for any length
+a `uint32_t` can express.
+
+**The two sabotages need different sizes and the smaller one hides the
+larger.** At exactly 65537 words the narrow accumulator is at its maximum
+and still correct, so a vector sized for the fold passes with the
+overflow restored. The committed vector is 65538 words and fails under
+either. **Two defects in one expression, and a test that catches one of
+them reads exactly like a test that catches both.**
+
+**The examples cannot bind it yet**, and that is 0053's limit rather than
+this one's: `gen-derived` emits C, so `is internet_checksum` on IPv4 would
+be refused by the Rust and Python backends, and the corpus builds every
+example in all four. What this closes is the description; what it waits on
+is the same thing PNG's CRC waits on.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

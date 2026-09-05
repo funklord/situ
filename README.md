@@ -768,10 +768,12 @@ soft-decision decoders are tier 1, where the caller owns the buffer and
 situ checks the contract. Section 13.4 of `project.md` records the boundary
 and the one case that is a trap rather than a gap.
 
-`std/kernels.situ` carries 38 of them: 15 polynomial (13 CRCs and 2
+`std/kernels.situ` carries 39 of them: 15 polynomial (13 CRCs and 2
 Reed-Solomon codes), 8 table, 7 shift_register (two scramblers, the two NRZI
 conventions, SONET, USB 3.0, PRBS23), 6 stuffing, 1 linear_block -- a
-Hamming(7, 4) -- and 1 permutation. Those counts are held to the schema by a
+Hamming(7, 4) -- 1 permutation, and 1 ones_complement, which is RFC 1071's
+checksum: the one IPv4, ICMP, UDP and TCP all carry, and the one that had no
+description here while every CRC anybody uses had one. Those counts are held to the schema by a
 test, because a number in a README is a claim like any other. Stages compose
 into a pipeline, whose properties are the product taken conservatively:
 

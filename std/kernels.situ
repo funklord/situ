@@ -119,6 +119,28 @@ codec crc8_smbus {
 }
 impl crc8_smbus derived;
 
+// RFC 1071's checksum, which IPv4, ICMP, UDP and TCP all carry -- and which
+// had no description here at all while every CRC anybody uses had one. It is
+// not a polynomial: there is no generator and no division. The data is read
+// as big-endian 16-bit words and added, the carries are folded back in, and
+// the result is complemented.
+//
+// `complement` is a flag rather than assumed, because the uncomplemented sum
+// is a real intermediate: a protocol summing a pseudo-header and a payload
+// separately adds the two halves and complements once at the end. The sum is
+// order-independent over 16-bit words, which is what makes that legal and is
+// most of the reason RFC 1071 exists as a document rather than as a line of
+// code.
+//
+// The generated implementation is checked against RFC 1071 section 3's own
+// worked example, a real IPv4 header, and an odd-length input -- the last
+// because an odd trailing byte is the HIGH half of a final word, and padding
+// it the other way is right for every even-length test anybody writes.
+codec internet_checksum {
+	kernel = ones_complement(width = 16, complement);
+}
+impl internet_checksum derived;
+
 // The same family over an extension field is a Reed-Solomon code rather than a
 // CRC, and the derivation says so: the parity is symbols rather than a digest,
 // it comes back, and it corrects rather than merely detecting -- so the code is
