@@ -30,12 +30,32 @@ endian big;                  // no multi-byte binary fields at all; see below
 // fact, per field.
 const HEADER_BYTES = 110;
 
+// The magic, and the one thing in this header that is not a number.
+//
+// A reader compares it as six bytes -- `memcmp(collected, "070701", 6)` -- so
+// a byte-run enum is what the format actually has (0052). It used to be a
+// `decimal u32 magic[6] [min = 70701, max = 70702]`, with a comment saying
+// there is no enum of text numbers, and the pair of bounds was standing in
+// for a set of two spellings because that was the only construct available.
+// The map records what changed: `repr` was TextConverted and is
+// MemoryIdentical, which is the difference between parsing six digits and
+// comparing six bytes, and the generated check now reads
+// `[must_eq = "070701" | "070702"]` rather than a decimal range a reader
+// cannot match against a format reference.
+//
+// No `default`, because a reader refuses a spelling it does not know rather
+// than passing it. The two arms are measured rather than recalled, against
+// the tool that wrote the vectors beside this file: GNU cpio 2.15 writes
+// "070701" for `-H newc` and "070702" for `-H crc`. A boot-time reader may
+// take a subset of that -- the kernel's initramfs accepts only the first --
+// and the subset is the reader's rather than the format's.
+enum format : u8[6] {
+	newc     = "070701",
+	newc_crc = "070702",
+}
+
 struct cpio_header {
-	// "070701", or "070702" when the check field is a checksum
-	// (initramfs.c:281). Read as a decimal text number so the two spellings
-	// are two values a `min`/`max` pair can admit -- there is no enum of text
-	// numbers, and the alternative is six bytes nothing constrains.
-	decimal u32  magic[6]  [min = 70701, max = 70702];
+	format  magic;
 
 	hex u32  ino[8];
 	hex u32  mode[8];
@@ -55,10 +75,19 @@ struct cpio_header {
 	// caller can size a buffer for rather than four billion.
 	hex u32  namesize[8]  [min = 1, max = 4096];
 
-	// Zero for "070701" and a checksum of the file data for "070702". Not
+	// Zero for `newc` and a checksum of the file data for `newc_crc`. Not
 	// modelled as a `checksum`: it covers the *data*, which is not in this
 	// struct, and coverage in situ is over regions of the message the tag is
 	// in. `example/tcp` carries the same limitation for the same reason.
+	//
+	// 0053 does not change that, and it fails a second time for a reason of
+	// its own: the algorithm is not one situ can generate. Despite the name,
+	// `newc_crc` is no CRC -- it is the unsigned sum of the file's bytes,
+	// truncated to 32 bits, so none of the thirteen CRC kernels in
+	// `std/kernels.situ` computes it and neither does `internet_checksum`,
+	// which is a one's-complement sum of 16-bit words. Measured rather than
+	// read off the name: `-H crc` over the six bytes "hello\n" writes
+	// 0000021E, and 0x21E is 542, which is 104+101+108+108+111+10.
 	hex u32  check[8];
 }
 

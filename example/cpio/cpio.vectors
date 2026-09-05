@@ -13,7 +13,7 @@
 #
 # ENTRY ONE, 132 bytes:
 #
-#   "070701"                     the magic, as six decimal digits
+#   "070701"                     the magic, as six bytes
 #   13 fields of 8 hex digits    ino .. check
 #   "greeting.txt\0"             13 bytes, which is what `namesize` says
 #   one zero byte                rounding 110 + 13 up to 124
@@ -26,7 +26,7 @@
 # not a multiple of four, so the two are never the same.
 
 cpio_entry greeting 30 37 30 37 30 31 30 30 31 42 31 31 32 39 30 30 30 30 38 31 42 34 30 30 30 30 30 33 45 38 30 30 30 30 30 33 45 38 30 30 30 30 30 30 30 31 36 41 37 30 42 41 42 42 30 30 30 30 30 30 30 36 30 30 30 30 30 30 30 30 30 30 30 30 30 30 32 42 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 44 30 30 30 30 30 30 30 30 67 72 65 65 74 69 6E 67 2E 74 78 74 00 00 68 65 6C 6C 6F 0A 00 00
-	header.magic    = 70701
+	header.magic    = 30 37 30 37 30 31
 	header.namesize = 13
 	header.filesize = 6
 	header.mode     = 33204
@@ -38,7 +38,7 @@ cpio_entry greeting 30 37 30 37 30 31 30 30 31 42 31 31 32 39 30 30 30 30 38 31 
 # and `namesize` is 11, so the padding after the name is three bytes.
 
 cpio_entry trailer 30 37 30 37 30 31 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 31 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 42 30 30 30 30 30 30 30 30 54 52 41 49 4C 45 52 21 21 21 00 00 00 00
-	header.magic    = 70701
+	header.magic    = 30 37 30 37 30 31
 	header.namesize = 11
 	header.filesize = 0
 	header.nlink    = 1
@@ -49,7 +49,7 @@ cpio_entry trailer 30 37 30 37 30 31 30 30 30 30 30 30 30 30 30 30 30 30 30 30 3
 # input it could validate -- random bytes are not hex digits -- so it skipped,
 # and before 26.86 it "passed" over a decoder reading past the struct.
 cpio_header header 30 37 30 37 30 31 30 30 31 42 31 31 32 39 30 30 30 30 38 31 42 34 30 30 30 30 30 33 45 38 30 30 30 30 30 33 45 38 30 30 30 30 30 30 30 31 36 41 37 30 42 41 42 42 30 30 30 30 30 30 30 36 30 30 30 30 30 30 30 30 30 30 30 30 30 30 32 42 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 44 30 30 30 30 30 30 30 30
-	magic    = 70701
+	magic    = 30 37 30 37 30 31
 	namesize = 13
 	filesize = 6
 	mode     = 33204

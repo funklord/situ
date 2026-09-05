@@ -11,6 +11,10 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec internet_checksum derived expansion=+2 seekable=linear granularity=block systematic deterministic
+
 struct icmp_echo_id size=4 repr=ValueConverted
   icmp_echo_id.identifier                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   icmp_echo_id.sequence                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
@@ -19,8 +23,8 @@ struct icmp_frag size=4 repr=ValueConverted
   icmp_frag.<reserved0>                  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   icmp_frag.mtu                          offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
 
-struct icmp_message size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
-  icmp_message.message                   offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(checksum)
+struct icmp_message size=8.. mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
+  icmp_message.message                   offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(checksum)
   icmp_message.type                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(checksum)
   icmp_message.code                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(checksum)
   icmp_message.checksum                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
@@ -37,3 +41,4 @@ struct icmp_message size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   icmp_message.body.frag.mtu             offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
   icmp_message.body.unused               offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic auth=Covered(checksum)
   icmp_message.body.pointer              offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic auth=Covered(checksum)
+  icmp_message.rest                      offset=AbsoluteStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(checksum)

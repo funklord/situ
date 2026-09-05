@@ -166,9 +166,14 @@ One loop serves a CRC and a sum alike, and no intermediate state is
 exposed: a seeded or chained form would have had to publish a running
 register, which is a wider interface for a narrower purpose.
 
-**One limit remains and it is not the construct's.** A schema whose
-`covers` is narrower than its protocol's produces a number nobody else
-agrees with: ICMP describes eight bytes where RFC 792 sums the whole
-message, so it does not bind. That is worth stating as a property --
-**binding a codec makes a coverage observable**, and a narrow `covers` was
-indistinguishable from a correct one while the caller did the summing.
+**All four IP checksums bind**, and ICMP is the one that had to be fixed
+first: its `covers` stopped after the variant body, eight bytes where RFC
+792 sums the whole message, so the schema had been quietly wrong for as
+long as it existed. Describing the payload is what made the coverage true.
+
+That is the property worth taking from this record. **Binding a codec makes
+a coverage observable.** While the caller does the arithmetic, a narrow
+`covers` and a correct one are the same declaration -- the caller sums what
+they know is right and a schema that disagrees is invisible from both
+sides. Making the compiler act on a declaration is a test of it, and the
+first real return on this construct was a schema it proved wrong.

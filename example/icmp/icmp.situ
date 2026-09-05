@@ -20,6 +20,11 @@
 // unreachable or a time-exceeded message carries before the datagram that
 // caused it.
 
+codec internet_checksum {
+	kernel = ones_complement(width = 16, complement);
+}
+impl internet_checksum derived;
+
 target buffer;
 endian big;
 
@@ -64,22 +69,17 @@ struct icmp_message {
 		// What it buys is section 14.2's dirty bit: writing any covered byte
 		// marks the checksum stale and the generated API says so, where a
 		// plain `u16` left the caller to remember.
-		// Deliberately NOT `is internet_checksum`, and the reason is a
-		// property of this schema rather than of the construct (0053).
+		// `is internet_checksum` names the codec, so `checksum_compute`
+		// runs RFC 1071 over the whole message with these two bytes read
+		// as zero (0053).
 		//
-		// RFC 792's checksum covers the whole ICMP message, data included.
-		// This schema describes the eight bytes above and nothing after
-		// them -- the echo payload, and the quoted datagram a
-		// `time_exceeded` carries, are not members here -- so `message` is
-		// eight bytes and a computed sum would be right only for an ICMP
-		// message with no data at all. Every real one has some.
-		//
-		// It was bound, briefly, and the probe is what said so: situ
-		// summed 8 bytes where a reference over the packet summed 16.
-		// Binding a codec is what makes a coverage observable; until
-		// something computed, a narrow `covers` and a correct one looked
-		// identical.
-		checksum u8 checksum[2] covers(message) [self_as = 0];
+		// It could not bind until `rest` below existed. `covers(message)`
+		// stopped after the variant body, so situ would have summed eight
+		// bytes where RFC 792 sums the datagram -- and a probe said so the
+		// first time anything computed. Binding a codec is what makes a
+		// coverage observable (26.247).
+		checksum u8 checksum[2] covers(message) is internet_checksum
+			[self_as = 0];
 
 		variant body switch (type) {
 			case icmp_type.echo_request:            icmp_echo_id  echo;
@@ -89,10 +89,27 @@ struct icmp_message {
 			case icmp_type.time_exceeded:           u8            unused[4];
 			case icmp_type.parameter_problem:       u8            pointer[4];
 		}
+
+		// RFC 792's checksum covers the whole message, and the whole
+		// message is longer than the eight bytes above: an echo carries
+		// data of the sender's choosing, and the error types quote the
+		// datagram that provoked them. Neither is a field -- an echo's
+		// payload is opaque by definition and the quoted header is
+		// another schema's -- so this is bytes, and it is here so that
+		// `covers(message)` is what RFC 792 says it is.
+		//
+		// It was absent, and nothing noticed while the caller did the
+		// summing: a narrow `covers` and a correct one are the same
+		// declaration until something computes over it (26.247).
+		u8  rest[remaining];
 	}
 }
 
-require size(icmp_message) == 8;
+// The size claim is gone rather than weakened. It said `== 8`, which was
+// true of the schema and never of ICMP: an echo carries data and an error
+// type quotes the datagram that caused it, so a message has a floor and no
+// ceiling. What survives is the claim worth keeping -- the fields are all
+// at constant offsets, which is what a reader of this schema wants to know.
 require absolute_static(icmp_message);
 
 // And the conflict section 14.2 exists to make visible: `sequence` is inside

@@ -18,6 +18,9 @@
 endian big
 target buffer
 
+enum format : u8[6] unknown=error
+  newc="070701" newc_crc="070702"
+
 struct cpio_entry size=111..4294971507
   @0x0000   110       cpio_header header  big
   @0x006e   1..4096   u8         name  sized-by=header.namesize nul_terminated
@@ -26,7 +29,7 @@ struct cpio_entry size=111..4294971507
   ~         0..3      u8         <reserved1>  sized-by=align_up(header.filesize,4)-header.filesize
 
 struct cpio_header size=110
-  @0x0000   6         u32        magic  big radix=10 min=70701 max=70702
+  @0x0000   6         format     magic  big
   @0x0006   8         u32        ino  big radix=16
   @0x000e   8         u32        mode  big radix=16
   @0x0016   8         u32        uid  big radix=16

@@ -13,7 +13,7 @@
 
 struct cpio_entry size=111..4294971507 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical
   cpio_entry.header                      offset=AbsoluteStatic(0x00) size=Fixed(110) align=Aligned(8) repr=TextConverted atomic=NonAtomic
-  cpio_entry.header.magic                offset=AbsoluteStatic(0x00) size=Fixed(6) align=Aligned(8) repr=TextConverted atomic=NonAtomic
+  cpio_entry.header.magic                offset=AbsoluteStatic(0x00) size=Fixed(6) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   cpio_entry.header.ino                  offset=AbsoluteStatic(0x06) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
   cpio_entry.header.mode                 offset=AbsoluteStatic(0x0E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
   cpio_entry.header.uid                  offset=AbsoluteStatic(0x16) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
@@ -33,7 +33,7 @@ struct cpio_entry size=111..4294971507 mutate=Shifting address=Unstable repr=Tex
   cpio_entry.<reserved1>                 offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
 
 struct cpio_header size=110 repr=TextConverted atomic=NonAtomic
-  cpio_header.magic                      offset=AbsoluteStatic(0x00) size=Fixed(6) align=Aligned(8) repr=TextConverted atomic=NonAtomic
+  cpio_header.magic                      offset=AbsoluteStatic(0x00) size=Fixed(6) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   cpio_header.ino                        offset=AbsoluteStatic(0x06) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
   cpio_header.mode                       offset=AbsoluteStatic(0x0E) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic
   cpio_header.uid                        offset=AbsoluteStatic(0x16) size=Fixed(8) align=Aligned(2) repr=TextConverted atomic=NonAtomic

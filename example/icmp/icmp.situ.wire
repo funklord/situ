@@ -29,11 +29,12 @@ struct icmp_frag size=4
   @0x0000   2         u16        <reserved0>  big
   @0x0002   2         u16        mtu  big
 
-struct icmp_message size=8
+struct icmp_message size=8..
   @0x0000   1         icmp_type  type
   @0x0001   1         u8         code
   @0x0002   2         u8         checksum  self_as=0
   @0x0004   4         variant    body
+  @0x0008   0..       u8         rest  sized-by=remaining
   body switch: type
   body case 0: reply icmp_echo_id
   body case 3: frag icmp_frag
@@ -41,4 +42,4 @@ struct icmp_message size=8
   body case 8: echo icmp_echo_id
   body case 11: unused u8
   body case 12: pointer u8
-  checksum covers: body echo identifier sequence frag <reserved0> mtu gateway pointer reply identifier sequence unused code message type
+  checksum covers: body echo identifier sequence frag <reserved0> mtu gateway pointer reply identifier sequence unused code message rest type

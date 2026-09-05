@@ -6553,8 +6553,18 @@ class Emitter:
 		# above the reserved run because both are byte loops over a fixed
 		# count and only the expected bytes differ -- and below the variant
 		# and delimiter cases, which are about members this one cannot be.
+		# An element's own members are checked under the element's struct,
+		# not here -- the same rule the variant, delimiter and reserved-run
+		# branches state, and for the same reason. Without it `packet`
+		# emitted the `connect` arm's magic inline and refused every packet
+		# that was not a CONNECT, whatever the discriminant said.
+		#
+		# The four-way differential caught it on a random buffer: C said
+		# constraint where the other three said ok, which is the one shape
+		# that test exists to find.
 		pinned = pinned_runs(placement)
-		if pinned is not None:
+		if pinned is not None \
+				and "." not in placement.path[len(struct.name) + 1:]:
 			return self._pinned_run_check(struct, placement, pinned)
 
 		if scalar is not None and placement.kind == "reserved" \

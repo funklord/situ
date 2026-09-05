@@ -130,16 +130,29 @@ struct mqtt_string {
 // 3.1.2. The variable header, and the client identifier that follows it.
 //
 // The protocol name is modelled as its four bytes rather than as a
-// length-prefixed string, and the length beside it is pinned to four. That is
-// what 3.1.2.1 specifies for this version -- the name is "MQTT" and nothing
-// else -- and it buys the connect flags a constant offset. Written the other
-// way, as `u8 name[name_length]`, the flags would follow a member the data
-// sizes, and a bit-packed field cannot: its byte is not known until parse
-// time, which the compiler says in those words. A server that means to read
-// *any* protocol name reads the length itself and stops here.
+// length-prefixed string, and both the length and the run itself are pinned.
+// That is what 3.1.2.1 specifies for this version -- the name is "MQTT" and
+// nothing else -- and it buys the connect flags a constant offset. Written
+// the other way, as `u8 name[name_length]`, the flags would follow a member
+// the data sizes, and a bit-packed field cannot: its byte is not known until
+// parse time, which the compiler says in those words. A server that means to
+// read *any* protocol name reads the length itself and stops here.
 struct connect_body {
 	u16  protocol_name_length  [must_eq = 4];
-	u8   protocol_name[4];                          // "MQTT"
+
+	// 3.1.2.1: "The Protocol Name is a UTF-8 encoded string that represents
+	// the protocol name "MQTT", capitalized as shown. The string, its offset
+	// and length will not be changed by future versions of the MQTT
+	// specification." Table 3.1 spells the four bytes 0x4D 0x51 0x54 0x54.
+	//
+	// This ran as `u8 protocol_name[4];` under a `// "MQTT"` comment, which is
+	// the state 0052 was written about: the length was checked and the name
+	// was not, so a CONNECT carrying four bytes of anything validated. The
+	// byte-run `[must_eq]` is one span comparison and one check id, and the
+	// generated comment names `"MQTT"` rather than a decimal run -- which is
+	// what lets a reader hold this file beside table 3.1.
+	u8   protocol_name[4]  [must_eq = "MQTT"];
+
 	u8   protocol_level        [must_eq = 4];       // 3.1.2.2: 4 is 3.1.1
 
 	// 3.1.2.3, from bit 7 down. `will_qos` is meaningless unless `will_flag`

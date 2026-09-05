@@ -155,7 +155,12 @@ def test_python_computes_the_checksum_the_kernel_did(tmp_path: Path) -> None:
 	finally:
 		sys.path.remove(str(tmp_path))
 
-	view = module.icmp_message.at(runtime.Message(bytearray(REPLY)), 0)
+	# The message is variable-length now: RFC 792's checksum covers the
+	# whole message, and the schema describes the payload that follows the
+	# eight fixed bytes rather than stopping at them (26.249). A view of one
+	# therefore takes an extent.
+	view = module.icmp_message.at(runtime.Message(bytearray(REPLY)), 0,
+	                              len(REPLY))
 	at, length = view.checksum_covered()
 	hole, held = view.checksum_self_span()
 	filler     = module.icmp_message.SELF_AS_CHECKSUM
@@ -171,6 +176,13 @@ def test_python_computes_the_checksum_the_kernel_did(tmp_path: Path) -> None:
 		total = (total & 0xFFFF) + (total >> 16)
 
 	assert (~total) & 0xFFFF == (REPLY[2] << 8) | REPLY[3]
+
+	# And the same answer from the generated computation, which did not
+	# exist when this test was written: the loop above IS what a caller had
+	# to write, so keeping it turns a reimplementation into a second
+	# witness. If they ever disagree, one of them is wrong and the test says
+	# which pair to look at (0053).
+	assert view.checksum_compute() == (~total) & 0xFFFF
 
 
 @pytest.mark.parametrize("backend", sorted(EMITS))

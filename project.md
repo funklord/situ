@@ -20978,6 +20978,74 @@ been the bad one.
 coverage is eight bytes where RFC 792 sums the whole message (26.247), so
 what stops it is the schema rather than the construct.
 
+### 26.249 The example was wrong, and only computing found it
+
+ICMP's `covers(message)` stopped after the variant body: eight bytes, where
+RFC 792 sums the whole message. An echo carries data of the sender's
+choosing and every error type quotes the datagram that provoked it, and
+neither was a member of this schema.
+
+So the fix is in the example rather than the compiler. `u8 rest[remaining]`
+inside the region is what makes `covers(message)` mean what RFC 792 says,
+and it is bytes rather than fields for a good reason: an echo's payload is
+opaque by definition and a quoted header belongs to another schema.
+
+**Two claims went with it, and one of them was false.** `require
+size(icmp_message) == 8` was true of the schema and never of ICMP -- a
+message has a floor and no ceiling. It is gone rather than weakened, and
+`absolute_static` survives, which is the claim a reader actually wants: the
+fields are at constant offsets whatever follows them.
+
+**The sequence of finding this is the point.** The schema had been wrong
+for as long as it existed. It passed every gate, matched its committed map,
+and produced a `covers` accessor a caller would have summed over. Nothing
+could see it, because a narrow coverage and a correct one are the same
+declaration while the arithmetic lives elsewhere: the caller sums what they
+know is right, and a schema that disagrees with them is invisible from both
+sides.
+
+Binding a codec is what closed that gap. situ computed 8 bytes where a
+hand-written RFC 1071 reference over the packet computed 16, and the
+disagreement was a number rather than an opinion. **A construct that makes
+the compiler act on a declaration is a test of the declaration**, which is
+worth more than the construct: 0053 was written to compute checksums and
+its first real return was finding a schema that had been quietly wrong.
+
+All four IP checksums bind now -- IPv4 against a published header, ICMP,
+UDP and TCP against references written from RFC 1071's prose.
+
+### 26.250 An arm's magic, checked whatever arm arrived
+
+The example audit put `[must_eq = "MQTT"]` on MQTT's protocol name, and the
+four-way differential refused a random buffer in C where the other three
+accepted it. C was wrong.
+
+`packet` has a variant, and its entry list carries the arm members'
+placements by dotted path. The variant, delimiter and reserved-run branches
+of `_member_checks` all guard on that -- `"." not in placement.path[...]`,
+with a comment saying an element's own members are checked under the
+element's struct. **The pinned-run branch was written without it**, so
+`packet` emitted the CONNECT arm's magic inline and refused every packet
+that was not a CONNECT, whatever the discriminant said.
+
+**The bug is one line and the shape is the one this session keeps meeting.**
+A new construct inherits the surrounding code's defaults, and a guard that
+three neighbouring branches carry is not a guard the fourth gets. 26.241
+was the same thing in the owned encoder, 26.240 in the packer.
+
+**What found it is worth more than the fix.** No hand-written test would
+have: it needs a schema with a variant whose arm has a pinned run, and a
+buffer whose discriminant selects a different arm. The differential
+generates random bytes and asks only whether the four backends agree --
+which is a question that needs no oracle and no expected value, and which
+therefore covers cases nobody thought of.
+
+The three that agreed were right by construction rather than by care: they
+emit an arm's checks only through the arm's own validator, so the case
+could not arise. **Agreement among three is not a majority verdict** -- it
+happened to be correct here, and the differential's assertion is that they
+agree, not that any of them is right.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

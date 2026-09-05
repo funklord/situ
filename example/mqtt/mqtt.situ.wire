@@ -37,7 +37,7 @@ struct connack_body size=2
 
 struct connect_body size=12..327695
   @0x0000   2         u16        protocol_name_length  big must_eq=4
-  @0x0002   4         u8         protocol_name  big
+  @0x0002   4         u8         protocol_name  big must_eq="MQTT"
   @0x0006   1         u8         protocol_level  must_eq=4
   @0x0007   1bit      u1         user_name_flag  msb_first
   @0x0007:1 1bit      u1         password_flag  msb_first
