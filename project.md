@@ -20936,6 +20936,48 @@ Python backend was correct by construction, because it reads the accessor's
 own slice rather than assuming a width -- which is the general lesson: a
 width taken from the member cannot drift from the member.
 
+### 26.248 Two spans, and the last two IP checksums bind
+
+`prefix(...)` names bytes the algorithm sums before the message's own --
+UDP's and TCP's twelve-byte pseudo-headers, built by the caller from a
+layer the schema does not describe (14.2a). A generated `compute` had a
+view and nothing else, so the clause was refused. It is threaded now, and
+all four IP checksums that can bind do.
+
+**The codec takes two spans rather than a seed.** `X_spans(a, alen, b,
+blen, hole_at, hole_len, fill)` walks the concatenation and indexes the
+hole against it, so one loop serves a CRC and a one's-complement sum alike.
+The obvious alternative was a seeded or chained form -- sum the prefix,
+carry the running value into the message -- and it is worse for a reason
+worth keeping: **it publishes intermediate state.** A CRC's running
+register is not its digest, the fold and the final xor have not happened,
+and an entry point handing that out invites a caller to treat it as an
+answer. Two spans is a wider signature and a narrower promise.
+
+The three entry points nest rather than duplicate: `X` calls `X_holed`
+calls `X_spans`, so there is one loop per codec however many shapes reach
+it.
+
+**Verified against sums nobody here wrote.** A hand-written RFC 1071
+reference gives UDP 0xe855 over a pseudo-header and an odd-length payload,
+and TCP 0xf383; situ agrees with both. The cases that matter are the last
+two of each probe: corrupting a byte of the **pseudo-header** -- which is
+not in the datagram at all -- must refuse, and a prefix of the wrong length
+must refuse rather than be summed. The first is the whole reason the clause
+exists; the second is the mistake a caller will actually make.
+
+**And the punctuation caught me.** `compute` takes `out` last, so its
+prefix parameters end with a comma; `check` takes nothing after, so they
+need one in front. Reusing one string and trimming produced
+`(situ_view_t view const uint8_t *prefix, ...,)` -- two errors in one line,
+from one convenience. The first schema to use it did not compile, which is
+the good ending; a generated signature that happened to parse would have
+been the bad one.
+
+**ICMP still does not bind, and now it is the only one.** Its declared
+coverage is eight bytes where RFC 792 sums the whole message (26.247), so
+what stops it is the schema rather than the construct.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

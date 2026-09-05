@@ -59,12 +59,23 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		" * those bytes taken as a constant (14.2, `[self_as]`). The bytes",
 		" * are still there and generated code never allocates a copy, so",
 		" * the hole is a parameter rather than an edited buffer: every",
-		" * `_holed` entry point below reads through this, and the plain",
-		" * entry point passes a zero-length hole. */",
-		"static inline uint8_t situ_holed_byte(const uint8_t *data,"
-		" uint32_t i, uint32_t hole_at, uint32_t hole_len, uint8_t fill)",
+		" * `_spans` entry point below reads through this, and the simpler",
+		" * ones pass a zero-length hole.",
+		" *",
+		" * Two spans rather than one, because a checksum may cover bytes",
+		" * the message does not contain: UDP's and TCP's pseudo-headers",
+		" * are built by the caller and summed before the datagram (14.2a).",
+		" * Walking a then b indexes the hole against the concatenation,",
+		" * which is what lets one loop serve both a CRC and a sum without",
+		" * exposing any intermediate state. */",
+		"static inline uint8_t situ_span_byte(const uint8_t *a, uint32_t alen,"
+		" const uint8_t *b, uint32_t i, uint32_t hole_at, uint32_t hole_len,"
+		" uint8_t fill)",
 		"{",
-		"\treturn (i >= hole_at && (i - hole_at) < hole_len) ? fill : data[i];",
+		"\tif (i >= hole_at && (i - hole_at) < hole_len) {",
+		"\t\treturn fill;",
+		"\t}",
+		"\treturn i < alen ? a[i] : b[i - alen];",
 		"}",
 	]
 
@@ -171,6 +182,11 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				f"{ident(prefix, decl.name, 'holed')}"
 				"(const uint8_t *data, uint32_t len, uint32_t hole_at,"
 				" uint32_t hole_len, uint8_t fill);",
+				f"uint{accumulator(width)}_t "
+				f"{ident(prefix, decl.name, 'spans')}"
+				"(const uint8_t *a, uint32_t alen, const uint8_t *b,"
+				" uint32_t blen, uint32_t hole_at, uint32_t hole_len,"
+				" uint8_t fill);",
 			])
 		elif decl.kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 			lines.extend([
@@ -181,6 +197,10 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				f"uint16_t {ident(prefix, decl.name, 'holed')}"
 				"(const uint8_t *data, uint32_t len, uint32_t hole_at,"
 				" uint32_t hole_len, uint8_t fill);",
+				f"uint16_t {ident(prefix, decl.name, 'spans')}"
+				"(const uint8_t *a, uint32_t alen, const uint8_t *b,"
+				" uint32_t blen, uint32_t hole_at, uint32_t hole_len,"
+				" uint8_t fill);",
 			])
 		elif decl.kernel.family is ast.KernelFamily.TABLE:
 			# Bits, unless the code pads: a padded table walks whole input
@@ -362,7 +382,8 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		# The implementation before the wrapper that calls it, so the file
 		# needs no forward declaration and compiles on its own reasoning
 		# rather than on the header happening to be included.
-		f"uint16_t {name}_holed(const uint8_t *data, uint32_t len,"
+		f"uint16_t {name}_spans"
+		"(const uint8_t *a, uint32_t alen, const uint8_t *b, uint32_t blen,"
 		" uint32_t hole_at, uint32_t hole_len, uint8_t fill)",
 		"{",
 		"\t/* 64 bits, so the accumulator cannot overflow for any length a",
@@ -370,21 +391,22 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\t * 1.4e14, and 2^64 is 1.8e19. A uint32_t held 65537 words and",
 		"\t * wrapped on the next one -- 128 KiB, which no IP datagram",
 		"\t * reaches and any file does. */",
+		"\tconst uint32_t len = alen + blen;",
 		"\tuint64_t sum = 0;",
 		"\tuint32_t i;",
 		"",
 		"\tfor (i = 0; i + 1u < len; i += 2u) {",
-		"\t\tsum += (uint64_t)("
-		"((uint32_t)situ_holed_byte(data, i, hole_at, hole_len, fill) << 8)",
-		"\t\t                   | situ_holed_byte(data, i + 1u, hole_at,"
-		" hole_len, fill));",
+		"\t\tsum += (uint64_t)(((uint32_t)situ_span_byte(a, alen, b, i,"
+		" hole_at, hole_len, fill) << 8)",
+		"\t\t                   | situ_span_byte(a, alen, b, i + 1u,"
+		" hole_at, hole_len, fill));",
 		"\t}",
 		"\tif (i < len) {",
 		"\t\t/* The odd byte is the high half of a final word. Padding it",
 		"\t\t * low is wrong for every odd length and right for every",
 		"\t\t * even-length test anybody writes. */",
-		"\t\tsum += (uint64_t)((uint32_t)situ_holed_byte("
-		"data, i, hole_at, hole_len, fill) << 8);",
+		"\t\tsum += (uint64_t)((uint32_t)situ_span_byte("
+		"a, alen, b, i, hole_at, hole_len, fill) << 8);",
 		"\t}",
 		"",
 		"\t/* A loop rather than one add, because a fold can carry again --",
@@ -394,6 +416,12 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\t\tsum = (sum & 0xFFFFu) + (sum >> 16);",
 		"\t}",
 		f"\treturn {final};",
+		"}",
+		"",
+		f"uint16_t {name}_holed(const uint8_t *data, uint32_t len,"
+		" uint32_t hole_at, uint32_t hole_len, uint8_t fill)",
+		"{",
+		f"\treturn {name}_spans(data, len, NULL, 0, hole_at, hole_len, fill);",
 		"}",
 		"",
 		f"uint16_t {name}(const uint8_t *data, uint32_t len)",
@@ -468,15 +496,17 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	# spaces with no tab in front -- which the convention gate reads as
 	# space indentation, correctly, because there is no indentation for the
 	# spaces to be alignment against.
-	lines.append(f"{word} {name}_holed(const uint8_t *data, uint32_t len,"
+	lines.append(f"{word} {name}_spans(const uint8_t *a, uint32_t alen,"
+	             " const uint8_t *b, uint32_t blen,"
 	             " uint32_t hole_at, uint32_t hole_len, uint8_t fill)")
 	lines.append("{")
 	lines.append(f"\t{word} crc = ({word})0x{started:0{digits}X}u;")
+	lines.append("\tconst uint32_t len = alen + blen;")
 	lines.append("\tuint32_t i;")
 	lines.append("")
 	lines.append("\tfor (i = 0; i < len; i++) {")
 	lines.append("\t\tconst uint8_t byte ="
-	             " situ_holed_byte(data, i, hole_at, hole_len, fill);")
+	             " situ_span_byte(a, alen, b, i, hole_at, hole_len, fill);")
 	lines.append("")
 
 	if reflect:
@@ -493,6 +523,13 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	lines.append("")
 	lines.append(f"\treturn ({word})(crc ^ ({word})0x{xorout:0{digits}X}u)"
 	             f"{f' & 0x{mask:X}u' if width < 64 else ''};")
+	lines.append("}")
+	lines.append("")
+	lines.append(f"{word} {name}_holed(const uint8_t *data, uint32_t len,"
+	             " uint32_t hole_at, uint32_t hole_len, uint8_t fill)")
+	lines.append("{")
+	lines.append(f"\treturn {name}_spans(data, len, NULL, 0, hole_at,"
+	             " hole_len, fill);")
 	lines.append("}")
 	lines.append("")
 	lines.append(f"{word} {name}(const uint8_t *data, uint32_t len)")

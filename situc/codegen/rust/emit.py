@@ -1254,11 +1254,11 @@ class Emitter:
 		if not wanted:
 			return []
 
-		# The hole reader every `_holed` entry point goes through. It
+		# The byte reader every `_spans` entry point goes through. It
 		# comes from `derived.py` rather than being spelled again here,
 		# because this path never goes through `derived.generate` and a
 		# second copy is a second thing to be wrong.
-		lines: list[str] = list(kernels.holed_byte_helper())
+		lines: list[str] = list(kernels.span_byte_helper())
 		for decl in self.schema.codecs():
 			if decl.name not in wanted:
 				continue
@@ -1293,12 +1293,16 @@ class Emitter:
 		read   = ("from_le_bytes" if placement.tag_codec_endian
 		          is ast.Endian.LITTLE else "from_be_bytes")
 
+		taken  = self._prefix_param(placement)
+		passed = self._prefix_arg(placement)
+
 		return [
 			"",
+			*self._prefix_note(placement, name),
 			f"\t/// {placement.tag_codec} over the bytes {name}_covered()",
 			"\t/// names. Not called by validate: the coverage may run to the",
 			"\t/// end of the message.",
-			"\tpub fn " + f"{name}_compute(&self) -> Result<u32> {{",
+			"\tpub fn " + f"{name}_compute(&self{taken}) -> Result<u32> {{",
 			f"\t\tlet (at, n) = self.{name}_covered()?;",
 			*self._codec_call(placement, codec, name),
 			"\t}",
@@ -1306,8 +1310,8 @@ class Emitter:
 			f"\t/// Whether the stored {placement.tag_codec} matches. Not",
 			"\t/// `Error::Tag`: that means a cryptographic gate refused, and",
 			"\t/// this means the message is corrupt or truncated.",
-			f"\tpub fn {name}_check(&self) -> Result<()> {{",
-			f"\t\tlet want = self.{name}_compute()?;",
+			f"\tpub fn {name}_check(&self{taken}) -> Result<()> {{",
+			f"\t\tlet want = self.{name}_compute({passed})?;",
 			f"\t\tlet at = ({start}) as usize;",
 			f"\t\tif at + {width} > self.bytes.len() {{",
 			"\t\t\treturn Err(Error::Bounds);",
@@ -1318,6 +1322,75 @@ class Emitter:
 			" else { Err(Error::Checksum) }",
 			"\t}",
 		]
+
+	def _prefix_bytes(self, placement: Placement) -> int | None:
+		"""How many bytes the named prefix struct is, where that is fixed.
+
+		C emits its `PREFIX_BYTES` macro under the same condition. A
+		pseudo-header whose size the data decides has no constant to check
+		a caller's slice against, and inventing one would refuse a correct
+		call; the slice is passed through unchecked there and the length
+		the codec sees is the one the caller supplied.
+		"""
+		if placement.tag_prefix is None:
+			return None
+
+		held = self.resolved.structs.get(placement.tag_prefix)
+		if held is None or not held.layout.is_fixed_size:
+			return None
+		return held.layout.size_bytes
+
+	def _prefix_param(self, placement: Placement) -> str:
+		"""`compute` and `check` take the prefix where the schema names one.
+
+		`prefix(...)` is bytes the algorithm reaches before this message's,
+		built by the caller and not present in the message at all (14.2a).
+		The compiler knows the struct and its size; it does not and cannot
+		know the contents, which come from a layer this schema does not
+		describe.
+
+		A slice rather than C's pointer and length, because a slice carries
+		its own -- so the length parameter C needs would be a second way to
+		say the same thing here, and the one check worth making is against
+		the size the schema fixed rather than against what the caller said
+		twice.
+		"""
+		return "" if placement.tag_prefix is None else ", prefix: &[u8]"
+
+	def _prefix_arg(self, placement: Placement) -> str:
+		return "" if placement.tag_prefix is None else "prefix"
+
+	def _prefix_note(self, placement: Placement, name: str) -> list[str]:
+		"""Bytes the algorithm covers before this message's (14.2a).
+
+		TCP's and UDP's pseudo-header: the addresses belong to the IP
+		layer, so no accessor here can reach them and none is emitted.
+		What situ contributes is the layout and the length, which is
+		exactly what a caller cannot safely guess and exactly what a
+		schema compiler is for.
+		"""
+		before = placement.tag_prefix
+		if before is None:
+			return []
+
+		size = self._prefix_bytes(placement)
+		out  = [
+			f"\t/// `{placement.name}` also covers `{before}`, which this",
+			"\t/// message does not contain: the algorithm runs over those",
+			"\t/// bytes first and over the covered span after them.",
+			"\t///",
+			f"\t/// Build one with the `{_pascal(before)}` accessors in this",
+			"\t/// module, in a buffer of your own, and pass it to",
+			f"\t/// `{name}_compute` and `{name}_check`. Its contents are not",
+			"\t/// situ's to supply -- they come from a layer this schema does",
+			"\t/// not describe, which is the whole reason the clause exists.",
+		]
+		if size is not None:
+			out.extend([
+				f"\tpub const PREFIX_BYTES_{name.upper()}: usize = {size};",
+				"",
+			])
+		return out
 
 	def _codec_call(self, placement: Placement, codec: str,
 			name: str) -> list[str]:
@@ -1334,13 +1407,43 @@ class Emitter:
 		their checksum is inside its own coverage, so a sum over the
 		span as it stands reads the stored value and is wrong for every
 		message.
+
+		A prefix is the same call with the other span filled in (14.2a):
+		the codec walks the concatenation, so the hole's index is measured
+		from the front of the prefix rather than from the front of the
+		message. UDP with no `[self_as]` would be a prefix and a zero-length
+		hole, which is why the two are independent here rather than nested.
 		"""
 		filler = _self_as(placement.attrs)
-		if filler is None:
+		before = placement.tag_prefix
+		if filler is None and before is None:
 			return [f"\t\tOk(u32::from({codec}(&self.bytes[at as usize"
 			        "..(at + n) as usize])))"]
 
-		return [
+		lines: list[str] = []
+
+		# The prefix is summed first, so the hole's index is measured
+		# against the concatenation rather than against the message.
+		if before is None:
+			head, ahead = "&[]", "hole_at - at"
+		else:
+			head, ahead = "prefix", "prefix.len() + (hole_at - at)"
+			size = self._prefix_bytes(placement)
+			if size is not None:
+				lines.extend([
+					f"\t\tif prefix.len() != Self::PREFIX_BYTES_{name.upper()}"
+					" {",
+					"\t\t\treturn Err(Error::Bounds);",
+					"\t\t}",
+				])
+
+		if filler is None:
+			return lines + [
+				f"\t\tOk(u32::from({codec}_spans({head},",
+				"\t\t\t&self.bytes[at..at + n], 0, 0, 0)))",
+			]
+
+		lines.extend([
 			f"\t\tlet (hole_at, hole_n) = self.{name}_self_span()?;",
 			"\t\t// The hole is an offset into the covered span, and C"
 			" subtracts",
@@ -1350,10 +1453,11 @@ class Emitter:
 			"\t\tif hole_at < at {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			f"\t\tOk(u32::from({codec}_holed(",
-			"\t\t\t&self.bytes[at..at + n], hole_at - at, hole_n,"
-			f" {filler:#04x})))",
-		]
+			f"\t\tOk(u32::from({codec}_spans({head},",
+			f"\t\t\t&self.bytes[at..at + n], {ahead},"
+			f" hole_n, {filler:#04x})))",
+		])
+		return lines
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts."""

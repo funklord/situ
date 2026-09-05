@@ -1855,29 +1855,6 @@ def check_checksum_codecs(schema: ast.Schema) -> None:
 					notes = [f"add `impl {member.codec} derived;` where its "
 					         f"kernel description is enough to generate it"])
 
-			# `prefix(...)` names bytes the algorithm reaches before this
-			# message's, built by the caller and not present in the message
-			# at all (14.2a). A generated `compute` has a view and nothing
-			# else, so it cannot reach them -- and a sum over the message
-			# alone is wrong for every datagram.
-			#
-			# Threading them is a real design step rather than an
-			# oversight: the codec's entry point takes one buffer, and a
-			# prefixed sum needs either a second or a seeded form. UDP and
-			# TCP are the two that want it.
-			if member.prefix is not None:
-				raise error(
-					f"`is {member.codec}` cannot compute a checksum with a "
-					f"`prefix`",
-					member.span,
-					label = f"`prefix({member.prefix})` is not reachable "
-					        f"from a view",
-					notes = ["the prefix is bytes the caller builds and the "
-					         "message does not contain, so a generated "
-					         "computation cannot see them",
-					         "drop the `is` clause and compute it in the "
-					         "caller, which is what UDP and TCP do"])
-
 			if kind is not ast.ImplKind.DERIVED:
 				raise error(
 					f"`{member.codec}` is not a derived codec",

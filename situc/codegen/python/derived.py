@@ -17,11 +17,16 @@ mask a narrow width needs is arithmetic those backends can skip when the
 width fills its word. Python's integers are unbounded: nothing wraps, so
 `crc << 8` grows for ever and every width -- 64 included -- is masked.
 
-Each codec emits two entry points, as C does. The plain one is the whole
+Each codec emits three entry points, as C does. The plain one is the whole
 interface most callers want; the `_holed` one takes the hole a `[self_as]`
-checksum needs (14.2), and the plain one is a call to it with a hole of
-length zero. The hole is a parameter rather than an edited buffer, so
-nothing here allocates a copy of the span it is summing.
+checksum needs (14.2); and `_spans` takes two spans, because a checksum may
+cover bytes the message does not contain -- UDP's and TCP's pseudo-headers
+are summed before the datagram (14.2a). The outer two are calls to `_spans`
+with an empty second span and a zero-length hole.
+
+Neither the hole nor the second span is an edited buffer: the hole is a
+parameter and the spans are read through one helper that indexes their
+concatenation, so nothing here allocates a copy of what it is summing.
 """
 
 from __future__ import annotations
@@ -61,7 +66,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"",
 		"from __future__ import annotations",
 	]
-	lines.extend(holed_byte())
+	lines.extend(span_byte())
 
 	for decl in schema.codecs():
 		if decl.name not in bound or decl.kernel is None:
@@ -88,12 +93,18 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	return "\n".join(lines) + "\n"
 
 
-def holed_byte() -> list[str]:
-	"""The module-level helper every `_holed` entry point reads through.
+def span_byte() -> list[str]:
+	"""The module-level helper every `_spans` entry point reads through.
 
-	C's `situ_holed_byte`, in Python and with the same reasoning. Both
+	C's `situ_span_byte`, in Python and with the same reasoning. Both
 	families route every byte read through it, so there is one place that
 	knows what a hole is rather than two that agree.
+
+	Two spans rather than one, and `index` walks their concatenation: a
+	checksum may cover bytes the message does not contain, which is what
+	`prefix(...)` says (14.2a). Reading through the helper is what keeps
+	that free -- `a + b` would be a copy of both, and the no-copy property
+	is the point rather than a nicety.
 
 	Public, and not folded into `generate`, because `generate` is not the
 	only caller. The single-file backend asks `_for_kernel` for one codec
@@ -108,17 +119,24 @@ def holed_byte() -> list[str]:
 		"# those bytes taken as a constant (14.2, `[self_as]`). The bytes",
 		"# are still there and generated code never allocates a copy, so",
 		"# the hole is a parameter rather than an edited buffer: every",
-		"# `_holed` entry point below reads through this, and the plain",
-		"# entry point passes a zero-length hole.",
+		"# `_spans` entry point below reads through this, and the simpler",
+		"# ones pass a zero-length hole.",
+		"#",
+		"# Two spans rather than one, because a checksum may cover bytes",
+		"# the message does not contain: UDP's and TCP's pseudo-headers",
+		"# are built by the caller and summed before the datagram (14.2a).",
+		"# `index` walks the concatenation, so the hole is measured against",
+		"# it -- and the two are never joined, which is what makes summing",
+		"# a pseudo-header cost no copy of the datagram.",
 		# One line, however long: a continuation aligned under an open paren
 		# at column zero is leading spaces with no tab in front, which the
 		# generated-source convention gate reads as space indentation --
 		# correctly, since there is no indentation for it to align against.
-		"def _holed_byte(data: bytes, index: int, hole_at: int,"
+		"def _span_byte(a: bytes, b: bytes, index: int, hole_at: int,"
 		" hole_len: int, fill: int) -> int:",
 		"\tif hole_at <= index < hole_at + hole_len:",
 		"\t\treturn fill",
-		"\treturn data[index]",
+		"\treturn a[index] if index < len(a) else b[index - len(a)]",
 	]
 
 
@@ -199,10 +217,22 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\tneeds (14.2). No copy is made: the hole is a parameter, so a",
 		"\tcaller holding a read-only view sums it without allocating one.",
 		'\t"""',
+		f"\treturn {name}_spans(data, b\"\", hole_at, hole_len, fill)",
+		"",
+		"",
+		f"def {name}_spans(a: bytes, b: bytes, hole_at: int, hole_len: int,"
+		f" fill: int) -> int:",
+		f'\t"""The {decl.name} of `a` followed by `b`, with a hole in it.',
+		"",
+		"\tTwo spans because a checksum may cover bytes the message does",
+		"\tnot contain -- a pseudo-header, which the caller builds and this",
+		"\truns over first (14.2a). `hole_at` is measured against the two",
+		"\ttaken together, and neither is copied.",
+		'\t"""',
 		f"\tcrc = 0x{started:0{digits}X}",
 		"",
-		"\tfor index in range(len(data)):",
-		"\t\tbyte = _holed_byte(data, index, hole_at, hole_len, fill)",
+		"\tfor index in range(len(a) + len(b)):",
+		"\t\tbyte = _span_byte(a, b, index, hole_at, hole_len, fill)",
 	])
 
 	# Every branch masks, including the widest. A Python integer does not
@@ -261,20 +291,34 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\tspan as it stands reads the stored value and is wrong for every",
 		"\tmessage. No copy is made -- the hole is a parameter.",
 		'\t"""',
+		f"\treturn {name}_spans(data, b\"\", hole_at, hole_len, fill)",
+		"",
+		"",
+		f"def {name}_spans(a: bytes, b: bytes, hole_at: int, hole_len: int,"
+		f" fill: int) -> int:",
+		f'\t"""The {decl.name} of `a` followed by `b`, with a hole in it.',
+		"",
+		"\tUDP and TCP sum a pseudo-header the datagram does not contain",
+		"\tand the caller builds (14.2a); it is `a` and the message is `b`.",
+		"\t`hole_at` is measured against the two taken together, and the",
+		"\ttwo are never joined -- reading through `_span_byte` is what",
+		"\tkeeps that from copying the message.",
+		'\t"""',
 		"\t# No accumulator width to choose: a Python integer cannot",
 		"\t# overflow, so the fold below is the only thing bounding it.",
+		"\tcount = len(a) + len(b)",
 		"\ttotal = 0",
 		"\tindex = 0",
 		"",
-		"\twhile index + 1 < len(data):",
-		"\t\thigh = _holed_byte(data, index, hole_at, hole_len, fill)",
-		"\t\tlow  = _holed_byte(data, index + 1, hole_at, hole_len, fill)",
+		"\twhile index + 1 < count:",
+		"\t\thigh = _span_byte(a, b, index, hole_at, hole_len, fill)",
+		"\t\tlow  = _span_byte(a, b, index + 1, hole_at, hole_len, fill)",
 		"\t\ttotal += (high << 8) | low",
 		"\t\tindex += 2",
-		"\tif index < len(data):",
+		"\tif index < count:",
 		"\t\t# The odd byte is the HIGH half of a final word.",
-		"\t\ttotal += _holed_byte("
-		"data, index, hole_at, hole_len, fill) << 8",
+		"\t\ttotal += _span_byte("
+		"a, b, index, hole_at, hole_len, fill) << 8",
 		"",
 		"\t# A loop, because a fold can carry again.",
 		"\twhile total >> 16:",

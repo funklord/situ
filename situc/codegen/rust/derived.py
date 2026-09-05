@@ -31,39 +31,55 @@ def _ident(prefix: str, name: str) -> str:
 	return name.lower()
 
 
-def holed_byte_helper() -> list[str]:
-	"""The one byte-reader every `_holed` entry point goes through.
+def span_byte_helper() -> list[str]:
+	"""The one byte-reader every `_spans` entry point goes through.
 
 	A checksum that covers its own field runs the algorithm with those
 	bytes taken as a constant (14.2, `[self_as]`). The bytes are still
 	there and generated code never allocates a copy, so the hole is a
 	parameter rather than an edited buffer.
 
+	Two spans rather than one, because a checksum may cover bytes the
+	message does not contain: UDP's and TCP's pseudo-headers are built by
+	the caller and summed before the datagram (14.2a). The index walks the
+	concatenation of the two, which is what lets one loop serve both a CRC
+	and a sum without exposing any intermediate state -- and it is what
+	makes the hole's index meaningful with a prefix in front of it. C
+	spells the absent span as a null pointer with a zero length; Rust has
+	no null pointer, so it is an empty slice.
+
 	Emitted once per module and shared by both families, rather than
-	once per codec: two copies of a three-line function are two things
+	once per codec: two copies of a six-line function are two things
 	to be wrong. It is a free function rather than an inner one because
 	`emit.py` puts these codecs in a module of its own making, where an
 	inner definition would be repeated per generated function.
 	"""
 	return [
 		"",
-		"/// The byte at `i`, or `fill` where `i` is one of the `hole_len`",
-		"/// bytes at `hole_at`. A checksum defined over its own field",
-		"/// takes those bytes as a constant while it runs (14.2,",
-		"/// `[self_as]`); generated code never allocates, so the hole is",
-		"/// a parameter rather than an edited buffer. The plain entry",
-		"/// points below pass a zero-length hole, which reads as the",
-		"/// data itself.",
+		"/// The byte at `i` of `a` followed by `b`, or `fill` where `i` is",
+		"/// one of the `hole_len` bytes at `hole_at`. A checksum defined",
+		"/// over its own field takes those bytes as a constant while it",
+		"/// runs (14.2, `[self_as]`); generated code never allocates, so",
+		"/// the hole is a parameter rather than an edited buffer.",
+		"///",
+		"/// Two spans, because a checksum may cover bytes the message does",
+		"/// not contain -- UDP's and TCP's pseudo-headers are built by the",
+		"/// caller and summed before the datagram (14.2a). `i` indexes the",
+		"/// concatenation, so the hole is measured against it too. The",
+		"/// simpler entry points below pass an empty second span, which is",
+		"/// where C passes a null pointer.",
 		# One line, however long: a continuation aligned under an open paren
 		# at column zero is leading spaces with no tab in front, which the
 		# generated-source convention gate reads as space indentation --
 		# correctly, since there is no indentation for it to align against.
-		"fn holed_byte(data: &[u8], i: usize, hole_at: usize,"
+		"fn span_byte(a: &[u8], b: &[u8], i: usize, hole_at: usize,"
 		" hole_len: usize, fill: u8) -> u8 {",
 		"\tif i >= hole_at && i - hole_at < hole_len {",
 		"\t\tfill",
+		"\t} else if i < a.len() {",
+		"\t\ta[i]",
 		"\t} else {",
-		"\t\tdata[i]",
+		"\t\tb[i - a.len()]",
 		"\t}",
 		"}",
 	]
@@ -83,7 +99,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"//! one description, so they cannot disagree.",
 		"",
 		"#![allow(dead_code)]",
-		*holed_byte_helper(),
+		*span_byte_helper(),
 	]
 
 	emitted = 0
@@ -168,9 +184,10 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	lines.extend(["];", ""])
 
 	started = crc_start(init, width, reflect)
-	# Two entry points, as C has: the plain one is the holed one with a
-	# zero-length hole, so there is one loop and one place for the
-	# arithmetic to be wrong.
+	# Three entry points, as C has: the plain one is the holed one with a
+	# zero-length hole, and the holed one is the two-span one with an empty
+	# second span. One loop, so there is one place for the arithmetic to be
+	# wrong.
 	lines.extend([
 		"#[must_use]",
 		f"pub fn {name}(data: &[u8]) -> {word} {{",
@@ -183,10 +200,21 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"#[must_use]",
 		f"pub fn {name}_holed(data: &[u8], hole_at: usize,"
 		f" hole_len: usize, fill: u8) -> {word} {{",
-		f"\tlet mut crc: {word} = 0x{started:0{digits}X};",
+		f"\t{name}_spans(data, &[], hole_at, hole_len, fill)",
+		"}",
 		"",
-		"\tfor i in 0..data.len() {",
-		"\t\tlet byte = holed_byte(data, i, hole_at, hole_len, fill);",
+		"/// The digest over `a` followed by `b`, with the hole indexed",
+		"/// against that concatenation. `b` is the message and `a` the",
+		"/// bytes covered ahead of it -- a pseudo-header the caller built",
+		"/// and this message does not contain (14.2a).",
+		"#[must_use]",
+		f"pub fn {name}_spans(a: &[u8], b: &[u8], hole_at: usize,"
+		f" hole_len: usize, fill: u8) -> {word} {{",
+		f"\tlet mut crc: {word} = 0x{started:0{digits}X};",
+		"\tlet len = a.len() + b.len();",
+		"",
+		"\tfor i in 0..len {",
+		"\t\tlet byte = span_byte(a, b, i, hole_at, hole_len, fill);",
 		"",
 	])
 	# Parenthesised only where the mask needs it: `-D warnings` refuses an
@@ -245,23 +273,40 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"#[must_use]",
 		f"pub fn {name}_holed(data: &[u8], hole_at: usize,"
 		f" hole_len: usize, fill: u8) -> u16 {{",
+		f"\t{name}_spans(data, &[], hole_at, hole_len, fill)",
+		"}",
+		"",
+		"/// The sum over `a` followed by `b`, with the hole indexed against",
+		"/// that concatenation. `b` is the message and `a` the bytes",
+		"/// covered ahead of it -- UDP's and TCP's pseudo-header, which the",
+		"/// caller builds and the datagram does not contain (14.2a).",
+		"///",
+		"/// The sum is order-independent over 16-bit words, which is why a",
+		"/// protocol may add the two halves separately. Walking them as one",
+		"/// span is what keeps an odd-length `a` correct anyway: the first",
+		"/// byte of `b` is then the low half of a word begun in `a`, which",
+		"/// summing the halves apart would get wrong.",
+		"#[must_use]",
+		f"pub fn {name}_spans(a: &[u8], b: &[u8], hole_at: usize,"
+		f" hole_len: usize, fill: u8) -> u16 {{",
 		"\t// 64 bits, so the accumulator cannot overflow for any slice a",
 		"\t// u32 length can express. A u32 holds 65537 words of 0xFFFF and",
 		"\t// wraps on the next one.",
+		"\tlet len = a.len() + b.len();",
 		"\tlet mut sum: u64 = 0;",
 		"\tlet mut i = 0usize;",
 		"",
-		"\twhile i + 1 < data.len() {",
+		"\twhile i + 1 < len {",
 		"\t\tsum += u64::from(u16::from_be_bytes([",
-		"\t\t\tholed_byte(data, i, hole_at, hole_len, fill),",
-		"\t\t\tholed_byte(data, i + 1, hole_at, hole_len, fill),",
+		"\t\t\tspan_byte(a, b, i, hole_at, hole_len, fill),",
+		"\t\t\tspan_byte(a, b, i + 1, hole_at, hole_len, fill),",
 		"\t\t]));",
 		"\t\ti += 2;",
 		"\t}",
-		"\tif i < data.len() {",
+		"\tif i < len {",
 		"\t\t// The odd byte is the HIGH half of a final word.",
 		"\t\tsum += u64::from("
-		"holed_byte(data, i, hole_at, hole_len, fill)) << 8;",
+		"span_byte(a, b, i, hole_at, hole_len, fill)) << 8;",
 		"\t}",
 		"",
 		"\t// A loop, because a fold can carry again.",

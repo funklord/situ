@@ -4,6 +4,11 @@
 // smallest schema that still has a length field pointing at a payload the
 // schema does not describe, which is the commonest shape in real protocols.
 
+codec internet_checksum {
+	kernel = ones_complement(width = 16, complement);
+}
+impl internet_checksum derived;
+
 target buffer;
 endian big;
 
@@ -21,7 +26,7 @@ struct udp_header {
 		// `prefix`, which adds twelve bytes that are not in the datagram at
 		// all -- see the note below.
 		checksum u8 checksum[2] covers(summed) prefix(udp_pseudo_header)
-			[self_as = 0];
+			is internet_checksum [self_as = 0];
 
 		// The payload the length points at. UDP's own header does not
 		// describe it -- the port does -- so it is bytes, and the length

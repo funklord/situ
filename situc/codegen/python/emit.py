@@ -1440,6 +1440,9 @@ class Emitter:
 				"\t\treturn start, end - start",
 			])
 
+		if placement.tag_prefix is not None:
+			lines.extend(self._tag_prefix(placement))
+
 		filler = _self_as(placement.attrs)
 		if filler is not None:
 			# A checksum defined over its own field runs the algorithm with
@@ -1505,7 +1508,7 @@ class Emitter:
 		# The helper both families read every byte through. Emitted here
 		# rather than by `derived.generate`, which this path never calls:
 		# a single file gets one copy however many codecs it carries.
-		lines: list[str] = list(kernels.holed_byte())
+		lines: list[str] = list(kernels.span_byte())
 		for decl in self.schema.codecs():
 			if decl.name not in wanted:
 				continue
@@ -1516,22 +1519,74 @@ class Emitter:
 			lines.extend(body)
 		return lines
 
+	def _prefix_bytes(self, placement: Placement) -> int | None:
+		"""How many bytes the prefix struct is, where that is a constant.
+
+		`None` where the schema names a prefix whose size the message
+		decides, which no pseudo-header in this repository does and which
+		the generated code therefore cannot check a length against. It
+		says so rather than checking against a number it made up.
+		"""
+		if placement.tag_prefix is None:
+			return None
+		held = self.resolved.structs.get(placement.tag_prefix)
+		if held is None or not held.layout.is_fixed_size:
+			return None
+		return held.layout.size_bytes
+
+	def _tag_prefix(self, placement: Placement) -> list[str]:
+		"""Bytes the algorithm covers before this message's (14.2a).
+
+		TCP's and UDP's pseudo-header: the addresses belong to the IP
+		layer, so no accessor here can reach them and none is emitted.
+		What situ contributes is the layout and the length, which is
+		exactly what a caller cannot safely guess and exactly what a schema
+		compiler is for.
+		"""
+		prefix = placement.tag_prefix or ""
+		size   = self._prefix_bytes(placement)
+		upper  = py_name(placement.name).upper()
+
+		lines = [
+			"",
+			f"\t# {placement.name} also covers `{prefix}`, which this message",
+			"\t# does not contain: the algorithm runs over those bytes first,",
+			"\t# then over the span above.",
+			"\t#",
+			f"\t# Build one with the `{py_name(prefix)}` class in this module,",
+			"\t# in a buffer of your own, and hand the bytes to the compute",
+			"\t# below. Their contents are not situ's to supply -- they come",
+			"\t# from a layer this schema does not describe, which is the",
+			"\t# whole reason the clause exists.",
+		]
+		if size is not None:
+			lines.append(f"\tPREFIX_BYTES_{upper} = {size}")
+		return lines
+
 	def _checksum_codec(self, placement: Placement, name: str) -> list[str]:
 		"""`is crc32` -- compute the sum, and compare it (0053).
 
 		The implementation is defined in this module by `_derived_codecs`,
 		so the call is a plain one and the file is self-contained.
 
-		Where the placement carries `[self_as]` the call is to the codec's
-		`_holed` entry point instead. A checksum covering its own field
-		runs the algorithm with those bytes taken as a constant (14.2);
-		the bytes are still there and generated code never allocates a
-		copy, so the hole is passed as parameters rather than punched into
-		a buffer -- which is what the `_self_span` accessor beside this has
-		always described and nothing had ever called. Without it IPv4, ICMP
-		and UDP could not bind a codec at all: their checksum is inside its
-		own coverage, so a sum over the span as it stands reads the stored
-		value and is wrong for every message.
+		Where the placement carries `[self_as]` or names a `prefix(...)`,
+		the call is to the codec's `_spans` entry point instead. A checksum
+		covering its own field runs the algorithm with those bytes taken as
+		a constant (14.2); the bytes are still there and generated code
+		never allocates a copy, so the hole is passed as parameters rather
+		than punched into a buffer -- which is what the `_self_span`
+		accessor beside this has always described and nothing had ever
+		called. Without it IPv4, ICMP and UDP could not bind a codec at
+		all: their checksum is inside its own coverage, so a sum over the
+		span as it stands reads the stored value and is wrong for every
+		message.
+
+		A `prefix(...)` is the other half of the same shape: bytes the
+		algorithm reaches before this message's and that this message does
+		not contain (14.2a). They are the caller's to build, so `compute`
+		and `check` take them -- summed as the first span, which is what
+		puts the hole's index against the concatenation rather than
+		against the datagram.
 
 		Neither is called by `validate`: a coverage may run to the end of
 		the message, and a constraint walk that costs a file read is not the
@@ -1542,38 +1597,76 @@ class Emitter:
 
 		order = ("little" if placement.tag_codec_endian is ast.Endian.LITTLE
 		         else "big")
-		codec = py_name(placement.tag_codec)
+		codec  = py_name(placement.tag_codec)
 		span   = ("bytes(self._msg.buffer"
 		          "[self._at + at:self._at + at + n])")
 		filler = _self_as(placement.attrs)
-		if filler is None:
+		before = placement.tag_prefix
+		# The prefix is a parameter rather than a member: a bytes object
+		# carries its own length, so the signature says less than C's and
+		# means the same. What it cannot carry is whether it is the RIGHT
+		# length, which is the one thing the schema knows -- so the length
+		# is checked against it and a wrong one is a BoundsError rather
+		# than a sum over a pseudo-header of somebody's own design.
+		taken  = "self" if before is None else "self, prefix: bytes"
+		passed = "" if before is None else "prefix"
+		guard: list[str] = []
+		if before is not None:
+			size = self._prefix_bytes(placement)
+			if size is None:
+				# A prefix whose size the message decides. Nothing to check
+				# a length against, and inventing one would be worse.
+				guard = [
+					f"\t\t# `{before}` has no constant size, so there is no",
+					"\t\t# length to hold the prefix to.",
+				]
+			else:
+				held = f"self.PREFIX_BYTES_{py_name(placement.name).upper()}"
+				guard = [
+					f"\t\tif len(prefix) != {held}:",
+					"\t\t\traise BoundsError(",
+					f'\t\t\t\tf"{placement.path}: the `{before}` prefix is '
+					f'{{{held}}} bytes, '
+					'not {len(prefix)}")',
+				]
+
+		if filler is None and before is None:
 			call = [f"\t\treturn {codec}({span})"]
 		else:
+			# The prefix is summed first, so the hole's index is measured
+			# against the concatenation rather than against the message.
 			# `_self_span` and `_covered` both count from `self._at`, so
-			# the hole's offset inside the span is one subtraction.
-			call = [
-				f"\t\tspan = {span}",
-				f"\t\thole_at, hole_n = self.{name}_self_span()",
-				f"\t\treturn {codec}_holed("
-				f"span, hole_at - at, hole_n, {filler:#04x})",
-			]
+			# the hole's offset inside the message span is one subtraction.
+			head = 'b""' if before is None else "prefix"
+			hole = ("hole_at - at" if before is None
+			        else "len(prefix) + (hole_at - at)")
+			if filler is None:
+				call = [f"\t\treturn {codec}_spans({head}, {span}, 0, 0, 0)"]
+			else:
+				call = [
+					f"\t\tspan = {span}",
+					f"\t\thole_at, hole_n = self.{name}_self_span()",
+					f"\t\treturn {codec}_spans({head}, span,"
+					f" {hole}, hole_n, {filler:#04x})",
+				]
 
 		return [
 			"",
-			f"\tdef {name}_compute(self) -> int:",
+			f"\tdef {name}_compute({taken}) -> int:",
 			f'\t\t"""{placement.tag_codec} over the bytes'
 			f' `{name}_covered` names."""',
 			f"\t\tat, n = self.{name}_covered()",
+			*guard,
 			*call,
 			"",
-			f"\tdef {name}_check(self) -> None:",
+			f"\tdef {name}_check({taken}) -> None:",
 			'\t\t"""Raise `ChecksumError` where the stored sum disagrees.',
 			"",
 			"\t\tNot a `TagError`: that one means a cryptographic gate",
 			"\t\trefused, and this means the message is corrupt or",
 			'\t\ttruncated."""',
 			f"\t\tstored = int.from_bytes(bytes(self.{name}), \"{order}\")",
-			f"\t\tfound  = self.{name}_compute()",
+			f"\t\tfound  = self.{name}_compute({passed})",
 			"\t\tif stored != found:",
 			f"\t\t\traise ChecksumError("
 			f'f"{placement.path}: stored {{stored:#x}}, '

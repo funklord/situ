@@ -11,6 +11,10 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec internet_checksum derived expansion=+2 seekable=linear granularity=block systematic deterministic
+
 struct udp_header size=8..65535 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
   udp_header.summed                      offset=AbsoluteStatic(0x00) size=Bounded(8, 65535) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(checksum)
   udp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)

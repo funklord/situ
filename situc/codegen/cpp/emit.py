@@ -2849,6 +2849,16 @@ class Emitter:
 				f"{self._codec_word(name)} situ_{c_name(name)}_holed"
 				"(const std::uint8_t *data, std::uint32_t len,"
 				" std::uint32_t hole_at, std::uint32_t hole_len,"
+				" std::uint8_t fill);",
+				# The third tier, and the only one a `prefix(...)` can
+				# reach: `_spans` takes two buffers, so the prefix the
+				# caller built is summed before the message's own bytes
+				# without either being copied into the other. The plain
+				# form and `_holed` take one buffer and cannot express it.
+				f"{self._codec_word(name)} situ_{c_name(name)}_spans"
+				"(const std::uint8_t *a, std::uint32_t alen,"
+				" const std::uint8_t *b, std::uint32_t blen,"
+				" std::uint32_t hole_at, std::uint32_t hole_len,"
 				" std::uint8_t fill);")], *[
 			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
 			f" std::uint32_t {counted(name)}, std::uint8_t *out);"
@@ -4956,6 +4966,8 @@ class Emitter:
 			"\t}",
 		]
 
+		lines.extend(self._tag_prefix(struct, placement))
+
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run
@@ -5046,6 +5058,85 @@ class Emitter:
 
 		return lines
 
+	def _tag_prefix(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Bytes the algorithm covers before this message's (14.2a).
+
+		TCP's and UDP's pseudo-header: the addresses belong to the IP layer,
+		so no accessor here can reach them and none is emitted. What situ
+		contributes is the layout and the length, which is exactly what a
+		caller cannot safely guess and exactly what a schema compiler is for.
+
+		The count is a constant rather than `udp_pseudo_header::size_bytes`
+		because that class is emitted after this one -- a schema declares the
+		message first and the pseudo-header after it, which is the order the
+		file is written in.
+		"""
+		if placement.tag_prefix is None:
+			return []
+
+		prefix = placement.tag_prefix
+		held   = self.resolved.structs.get(prefix)
+		size   = (held.layout.size_bytes
+		          if held is not None and held.layout.is_fixed_size else None)
+		# The class the schema's name reaches, not the schema's name: a
+		# struct called `class` is renamed on the way into C++ and a note
+		# pointing at the schema spelling would send a reader to an
+		# identifier this header does not declare.
+		shown  = class_name(held) if held is not None else prefix
+
+		out = [
+			"",
+			f"\t/* {placement.name} also covers `{prefix}`, which this"
+			" message does not",
+			"\t * contain: the algorithm runs over those bytes first, then"
+			" over the",
+			"\t * span below.",
+			"\t *",
+			f"\t * Build one with the `::situ::{shown}` accessors in this"
+			" header, in a",
+			"\t * buffer of your own, and pass it to"
+			f" `{c_name(placement.name)}_compute` and",
+			f"\t * `{c_name(placement.name)}_check` below. Its contents are"
+			" not situ's to",
+			"\t * supply -- they come from a layer this schema does not"
+			" describe, which",
+			"\t * is the whole reason the clause exists. */",
+		]
+		if size is not None:
+			out.append(f"\tstatic constexpr std::uint32_t"
+			           f" prefix_bytes_{c_name(placement.name)} = {size}u;")
+		return out
+
+	def _prefix_params(self, placement: Placement) -> str:
+		"""`compute`'s prefix parameters, which are followed by `out`.
+
+		Three strings rather than one trimmed to fit, because the two
+		signatures put the list in different places: `compute` takes `out`
+		after it and `check` takes nothing at all. Reusing one string and
+		cutting the punctuation off either end is how C's first attempt
+		emitted `(situ_view_t view const uint8_t *prefix, ...,)`, which is
+		two errors in one line.
+		"""
+		if placement.tag_prefix is None:
+			return ""
+		return "const std::uint8_t *prefix, std::uint32_t prefix_len, "
+
+	def _prefix_only(self, placement: Placement) -> str:
+		"""`check`'s whole parameter list, which is the prefix or nothing.
+
+		A member function, so there is no view parameter in front of it and
+		no leading comma to write -- which is where this differs from C's
+		`_prefix_tail` rather than merely being spelled differently.
+		"""
+		if placement.tag_prefix is None:
+			return ""
+		return "const std::uint8_t *prefix, std::uint32_t prefix_len"
+
+	def _prefix_args(self, placement: Placement) -> str:
+		"""What `check` passes on to `compute`, ahead of `want`."""
+		return "" if placement.tag_prefix is None else "prefix, prefix_len, "
+
 	def _codec_word(self, name: str) -> str:
 		"""The C type a derived codec returns, as C++ spells it.
 
@@ -5072,15 +5163,52 @@ class Emitter:
 		bytes taken as a constant (14.2), and generated code never allocates
 		a copy -- so the hole is passed to the codec rather than punched
 		into a buffer. Without it IPv4, ICMP and UDP could not bind one.
+
+		A `prefix(...)` is the same refusal to copy, one span further out:
+		the caller's bytes are summed first as `_spans`' first buffer rather
+		than being concatenated with the message into a third (14.2a). That
+		is what moves the hole -- it is an index into the concatenation, so
+		it carries the prefix's length in front of it.
 		"""
 		assert placement.tag_codec is not None
 		codec  = f"::situ_{c_name(placement.tag_codec)}"
 		filler = _self_as(placement.attrs)
-		if filler is None:
+		before = placement.tag_prefix
+		if filler is None and before is None:
 			return [f"\t\tout = {codec}(raw().base + at, n);"]
 
 		held = bare_name(local_name(struct, placement))
-		return [
+		lines: list[str] = []
+
+		if before is None:
+			head, ahead = "nullptr, 0,", "0u"
+		else:
+			# The length is checked against the size the schema fixed,
+			# because a caller who hands over a shorter pseudo-header gets
+			# a sum over bytes it does not own -- a wrong answer, where a
+			# refusal is a wrong call said out loud.
+			count = f"prefix_bytes_{c_name(placement.name)}"
+			lines.extend([
+				f"\t\tif (prefix == nullptr || prefix_len != {count}) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			] if self._prefix_bytes(placement) is not None else [
+				"\t\tif (prefix == nullptr) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			])
+			head, ahead = "prefix, prefix_len,", "prefix_len"
+
+		if filler is None:
+			# A prefix with no `[self_as]`: TCP's and UDP's checksums are
+			# inside their own coverage and IPv4's is, but nothing in the
+			# language ties the two clauses together, so the hole is zero
+			# length rather than absent.
+			lines.append(f"\t\tout = {codec}_spans({head}"
+			             " raw().base + at, n, 0, 0, 0);")
+			return lines
+
+		lines.extend([
 			"\t\tstd::uint32_t hole_at = 0, hole_n = 0;",
 			"",
 			# The hole is inside the covered span by construction, so the
@@ -5096,9 +5224,25 @@ class Emitter:
 			"\t\t\t\t|| hole_at < at) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\tout = {codec}_holed(raw().base + at, n, hole_at - at,"
-			f" hole_n, {filler:#04x});",
-		]
+			f"\t\tout = {codec}_spans({head} raw().base + at, n,"
+			f" {ahead} + (hole_at - at), hole_n, {filler:#04x});",
+		])
+		return lines
+
+	def _prefix_bytes(self, placement: Placement) -> int | None:
+		"""How many bytes the prefix struct is, where it is a fixed number.
+
+		A prefix whose length the data decides has no constant to compare
+		against, so `_codec_call` refuses a null pointer and nothing else
+		there. RFC 768's and RFC 793's pseudo-headers are both fixed, which
+		is why the constant is the case worth having.
+		"""
+		if placement.tag_prefix is None:
+			return None
+		held = self.resolved.structs.get(placement.tag_prefix)
+		if held is None or not held.layout.is_fixed_size:
+			return None
+		return held.layout.size_bytes
 
 	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
 			name: str) -> list[str]:
@@ -5133,6 +5277,7 @@ class Emitter:
 			"\t * end of the message, and a constraint walk that costs a file",
 			"\t * read is not the flat model 0051 settled on. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}_compute("
+			f"{self._prefix_params(placement)}"
 			"std::uint32_t &out) const noexcept",
 			"\t{",
 			"\t\tstd::uint32_t at = 0, n = 0;",
@@ -5148,10 +5293,12 @@ class Emitter:
 			f"\t/* Whether the stored {placement.tag_codec} matches. Not",
 			"\t * `err::tag`: that means a cryptographic gate refused, and",
 			"\t * this means the message is corrupt or truncated. */",
-			f"\t[[nodiscard]] ::situ::rt::err {name}_check() const noexcept",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_check("
+			f"{self._prefix_only(placement)}) const noexcept",
 			"\t{",
 			"\t\tstd::uint32_t want = 0;",
-			f"\t\tconst ::situ::rt::err e = {name}_compute(want);",
+			f"\t\tconst ::situ::rt::err e = {name}_compute("
+			f"{self._prefix_args(placement)}want);",
 			"",
 			"\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\treturn e;",

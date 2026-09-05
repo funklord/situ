@@ -154,12 +154,21 @@ plain one passes a zero-length one. The bytes stay in the buffer and
 nothing allocates; the codec is told where not to look. IPv4 computes its
 own header checksum and matches the published value.
 
-**Two limits remain, and neither is this construct's.** `prefix(...)` names
-bytes the caller builds and the message does not contain (14.2a), which a
-view cannot reach -- so UDP and TCP keep the caller's arithmetic and a
-prefixed `is` is refused. And a schema whose `covers` is narrower than its
-protocol's produces a number nobody else agrees with: ICMP describes eight
-bytes where RFC 792 sums the whole message, so it does not bind either.
-That second one is worth stating as a property of the construct: **binding
-a codec makes a coverage observable**, and a narrow `covers` was
+**`prefix(...)` is threaded, so UDP and TCP bind.** The prefix names bytes
+the algorithm sums before the message's own, built by the caller and not
+present in the message (14.2a). situ knows the struct and its size and
+cannot know its contents, so `compute` and `check` take them and refuse a
+length that disagrees with the schema's.
+
+The codec takes two spans rather than one -- `X_spans(a, alen, b, blen,
+hole_at, hole_len, fill)`, with the hole indexed against the concatenation.
+One loop serves a CRC and a sum alike, and no intermediate state is
+exposed: a seeded or chained form would have had to publish a running
+register, which is a wider interface for a narrower purpose.
+
+**One limit remains and it is not the construct's.** A schema whose
+`covers` is narrower than its protocol's produces a number nobody else
+agrees with: ICMP describes eight bytes where RFC 792 sums the whole
+message, so it does not bind. That is worth stating as a property --
+**binding a codec makes a coverage observable**, and a narrow `covers` was
 indistinguishable from a correct one while the caller did the summing.

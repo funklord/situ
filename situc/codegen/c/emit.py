@@ -647,7 +647,7 @@ class Emitter:
 			" * has the whole message.",
 			" */",
 			f"static inline situ_err_t {compute}(situ_view_t view,"
-			" uint32_t *out)",
+			f"{self._prefix_params(placement)} uint32_t *out)",
 			"{",
 			"\tuint32_t at, n;",
 			f"\tconst situ_err_t e = {covered}(view, &at, &n);",
@@ -665,10 +665,12 @@ class Emitter:
 			" * `SITU_ERR_TAG`: that one means a cryptographic gate refused,",
 			" * and this means the message is corrupt or truncated.",
 			" */",
-			f"static inline situ_err_t {check}(situ_view_t view)",
+			f"static inline situ_err_t {check}(situ_view_t view"
+			f"{self._prefix_tail(placement)})",
 			"{",
 			"\tuint32_t want;",
-			f"\tconst situ_err_t e = {compute}(view, &want);",
+			f"\tconst situ_err_t e = {compute}(view,"
+			f"{self._prefix_args(placement)} &want);",
 			"",
 			"\tif (e != SITU_OK) {",
 			"\t\treturn e;",
@@ -6930,6 +6932,37 @@ class Emitter:
 			"\t}",
 		]
 
+	def _prefix_params(self, placement: Placement) -> str:
+		"""`compute` and `check` take the prefix where the schema names one.
+
+		`prefix(...)` is bytes the algorithm reaches before this message's,
+		built by the caller and not present in the message at all (14.2a).
+		The compiler knows the struct and its size; it does not and cannot
+		know the contents, which come from a layer this schema does not
+		describe. So the caller passes them, and the length is checked
+		against the size the schema fixed.
+		"""
+		if placement.tag_prefix is None:
+			return ""
+		return " const uint8_t *prefix, uint32_t prefix_len,"
+
+	def _prefix_tail(self, placement: Placement) -> str:
+		"""The same parameters as a trailing list, for `check`.
+
+		`compute` takes `out` last so its prefix sits in the middle and
+		carries a trailing comma; `check` takes nothing after, so it needs
+		a leading one. Reusing `compute`'s string and trimming produced
+		`(situ_view_t view const uint8_t *prefix, ...,)`, which is two
+		punctuation errors in one line and did not compile -- caught by the
+		first schema to use it.
+		"""
+		if placement.tag_prefix is None:
+			return ""
+		return ", const uint8_t *prefix, uint32_t prefix_len"
+
+	def _prefix_args(self, placement: Placement) -> str:
+		return "" if placement.tag_prefix is None else " prefix, prefix_len,"
+
 	def _codec_call(self, struct: ResolvedStruct, placement: Placement,
 			codec: str) -> list[str]:
 		"""The codec over the covered span, with `[self_as]`'s hole in it.
@@ -6946,21 +6979,59 @@ class Emitter:
 		stands reads the stored value and is wrong for every message.
 		"""
 		filler = _self_as(placement.attrs)
-		if filler is None:
+		before = placement.tag_prefix
+		if filler is None and before is None:
 			return [f"\t*out = {codec}(view.base + at, n);"]
 
 		local = c_name(self._local(struct, placement))
-		span  = ident(self.prefix, struct.name, local, "self_span")
-		return [
+		lines: list[str] = []
+
+		# The prefix is summed first, so the hole's index is measured
+		# against the concatenation rather than against the message.
+		if before is None:
+			head, ahead = "NULL, 0,", "0u"
+		else:
+			# The length check only where the prefix struct has a constant
+			# size, because `_tag_prefix` emits the macro only then. The
+			# first version referenced it unconditionally, so a schema whose
+			# prefix is variable-length generated a header naming an
+			# undeclared identifier -- reported by two backends writing the
+			# same feature, and reproduced with a two-line schema.
+			#
+			# A variable prefix keeps the null check and loses the length
+			# one, which is the honest position: the compiler does not know
+			# how long it should be either.
+			held = self.resolved.structs.get(placement.tag_prefix or "")
+			fixed = (held is not None and held.layout.is_fixed_size)
+			guard = "prefix == NULL"
+			if fixed:
+				guard += (" || prefix_len != "
+				          + macro(self.prefix, struct.name, local,
+				                  "PREFIX_BYTES"))
+			lines.extend([
+				f"\tif ({guard}) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			])
+			head, ahead = "prefix, prefix_len,", "prefix_len"
+
+		if filler is None:
+			lines.append(f"\t*out = {codec}_spans({head}"
+			             " view.base + at, n, 0, 0, 0);")
+			return lines
+
+		span = ident(self.prefix, struct.name, local, "self_span")
+		lines.extend([
 			"\tuint32_t hole_at, hole_n;",
 			"",
 			f"\tif ({span}(view, &hole_at, &hole_n) != SITU_OK",
 			"\t    || hole_at < at) {",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-			f"\t*out = {codec}_holed(view.base + at, n, hole_at - at,"
-			f" hole_n, {filler:#04x}u);",
-		]
+			f"\t*out = {codec}_spans({head} view.base + at, n,"
+			f" {ahead} + (hole_at - at), hole_n, {filler:#04x}u);",
+		])
+		return lines
 
 	def _reserved_array_check(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:
