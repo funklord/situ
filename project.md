@@ -20877,6 +20877,65 @@ parameters in `std/kernels.situ` rather than from `crc_table`, agreeing
 with all thirteen over nine inputs -- with a deliberately wrong `xorout`
 shown to separate them, so the cross-check is known able to fail.
 
+### 26.247 The hole becomes a parameter, and IPv4 computes its own checksum
+
+`[self_as = 0]` says a checksum's own bytes read as a constant while the
+algorithm runs over the region containing them (14.2). The accessor
+describing that hole -- `X_self_span`, and a `X_self_as` macro beside it --
+has existed for as long as the construct, with a comment telling a caller
+to substitute those bytes. **Nothing had ever called it.**
+
+So the hole is a parameter now. Every derived codec gains a second entry
+point, `X_holed(data, len, hole_at, hole_len, fill)`, and the plain one
+calls it with a zero-length hole. The bytes are still in the buffer and
+generated code still never allocates -- what changed is that the codec is
+told where not to look.
+
+**IPv4 binds and computes its own header checksum**, verified against the
+published value for a real header: 0xb861, with the field read as zero.
+Corrupting a covered byte refuses; zeroing the stored field refuses while
+the *computed* value stays 0xb861, which is the hole visibly working.
+
+**Two of the four IP checksums still do not bind, for two different
+reasons, and both are the construct meeting a fact rather than a gap.**
+
+*UDP and TCP carry `prefix(...)`* -- twelve bytes of pseudo-header the
+caller builds and the datagram does not contain (14.2a). A generated
+`compute` has a view and nothing else, so it cannot reach them, and a sum
+over the message alone is wrong for every datagram. Threading them needs a
+second buffer or a seeded entry point, which is a decision rather than an
+oversight, so `is` with a `prefix` is refused.
+
+*ICMP's declared coverage is narrower than the protocol's*, and this one is
+the finding. RFC 792's checksum covers the whole message including data;
+this schema describes eight bytes -- type, code, checksum, variant body --
+and nothing after them, so `covers(message)` is eight bytes. It was bound
+briefly and the probe said so: situ summed 8 where a reference over the
+packet summed 16.
+
+**Binding a codec is what makes a coverage observable.** Until something
+computed, a narrow `covers` and a correct one were the same declaration:
+the caller summed whatever they knew was right, and a wrong span looked
+like a caller's bug. That is 26.244 arriving one level up -- there three
+backends disagreed about where a region ended, here a schema disagrees with
+its own protocol -- and both were invisible for the same reason.
+
+**A declaration disagreeing with its definition, across a translation
+unit.** The C++ prototype list hand-wrote `std::uint32_t` for every codec,
+and the Internet checksum returns `uint16_t`. Nothing can catch that: the
+compiler sees one declaration, the linker matches on name alone. IPv4 came
+back as `0xffffb861` -- the right value in the low half and garbage above
+it -- and the only reason it was caught at all is that the C probe had
+already fixed what the right answer was. The prototype reads the kernel's
+own width now.
+
+**And the stored value was read at the wrong width in three backends.** A
+CRC32 is four bytes and the Internet checksum is two; the first version
+read 32 bits regardless, which made `compute` right and `check` wrong. The
+Python backend was correct by construction, because it reads the accessor's
+own slice rather than assuming a width -- which is the general lesson: a
+width taken from the member cannot drift from the member.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

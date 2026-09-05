@@ -627,9 +627,13 @@ class Emitter:
 		check   = ident(self.prefix, struct.name, local, "check")
 		codec   = ident(self.prefix, placement.tag_codec)
 		width   = (placement.size_bits or 0) // BITS_PER_BYTE
-		read    = ("situ_get_le32"
-		           if placement.tag_codec_endian is ast.Endian.LITTLE
-		           else "situ_get_be32")
+		# Sized by the field, not assumed 32-bit. A CRC32 is four bytes and
+		# the Internet checksum is two, and reading the wrong width made
+		# `compute` right and `check` wrong -- which the first IPv4 probe
+		# caught, because compute had already matched the published value.
+		order   = ("le" if placement.tag_codec_endian is ast.Endian.LITTLE
+		           else "be")
+		read    = f"situ_get_{order}{width * 8}"
 		where   = self._base_expression(struct, placement)
 
 		return [
@@ -651,7 +655,7 @@ class Emitter:
 			"\tif (e != SITU_OK) {",
 			"\t\treturn e;",
 			"\t}",
-			f"\t*out = {codec}(view.base + at, n);",
+			*self._codec_call(struct, placement, codec),
 			"\treturn SITU_OK;",
 			"}",
 			"",
@@ -6924,6 +6928,38 @@ class Emitter:
 			"\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t}",
 			"\t}",
+		]
+
+	def _codec_call(self, struct: ResolvedStruct, placement: Placement,
+			codec: str) -> list[str]:
+		"""The codec over the covered span, with `[self_as]`'s hole in it.
+
+		A checksum covering its own field runs the algorithm with those
+		bytes taken as a constant (14.2). The bytes are still there and
+		generated code never allocates a copy, so the hole is passed to the
+		codec rather than punched into a buffer -- which is what the
+		`_self_span` accessor beside this has always described and nothing
+		had ever called.
+
+		Without it IPv4, ICMP and UDP could not bind a codec at all: their
+		checksum is inside its own coverage, so a sum over the span as it
+		stands reads the stored value and is wrong for every message.
+		"""
+		filler = _self_as(placement.attrs)
+		if filler is None:
+			return [f"\t*out = {codec}(view.base + at, n);"]
+
+		local = c_name(self._local(struct, placement))
+		span  = ident(self.prefix, struct.name, local, "self_span")
+		return [
+			"\tuint32_t hole_at, hole_n;",
+			"",
+			f"\tif ({span}(view, &hole_at, &hole_n) != SITU_OK",
+			"\t    || hole_at < at) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			f"\t*out = {codec}_holed(view.base + at, n, hole_at - at,"
+			f" hole_n, {filler:#04x}u);",
 		]
 
 	def _reserved_array_check(self, struct: ResolvedStruct, placement: Placement,

@@ -1855,30 +1855,28 @@ def check_checksum_codecs(schema: ast.Schema) -> None:
 					notes = [f"add `impl {member.codec} derived;` where its "
 					         f"kernel description is enough to generate it"])
 
-			# `[self_as = 0]` says the checksum's own bytes read as zero
-			# while the algorithm runs over them, which is what lets a
-			# checksum sit inside its own coverage (14.2). A generated
-			# `compute` reads the covered span as it stands, so it would
-			# sum the stored value and produce a number that is wrong for
-			# every message -- IPv4, ICMP and UDP are all this shape.
+			# `prefix(...)` names bytes the algorithm reaches before this
+			# message's, built by the caller and not present in the message
+			# at all (14.2a). A generated `compute` has a view and nothing
+			# else, so it cannot reach them -- and a sum over the message
+			# alone is wrong for every datagram.
 			#
-			# Refused rather than emitted, per 17.0: a wrong checksum is
-			# worse than an absent one, because it looks like a verdict.
-			# What lifts this is a `compute` that substitutes the hole,
-			# which the C backend already has machinery for.
-			if any(attr.name == "self_as" for attr in member.attrs):
+			# Threading them is a real design step rather than an
+			# oversight: the codec's entry point takes one buffer, and a
+			# prefixed sum needs either a second or a seeded form. UDP and
+			# TCP are the two that want it.
+			if member.prefix is not None:
 				raise error(
-					f"`is {member.codec}` cannot compute a checksum that "
-					f"covers itself",
+					f"`is {member.codec}` cannot compute a checksum with a "
+					f"`prefix`",
 					member.span,
-					label = "`[self_as]` is not honoured by the generated "
-					        "computation",
-					notes = ["the sum would be taken over the stored bytes "
-					         "rather than over the zeros `[self_as]` names, "
-					         "so it would be wrong for every message",
+					label = f"`prefix({member.prefix})` is not reachable "
+					        f"from a view",
+					notes = ["the prefix is bytes the caller builds and the "
+					         "message does not contain, so a generated "
+					         "computation cannot see them",
 					         "drop the `is` clause and compute it in the "
-					         "caller, which is what a checksum did before "
-					         "0053"])
+					         "caller, which is what UDP and TCP do"])
 
 			if kind is not ast.ImplKind.DERIVED:
 				raise error(

@@ -148,10 +148,18 @@ invent a path convention the caller has to satisfy. So those two emit the
 codec into the module that calls it, once per codec however many checksums
 name it, and only where one is named.
 
-**`[self_as]` is refused, and that is the remaining limit.** A checksum
-that sits inside its own coverage says its own bytes read as zero while
-the algorithm runs (14.2). A generated `compute` reads the covered span as
-it stands, so it would sum the stored value and be wrong for every
-message. IPv4, ICMP and UDP are all that shape, so they keep the caller's
-arithmetic; PNG's CRC is outside the region it covers and binds. A
-`compute` that substitutes the hole is what lifts this.
+**`[self_as]` is honoured.** Every derived codec has a second entry point
+taking a hole -- `X_holed(data, len, hole_at, hole_len, fill)` -- and the
+plain one passes a zero-length one. The bytes stay in the buffer and
+nothing allocates; the codec is told where not to look. IPv4 computes its
+own header checksum and matches the published value.
+
+**Two limits remain, and neither is this construct's.** `prefix(...)` names
+bytes the caller builds and the message does not contain (14.2a), which a
+view cannot reach -- so UDP and TCP keep the caller's arithmetic and a
+prefixed `is` is refused. And a schema whose `covers` is narrower than its
+protocol's produces a number nobody else agrees with: ICMP describes eight
+bytes where RFC 792 sums the whole message, so it does not bind either.
+That second one is worth stating as a property of the construct: **binding
+a codec makes a coverage observable**, and a narrow `covers` was
+indistinguishable from a correct one while the caller did the summing.

@@ -31,6 +31,44 @@ def _ident(prefix: str, name: str) -> str:
 	return name.lower()
 
 
+def holed_byte_helper() -> list[str]:
+	"""The one byte-reader every `_holed` entry point goes through.
+
+	A checksum that covers its own field runs the algorithm with those
+	bytes taken as a constant (14.2, `[self_as]`). The bytes are still
+	there and generated code never allocates a copy, so the hole is a
+	parameter rather than an edited buffer.
+
+	Emitted once per module and shared by both families, rather than
+	once per codec: two copies of a three-line function are two things
+	to be wrong. It is a free function rather than an inner one because
+	`emit.py` puts these codecs in a module of its own making, where an
+	inner definition would be repeated per generated function.
+	"""
+	return [
+		"",
+		"/// The byte at `i`, or `fill` where `i` is one of the `hole_len`",
+		"/// bytes at `hole_at`. A checksum defined over its own field",
+		"/// takes those bytes as a constant while it runs (14.2,",
+		"/// `[self_as]`); generated code never allocates, so the hole is",
+		"/// a parameter rather than an edited buffer. The plain entry",
+		"/// points below pass a zero-length hole, which reads as the",
+		"/// data itself.",
+		# One line, however long: a continuation aligned under an open paren
+		# at column zero is leading spaces with no tab in front, which the
+		# generated-source convention gate reads as space indentation --
+		# correctly, since there is no indentation for it to align against.
+		"fn holed_byte(data: &[u8], i: usize, hole_at: usize,"
+		" hole_len: usize, fill: u8) -> u8 {",
+		"\tif i >= hole_at && i - hole_at < hole_len {",
+		"\t\tfill",
+		"\t} else {",
+		"\t\tdata[i]",
+		"\t}",
+		"}",
+	]
+
+
 def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	"""Emit every derived implementation the schema binds, as Rust."""
 	bound = {impl.codec for impl in schema.impls()
@@ -45,6 +83,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"//! one description, so they cannot disagree.",
 		"",
 		"#![allow(dead_code)]",
+		*holed_byte_helper(),
 	]
 
 	emitted = 0
@@ -129,12 +168,26 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	lines.extend(["];", ""])
 
 	started = crc_start(init, width, reflect)
+	# Two entry points, as C has: the plain one is the holed one with a
+	# zero-length hole, so there is one loop and one place for the
+	# arithmetic to be wrong.
 	lines.extend([
 		"#[must_use]",
 		f"pub fn {name}(data: &[u8]) -> {word} {{",
+		f"\t{name}_holed(data, 0, 0, 0)",
+		"}",
+		"",
+		"/// The same digest with a hole in it: the `hole_len` bytes at",
+		"/// `hole_at` read as `fill`, which is what `[self_as]` asks for",
+		"/// (14.2). The bytes are still in `data`; nothing is copied.",
+		"#[must_use]",
+		f"pub fn {name}_holed(data: &[u8], hole_at: usize,"
+		f" hole_len: usize, fill: u8) -> {word} {{",
 		f"\tlet mut crc: {word} = 0x{started:0{digits}X};",
 		"",
-		"\tfor byte in data {",
+		"\tfor i in 0..data.len() {",
+		"\t\tlet byte = holed_byte(data, i, hole_at, hole_len, fill);",
+		"",
 	])
 	# Parenthesised only where the mask needs it: `-D warnings` refuses an
 	# unnecessary pair around an assigned value, and every generated crate
@@ -146,14 +199,14 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	# evaluates to zero. Rust does not promote: `u8 >> 8` is a compile-time
 	# overflow, and rustc refused the tree's one reflected eight-bit CRC.
 	if width == 8:
-		step = f"{name.upper()}_TABLE[(crc ^ *byte) as usize]"
+		step = f"{name.upper()}_TABLE[(crc ^ byte) as usize]"
 	elif reflect:
 		step = (f"{name.upper()}_TABLE"
-		        f"[((crc ^ {word}::from(*byte)) & 0xFF) as usize]"
+		        f"[((crc ^ {word}::from(byte)) & 0xFF) as usize]"
 		        f" ^ (crc >> 8)")
 	else:
 		step = (f"{name.upper()}_TABLE[(((crc >> {width - 8})"
-		        f" ^ {word}::from(*byte)) & 0xFF) as usize]"
+		        f" ^ {word}::from(byte)) & 0xFF) as usize]"
 		        f" ^ (crc << 8)")
 	lines.append(f"\t\tcrc = ({step}){narrow};" if narrow
 	             else f"\t\tcrc = {step};")
@@ -182,6 +235,16 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		              else "."),
 		"#[must_use]",
 		f"pub fn {name}(data: &[u8]) -> u16 {{",
+		f"\t{name}_holed(data, 0, 0, 0)",
+		"}",
+		"",
+		"/// The same sum with a hole in it: the `hole_len` bytes at",
+		"/// `hole_at` read as `fill`. That is what a checksum covering its",
+		"/// own field asks for (14.2, `[self_as]`), and it is the shape",
+		"/// RFC 1071 itself describes -- the field is summed as zero.",
+		"#[must_use]",
+		f"pub fn {name}_holed(data: &[u8], hole_at: usize,"
+		f" hole_len: usize, fill: u8) -> u16 {{",
 		"\t// 64 bits, so the accumulator cannot overflow for any slice a",
 		"\t// u32 length can express. A u32 holds 65537 words of 0xFFFF and",
 		"\t// wraps on the next one.",
@@ -189,12 +252,16 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\tlet mut i = 0usize;",
 		"",
 		"\twhile i + 1 < data.len() {",
-		"\t\tsum += u64::from(u16::from_be_bytes([data[i], data[i + 1]]));",
+		"\t\tsum += u64::from(u16::from_be_bytes([",
+		"\t\t\tholed_byte(data, i, hole_at, hole_len, fill),",
+		"\t\t\tholed_byte(data, i + 1, hole_at, hole_len, fill),",
+		"\t\t]));",
 		"\t\ti += 2;",
 		"\t}",
 		"\tif i < data.len() {",
 		"\t\t// The odd byte is the HIGH half of a final word.",
-		"\t\tsum += u64::from(data[i]) << 8;",
+		"\t\tsum += u64::from("
+		"holed_byte(data, i, hole_at, hole_len, fill)) << 8;",
 		"\t}",
 		"",
 		"\t// A loop, because a fold can carry again.",

@@ -16,6 +16,12 @@ Python changes. A C or Rust register is a machine word that wraps, so the
 mask a narrow width needs is arithmetic those backends can skip when the
 width fills its word. Python's integers are unbounded: nothing wraps, so
 `crc << 8` grows for ever and every width -- 64 included -- is masked.
+
+Each codec emits two entry points, as C does. The plain one is the whole
+interface most callers want; the `_holed` one takes the hole a `[self_as]`
+checksum needs (14.2), and the plain one is a call to it with a hole of
+length zero. The hole is a parameter rather than an edited buffer, so
+nothing here allocates a copy of the span it is summing.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"",
 		"from __future__ import annotations",
 	]
+	lines.extend(holed_byte())
 
 	for decl in schema.codecs():
 		if decl.name not in bound or decl.kernel is None:
@@ -79,6 +86,40 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		lines.extend(body)
 
 	return "\n".join(lines) + "\n"
+
+
+def holed_byte() -> list[str]:
+	"""The module-level helper every `_holed` entry point reads through.
+
+	C's `situ_holed_byte`, in Python and with the same reasoning. Both
+	families route every byte read through it, so there is one place that
+	knows what a hole is rather than two that agree.
+
+	Public, and not folded into `generate`, because `generate` is not the
+	only caller. The single-file backend asks `_for_kernel` for one codec
+	at a time and never calls `generate` at all, so it emits this itself --
+	and a second copy of the idea in `emit.py` is exactly the shape that
+	drifts.
+	"""
+	return [
+		"",
+		"",
+		"# A checksum that covers its own field runs the algorithm with",
+		"# those bytes taken as a constant (14.2, `[self_as]`). The bytes",
+		"# are still there and generated code never allocates a copy, so",
+		"# the hole is a parameter rather than an edited buffer: every",
+		"# `_holed` entry point below reads through this, and the plain",
+		"# entry point passes a zero-length hole.",
+		# One line, however long: a continuation aligned under an open paren
+		# at column zero is leading spaces with no tab in front, which the
+		# generated-source convention gate reads as space indentation --
+		# correctly, since there is no indentation for it to align against.
+		"def _holed_byte(data: bytes, index: int, hole_at: int,"
+		" hole_len: int, fill: int) -> int:",
+		"\tif hole_at <= index < hole_at + hole_len:",
+		"\t\treturn fill",
+		"\treturn data[index]",
+	]
 
 
 def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
@@ -146,9 +187,22 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"",
 		f"def {name}(data: bytes) -> int:",
 		f'\t"""The {decl.name} of `data`, as {article} {width}-bit integer."""',
+		f"\treturn {name}_holed(data, 0, 0, 0)",
+		"",
+		"",
+		f"def {name}_holed(data: bytes, hole_at: int, hole_len: int,"
+		f" fill: int) -> int:",
+		f'\t"""The {decl.name} of `data`, with a hole read as `fill`.',
+		"",
+		"\tThe `hole_len` bytes at `hole_at` read as `fill` rather than as",
+		"\twhat is there, which is what a checksum covering its own field",
+		"\tneeds (14.2). No copy is made: the hole is a parameter, so a",
+		"\tcaller holding a read-only view sums it without allocating one.",
+		'\t"""',
 		f"\tcrc = 0x{started:0{digits}X}",
 		"",
-		"\tfor byte in data:",
+		"\tfor index in range(len(data)):",
+		"\t\tbyte = _holed_byte(data, index, hole_at, hole_len, fill)",
 	])
 
 	# Every branch masks, including the widest. A Python integer does not
@@ -194,17 +248,33 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\tRFC 1071's sum with end-around carry"
 		+ (", complemented." if complement else "."),
 		'\t"""',
+		f"\treturn {name}_holed(data, 0, 0, 0)",
+		"",
+		"",
+		f"def {name}_holed(data: bytes, hole_at: int, hole_len: int,"
+		f" fill: int) -> int:",
+		f'\t"""The {decl.name} of `data`, with a hole read as `fill`.',
+		"",
+		"\tThe `hole_len` bytes at `hole_at` read as `fill` rather than as",
+		"\twhat is there. This is the case RFC 1071 exists for: IPv4, ICMP",
+		"\tand UDP put the sum inside its own coverage, so a sum over the",
+		"\tspan as it stands reads the stored value and is wrong for every",
+		"\tmessage. No copy is made -- the hole is a parameter.",
+		'\t"""',
 		"\t# No accumulator width to choose: a Python integer cannot",
 		"\t# overflow, so the fold below is the only thing bounding it.",
 		"\ttotal = 0",
 		"\tindex = 0",
 		"",
 		"\twhile index + 1 < len(data):",
-		"\t\ttotal += (data[index] << 8) | data[index + 1]",
+		"\t\thigh = _holed_byte(data, index, hole_at, hole_len, fill)",
+		"\t\tlow  = _holed_byte(data, index + 1, hole_at, hole_len, fill)",
+		"\t\ttotal += (high << 8) | low",
 		"\t\tindex += 2",
 		"\tif index < len(data):",
 		"\t\t# The odd byte is the HIGH half of a final word.",
-		"\t\ttotal += data[index] << 8",
+		"\t\ttotal += _holed_byte("
+		"data, index, hole_at, hole_len, fill) << 8",
 		"",
 		"\t# A loop, because a fold can carry again.",
 		"\twhile total >> 16:",

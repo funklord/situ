@@ -12,6 +12,11 @@
 //    below them -- of which there is nothing, which is a fact about where IPv4
 //    put its variable part rather than about situ.
 
+codec internet_checksum {
+	kernel = ones_complement(width = 16, complement);
+}
+impl internet_checksum derived;
+
 target buffer;
 endian big;
 bit_order msb_first;
@@ -57,7 +62,13 @@ struct ipv4_header [allow_straddle] {
 		// decides -- so this is a tag over a variable span, which is the reason
 		// the note that used to sit at the bottom of this file said a checksum
 		// belongs in the tag machinery rather than in a plain field.
-		checksum u8 header_checksum[2] covers(header) [self_as = 0];
+		// `is internet_checksum` names the codec that computes it, so the
+		// generated `header_checksum_compute` runs RFC 1071 over the header
+		// with these two bytes read as zero -- which is what `[self_as]`
+		// has always described and, until the hole became a parameter, what
+		// nothing could act on (0053).
+		checksum u8 header_checksum[2] covers(header) is internet_checksum
+			[self_as = 0];
 
 		ipv4_address  source       @ 0x0C;
 		ipv4_address  destination  @ 0x10;

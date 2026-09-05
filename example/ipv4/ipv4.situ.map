@@ -11,6 +11,10 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec internet_checksum derived expansion=+2 seekable=linear granularity=block systematic deterministic
+
 struct ipv4_address size=4 atomic=NonAtomic
   ipv4_address.octets                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
 

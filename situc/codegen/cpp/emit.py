@@ -2836,10 +2836,20 @@ class Emitter:
 			if held.codec and held.kind == "coded" and held.coded_covers
 			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
 
+		# The codec's OWN return width, not a guess. Declaring
+		# `std::uint32_t` for a codec that returns `uint16_t` is a
+		# declaration disagreeing with its definition across a translation
+		# unit, which no compiler can catch and no test would name: IPv4's
+		# checksum came back as 0xffffb861 with the right value in the low
+		# half and garbage above it.
 		return ['extern "C" {', *[
-			f"std::uint32_t situ_{c_name(name)}(const std::uint8_t *data,"
-			" std::uint32_t len);"
-			for name in checksums], *[
+			line for name in checksums for line in (
+				f"{self._codec_word(name)} situ_{c_name(name)}"
+				"(const std::uint8_t *data, std::uint32_t len);",
+				f"{self._codec_word(name)} situ_{c_name(name)}_holed"
+				"(const std::uint8_t *data, std::uint32_t len,"
+				" std::uint32_t hole_at, std::uint32_t hole_len,"
+				" std::uint8_t fill);")], *[
 			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
 			f" std::uint32_t {counted(name)}, std::uint8_t *out);"
 			for name in wanted], *[
@@ -5036,6 +5046,60 @@ class Emitter:
 
 		return lines
 
+	def _codec_word(self, name: str) -> str:
+		"""The C type a derived codec returns, as C++ spells it.
+
+		A CRC returns its accumulator and the Internet checksum returns
+		sixteen bits, so this is the kernel's answer rather than a
+		convenient constant.
+		"""
+		from situc.codegen.kernel_math import accumulator, crc_width
+
+		decl = self.codecs.get(name)
+		if decl is not None and decl.kernel is not None:
+			if decl.kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
+				return "std::uint16_t"
+			width = crc_width(decl)
+			if width is not None:
+				return f"std::uint{accumulator(width)}_t"
+		return "std::uint32_t"
+
+	def _codec_call(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The codec over the covered span, with `[self_as]`'s hole in it.
+
+		A checksum covering its own field runs the algorithm with those
+		bytes taken as a constant (14.2), and generated code never allocates
+		a copy -- so the hole is passed to the codec rather than punched
+		into a buffer. Without it IPv4, ICMP and UDP could not bind one.
+		"""
+		assert placement.tag_codec is not None
+		codec  = f"::situ_{c_name(placement.tag_codec)}"
+		filler = _self_as(placement.attrs)
+		if filler is None:
+			return [f"\t\tout = {codec}(raw().base + at, n);"]
+
+		held = bare_name(local_name(struct, placement))
+		return [
+			"\t\tstd::uint32_t hole_at = 0, hole_n = 0;",
+			"",
+			# The hole is inside the covered span by construction, so the
+			# subtraction below cannot underflow -- but "cannot" is the
+			# reasoning, not the code. Unsigned wrap would put the hole
+			# past the end and the sum would silently include the stored
+			# bytes, which is the one failure this whole mechanism exists
+			# to prevent. Rust's backend guards it because a debug build
+			# would panic; the others guard it because a wrong sum is
+			# worse than a refusal.
+			f"\t\tif ({held}_self_span(hole_at, hole_n)"
+			" != ::situ::rt::err::ok",
+			"\t\t\t\t|| hole_at < at) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\tout = {codec}_holed(raw().base + at, n, hole_at - at,"
+			f" hole_n, {filler:#04x});",
+		]
+
 	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
 			name: str) -> list[str]:
 		"""`is crc32` -- compute the sum, and compare it (0053).
@@ -5053,10 +5117,14 @@ class Emitter:
 		if placement.tag_codec is None:
 			return []
 
-		read  = ("situ_get_le32"
-		         if placement.tag_codec_endian is ast.Endian.LITTLE
-		         else "situ_get_be32")
 		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		# Sized by the field, not assumed 32-bit. A CRC32 is four bytes and
+		# the Internet checksum is two; reading the wrong width made
+		# `compute` right and `check` wrong, which the first IPv4 probe
+		# caught only because compute had already matched a published value.
+		order = ("le" if placement.tag_codec_endian is ast.Endian.LITTLE
+		         else "be")
+		read  = f"situ_get_{order}{width * 8}"
 		where = self._offset_expression(struct, placement) or "0"
 		return [
 			"",
@@ -5073,8 +5141,7 @@ class Emitter:
 			"\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\treturn e;",
 			"\t\t}",
-			f"\t\tout = ::situ_{c_name(placement.tag_codec)}"
-			"(raw().base + at, n);",
+			*self._codec_call(struct, placement),
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 			"",

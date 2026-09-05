@@ -1502,7 +1502,10 @@ class Emitter:
 		if not wanted:
 			return []
 
-		lines: list[str] = []
+		# The helper both families read every byte through. Emitted here
+		# rather than by `derived.generate`, which this path never calls:
+		# a single file gets one copy however many codecs it carries.
+		lines: list[str] = list(kernels.holed_byte())
 		for decl in self.schema.codecs():
 			if decl.name not in wanted:
 				continue
@@ -1519,6 +1522,17 @@ class Emitter:
 		The implementation is defined in this module by `_derived_codecs`,
 		so the call is a plain one and the file is self-contained.
 
+		Where the placement carries `[self_as]` the call is to the codec's
+		`_holed` entry point instead. A checksum covering its own field
+		runs the algorithm with those bytes taken as a constant (14.2);
+		the bytes are still there and generated code never allocates a
+		copy, so the hole is passed as parameters rather than punched into
+		a buffer -- which is what the `_self_span` accessor beside this has
+		always described and nothing had ever called. Without it IPv4, ICMP
+		and UDP could not bind a codec at all: their checksum is inside its
+		own coverage, so a sum over the span as it stands reads the stored
+		value and is wrong for every message.
+
 		Neither is called by `validate`: a coverage may run to the end of
 		the message, and a constraint walk that costs a file read is not the
 		flat model 0051 settled on.
@@ -1529,14 +1543,28 @@ class Emitter:
 		order = ("little" if placement.tag_codec_endian is ast.Endian.LITTLE
 		         else "big")
 		codec = py_name(placement.tag_codec)
+		span   = ("bytes(self._msg.buffer"
+		          "[self._at + at:self._at + at + n])")
+		filler = _self_as(placement.attrs)
+		if filler is None:
+			call = [f"\t\treturn {codec}({span})"]
+		else:
+			# `_self_span` and `_covered` both count from `self._at`, so
+			# the hole's offset inside the span is one subtraction.
+			call = [
+				f"\t\tspan = {span}",
+				f"\t\thole_at, hole_n = self.{name}_self_span()",
+				f"\t\treturn {codec}_holed("
+				f"span, hole_at - at, hole_n, {filler:#04x})",
+			]
+
 		return [
 			"",
 			f"\tdef {name}_compute(self) -> int:",
 			f'\t\t"""{placement.tag_codec} over the bytes'
 			f' `{name}_covered` names."""',
 			f"\t\tat, n = self.{name}_covered()",
-			f"\t\treturn {codec}("
-			"bytes(self._msg.buffer[self._at + at:self._at + at + n]))",
+			*call,
 			"",
 			f"\tdef {name}_check(self) -> None:",
 			'\t\t"""Raise `ChecksumError` where the stored sum disagrees.',

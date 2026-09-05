@@ -1254,7 +1254,11 @@ class Emitter:
 		if not wanted:
 			return []
 
-		lines: list[str] = []
+		# The hole reader every `_holed` entry point goes through. It
+		# comes from `derived.py` rather than being spelled again here,
+		# because this path never goes through `derived.generate` and a
+		# second copy is a second thing to be wrong.
+		lines: list[str] = list(kernels.holed_byte_helper())
 		for decl in self.schema.codecs():
 			if decl.name not in wanted:
 				continue
@@ -1281,6 +1285,9 @@ class Emitter:
 			return []
 
 		codec  = placement.tag_codec.lower()
+		# Sized by the field, not assumed 32-bit. A CRC32 is four bytes
+		# and the Internet checksum is two, and reading the wrong width
+		# makes `compute` right and `check` wrong.
 		width  = (placement.size_bits or 0) // BITS_PER_BYTE
 		start  = self._offset_expression(struct, placement) or "0"
 		read   = ("from_le_bytes" if placement.tag_codec_endian
@@ -1293,8 +1300,7 @@ class Emitter:
 			"\t/// end of the message.",
 			"\tpub fn " + f"{name}_compute(&self) -> Result<u32> {{",
 			f"\t\tlet (at, n) = self.{name}_covered()?;",
-			f"\t\tOk(u32::from({codec}(&self.bytes[at as usize"
-			"..(at + n) as usize])))",
+			*self._codec_call(placement, codec, name),
 			"\t}",
 			"",
 			f"\t/// Whether the stored {placement.tag_codec} matches. Not",
@@ -1311,6 +1317,42 @@ class Emitter:
 			f"\t\tif u32::from(held) == want {{ Ok(()) }}"
 			" else { Err(Error::Checksum) }",
 			"\t}",
+		]
+
+	def _codec_call(self, placement: Placement, codec: str,
+			name: str) -> list[str]:
+		"""The codec over the covered span, with `[self_as]`'s hole in it.
+
+		A checksum covering its own field runs the algorithm with those
+		bytes taken as a constant (14.2). The bytes are still there and
+		generated code never allocates a copy, so the hole is passed to
+		the codec rather than punched into a buffer -- which is what the
+		`_self_span` accessor beside this has always described and
+		nothing had ever called.
+
+		Without it IPv4, ICMP and UDP could not bind a codec at all:
+		their checksum is inside its own coverage, so a sum over the
+		span as it stands reads the stored value and is wrong for every
+		message.
+		"""
+		filler = _self_as(placement.attrs)
+		if filler is None:
+			return [f"\t\tOk(u32::from({codec}(&self.bytes[at as usize"
+			        "..(at + n) as usize])))"]
+
+		return [
+			f"\t\tlet (hole_at, hole_n) = self.{name}_self_span()?;",
+			"\t\t// The hole is an offset into the covered span, and C"
+			" subtracts",
+			"\t\t// these unguarded. Here the guard is not politeness:"
+			" an",
+			"\t\t// underflow panics, and a panic in `no_std` aborts.",
+			"\t\tif hole_at < at {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tOk(u32::from({codec}_holed(",
+			"\t\t\t&self.bytes[at..at + n], hole_at - at, hole_n,"
+			f" {filler:#04x})))",
 		]
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:

@@ -64,6 +64,21 @@ struct icmp_message {
 		// What it buys is section 14.2's dirty bit: writing any covered byte
 		// marks the checksum stale and the generated API says so, where a
 		// plain `u16` left the caller to remember.
+		// Deliberately NOT `is internet_checksum`, and the reason is a
+		// property of this schema rather than of the construct (0053).
+		//
+		// RFC 792's checksum covers the whole ICMP message, data included.
+		// This schema describes the eight bytes above and nothing after
+		// them -- the echo payload, and the quoted datagram a
+		// `time_exceeded` carries, are not members here -- so `message` is
+		// eight bytes and a computed sum would be right only for an ICMP
+		// message with no data at all. Every real one has some.
+		//
+		// It was bound, briefly, and the probe is what said so: situ
+		// summed 8 bytes where a reference over the packet summed 16.
+		// Binding a codec is what makes a coverage observable; until
+		// something computed, a narrow `covers` and a correct one looked
+		// identical.
 		checksum u8 checksum[2] covers(message) [self_as = 0];
 
 		variant body switch (type) {
