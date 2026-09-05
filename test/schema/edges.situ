@@ -290,6 +290,19 @@ struct placed_run {
 	u8   n;
 	u8   body[n];
 	u8   label[2];
+	// A run of WIDE elements in the same position, because it takes a
+	// different path: a byte array is a span, anything wider is reached by
+	// index. This walks that path in four backends and compares what they
+	// read.
+	//
+	// It does NOT catch the fault 26.262 fixed, and saying so here is the
+	// point: the four-way driver reads into a zeroed `static uint8_t
+	// raw[4096]` and fills a prefix, so an unguarded read past the frame
+	// lands on zeros in every backend and the four agree -- on a value none
+	// of them was entitled to. Sabotaging the guard leaves this green. What
+	// separates them is a sanitizer over a heap buffer of exactly the right
+	// size, which is `test_a_wide_array_behind_a_variable_member_is_guarded`.
+	u16  marks[2];
 	u16  tag;
 }
 

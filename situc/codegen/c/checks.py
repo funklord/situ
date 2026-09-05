@@ -1435,6 +1435,17 @@ def _array_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	if scalar is not None:
 		if scalar.bits == BITS_PER_BYTE:
 			return	# a byte array is handed out as a pointer, not indexed
+		if placement.offset_bits is None:
+			# The check writes its pattern at the offset the map implies, and
+			# a member the message places has no such offset to imply one.
+			# `_element_encoding_check` asserted this was "checked by the
+			# caller" and the caller checked `sealed_by`, the count and the
+			# element width -- never this. A fixed-count array of wide
+			# scalars behind a variable-length member reached it and
+			# `gen-checks` died on the assertion (26.262).
+			suite.skip(placement.path, "is placed by the message, so there "
+			           "is no static offset to write a stride pattern at")
+			return
 		_element_encoding_check(suite, struct, entry, prefix, extent, count)
 		return
 

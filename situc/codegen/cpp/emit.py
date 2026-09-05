@@ -5606,6 +5606,19 @@ class Emitter:
 		load  = self._load(scalar, placement,
 		                   offset=f"({start}) + index * {width}")
 
+		# An out-of-range INDEX is the caller's to avoid, as with any array.
+		# The frame not reaching the element is a different question, and at
+		# a dynamic offset it is one index 0 can fail: the offset is a sum
+		# the message chose. Unguarded, this read past the buffer --
+		# AddressSanitizer calls it a heap-buffer-overflow, zero bytes after
+		# a 14-byte region -- where C answers zero from the same schema.
+		# A static offset sits inside `size_min`, which the view checked, so
+		# it keeps the load it always had.
+		reach = f"({start}) + index * {width}"
+		body  = (load if placement.offset_bits is not None else
+		         f"situ_in_bounds(raw(), {reach}, {width}u)"
+		         f" ? {load} : {ctype}{{}}")
+
 		return [
 			"",
 			f"\t/* {placement.path}: {count} elements of {scalar.name}.",
@@ -5617,7 +5630,7 @@ class Emitter:
 			f"\t[[nodiscard]] {ctype} {name}(std::uint32_t index)"
 			" const noexcept",
 			"\t{",
-			f"\t\treturn {load};",
+			f"\t\treturn {body};",
 			"\t}",
 		]
 

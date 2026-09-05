@@ -3010,6 +3010,21 @@ class Emitter:
 		load = self._load(placement, scalar,
 		                  offset=f"({start}) + index * {width}")
 
+		# The index check above is about the ARRAY. Whether the frame reaches
+		# the element is a different question, and at a dynamic offset it is
+		# one index 0 can fail, the offset being a sum the message chose.
+		# Without it this read whatever the buffer held there and answered a
+		# number, where C answers zero -- and C++, doing the same, was a
+		# heap-buffer-overflow under AddressSanitizer. A static offset sits
+		# inside the minimum the view checked, so it keeps its plain load.
+		reach = ([] if placement.offset_bits is not None else [
+			f"\t\tif self._len - (({start}) + index * {width}) < {width}:",
+			"\t\t\t# Its offset is a sum of lengths the message chose, and",
+			"\t\t\t# the frame does not reach this element. `validate`",
+			"\t\t\t# reports such a message as malformed.",
+			"\t\t\treturn 0",
+		])
+
 		return [
 			"",
 			f"\tCOUNT_{name.upper()} = {count}",
@@ -3022,6 +3037,7 @@ class Emitter:
 			f"\t\tif not 0 <= index < {count}:",
 			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]'
 			f' of {count}")',
+			*reach,
 			f"\t\treturn {load}",
 		]
 

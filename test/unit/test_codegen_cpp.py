@@ -1009,6 +1009,78 @@ int main()
 	assert run.returncode == 0, run.stderr
 
 
+WIDE_BEHIND = "struct s { u8 n; u8 a[n]; u16 w[2]; u16 tail; }"
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_wide_array_behind_a_variable_member_is_guarded(
+		tmp_path: Path) -> None:
+	"""An element the frame does not reach, read by index.
+
+	A byte array is a span and is bounded as one. Anything wider is reached
+	by index, and the index check that guards it is about the ARRAY -- the
+	count is the schema's, so element 0 "is always there". At a dynamic
+	offset it is not: the offset is a sum the message chose, and element 0
+	can be past the end. C bounded this read from the start; C++ emitted a
+	bare load.
+
+	**The four-way differential cannot see this, which is why it survived.**
+	Its driver reads into `static uint8_t raw[4096]` and fills a prefix, so
+	an unguarded read past the frame lands on zeros in every backend and the
+	four agree -- on a value none of them was entitled to. A sanitizer over
+	a heap buffer of exactly the right size is the instrument that separates
+	them, which is what this is.
+	"""
+	result = compiles(tmp_path, WIDE_BEHIND, extra="""
+#include <cstdlib>
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	/* n = 200, so `w` claims offset 201 and the frame holds nine bytes.
+	 * On the heap, exactly nine, so a read past them is a fault the
+	 * sanitizer sees rather than a zero from a static buffer. */
+	auto *part = static_cast<std::uint8_t *>(std::malloc(9));
+
+	if (part == nullptr)
+		return 1;
+	part[0] = 200;
+	std::memset(part + 1, 'x', 8);
+
+	::situ::rt::message msg(part, 9u);
+	::situ::s view;
+	const auto got = ::situ::s::at(msg, 0u, 9u, view);
+	int rc = 0;
+
+	if (got != ::situ::rt::err::ok) {
+		std::free(part);
+		return 0;               /* refused outright is a pass */
+	}
+	if (view.w(0) != 0)
+		rc = 2;                 /* outside the frame: zero, as C answers */
+	std::free(part);
+	return rc;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 "-fsanitize=address",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, run.stdout + run.stderr
+
+
 # -- a base the message puts past the end -----------------------------------
 
 OVERREACHING = 'struct s { u16 n; u8 a[n]; u8 b[] until ";"; }'

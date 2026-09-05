@@ -5088,6 +5088,20 @@ class Emitter:
 		load  = self._load(placement, scalar,
 		                   offset=f"{self._unparen(start)} + index * {width}")
 
+		# The check above is about the ARRAY: the index is the caller's and
+		# the count is the schema's. Whether the FRAME reaches the element is
+		# a different question, and at a dynamic offset it is one index 0 can
+		# fail -- so "the first element is always there", which the
+		# differential's own probe assumes, stops being true. `Err` rather
+		# than a zero, matching what a data-sized run of these answers past
+		# its clamped count; the probe maps it to 0 and the four agree.
+		reach = ([] if placement.offset_bits is not None else [
+			f"\t\tif self.bytes.len().saturating_sub("
+			f"{self._unparen(start)} + index * {width}) < {width} {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+		])
+
 		return [
 			"",
 			f"\t/// `{placement.path}`: {count} elements of {scalar.name}.",
@@ -5099,6 +5113,7 @@ class Emitter:
 			f"\t\tif index >= {count} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
+			*reach,
 			f"\t\tOk({load})",
 			"\t}",
 		]

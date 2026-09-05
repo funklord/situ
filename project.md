@@ -21534,6 +21534,63 @@ own argument is that this is the right trade -- "the point is not to run
 every cell but to have the cells *enumerated*, so a sample is a sample
 of something known rather than of whatever somebody thought of."
 
+### 26.262 An element the frame does not reach, and the instrument that cannot see it
+
+A fixed-count array of WIDE scalars behind a variable-length member. C
+bounded the element read from the start:
+
+    situ_in_bounds(view, situ_s_run_offset(view) + index * 4u, 4u)
+        ? (int32_t)situ_get_be32(...) : (int32_t)0
+
+C++ emitted a bare load. Under AddressSanitizer that is a
+heap-buffer-overflow, zero bytes past a 14-byte region, from a schema
+situ accepts and compiles without a word. Python and Rust are
+memory-safe and still wrong: each checks the INDEX and not the frame, so
+they answer a value where C answers zero.
+
+**The index check is about the array; the frame is a different
+question.** C++'s comment says "Out of range is the caller's to avoid,
+as with any array", which is true of the index and says nothing about
+whether the bytes are there. Rust's is sharper and was the thing to
+notice: "the index is the caller's own and the count is the schema's, so
+the first element is always there." At a static offset that holds --
+`size_min` covered it. At a dynamic one the offset is a sum the message
+chose, and element ZERO can be outside. Each backend now uses its own
+convention, on the dynamic case only: `situ_in_bounds`, Python's
+`self._len - offset < width`, and Rust's `Err(Error::Bounds)`, which the
+differential's probe already maps to zero.
+
+**The four-way differential cannot see this, and that is the finding.**
+`placed_run` gained a `u16 marks[2]` so the shape would be compared on
+every commit -- and sabotaging the C++ guard left it GREEN. Its driver
+reads into `static uint8_t raw[4096]` and fills a prefix, so a read past
+the frame lands on zeros in every backend: C refuses and answers zero,
+unguarded C++ reads `base + limit` and gets zero, and the four agree on
+a value none of them was entitled to. Identical output, opposite
+correctness.
+
+So the differential is structurally blind to an out-of-frame read, and
+adding a corpus construct was the wrong reflex here. What separates them
+is a sanitizer over a HEAP buffer of exactly the right size, which the
+suite already had the idiom for. The schema comment says so rather than
+implying coverage it does not have.
+
+**The corpus addition then found a second, unrelated defect anyway.**
+`gen-checks` died on `checks.py`'s
+`assert placement.offset_bits is not None, "checked by the caller"` --
+and the caller checks `sealed_by`, the count and the element width,
+never that. The check writes its pattern at the offset the map implies
+and a dynamically placed member implies none, so it is skipped with the
+reason in the generated header:
+
+    *   placed_run.marks: is placed by the message, so there is no
+    *   static offset to write a stride pattern at
+
+An assertion that names its precondition and is wrong about who
+enforces it is worse than no assertion: it reads as a checked invariant.
+Reported independently by a sweep before the corpus reached it, which is
+two instruments finding one defect and is how it should go.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
