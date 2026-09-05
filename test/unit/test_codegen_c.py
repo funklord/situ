@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from situc.cli import analyse
-from situc.codegen.c import generate
+from situc.codegen.c import frame as frame_c, generate
 from situc.diagnostics import Source, SituError
 from situc.layout import solve
 from situc.parser import parse, parse_text
@@ -425,6 +425,50 @@ def test_every_schema_generates_and_compiles(path: Path, tmp_path: Path) -> None
 	result = subprocess.run(
 		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
 		 "-c", str(tmp_path / f"{path.stem}.c"), "-o", str(tmp_path / "out.o")],
+		capture_output=True, text=True)
+	assert result.returncode == 0, f"{path.parent.name}:\n{result.stderr}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_frame_layer_compiles(path: Path, tmp_path: Path) -> None:
+	"""Rung 4, which nothing compiled until slip's stopped compiling.
+
+	The check above builds `--layer view`, and `frame` is a rung above it
+	that `converse` and `drive` both include -- so a reader emitted against
+	a `required` nobody wrote reached anyone building the top layer, and no
+	test saw it. slip and smtp both shipped a `_frame.h` whose
+	`situ_frame_reader_next` called `situ_frame_required`, which the same
+	header declined to define and said so in a comment, sixty-seven lines
+	below the `situ_frame_datagram_span` it would have used.
+
+	Compiled rather than inspected, because the fault is a call to a
+	function that is not there: no assertion about the text would have
+	found it, and the compiler finds it for free.
+	"""
+	if "STATUS: needs phase" in path.read_text(encoding="ascii"):
+		pytest.skip("declares itself unbuildable")
+
+	source, resolved, _ = analyse(path)
+	schema    = parse(source)
+	generated = generate(schema, resolved, path.stem)
+	files     = dict(generated.files())
+	files.update(frame_c.generate(schema, resolved, path.stem, "situ"))
+
+	if f"{path.stem}_frame.h" not in files:
+		pytest.skip("no struct this schema frames")
+
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	# The header is the artifact: it carries the reader, and a translation
+	# unit that includes it is the smallest thing that resolves its calls.
+	probe = tmp_path / "frame_probe.c"
+	probe.write_text(f'#include "{path.stem}_frame.h"\nint main(void)'
+	                 " { return 0; }\n", encoding="ascii")
+	result = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 "-c", str(probe), "-o", str(tmp_path / "frame.o")],
 		capture_output=True, text=True)
 	assert result.returncode == 0, f"{path.parent.name}:\n{result.stderr}"
 

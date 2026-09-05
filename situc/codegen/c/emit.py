@@ -5148,6 +5148,27 @@ class Emitter:
 			return self._variant_length(struct, placement) is not None
 		if placement.kind not in ("coded", "sealed"):
 			return True
+
+		# A delimited region's wire length is wherever the terminator turns
+		# out to be, whatever the codec does to the bytes on the way past it.
+		# `_raw_length_expression` knows that -- it asks about the delimiter
+		# before anything else and answers with the region's own `_span`
+		# scan. This asked the codec's *expansion* instead, which for slip's
+		# stuffing is `ratio_bounded(2, 1)` and has no closed form, so
+		# `region_extent` said None and `_required` was declined. The two
+		# functions differ only in which question they ask first.
+		#
+		# It did not stop there, because `frame.py` is guided by the shared
+		# `traverse.frameable` rather than by this: the reader was emitted
+		# and called `situ_frame_required`, which nothing defines. slip's
+		# header carried "No `frame_required`: one of its members has no
+		# length this can compute" sixty-seven lines below the
+		# `situ_frame_datagram_span` it would have used, and the generated
+		# code did not compile. C++, Rust and Python all emit `required`
+		# for the same schema, so C was alone -- and alone in a layer no
+		# test compiled.
+		if placement.delimiter is not None:
+			return True
 		return self._region_length(struct, placement) is not None
 
 	def _count_expression(self, struct: ResolvedStruct, placement: Placement,

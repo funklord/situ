@@ -21415,6 +21415,62 @@ about a fix he had just written. The differential asked four
 implementations the same question over pseudo-random buffers and found
 where they parted, twice, in the half-hour after the construct arrived.
 
+### 26.260 A reader calling the function its own header declined to write
+
+`situc build example/slip/slip.situ --target c --layer frame` emits a
+`slip_frame.h` whose `situ_frame_reader_next` calls
+`situ_frame_required`, and `slip.h` says, in as many words:
+
+    /* No `frame_required`: one of its members has no length this can
+       compute.
+
+Sixty-seven lines below the `situ_frame_datagram_span` it would have
+used. The generated code does not compile. smtp's `data_block` is the
+same, and those two are the whole of it.
+
+**Two halves, and only together do they break.** `_has_length` asks, for
+a `coded` region, whether `_region_length` has an answer -- and that
+reasons from the CODEC'S EXPANSION, which for slip's stuffing is
+`ratio_bounded(2, 1)` and genuinely has no closed form. That refusal is
+correct on its own terms. But the region is `until "\xC0"`, and a
+delimited region's wire length is wherever the terminator turns out to
+be, whatever the codec does to the bytes on the way past it.
+`_raw_length_expression` knows exactly that: it asks about the delimiter
+BEFORE anything else and answers with the region's own `_span` scan. The
+two C functions differ only in which question they ask first.
+
+The second half is that `frame.py` is guided by the shared
+`traverse.frameable` rather than by `_has_length`, so it emitted the
+reader regardless. A gate and its consumer disagreeing about what is
+possible, which is the shape invariant 77 names.
+
+**C was alone.** C++, Rust and Python all emit `required` for slip, and
+Python's shape is the one C now matches: check `datagram_terminated`,
+then add `datagram_span`, with `have + 1` as the honest lower bound when
+the delimiter has not arrived. The machinery was never missing -- C
+emits `_terminated` and `_span` helpers, and http's frame layer, which
+is full of `until` byte arrays, has always compiled clean.
+
+**Nothing compiled rung 4.** `test_every_schema_generates_and_compiles`
+builds `--layer view`; `frame` is a rung above it that `converse` and
+`drive` both include, so the broken header reached anyone building the
+top layer and no test saw it. There is a compile check for the frame
+layer now, over every schema, and it is a COMPILE rather than an
+assertion about the text because the fault is a call to a function that
+is not there -- no string match would have found it, and the compiler
+finds it for free. Reverted, it fails on slip and smtp with the original
+errors.
+
+**And a fixture error worth recording, the fourth of the day.** Checking
+the new `required` against Python's, C answered 4 where Python answered
+3 and it looked like a real disagreement. The fixture was
+`"ab\xC0cd\xC0"` in C, where `\x` is GREEDY: `c` and `d` are hex digits,
+so `\xC0cd` is one escape and the two programs were reading different
+bytes. Python's `\x` takes exactly two. With explicit byte arrays the
+two agree on every input. **A cross-language comparison has to be given
+the same bytes, and a string literal is not the same bytes in two
+languages.**
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
