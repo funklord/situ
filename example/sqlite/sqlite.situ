@@ -31,6 +31,82 @@ varint_type sqlite_varint {
 	max_bytes = 9;
 }
 
+// The first hundred bytes of page 1, which every SQLite database begins with
+// (fileformat.html section 1.3). It is here for the sixteen-byte magic: the
+// header string is the longest pinned byte run in this directory, and until
+// `[must_eq]` took a literal there was no way to say it that generated a
+// check rather than a comment (0052).
+//
+// The rest earns its place by being unusually strict for a header: three
+// fractions the format fixes outright, a twenty-byte reserved run, and two
+// small vocabularies. Every value below was read out of a database sqlite3
+// wrote, not recalled.
+enum sqlite_format_version : u8 {
+	legacy      = 1,        // rollback journal
+	wal         = 2,        // write-ahead log
+}
+
+enum sqlite_text_encoding : u32 {
+	utf8        = 1,
+	utf16le     = 2,
+	utf16be     = 3,
+}
+
+struct sqlite_file_header {
+	// "SQLite format 3\x00" -- sixteen bytes including the terminator, which
+	// is part of the string the format specifies rather than a convention of
+	// C's. One span comparison; the alternative was sixteen fields.
+	u8  magic[16]  [must_eq = "SQLite format 3\x00"];
+
+	// A power of two from 512 to 32768, or 1 meaning 65536 -- so the bound
+	// is what the language can state and the rest is the format's own rule.
+	// `[max]` is not 32768 because of that 1.
+	u16 page_size;
+
+	sqlite_format_version  write_version;
+	sqlite_format_version  read_version;
+
+	// Unused bytes at the end of every page. Usually zero, and not pinned:
+	// an extension may reserve some.
+	u8  reserved_per_page;
+
+	// Three fractions the format fixes outright -- "Must be 64", "Must be
+	// 32", "Must be 32" -- so they are constraints rather than fields a
+	// reader interprets.
+	u8  max_embedded_payload_fraction  [must_eq = 64];
+	u8  min_embedded_payload_fraction  [must_eq = 32];
+	u8  leaf_payload_fraction          [must_eq = 32];
+
+	u32 change_counter;
+	u32 size_in_pages;              // the "in-header database size"
+	u32 first_freelist_trunk;
+	u32 freelist_page_count;
+	u32 schema_cookie;
+	u32 schema_format   [min = 1, max = 4];
+	u32 default_page_cache_size;
+	u32 largest_root_btree_page;    // auto-vacuum modes, else zero
+
+	sqlite_text_encoding  text_encoding;
+
+	u32 user_version;               // PRAGMA user_version
+	u32 incremental_vacuum;
+	u32 application_id;             // PRAGMA application_id
+
+	// "Reserved for expansion. Must be zero." Twenty bytes, and the one
+	// place in this directory where a reserved run is that long -- which is
+	// what makes it worth having: `must_be_zero` over a run is a loop, and
+	// a run this size is where a backend that got the loop wrong would show
+	// it.
+	reserved  u8[20]  [must_be_zero];
+
+	u32 version_valid_for;
+	u32 sqlite_version_number;
+}
+
+require size(sqlite_file_header) == 100;
+require absolute_static(sqlite_file_header);
+require memory_identical(sqlite_file_header.magic);
+
 // A message here is one page. SQLite reads pages, and the cell offsets are
 // measured from the start of one -- so a page is the frame that bounds them.
 //

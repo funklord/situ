@@ -20,6 +20,12 @@ target buffer
 
 varint sqlite_varint : be128 bits=64 bytes=9
 
+enum sqlite_format_version : u8 unknown=error
+  legacy=1 wal=2
+
+enum sqlite_text_encoding : u32 unknown=error
+  utf8=1 utf16le=2 utf16be=3
+
 struct btree_leaf_page size=8..
   @0x0000   1         u8         page_type  must_eq=13
   @0x0001   2         u16        first_freeblock  big
@@ -29,6 +35,31 @@ struct btree_leaf_page size=8..
   @0x0008   0..       table_leaf_cell cells  sized-by=cell_count
   cells index entry: 2
   cells index base: member page_type
+
+struct sqlite_file_header size=100
+  @0x0000   16        u8         magic  big must_eq="SQLite format 3\0"
+  @0x0010   2         u16        page_size  big
+  @0x0012   1         sqlite_format_version write_version
+  @0x0013   1         sqlite_format_version read_version
+  @0x0014   1         u8         reserved_per_page
+  @0x0015   1         u8         max_embedded_payload_fraction  must_eq=64
+  @0x0016   1         u8         min_embedded_payload_fraction  must_eq=32
+  @0x0017   1         u8         leaf_payload_fraction  must_eq=32
+  @0x0018   4         u32        change_counter  big
+  @0x001c   4         u32        size_in_pages  big
+  @0x0020   4         u32        first_freelist_trunk  big
+  @0x0024   4         u32        freelist_page_count  big
+  @0x0028   4         u32        schema_cookie  big
+  @0x002c   4         u32        schema_format  big min=1 max=4
+  @0x0030   4         u32        default_page_cache_size  big
+  @0x0034   4         u32        largest_root_btree_page  big
+  @0x0038   4         sqlite_text_encoding text_encoding  big
+  @0x003c   4         u32        user_version  big
+  @0x0040   4         u32        incremental_vacuum  big
+  @0x0044   4         u32        application_id  big
+  @0x0048   20        u8         <reserved0>  big must_be_zero
+  @0x005c   4         u32        version_valid_for  big
+  @0x0060   4         u32        sqlite_version_number  big
 
 struct table_leaf_cell size=2..18446744073709551633
   @0x0000   1..9      sqlite_varint payload_size  varint=sqlite_varint

@@ -941,7 +941,17 @@ def compared_members() -> tuple[int, int, int]:
 		blob, _ = packer.pack(parsed, resolved, metadata=True)
 		image   = load(blob)
 		walked, where = set(), ""
-		for line in report.listing(image, bytes(range(1, 97))).split("\n"):
+		# 128 bytes, and the length is load-bearing rather than arbitrary: a
+		# struct longer than the probe cannot be acquired, so the walker
+		# renders nothing for it and the overlap falls without anything
+		# being wrong with the walker. It was 96, and SQLite's 100-byte file
+		# header took the share from 91% to 87% -- a measurement that could
+		# not see the struct, reported as a coverage loss (26.252).
+		#
+		# Non-repeating within a 251 cycle so a field read at the wrong
+		# offset is unlikely to find the value it should have.
+		probe = bytes((index % 251) + 1 for index in range(128))
+		for line in report.listing(image, probe).split("\n"):
 			if line.startswith("-- "):
 				where = line[3:]
 				continue
@@ -977,8 +987,8 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	"""
 	asked, walked, both = compared_members()
 
-	assert both >= 470, (
-		f"the differential compares {both} members, down from 477; "
+	assert both >= 505, (
+		f"the differential compares {both} members, down from 509; "
 		f"C asks about {asked} and the walker renders {walked}")
 	assert both * 100 >= asked * 88, (
 		f"only {100 * both // asked}% of what C asks is compared, "

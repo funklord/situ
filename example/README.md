@@ -29,7 +29,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
 | [protobuf](protobuf/) | The language's hardest conformance test: the worst case on every axis, and five independent causes of non-canonicity. project.md section 9.7. |
-| [sqlite](sqlite/) | An offset table: pointers in key order, cells filling the page backwards, and the two things a real one asked for that situ has not got. project.md section 9.3. |
+| [sqlite](sqlite/) | An offset table: pointers in key order, cells filling the page backwards, and the two things a real one asked for that situ has not got. Also the file header, whose sixteen-byte magic is the longest pinned byte run here. project.md section 9.3. |
 | [packet](packet/) | The security position: the doom principle as a stage gate, and tag coverage against in-place mutation. project.md example 5.3. |
 | [registers](register/) | The MMIO target, where a missing setter is the deliverable: `access_width` plus `no_rmw` makes setting one bit a compile error. project.md example 15.2. |
 | [dnsname](dnsname/) | The boundary, in one file: situ describes a compressed name completely and walks it, and cannot follow the pointer -- the difference is the view model rather than a gap. Walking it is what turned a variant's extent from "unknowable" into a switch on the discriminant. Also the one weakening a schema has to declare because the layout does not imply it. |

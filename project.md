@@ -21046,6 +21046,59 @@ could not arise. **Agreement among three is not a majority verdict** -- it
 happened to be correct here, and the differential's assertion is that they
 agree, not that any of them is right.
 
+### 26.251 The sixteen-byte magic, and two databases rather than one
+
+`example/sqlite` described a b-tree leaf page and not the file header the
+magic lives in, which is why the audit rejected it as a byte-run candidate
+and referred the question up (26.250). Answered: the header is here.
+
+**It is the longest pinned run in the directory** -- `"SQLite format 3\x00"`,
+sixteen bytes including the terminator, which belongs to the format's own
+string rather than to C's convention. One span comparison where the
+alternative was sixteen fields.
+
+The rest earns its place by being unusually strict for a header. Three
+fractions the format fixes outright -- "Must be 64", "Must be 32", "Must be
+32" -- are constraints rather than fields a reader interprets; the twenty
+reserved bytes at offset 72 are this directory's longest `must_be_zero` run,
+which is where a backend that got that loop wrong would show it; and the
+write/read version and the text encoding are small closed vocabularies.
+
+**Two databases, not one, and the reason is the vacuous-pass rule.**
+`page_size`, `user_version` and `application_id` are the same bytes in every
+default database, so one vector cannot tell a getter that reads a field from
+a getter that returns a constant. The pair varies them. `page_size` earns a
+second sentence: 512 is `02 00` and 4096 is `10 00`, so the two together
+also say the field is big-endian -- read the other way they would be 2 and
+16, neither of which sqlite3 ever wrote and both outside the format's range.
+`application_id = 1234` is 0x4D2, four bytes of which only the last two are
+non-zero, so a read at the wrong offset or width lands on zeros and looks
+like a pass.
+
+**Both vectors came from sqlite3 3.46.1**, and every field was read out of a
+file on disk rather than recalled from the specification -- the generated
+suite runs them under cmocka and both pass. The one measurement worth
+keeping separately: corrupting a byte of the magic refuses and names
+`SITU_SQLITE_FILE_HEADER_MAGIC_CHECK`, so the refusal is the magic's rather
+than a neighbouring constraint's.
+
+**It also moved a gate, and the gate was right to fire.** The walker
+differential asserts that at least 88% of what C asks about is compared
+against the walker, and the new header took it to 87%. Not because the
+walker cannot render those fields -- because the probe buffer was 96 bytes
+and the struct is 100, so the view could not be acquired and the walker
+rendered nothing for it. **A measurement that could not see the struct,
+reported as a coverage loss.** The probe is 128 bytes now and the overlap
+is 91%, up from the 87% the shorter one gave; the count floor moved with
+it, because a floor left where it was after coverage improves is a floor
+that stops catching anything.
+
+**And this is the example growing rather than a construct being converted**,
+which the audit was right to hold back for a decision. What it buys is the
+first vector suite for this schema at all: `sqlite` had prose in
+`vectors.txt` and nothing machine-checked, so its accessors had never been
+held to bytes another implementation wrote.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

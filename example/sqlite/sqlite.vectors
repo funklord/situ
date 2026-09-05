@@ -1,0 +1,57 @@
+# Golden vectors for the SQLite file header.
+#
+# Regenerate with sqlite3 itself, never with situ -- a description that agrees
+# only with its own compiler has demonstrated nothing:
+#
+#   sqlite3 small.db "PRAGMA page_size=512;
+#                     CREATE TABLE t(a TEXT);
+#                     INSERT INTO t VALUES('alpha'),('beta'),('gamma');"
+#   sqlite3 tagged.db "PRAGMA page_size=4096;
+#                      PRAGMA application_id=1234;
+#                      PRAGMA user_version=7;
+#                      CREATE TABLE u(b INT);"
+#   head -c 100 small.db | xxd -p
+#
+# Written by sqlite3 3.46.1. Two headers rather than one, because a single
+# database cannot show a field being read: `page_size`, `user_version` and
+# `application_id` are the same bytes in both files unless something varies
+# them, and a constant satisfies a getter that returns a constant.
+#
+# `page_size` is the one worth reading twice. 512 is 02 00 and 4096 is 10 00,
+# so the pair also says the field is big-endian -- little-endian would give
+# 0x0002 and 0x0010, both of which are outside the format's range and neither
+# of which is a page size sqlite3 ever wrote.
+
+# -- 512-byte pages, three rows. The default everything else.
+
+sqlite_file_header small 53 51 4C 69 74 65 20 66 6F 72 6D 61 74 20 33 00 02 00 01 01 00 40 20 20 00 00 00 02 00 00 00 02 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 04 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02 00 2E 7A 71
+	page_size                     = 512
+	write_version                 = SITU_SQLITE_FORMAT_VERSION_LEGACY
+	read_version                  = SITU_SQLITE_FORMAT_VERSION_LEGACY
+	reserved_per_page             = 0
+	max_embedded_payload_fraction = 64
+	min_embedded_payload_fraction = 32
+	leaf_payload_fraction         = 32
+	size_in_pages                 = 2
+	schema_cookie                 = 1
+	schema_format                 = 4
+	text_encoding                 = SITU_SQLITE_TEXT_ENCODING_UTF8
+	user_version                  = 0
+	application_id                = 0
+	version_valid_for             = 2
+	sqlite_version_number         = 3046001
+
+# -- 4096-byte pages, and the two pragmas that write a number a reader can
+#    choose. `application_id` is 1234 = 0x4D2, which is four bytes of which
+#    only the last two are non-zero -- a field read at the wrong offset or the
+#    wrong width lands on zeros and looks like a pass.
+
+sqlite_file_header tagged 53 51 4C 69 74 65 20 66 6F 72 6D 61 74 20 33 00 10 00 01 01 00 40 20 20 00 00 00 03 00 00 00 02 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 04 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 07 00 00 00 00 00 00 04 D2 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03 00 2E 7A 71
+	page_size                     = 4096
+	size_in_pages                 = 2
+	schema_format                 = 4
+	text_encoding                 = SITU_SQLITE_TEXT_ENCODING_UTF8
+	user_version                  = 7
+	application_id                = 1234
+	version_valid_for             = 3
+	sqlite_version_number         = 3046001

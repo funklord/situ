@@ -19,6 +19,31 @@ struct btree_leaf_page size=8.. mutate=Shifting address=FrameStable repr=ValueCo
   btree_leaf_page.fragmented_free        offset=AbsoluteStatic(0x07) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   btree_leaf_page.cells                  offset=AbsoluteStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
 
+struct sqlite_file_header size=100 repr=ValueConverted atomic=NonAtomic
+  sqlite_file_header.magic               offset=AbsoluteStatic(0x00) size=Fixed(16) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  sqlite_file_header.page_size           offset=AbsoluteStatic(0x10) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.write_version       offset=AbsoluteStatic(0x12) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  sqlite_file_header.read_version        offset=AbsoluteStatic(0x13) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  sqlite_file_header.reserved_per_page   offset=AbsoluteStatic(0x14) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  sqlite_file_header.max_embedded_payload_fraction offset=AbsoluteStatic(0x15) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  sqlite_file_header.min_embedded_payload_fraction offset=AbsoluteStatic(0x16) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  sqlite_file_header.leaf_payload_fraction offset=AbsoluteStatic(0x17) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  sqlite_file_header.change_counter      offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.size_in_pages       offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.first_freelist_trunk offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.freelist_page_count offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.schema_cookie       offset=AbsoluteStatic(0x28) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.schema_format       offset=AbsoluteStatic(0x2C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.default_page_cache_size offset=AbsoluteStatic(0x30) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.largest_root_btree_page offset=AbsoluteStatic(0x34) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.text_encoding       offset=AbsoluteStatic(0x38) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.user_version        offset=AbsoluteStatic(0x3C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.incremental_vacuum  offset=AbsoluteStatic(0x40) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.application_id      offset=AbsoluteStatic(0x44) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.<reserved0>         offset=AbsoluteStatic(0x48) size=Fixed(20) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  sqlite_file_header.version_valid_for   offset=AbsoluteStatic(0x5C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  sqlite_file_header.sqlite_version_number offset=AbsoluteStatic(0x60) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
 struct table_leaf_cell size=2..18446744073709551633 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   table_leaf_cell.payload_size           offset=AbsoluteStatic(0x00) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
   table_leaf_cell.rowid                  offset=Dynamic size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
