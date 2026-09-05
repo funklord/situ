@@ -3426,10 +3426,15 @@ class Emitter:
 		return lines
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
-			held: str, cast: str = "usize", bounded: bool = False) -> str:
+			held: str, cast: str = "usize", bounded: bool = False,
+			extra: dict[str, str] | None = None) -> str:
 		"""`cast` is `i64` and `bounded` true for a size expression (14.2b):
 		signed throughout, every leaf held to `LEAF_MAX`, one clamp at the
-		end. C's copy carries the reasoning."""
+		end. C's copy carries the reasoning.
+
+		`extra` names the caller supplies as Rust expressions rather than as
+		fields of `struct` -- `remaining` in a repeat condition, and nothing
+		else. C's copy carries that reasoning too."""
 		def leaf(text: str, signed: bool = False) -> str:
 			"""One read, cast and bounded together.
 
@@ -3478,6 +3483,11 @@ class Emitter:
 		consts = self.resolved.layout.env.consts
 
 		def read(name: str) -> str:
+			if extra is not None and name in extra:
+				# Only where the caller says so: `remaining` means nothing
+				# in a size expression, and a name that resolves everywhere
+				# is a name that resolves where it should not.
+				return leaf(extra[name])
 			if name in consts:
 				return str(consts[name])
 			held_at = by_path[name]
@@ -3518,8 +3528,36 @@ class Emitter:
 			return leaf(f"{held}.{_ident(c_name(name))}()",
 			            held_at.scalar is not None and held_at.scalar.signed)
 
-		return expand_calls(over_fields([*by_path, *consts], source, read),
-		                    rust_spelling)
+		return expand_calls(
+			over_fields([*by_path, *consts, *(extra or {})], source, read),
+			rust_spelling)
+
+	def _element_condition(self, element: ResolvedStruct,
+			placement: Placement, limit: str) -> str:
+		"""The repeat predicate, as Rust over the element's own view.
+
+		Plus `remaining`, which is not a field of the element and is the
+		only thing that can stop a stream with no count and no sentinel: a
+		WOZ2 file is a header, a checksum over the rest, and chunks to the
+		end. `situc wire` accepted `while (remaining > 0)` and every backend
+		died on it with `UnknownName` -- a traceback where every other
+		refusal situ gives is a diagnostic (reported by respec, 26.253).
+
+		A `while` asks about the element just read, so at the point the
+		condition runs `at` has advanced past it: `remaining` is the bytes
+		after the element, which is exactly the question "is there another
+		one".
+
+		`limit` is where the walk ends, and it is not one name in this
+		backend as it is in C: the accessors walk `self.bytes` and framing
+		walks the `have` bytes that have arrived, so the caller names its
+		own. Saturating, for the reason the runtime's `advance` is: `at` is
+		arithmetic over lengths the message controls, and `limit - at` in
+		`usize` reports a run of about eighteen quintillion bytes.
+		"""
+		return self._over_fields(
+			element, placement.repeat_while or "", "element",
+			extra = {"remaining": f"{limit}.saturating_sub(at)"})
 
 
 	def _run_index(self, struct: ResolvedStruct, placement: Placement,
@@ -3629,7 +3667,7 @@ class Emitter:
 			return ["", f"\t// {placement.path}: this backend cannot resolve"
 			        " where the run starts."]
 
-		cond = self._over_fields(element, placement.repeat_while or "", "element")
+		cond = self._element_condition(element, placement, "self.bytes.len()")
 		cap  = ("" if placement.repeat_cap is None
 		        else f" && n < {placement.repeat_cap}")
 
@@ -4029,12 +4067,22 @@ class Emitter:
 		body: list[str] = []
 
 		if placement.repeat_while is not None:
-			cond = self._over_fields(element, placement.repeat_while or "",
-			                         "element")
+			# `have` rather than `self.bytes`: framing is an associated
+			# function over a slice, and what has arrived is the only limit
+			# it knows. A run reaching to the end of the view cannot be
+			# framed from a prefix, and this says so honestly -- more bytes
+			# here means another element is expected.
+			cond = self._element_condition(element, placement, "have")
 			body.extend([
 				*read,
-				f"\t\t\tlet element = {inner} {{"
-				" bytes: &data[at..at + part] };",
+				# Bound only where the condition reads it. A condition over
+				# `remaining` alone names no field of the element, and an
+				# unused binding is an error under `-D warnings` -- which
+				# is generated code that fails for the user. Same test as
+				# the `probe` above, for the same reason.
+				*([f"\t\t\tlet element = {inner} {{"
+				   " bytes: &data[at..at + part] };"]
+				  if "element." in cond else []),
 				"\t\t\tat += part;",
 				"",
 				"\t\t\t// The condition is asked about the element just"

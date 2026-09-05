@@ -21099,6 +21099,100 @@ first vector suite for this schema at all: `sqlite` had prose in
 `vectors.txt` and nothing machine-checked, so its accessors had never been
 held to bytes another implementation wrote.
 
+### 26.253 `remaining` reached the contract and not the code
+
+Reported by respec, reproduced here: `situc wire` accepts
+`chunk chunks[] while (remaining > 0)` and `situc build` dies with
+`situc.names.UnknownName: 'remaining'` -- for every code backend, as a
+traceback rather than a diagnostic.
+
+**Two faults, and the second is the worse one.** The front end and the
+backends disagree about what a schema is, which is 26.233's shape again --
+one command accepting what another cannot compile. And it crashes:
+`UnknownName` is a deliberate mechanism whose own comment says a rewriter
+that cannot rewrite a name "has not got an answer, and saying so is the
+difference between a caller that declines the member and generated code
+that does not build." It is meant to be caught by the caller. On the
+`repeat_while` path nobody catches it.
+
+**The answer is to resolve it, not to refuse it.** `_element_condition`
+supplied the element struct's own fields and nothing else, and `remaining`
+is not a field of a chunk. But a `while` is a POST-condition -- it asks
+about the element just read -- so where the condition runs the cursor has
+already passed that element, and `remaining` is the bytes after it. That is
+exactly the question "is there another one", and it is the only question a
+stream with no count and no sentinel can ask. situ already resolved
+`remaining` as a *size*; the gap was that a size and a condition took
+different name tables.
+
+**Scoped to the condition, deliberately.** `_over_fields` takes an `extra`
+map now and only the repeat-while caller passes one. `remaining` means
+nothing in a size expression, and a name that resolves everywhere is a name
+that resolves where it should not.
+
+**The probe that proved it was not the probe that was asked for.** The
+verification everywhere -- mine included -- was a three-chunk file with
+`while (remaining > 0)`, checking the count came out 3. That count cannot
+tell a correct cursor from a wrong one: the walk's own `at < limit` bound
+stops it after the third chunk whether `remaining` is read before or after
+the advance, so a backend reading the cursor one element early passes.
+Caught by a worker, which built the case that discriminates -- the same
+schema with `while (remaining > 8)`, where post-advance gives 2 and
+pre-advance gives 3. All four backends give 2.
+
+That is *Corroboration has to be independent* in its operational form:
+agreement is evidence only where a case exists that would disagree. Four
+backends agreeing on 3 was four readings of a number the loop bound
+produced.
+
+**Rust's compiler found a second defect on the way.** `_framing_walk`
+emitted `let element = ...` unconditionally, and a condition over
+`remaining` alone names no field of it -- so `-D warnings` refused the
+crate for an unused binding. C never had it, because its equivalent takes
+the element's address and the variable is therefore used. A construct that
+needs none of the surrounding scaffolding is how unused scaffolding gets
+noticed.
+
+**The walker was already right**, which is worth recording because it is
+the one description that needed no change: it refuses a broken magic on
+respec's schema and accepts good bytes, so its `clean` is a verdict rather
+than a skip.
+
+**What made the report actionable was the shape rather than the stack.**
+respec quoted the *good* case beside the bad one -- `u8 rest[remaining]`
+refused properly, with a diagnostic naming 0047 -- which turned a traceback
+into "size works, condition does not". A bug report that includes the
+neighbouring case that behaves correctly is doing the triage for you.
+
+**And they reported being unable to file it where it belonged.** respec
+says this file is not writable from their session, so the finding sat in
+their own notes waiting to be relayed. Measured here: it is `664
+claude:users`, which is consistent with what they describe, though whether
+their user is in that group is not something this side can check.
+
+The dependency rule says a fault found in a sibling is written into that
+sibling's `project.md`. Where a permission makes that impossible the rule
+becomes a queue, and a queue is only drained when somebody thinks to look
+-- this one was drained because the holder asked, not because anything
+surfaced it.
+
+**And the fix was made by four workers in one tree, which nearly cost
+somebody's work.** One of them ran `git stash` to get a pre-fix control and
+reported it afterwards: the round trip was clean, but two other workers had
+edits in flight and `project.md` had just been written. A stash takes the
+whole tree, so had they landed a minute earlier they would have gone into
+it -- and a `stash pop` that conflicts is recoverable while a `stash` that
+silently swallows a file somebody is still editing is the shared-tree
+hazard `CLAUDE.md` describes, arriving through a command nobody thinks of
+as destructive.
+
+What made it safe was the worker saying so unprompted. **Nothing in the
+tree would have shown it**: the stash list is empty afterwards either way,
+and a file that went in and came back out looks untouched. The comparison
+it wanted -- generated output before and after one file's change -- is had
+by copying the package aside and reverting one file in the copy, which is
+what it did for every comparison after the first.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

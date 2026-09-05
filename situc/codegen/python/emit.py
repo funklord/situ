@@ -3435,7 +3435,8 @@ class Emitter:
 		]
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
-			held: str, bounded: bool = False) -> str:
+			held: str, bounded: bool = False,
+			extra: dict[str, str] | None = None) -> str:
 		"""`bounded` holds every leaf to `LEAF_MAX`, which a size expression
 		asks for (14.2b). Python's integers do not overflow, so this is here
 		to *agree* with the three backends that do rather than for its own
@@ -3457,6 +3458,13 @@ class Emitter:
 		consts = self.resolved.layout.env.consts
 
 		def read(local: str) -> str:
+			if extra is not None and local in extra:
+				# A name the caller supplies as a Python expression rather
+				# than a field of this struct. Only where the caller says
+				# so: `remaining` means nothing in a size expression, and a
+				# name that resolves everywhere is a name that resolves
+				# where it should not.
+				return leaf(extra[local])
 			if local in consts:
 				return str(consts[local])
 			placement = by_local[local]
@@ -3481,8 +3489,35 @@ class Emitter:
 			return f"({self._raw_load(placement, placement.scalar)})"
 
 		return expand_calls(
-			_pythonic(over_fields([*by_local, *consts], source, read)),
+			_pythonic(over_fields([*by_local, *consts, *(extra or {})],
+			                      source, read)),
 			python_spelling)
+
+	def _element_condition(self, element: ResolvedStruct,
+			placement: Placement, cursor: str, limit: str) -> str:
+		"""The predicate, as Python over the element's own view.
+
+		Plus `remaining`, which is not a field of the element and is the
+		only thing that can stop a stream with no count and no sentinel: a
+		WOZ2 file is a header, a checksum over the rest, and chunks to the
+		end. `situc wire` accepted `while (remaining > 0)` and every backend
+		died on it with `UnknownName` -- a traceback where every other
+		refusal situ gives is a diagnostic (reported by respec, 26.253).
+
+		A `while` asks about the element just read, so at the point the
+		condition runs `cursor` has advanced past it: `remaining` is the
+		bytes after the element, which is exactly the question "is there
+		another one". `limit` differs between the walk and the framing pass
+		-- the frame this view holds, against what has arrived -- and that
+		is the whole reason both are the caller's to name.
+
+		Clamped, because a cursor at the limit must read zero rather than a
+		negative: `situ_remaining_u32` does the same in C, and a condition
+		asking `remaining > 0` would otherwise be true past the end.
+		"""
+		return self._over_fields(
+			element, placement.repeat_while or "", "element",
+			extra = {"remaining": f"max(0, {limit} - {cursor})"})
 
 	def _repeat_while(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -3500,7 +3535,7 @@ class Emitter:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
 			        " where the run starts."]
 
-		cond = self._over_fields(element, placement.repeat_while or "", "element")
+		cond = self._element_condition(element, placement, "at", "self._len")
 		cap  = ("" if placement.repeat_cap is None
 		        else f" and len(starts) <= {placement.repeat_cap}")
 
@@ -3802,8 +3837,10 @@ class Emitter:
 		body: list[str] = []
 
 		if placement.repeat_while is not None:
-			cond = self._over_fields(element, placement.repeat_while or "",
-			                         "element")
+			# `have` rather than the view's length: this is framing, so the
+			# bound is what has arrived. C's framing view sets `limit` to
+			# the same thing for the same reason.
+			cond = self._element_condition(element, placement, "at", "have")
 			body.extend([
 				*read,
 				f"\t\t\telement = {inner}(probe._msg, at, part)",

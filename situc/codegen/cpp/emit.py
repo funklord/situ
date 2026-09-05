@@ -1613,7 +1613,29 @@ class Emitter:
 
 	def _element_cond(self, element: ResolvedStruct,
 			placement: Placement) -> str:
-		"""The condition over `element`, whose accessors are methods."""
+		"""The condition over `element`, whose accessors are methods.
+
+		Plus `remaining`, which is not a field of the element and is the
+		only thing that can stop a stream with no count and no sentinel: a
+		WOZ2 file is a header, a checksum over the rest, and chunks to the
+		end. `situc wire` accepted `while (remaining > 0)` and every backend
+		died on it with `UnknownName` -- a traceback where every other
+		refusal situ gives is a diagnostic (reported by respec, 26.253).
+
+		A `while` asks about the element just read, so at the point the
+		condition runs `at` has advanced past it: `remaining` is the bytes
+		after the element, which is exactly the question "is there another
+		one". Every walk this condition is pasted into -- the count, the
+		indexed accessor, the span and the index -- does `at += size` before
+		asking, so the one cursor answers for all four.
+
+		C spells it against `view.limit` from `_over_fields`, which is
+		shared with size expressions and so takes the name as a parameter.
+		This rewriter serves the repeat-while and nothing else, so the name
+		is written here: `remaining` means nothing in a size expression, and
+		a name that resolves everywhere is a name that resolves where it
+		should not.
+		"""
 		names = [entry.placement.name for entry in element.entries
 		         if entry.placement.scalar is not None
 		         and "." not in entry.placement.path[len(element.name) + 1:]]
@@ -1625,13 +1647,16 @@ class Emitter:
 		           for entry in element.entries}
 
 		def read(name: str) -> str:
+			if name == "remaining":
+				return "situ_remaining_u32(raw_.limit, at)"
 			held = by_name.get(name)
 			if held is not None and held.type_name in self.enums \
 					and held.scalar is not None:
 				return f"({self._load(held.scalar, held, None, on='element')})"
 			return f"element.{c_name(name)}()"
 
-		return over_fields(names, placement.repeat_while or "", read)
+		return over_fields([*names, "remaining"],
+		                   placement.repeat_while or "", read)
 
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

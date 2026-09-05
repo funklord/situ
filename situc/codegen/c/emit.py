@@ -3512,11 +3512,27 @@ class Emitter:
 
 	def _element_condition(self, element: ResolvedStruct,
 			placement: Placement) -> str:
-		"""The predicate, as C over the element's own view."""
-		return self._over_fields(element, placement.repeat_while or "", "element")
+		"""The predicate, as C over the element's own view.
+
+		Plus `remaining`, which is not a field of the element and is the
+		only thing that can stop a stream with no count and no sentinel: a
+		WOZ2 file is a header, a checksum over the rest, and chunks to the
+		end. `situc wire` accepted `while (remaining > 0)` and every backend
+		died on it with `UnknownName` -- a traceback where every other
+		refusal situ gives is a diagnostic (reported by respec, 26.253).
+
+		A `while` asks about the element just read, so at the point the
+		condition runs `at` has advanced past it: `remaining` is the bytes
+		after the element, which is exactly the question "is there another
+		one".
+		"""
+		return self._over_fields(
+			element, placement.repeat_while or "", "element",
+			extra = {"remaining": "situ_remaining_u32(view.limit, at)"})
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
-			held: str, bounded: bool = False) -> str:
+			held: str, bounded: bool = False,
+			extra: dict[str, str] | None = None) -> str:
 		"""A schema expression over a struct's own fields, as C.
 
 		Every name in it is a field of `struct`, so each becomes that field's
@@ -3555,6 +3571,13 @@ class Emitter:
 		consts = self.resolved.layout.env.consts
 
 		def read(local: str) -> str:
+			if extra is not None and local in extra:
+				# A name the caller supplies as a C expression rather than
+				# a field of this struct. Only where the caller says so:
+				# `remaining` means nothing in a size expression, and a
+				# name that resolves everywhere is a name that resolves
+				# where it should not.
+				return leaf(extra[local], False)
 			if local in consts:
 				# A compile-time constant is bounded here rather than at
 				# run time: it cannot be what overflows, and wrapping it
@@ -3599,7 +3622,8 @@ class Emitter:
 			            placement.scalar.signed)
 
 		return expand_calls(
-			over_fields([*by_local, *consts], source, read), c_spelling)
+			over_fields([*by_local, *consts, *(extra or {})], source, read),
+			c_spelling)
 
 	def _record_prologue(self, base: str, delim: bytes, sym: str,
 			extent: str) -> list[str]:
