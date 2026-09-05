@@ -75,7 +75,15 @@ _NO_CHECK = "0xFFFFFFFFu"
 
 #: A line that leaves `validate` with a refusal. Every one of them is inside
 #: exactly one member's group, so the identity to record is that member's.
-_REFUSES = re.compile(r"\s*return SITU_ERR_\w+;\s*$")
+#: A line that refuses, and so needs `*which` set before it. `return e;`
+#: is here because a digit check propagates the accessor's own status
+#: rather than naming a constant: without it the member was grouped as
+#: having no refusal, got no CHECK id, and `check()` returned refused
+#: while leaving `*which` at the sentinel its own header documents as
+#: "nothing refused" -- the two halves of one result contradicting each
+#: other, and the member identity 0051 asks for lost exactly where a
+#: caller most wants it.
+_REFUSES = re.compile(r"\s*return (?:SITU_ERR_\w+|e);\s*$")
 
 
 @dataclass

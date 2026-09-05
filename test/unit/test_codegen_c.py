@@ -8,6 +8,7 @@ catches a -Wconversion regression.
 
 from __future__ import annotations
 
+import re
 import sys
 import shutil
 import subprocess
@@ -366,6 +367,40 @@ def test_generated_code_compiles_for_aarch64(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_refusal_in_check_names_the_member_that_refused(
+		path: Path) -> None:
+	"""`check(view, &which)` must set `*which` before every refusal.
+
+	Its header says `*which` is one of the ids "on a refusal and 0xFFFFFFFF
+	when nothing refused". A digit check propagates the accessor's status --
+	`return e;` rather than a `SITU_ERR_` constant -- and `_REFUSES` did not
+	recognise that as a refusal, so the member was grouped as refusing
+	nothing, got no CHECK id, and `check()` returned refused while leaving
+	`*which` at the sentinel meaning "nothing refused". One call's two
+	outputs contradicting each other, and the member identity 0051 asks for
+	lost in exactly the case a caller most wants it: cpio's header carries
+	thirteen such fields and named none of them.
+
+	Asserted over the whole corpus rather than over cpio, because the cell
+	that matters is "a refusal shape nobody has thought of yet" -- a new one
+	arrives as a failure here rather than as a silent 0xFFFFFFFF.
+	"""
+	source, resolved, _ = analyse(path)
+	text = generate(parse(source), resolved, "unit").source
+
+	for body in re.findall(
+			r"situ_err_t situ_\w+_check\(situ_view_t view, uint32_t \*which\)"
+			r"\n\{(.*?)\n\}", text, re.S):
+		lines = body.splitlines()
+		for at, line in enumerate(lines):
+			if not re.match(r"\s*return (?:SITU_ERR_\w+|e);\s*$", line):
+				continue
+			assert at and "*which = " in lines[at - 1], (
+				f"{path.name}: a refusal that does not name its member:\n"
+				+ "\n".join(lines[max(0, at - 4):at + 1]))
+
+
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_every_schema_generates_and_compiles(path: Path, tmp_path: Path) -> None:
 	"""Every schema in the repository, not every example.

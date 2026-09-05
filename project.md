@@ -21299,6 +21299,53 @@ condition at all. **So the spellings that got past the check were exactly
 the spellings that crashed.** Six while-runs in the corpus, none dotted, so
 refusing them costs nothing.
 
+### 26.258 Refused, and nothing refused
+
+`situ_<struct>_check(view, &which)` exists to name the member that
+refused -- "the id is the contract and the name is a macro, so nothing
+here costs a string (0051)". Its header promises `*which` is "one of the
+ids below on a refusal and 0xFFFFFFFF when nothing refused". For a
+fixed-width text number it returned refused AND wrote the sentinel, so
+one call's two outputs contradicted each other and the caller was handed
+an id that names no member.
+
+**The cause is a regex that decides what a refusal looks like.**
+`_REFUSES` matched `return SITU_ERR_<something>;`, and a digit check does
+not return a constant -- it propagates the accessor's own status with
+`return e;`. So the member was grouped as refusing nothing, was given no
+CHECK id, and the loop that writes `*which` before each refusal skipped
+it. `cpio_header` carries thirteen such fields and named none of them:
+`ino = "ZZZZZZZZ"` was refused as "nothing refused" while `namesize` out
+of range was named correctly, three lines apart in the same function.
+
+**Python already got this right**, which is what made it worth chasing:
+it raises `ConstraintError: cpio_header.ino is not 8 digits in base 16`.
+Two descriptions of one schema, one naming the member and one losing it.
+
+18 refusals across four schemas are named now -- cpio 13, edges 3, http
+and smtp one each -- and the ids renumber where they were previously
+absent, which is a generated-header change rather than a schema one.
+
+**The test asserts the population, not the case.** Over every schema in
+the corpus, every line in a `check()` body that returns a refusal must be
+preceded by `*which = `. Asserting cpio's thirteen would pass while the
+next refusal shape nobody has thought of arrives silently; this way it
+arrives as a failure. Reverting `_REFUSES` fails it, naming cpio and http.
+
+**What found it was reading the differential's own list of what it does
+not compare.** `codegen/differ.py` says the probed subset "is the thing
+to grow", and names a fixed-width text number's value as excluded -- so
+that is where four descriptions were free to disagree. They did not
+disagree about the value; they disagreed about how a bad one is reported,
+which is one layer up from where the sweep was aimed.
+
+**And one instrument error, the third of its kind in a day.** The first
+probe printed `which` in the same `printf` as the call that writes it,
+where the evaluation order is unspecified: it read the sentinel it had
+initialised and reported `which=0`, which is `MAGIC` -- a wrong member, in
+a finding about reporting the wrong member. A second program with a
+distinctive sentinel, reading after the call, gave the real answer.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
