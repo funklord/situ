@@ -21471,6 +21471,69 @@ two agree on every input. **A cross-language comparison has to be given
 the same bytes, and a string literal is not the same bytes in two
 languages.**
 
+### 26.261 The axis was enumerated and the member was always data-sized
+
+`compose.py` exists to put constructs next to each other and see what four
+backends do with the pair, and it names the axis this needed:
+
+    **what precedes it** -- nothing, a variable-length run, or a
+    delimiter. This is the axis that decides whether the member's offset
+    is a constant, and 26.49 is eleven places that assumed it was.
+
+The axis was there. 26.259 still happened -- `u8 head[2]` behind a
+variable-length member, building in C and raising `offset is dynamic` in
+the other three -- because of one line:
+
+    FORMS = {"count": "[{read}]", "arith": "[{read} + 1]",
+             "remaining": "[remaining]"}
+
+**All three forms are sized by the DATA.** The member under test always
+carried a count read from the message, so the simplest member of all --
+a literal count, where everything visible about it is static and only
+its offset is not -- never occupied the position this file was built to
+test. That is exactly the shape a backend assumes is constant, which is
+why it was the shape that broke.
+
+`"fixed": "[2]"` takes the space from 6300 cells to 9000.
+
+**150 of the new cells, seed 23: 104 agreed, 46 did not.** And the
+element axis predicts which way, almost perfectly:
+
+    element   crash  build  disagree
+    rec          12      0         0
+    vrec          0     27         0
+    i32/u16       0      0         6
+    u8            0      1         0
+
+So four defects rather than forty-six. A fixed-count run of a FIXED
+record crashes the compiler; of a VARIABLE record it emits code that
+does not build -- `run_span` called by a later member's offset and never
+declared; a fixed-count run of WIDE scalars is read without a frame
+check; and a byte array in a variant arm has C calling an offset
+function it does not declare.
+
+**The wide-scalar one is memory-safety, not a wrong number.** C bounds
+its element read with `situ_in_bounds`; C++ emits a bare
+`situ_get_be32(raw_.base + offset + index * 4)`. Under
+AddressSanitizer that is a heap-buffer-overflow, zero bytes past a
+14-byte region, reached from a schema situ accepts and compiles
+silently. Python and Rust check the INDEX and not the frame, so they
+answer wrong values where C answers zero. The same generated file
+frame-checks `tail`, a scalar at the very same dynamic offset.
+
+**All forty-six reproduce at `cdf5eeb~1`**, before 26.259 and 26.260 --
+checked by copying this `compose.py` into a worktree of that commit and
+running four representatives. Nothing here is a regression; the form
+made pre-existing defects visible, which is what it is for.
+
+**`test_composed_schemas` still passes**, its fixed 25-cell sample
+having drawn none of them. That is the seed's luck rather than evidence,
+and it is worth stating plainly: the enumerated space now contains cells
+that are known to fail, and a future sample may draw one. The module's
+own argument is that this is the right trade -- "the point is not to run
+every cell but to have the cells *enumerated*, so a sample is a sample
+of something known rather than of whatever somebody thought of."
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

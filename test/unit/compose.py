@@ -68,6 +68,16 @@ FORMS: dict[str, str] = {
 	"count":     "[{read}]",
 	"arith":     "[{read} + 1]",
 	"remaining": "[remaining]",
+	# A count the SCHEMA gives, which is the one form where every visible
+	# thing about the member is static and only its offset is not. That is
+	# exactly when a backend assumes a constant: `u8 head[2]` behind a
+	# variable-length member read `Placement.offset_bytes`, which asserts,
+	# and C++, Python and Rust each raised `offset is dynamic` where C built
+	# it correctly (26.259). This axis was already here -- `BEFORE` exists
+	# to make the offset dynamic and says so -- and the member under test
+	# was always sized by the DATA, so the simplest member of all never
+	# occupied the position this file was built to test.
+	"fixed":     "[2]",
 }
 
 #: What is counted. A byte run is a pointer and a length; anything wider is
