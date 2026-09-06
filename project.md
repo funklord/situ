@@ -21822,6 +21822,71 @@ a counted run and has to be walked, so a later member's offset calls a
 span function nothing emits. Folding it in here would have hidden a
 second defect inside a change about the first.
 
+### 26.267 Two predicates, one spelling apart, six descriptions wrong
+
+`T x[2]` where the element has no single size. `classify` called it an
+ARRAY; `is_counted_run` called it a counted run. They agreed about every
+other member in the tree and parted on exactly this spelling -- `T x[n]`
+reaches the walk through `data_sized`, and the literal count fell through
+to a stride it has not got.
+
+Six descriptions inherited it, each differently:
+
+    C           correct -- walks it
+    C++         declined the accessor, still named `run_span()`  no compile
+    Rust        the same                                         no compile
+    Python      `index * SIZE_BYTES` over the element's MINIMUM  wrong
+                offsets for every element after the first, and no span,
+                so an AttributeError on whatever followed the run
+    dissector   `while n < () and ...`                           not Lua
+    walker      refused the member outright
+
+**Python's is the one to be frightened of.** It byte-compiles, so nothing
+between writing the schema and running the program says a word.
+
+**The fix is one line in `classify`, and it fits the existing contract.**
+The signature takes `Container[str]` and says why -- "passed in rather
+than reached for, so this stays a function of the data" -- so the
+element's size cannot be looked up there. It does not need to be:
+`element_bits` is on the placement and is None exactly when the element
+has no fixed width. An earlier attempt called `is_counted_run` from
+inside `classify` and failed on a `set` with no `.get`; the contract was
+the constraint, and reading it is what found the field that satisfies it.
+
+**Routing correctly was half.** Each backend takes the walk's stopping
+rule from `_count_expression`, which answers the two spellings the
+MESSAGE carries and returns None for the one the SCHEMA carries. So C++
+compiled and then walked to the end of the frame instead of stopping at
+two -- a wrong answer replacing a compile error, which is worse, because
+it answers. Each backend's `extent()` guard wanted `is_counted_run` in
+place of `data_sized` for the same reason, and the comment beside the C++
+one already read "the same missing spelling this file has now met in four
+places".
+
+**And the walker's refusal predicted its own repeal.** It declined this
+shape deliberately: "The walk could add the elements up, and then it
+would be the only implementation that could: no backend emits a span for
+one, so nothing after such a run is placed by anybody." That was true
+when written. Reconciling the predicates made it false, and the walker
+walks it now. **A refusal resting on a fact about other implementations
+is one to re-read when they change** -- and this one said plainly which
+fact, which is why it could be re-read at all.
+
+**Measured.** `--only=-fixed-rec-` and `--only=-fixed-vrec-` were 12
+crashes in 12 and 18 build failures in 20; both are 20 agreed in 20.
+Generated output for every corpus schema is byte-identical to HEAD in all
+five descriptions -- the change reaches only the shape that was broken.
+`test_backends_refuse_the_same_members` failed the first attempt with
+`pieces.two: refused by ['cpp', 'python', 'rust'], emitted by ['c']`,
+which is the assertion this file exists for, and passes now.
+
+**One test asserted the refusal and was repointed rather than deleted.**
+`test_an_element_of_no_single_size_is_refused` held a real property --
+there is no constant stride -- and had encoded the accident that the
+property was answered by declining. It asserts the walk now, and that
+`index * v::size_bytes` never appears, since that is the wrong-answer
+form Python was emitting.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -197,6 +197,14 @@ struct packed_driver size=3..63
   @0x0001   0..60     u32        d  sized-by=n
   ~         2         u16        tail  big
 
+struct piece size=1..256
+  @0x0000   1         u8         len
+  @0x0001   0..255    u8         body  sized-by=len
+
+struct pieces size=4..514
+  @0x0000   2..512    piece      two  big
+  ~         2         u16        after  big
+
 struct pinned size=19
   @0x0000   1         u8         used  max=16
   @0x0001   16        u8         body  big sized-by=used

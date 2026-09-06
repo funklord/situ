@@ -1943,12 +1943,26 @@ def test_an_element_index_is_bounded_by_the_count() -> None:
 	assert "reading::size_bytes" in header
 
 
-def test_an_element_of_no_single_size_is_refused() -> None:
-	"""Element N is not at a constant stride, so there is no index to compute."""
+def test_an_element_of_no_single_size_is_walked_not_strided() -> None:
+	"""Element N is not at a constant stride, so it is reached by walking.
+
+	This asserted the REFUSAL until 26.267, and the refusal was an artifact:
+	`classify` called `v items[4]` an ARRAY where `is_counted_run` called it
+	a counted run, so the one spelling with a literal count was handed a
+	stride it has not got and declined. The property the test was written
+	for is unchanged -- there is no constant stride -- and it is now
+	answered by the walk every other counted run already used, which is
+	what C has always emitted.
+
+	The stride is what must not appear: `index * v::size_bytes` over an
+	element whose `size_bytes` is its MINIMUM is the wrong offset for every
+	element after the first, and that is what Python emitted for this shape.
+	"""
 	header = emit("struct v { u8 n; u8 body[n]; }"
 	              "struct frame { v items[4]; }")
 
-	assert "has no single size" in header
+	assert "items_span_from" in header or "items_count" in header
+	assert "index * v::size_bytes" not in header
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")

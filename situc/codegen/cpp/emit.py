@@ -2066,13 +2066,11 @@ class Emitter:
 					Member.RECORD_RUN, Member.REPEAT_WHILE, Member.NESTED,
 					Member.INDEXED):
 				return True
-			# `data_sized`, not `sized_by`: the arithmetic spelling of a
-			# count is a count, and reading only the bare one left
-			# `vrec run[n + 1]` without an `extent()` while the walk that
-			# indexes it called one. The same missing spelling this file
-			# has now met in four places.
-			return (data_sized(placement)
-			        and not struct.layout.is_fixed_size)
+			# `is_counted_run`, not `data_sized`: a LITERAL count is a
+			# count too, and asking only about the data-driven spellings
+			# left `vrec run[2]` without the extent its own walk calls.
+			# One predicate answers `[n]`, `[n + 1]` and `[2]` (26.267).
+			return is_counted_run(self.resolved.structs, placement)
 
 		if not any(walks(other, entry)
 		           for other in self.resolved.structs.values()
@@ -2498,6 +2496,15 @@ class Emitter:
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""The value of the field that sizes a member, read at run time."""
+		# A count the SCHEMA gives. `sized_by` and `size_expr` are the two
+		# the message carries, and `T x[2]` carries neither -- so every
+		# caller that walks a run asked for the count, got None, and fell
+		# back to "the frame is the bound", walking past the two elements
+		# the schema asked for (26.267). The fifth place this question has
+		# been spelled one way short.
+		if placement.array_count is not None:
+			return str(placement.array_count)
+
 		# A count written as arithmetic. `sized_by` holds a path and holds
 		# nothing for `x[n + 1]`, so this looked up a driver named "None",
 		# found none, and handed its caller a Python `None` -- which C++

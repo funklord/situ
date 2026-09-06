@@ -333,6 +333,20 @@ def classify(struct: ResolvedStruct, placement: Placement,
 
 	# Before NESTED: an array of structs names a struct type and is not one.
 	if placement.array_count is not None:
+		# A literal count of elements with NO SINGLE SIZE is a counted run:
+		# there is no stride to multiply, so element N is reached by walking.
+		# `is_counted_run` has always said so and this said ARRAY, and the
+		# two shared predicates parted on exactly that spelling -- `T x[n]`
+		# reaches the walk through `data_sized` above, `T x[2]` fell here and
+		# was handed a stride (26.267).
+		#
+		# Asked with `element_bits`, which the placement already carries and
+		# is None exactly when the element has no fixed width. `structs` is a
+		# Container of names by contract -- "passed in rather than reached
+		# for, so this stays a function of the data" -- so the element's size
+		# cannot be looked up here, and does not need to be.
+		if placement.element_bits is None and placement.type_name in structs:
+			return Member.VARIABLE
 		return Member.ARRAY
 
 	if placement.type_name in structs:

@@ -315,6 +315,24 @@ struct placed_run {
 	u16  tag;
 }
 
+// A LITERAL count of elements that have no single size. `segments` above is
+// the same shape with the count in the message, and that spelling has worked
+// since 26.46 -- this one had not, because `classify` called it an ARRAY
+// while `is_counted_run` called it a run, and five descriptions inherited
+// the disagreement one way each (26.267).
+//
+// `after` is the assertion: it sits behind the run, so a span that is wrong
+// or absent shows up as a member nobody can place.
+struct piece {
+	u8  len;
+	u8  body[len];
+}
+
+struct pieces {
+	piece  two[2];
+	u16    after;
+}
+
 struct hop {
 	u8  kind;
 	u8  value;

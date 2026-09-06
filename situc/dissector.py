@@ -1233,10 +1233,18 @@ def _counted_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	and stop early on a zero-length element or one the frame does not hold --
 	the two bounds every generated walk carries (invariant 24).
 	"""
-	count = (_over_fields(struct, placement.size_expr, "at_struct")
-	         if placement.size_expr is not None
-	         else _over_fields(struct, placement.sized_by or "", "at_struct"))
-	if count is None:
+	# A count the SCHEMA gives. Neither `size_expr` nor `sized_by` holds one,
+	# so `_over_fields` was handed "" and answered "" -- not None, so the
+	# guard let it through and the walk came out `while n < () and ...`,
+	# which is not Lua. The fifth description to spell this question one way
+	# short (26.267).
+	if placement.array_count is not None:
+		count: str | None = str(placement.array_count)
+	elif placement.size_expr is not None:
+		count = _over_fields(struct, placement.size_expr, "at_struct")
+	else:
+		count = _over_fields(struct, placement.sized_by or "", "at_struct")
+	if not count:
 		return []
 
 	name = _span_name(struct, placement)

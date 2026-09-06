@@ -218,15 +218,34 @@ def size_bits(view: View, index: int) -> int:
 		# number, which is the failure this repository rates worst"
 		# (`edges`' own comment on `segments`).
 		#
-		# Refused rather than walked. The walk could add the elements up,
-		# and then it would be the only implementation that could: no
-		# backend emits a span for one, so nothing after such a run is
-		# placed by anybody, and a walk that placed it would disagree with
-		# all four about where the next member is.
+		# Walked, since 26.267. This refused instead, and said why: "the
+		# walk could add the elements up, and then it would be the only
+		# implementation that could: no backend emits a span for one, so
+		# nothing after such a run is placed by anybody". That premise was
+		# true and has stopped being: `classify` called this shape an ARRAY
+		# where `is_counted_run` called it a run, and once the two were
+		# reconciled all five descriptions emit the span and place what
+		# follows. A refusal resting on a fact about other implementations
+		# is one to re-read when they change.
 		if placement.type_struct != NONE and placement.element_bits == NONE:
-			raise Unplaceable(
-				f"placement {index} is a counted run of variable-length "
-				"elements, which has no stride")
+			at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+			start = at
+			for _ in range(count):
+				if at >= view.limit:
+					break
+				inner = View(view.image, view.buffer, placement.type_struct,
+				             at, view.limit)
+				try:
+					size = struct_extent(inner)
+				except Refused:
+					break
+				# The two bounds every generated walk carries: a zero-extent
+				# element would not advance, and one the frame does not hold
+				# was never an element (invariant 24).
+				if size == 0 or at + size > view.limit:
+					break
+				at += size
+			return (at - start) * BITS_PER_BYTE
 		element = (placement.element_bits
 		           if placement.element_bits != NONE else BITS_PER_BYTE)
 		width = count * element
