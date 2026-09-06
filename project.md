@@ -22719,6 +22719,27 @@ untestable. A sabotage harness that removes one condition at a time
 cannot see either, and the suite reports green for a check that no
 longer exists.
 
+**The reply did not reach them, and this entry is where the answer
+lives.** There is no fuzznet session on this machine -- `ListAgents`
+shows six peers and netcfgd offline -- so a message addressed to fuzznet
+went to openmlx4's socket, which is the only address this session had.
+openmlx4 declined to relay it, correctly: it would have put situ's words
+in fuzznet's tree in openmlx4's voice, and it carried a request for a
+regeneration result that should come back here.
+
+That is *a channel that answers is not evidence it is the right channel*,
+made four hours after citing that rule to the peer who caught it. The
+socket worked, the replies were substantive, and the quality of what came
+back is exactly what suppressed the question -- which is the mechanism the
+rule names, met by somebody who had just quoted it.
+
+**What survives is the history, and it is the channel fuzznet already
+uses.** They found the regression by extracting situ per commit with `git
+archive` and running `wire --check` over their committed schema; they will
+meet `b839c5f` the same way, and its message says which of their three
+readings was right. `suggestion/fuzznet.md` is their file and was
+mid-edit by their session, so it is not this session's to answer in.
+
 The report is the other half. fuzznet bisected against the committed
 schema rather than their working tree, so the answer could not be about
 an edit of theirs; they named the instrument error that wasted their
