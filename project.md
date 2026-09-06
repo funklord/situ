@@ -22139,6 +22139,76 @@ reads sixteen now, gcc declines at six, and the sabotage fails through the
 the symbol rather than on a byte count, since a count is a claim in a
 particular compiler's units.
 
+### 26.273 A bound the descriptions disagreed about, behind a subcommand split
+
+openmlx4 reported four subcommands giving three answers about one file:
+`map` and `wire` exit 0 on `[must_eq = (0 - b0 - b1 - b2) % 256]` while
+`build` and `verify` exit 1. They had been about to recommend `situc map
+--check` as their gate and changed the recommendation to run `verify` too.
+
+**They were right, and the divergence was the visible end of a defect
+that is not about subcommands.** Two causes, and the second is the one
+worth the entry.
+
+**One: `invariant.OPERATORS` was `frozenset("+-*/")`.** `%` was missing
+rather than excluded -- `relation.OPERATORS` has carried both since it
+was written, and the docstring's exclusions are comparison and bit
+twiddling, neither of which `%` is. An unrenderable bound reaches
+`bound_refusal` and a renderable one does not, so `build` refused what
+`map` published a row for.
+
+**Two: a bound naming a sibling is rendered as TEXT by each backend, and
+`/` and `%` do not mean the same thing in all six.** C, C++ and Rust
+truncate toward zero; Python and Lua floor. Measured, on the two bytes
+`03 7f` against `[must_eq = (0 - b0) / 2 + 128]`:
+
+    C      situ_s_check(view)  -> SITU_OK
+    Python v.validate()        -> ConstraintError, wanting 126
+
+Six descriptions of one layout, built from one schema, disagreeing about
+which messages are valid. That is the property the compiler exists to
+hold, and it had been available since bounds learned to name a sibling.
+
+**`interval_of` has carried the refusal from the beginning.** "The left
+operand of `%` may be negative", with the note about C against Python and
+the remedy of `[min = N]`. It carried it for SIZE expressions, because a
+size is what asked. A bound reaches the same four backends by another
+route and had never asked -- **so the rule was live on one of the two
+paths that need it, and the path it was missing from is the one whose
+failure is silent.** A wrong size is a wrong length and something
+notices; a wrong bound is a message one description accepts and another
+rejects, with no run in which both are present.
+
+**Where the guard goes decided itself twice.** It is in the solver rather
+than in each backend's `_attr_checks` for 26.233's reason: `map` and
+`wire` call `solve` and not codegen, so an emitter-side guard leaves them
+publishing a diffable artefact for a schema that does not compile. And it
+is in `record_interval` rather than in `constrain`, which was the first
+attempt: `constrain` takes no `Walk` and so no field env, and hung one
+level out the check refused `[must_eq = "BM"]` -- a signature on a byte
+run, arithmetic-free -- in six committed schemas. `record_interval`
+returns early for anything that is not a scalar, which is exactly the
+population that can carry arithmetic.
+
+**What the peer could not have found, and what they could.** They had the
+symptom and no way to see the cause; the reasons were here. The reverse
+also held earlier in the same exchange -- their `--owned` BCD report is a
+defect this tree's own tests do not reach. Neither side could have
+produced the other's half.
+
+**The population assertion caught the operator addition arriving
+alone.** `test_the_builtin_cases_are_the_builtins` asserts
+`set(OPERATOR_CASES) == set(OPERATORS)`, so adding `%` to one set without
+a case in the other went red immediately. A set stated in one place and
+walked from another cannot grow on one side.
+
+Both fixes sabotaged separately, each failing through its own test and
+leaving the other green. The byte-sum check openmlx4 wanted is
+expressible with the subtraction lifted above zero --
+`[must_eq = (768 - b0 - b1 - b2) % 256]`, 768 because it must be
+congruent to 0 mod 256 and at least 765 -- and C and Python agree on all
+1260 byte quadruples tried, 12 of them accepted, so it discriminates.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

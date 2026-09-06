@@ -1831,10 +1831,12 @@ class Solver:
 			if digits is not None:
 				limit = min((1 << scalar.bits) - 1,
 				            int(member.radix ** digits) - 1)
+				self.check_bound_arithmetic(member.attrs, state)
 				state.fields[name] = self.constrain(Interval(0, limit),
 				                                    member.attrs)
 				return
 
+		self.check_bound_arithmetic(member.attrs, state)
 		state.fields[name] = self.constrain(
 			scalar_interval(scalar.bits, scalar.signed), member.attrs)
 
@@ -1875,6 +1877,54 @@ class Solver:
 			held  = (Interval(0, limit) if limit is not None
 			         else scalar_interval(inner.scalar.bits, inner.scalar.signed))
 			state.fields[f"{name}.{tail}"] = self.constrain(held, inner.attrs)
+
+	def check_bound_arithmetic(self, attrs: tuple[ast.Attr, ...],
+			state: Walk) -> None:
+		"""Refuse a bound whose arithmetic the six descriptions disagree about.
+
+		A bound that is not a compile-time constant is not thereby wrong: one
+		naming a sibling is checked against a message in front of you, so the
+		value is there to read, and every backend renders it as a run-time
+		comparison. It renders it as *text* -- and `/` and `%` truncate toward
+		zero in C, C++ and Rust while Python and Lua floor. Measured on
+		`[must_eq = (0 - b0) / 2 + 128]` over the two bytes `03 7f`: the C
+		description answered SITU_OK and the Python one raised, wanting 126.
+		Six descriptions of one layout disagreeing about which messages are
+		valid, which is the property the compiler exists to hold.
+
+		`interval_of` has carried exactly this refusal from the start -- "the
+		left operand of `%` may be negative", with a note suggesting
+		`[min = N]`. It carried it for SIZE expressions, because a size is
+		what asked. A bound reaches the same backends by another route and had
+		never asked, so the rule was live on one of the two paths that need
+		it.
+
+		It runs in the solver rather than in each backend's `_attr_checks`,
+		for the reason 26.233 gives about the string case: `map` and `wire`
+		call `solve` and not codegen, so a guard in an emitter lets those two
+		publish an artefact -- the artefact `--check` diffs in review -- for a
+		schema that does not compile. Reported by openmlx4, who found them
+		exiting 0 where `build` exited 1 and had been about to recommend
+		`situc map --check` as their gate.
+
+		Called from `record_interval` and not from `constrain`, which takes no
+		`Walk`. That is also the right population rather than a convenience:
+		`record_interval` returns early for anything that is not a scalar, and
+		a `[must_eq = "BM"]` on a byte run is a comparison of bytes rather
+		than arithmetic. Attached one level out, this refused the signature in
+		six committed schemas.
+
+		The env is the walk's, not the schema's. `constrain` takes the
+		constant env deliberately -- a bound that folds narrows an interval
+		and one that does not narrows nothing -- while this asks whether the
+		arithmetic can be spelled at all, which needs the siblings in scope
+		because the whole hazard is about a field's range.
+		"""
+		env = self.result.env.with_layout(
+			self.result.lookup, self.result.explain).with_fields(state.fields)
+		for attr in attrs:
+			if attr.name in NUMERIC_BOUNDS and attr.value is not None:
+				interval_of(attr.value, env)
 
 	def constrain(self, base: Interval, attrs: tuple[ast.Attr, ...]) -> Interval:
 		"""Narrow a field's range by the constraints it declares.

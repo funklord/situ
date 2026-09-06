@@ -253,12 +253,17 @@ BUILTIN_CASES = {
 }
 
 #: The same for the arithmetic. `-` takes the operands in the order that
-#: cannot go negative, which is the whole subject of the refusal tested below.
+#: cannot go negative, which is the whole subject of the refusal tested below --
+#: and of `%`, whose absence from `OPERATORS` was an omission rather than a
+#: decision. This assertion is what caught the addition arriving without a
+#: case, which is the population rule working: a set stated in one place and
+#: walked from another cannot grow on one side alone.
 OPERATOR_CASES = {
 	"+": "invariant s.total == size(s.b) + size(s.a);\n",
 	"-": "invariant s.total == size(s.b) - size(s.a);\n",
 	"*": "invariant s.total == size(s.b) * size(s.a);\n",
 	"/": "invariant s.total == size(s.b) / size(s.a);\n",
+	"%": "invariant s.total == size(s.b) % size(s.a);\n",
 }
 
 ARITHMETIC = "struct s {\n\tu16 total;\n\tu8 a;\n\tu32 b;\n}\n"

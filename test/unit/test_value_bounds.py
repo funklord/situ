@@ -16,7 +16,10 @@ imported without a compiler.
 
 from __future__ import annotations
 
+import pytest
+
 from situc.codegen.c import generate
+from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
@@ -35,6 +38,12 @@ def header(body: str) -> str:
 	schema   = parse_text(PREAMBLE + body)
 	resolved = resolve(schema, solve(schema))
 	return generate(schema, resolved, "unit").header
+
+
+def source(body: str) -> str:
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	return generate(schema, resolved, "unit").source
 
 
 def test_value_bounds_are_exported_as_macros() -> None:
@@ -66,3 +75,38 @@ def test_wrong_domains_are_excluded() -> None:
 	would be a constant in the wrong domain -- worse than none."""
 	emitted = header("struct s { q8_8 trim [max = 100]; bcd8 day [max = 49]; }")
 	assert "VALUE_MAX" not in emitted
+
+
+def test_a_bound_the_descriptions_would_disagree_about_is_refused() -> None:
+	"""`/` and `%` truncate toward zero in C, C++ and Rust and floor in
+	Python and Lua, so a negative dividend is arithmetic the six descriptions
+	do not share. Measured before the guard, on `03 7f`: the C description
+	answered SITU_OK and the Python one raised, wanting 126.
+
+	Refused in `solve` rather than in an emitter, so that `map` and `wire` --
+	which call the solver and not codegen -- refuse it too. openmlx4 found
+	those two exiting 0 where `build` exited 1, having been about to
+	recommend `situc map --check` as their gate.
+	"""
+	with pytest.raises(SituError, match="left operand of `%` may be negative"):
+		header("struct s { u8 b0; u8 b1 [must_eq = (0 - b0) % 256]; }")
+
+	with pytest.raises(SituError, match="left operand of `/` may be negative"):
+		header("struct s { u8 b0; u8 b1 [must_eq = (0 - b0) / 2 + 128]; }")
+
+
+def test_a_bound_whose_dividend_cannot_go_negative_is_kept() -> None:
+	"""The guard is about the sign, not about the operator: the same schema
+	written so the subtraction cannot go below zero is the byte-sum check
+	openmlx4 wanted, and all four backends render it alike -- C and Python
+	agreed on 1260 byte quadruples, 12 of them accepted.
+
+	`%` had also been missing from `invariant.OPERATORS`, which is what made
+	`[must_eq = b0 % 256]` unrenderable and so refused by `build` while `map`
+	published a row for it.
+	"""
+	emitted = source("struct s { u8 b0; u8 b1; u8 b2;"
+	                 " u8 b3 [must_eq = (768 - b0 - b1 - b2) % 256]; }")
+	assert "% 256" in emitted
+	header("struct s { u8 b0; u8 b1 [must_eq = b0 % 256]; }")
+	header("struct s { u8 b0; u8 b1 [must_eq = b0 / 2]; }")

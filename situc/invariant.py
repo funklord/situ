@@ -32,7 +32,17 @@ if TYPE_CHECKING:
 #: they are hard to emit, but because an invariant states that a field *equals*
 #: something, and the moment the right side can be a predicate the construct
 #: has quietly become a second `require` with a worse syntax.
-OPERATORS = frozenset("+-*/")
+#:
+#: `%` belongs with `/` and was missing rather than excluded -- the set was
+#: written as the four characters anybody types, and `relation.OPERATORS`
+#: has carried both all along. What its absence produced was `map` and
+#: `wire` exiting 0 on `[must_eq = b0 % 256]` while `build` exited 1, since
+#: an unrenderable bound reaches `bound_refusal` and a renderable one does
+#: not. The sign hazard the two share is refused in the solver now, by
+#: `LayoutBuilder.check_bound_arithmetic`, so adding this widens the
+#: expressible set without widening what the descriptions can disagree
+#: about.
+OPERATORS = frozenset("+-*/%")
 
 #: What an invariant may ask of a member. Each is a fact the layout solver
 #: already knows, which is what makes them safe to derive from.
