@@ -71,6 +71,7 @@ def check(schema: ast.Schema) -> None:
 	check_codec_sizes(schema)
 	check_registers(schema)
 	check_no_recursive_types(schema)
+	check_depth_bounds(schema)
 	check_delimiters(schema)
 	check_tlv_grammar(schema)
 	check_index_bases(schema)
@@ -1422,6 +1423,10 @@ STRUCT_ONLY_ATTRS = {
 	"allow_host_dependent": "a struct, whose layout the host decides",
 	"version":              "a struct, naming the field its `[since]` members "
 	                        "are counted against",
+	"depth":                "a struct that names itself, stating how deep the "
+	                        "format allows the nesting to go (0054)",
+	"limit":                "a struct that names itself, stating how deep this "
+	                        "build will follow it (0054)",
 }
 
 
@@ -3244,18 +3249,94 @@ def _fields(members: tuple[ast.Member, ...]) -> list[ast.Field]:
 
 
 def check_no_recursive_types(schema: ast.Schema) -> None:
-	"""Reject recursive struct declarations (project.md section 2).
+	"""Reject a recursive struct that does not say how deep it goes (0054).
 
-	Recursive types make size and capability computation non-terminating, so
-	they are rejected at parse time rather than diagnosed later by a solver that
-	failed to converge.
+	Recursion makes size and capability computation non-terminating, and for a
+	long time that was the whole rule. What it needs is a *bound*, not a
+	prohibition: a declared depth makes the size finite, the lattice walk
+	terminating and the walker's stack a quantity somebody chose. So a struct
+	that names itself and declares `[depth = N]` is allowed, and one that does
+	not is refused as before -- with the remedy attached, because a format
+	whose nesting is unbounded is one whose worst case nobody has considered.
+
+	**Direct self-reference only.** A mutual cycle is still refused, which
+	0054 leaves open deliberately: nothing in the mechanism needs the
+	recursion to be single, and the diagnostic is what wants thought, since
+	naming one struct of a two-struct cycle sends the reader to whichever
+	happened to be listed first.
 	"""
 	structs = {decl.name: decl for decl in schema.structs()}
 
 	for name in structs:
 		cycle = _find_cycle(name, structs, [])
-		if cycle is not None:
-			raise _recursion_error(cycle, structs)
+		if cycle is None:
+			continue
+		if len(cycle) == 2 and _declared_depth(structs[name]) is not None:
+			continue	# bounded, and the bound is the whole permission
+		raise _recursion_error(cycle, structs)
+
+
+def _declared_depth(decl: ast.StructDecl) -> int | None:
+	"""The `[depth = N]` a struct declares, or None."""
+	for attr in decl.attrs:
+		if attr.name == "depth" and isinstance(attr.value, ast.IntLiteral):
+			return attr.value.value
+	return None
+
+
+def check_depth_bounds(schema: ast.Schema) -> None:
+	"""`depth` and `limit` state facts about different things, so both are
+	checked against what they can mean.
+
+	A `limit` above a `depth` buys nothing: the format already refuses what it
+	would have caught, so it sits in a schema looking like a defence and is
+	not one. Refused rather than warned, because a schema that states what the
+	generated code does not enforce is worse than one stating nothing (17.0).
+
+	Both must be positive. A depth of zero describes a type that cannot
+	contain itself, which is a struct without the attribute.
+	"""
+	for decl in schema.structs():
+		depth = _declared_depth(decl)
+		limit = None
+		for attr in decl.attrs:
+			if attr.name == "limit" and isinstance(attr.value, ast.IntLiteral):
+				limit = attr.value.value
+
+		for name, value in (("depth", depth), ("limit", limit)):
+			if value is not None and value < 1:
+				raise error(
+					f"`[{name} = {value}]` is not a depth",
+					decl.span,
+					label = "declared here",
+					notes = ["a depth of zero or less describes a type that "
+					         "cannot contain itself, which is a struct "
+					         "without the attribute"],
+				)
+
+		if depth is None and limit is not None:
+			raise error(
+				"`[limit]` without `[depth]`",
+				decl.span,
+				label = "declared here",
+				notes = ["`limit` is this build's cap on a recursion the "
+				         "format bounds with `depth`, and there is no "
+				         "recursion here to cap",
+				         "a struct that names itself needs `depth` to be "
+				         "describable at all"],
+			)
+
+		if depth is not None and limit is not None and limit > depth:
+			raise error(
+				f"`[limit = {limit}]` is above `[depth = {depth}]`",
+				decl.span,
+				label = "declared here",
+				notes = ["`depth` is the format's own limit, so a message "
+				         "deeper than it is already refused as malformed",
+				         "a `limit` above it can never fire, and a schema "
+				         "that states what the generated code does not "
+				         "enforce is worse than one stating nothing (17.0)"],
+			)
 
 
 def _find_cycle(name: str, structs: Structs, path: list[str]) -> list[str] | None:
@@ -3298,7 +3379,12 @@ def _recursion_error(cycle: list[str], structs: Structs) -> SituError:
 		label = "declared here",
 		notes = [
 			f"cycle: {chain}",
-			"recursive types make size and capability computation "
-			"non-terminating, so they are rejected (project.md section 2)",
+			"recursion needs a bound: size and capability computation do "
+			"not terminate without one, and a walker has no stack depth to "
+			"budget for",
+			"say how deep the format allows it to go -- "
+			f"`struct {cycle[0]} [depth = N]`" if len(cycle) == 2 else
+			"a mutual cycle is not describable yet: `[depth]` bounds a "
+			"struct that names itself, and 0054 leaves the mutual case open",
 		],
 	)

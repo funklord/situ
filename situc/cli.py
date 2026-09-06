@@ -579,6 +579,39 @@ def cmd_build(args: argparse.Namespace) -> int:
 	from situc.codegen.cpp import generate as generate_cpp
 
 	source, resolved, outcomes = analyse(args.schema)
+
+	# A recursive type is describable but not yet generable (0054). The
+	# layout, the map and the wire contract are correct for one -- which is
+	# the specification path, and the one two consumers actually adopted --
+	# while every backend emits an `extent` that calls itself. In C that does
+	# not even compile without a forward declaration, and with one it would be
+	# run-time recursion in generated code that 20.1 promises has none, with
+	# `depth` and `limit` enforced nowhere.
+	#
+	# Refused with the reason rather than emitted, on 26.69's precedent: a
+	# caller who asked for this mode and found a header that does not build
+	# would conclude the generator was broken. What is missing is named, so
+	# the refusal says which half of the tool works.
+	recursive = sorted(
+		name for name, struct in resolved.structs.items()
+		if any(entry.placement.type_name == name for entry in struct.entries))
+	if recursive:
+		from situc.diagnostics import error
+
+		named = ", ".join(f"`{name}`" for name in recursive)
+		raise error(
+			f"no accessors yet for a recursive type: {named}",
+			resolved.structs[recursive[0]].layout.span,
+			label = "declared here",
+			notes = ["`[depth]` makes a recursive type describable, and "
+			         "`situc map`, `wire` and `verify` are correct for one",
+			         "code generation is not: every backend would emit an "
+			         "`extent` that calls itself, which section 20.1 promises "
+			         "generated code does not do, and neither `depth` nor "
+			         "`limit` is enforced anywhere yet",
+			         "the specification path works today -- commit the map "
+			         "and the wire contract and check them in CI"])
+
 	files: dict[str, str]
 	warnings: list[Diagnostic]
 

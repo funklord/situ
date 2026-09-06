@@ -137,7 +137,7 @@ def test_recursion_diagnostic_shows_the_cycle() -> None:
 
 	rendered = caught.value.diagnostic.render()	# type: ignore[attr-defined]
 	assert "cycle: A -> B -> A" in rendered
-	assert "non-terminating" in rendered
+	assert "recursion needs a bound" in rendered
 
 
 def test_width_error_points_at_the_type() -> None:

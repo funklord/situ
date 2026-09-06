@@ -169,8 +169,16 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   carried `WALK_DEPTH_MAX` since it was written; this is that mechanism
   reaching the compiler, not a new one.
 
-  **Not yet implemented.** The record is the design; `wellformed.py` still
-  refuses every cycle.
+  **The describing half is implemented; the generating half is not.** A
+  struct that names itself and declares `[depth = N]` is accepted, laid out
+  and mapped, and `situc map`, `wire` and `verify` are correct for one.
+  `situc build` refuses it by name, because every backend would emit an
+  `extent` that calls itself -- run-time recursion in generated code that
+  20.1 promises has none, with neither `depth` nor `limit` enforced
+  anywhere. A header that does not compile is worse than a refusal (26.69).
+
+  Mutual recursion stays refused, as the record leaves it. `SITU_ERR_DEPTH`
+  and the walkers' side are the generating half and are not built.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
@@ -22675,7 +22683,8 @@ whose".
 ### 26.280 A guard aimed wider than its subject, and two that hid each other
 
 fuzznet bisected a regression to `74f3742` -- this session's bound guard
--- and carried a red `make schema` rather than working around it.
+-- and carried a red schema gate of their own rather than working around
+it.
 
     u16  index    [max = chunks - 1];    // `chunks` is at 0x57, `index` 0x55
 
@@ -22764,6 +22773,73 @@ first pass -- a scratch copy without the `.wire` sibling, which fails
 identically to the real refusal in a one-line summary; and they offered
 three readings of what situ might have intended rather than one. The
 third was right.
+
+### 26.281 Bounded recursion, and the one line that was doing the refusing
+
+0054 implemented as far as description goes. A struct that names itself
+and declares `[depth = N]` is accepted, laid out and mapped; one that does
+not is refused as before, now with the remedy in the diagnostic.
+
+**What "non-terminating" meant was one function re-entering itself.**
+Section 2 justified the ban for eight months on the grounds that size and
+capability computation do not terminate, and lifting the refusal to look
+showed exactly where:
+
+    layout_of -> place_members -> place_one -> element_extent
+              -> layout_of ...  RecursionError in Scope.narrow
+
+`layout_of` had no re-entry guard because nothing could re-enter it. One
+`in_progress` set and one early return is the whole of the solver change,
+and **the placeholder it returns needed no new machinery at all**: a
+self-reference is worth zero-to-unbounded, which is an ordinary
+variable-length nested member, and every backend already understands one.
+The feature that had been called non-terminating was four lines and a set.
+
+**The upper bound is honest rather than derived, and that is a limit
+worth stating.** 0054 says `depth` is what makes `size_max` a number, and
+for a *counted* recursion it is not sufficient: unrolling 32 levels of
+`node children[count]` with an unbounded `u16 count` gives a finite
+maximum that is astronomically large and no use to anybody sizing a
+buffer. A usable bound needs `[max]` on the count as well as `[depth]` on
+the type -- which is openmlx4's `size=20..17179869200` met from the other
+end, and the same answer: the number is the schema's silence becoming
+visible.
+
+**Describable is not generable, and the refusal says which is which.**
+All four backends emit for a recursive type and the C header does not
+compile -- `situ_node_children_extent` calls `situ_node_extent` above its
+declaration -- and a forward declaration would only convert that into
+run-time recursion in generated code that 20.1 promises has none, with
+`depth` and `limit` enforced nowhere. `situc build` refuses by name on
+26.69's precedent; `map`, `wire` and `verify` are correct, which is the
+specification path two consumers actually adopted.
+
+**Three tests asserted the old rule and one asserted the old wording,
+which is the guard working rather than a cost.** `test_direct_recursion_
+rejected` is `test_direct_recursion_is_rejected_without_a_declared_depth`
+now, with an acceptance case beside it: the old name said the refusal was
+unconditional, and it has stopped being.
+
+**And one failed for a reason worth keeping.** `test_every_documented_
+make_target_exists` refused 26.280 for naming `make schema`, which is
+*fuzznet's* target quoted in their report and not one situ has. The guard
+cannot tell a foreign command from a claim about this tree, and it should
+not be taught to -- so the prose changed instead. **A document that
+quotes another project's commands will keep tripping a check that reads
+every backtick as a claim about here**, which is the voice rule arriving
+somewhere nobody had put it: their command in their voice still reads as
+this tree's to a regex.
+
+**What JSON gets from this, which is less than the question implied.**
+Recursion was never its main blocker. A JSON object is a string-keyed TLV
+and situ's `known` takes integer literals -- buildable -- but members
+identified by name with no order is what a text codec *means*, and 9.6's
+"discriminant strictly before the variant in layout order" is a statement
+about a world where order exists rather than a restriction to relax.
+netcfgd put it best and it is their sentence: the two projects' premises
+point opposite ways. What 0054 does serve is their case and not JSON's --
+a document of known types, 117 nodes and depth 7, where the recursion is
+in the codec rather than in the type described.
 
 ## 27. Questions, and how they were settled
 

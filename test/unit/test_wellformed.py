@@ -225,7 +225,7 @@ def test_recursion_survives_the_other_checks() -> None:
 	first; this one has only the cycle."""
 	report = rendered("struct A { B b; } struct B { C c; } struct C { A a; }")
 	assert "recursive" in report
-	assert "non-terminating" in report
+	assert "recursion needs a bound" in report
 
 
 def test_an_encoding_situ_cannot_check_is_refused() -> None:

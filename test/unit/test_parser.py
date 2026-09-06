@@ -557,10 +557,26 @@ def test_declaration_must_start_with_a_keyword() -> None:
 # -- recursive types --------------------------------------------------------
 
 
-def test_direct_recursion_rejected() -> None:
+def test_direct_recursion_is_rejected_without_a_declared_depth() -> None:
+	"""Named for the condition, since the rule gained one (0054): a struct
+	that names itself is describable when it says how deep the format lets
+	the nesting go, and refused when it does not. The old name said the
+	refusal was unconditional, which it has stopped being."""
 	with pytest.raises(SituError, match="contains itself") as caught:
 		parse_text("struct Node { u8 tag; Node next; }")
-	assert "non-terminating" in caught.value.diagnostic.render()
+	rendered = caught.value.diagnostic.render()
+	assert "recursion needs a bound" in rendered
+	assert "[depth = N]" in rendered, "the refusal has to name the remedy"
+
+
+def test_direct_recursion_is_accepted_with_one() -> None:
+	"""The other side of the same rule, here rather than only in
+	`test_recursion.py`, because this file is where a reader looks for what
+	the parser does with a cycle and would otherwise find only the refusal."""
+	schema = parse_text("target buffer;\nendian big;\n"
+	                    "struct Node [depth = 8] { u8 tag; u8 n; "
+	                    "Node next[n]; }")
+	assert [decl.name for decl in schema.structs()] == ["Node"]
 
 
 def test_mutual_recursion_rejected() -> None:

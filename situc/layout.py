@@ -730,9 +730,14 @@ class Solver:
 		self.varints = {decl.name: decl for decl in schema.varints()}
 		self.codecs  = {decl.name: decl for decl in schema.codecs()}
 		self.scopes  = _scopes(schema)
+		#: Structs whose layout is being computed right now. A name arriving
+		#: here twice is a struct that names itself, which `[depth = N]`
+		#: permits and which `recursive_placeholder` answers (0054).
+		self.in_progress: set[str] = set()
 
 	def run(self) -> None:
-		# Recursion is already rejected, so a plain post-order walk terminates.
+		# A post-order walk, and a struct that names itself is answered by
+		# `in_progress` rather than by recursing into it again.
 		for name in self.structs:
 			self.layout_of(name)
 
@@ -743,6 +748,50 @@ class Solver:
 		if existing is not None:
 			return existing
 
+		if name in self.in_progress:
+			# A struct naming itself, which `[depth = N]` is what permits
+			# (0054). Returning here is the whole of what stops the solver:
+			# without it `layout_of` re-enters for the same name and dies in
+			# `Scope.narrow` at Python's recursion limit, which is what
+			# section 2's "non-terminating" meant concretely.
+			#
+			# What it returns is the floor: a self-reference contributes at
+			# least nothing -- the recursion has to be able to stop in the
+			# data or the type describes one size -- and at most an amount
+			# the count above it decides. That is exactly a variable-length
+			# nested member, which every backend already handles, so the
+			# recursion costs no new machinery below this line.
+			return self.recursive_placeholder(name)
+
+		self.in_progress.add(name)
+		try:
+			return self._layout_of(name)
+		finally:
+			self.in_progress.discard(name)
+
+	def recursive_placeholder(self, name: str) -> StructLayout:
+		"""What a self-reference is worth while its own layout is in flight.
+
+		Zero to unbounded. The lower bound is honest: a recursive type whose
+		recursion cannot terminate in the data describes exactly one size, and
+		`[depth]` would be a fixed nesting count rather than a bound -- so the
+		floor of a self-reference is the case where it stops.
+
+		The upper bound is `None` rather than a number derived from `[depth]`,
+		and that is a limit worth stating rather than hiding. Unrolling N
+		times gives a finite maximum only where the counts above the recursion
+		are themselves bounded; with an unbounded `u16 count` the honest
+		maximum at depth 32 is astronomically large and no use to a caller
+		sizing a buffer. So a usable bound needs `[max]` on the count as well
+		as `[depth]` on the type, which is the same thing openmlx4 met from
+		the other end when a missing `[max]` derived `size=20..17179869200`
+		and they called the number the schema's silence becoming visible.
+		"""
+		decl = self.structs[name]
+		return StructLayout(name=name, size_bits=0, span=decl.span,
+		                    register=decl.register, size_max_bits=None)
+
+	def _layout_of(self, name: str) -> StructLayout:
 		decl   = self.structs[name]
 		scope  = self.scopes[name].narrow(decl.attrs, self.result.env)
 		layout = StructLayout(name=name, size_bits=0, span=decl.span,

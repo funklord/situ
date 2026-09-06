@@ -108,6 +108,11 @@ ATTRIBUTE_NAMES = frozenset({
 	# section 8.2 - 8.6: layout and representation
 	"allow_straddle", "require_aligned", "encoding", "nul_terminated",
 	"endian", "bit_order", "size",
+	# doc/decision/0054: what makes a recursive type describable. `depth` is
+	# the format's own limit and `limit` is this build's cap, and they are two
+	# names because a message deeper than the first is malformed while one
+	# deeper than the second is well formed and refused anyway.
+	"depth", "limit",
 	# section 8.1: a packed-decimal field narrower than its digits, which is
 	# what a register holding a control bit above the decimal is
 	"bits",
