@@ -149,8 +149,28 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   whose `expansion = unbounded` cannot report its output extent without
   decompressing, so it is the one case no measure-then-allocate pass can
   serve. Whether it earns a caller-supplied allocator is undecided.
-- **No recursive types in v0.** Recursive schema types make size and capability
-  computation non-terminating. Rejected at parse time with a clear error.
+- **~~No recursive types in v0.~~ Superseded: recursive types are permitted
+  where the schema states a depth** (`doc/decision/0054-bounded-recursion.md`,
+  the copyright holder's decision 2026-09-06). The reasoning that produced the
+  refusal was sound and none of it needed a prohibition: size computation,
+  capability computation, `--owned` and the walkers all need a *bound*, and a
+  bound is what a declared depth is. Recursion with no declared depth is still
+  refused, with the same diagnostic and a remedy attached -- a format whose
+  nesting is unbounded is one whose worst case nobody has considered, which is
+  a finding rather than a gap in the language.
+
+  Two depths, because they answer different questions and situ has already
+  drawn this line twice. `depth = N` is the format's own limit, so a deeper
+  message is malformed and it is what makes `size_max` a number. `limit = N`
+  is this build's cap, so a deeper message is well formed and refused anyway,
+  under its own error class -- the same separation `SITU_ERR_TRUNCATED` keeps
+  from `SITU_ERR_BOUNDS`, and that `SITU_WALK_UNSUPPORTED` states outright as
+  "a statement about this build rather than about the bytes". The walker has
+  carried `WALK_DEPTH_MAX` since it was written; this is that mechanism
+  reaching the compiler, not a new one.
+
+  **Not yet implemented.** The record is the design; `wellformed.py` still
+  refuses every cycle.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
