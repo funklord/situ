@@ -478,6 +478,53 @@ def test_they_agree_about_an_endian_marker(tmp_path: Path) -> None:
 	assert c_markers(tmp_path, blob, big) == ["little=0", "refused"]
 
 
+_NEGATIVE_SCHEMA = """target buffer;
+endian big;
+
+struct s {
+	u8   n  [min = 5];
+	u8   body[(n - 5) * 4];
+	u16  tail;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_a_negative_length_reads_as_zero(
+		tmp_path: Path) -> None:
+	"""14.2b: a length expression that goes negative reads as zero.
+
+	Every other description does it. The generated C spells it
+	`situ_nonneg_u32`, and `walk.py` clamps with `min(max(count, 0), ...)`
+	under a comment saying the clamp is there "to agree with the three
+	backends that do rather than for its own sake". This walker returned
+	BOUNDS instead, so `example/tcp`'s `options[(data_offset - 5) * 4]` --
+	whose own schema comment says a negative "reads as zero rather than as
+	a length" -- was refused here and answered 0 by the other five, taking
+	every member after it with it.
+
+	Both `n` values are asserted, because a walker that answered 0 for
+	everything would pass the negative case alone.
+
+	`[min = 5]` is what makes the schema legal -- without it the solver
+	refuses the member outright, "array length [-20, 1000] may be
+	negative". The constraint bounds the range at COMPILE time and a
+	message can still carry less, which is the whole reason 14.2b has
+	something to say: `validate` reports such a message as malformed and
+	the accessor still has to answer. `example/tcp` declares
+	`u4 data_offset [min = 5]` for the same reason.
+	"""
+	blob = _inline_image(_NEGATIVE_SCHEMA)
+
+	short = bytes.fromhex("02") + b"\xbe\xef"          # n = 2, so (2-5)*4 < 0
+	long_ = bytes.fromhex("06") + b"aaaa" + b"\xbe\xef"  # n = 6, so 4 bytes
+
+	assert python_widths(blob, short) == ["1", "0", "2"]
+	assert c_widths(tmp_path, blob, short) == ["1", "0", "2"]
+	assert python_widths(blob, long_) == ["1", "4", "2"]
+	assert c_widths(tmp_path, blob, long_) == ["1", "4", "2"]
+
+
 _BITS_SCHEMA = """target buffer;
 endian big;
 bit_order BITORDER;

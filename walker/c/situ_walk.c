@@ -1116,7 +1116,25 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	if (count < 0 || (uint64_t)count > 0xffffffffu / held.element_bits) {
+	/* Negative reads as zero (14.2b), which is what every other
+	 * description does: the generated C spells it `situ_nonneg_u32`, and
+	 * `walk.py` clamps with `min(max(count, 0), ...)` under a comment
+	 * saying the clamp is there "to agree with the three backends that do
+	 * rather than for its own sake". This refused instead, so `tcp`'s
+	 * `options[(data_offset - 5) * 4]` -- whose own schema comment says a
+	 * negative "reads as zero rather than as a length" -- came back BOUNDS
+	 * here and 0 in the other five, and the members after it went with it
+	 * (26.270).
+	 *
+	 * The overflow arm above is left refusing rather than saturating. A
+	 * count that large is a declared length no frame holds, the four
+	 * backends clamp it to what is left in the view rather than to a
+	 * number, and matching that is a wider change than this one -- so it
+	 * stays a refusal and is recorded as the half still apart. */
+	if (count < 0) {
+		count = 0;
+	}
+	if ((uint64_t)count > 0xffffffffu / held.element_bits) {
 		return SITU_WALK_BOUNDS;
 	}
 

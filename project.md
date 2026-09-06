@@ -21991,6 +21991,51 @@ would have caught it. **A report's phrasing survives into a commit
 message unless something forces the check**, which is the second time in
 this session an inherited claim needed narrowing at the moment of use.
 
+### 26.270 A negative reads as zero, in five descriptions and not the sixth
+
+Section 14.2b: a length expression that goes negative reads as zero. The
+generated C spells it `situ_nonneg_u32`. `walk.py` clamps with
+`min(max(count, 0), 0xFFFFFFFF)` under a comment saying the clamp is there
+"to *agree* with the three backends that do rather than for its own sake".
+The C walker had:
+
+    if (count < 0 || (uint64_t)count > 0xffffffffu / held.element_bits) {
+            return SITU_WALK_BOUNDS;
+    }
+
+So `example/tcp`'s `options[(data_offset - 5) * 4]` -- whose own schema
+comment says a negative "reads as zero rather than as a length (14.2b)" --
+was refused here and answered 0 by the other five, and every member after
+it went with it. Measured on a header whose `data_offset` nibble is 0:
+`walk.py` gives `options` and `payload` a size of 0, the C walker gave
+`-- this build does not render it` and `-- bounds`.
+
+**The overflow arm is left refusing, and that is deliberate.** Splitting
+the condition was the change; clamping both halves was not. A count past
+`0xffffffff / element_bits` is a declared length no frame holds, and the
+four backends do not saturate it to a number either -- they clamp to what
+is LEFT IN THE VIEW, which is a different answer that this walker cannot
+give without a wider change. So it stays a refusal, and it stays named:
+`dtls`, `netlink` and `pickle` are the three schemas where `walk.py`
+answers 20260, 40123 and 1708341630 and the C walker will not.
+**Saturating to a number nobody chose would have closed the disagreement
+by inventing an answer.**
+
+The corpus comparison between the two walkers goes from 31 agreeing and 5
+apart to 32 and 4.
+
+**Writing the test taught me why the construct is legal at all.** The
+first schema was refused by the solver -- "array length [-20, 1000] may be
+negative" -- and `example/tcp` declares `u4 data_offset [min = 5]`, which
+bounds the range at COMPILE time while a message can still carry less.
+That is the whole reason 14.2b has something to say: the constraint makes
+the member expressible, `validate` reports a violating message as
+malformed, and the accessor still has to answer something. Without the
+constraint there is no negative case to have a rule about.
+
+Both `n` values are asserted. A walker that answered 0 for everything
+would pass the negative case on its own.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
