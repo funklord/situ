@@ -70,10 +70,39 @@ def test_a_bound_that_does_not_fold_is_skipped() -> None:
 	assert "VALUE_MAX" not in emitted
 
 
-def test_wrong_domains_are_excluded() -> None:
-	"""Fixed point's getter is scaled and BCD's is decoded, so a raw bound
-	would be a constant in the wrong domain -- worse than none."""
+def test_a_converted_type_exports_its_bound_too() -> None:
+	"""These were excluded, and the reason given was false.
+
+	`declared_value_bounds` withheld them because "the getter's value is
+	scaled or decoded, so exporting the raw bound would hand a caller a
+	constant in the wrong domain". Nothing scales: 8.1 has a fixed-point
+	getter return the stored integer and the caller scale with `_SCALE`, and
+	every backend does. And BCD's bound is compared against the decoded
+	value, in all four descriptions since 26.274 -- before that Rust compared
+	it against the packed nibbles, which is the hazard the sentence was
+	describing, in the one type it was true of.
+
+	A bound is stated in the domain the getter returns. `validate` compares
+	the schema's number against that same value, so the constant is the one
+	a hand-written caller needs and no conversion is applied to it. Settled
+	by the copyright holder 2026-09-06.
+
+	The executable half -- the constant driving the module's own `validate`
+	at both boundaries, for a type where the bytes and the value differ -- is
+	`test_value_bounds_agree_with_validate_for_a_converted_type` in
+	`test_codegen_python.py`. A plain `u16` cannot discriminate a
+	right-domain constant from a wrong-domain one; these two can.
+	"""
 	emitted = header("struct s { q8_8 trim [max = 100]; bcd8 day [max = 49]; }")
+	assert "#define SITU_S_TRIM_VALUE_MAX 100" in emitted
+	assert "#define SITU_S_DAY_VALUE_MAX 49u" in emitted
+
+
+def test_a_float_bound_is_still_excluded() -> None:
+	"""And for a reason the other two did not have: a bound folds to an
+	integer here, so a float field has nothing to export rather than
+	something in the wrong units."""
+	emitted = header("struct s { f32 gain [max = 100]; }")
 	assert "VALUE_MAX" not in emitted
 
 

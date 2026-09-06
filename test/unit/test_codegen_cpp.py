@@ -2712,11 +2712,15 @@ def test_value_bounds_are_exported_as_constexpr() -> None:
 	assert "bias_value_max" not in source
 
 
-def test_value_bounds_stay_out_of_the_wrong_domains() -> None:
-	"""Fixed point is excluded: the getter's value is scaled, so the raw
-	bound would be a constant in the wrong domain -- worse than none."""
+def test_a_fixed_point_bound_is_exported_in_the_getter_s_type() -> None:
+	"""This asserted the opposite, on the grounds that "the getter's value is
+	scaled" -- which is false in every backend, and contradicts 8.1: a
+	fixed-point getter returns the stored integer and the caller scales with
+	the emitted scale constants. The bound is in that same domain, which is
+	what `validate` already compares it against, so the constant carries the
+	getter's own type."""
 	source = emit("struct s { q8_8 trim [max = 100]; u8 pad; }")
-	assert "value_max" not in source
+	assert "static constexpr std::int16_t trim_value_max = 100;" in source
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no C++ compiler")

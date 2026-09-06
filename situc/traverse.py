@@ -1381,12 +1381,33 @@ def declared_value_bounds(placement: Placement,
 	to the value domain (26.125).
 
 	One decision, four spellings: each backend renders what this returns and
-	none re-derives it. Only integer-domain scalars answer -- an unsigned or
-	signed integer, a bit run, or a text number, where the schema's bound and
-	the getter's value are the same number. Fixed point and BCD are excluded
-	because the getter's value is scaled or decoded, so exporting the raw
-	bound would hand a caller a constant in the wrong domain -- worse than
-	none.
+	none re-derives it.
+
+	**A bound is stated in the domain the getter returns**, which is what
+	makes the export safe for every converted type rather than only for
+	plain integers. Fixed point returns the raw stored integer -- 8.1 says
+	so, and the caller scales with `_SCALE` and `_FRAC_BITS` -- and BCD
+	returns the decoded number. In both cases `validate` compares the
+	schema's number against that same value, so the constant exported here
+	is the one a hand-written caller needs and no conversion is applied to
+	it.
+
+	Fixed point and BCD were excluded until 2026-09-06 on the stated grounds
+	that "the getter's value is scaled or decoded, so exporting the raw
+	bound would hand a caller a constant in the wrong domain". Half of that
+	was false and the other half stopped being true the same day. **Nothing
+	scales anywhere**: every backend's fixed-point getter returns the raw
+	integer, which contradicted 8.1 in a sentence copied into two test
+	docstrings as well. And BCD's bound is compared decoded in all four only
+	since 26.274 -- before that Rust compared it against the packed nibbles,
+	so the domains genuinely did differ in one description of four. The
+	rationale was describing a real hazard that has since been fixed, in a
+	type it was never true of.
+
+	`FLOAT` stays out, and for a reason the others did not have: a bound
+	folds to an integer here, and a float field's domain is not the
+	integers, so there is nothing to export rather than something in the
+	wrong units.
 
 	A bound that does not fold (it references a field, say) is skipped rather
 	than refused: `validate` still enforces it, and a constant that cannot be
@@ -1398,8 +1419,7 @@ def declared_value_bounds(placement: Placement,
 	if placement.kind != "field":
 		return (None, None)
 	scalar = placement.scalar
-	if scalar is None or scalar.kind not in (
-			ScalarKind.UINT, ScalarKind.SINT, ScalarKind.BIT):
+	if scalar is None or scalar.kind is ScalarKind.FLOAT:
 		return (None, None)
 
 	found: dict[str, int] = {}

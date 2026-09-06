@@ -624,6 +624,24 @@ must          = "must" expr ";" ;
 - A BCD field can hold a bit pattern that is not a number: a nibble above nine.
   The getter cannot report that, so the generated validator checks it, which is
   the only type where reading and validating disagree about what is possible.
+- **A `[min]` or `[max]` on either is stated in the domain the getter
+  returns** -- the raw stored integer for fixed point, the decoded number for
+  BCD -- and never in the other one. So `[max = 100]` on a `q8_8 trim_ppm` is
+  100 raw units, a little under 0.4 ppm, and a schema meaning 100 ppm writes
+  `[max = 25600]`. That is the same number `validate` compares and the same
+  number `VALUE_MIN`/`VALUE_MAX` export, so the three cannot drift apart; the
+  caller converts with `_SCALE` where it wants the scaled figure, which is
+  what those constants are for.
+
+  Stated here because it was not stated anywhere, and the absence had already
+  produced a wrong sentence in the compiler: bounds on these two types were
+  withheld from the exported constants on the grounds that "the getter's value
+  is scaled or decoded", which is false of fixed point in every backend and
+  contradicts the bullet above. Settled by the copyright holder 2026-09-06.
+  Note that `rtc.situ`'s own comment describes `trim_ppm` in the scaled domain
+  -- "-128 to just under +128 parts per million" -- which is the reading a
+  person naturally has and the reason this needs writing down rather than
+  inferring.
 
 ### 8.1.1 Variable-length integers
 
@@ -22368,6 +22386,72 @@ encoding.**
 `--owned` is C-only by design and says so when asked for another target,
 so this is the one place it had to be fixed -- the first time this
 session that a defect of this shape did not have three siblings.
+
+### 26.276 A capability withheld for a reason that was false
+
+Pointing 26.275's lens deliberately -- wherever a value is stored in one
+encoding and read in another, the conversion and the check beside it are
+separate paths -- found a fifth instance immediately, and it is a
+different species from the four that produced the lens. Nothing was
+converted wrongly. **A conversion that never happens was described in
+prose as though it did**, and a capability was withheld on the strength
+of it.
+
+`declared_value_bounds` is the shared decision point all four backends
+render, and it excluded fixed point and BCD:
+
+    Fixed point and BCD are excluded because the getter's value is
+    scaled or decoded, so exporting the raw bound would hand a caller a
+    constant in the wrong domain -- worse than none.
+
+**Nothing scales anywhere.** Measured across all four for
+`q8_8 trim [max = 100]`: every getter returns the raw stored integer
+(`int16_t`, `std::int16_t`, `i16`, `int`), every `validate` compares the
+bound against it, and `_SCALE` and `_FRAC_BITS` are emitted beside them.
+Section 8.1 says so outright -- "neither generates floating point ... the
+caller does the arithmetic in whatever type it has" -- so the sentence
+contradicted the specification it was implementing.
+
+**And the BCD half stopped being true the same day.** Its bound is
+compared decoded in all four only since 26.274; before that Rust compared
+it against the packed nibbles. So the rationale was describing a real
+hazard, in the one type it applied to, which had just been fixed one
+entry earlier.
+
+**The claim lived in three places and had been copied twice** --
+`traverse.py`, `test_value_bounds.py`, `test_codegen_cpp.py` -- with two
+tests asserting the absence and citing the false reason as their
+docstring. That is the shape working-practice.md warns about: a
+correction has to go where a reader will next look for the claim, and
+here the two tests were the copies that would have outlived a fix to the
+source.
+
+**Held open rather than resolved, and that was right.** Two coherent
+answers existed -- bounds are raw, so the exclusion is unjustified; or
+bounds are scaled, so `validate` is wrong in all four backends -- and
+nothing in the tree decided between them, because **no committed schema
+puts a bound on a fixed-point field.** Only two test fixtures do. The one
+committed fixed-point schema reads it the other way: `rtc.situ` describes
+`trim_ppm` as running "-128 to just under +128 parts per million", which
+is the scaled figure. A person's natural reading and the compiler's
+behaviour disagreed, and neither was written down.
+
+Settled by the copyright holder: **bounds are raw**, and 8.1 now says
+which domain a bound on a converted type is in, with the `[max = 25600]`
+spelling for a schema that means 100 ppm. The macros are exported for
+both types, in the getter's own type, and the scaled variant was
+deliberately declined -- the caller has `_SCALE`, and a second constant
+is a second thing to be wrong.
+
+**What tests it is the executable half, and only for a converted type.**
+`test_value_bounds_agree_with_validate` has driven the module's own
+constants through its own `validate` at both boundaries since 26.125 --
+over a `u16`, for which a right-domain and a wrong-domain constant are
+the same number, so it could not have caught this. The two added beside
+it can: a fixed-point constant exported pre-scaled would be 25600 and
+fails, and a BCD constant exported as packed nibbles would be 0x12 = 18
+and fails. **A canary over the one type where the two domains coincide is
+a canary that cannot sing.**
 
 ## 27. Questions, and how they were settled
 

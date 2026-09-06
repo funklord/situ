@@ -2093,3 +2093,54 @@ def test_value_bounds_agree_with_validate(tmp_path: Path) -> None:
 		view(module.s.MTU_VALUE_MAX + 1).validate()
 	with pytest.raises(module.ConstraintError):
 		view(module.s.MTU_VALUE_MIN - 1).validate()
+
+
+def test_value_bounds_agree_with_validate_for_a_converted_type(
+		tmp_path: Path) -> None:
+	"""The same fact where the bytes and the value are not the same number.
+
+	A plain `u16` cannot tell a right-domain constant from a wrong-domain
+	one, because for it the two coincide -- which is why the canary above
+	could not have caught fixed point and BCD being excluded on the grounds
+	that their constants would be in the wrong domain. These two can:
+
+	* `q8_8 trim [max = 100]` is 100 *raw units*, since 8.1 has the getter
+	  return the stored integer and the caller scale with `_SCALE`. A
+	  constant exported pre-scaled would be 25600, and a buffer holding raw
+	  25600 fails `validate` -- so a scaled export cannot pass this.
+	* `bcd2 month [max = 12]` is 12 *decoded*. A constant exported as the
+	  packed nibbles would be 0x12 = 18, and a buffer BCD-encoding 18 reads
+	  back as 18, which fails -- so a raw export cannot pass this either.
+
+	The BCD half is only true in all four descriptions since 26.274; before
+	it Rust compared this bound against the packed nibbles.
+	"""
+	module = load(tmp_path, "bit_order msb_first;\n"
+	              "struct s { q8_8 trim [min = -50, max = 100]; }")
+
+	def trim(value: int) -> Any:
+		return module.s.at(module.Message(
+			bytearray(int(value & 0xFFFF).to_bytes(2, "big"))))
+
+	trim(module.s.TRIM_VALUE_MAX).validate()
+	trim(module.s.TRIM_VALUE_MIN).validate()
+	with pytest.raises(module.ConstraintError):
+		trim(module.s.TRIM_VALUE_MAX + 1).validate()
+	with pytest.raises(module.ConstraintError):
+		trim(module.s.TRIM_VALUE_MIN - 1).validate()
+
+	bcd_dir = tmp_path / "bcd"
+	bcd_dir.mkdir()
+	packed = load(bcd_dir, "bit_order msb_first;\n"
+	              "struct s { bcd2 month [min = 1, max = 12]; }")
+
+	def month(value: int) -> Any:
+		# The BCD spelling of a decimal number: 12 is the byte 0x12.
+		return packed.s.at(packed.Message(bytearray([int(str(value), 16)])))
+
+	month(packed.s.MONTH_VALUE_MAX).validate()
+	month(packed.s.MONTH_VALUE_MIN).validate()
+	with pytest.raises(packed.ConstraintError):
+		month(packed.s.MONTH_VALUE_MAX + 1).validate()
+	with pytest.raises(packed.ConstraintError):
+		month(packed.s.MONTH_VALUE_MIN - 1).validate()
