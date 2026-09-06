@@ -1495,6 +1495,53 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return lines
 
 
+#: The field names an arithmetic size expression mentions. `relation.paths_in`
+#: walks an AST and this has only the rendered text, which is what the
+#: placement carries by the time a dissector sees it.
+def paths_in_expr(source: str) -> list[str]:
+	return re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", source)
+
+
+def _count_declined(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> str:
+	"""Why a run's count cannot be read, in the reader's terms.
+
+	One message covered five refusals: a driver at a sub-byte offset, a
+	varint driver, an operator decision 0021 declines, a host-order driver,
+	and a driver genuinely absent. Only the last is "cannot locate", and the
+	other four were reported as it -- so nine members in the corpus named
+	the wrong cause, and `edges`' `arithmetic` sent a reader looking for a
+	field that is right there. `_run_declined` above argues this for the
+	other half of the same question; this is the half it did not cover.
+	"""
+	written = placement.size_shown or placement.size_expr or placement.sized_by
+	if placement.size_expr is not None and _UNSPELLABLE.search(placement.size_expr):
+		return (f"sized by `{written}`, whose operator this dissector does"
+		        " not spell (decision 0021)")
+
+	# The driver of an arithmetic size is named inside the expression rather
+	# than in `sized_by`, which holds a bare path and holds nothing for one.
+	# Looking only there reported `varint_driver.d`, sized by `n + 1`, as a
+	# field nobody could find -- when `n` is right there and is a varint.
+	named = placement.sized_by
+	if named is None and placement.size_expr is not None:
+		for path in paths_in_expr(placement.size_expr):
+			if resolved.find(f"{struct.name}.{path}") is not None:
+				named = path
+				break
+
+	driver = resolved.find(f"{struct.name}.{named}") if named else None
+	if driver is None:
+		return f"sized by `{written}`, which this dissector cannot locate"
+	if driver.placement.varint is not None:
+		return (f"sized by `{written}`, a varint, whose width is in its own"
+		        " bytes")
+	if _host_order(driver.placement):
+		return (f"sized by `{written}`, which is `endian native`: the capture"
+		        " does not record which machine wrote it")
+	return f"sized by `{written}`, which this dissector cannot read"
+
+
 def _run_declined(resolved: ResolvedSchema, placement: Placement,
 		element: ResolvedStruct | None) -> str:
 	"""Why a `while` run is not walked, in the reader's terms.
@@ -1644,11 +1691,10 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# The shown form: this is a note for a person reading the dissector,
 		# and `size_expr` is parenthesised at every operator so that a host
 		# compiler cannot regroup it.
-		written = (placement.size_shown or placement.size_expr
-		           or placement.sized_by)
 		return [
-			f"\t-- {placement.path}: sized by `{written}`, which this",
-			"\t-- dissector cannot locate; the rest of the frame is shown raw",
+			f"\t-- {placement.path}: "
+			f"{_count_declined(resolved, struct, placement)};",
+			"\t-- the rest of the frame is shown raw",
 			*seek,
 			"\tif tvb:len() > at then",
 			f"\t\tsubtree:add({field}, tvb(at))",
@@ -1726,29 +1772,25 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return _over_fields(struct, placement.size_expr, "0")
 
 	driver = resolved.find(f"{struct.name}.{placement.sized_by}")
-	if driver is None or driver.placement.offset_bits is None:
-		return None
-	if driver.placement.offset_bits % BITS_PER_BYTE:
+	if driver is None:
 		return None
 
-	if _host_order(driver.placement):
-		return None		# no answer a capture can give
-
-	byte  = driver.placement.offset_bits // BITS_PER_BYTE
-	width = driver.placement.size_bits // BITS_PER_BYTE
-
-	# A driver written as digits is parsed, not loaded. `_read` above says the
-	# same thing for the same reason; this is the copy that decides how long a
-	# *run* is, and it read a cpio name length as an eight-byte integer --
-	# which Wireshark's `uint` refuses outright, above four.
-	if driver.placement.radix is not None:
-		# ...and never negative, for the reason `_read` gives: a minus sign is
-		# a number to `tonumber` and is not a digit to anything else here.
-		return (f"situ_digits(tvb, {byte}, {width},"
-		        f" {driver.placement.radix})")
-
-	read  = "le_uint" if driver.placement.endian is ast.Endian.LITTLE else "uint"
-	return f"tvb({byte}, {width}):{read}()"
+	# `_read`, rather than a second reader beside it. This hand-rolled the
+	# load and said so -- "`_read` above says the same thing for the same
+	# reason; this is the copy that decides how long a *run* is" -- and the
+	# copy knew less than the original. It refused a driver at a sub-byte
+	# offset outright, so `edges`' `packed_driver.d`, sized by a nibble, was
+	# declined with "sized by `n`, which this dissector cannot locate" while
+	# `_read` spells that very nibble as
+	# `(situ_uint(tvb, 0, 1, false) % 16)` and the same generated file shows
+	# the field two lines above the claim. A parallel accessor family is a
+	# backend that has to be finished twice (invariant 77), and this is the
+	# half that was not.
+	#
+	# `_read` answers None for what it genuinely cannot read -- a host-order
+	# field, a width Wireshark's `uint` cannot take -- so the refusals that
+	# were true survive and only the false ones go.
+	return _read(driver.placement, "0")
 
 
 def _element_bytes(resolved: ResolvedSchema, placement: Placement) -> int | None:

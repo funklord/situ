@@ -21887,6 +21887,66 @@ property was answered by declining. It asserts the walk now, and that
 `index * v::size_bytes` never appears, since that is the wrong-answer
 form Python was emitting.
 
+### 26.268 The copy that knew less, and a message covering five causes
+
+`_count_expression` in the dissector read a run's driver by hand, and said
+so: "`_read` above says the same thing for the same reason; **this is the
+copy** that decides how long a *run* is."
+
+**The copy knew less than the original, in two ways.** It refused a driver
+at a sub-byte offset outright, so `edges`' `packed_driver.d`, sized by a
+nibble, was declined -- while `_read` spells that very nibble
+`(situ_uint(tvb, 0, 1, false) % 16)` and the same generated file shows the
+field two lines above the claim. And it loaded through a bare
+`tvb(byte, width):uint()` where `_read` goes through `situ_uint`, which
+bounds-checks: the two agree on a whole packet and differ on a short one,
+where the bare form raises out of Wireshark. **An unguarded read, in the
+one program whose whole job is packets that may be truncated.**
+
+It delegates to `_read` now. `_read` still answers None for what it
+genuinely cannot read, so the true refusals survive and only the false
+one goes.
+
+**Then the message, which was one sentence for five different causes.**
+"sized by `x`, which this dissector cannot locate" was emitted for a
+driver at a sub-byte offset, a varint driver, an operator decision 0021
+declines, a host-order driver, and a driver genuinely absent -- and only
+the last is what it says. Nine members in the corpus named the wrong
+cause, which sends a reader to look for a field that is right there.
+
+Each names its own now, and the corpus went from nine refusals with one
+message to eight with four:
+
+    arithmetic.halved   whose operator this dissector does not spell (0021)
+    varint_driver.d     a varint, whose width is in its own bytes
+    nlattr.payload      `endian native`: the capture does not record
+                        which machine wrote it
+    packed_driver.d     not refused at all any more
+
+**The varint one needed a second step.** Its driver is named inside an
+arithmetic `size_expr` rather than in `sized_by`, which holds a bare path
+and holds nothing for one -- so looking only there reported a field
+nobody could find, when `n` is right there. Same omission `_count_expression`
+already carried a comment about, met once more one level out.
+
+**Checked that the refusals are still refusals.** "Zero `cannot locate`"
+could equally have meant the members had started emitting something
+wrong; they are still declined, eight of them, with reasons that are
+true. All 38 dissectors pass `luac`.
+
+**And two lenses that found nothing, recorded because the method is
+reusable.** Ten placement predicates evaluated over 1,161 corpus
+placements, looking for pairs that nearly agree -- the signature of one
+decision spelled twice. Seven pairs flagged and all seven were the
+detector's fault: two mostly-False predicates agree 99% of the time with
+no base-rate correction, and the one real pair, `is_counted_run` against
+`is_run`, has both directions populated and is complementary by design.
+Then ten backend-private helpers shadowing a `traverse` name, including
+`_element_bytes` in five files: all differ deliberately, the shared one
+defaulting to 1 where the private ones answer None. **A name collision
+that is not a duplication is worth knowing about once**, so that the next
+sweep does not spend the same afternoon on it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

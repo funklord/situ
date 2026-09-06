@@ -308,13 +308,24 @@ def test_a_struct_array_is_dissected_element_by_element() -> None:
 
 
 def test_a_dynamic_count_is_read_from_the_field_that_drives_it() -> None:
-	"""The same arithmetic the generated C offset functions do."""
+	"""The same arithmetic the generated C offset functions do.
+
+	Through `situ_uint` rather than a bare `tvb(1, 2):uint()`, which is what
+	this asserted until the count read was delegated to `_read` (26.268).
+	The two answer the same number on a whole packet and differ on a short
+	one: `situ_uint` bounds-checks and returns 0, and the bare form raises
+	out of Wireshark. So the hand-rolled copy this replaced was not only
+	less capable than `_read` -- it refused a bit-packed driver `_read`
+	spells -- but also unguarded, on a dissector's whole job of reading
+	packets that may be truncated.
+	"""
 	text = emit("""struct h { u8 v; u16 n; }
 	struct r { u32 id; }
 	struct s { h hdr; r recs[hdr.n]; }
 	""")
 
-	assert "local recs_n = tvb(1, 2):uint()" in text
+	assert "local recs_n = situ_uint(tvb, 1, 2, false)" in text
+	assert "tvb(1, 2):uint()" not in text
 	assert "for i = 0, recs_n - 1 do" in text
 
 
