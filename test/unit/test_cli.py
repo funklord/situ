@@ -667,25 +667,57 @@ def test_the_version_names_the_copyright_holder(
 	assert COPYRIGHT in readme, "the README does not name the holder"
 
 
+def test_print_std_dir_names_a_directory_that_is_there(
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""`import std "..."` is the answer inside a schema; this is the answer
+	outside one, for a Makefile that wants to depend on a shipped schema or
+	hand it to a tool that is not situc.
+
+	It asserts the directory exists and holds a schema, not just that a line
+	was printed: a path that is wrong prints exactly as readily as one that
+	is right, and a shell would use either.
+	"""
+	with pytest.raises(SystemExit) as exit_:
+		main(["--print-std-dir"])
+	assert exit_.value.code == 0
+
+	printed = capsys.readouterr().out.splitlines()
+	assert len(printed) == 1, printed
+	root = Path(printed[0])
+	assert root.is_dir(), root
+	assert sorted(p.name for p in root.glob("*.situ")), root
+
+
 def test_it_names_only_the_flags_that_are_global() -> None:
 	"""`--out` and `--target` read like global options and are not; a reader
 	who believes the old line writes `situc --target=rust build` and gets a
 	usage error.
 
 	`--version` is global and is listed, because a packaged tool that cannot
-	say which version it is cannot be evaluated."""
+	say which version it is cannot be evaluated. So is `--print-std-dir`,
+	which answers outside a schema what `import std "..."` answers inside
+	one -- and this assertion is what caught it arriving without the section
+	being updated, which is the population rule working: a set stated in one
+	place and walked from another cannot grow on one side."""
 	globals_ = {option
 	            for action in build_parser()._actions
 	            for option in action.option_strings
 	            if option.startswith("--")}
 	text = SPEC.read_text(encoding="utf-8")
 	section = text[text.index("## 21. CLI surface"):text.index("## 22.")]
-	claimed = section[section.index("Two global flags"):]
+	# Anchored on the word rather than the count, which changes: "Two global
+	# flags" became "Three" when `--print-std-dir` arrived, and the test then
+	# failed on a `ValueError` from this line rather than on its assertion --
+	# a true failure reported through the wrong half of itself.
+	claimed = section[section.index("global flags"):]
 
 	# `--help` is argparse's, not situ's, and the section does not list it.
-	assert globals_ - {"--help"} == {"--diagnostics", "--version"}
+	assert globals_ - {"--help"} == {"--diagnostics", "--version",
+	                                 "--print-std-dir"}
 	assert "--diagnostics" in claimed
 	assert "--version" in claimed
+	assert "--print-std-dir" in claimed
 	for local in ("--out", "--target", "--prefix"):
 		assert f"`{local}" in claimed or f"`{local}=" in claimed
 

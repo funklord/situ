@@ -15,6 +15,7 @@ import pytest
 from situc import ast
 from situc.diagnostics import SituError
 from situc.parser import parse, parse_text
+from situc.imports import library_root
 from situc.diagnostics import Source
 
 BUFFER = "target buffer;\nendian big;\nbit_order msb_first;\n\n"
@@ -125,3 +126,96 @@ def test_an_import_needs_a_file_to_resolve_against() -> None:
 	with pytest.raises(SituError) as caught:
 		parse_text('import "lib.situ";\n' + BUFFER + "struct s { u8 x; }\n")
 	assert "needs a schema that came from a file" in caught.value.diagnostic.render()
+
+
+# -- `import std "..."`, the installed library ------------------------------
+
+
+def test_the_library_form_reads_from_situ_s_own_directory(tmp_path: Path) -> None:
+	"""A consumer's schema, nowhere near situ's tree, naming what situ ships.
+
+	This is the case the relative rule cannot serve: a schema that wants
+	`crc32` would otherwise carry `../../../usr/share/situc/std/kernels.situ`
+	and compile on one machine.
+	"""
+	root = library_root()
+	assert root is not None and (root / "kernels.situ").is_file(), root
+
+	path = write(tmp_path, "mine.situ",
+	             'import std "kernels.situ";\n' + BUFFER
+	             + "struct s { u8 a; }\n")
+	names = {decl.name for decl in load(path).decls
+	         if isinstance(decl, ast.CodecDecl)}
+	assert "crc32" in names
+
+
+def test_the_two_forms_do_not_fall_back_to_each_other(tmp_path: Path) -> None:
+	"""Neither resolution is the other's second chance, and that is the whole
+	reason they are spelled differently.
+
+	A fallback would mean that dropping a file beside your own silently
+	changes which file an existing import names -- the shadowing hazard
+	`#include "..."` has, and the reason C keeps `<...>` separate. So a
+	`kernels.situ` sitting next to the importing file must not satisfy
+	`import std`, and a library name must not satisfy a relative import.
+	"""
+	write(tmp_path, "kernels.situ", "codec local_only {\n\tgranularity = byte;\n}\n")
+
+	# The local file is right there, and `import std` still reaches past it.
+	path  = write(tmp_path, "a.situ", 'import std "kernels.situ";\n' + BUFFER
+	              + "struct s { u8 a; }\n")
+	names = {decl.name for decl in load(path).decls
+	         if isinstance(decl, ast.CodecDecl)}
+	assert "crc32" in names
+	assert "local_only" not in names
+
+	# And the relative form reads the local one, not the library's.
+	path  = write(tmp_path, "b.situ", 'import "kernels.situ";\n' + BUFFER
+	              + "struct s { u8 a; }\n")
+	names = {decl.name for decl in load(path).decls
+	         if isinstance(decl, ast.CodecDecl)}
+	assert "local_only" in names
+	assert "crc32" not in names
+
+
+def test_a_missing_library_file_names_the_flag(tmp_path: Path) -> None:
+	"""The directory is not something a reader can guess, so the diagnostic
+	says how to print it rather than only which path failed."""
+	path = write(tmp_path, "mine.situ", 'import std "nope.situ";\n' + BUFFER
+	             + "struct s { u8 a; }\n")
+	with pytest.raises(SituError) as caught:
+		load(path)
+	rendered = str(caught.value) + "".join(getattr(caught.value, "notes", []))
+	assert "nope.situ" in rendered
+
+
+def test_a_library_import_needs_no_file_to_resolve_against() -> None:
+	"""A relative import cannot be resolved in a schema parsed from a string,
+	and says so. A library one can, since it is not measured from anywhere --
+	which is the case an editor and the language server are in."""
+	schema = parse_text('import std "kernels.situ";\n' + BUFFER
+	                    + "struct s { u8 a; }\n")
+	names  = {decl.name for decl in schema.decls
+	          if isinstance(decl, ast.CodecDecl)}
+	assert "crc32" in names
+
+
+def test_std_is_still_an_ordinary_identifier() -> None:
+	"""A soft keyword, read the way `at` is: `std` means something in one
+	position and is a name everywhere else, so no schema stops parsing."""
+	schema = parse_text(BUFFER + "struct std { u8 std; }\n")
+	names  = [decl.name for decl in schema.decls
+	          if isinstance(decl, ast.StructDecl)]
+	assert names == ["std"]
+
+
+def test_the_form_survives_a_round_trip() -> None:
+	"""`dump-ast --format source` re-renders a schema, and dropping `std`
+	there would turn a library import into a relative one that names a file
+	the consumer does not have."""
+	from situc.unparse import unparse
+
+	schema = parse_text(BUFFER + "struct s { u8 a; }\n")
+	schema.decls.insert(0, ast.ImportDirective(schema.decls[0].span,
+	                                           "kernels.situ", True))
+	assert 'import std "kernels.situ";' in unparse(schema)

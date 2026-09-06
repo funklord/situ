@@ -126,7 +126,8 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 		return [f"bit_order {decl.bit_order.value};"]
 
 	if isinstance(decl, ast.ImportDirective):
-		return [f'import "{_escape(decl.path)}";']
+		where = "std " if decl.library else ""
+		return [f'import {where}"{_escape(decl.path)}";']
 
 	if isinstance(decl, ast.StrictnessDirective):
 		return [f"strictness = {decl.strictness.value};"]

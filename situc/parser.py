@@ -577,7 +577,21 @@ class Parser:
 		return ast.BitOrderDirective(self.span_from(start), order)
 
 	def parse_import(self) -> ast.ImportDirective:
+		"""`import "path";` or `import std "path";`.
+
+		`std` is a soft keyword, read the way `at` is: an identifier in this
+		one position, so no schema that used it as a name stops parsing.
+
+		A word rather than angle brackets, which decision 0006 settles for
+		this tree generally -- and here it also avoids making the lexer
+		context-sensitive, since `<kernels.situ>` lexes as five tokens and
+		reassembling them is a rule the LSP and the unparser would both have
+		to learn.
+		"""
 		start = self.advance()
+		library = self.current.is_ident("std")
+		if library:
+			self.advance()
 		if self.current.kind is not TokenKind.STRING:
 			raise error(
 				f"expected a quoted path, found {self.current.describe()}",
@@ -586,7 +600,7 @@ class Parser:
 			)
 		path = self.advance()
 		self.expect_symbol(";", "after the import directive")
-		return ast.ImportDirective(self.span_from(start), path.text)
+		return ast.ImportDirective(self.span_from(start), path.text, library)
 
 	# -- declarations ---------------------------------------------------
 

@@ -800,8 +800,18 @@ class BitOrderDirective(Decl):
 
 @dataclass(frozen=True)
 class ImportDirective(Decl):
+	"""`import "other.situ";`, or `import std "kernels.situ";`.
+
+	Two resolutions, spelled differently on purpose. Without `std` the path is
+	read relative to the importing file, which is what `imports.py` has always
+	done and what keeps an import's meaning independent of how situc was
+	invoked. With it, the path is read from the directory situ installs its
+	own schemas into -- one directory, not a search path, so there is still
+	nothing to disambiguate.
+	"""
 	span: Span
 	path: str
+	library: bool = False
 
 
 @dataclass(frozen=True)

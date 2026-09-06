@@ -74,6 +74,32 @@ DRIVERS = tuple(DRIVER_BACKENDS)
 COPYRIGHT = "Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>"
 
 
+class _PrintStdDir(argparse.Action):
+	"""`--print-std-dir`, so a build system can find what situ installed.
+
+	`import std "kernels.situ"` is the answer inside a schema; this is the
+	answer outside one, for a Makefile that wants to copy a schema, add a
+	dependency on it, or pass it to a tool that is not situc. It prints one
+	line and exits, and it exits non-zero with a diagnostic where the
+	directory cannot be found, rather than printing nothing and exiting 0 --
+	which a shell would read as an empty path and use.
+	"""
+
+	def __call__(self, parser: argparse.ArgumentParser, namespace: object,
+			values: object, option_string: str | None = None) -> None:
+		from situc.imports import library_root
+
+		root = library_root()
+		if root is None:
+			sys.stderr.write(
+				"situc: cannot find situ's own schema directory.\n"
+				"       It is <tree>/std when run from the source tree and\n"
+				"       <prefix>/share/situc/std when installed.\n")
+			parser.exit(1)
+		sys.stdout.write(f"{root}\n")
+		parser.exit()
+
+
 class _Version(argparse.Action):
 	"""`--version`, printed rather than passed through the help formatter.
 
@@ -114,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
 	# `License:` beside it would be undoing that decision, not completing it.
 	parser.add_argument("--version", action=_Version, nargs=0, default=None,
 	                    help="print the version and exit")
+
+	# Where `import std "..."` reads from, for whoever is outside a schema.
+	parser.add_argument("--print-std-dir", action=_PrintStdDir, nargs=0,
+	                    default=None,
+	                    help="print the directory `import std` reads from")
 
 	sub = parser.add_subparsers(dest="command", required=True)
 

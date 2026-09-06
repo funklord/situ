@@ -375,8 +375,16 @@ target buffer;          // or `mmio`, or `file`
 endian big;             // or `little`, `native`
 bit_order msb_first;    // or `lsb_first`
 strictness = strict;    // or `lenient`
-import "std/codecs.situ";
+import "std/codecs.situ";      // relative to this file
+import std "codecs.situ";      // from what situ installed
 ```
+
+The two import forms resolve differently and neither falls back to the other.
+A quoted path is read relative to the importing file, so which file it names
+never depends on how `situc` was invoked. `import std "..."` reads from the
+directory situ installs its own schemas into, which is what lets a schema name
+a shipped codec without hard-coding a prefix; `situc --print-std-dir` prints
+that directory for a build system that needs the path outside a schema.
 
 **The target is the medium, and it is a bundle of assumptions rather than a
 label.** Each brings what is true of its medium and refuses what cannot live

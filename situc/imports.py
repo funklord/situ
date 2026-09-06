@@ -6,6 +6,21 @@ search path, so which file an import names does not depend on how the compiler
 was invoked. A search path would make that ambiguous, and 17.0 refuses an
 ambiguity rather than picking a default nobody can see.
 
+AND `import std "..."` READS FROM WHERE SITU INSTALLED ITS OWN SCHEMAS, which
+is the other half of that rule rather than an exception to it. 17.0's
+objection is to a search *path* -- a list, where "which of these won?" has no
+visible answer. This is one directory, which situc finds the way `bin/situc`
+finds its own package, so an import still names exactly one file and still
+does not depend on the invocation. What it does depend on is which situ is
+installed, and that is the point: a consumer describing a JSON-based format
+should not have to write `../../../usr/share/situc/std` into a schema that
+then only compiles on one machine.
+
+The two are spelled differently on purpose and neither falls back to the
+other. A fallback would mean that adding a file beside your own silently
+changes which file an existing import names, which is the shadowing hazard
+`#include "..."` has and the reason C keeps `<...>` separate.
+
 WHAT ARRIVES. Every top-level declaration of the imported file, merged into
 one flat namespace. Nothing is renamed and nothing is qualified: an imported
 `codec aes_gcm_128` is `aes_gcm_128` here. Two declarations reaching one name
@@ -50,13 +65,22 @@ def expand(schema: ast.Schema, source: Source,
 	if not directives:
 		return
 
-	here = _directory(source, directives[0])
+	# The importing file's directory is needed only by a relative import, and
+	# asking for it unconditionally would refuse a schema parsed from a string
+	# that imports nothing but `std` -- which is the case an editor and the
+	# language server are in.
+	here = (_directory(source, next(d for d in directives if not d.library))
+	        if any(not d.library for d in directives) else None)
 	if seen is None:
 		seen = {_key(Path(source.path))}
 
 	arrived: list[ast.Decl] = []
 	for directive in directives:
-		target = (here / directive.path).resolve()
+		if directive.library:
+			target = _library_target(directive)
+		else:
+			assert here is not None
+			target = (here / directive.path).resolve()
 		if _key(target) in seen:
 			# Already here, whether from a diamond or a cycle. Both are
 			# answered by contributing nothing a second time.
@@ -78,6 +102,46 @@ def expand(schema: ast.Schema, source: Source,
 	schema.decls[:] = [*arrived,
 	                   *(decl for decl in schema.decls
 	                     if not isinstance(decl, ast.ImportDirective))]
+
+
+def library_root() -> Path | None:
+	"""The directory situ's own schemas live in, or None.
+
+	Found the way `bin/situc` finds its package and for the same reason:
+	situc has to run from a bare interpreter with nothing installed, so it
+	locates itself rather than being told where it is. Two shapes, checked in
+	order -- the source tree, where the package is `<tree>/situc` and the
+	schemas are `<tree>/std`; and an installed prefix, where `make install`
+	puts the package in `<prefix>/lib/situc` and the schemas in
+	`<prefix>/share/situc/std`.
+
+	`situc --print-std-dir` prints what this returns, so a build system can
+	compute the path without a schema having to contain one.
+	"""
+	package = Path(__file__).resolve().parent
+	for candidate in (package.parent / "std",
+	                  package.parent.parent / "share" / "situc" / "std"):
+		if candidate.is_dir():
+			return candidate
+	return None
+
+
+def _library_target(directive: ast.ImportDirective) -> Path:
+	"""Where `import std "x"` reads from, or a diagnostic saying why not."""
+	root = library_root()
+	if root is None:
+		raise error(
+			f"cannot find situ's own schemas to read `{directive.path}` from",
+			directive.span,
+			label = "no installed schema directory",
+			notes = ["`import std` reads from the directory `make install` "
+			         "puts `std/*.situ` in, and situc could not locate it "
+			         "from its own package",
+			         "`situc --print-std-dir` prints where it looked",
+			         "an import without `std` is read relative to this file "
+			         "and needs nothing installed"],
+		)
+	return (root / directive.path).resolve()
 
 
 def _key(path: Path) -> str:
@@ -117,6 +181,9 @@ def _read(target: Path, directive: ast.ImportDirective) -> str:
 			directive.span,
 			label = exc.strerror or "unreadable",
 			notes = [f"looked for {target}",
+			         "`import std` reads from situ's own schema directory, "
+			         "which `situc --print-std-dir` prints"
+			         if directive.library else
 			         "an import is read relative to the importing file's "
 			         "directory, not from a search path: which file it names "
 			         "does not depend on how situc was invoked"],

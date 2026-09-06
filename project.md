@@ -3751,6 +3751,26 @@ because the alternative is an ambiguity rather than because it is tidier:
   search path, so which file an import names does not depend on how situc was
   invoked -- a search path makes that a property of the invocation, which is
   exactly what 17.0 refuses to leave open.
+- **`import std "kernels.situ";` reads from the directory situ installed its
+  own schemas into**, which is the other half of that rule rather than an
+  exception to it. 17.0's objection is to a search *path* -- a list, where
+  "which of these won?" has no visible answer. This is one directory, found
+  the way `bin/situc` finds its own package, so an import still names exactly
+  one file. What it depends on is which situ is installed, and that is the
+  point: a consumer describing a JSON-based format should not have to write
+  `../../../usr/share/situc/std/kernels.situ` into a schema that then compiles
+  on one machine. `situc --print-std-dir` prints the directory, for a build
+  system that needs the path outside a schema.
+
+  **Neither form falls back to the other**, which is what makes the second
+  spelling worth having rather than a convenience. A fallback would mean that
+  dropping a file beside your own silently changes which file an existing
+  import names -- the shadowing hazard `#include "..."` has, and the reason C
+  keeps `<...>` separate. `std` is a soft keyword read the way `at` is, so no
+  schema using it as a name stops parsing, and it is a word rather than angle
+  brackets because 0006 settles that for this tree and because `<kernels.situ>`
+  lexes as five tokens the LSP and the unparser would both have to learn to
+  reassemble.
 - **Flat.** Nothing is renamed and nothing is qualified: an imported
   `codec aes_gcm_128` is `aes_gcm_128` here. Two declarations reaching one
   name are refused by `check_unique_declarations`, which has caught that since
@@ -4415,9 +4435,15 @@ situc gen-codec-tests <schema>    property tests from codec signatures
 situc import-proto <proto> -o <schema>   [--accept-lossy]
 ```
 
-Two global flags: `--diagnostics=text|json`, and `--version`, which prints the
+Three global flags: `--diagnostics=text|json`; `--version`, which prints the
 string in `situc/__init__.py` -- the same one the Debian packaging reads, so a
-package and the binary inside it cannot claim different versions. `--out`,
+package and the binary inside it cannot claim different versions; and
+`--print-std-dir`, which prints the directory `import std "..."` reads from.
+That last one is the answer outside a schema to the question `import std`
+answers inside one, for a build system that wants to depend on a shipped
+schema or hand it to a tool that is not situc. It exits non-zero with a
+diagnostic where the directory cannot be found, rather than printing nothing
+and exiting 0 -- which a shell would read as an empty path and use. `--out`,
 `--target=c|cpp|python|rust` and `--prefix=NAME` belong to the subcommands that
 take them, which is not the same thing and was written here as though it were.
 There is no `--strict`; it was listed for a while and never existed.
@@ -22452,6 +22478,75 @@ it can: a fixed-point constant exported pre-scaled would be 25600 and
 fails, and a BCD constant exported as packed nibbles would be 0x12 = 18
 and fails. **A canary over the one type where the two domains coincide is
 a canary that cannot sing.**
+
+### 26.277 The library situ installed and gave nobody a way to name
+
+Asked whether a consumer can import an example schema without knowing
+where situ is installed. Measured: **no**, and the reason was good while
+the consequence was not.
+
+`import "..."` resolves relative to the importing file, deliberately and
+with 17.0 cited: "there is no search path, so which file an import names
+does not depend on how the compiler was invoked." That rule is right and
+is unchanged. What sat behind it is that **`make install` puts
+`std/*.situ` in `$(PREFIX)/share/situc/std`, `debian/situc.install` ships
+it, and nothing anywhere tells a consumer where it went** -- no flag, no
+mention in `--help`, and `grep -rn "share/situc"` across `situc/`,
+`bin/situc` and the README returned nothing. The library was installed
+and reachable only by writing an absolute path that varies per machine
+into a schema.
+
+**17.0's objection does not reach this case, and that is the opening.**
+What it refuses is a search *path* -- a list, where "which of these won?"
+has no visible answer. One directory is not a list. `import std
+"kernels.situ";` reads from where situ put its own schemas, found the way
+`bin/situc` finds its own package, and an import still names exactly one
+file.
+
+**Neither form falls back to the other**, which is what makes the second
+spelling worth having rather than a convenience. A fallback would mean
+that dropping a file beside your own silently changes which file an
+existing import names -- the shadowing hazard `#include "..."` has, and
+the reason C keeps `<...>` separate. The test for it had to be written
+twice: the first sabotage did not change behaviour for its fixture, so it
+passed, and only a sabotage that actually implements the shadowing --
+prefer a local file where one exists -- made it fail. **A sabotage that
+cannot reach the code it is aimed at reports the same green as a working
+guard.**
+
+A word rather than angle brackets, per 0006, and because `<kernels.situ>`
+lexes as five tokens that the LSP and the unparser would both have to
+learn to reassemble -- context-sensitivity in a lexer that has none, to
+save a word. `std` is a soft keyword read the way `at` is.
+
+`situc --print-std-dir` is the same answer outside a schema, for a build
+system that wants to depend on a shipped schema or hand it to a tool that
+is not situc. It exits non-zero where the directory cannot be found
+rather than printing nothing and exiting 0, which a shell would read as
+an empty path and use.
+
+**Two instruments earned their keep on the way, and one nearly did
+not.**
+
+`test_it_names_only_the_flags_that_are_global` holds the parser's global
+flags against what 21 claims, so the new flag arriving without the
+section being updated went red immediately -- the population rule again.
+But it then failed through a `ValueError`, because it sliced the section
+from the literal phrase "Two global flags" and the fix had made it
+"Three". **A true failure reported through the wrong half of itself**: a
+reader would have gone looking for a broken index rather than a missing
+sentence. It anchors on "global flags" now.
+
+And fourteen unrelated tests failed in the same run, all at the linker,
+for a missing `build/host/runtime/libsitu.a`. That is 26.87 exactly --
+the Makefile's own comment says `test-py: runtime` exists because "on any
+tree where the archive did not already exist, ten tests failed at the
+linker" -- met by running pytest directly and bypassing the prerequisite,
+in a shared tree where the archive had gone. **Fourteen compile-and-run
+tests failing together, in a run that took fifty minutes instead of
+fourteen, is a fact about the machine before it is a fact about the
+code**, and reading one error message settled it faster than reading any
+diff would have.
 
 ## 27. Questions, and how they were settled
 
