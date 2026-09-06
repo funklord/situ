@@ -39,6 +39,39 @@ def emit(body: str, preamble: str = PREAMBLE) -> str:
 	return generate_rs(schema, resolved, "unit").module
 
 
+def test_a_struct_doc_says_which_size_it_has() -> None:
+	""""N bytes, fixed" is a claim, and it was made about every struct.
+
+	`fixed` is computed here -- it decides `SIZE` against `SIZE_MIN` a few
+	lines below -- and the sentence above it did not consult it, so 80 of
+	the tree's 167 structs were documented as fixed while being variable,
+	with `size_bytes` (their minimum) given as their size.
+	`ble.le_advertising_report` read "4 bytes, fixed" and spans 4 to 10459.
+
+	C++ and Python both branch on the same value and say "and up"; this is
+	their wording. Asserted in both directions, because a version that
+	always said "and up" would pass a test that only checked the variable
+	case -- and that is the shape the bug had, one arm answering for both.
+	"""
+	both = emit("struct fix { u16 a; u16 b; }"
+	            "struct vary { u8 n; u8 body[n]; }")
+
+	assert "/// struct fix: 4 bytes, fixed." in both
+	assert "/// struct vary: 1 bytes and up." in both
+	assert "vary: 1 bytes, fixed" not in both
+
+
+def test_a_struct_doc_names_the_type_rather_than_a_placeholder() -> None:
+	"""The line was a plain string where every line around it is an
+	f-string, so `{name}Mut` reached all 145 struct docs with its braces
+	still in it -- a doc comment telling the reader to look up a type
+	called `{name}Mut` (26.269)."""
+	module = emit("struct fix { u16 a; u16 b; }")
+
+	assert "`FixMut`" in module
+	assert "{name}" not in module
+
+
 def emit_materialized(body: str, preamble: str = PREAMBLE) -> str:
 	"""The second accessor family as well (decision 0022)."""
 	schema   = parse_text(preamble + body)

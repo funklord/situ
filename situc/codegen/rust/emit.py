@@ -367,12 +367,24 @@ class Emitter:
 				                                 held.tlv_grammar))
 
 		name  = _pascal(struct.name)
-		fixed = layout.is_fixed_size
+		# `fixed` decides `SIZE` against `SIZE_MIN` below, and the doc line
+		# above it said "fixed" whatever it held -- so 80 of the tree's 167
+		# structs were documented as fixed while being variable, with
+		# `size_bytes` (their MINIMUM) presented as their size.
+		# `ble.le_advertising_report` read "4 bytes, fixed" and spans 4 to
+		# 10459. The value was right there and the sentence beside it did
+		# not consult it; C++ and Python both do, and say "and up", which is
+		# their wording (26.269).
+		fixed  = layout.is_fixed_size
+		extent = (f"{layout.size_bytes} bytes, fixed" if fixed
+		          else f"{layout.size_bytes} bytes and up")
 		lines = [
-			f"/// struct {struct.name}: {layout.size_bytes} bytes, fixed.",
+			f"/// struct {struct.name}: {extent}.",
 			"///",
 			"/// The lifetime is the buffer's. Section 12.3's invalidation rule",
-			"/// is the borrow checker here: a write through `{name}Mut` while",
+			# An f-string: this was a plain one, so `{name}Mut` reached all
+			# 145 struct docs with the braces still in it.
+			f"/// is the borrow checker here: a write through `{name}Mut` while",
 			"/// this is outstanding does not compile.",
 			"pub struct " + name + "<'a> {",
 			"\tbytes: &'a [u8],",

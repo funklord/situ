@@ -21947,6 +21947,50 @@ defaulting to 1 where the private ones answer None. **A name collision
 that is not a duplication is worth knowing about once**, so that the next
 sweep does not spend the same afternoon on it.
 
+### 26.269 A value in scope, and the sentence beside it not asking
+
+Rust's struct doc:
+
+    fixed = layout.is_fixed_size
+    lines = [
+        f"/// struct {struct.name}: {layout.size_bytes} bytes, fixed.",
+
+`fixed` is not unused -- it decides `SIZE` against `SIZE_MIN` twenty-seven
+lines below, and removing it breaks the build. The doc line simply did not
+consult it. **80 of the tree's 167 structs were documented as fixed while
+being variable**, with `size_bytes` -- their MINIMUM -- given as their
+size. `ble.le_advertising_report` read "4 bytes, fixed" and spans 4 to
+10459: a 2600-fold understatement stated as a fact, in a shipped header.
+
+C++ and Python both branch on the same value and say "N bytes and up", so
+the wording is theirs rather than one invented here. 65 say fixed now and
+80 say and up.
+
+**And the line under it was a plain string** where every line around it is
+an f-string, so `` `{name}Mut` `` reached all 145 struct docs with its
+braces still in it -- a doc comment telling a reader to look up a type
+called `{name}Mut`. Zero now.
+
+**Neither changes generated behaviour**, which is why they lasted: nothing
+compiles a doc comment, no differential compares one, and the suite reads
+generated code for structure rather than for prose. A claim in a comment
+is checked by a person or by nothing.
+
+**Asserted in both directions.** A test that only checked the variable
+case would pass against a version that always said "and up" -- and one
+arm answering for both is exactly the shape the bug had. Sabotaging each
+half fails its own test.
+
+**A correction, because the first version of this entry repeated it.**
+The finding arrived as "`fixed` is computed and never used", and that was
+carried into a comment and most of a commit message before the
+interpreter refused the build: it IS used, further down. The true
+statement is narrower and more useful -- the value was in scope and the
+sentence beside it did not ask -- and nothing but acting on the claim
+would have caught it. **A report's phrasing survives into a commit
+message unless something forces the check**, which is the second time in
+this session an inherited claim needed narrowing at the moment of use.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
