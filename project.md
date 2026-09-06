@@ -22672,6 +22672,61 @@ three were settled that way in a minute each, without which the honest
 report would have been "something in here is broken and I do not know
 whose".
 
+### 26.280 A guard aimed wider than its subject, and two that hid each other
+
+fuzznet bisected a regression to `74f3742` -- this session's bound guard
+-- and carried a red `make schema` rather than working around it.
+
+    u16  index    [max = chunks - 1];    // `chunks` is at 0x57, `index` 0x55
+
+    66de6b0   "is current", exit 0
+    74f3742   `chunks` is not in scope here
+
+`check_bound_arithmetic` called `interval_of`, which evaluates the whole
+expression and therefore refuses a name it cannot resolve. A bound naming
+a field declared **later** in the struct became an error, in a guard
+written about division. Whether such a bound is legal is a real question
+and it is not this guard's: it was somebody else's before the guard
+existed and it still is.
+
+**situ's own corpus could not have shown it.** No committed schema here
+has a forward-referencing bound, so every example passed and the check
+looked right -- which is `evidence.md`'s *capable and misaimed*, a state
+a control cannot detect, because the control tests the instrument against
+the failure it was built for and not against the population it will meet.
+The population that would have caught it lives in a consumer's tree.
+
+**And the fix arrived as two conditions that hid each other.** Narrowing
+to `/` and `%`, and skipping a bound whose names do not resolve, each
+independently save fuzznet's case -- so **each one's sabotage stayed
+green because the other covered it**, and both came within a commit of
+shipping undemonstrated. What separates them is a bound that divides
+*and* reads a later field:
+
+    [max = chunks / 2]      operator test alone: refused (wrong)
+                            name test alone:     accepted
+
+With that case in the suite the name test's sabotage fails. **The
+operator test's still does not, and it is kept anyway** -- said in its
+docstring rather than left for a reader, since a condition presented as a
+guard and unable to fail is what this section keeps finding elsewhere. It
+earns its place by keeping the guard's population the one it reasons
+about, which is precisely what the first version got wrong.
+
+**Two redundant guards are worse than one, in the specific way this
+file cares about**: they do not merely duplicate, they make each other
+untestable. A sabotage harness that removes one condition at a time
+cannot see either, and the suite reports green for a check that no
+longer exists.
+
+The report is the other half. fuzznet bisected against the committed
+schema rather than their working tree, so the answer could not be about
+an edit of theirs; they named the instrument error that wasted their
+first pass -- a scratch copy without the `.wire` sibling, which fails
+identically to the real refusal in a one-line summary; and they offered
+three readings of what situ might have intended rather than one. The
+third was right.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -98,6 +98,41 @@ def test_a_converted_type_exports_its_bound_too() -> None:
 	assert "#define SITU_S_DAY_VALUE_MAX 49u" in emitted
 
 
+def test_a_bound_may_name_a_field_declared_later() -> None:
+	"""Whether a forward-referencing bound is legal is not this guard's
+	question, and for a while it answered anyway.
+
+	`interval_of` evaluates the whole expression, so it refuses a name it
+	cannot resolve -- and running it over every bound turned a scope decision
+	into an arithmetic refusal. fuzznet's `[max = chunks - 1]` reads a field
+	two bytes further on, had compiled since their schema existed, and stopped
+	at 74f3742; they bisected it against the committed schema and carried a
+	red gate rather than working around it.
+
+	No committed schema here has one, which is why the corpus could not show
+	it: every example passed and the guard looked right. This fixture is the
+	population situ does not otherwise have.
+	"""
+	header("struct s { u16 index [max = chunks - 1]; u16 chunks; }")
+	header("struct s { u16 index [min = base]; u16 base; }")
+
+	# And one that divides as well, which is the case that separates the two
+	# conditions in the guard. Without the operator test the first two are
+	# refused; without the name test this one is -- and with either alone the
+	# other's sabotage stays green, which is how both came within a commit of
+	# shipping undemonstrated.
+	header("struct s { u16 index [max = chunks / 2]; u16 chunks; }")
+
+
+def test_a_forward_reference_is_still_not_a_way_past_the_guard() -> None:
+	"""The narrowing is `/` and `%` and resolvable names, so a bound that
+	divides and reads a *sibling already declared* is still refused. Without
+	this, "skip what does not resolve" would be a hole anybody could reach by
+	reordering two fields."""
+	with pytest.raises(SituError, match="left operand of `/` may be negative"):
+		header("struct s { u16 base; u16 index [max = (0 - base) / 2]; }")
+
+
 def test_a_float_bound_is_still_excluded() -> None:
 	"""And for a reason the other two did not have: a bound folds to an
 	integer here, so a float field has nothing to export rather than

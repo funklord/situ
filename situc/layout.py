@@ -692,6 +692,34 @@ def solve(schema: ast.Schema) -> SchemaLayout:
 	return result
 
 
+def _divides(expr: ast.Expr) -> bool:
+	"""Whether an expression contains `/` or `%` anywhere.
+
+	The two operators whose meaning is not shared: C, C++ and Rust truncate
+	toward zero, Python and Lua floor. Everything else in a bound means the
+	same thing in all six descriptions, so there is nothing to ask about.
+
+	**This narrowing has no observable effect today, and is kept anyway.**
+	Sabotaged, the suite stays green: the name test beside it already skips
+	every bound that cannot resolve, and a bound that resolves and does not
+	divide passes `interval_of` regardless. It is here so that the population
+	the guard evaluates is the population it reasons about -- which is
+	exactly what the first version got wrong, running over every bound and
+	refusing a forward reference in a check written about division. An
+	early-out that keeps a check pointed at its own subject is worth more
+	than the test that would demonstrate it.
+
+	Said plainly rather than left for a reader to discover, because a
+	condition presented as a guard and unable to fail is the thing this file
+	keeps finding elsewhere.
+	"""
+	if isinstance(expr, ast.Binary):
+		return (expr.op in ("/", "%")
+		        or _divides(expr.left) or _divides(expr.right))
+	inner = getattr(expr, "operand", None)
+	return _divides(inner) if inner is not None else False
+
+
 class Solver:
 	def __init__(self, schema: ast.Schema, result: SchemaLayout) -> None:
 		self.schema  = schema
@@ -1882,6 +1910,21 @@ class Solver:
 			state: Walk) -> None:
 		"""Refuse a bound whose arithmetic the six descriptions disagree about.
 
+		**`/` and `%` only, and only where every name resolves.** The first
+		version ran `interval_of` over every bound -- which evaluates the
+		whole expression and therefore refuses anything it cannot resolve --
+		so a bound naming a field declared later in the struct became an
+		error, in a guard written about division. fuzznet's
+		`[max = chunks - 1]` reads a field two bytes further on, had compiled
+		since that schema existed, and stopped at 74f3742; they bisected it
+		against the committed schema and carried a red gate rather than
+		working around it.
+
+		That is a capable check aimed at a wider population than the one it
+		was built for, and situ's own corpus could not have shown it: no
+		committed schema here has a forward-referencing bound, so every
+		example passed and the guard looked right.
+
 		A bound that is not a compile-time constant is not thereby wrong: one
 		naming a sibling is checked against a message in front of you, so the
 		value is there to read, and every backend renders it as a run-time
@@ -1920,11 +1963,28 @@ class Solver:
 		arithmetic can be spelled at all, which needs the siblings in scope
 		because the whole hazard is about a field's range.
 		"""
+		from situc.invariant import paths_in
+
 		env = self.result.env.with_layout(
 			self.result.lookup, self.result.explain).with_fields(state.fields)
 		for attr in attrs:
-			if attr.name in NUMERIC_BOUNDS and attr.value is not None:
-				interval_of(attr.value, env)
+			if attr.name not in NUMERIC_BOUNDS or attr.value is None:
+				continue
+			if not _divides(attr.value):
+				continue
+			# A bound may name a field declared LATER in the struct, and
+			# whether that is legal is somebody else's question -- it was
+			# before this guard existed and it still is. `interval_of`
+			# evaluates the whole expression and so refuses a name it cannot
+			# resolve, which turned a scope decision into an arithmetic
+			# refusal. Asked by resolving the names rather than by reading
+			# the diagnostic, because a message is the wrong thing to branch
+			# on.
+			if any(name.partition(".")[0] not in state.fields
+			       and name not in state.fields
+			       for name in paths_in(attr.value)):
+				continue
+			interval_of(attr.value, env)
 
 	def constrain(self, base: Interval, attrs: tuple[ast.Attr, ...]) -> Interval:
 		"""Narrow a field's range by the constraints it declares.
