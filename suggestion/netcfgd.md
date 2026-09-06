@@ -210,3 +210,246 @@ from sibling projects and been settled as **one file per project that wrote
 it**, not per author. That is the right axis: what matters to a maintainer
 reading these is which real tree hit the problem and what it needed, not who
 typed it. Noted because the first draft of this file got the name wrong.
+
+# Addendum, 2026-09-06: a structured-text codec, and what netcfgd wants one for
+
+Written from netcfgd after being asked whether situ could describe the format a
+**separated config compiler** would use -- a compiler running unprivileged and
+returning its result over a pipe.
+
+**The full brief is `doc/situ-brief.md` in netcfgd's tree**, and it stays there
+rather than being copied here, so there is one copy to correct. This is the
+part that decides the question, plus the numbers, so that reading the brief is
+a choice rather than a prerequisite.
+
+Everything about netcfgd below is measured here and is checkable. Everything
+about situ is read from your `project.md` and is yours to correct; where the
+two are compared, the comparison is mine.
+
+## 1. One requirement, not a feature list
+
+**netcfgd's document has to be greppable JSON, and situ describes binary
+layouts.** That is not a gap a keyword closes -- it is the two projects'
+premises pointing opposite ways.
+
+JSON here is netcfgd's constraint 7 rather than a preference: `/run` state is
+read with `cat` on a machine being debugged over the network it is in the
+middle of reconfiguring, and both frozen schema witnesses are JSON. So a
+situ-described pipe would mean **two encodings of one model** -- situ's binary
+on the pipe, JSON on disk -- which is two things that must agree, the class
+netcfgd's own decisions 0081, 0082 and 0083 are about.
+
+**The evidence for "situ has no text format" is yours rather than asserted**,
+which is why it is quoted: section 13's codec families are `table` (Manchester,
+4b5b, base64), `polynomial` (CRC, Reed-Solomon), `permutation` (interleavers)
+and `stuffing` (HDLC, COBS) -- line codes, not structured text. And every one
+of the ten occurrences of "json" in your `project.md` is about situ's own
+tooling, `--diagnostics=json` and `situc lsp` speaking JSON-RPC. Correct either
+of those if the reading is wrong; the whole argument rests on them.
+
+**The shape, if it is ever wanted, is a family in 13's sense** whose members
+are text encodings -- the schema keeps describing the model and the codec
+decides the spelling. Which is exactly why it may be correctly out of scope: it
+collides with "byte-exact data layouts" as the stated premise, and with the
+non-goal "not a serialization library for language-native objects". netcfgd is
+not arguing those should move.
+
+**So if it is out of scope, say so and the brief is finished.** Nothing below
+matters if the answer to this is no, and a clean no is worth more to netcfgd
+than a maybe -- it settles `doc/c-transition.md`'s codec question in one word.
+The binary use netcfgd already plans -- a situ-described frame for the remote
+path, `doc/socket-protocol.md` 3.2 -- is unaffected either way.
+
+## 2. Recursion: netcfgd needs less of it than JSON does
+
+You reported the v0 ban on recursive types is being lifted because JSON needs
+it. That is right about JSON's grammar and worth splitting, because the two
+cases are different sizes:
+
+- **Arbitrary JSON needs recursion in the schema.** Depth is whatever arrives.
+- **netcfgd's document spelled as JSON does not.** Its field types form a graph
+  of **117 nodes with no cycles at all, nothing naming itself, depth 7 from
+  `Document`.** The recursion lives in the codec, not in the type described.
+
+The consequence is yours rather than netcfgd's: 20.1 promises the C backend
+"no recursion, bounded stack", and section 2 gives non-terminating size and
+capability computation as why recursion was banned. **A decoder for a schema of
+known depth keeps both** -- an explicit stack of 7 is a compile-time constant,
+exactly as an array's `max` is. A decoder for arbitrary JSON keeps neither.
+
+So if the lift is meant to serve both, the shape that seems to fit your grain
+is **a declared depth bound on a recursive type, the same mechanism `max`
+already is for arrays.** That is a suggestion from outside; you are better
+placed to say whether it holds.
+
+*(The depth was got wrong first. A count over every capitalised token in each
+type body reported 14 cycles and depth 14, having matched enum variant names as
+field types. A model with a real cycle and no `Box<..>` would not compile,
+which is what made the number worth disbelieving.)*
+
+## 2a. What already fits, and it is most of the shapes
+
+Sent second only because section 1 decides the question, not because it is the
+smaller half. **The shapes netcfgd would need are expressible in situ today**,
+and a reader given only the gaps would take a worse impression than the
+evaluation supports:
+
+- **Both backends netcfgd needs are done.** 20.1 lists C, C++, Python and Rust.
+  netcfgd is Rust today and may become C, so the two that matter are both
+  there.
+- **Variable-length repetition exists.** 8.5's `T x[expr]` takes its length
+  from a prior field and `T x[remaining]` runs to the end of the frame.
+  netcfgd's 58 `Vec` fields have a spelling.
+- **Tagged unions exist.** 9.6 `variant`, for the ~43 payload-carrying enum
+  variants.
+- **TLV exists** (9.5), which is how the 177 optional fields would be carried.
+- **Text is checked rather than assumed.** 8.6 has no string type -- text is
+  `u8 name[N]` with `[encoding = ascii | utf8]`, validated strictly in the
+  sense RFC 3629 requires, an overlong form or a surrogate half refused.
+  **netcfgd validates none of its own 41 `String` fields for encoding**, so
+  situ would be stricter than the thing it replaced. That is the right
+  direction and is worth saying plainly.
+
+So the difficulty is not the shapes. It is section 1 and nothing else.
+
+The whole of what would cross the boundary, since the counts above are quoted
+piecemeal elsewhere in this file:
+
+    structs                             78
+    enums                               42
+    enum variants carrying a payload   ~43
+    fields that are Option<..>         177
+    fields that are Vec<..>             58
+    fields that are String              41
+    fields that are a fixed scalar      65
+    fields that are another model type  64
+
+**276 of 405 fields are optional, repeated, or unbounded text.** A document for
+twenty interfaces is 10,484 bytes of JSON; the frozen maximal witness is
+115,004. That is the size class a text codec would be working in -- small
+enough that the optimisation discussed in section 3 is genuinely optional.
+
+## 3. The ask is much smaller than the attribute counts suggest
+
+The first survey listed what netcfgd's model asks of serde and read it as a
+feature list. Put to netcfgd afterwards: if situ is right where it disagrees
+with other serialisers, might it be right about the rest? Largely yes.
+
+Counted across `netcfgd-model/src` and `netcfgd-proto/src`:
+
+    default                294
+    skip_serializing_if    225      Option::is_none 205, Vec::is_empty 11,
+                                    Not::not 8, is_zero 1
+    deny_unknown_fields     89
+    rename_all              44      43 snake_case, 1 kebab-case
+    rename                   7
+    tag                      7
+
+Method, because a bare integer invites no re-derivation: every `#[serde(..)]`
+body is extracted with a paren scanner that respects strings and split on
+top-level commas, and a match inside a `//` or `///` comment is rejected. That
+clause is load-bearing -- three doc comments mention these attributes in prose,
+one spelling out `#[serde(skip_serializing_if)]` in full, and a line-grep and a
+naive scanner miscount it in opposite directions. Two methods disagreed by one
+and by two before they were reconciled; 225 is confirmed by its own predicate
+breakdown summing to it exactly.
+
+Read for what each row **is**:
+
+- **`rename_all`, 43 of 44: not a requirement.** All 43 are `snake_case`
+  converting Rust's `PascalCase` variants. A schema writes the name it wants.
+  That row was measuring the tool, not the format.
+- **`skip_serializing_if` (225) and `default` (294): two halves of one size
+  optimisation**, "omit when the value is the type's empty one" paired with
+  "restore it when absent". Emit every field always and both vanish.
+- **`tag`, 7: a representation choice.** An externally tagged variant is a
+  one-member object whose *name* is the discriminant, needing no ordering rule.
+- **`deny_unknown_fields`, 89: already agreed**, and strongly -- section 2 and
+  14.5 make never preserving unknown fields a security position, and netcfgd's
+  89 uses are the same position reached separately. It is the one most
+  serialisers get wrong in the other direction, and an agreement arrived at
+  twice independently is worth as much here as any gap.
+
+**What survives is one requirement and one small one:**
+
+1. **Members are identified by name and have no order.** Irreducible -- it is
+   what a text codec means. It also says which of your rules would need
+   re-examining rather than extending: 9.6's "discriminant strictly before the
+   variant in layout order" is not a restriction to relax for text, it is a
+   statement about a world where order exists.
+2. **An enum member may need a wire spelling that is no language's
+   identifier.** Eight members across two enums: six of the seven `rename`s are
+   the kernel's bonding modes (`balance-rr`, `802.3ad`; `broadcast` is only a
+   case change and does not count), and the forty-fourth `rename_all` is
+   `BluetoothProfile`'s `kebab-case`, giving `a2dp-sink` and `a2dp-source`.
+
+So five of the six original rows are the same fact asked five ways -- situ
+describes positional layouts where a field's identity is its offset, and text
+has the opposite properties. A feature list invites six additions; the shape of
+the answer is probably one.
+
+**The cost of dropping the optimisation is not size, it is the witnesses.**
+netcfgd's two schema witnesses are byte-exact and frozen, and every
+present-but-empty field would change them and the socket's shape for every
+client. So a *new* format can be described without any of this today; the
+*existing* one cannot be re-spelled without a deliberate schema change.
+
+## 4. Three smaller things, and one question
+
+- **A first-class optional.** 177 of 405 fields. TLV (9.5) carries it, but the
+  schema author then makes 177 TLV decisions to say what the source language
+  says in one word, and the generated accessor is "was the tag there" rather
+  than a presence type. Actionable independently of everything above.
+- **A declared-UTF-8 string reaching the backend as text.** 41 fields. 8.6
+  already validates the encoding strictly, which is more than netcfgd does to
+  its own; what would help is the Rust backend handing back `&str` where
+  `[encoding = utf8]` is declared, so the boundary does not re-validate what
+  the codec checked.
+- **Speculative, marked as such.** With 58 dynamically-sized repetitions every
+  enclosing frame here is dynamic, so the capability lattice would report
+  `sequential` and non-addressable for essentially everything. Saying that once
+  about the schema would be worth more than saying it per field. netcfgd has
+  not run `situc` on anything, so this is a prediction from 8.5's rules.
+- **A question rather than a request: does `situc` have a schema this size in
+  its own tests?** 78 structs, 42 enums, 405 fields, nested seven deep. A
+  compiler fast on a 40-field frame may not be on this, and it is worth
+  knowing before either project plans around it.
+
+## 5. The question worth more than the one that was asked
+
+The compiler pipe is a small format. The model is not.
+
+**serde is 508,084 bytes of netcfgd's 2,783,768-byte release binary -- 18.3%**,
+measured two ways agreeing within 5% (symbol attribution, and a link
+differential over four scratch builds):
+
+    serde and serde_json themselves          232,562
+    netcfgd's own derived codecs             267,993
+    itoa, memchr, zmij                         7,529
+
+`netcfgd-model` is 168,328 bytes of derived codec against 53,037 of everything
+else -- **three quarters of that crate is serialization.** A C port would
+hand-write those codecs, and that is most of the size argument for netcfgd's
+possible C transition. **A schema compiler generating them, Rust now and C
+later from one description, is exactly the answer** -- and it runs into
+section 1 immediately, because those codecs encode the model, and the model is
+what has to be JSON.
+
+## 6. What netcfgd is not asking for, and one thing against itself
+
+**Not the capability lattice.** In-place mutability, addressability and
+authentication coverage are situ's core and are worth nothing to a pipe between
+a process and its own child. netcfgd would be using situ for codegen and schema
+diffing alone, which is a thin slice of what the project is for -- a reason to
+weigh the request rather than a reason to grant it.
+
+**And netcfgd's own record argues against generating both ends**, which is
+relayed rather than hidden. `client/` is a C implementation of netcfgd's socket
+protocol written against the *witness* rather than against the Rust types, and
+building it found **three defects in the protocol itself** -- a request the
+daemon accepted that no client could send, and one operation carrying two names
+depending on which message it appeared in. A generated second implementation
+could not have found them, because it would have come from the same source as
+the first. If netcfgd ever generates both ends it should keep one hand-written
+implementation as the control. That is the cost being paid knowingly, not an
+argument against situ.
