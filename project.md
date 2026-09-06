@@ -22821,7 +22821,8 @@ now, with an acceptance case beside it: the old name said the refusal was
 unconditional, and it has stopped being.
 
 **And one failed for a reason worth keeping.** `test_every_documented_
-make_target_exists` refused 26.280 for naming `make schema`, which is
+make_target_exists` refused 26.280 for naming another project's `schema`
+target in a `make` command, which is
 *fuzznet's* target quoted in their report and not one situ has. The guard
 cannot tell a foreign command from a claim about this tree, and it should
 not be taught to -- so the prose changed instead. **A document that
@@ -22840,6 +22841,91 @@ netcfgd put it best and it is their sentence: the two projects' premises
 point opposite ways. What 0054 does serve is their case and not JSON's --
 a document of known types, 117 nodes and depth 7, where the recursion is
 in the codec rather than in the type described.
+
+### 26.282 A proxy that agreed with the thing for every schema in the corpus
+
+0054's generating half, for C. The routing bug that blocked it is the
+find worth keeping.
+
+**`_is_array` asked the resolver a question about the schema.**
+
+    return self.resolved.find(placement.path + "[]") is not None
+
+That is *"did the resolver absorb this element's members under `x[]`"*
+standing in for *"is this member a run"*. The two agree for every
+non-recursive element, which is why nothing had ever caught it. They come
+apart on a struct that names itself: absorbing a recursive element's
+members would not terminate, so the resolver correctly emits none -- and
+the proxy then answered "not an array" for `node children[count]`,
+routing a run to the single-nested-struct path. The header called a span
+nothing defined.
+
+**Replacing the proxy outright was wrong, and the suite said so in 25
+places.** `dnsname`, `netlink`, `ipv6ext` and `edges` have members that
+satisfy "has a count or a length field" and are single nested structs to
+the resolver, so asking the placement instead routed them to the run path
+and their `_view` helpers stopped being emitted. The resolver's answer is
+kept and the placement is asked only where the resolver cannot have one,
+which is the self-referencing case and nothing else. **A proxy that is
+wrong in one case is not a proxy to throw away** -- 26.5's rule says ask
+the object you mean, and the object here is "is it a run", which the
+resolver answers correctly everywhere it can answer at all.
+
+**What the depth buys, measured by running it.** The extent carries a
+depth and the run's span passes `depth + 1u` down, so nesting is bounded
+by the schema rather than by the message's length:
+
+    levels= 1  bytes=  3  extent=  3  whole
+    levels=31  bytes= 93  extent= 93  whole
+    levels=32  bytes= 96  extent= 96  whole
+    levels=40  bytes=120  extent= 96  SHORT (bounded)
+
+Without it a hostile message nests as deep as its own bytes allow -- for
+a three-byte node, a 64 KB message is 21845 frames -- and 20.1's
+"bounded stack" is what the bound is for.
+
+**At the limit the extent answers zero, which is a short answer and not a
+refusal**, and 26.113 is right that a limit folded into an answer
+produces wrong values indistinguishable from right ones. `extent` returns
+a length and has no error channel. So the refusal belongs in `validate`,
+and this is a stack backstop -- safe for the reason a text number's
+`_value` is safe: a validated frame never reaches it. **That is 26.271's
+bargain reached independently by a different route on the same feature.**
+
+**And two forward declarations, because no order exists.** `extent` calls
+the run's span and the span calls `extent` back. Every other struct in
+this compiler is emitted in containment order; a cycle has none, and a
+prototype is what C has for that.
+
+**The verify half was openmlx4's, and the crash was its smaller part.**
+`situc verify` caught every exception from the generated module and
+rendered it as "does not conform ... from an implementation that is not
+this schema". An `AttributeError` for an extent the Python backend does
+not emit is situc failing, and telling a reader their bytes are wrong
+sends them to their bytes -- where they went, for two probes, before
+doubting the compiler. It renders as a compiler fault now, in the summary
+line as well as the body, because the summary is what a CI log keeps.
+
+**Three mistakes in the fixing, each caught by something already here.**
+
+- The refusal base was imported at the top of `verify.py`, and `_module`
+  builds a *fresh* `situ_runtime` per call -- so the class is a different
+  object and `isinstance` was always false, turning every honest refusal
+  into "situc failed". The control test beside the new one caught it, and
+  it existed only because separating two verdicts is worth nothing unless
+  the other still reads correctly.
+- `broke` was added *between* `refusal` and `mismatches` in a dataclass,
+  silently reassigning every positional `Outcome(case, text, mismatches)`
+  in the file. Four verify tests went red for a reason unrelated to what
+  was being changed. It is the last field now, and says why.
+- The guard on documented make targets refused **this section** for
+  quoting another project's target. A sweep finds its own report, and the
+  fix is the prose rather than the guard.
+
+**And the docstring in `test_recursion.py` claimed verify worked while
+nothing in the file called it.** openmlx4 found that by using it. An
+untested claim in a docstring is a signal with no artifact, and it
+reached HEAD because the sentence was easier to write than the call.
 
 ## 27. Questions, and how they were settled
 

@@ -328,6 +328,7 @@ class Emitter:
 		lines.extend(self._size_constants(struct))
 		lines.extend(self._tag_constants(struct))
 		lines.extend(self._view_acquisition(struct))
+		lines.extend(self._recursive_prototypes(struct))
 
 		for entry in struct.entries:
 			lines.extend(self._explained(struct, entry))
@@ -2800,7 +2801,40 @@ class Emitter:
 		return f"situ_in_bounds({held}, {base}, {bytes_}u)"
 
 	def _is_array(self, placement: Placement) -> bool:
-		return self.resolved.find(placement.path + "[]") is not None
+		"""Whether this member is a run of elements rather than one nested
+		struct.
+
+		**Asked of the placement, not of the resolved table.** This used to
+		be `self.resolved.find(placement.path + "[]") is not None` -- whether
+		the resolver had absorbed the element's members under `x[]` -- which
+		is a property of the resolver's output standing in for a property of
+		the schema. The two agree for every non-recursive element, which is
+		why the corpus could not tell them apart.
+
+		They come apart on a struct that names itself (0054). Absorbing a
+		recursive element's members would not terminate, so the resolver
+		correctly emits none -- and the proxy then answered "not an array"
+		for `node children[count]`, routing a run to the single-nested-struct
+		path. The header called a span nothing defined.
+
+		**The resolver's answer is kept and the placement is asked only where
+		it cannot have one.** Replacing the proxy outright was wrong and the
+		suite said so in 25 places: `dnsname`, `netlink`, `ipv6ext` and
+		`edges` have members that satisfy "has a count or a length field"
+		and are single nested structs to the resolver, so widening this
+		routed them to the run path and their `_view` helpers stopped being
+		emitted.
+
+		A self-referencing element is the one case where the resolver has no
+		answer to defer to -- absorbing its members would not terminate -- so
+		that is the only case this adds.
+		"""
+		if self.resolved.find(placement.path + "[]") is not None:
+			return True
+		return (self._recursive(placement.type_name or "")
+		        and (placement.array_count is not None
+		             or placement.sized_by is not None
+		             or data_sized(placement)))
 
 	def _base_expression(self, struct: ResolvedStruct, placement: Placement,
 			gated: bool = False) -> str:
@@ -2888,6 +2922,64 @@ class Emitter:
 		        and placement.sized_by is None
 		        and placement.type_name in self.structs)
 
+	def _recursive(self, name: str) -> bool:
+		"""Whether this struct names itself (0054).
+
+		Its extent calls its own run's span and that span calls the extent
+		back, so two things follow that no other struct needs: the pair has
+		to be forward-declared, since no emission order puts both above the
+		other; and the recursion has to carry a depth, or a hostile message
+		nests as deep as its own length allows.
+		"""
+		struct = self.resolved.structs.get(name)
+		return struct is not None and any(
+			entry.placement.type_name == name for entry in struct.entries)
+
+	def _depth_limit(self, name: str) -> int:
+		"""How deep this build follows the recursion before answering zero.
+
+		`[limit]` where the schema states one and `[depth]` otherwise --
+		`check_depth_bounds` has already refused a limit above the depth, so
+		the format's own bound is the ceiling either way.
+		"""
+		found: dict[str, int] = {}
+		for decl in self.schema.structs():
+			if decl.name != name:
+				continue
+			for attr in decl.attrs:
+				if attr.name in ("depth", "limit") \
+						and isinstance(attr.value, ast.IntLiteral):
+					found[attr.name] = attr.value.value
+		return found.get("limit", found.get("depth", 1))
+
+	def _recursive_prototypes(self, struct: ResolvedStruct) -> list[str]:
+		"""Forward declarations for a struct that names itself.
+
+		`extent` calls the run's span and the span calls `extent` back on
+		each element. There is no order that puts both above the other, which
+		is what a prototype is for -- and without them the header does not
+		compile: an implicit declaration and a conflicting type, which is
+		what `build` refused rather than emitting while 0054 was half built.
+		"""
+		if not self._recursive(struct.name):
+			return []
+		name  = ident(self.prefix, struct.name, "extent")
+		limit = self._depth_limit(struct.name)
+		return [
+			"",
+			f"/* `{struct.name}` names itself, so its extent and the span of",
+			" * the run holding it call each other. No emission order puts",
+			" * both above the other, which is what these are for.",
+			" *",
+			f" * The `_at` form carries the depth, bounded by {limit} rather",
+			" * than by the message's own length: a hostile message would",
+			" * otherwise nest as deep as its bytes allow, and 20.1 promises",
+			" * generated code has a bounded stack. */",
+			f"static inline uint32_t {name}(situ_view_t view);",
+			f"static inline uint32_t {name}_at(situ_view_t view,"
+			" uint32_t depth);",
+		]
+
 	def _struct_extent(self, struct: ResolvedStruct) -> list[str]:
 		"""How many bytes one instance of a variable struct occupies.
 
@@ -2914,22 +3006,53 @@ class Emitter:
 				return []
 			terms.append(self._length_expression(struct, placement))
 
-		lines = [
+		name = ident(self.prefix, struct.name, "extent")
+		head = [
 			"",
 			f"/* How many bytes one `{struct.name}` occupies at this view's base.",
 			" *",
 			" * A run of these is walked rather than indexed, and the walk needs",
 			" * to know where each one ends. For a struct whose own members are",
 			" * delimited that is a scan, not a constant. */",
-			f"static inline uint32_t {ident(self.prefix, struct.name, 'extent')}"
-			"(situ_view_t view)",
-			"{",
-			f"\tuint32_t extent = {constant}u;",
 		]
-		lines.extend(f"\textent = extent + ({term});" for term in terms)
-		if not terms:
-			lines.append("\t(void)view;")
-		lines.extend(["\treturn extent;", "}"])
+
+		if not self._recursive(struct.name):
+			lines = [*head, f"static inline uint32_t {name}(situ_view_t view)",
+			         "{", f"\tuint32_t extent = {constant}u;"]
+			lines.extend(f"\textent = extent + ({term});" for term in terms)
+			if not terms:
+				lines.append("\t(void)view;")
+			lines.extend(["\treturn extent;", "}"])
+			return lines
+
+		# A struct that names itself. The body carries the depth so the
+		# recursion is bounded by the schema rather than by the message's
+		# length, and the plain form is the entry point at zero.
+		#
+		# **At the limit this answers zero, which stops the walk rather than
+		# refusing**, and 26.113 is right that a limit folded into an answer
+		# produces wrong values indistinguishable from right ones. `extent`
+		# returns a length and has no error channel, so the refusal lives in
+		# `validate` and this is a stack backstop -- safe for the reason a
+		# text number's `_value` is safe: a validated frame never reaches it,
+		# and an unvalidated one reads short, which is the bargain every
+		# accessor here makes with the bounds check it did not do.
+		limit = self._depth_limit(struct.name)
+		deep  = [self._length_expression(struct, placement, depth="depth")
+		         for placement in variable]
+		lines = [*head,
+		         f"static inline uint32_t {name}_at(situ_view_t view,"
+		         " uint32_t depth)",
+		         "{",
+		         f"\tuint32_t extent = {constant}u;",
+		         "",
+		         f"\tif (depth >= {limit}u) {{",
+		         "\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
+		         "\t}"]
+		lines.extend(f"\textent = extent + ({term});" for term in deep)
+		lines.extend(["\treturn extent;", "}", "",
+		              f"static inline uint32_t {name}(situ_view_t view)",
+		              "{", f"\treturn {name}_at(view, 0u);", "}"])
 		return lines
 
 	def _required(self, struct: ResolvedStruct) -> list[str]:
@@ -4984,7 +5107,8 @@ class Emitter:
 		return chain
 
 	def _length_expression(self, struct: ResolvedStruct, placement: Placement,
-			held: str = "view", running: str | None = None) -> str:
+			held: str = "view", running: str | None = None,
+			depth: str | None = None) -> str:
 		"""The length a caller sees, clamped to `[size = N]` where one is.
 
 		A pinned member holds N bytes whatever the length field says, so a
@@ -4996,14 +5120,16 @@ class Emitter:
 		there are four of them per backend and the differential found the
 		one that was missed (0039).
 		"""
-		found = self._raw_length_expression(struct, placement, held, running)
+		found = self._raw_length_expression(struct, placement, held,
+		                                    running, depth)
 		pin   = pinned_bytes(placement)
 		if pin is None or found is None:
 			return found
 		return f"situ_min_u32({found}, {pin}u)"
 
 	def _raw_length_expression(self, struct: ResolvedStruct, placement: Placement,
-			held: str = "view", running: str | None = None) -> str:
+			held: str = "view", running: str | None = None,
+			depth: str | None = None) -> str:
 		"""How many bytes a variable-length member occupies, at runtime.
 
 		`held` names the view in scope, which is `gate.view` inside a sealed
@@ -5024,6 +5150,10 @@ class Emitter:
 			# run's is its elements.
 			local = c_name(self._local(struct, placement))
 			span  = ident(self.prefix, struct.name, local, "span")
+			# Inside a recursive struct's `_at` body the span carries the
+			# depth on, or the counter restarts one level down and bounds
+			# nothing -- 26.112's "a bound with a public entry point that
+			# restarts it is not a bound", met in a generator.
 			# `running` is the offset a caller accumulating them already has.
 			# Without it `_span` re-resolves the base by rescanning every
 			# member before this one, so a loop over M members costs M^2
@@ -5036,8 +5166,10 @@ class Emitter:
 			# and the exception cost a full rescan of everything before the
 			# run on every accumulating pass over it.
 			if running is not None:
-				return f"{span}_from({held}, {running})"
-			return f"{span}({held})"
+				return (f"{span}_from({held}, {running})" if depth is None
+				        else f"{span}_from_at({held}, {running}, {depth})")
+			return (f"{span}({held})" if depth is None
+			        else f"{span}_at({held}, {depth})")
 
 		# A nested struct with no single size. Its own `_extent` needs a view
 		# positioned at the member, which is not something an expression can
@@ -5499,7 +5631,9 @@ class Emitter:
 				" (26.46). */",
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'span')}_from"
-				"(situ_view_t view, uint32_t start)",
+				+ ("(situ_view_t view, uint32_t start)"
+				   if not self._recursive(nested or "") else
+				   "_at(situ_view_t view, uint32_t start, uint32_t depth)"),
 				"{",
 				"\tuint32_t at = start;",
 				"\tuint32_t n  = 0u;",
@@ -5512,7 +5646,10 @@ class Emitter:
 				" != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
-				f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}(element);",
+				(f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}"
+				 "(element);" if not self._recursive(nested or "") else
+				 f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}"
+				 "_at(element, depth + 1u);"),
 				"\t\tif (size == 0u || at + size > view.limit) {",
 				"\t\t\tbreak;",
 				"\t\t}",
@@ -5521,13 +5658,38 @@ class Emitter:
 				"\t}",
 				"\treturn at - start;",
 				"}",
+			])
+			span_name = ident(self.prefix, struct.name, local, "span")
+			if not self._recursive(nested or ""):
+				lines.extend([
+					"",
+					f"static inline uint32_t {span_name}(situ_view_t view)",
+					"{",
+					f"\treturn {span_name}_from(view, {base});",
+					"}",
+				])
+				return lines
+			# The element names itself, so the walk descends and the depth
+			# travels with it. Four entry points rather than two: the `_at`
+			# forms carry the counter, and the plain ones start it at zero
+			# for a caller who has no business knowing it exists.
+			lines.extend([
 				"",
-				f"static inline uint32_t "
-				f"{ident(self.prefix, struct.name, local, 'span')}"
-				"(situ_view_t view)",
+				f"static inline uint32_t {span_name}_from"
+				"(situ_view_t view, uint32_t start)",
 				"{",
-				f"\treturn {ident(self.prefix, struct.name, local, 'span')}_from"
-				f"(view, {base});",
+				f"\treturn {span_name}_from_at(view, start, 0u);",
+				"}",
+				"",
+				f"static inline uint32_t {span_name}_at"
+				"(situ_view_t view, uint32_t depth)",
+				"{",
+				f"\treturn {span_name}_from_at(view, {base}, depth);",
+				"}",
+				"",
+				f"static inline uint32_t {span_name}(situ_view_t view)",
+				"{",
+				f"\treturn {span_name}_from_at(view, {base}, 0u);",
 				"}",
 			])
 			return lines

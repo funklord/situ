@@ -12,12 +12,20 @@ died in `Scope.narrow` at Python's recursion limit. One guard stops it, and
 the placeholder it returns is a variable-length nested member, which every
 backend already understands.
 
-**Describable is not generable, and that line is tested here too.** `map`,
-`wire` and `verify` are correct for a recursive type; `build` refuses one,
-because every backend would emit an `extent` that calls itself -- run-time
-recursion in generated code that 20.1 promises has none, with neither
-`depth` nor `limit` enforced anywhere. A header that does not compile is
-worse than a refusal (26.69).
+**The C backend generates for one; the other three do not yet.** Its extent
+carries a depth and stops at the declared bound, so the recursion is bounded
+by the schema rather than by the message's own length -- which is what 20.1's
+"bounded stack" needs. `build` refuses the other three targets by name.
+
+**And the claim about `verify` in this docstring was wrong for a day.** It
+said "map, wire and verify are correct for a recursive type" while nothing in
+this file called `verify` -- it imported `solve`, `parse_text` and `resolve`
+and nothing else. openmlx4 found the gap by using it: a recursive *located*
+member crashed the Python backend, and `verify` rendered the crash as "does
+not conform ... from an implementation that is not this schema", which sent
+them to their own bytes for two probes. An untested claim in a docstring is
+the same shape as a signal with no artifact, and it reached HEAD because the
+sentence was easier to write than the call.
 """
 
 from __future__ import annotations
@@ -26,7 +34,11 @@ import pytest
 
 from situc.diagnostics import SituError
 from situc.layout import solve
-from situc.parser import parse_text
+import shutil
+import subprocess
+from pathlib import Path
+
+from situc.parser import parse, parse_text
 from situc.resolve import resolve
 
 PREAMBLE = "target buffer;\nendian big;\n"
@@ -36,6 +48,20 @@ NODE = ("struct node [depth = 32] {\n"
         "\tu16  count;\n"
         "\tnode children[count];\n"
         "}\n")
+
+
+def _verify(schema: Path, vectors: Path) -> str:
+	"""What `situc verify` would print, without going through the CLI."""
+	from situc import verify as verify_mod
+	from situc.diagnostics import Source
+
+	source   = Source(str(schema), schema.read_text(encoding="ascii"))
+	parsed   = parse(source)
+	resolved = resolve(parsed, solve(parsed))
+	found    = verify_mod.check(
+		parsed, resolved, schema.stem,
+		Source(str(vectors), vectors.read_text(encoding="ascii")))
+	return verify_mod.render(found, str(schema), str(vectors))
 
 
 def layout(body: str):
@@ -106,7 +132,7 @@ def test_a_limit_without_a_depth_is_refused() -> None:
 		layout("struct s [limit = 4] { u8 a; }\n")
 
 
-def test_a_recursive_type_is_described_but_not_generated() -> None:
+def test_only_c_generates_for_a_recursive_type_so_far() -> None:
 	"""The line this phase draws, and the refusal names which half works.
 
 	Every backend would emit an `extent` that calls itself. In C that does not
@@ -124,5 +150,132 @@ def test_a_recursive_type_is_described_but_not_generated() -> None:
 
 		assert main(["map", str(path)]) == 0
 		assert main(["wire", str(path)]) == 0
-		assert main(["build", str(path), "--target", "c",
-		             "--out", tmp]) != 0
+		# C generates for one: its extent carries a depth and stops at the
+		# declared bound, so the recursion is bounded by the schema rather
+		# than by the message's own length.
+		assert main(["build", str(path), "--target", "c", "--out", tmp]) == 0
+		# The other three do not yet, and say so rather than emitting a
+		# header that does not compile (26.69).
+		for target in ("cpp", "rust", "python"):
+			assert main(["build", str(path), "--target", target,
+			             "--out", tmp]) != 0, target
+
+
+def test_verify_reports_a_compiler_fault_as_one(tmp_path: Path) -> None:
+	"""The crash is the smaller half; the verdict is the bug.
+
+	`verify` caught every exception from the generated module and rendered it
+	as "does not conform ... from an implementation that is not this schema".
+	An `AttributeError` from a construct the Python backend does not emit is
+	situc failing, and telling a reader their bytes are wrong sends them to
+	the bytes -- which is where openmlx4 went, for two probes, before doubting
+	the compiler.
+
+	A recursive *located* member is the case that produces it. Pinned on the
+	rendering rather than on the crash, because the crash is a gap that will
+	close and the rendering is a rule that must not.
+	"""
+	schema = tmp_path / "chain.situ"
+	schema.write_text(PREAMBLE + "struct hdr { u32 size; u32 next; }\n"
+	                  "struct chain [depth = 8] {\n"
+	                  "\thdr   head;\n"
+	                  "\tu8    data[head.size];\n"
+	                  "\tchain following at head.next;\n"
+	                  "}\n", encoding="ascii")
+	vectors = tmp_path / "chain.vectors"
+	vectors.write_text("chain one 00 00 00 00 00 00 00 00\n", encoding="ascii")
+
+	text = _verify(schema, vectors)
+	assert "situc failed" in text, text
+	assert "not a verdict on the bytes" in text, text
+	assert "does not conform" not in text, text
+
+
+def test_verify_still_calls_a_refusal_a_refusal(tmp_path: Path) -> None:
+	"""The control on the test above: separating a compiler fault from a
+	verdict is only worth anything if a verdict still reads as one. Without
+	this, renaming every failure "situc failed" would pass."""
+	schema = tmp_path / "s.situ"
+	schema.write_text(PREAMBLE + "struct s { u8 v [must_eq = 7]; }\n",
+	                  encoding="ascii")
+	vectors = tmp_path / "s.vectors"
+	vectors.write_text("s wrong 09\n", encoding="ascii")
+
+	text = _verify(schema, vectors)
+	assert "does not conform" in text, text
+	assert "situc failed" not in text, text
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")
+def test_the_generated_c_bounds_the_recursion_by_the_schema(
+		tmp_path: Path) -> None:
+	"""Compiled and run, because the point of the depth is what it does at
+	run time and a header that merely compiles proves nothing about that.
+
+	Nesting up to the declared depth measures whole; past it the extent stops
+	at the bound rather than following the message. That is what 20.1's
+	bounded stack means for a type whose nesting the data decides -- without
+	it a hostile message nests as deep as its own bytes allow.
+
+	The extent answers a short length rather than an error because it returns
+	a length and has no error channel; `validate` is where the refusal
+	belongs. A test that only checked the short answer would pass against a
+	generator that had lost the recursion entirely, so both sides of the
+	bound are asserted.
+	"""
+	from situc.cli import main
+
+	schema = tmp_path / "r.situ"
+	schema.write_text(PREAMBLE + NODE, encoding="ascii")
+	assert main(["build", str(schema), "--target", "c",
+	             "--out", str(tmp_path)]) == 0
+
+	(tmp_path / "main.c").write_text('''#include <stdio.h>
+#include "r.h"
+static uint32_t build(uint8_t *buf, uint32_t levels)
+{
+	uint32_t i;
+	for (i = 0; i < levels; i++) {
+		buf[i * 3u]      = (uint8_t)i;
+		buf[i * 3u + 1u] = 0u;
+		buf[i * 3u + 2u] = (uint8_t)(i + 1u < levels ? 1u : 0u);
+	}
+	return levels * 3u;
+}
+int main(void)
+{
+	uint8_t buf[4096];
+	uint32_t want[] = { 1u, 31u, 32u, 64u };
+	unsigned k;
+	for (k = 0; k < 4u; k++) {
+		situ_msg_t msg; situ_view_t view;
+		uint32_t used = build(buf, want[k]);
+		situ_msg_init(&msg, buf, used);
+		if (situ_node_view(&msg, 0u, used, &view) != SITU_OK) { return 1; }
+		printf("%u %u\\n", used, situ_node_extent(view));
+	}
+	return 0;
+}
+''', encoding="ascii")
+
+	runtime = Path(__file__).resolve().parents[2] / "runtime" / "c"
+	built = subprocess.run(
+		["gcc", "-std=c11", "-Os", "-Wall", "-Wextra", "-Werror",
+		 "-Wconversion", "-Wsign-conversion", f"-I{runtime}", f"-I{tmp_path}",
+		 str(tmp_path / "main.c"), str(tmp_path / "r.c"),
+		 str(runtime / "situ.c"), "-o", str(tmp_path / "r")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "r")], capture_output=True, text=True)
+	assert ran.returncode == 0, ran.stderr
+	rows = [tuple(int(n) for n in line.split())
+	        for line in ran.stdout.split("\n") if line]
+	assert len(rows) == 4, ran.stdout
+
+	# Inside the declared 32, the extent is the whole chain.
+	for used, extent in rows[:3]:
+		assert extent == used, rows
+	# Past it, the extent stops at the bound: 32 levels of three bytes.
+	used, extent = rows[3]
+	assert used == 192 and extent == 96, rows

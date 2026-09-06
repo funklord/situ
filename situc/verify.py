@@ -73,6 +73,17 @@ class Outcome:
 	#: because it qualifies what conforming means rather than the vector.
 	unwalked: tuple[str, ...] = ()
 
+	#: True where situc itself failed rather than the vector being refused.
+	#: Rendered as a compiler fault, because a reader told that their bytes
+	#: do not conform goes and looks at their bytes.
+	#:
+	#: **Last, and that is not cosmetic.** Added between `refusal` and
+	#: `mismatches` it silently reassigned every positional `Outcome(case,
+	#: text, mismatches)` in this file -- the mismatch list landed in a bool
+	#: and the count string in `refusal` -- and four verify tests went red
+	#: for a reason that had nothing to do with what was being changed.
+	broke: bool = False
+
 	@property
 	def ok(self) -> bool:
 		return self.refusal is None
@@ -112,6 +123,14 @@ def _module(schema: ast.Schema, resolved: ResolvedSchema, name: str) -> object:
 		built = types.ModuleType(name)
 		exec(generate_py.generate(schema, resolved, name).module,   # noqa: S102
 		     built.__dict__)
+		# The base of every refusal the generated module can raise, taken
+		# from the runtime just built rather than from an import here. A
+		# fresh `situ_runtime` is made per call, so a class imported at the
+		# top of this file is a different object and `isinstance` against it
+		# is always false -- which silently turned every honest refusal into
+		# "situc failed". Caught by the control beside the test for that
+		# rendering, which is the only reason it is not shipped.
+		built.__situ_refusal__ = runtime.SituError    # type: ignore[attr-defined]
 		return built
 	finally:
 		del sys.modules["situ_runtime"]
@@ -169,8 +188,22 @@ def _outcome(module: object, resolved: ResolvedSchema, macros: dict[str, int],
 		                 len(case.data)))
 		view.validate()
 	except Exception as refused:                        # noqa: BLE001
+		# A refusal by the generated module is a verdict about the vector,
+		# which is what this function exists to report. Anything else is
+		# situc failing, and reporting THAT as "does not conform ... from an
+		# implementation that is not this schema" tells a reader their bytes
+		# are wrong when the compiler is.
+		#
+		# openmlx4 met it on a recursive located member -- an AttributeError
+		# for an extent the Python backend does not emit -- and spent two
+		# probes doubting their own vector first. That is the cost of a red
+		# result that is not about the thing it names, and the crash was the
+		# smaller half of the bug.
+		if isinstance(refused, getattr(module, "__situ_refusal__", ())):
+			return Outcome(case, f"{type(refused).__name__}: {refused}",
+			               unwalked=unwalked)
 		return Outcome(case, f"{type(refused).__name__}: {refused}",
-		               unwalked=unwalked)
+		               unwalked=unwalked, broke=True)
 
 	surplus = _surplus(held, struct, case.data)
 	if surplus is not None:
@@ -449,6 +482,22 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 
 	lines = []
 	for one in failed:
+		if one.broke:
+			# situc failed. Saying "does not conform" here would send a
+			# reader to their own bytes, and openmlx4 went there first for
+			# two probes before doubting the compiler.
+			lines.append(f"error: situc failed while checking "
+			             f"{one.case.struct} `{one.case.name}`")
+			lines.append(f"   --> {vectors_path}:{one.case.line}")
+			lines.append(f"    = {one.refusal}")
+			lines.append("    = this is a fault in situc, not a verdict on "
+			             "the bytes -- the vector may be perfectly good")
+			lines.append("    = a construct no backend generates for reaches "
+			             "here as an ordinary error; the known case is a "
+			             "recursive type (0054), which `situc build` refuses "
+			             "by name")
+			lines.append("")
+			continue
 		lines.append(f"error: {one.case.struct} `{one.case.name}` does not "
 		             f"conform")
 		lines.append(f"   --> {vectors_path}:{one.case.line}")
@@ -465,8 +514,20 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 	arrays = list(dict.fromkeys(one for outcome in found
 	                            for one in outcome.unwalked))
 
+	broke = [one for one in failed if one.broke]
+
 	if not found:
 		lines.append(f"situc: {vectors_path} holds no vectors")
+	elif broke:
+		# The summary is the line a CI log keeps, so it must not say
+		# "do not conform" about vectors situc never managed to check. A
+		# reader who greps for that phrase and finds it goes to the bytes.
+		refused = len(failed) - len(broke)
+		said    = (f"situc: failed on {len(broke)} of {len(found)} vectors "
+		           f"against {schema_path}")
+		if refused:
+			said += f"; {refused} more do not conform"
+		lines.append(said)
 	elif failed:
 		lines.append(f"situc: {len(failed)} of {len(found)} vectors do not "
 		             f"conform to {schema_path}")

@@ -595,22 +595,25 @@ def cmd_build(args: argparse.Namespace) -> int:
 	recursive = sorted(
 		name for name, struct in resolved.structs.items()
 		if any(entry.placement.type_name == name for entry in struct.entries))
-	if recursive:
+	if recursive and args.target != "c":
 		from situc.diagnostics import error
 
 		named = ", ".join(f"`{name}`" for name in recursive)
 		raise error(
-			f"no accessors yet for a recursive type: {named}",
+			f"no accessors yet in {args.target} for a recursive type:"
+			f" {named}",
 			resolved.structs[recursive[0]].layout.span,
 			label = "declared here",
-			notes = ["`[depth]` makes a recursive type describable, and "
-			         "`situc map`, `wire` and `verify` are correct for one",
-			         "code generation is not: every backend would emit an "
-			         "`extent` that calls itself, which section 20.1 promises "
-			         "generated code does not do, and neither `depth` nor "
-			         "`limit` is enforced anywhere yet",
-			         "the specification path works today -- commit the map "
-			         "and the wire contract and check them in CI"])
+			notes = ["`--target c` generates for one: its extent carries "
+			         "a depth and stops at the declared bound, so the "
+			         "recursion is bounded by the schema rather than by the "
+			         "message's own length (20.1)",
+			         "this backend would emit an `extent` that calls itself "
+			         "with nothing bounding it, so it is refused rather than "
+			         "emitted",
+			         "the specification path works for every target -- "
+			         "commit the map and the wire contract and check them "
+			         "in CI"])
 
 	files: dict[str, str]
 	warnings: list[Diagnostic]
