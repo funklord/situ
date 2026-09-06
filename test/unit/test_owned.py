@@ -5,6 +5,15 @@ is gone, so the claim it makes is narrow and checkable: **decode then encode
 returns the bytes you started with**. Anything that gets a field's offset,
 width, byte order or sign wrong breaks that, and breaks it visibly.
 
+**And that claim is not sufficient, which this file learned the expensive
+way.** A round trip catches a conversion applied on one side only. It cannot
+catch one dropped from *both* sides: BCD was absent from `_read` and from
+`_write` together, so decode-then-encode was byte-identical, `decode`
+returned SITU_OK, and the struct held 8215-9-40 for bytes the view read as
+2017-9-28. Self-consistent and wrong together. The test that catches it
+compares the owned value against the view accessor over the same bytes --
+the relationship rather than either side -- and it is below.
+
 Run against every example that has an ownable struct rather than a chosen
 one. Which schemas those are is not something anybody picked -- it is
 whatever the fixed-size rule admits -- so the coverage moves with the tree
@@ -264,3 +273,100 @@ def test_a_variable_length_struct_is_refused_with_a_reason() -> None:
 	assert "arp_generic" in refused
 	assert "decided by the data" in refused["arp_generic"]
 	assert "arp_packet" not in refused
+
+
+def test_the_owned_value_is_the_view_s_value(tmp_path: Path) -> None:
+	"""The round trip cannot see a conversion dropped from both sides.
+
+	BCD was absent from the owned form's load *and* its store, so
+	decode-then-encode returned the input unchanged, `decode` reported
+	SITU_OK, and the struct held a different date from the one the bytes
+	spell. `example/rtc` is the schema in the tree with the property, and it
+	carries the bit-packed case as well as the byte-aligned one.
+
+	Asserted against the view accessor rather than against a literal, for the
+	reason `evidence.md` gives about pinning a relationship: the two are
+	generated from one schema and are supposed to agree, so a case where they
+	would disagree is the whole test. A literal would go stale the next time
+	the corpus moved and would say nothing about the pair.
+
+    Measured before the fix, on `20 17 09 28`:
+
+        view   2017-9-28
+        owned  8215-9-40
+        round  20 17 09 28  identical
+
+    with the month agreeing in both -- the same coincidence that let the
+    original defect reach a real card.
+	"""
+	if COMPILER is None:
+		pytest.skip("no C compiler")
+
+	path         = ROOT / "example" / "rtc" / "rtc.situ"
+	names, where = build(path, tmp_path)
+	assert "wall_clock" in names, names
+
+	driver = """#include <stdio.h>
+#include "rtc.h"
+#include "rtc_owned.h"
+
+int main(void)
+{
+	/* A valid BCD wall clock: 2026-09-06, Sunday, 12:34:56. */
+	uint8_t buf[7] = { 0x56u, 0x34u, 0x12u, 0x07u, 0x06u, 0x09u, 0x26u };
+	situ_msg_t msg;
+	situ_view_t view;
+	situ_wall_clock_t owned;
+	int bad = 0;
+
+	situ_msg_init(&msg, buf, sizeof buf);
+	if (situ_wall_clock_view(&msg, 0u, &view) != SITU_OK) {
+		printf("no view\\n");
+		return 1;
+	}
+	if (situ_wall_clock_validate(view) != SITU_OK) {
+		printf("fixture does not validate\\n");
+		return 1;
+	}
+	if (situ_wall_clock_decode(buf, sizeof buf, &owned) != SITU_OK) {
+		printf("decode refused\\n");
+		return 1;
+	}
+
+#define SAME(field) do { \\
+	unsigned v = (unsigned)situ_wall_clock_##field##_get(view); \\
+	unsigned o = (unsigned)owned.field; \\
+	printf("%-9s view=%u owned=%u %s\\n", #field, v, o, \\
+	       v == o ? "agree" : "DIFFER"); \\
+	if (v != o) { bad = 1; } \\
+} while (0)
+
+	SAME(seconds);
+	SAME(minutes);
+	SAME(hours);
+	SAME(weekday);
+	SAME(day);
+	SAME(month);
+	SAME(year);
+#undef SAME
+
+	return bad;
+}
+"""
+	(where / "vv.c").write_text(driver, encoding="ascii")
+
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{where}", f"-I{RUNTIME}",
+		 str(where / "vv.c"), str(where / "rtc.c"),
+		 str(where / "rtc_owned.c"), str(RUNTIME / "situ.c"),
+		 "-o", str(where / "vv")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(where / "vv")], capture_output=True, text=True)
+	# The fixture has to reach the comparison, not merely fail to disagree:
+	# a driver that refused the view would exit 1 and a driver whose macro
+	# never ran would exit 0 having compared nothing.
+	assert "DIFFER" not in ran.stdout, ran.stdout
+	assert ran.stdout.count("agree") == 7, ran.stdout
+	assert ran.returncode == 0, ran.stdout + ran.stderr

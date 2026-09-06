@@ -22308,6 +22308,67 @@ same mistake within the hour from the other direction, a `sed` pattern
 short by one space that printed "2 vectors conform" twice; two shapes,
 one lesson, and the only kind of corroboration that counts here.
 
+### 26.275 A round trip cannot see a conversion dropped from both sides
+
+openmlx4's `--owned` trial found the last of their three defects. The
+owned form emitted a raw load where the view accessor decodes, and its
+encode dropped the encode to match, so BCD was absent from both halves.
+Measured on `20 17 09 28`:
+
+    view   2017-9-28
+    decode rc=0
+    owned  8215-9-40
+    round  20 17 09 28  identical
+
+`grep -rn bcd situc/codegen/c/owned.py` matched nothing, which is a
+better statement of it than any description: the conversion was not
+wrong, it was **not there**, in both directions at once. The month reads
+9 either way, which is the same coincidence that let the original defect
+reach a real card.
+
+**The file's own claim was the thing that hid it.** `test_owned.py`
+opens by naming what the owned form promises -- "decode then encode
+returns the bytes you started with. Anything that gets a field's offset,
+width, byte order or sign wrong breaks that, and breaks it visibly" --
+and that sentence is true and insufficient in a way nothing about it
+announces. A round trip catches a conversion applied on one side only.
+It cannot catch one dropped from both, because the pair is then
+**self-consistent and wrong together** and the identity it asserts still
+holds. Sabotaged three ways, with the round-trip test the file calls its
+whole claim:
+
+    sabotage             relationship test   round-trip test
+    both halves          FAILS               24 passed -- blind
+    decode half only     FAILS               FAILS
+
+**So the round trip is not a weak test, it is a test of the wrong
+relation** -- it compares the owned form against itself, and 26.233's
+rule about a generator agreeing with itself is the same observation one
+layer along. What catches it compares the owned value against the *view*
+accessor over the same bytes: two descriptions of one schema that are
+supposed to agree, with a case where they would not.
+
+The generated file's own header states the principle that was broken,
+which is why openmlx4 quoted it: "Constraints are the view's to state
+and this reuses them rather than restating them: two checks of one
+schema is how they come to disagree." The constraints were reused. The
+representation conversion was restated, and that is where the two came
+to disagree.
+
+**Which makes this 26.274's shape a fourth time in one day** -- a
+conversion the accessor applies and the code beside it skips. Four
+instances now, in four different places: cpio's `[min = 70701]`
+comparing a text number's bits, Rust comparing a bcd bound against
+packed nibbles, three backends never asking `bcd_valid`, and this. The
+lens is worth keeping pointed: **wherever a value is stored in one
+encoding and read in another, the conversion and the check beside it are
+separate code paths, and only one of them is obviously about the
+encoding.**
+
+`--owned` is C-only by design and says so when asked for another target,
+so this is the one place it had to be fixed -- the first time this
+session that a defect of this shape did not have three siblings.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

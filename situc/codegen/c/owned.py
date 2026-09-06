@@ -140,7 +140,25 @@ def _ctype(placement: Placement, prefix: str, enums: Mapping[str, object]) -> st
 
 
 def _read(placement: Placement, prefix: str) -> str:
-	"""The expression that lifts one scalar out of `data`."""
+	"""The expression that lifts one scalar out of `data`.
+
+	BCD is the one representation where the bits and the value differ by
+	more than byte order, and the reason it is handled here rather than by
+	the caller is that it was not handled anywhere: this emitted a raw load
+	where the view accessor decodes, and its encode dropped the encode to
+	match, so the pair was **self-consistent and wrong together**. A
+	decode/encode round trip is byte-identical, `decode` returns SITU_OK,
+	and the struct holds a different date from the one the bytes spell.
+	Measured on `20 17 09 28`: the view read 2017-9-28 and the owned form
+	held 8215-9-40, with the month agreeing in both -- which is the same
+	coincidence that let the original defect reach a card.
+
+	Reported by openmlx4, whose `--owned` trial found it. The generated
+	file's own header states the principle it broke: "Constraints are the
+	view's to state and this reuses them rather than restating them: two
+	checks of one schema is how they come to disagree." The constraints
+	were reused; the representation conversion was restated.
+	"""
 	scalar = placement.scalar
 	assert scalar is not None and placement.offset_bits is not None
 
@@ -151,14 +169,17 @@ def _read(placement: Placement, prefix: str) -> str:
 		# Bit-packed: the runtime's extractor takes a bit offset and a width,
 		# and the bit order is the schema's rather than the host's.
 		order = "msb" if placement.bit_order is ast.BitOrder.MSB_FIRST else "lsb"
-		return (f"(uint{width}_t)situ_bits_get_{order}(data, "
-		        f"{placement.offset_bits}u, {scalar.bits}u)")
+		raw = (f"(uint{width}_t)situ_bits_get_{order}(data, "
+		       f"{placement.offset_bits}u, {scalar.bits}u)")
+	elif scalar.bits == 8:
+		raw = f"data[{offset}u]"
+	else:
+		end = "le" if placement.endian is ast.Endian.LITTLE else "be"
+		raw = f"situ_get_{end}{scalar.bits}(data + {offset}u)"
 
-	if scalar.bits == 8:
-		return f"data[{offset}u]"
-
-	end = "le" if placement.endian is ast.Endian.LITTLE else "be"
-	return f"situ_get_{end}{scalar.bits}(data + {offset}u)"
+	if scalar.is_bcd:
+		return f"situ_bcd_decode((uint64_t){raw}, {scalar.digits}u)"
+	return raw
 
 
 def _write(placement: Placement, prefix: str, value: str) -> list[str]:
@@ -167,6 +188,12 @@ def _write(placement: Placement, prefix: str, value: str) -> list[str]:
 	assert scalar is not None and placement.offset_bits is not None
 
 	offset = placement.offset_bits // BITS_PER_BYTE
+
+	# The other half of `_read`'s conversion, and it has to move with it:
+	# dropping only one would turn a pair that is self-consistent and wrong
+	# into a round trip that corrupts, which is worse in a different way.
+	if scalar.is_bcd:
+		value = f"situ_bcd_encode((uint64_t){value}, {scalar.digits}u)"
 
 	if placement.offset_bits % BITS_PER_BYTE or scalar.bits not in WORD_WIDTHS:
 		order = "msb" if placement.bit_order is ast.BitOrder.MSB_FIRST else "lsb"
