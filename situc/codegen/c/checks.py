@@ -1144,7 +1144,7 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 	# it had the same gap in the same place.
 	if placement.array_count is not None or placement.sized_by is not None \
 			or data_sized(placement):
-		_array_checks(suite, struct, entry, prefix, extent)
+		_array_checks(suite, resolved, struct, entry, prefix, extent)
 		return		# no scalar accessor; the elements are what there is to check
 	if placement.scalar is None:
 		# Only where a sub-view was emitted. A nested struct whose own extent
@@ -1395,7 +1395,8 @@ def _nested_placement_check(suite: Suite, resolved: ResolvedSchema,
 		 " * zero. Only this says where the parent actually puts it. */"])
 
 
-def _array_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+def _array_checks(suite: Suite, resolved: ResolvedSchema,
+		struct: ResolvedStruct, entry: Resolved,
 		prefix: str, extent: int) -> None:
 	"""Element addressing: the stride, and the bound.
 
@@ -1451,6 +1452,23 @@ def _array_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 
 	nested = resolve_element_struct(placement)
 	if nested is None:
+		return
+
+	# The stride is `SIZE_FIXED`, and that macro is emitted only for a struct
+	# that has one -- `_size_constants` withholds it from a variable-length
+	# element deliberately, because "pretending otherwise would hand a caller
+	# a number that is wrong for every message but the shortest". An array of
+	# such elements reached here and named the macro anyway, so `gen-checks`
+	# emitted a suite that did not compile.
+	#
+	# The scalar branch above already guards its own version of this. This is
+	# the same question one type along, and the shape 26.262 records: an
+	# assertion about what the caller checked, where the caller checked
+	# something else.
+	element = resolved.structs.get(nested)
+	if element is None or not element.layout.is_fixed_size:
+		suite.skip(placement.path, f"has elements of `{nested}`, whose size "
+		           "the data decides, so there is no stride to measure")
 		return
 
 	at = ident(prefix, struct.name, local, "at")

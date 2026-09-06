@@ -22621,6 +22621,57 @@ whether these want the `namespace` that decision 0012 already provides.
 The second is the larger answer and the one that scales past six
 collisions.
 
+### 26.279 Three breakages in `make test-c`, stacked behind each other
+
+fmake reported that `test/generated/test_icmp.c` does not compile at
+HEAD, having driven `situc` over a `git archive` of `030880f`. It is
+right, and following it found two more behind it.
+
+**One: the committed test called a three-argument view.**
+`situ_icmp_message_view` takes `(msg, offset, length, out)` because
+`icmp_message` is variable-sized; the test passed three. Generated
+byte-identically at `4b2cf1a` and at HEAD -- same signature, same line
+number -- so it is not this session's, and `git log -S` dates the call to
+**2026-08-25**. Twelve days red.
+
+**Two, behind it and mine: a stride check naming a macro that is not
+emitted.** `edges_checks.c` referenced `SITU_PIECE_SIZE_FIXED`, and
+`_size_constants` withholds `SIZE_FIXED` from a variable-length struct
+deliberately -- "pretending otherwise would hand a caller a number that
+is wrong for every message but the shortest". `piece` is variable, and
+`_array_checks` named the macro anyway. The scalar branch three lines
+above already guards its own version of exactly this, which is 26.262's
+shape one type along: **an assertion about what the caller checked, where
+the caller checked something else.**
+
+**Three, behind that and not mine:** `gen-codec-tests` emits calls to
+`situ_internet_checksum_encode`, and `gen-derived` emits `_holed` and
+`_spans` for a `ones_complement` kernel and no `_encode`. Identical at
+base and HEAD. Left open: whether the signature over-claims or the
+generator under-emits is a question about the codec layer, not a typo.
+
+**What this is really about is which gate was being run.** The Python
+suite is 4667 tests and green throughout; `make test-c` builds the
+generated C and has been red since August. Nothing in the loop this
+session ran it, so a defect I introduced sat behind a defect somebody
+else introduced, and neither surfaced. That is *A check that runs only in
+CI is a check you have stopped running* with the roles moved: the check
+existed, ran locally, and simply was not in anybody's loop.
+
+**And the stacking is the part to carry.** A build that stops at the
+first error hides everything after it, so **the count of breakages is
+invisible until the first is fixed** -- three fixes deep, and only the
+second was findable by anything I was running. A red gate is not one
+failure; it is an unknown number of them, and the number cannot be read
+off the output.
+
+**The measurement that made this cheap** was not the fix but the
+attribution: `git archive` of the session's base commit into a scratch
+tree, generating the same header, and diffing the signature. Two of the
+three were settled that way in a minute each, without which the honest
+report would have been "something in here is broken and I do not know
+whose".
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

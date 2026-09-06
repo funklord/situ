@@ -73,7 +73,7 @@ static void open_reply(situ_msg_t *msg, situ_view_t *view, uint8_t *buf,
         uint32_t length)
 {
 	situ_msg_init(msg, buf, length);
-	assert_int_equal(situ_icmp_message_view(msg, 0, view), SITU_OK);
+	assert_int_equal(situ_icmp_message_view(msg, 0, length, view), SITU_OK);
 }
 
 static void test_a_real_reply_validates(void **state)
