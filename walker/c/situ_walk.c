@@ -580,7 +580,37 @@ static situ_walk_err ctx_load(void *raw, uint32_t index, int32_t base,
 	                                    ctx->shape, index, ctx->depth,
 	                                    &value);
 	if (err != SITU_WALK_OK) {
-		return err;
+		/* The lax half of a distinction every backend makes. C emits two
+		 * readers for a text number: `_get`, which returns an error when
+		 * the bytes are not digits, and `_value`, which cannot fail and
+		 * yields zero when they are not. An EXPRESSION calls `_value` --
+		 * a length is needed to place the next member whether or not the
+		 * field parsed -- and `validate` calls `_get`, which is where a
+		 * field that is not a number is called malformed.
+		 *
+		 * This read both through the strict one, so `example/cpio` over
+		 * bytes that are not hex digits refused the length and every
+		 * member after it: `110 refused refused refused refused` where
+		 * `walk.py` and the four backends say `110 0 2 0 0`.
+		 *
+		 * `walk.py` carried this same fault and its `_value_of` records
+		 * the fix; this walker is the second implementation of that
+		 * module and did not inherit it, which is 26.263's shape a third
+		 * time (26.271). */
+		situ_walk_placement held;
+
+		if (err != SITU_WALK_CONSTRAINT) {
+			return err;
+		}
+		if (situ_walk_placement_at(ctx->image, index, &held)
+		                != SITU_WALK_OK) {
+			return err;
+		}
+		if (held.radix == 0u) {
+			return err;
+		}
+		*out = 0;
+		return SITU_WALK_OK;
 	}
 	*out = (int64_t)value;
 	return SITU_WALK_OK;

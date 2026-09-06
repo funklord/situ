@@ -22036,6 +22036,54 @@ constraint there is no negative case to have a rule about.
 Both `n` values are asserted. A walker that answered 0 for everything
 would pass the negative case on its own.
 
+### 26.271 The strict reader where the lax one belongs, and two near-misses
+
+Every backend emits two readers for a text number, and the split is the
+point: `_get` returns an error when the bytes are not digits and is what
+`validate` calls; `_value` cannot fail, yields zero, and is what a LENGTH
+EXPRESSION calls -- the next member has to be placed whether or not the
+field parsed. C's generated cpio length is literally
+`situ_min_u32((uint32_t)situ_cpio_entry_header_namesize_value(view), ...)`.
+
+The C walker routed both through `parse_digits`, which returns
+`SITU_WALK_CONSTRAINT` for a non-digit, and that error propagates out of
+`situ_walk_eval` -- so a driver holding `ZZZZ` refused the length and
+every member after it went with it.
+
+**`walk.py` carried this and fixed it**, and its `_value_of` docstring is
+the specification: "The lax half of a distinction every backend makes and
+this walker did not... Reading both through the strict one made `edges`'
+`text_driver` answer BOUNDS over a buffer whose four digit bytes were
+`" 1\n4"`, where C sized `d[n]` at zero and said the message was fine."
+The C walker is the second implementation of that module and had not
+inherited it -- 26.263's shape a third time.
+
+**Two near-misses, and they are the reason this entry is worth its
+length.**
+
+The corpus row that prompted the whole investigation was measured on a
+buffer too short for the schema. cpio's header is 110 bytes and the sweep
+used 64, so `110 refused refused refused refused` was plain BOUNDS and
+had nothing to do with digits. **A comparison whose input cannot reach
+the construct reports a disagreement about something else**, and it reads
+exactly like the one you went looking for.
+
+Then, with a properly sized buffer, the two walkers agreed -- and the
+reading was taken with the patch already applied. Only the control
+separated them:
+
+    namesize = 00000006   without: both 110 6 0 0 0   with: unchanged
+    namesize = ZZZZZZZZ   without: py 110 0 2 0 0
+                                   c  refused x4     with: both agree
+
+**A fix is not established by the state after it**, and "they agree now"
+is a sentence about one measurement rather than two. The second reading
+cost one revert and one rebuild.
+
+The test asserts both digit strings. A walker that sized everything at
+zero would pass the bad one alone, and the valid case is what says the
+lax reader still reads.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

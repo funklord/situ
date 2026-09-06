@@ -478,6 +478,49 @@ def test_they_agree_about_an_endian_marker(tmp_path: Path) -> None:
 	assert c_markers(tmp_path, blob, big) == ["little=0", "refused"]
 
 
+_DIGITS_SCHEMA = """target buffer;
+endian big;
+
+struct s {
+	hex u32  n[4];
+	u8       body[n];
+	u16      tail;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_a_bad_digit_sizes_a_member_at_zero(
+		tmp_path: Path) -> None:
+	"""A text number has two readers, and an expression wants the lax one.
+
+	Every backend emits both: `_get` returns an error when the bytes are
+	not digits, and `_value` cannot fail and yields zero. A length
+	expression calls `_value` -- the next member has to be placed whether
+	or not the field parsed -- and `validate` calls `_get`, which is where
+	a field that is not a number is called malformed.
+
+	This walker read both through the strict one, so a driver holding
+	`ZZZZ` refused the length and every member after it went with it.
+	`walk.py` carried the same fault and its `_value_of` records the fix;
+	this is the second implementation of that module and had not inherited
+	it (26.271).
+
+	Both digit strings are asserted. A walker that sized everything at
+	zero would pass the bad one on its own -- and the valid case is what
+	says the lax reader still reads.
+	"""
+	blob = _inline_image(_DIGITS_SCHEMA)
+
+	good = b"0006" + b"aaaaaa" + b"\xbe\xef"
+	bad  = b"ZZZZ" + b"aaaaaa" + b"\xbe\xef"
+
+	assert python_widths(blob, good) == ["4", "6", "2"]
+	assert c_widths(tmp_path, blob, good) == ["4", "6", "2"]
+	assert python_widths(blob, bad) == ["4", "0", "2"]
+	assert c_widths(tmp_path, blob, bad) == ["4", "0", "2"]
+
+
 _NEGATIVE_SCHEMA = """target buffer;
 endian big;
 
