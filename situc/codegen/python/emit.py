@@ -40,6 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	depth_limit, is_recursive,
 	codec_entry_point, decode_counts_bits,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
@@ -3296,7 +3297,10 @@ class Emitter:
 
 		return [
 			"",
-			f"	def {name}_span_from(self, start: int,",
+			(f"	def {name}_span_from(self, start: int,"
+			 if not is_recursive(self.resolved.structs,
+			                     placement.type_name or "") else
+			 f"	def {name}_span_from_at(self, start: int, depth: int = 0,"),
 			"			count_only: bool = False) -> int:",
 			f'		"""The walk, from a base the caller already knows -- the'
 			' same',
@@ -3308,17 +3312,38 @@ class Emitter:
 			f"		while {stop}at < self._len:",
 			f"			element = {inner}(self._msg, self._at + at,"
 			" self._len - at)",
-			"			size    = element._extent",
+			("			size    = element._extent"
+			 if not is_recursive(self.resolved.structs,
+			                     placement.type_name or "") else
+			 "			size    = element._extent_at(depth + 1)"),
 			"			if size == 0 or at + size > self._len:",
 			"				break",
 			"			at += size",
 			"			n  += 1",
 			"",
 			"		return n if count_only else at - start",
-			"",
-			"	@property",
-			f"	def {name}_span(self) -> int:",
-			f"		return self.{name}_span_from(self.{name}_offset)",
+			*( ["",
+			    "	@property",
+			    f"	def {name}_span(self) -> int:",
+			    f"		return self.{name}_span_from(self.{name}_offset)"]
+			   if not is_recursive(self.resolved.structs,
+			                       placement.type_name or "") else
+			   # The element names itself, so the walk descends and the depth
+			   # travels with it. The plain forms start it at zero for a
+			   # caller with no business knowing it exists.
+			   ["",
+			    f"	def {name}_span_from(self, start: int,",
+			    "			count_only: bool = False) -> int:",
+			    f"		return self.{name}_span_from_at(start, 0, count_only)",
+			    "",
+			    f"	def {name}_span_at(self, depth: int) -> int:",
+			    f"		return self.{name}_span_from_at("
+			    f"self.{name}_offset, depth)",
+			    "",
+			    "	@property",
+			    f"	def {name}_span(self) -> int:",
+			    f"		return self.{name}_span_from_at("
+			    f"self.{name}_offset, 0)"] ),
 		]
 
 	# -- dynamic arithmetic --------------------------------------------
@@ -3980,7 +4005,8 @@ class Emitter:
 			"\t# Framing such a message is the layer below's job.",
 		]
 
-	def _extent_expression(self, struct: ResolvedStruct) -> str | None:
+	def _extent_expression(self, struct: ResolvedStruct,
+			depth: str | None = None) -> str | None:
 		"""How many bytes one instance of a variable struct occupies."""
 		# The arithmetic and the refusals are shared
 		# (traverse.extent_parts); rendering one length is Python's business.
@@ -4000,7 +4026,7 @@ class Emitter:
 
 		terms = [str(constant)]
 		for placement in variable:
-			length = self._length_expression(struct, placement)
+			length = self._length_expression(struct, placement, depth=depth)
 			if length is None:
 				return None
 			terms.append(length)
@@ -4034,16 +4060,30 @@ class Emitter:
 		if extent is None:
 			return []
 
-		return [
-			"",
-			"\t@property",
-			"\tdef _extent(self) -> int:",
-			f'\t\t"""How many bytes one `{struct.name}` occupies.',
-			"",
-			"\t\tA run of these is walked, and the walk needs to know where",
-			'\t\teach one ends."""',
-			f"\t\treturn {extent}",
-		]
+		doc = [f'\t\t"""How many bytes one `{struct.name}` occupies.',
+		       "",
+		       "\t\tA run of these is walked, and the walk needs to know where",
+		       '\t\teach one ends."""']
+		if not is_recursive(self.resolved.structs, struct.name):
+			return ["", "\t@property", "\tdef _extent(self) -> int:",
+			        *doc, f"\t\treturn {extent}"]
+
+		# A struct that names itself (0054): the depth bounds the recursion
+		# by the schema rather than by the message's own length. Python's
+		# own recursion limit would otherwise be the only thing stopping a
+		# hostile message, and a RecursionError is not a verdict on bytes.
+		limit = depth_limit(self.schema, struct.name)
+		deep  = self._extent_expression(struct, depth="depth")
+		return ["",
+		        "\tdef _extent_at(self, depth: int) -> int:",
+		        *doc,
+		        f"\t\tif depth >= {limit}:",
+		        "\t\t\treturn 0\t# `[depth]`/`[limit]`, not the frame",
+		        f"\t\treturn {deep or extent}",
+		        "",
+		        "\t@property",
+		        "\tdef _extent(self) -> int:",
+		        "\t\treturn self._extent_at(0)"]
 
 	def _offset_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
@@ -4286,7 +4326,8 @@ class Emitter:
 		        f" // {rule.group_in}) * {rule.group_out}")
 
 	def _length_expression(self, struct: ResolvedStruct,
-			placement: Placement, running: str | None = None) -> str | None:
+			placement: Placement, running: str | None = None,
+			depth: str | None = None) -> str | None:
 		"""The length a caller sees, clamped to `[size = N]` where one is.
 
 		A pinned member holds N bytes whatever the length field says, so a
@@ -4298,14 +4339,16 @@ class Emitter:
 		there are four of them per backend and the differential found the
 		one that was missed (0039).
 		"""
-		found = self._raw_length_expression(struct, placement, running)
+		found = self._raw_length_expression(struct, placement, running,
+		                                    depth)
 		pin   = pinned_bytes(placement)
 		if pin is None or found is None:
 			return found
 		return f"min({found}, {pin})"
 
 	def _raw_length_expression(self, struct: ResolvedStruct,
-			placement: Placement, running: str | None = None) -> str | None:
+			placement: Placement, running: str | None = None,
+			depth: str | None = None) -> str | None:
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)
 
@@ -4319,9 +4362,13 @@ class Emitter:
 			# scan, a record run's walk and a `while` run's. The runs were the
 			# exception, and it cost a rescan of everything before the run on
 			# every accumulating pass over it.
+			# Inside a recursive extent's `_at` body the span carries the
+			# depth on, or the counter restarts one level down (26.112).
 			if running is not None:
-				return f"self.{name}_span_from({running})"
-			return f"self.{name}_span"
+				return (f"self.{name}_span_from({running})" if depth is None
+				        else f"self.{name}_span_from_at({running}, {depth})")
+			return (f"self.{name}_span" if depth is None
+			        else f"self.{name}_span_at({depth})")
 
 		# Arithmetic over a field rather than a reference to one. Without this
 		# the member fell through to the scalar case and this backend read one

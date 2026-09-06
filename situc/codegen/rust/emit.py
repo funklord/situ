@@ -42,7 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	codec_entry_point,
+	codec_entry_point, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
@@ -3749,16 +3749,42 @@ class Emitter:
 			"",
 			"\t/// The walk, from a base the caller already knows: the same",
 			"\t/// helper every delimited member has, for the same reason.",
-			f"\tpub fn {_ident(f'{base}_span_from')}(&self, start: usize)"
-			" -> usize {",
-			*walk_from("start"), *tail,
-			"\t\tlet _ = n;",
-			"\t\tat - start",
-			"\t}",
-			"",
-			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
-			f"\t\tself.{_ident(f'{base}_span_from')}({start})",
-			"\t}",
+			*( [
+				f"\tpub fn {_ident(f'{base}_span_from')}(&self, start: usize)"
+				" -> usize {",
+				*walk_from("start"), *tail,
+				"\t\tlet _ = n;",
+				"\t\tat - start",
+				"\t}",
+				"",
+				f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+				f"\t\tself.{_ident(f'{base}_span_from')}({start})",
+				"\t}",
+			] if not is_recursive(self.resolved.structs,
+			                      placement.type_name or "") else [
+				# The element names itself, so the walk descends and the
+				# depth travels with it.
+				f"\tpub fn {_ident(f'{base}_span_from_at')}(&self,"
+				" start: usize, depth: usize) -> usize {",
+				*walk_from("start"), *tail,
+				"\t\tlet _ = n;",
+				"\t\tat - start",
+				"\t}",
+				"",
+				f"\tpub fn {_ident(f'{base}_span_from')}(&self,"
+				" start: usize) -> usize {",
+				f"\t\tself.{_ident(f'{base}_span_from_at')}(start, 0)",
+				"\t}",
+				"",
+				f"\tpub fn {_ident(f'{base}_span_at')}(&self,"
+				" depth: usize) -> usize {",
+				f"\t\tself.{_ident(f'{base}_span_from_at')}({start}, depth)",
+				"\t}",
+				"",
+				f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+				f"\t\tself.{_ident(f'{base}_span_from_at')}({start}, 0)",
+				"\t}",
+			] ),
 			*self._run_index(struct, placement, walk, cond, inner),
 		]
 
@@ -4186,7 +4212,8 @@ class Emitter:
 			"\t// Framing such a message is the layer below's job.",
 		]
 
-	def _extent_expression(self, struct: ResolvedStruct) -> str | None:
+	def _extent_expression(self, struct: ResolvedStruct,
+			depth: str | None = None) -> str | None:
 		"""How many bytes one instance of a variable struct occupies."""
 		# The arithmetic and the refusals are shared
 		# (traverse.extent_parts); rendering one length is Rust's business.
@@ -4206,7 +4233,7 @@ class Emitter:
 
 		terms = [str(constant)]
 		for placement in variable:
-			length = self._length_expression(struct, placement)
+			length = self._length_expression(struct, placement, depth=depth)
 			if length is None:
 				return None
 			terms.append(length)
@@ -4240,14 +4267,33 @@ class Emitter:
 		if extent is None:
 			return []
 
-		return [
+		head = [
 			"",
 			f"\t/// How many bytes one `{struct.name}` occupies. A run of these",
 			"\t/// is walked, and the walk needs to know where each one ends.",
-			"\tpub fn extent(&self) -> usize {",
-			f"\t\t{extent}",
-			"\t}",
 		]
+		if not is_recursive(self.resolved.structs, struct.name):
+			return [*head, "\tpub fn extent(&self) -> usize {",
+			        f"\t\t{extent}", "\t}"]
+
+		# A struct that names itself (0054): the body carries the depth so
+		# the recursion is bounded by the schema rather than by the message's
+		# own length. Zero at the limit stops the walk rather than refusing,
+		# because this returns a length and has no error channel -- the
+		# refusal belongs in `validate`, and this is a stack backstop.
+		limit = depth_limit(self.schema, struct.name)
+		deep  = self._extent_expression(struct, depth="depth")
+		return [*head,
+		        "\tpub fn extent_at(&self, depth: usize) -> usize {",
+		        f"\t\tif depth >= {limit} {{",
+		        "\t\t\treturn 0;\t// `[depth]`/`[limit]`, not the frame",
+		        "\t\t}",
+		        f"\t\t{deep or extent}",
+		        "\t}",
+		        "",
+		        "\tpub fn extent(&self) -> usize {",
+		        "\t\tself.extent_at(0)",
+		        "\t}"]
 
 	def _offset_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
@@ -4668,7 +4714,8 @@ class Emitter:
 		        f" / {rule.group_in}) * {rule.group_out}")
 
 	def _length_expression(self, struct: ResolvedStruct,
-			placement: Placement, running: str | None = None) -> str | None:
+			placement: Placement, running: str | None = None,
+			depth: str | None = None) -> str | None:
 		"""The length a caller sees, clamped to `[size = N]` where one is.
 
 		A pinned member holds N bytes whatever the length field says, so a
@@ -4680,7 +4727,8 @@ class Emitter:
 		there are four of them per backend and the differential found the
 		one that was missed (0039).
 		"""
-		found = self._raw_length_expression(struct, placement, running)
+		found = self._raw_length_expression(struct, placement, running,
+		                                    depth)
 		pin   = pinned_bytes(placement)
 		if pin is None or found is None:
 			return found
@@ -4691,7 +4739,8 @@ class Emitter:
 		return f"core::cmp::min({_unwrapped(found)}, {pin})"
 
 	def _raw_length_expression(self, struct: ResolvedStruct,
-			placement: Placement, running: str | None = None) -> str | None:
+			placement: Placement, running: str | None = None,
+			depth: str | None = None) -> str | None:
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)
 
@@ -4717,18 +4766,31 @@ class Emitter:
 			# scan, a record run's walk and a `while` run's. The runs were the
 			# exception, and it cost a rescan of everything before the run on
 			# every accumulating pass over it.
+			# Inside a recursive extent's `_at` body the span carries the
+			# depth on, or the counter restarts one level down and bounds
+			# nothing (26.112).
 			if running is not None:
-				return f"self.{_ident(name + '_span_from')}({running})"
-			return f"self.{_ident(name + '_span')}()"
+				return (f"self.{_ident(name + '_span_from')}({running})"
+				        if depth is None else
+				        f"self.{_ident(name + '_span_from_at')}"
+				        f"({running}, {depth})")
+			return (f"self.{_ident(name + '_span')}()" if depth is None
+			        else f"self.{_ident(name + '_span_at')}({depth})")
 
 		# Arithmetic over a field rather than a reference to one. Without this
 		# the member fell through to the scalar case and this backend read one
 		# byte and called it the field.
 		if is_counted_run(self.resolved.structs, placement):
 			base = c_name(local_name(struct, placement))
-			return (f"self.{_ident(base + '_span_from')}({running})"
-			        if running is not None
-			        else f"self.{_ident(base + '_span')}()")
+			# Inside a recursive extent's `_at` body the span carries the
+			# depth on, or the counter restarts one level down (26.112).
+			if running is not None:
+				return (f"self.{_ident(base + '_span_from')}({running})"
+				        if depth is None else
+				        f"self.{_ident(base + '_span_from_at')}"
+				        f"({running}, {depth})")
+			return (f"self.{_ident(base + '_span')}()" if depth is None
+			        else f"self.{_ident(base + '_span_at')}({depth})")
 
 		if placement.size_expr is not None:
 			# Bounded leaves, signed arithmetic, one clamp (14.2b).
@@ -5013,8 +5075,12 @@ class Emitter:
 				"\t/// the run, and nothing emitted it -- so those members",
 				"\t/// were declined as having an offset this could not",
 				"\t/// resolve, which was true only because this was missing.",
-				f"\tpub fn {_ident(base + '_span_from')}(&self, start: usize)"
-				" -> usize {",
+				(f"\tpub fn {_ident(base + '_span_from')}(&self,"
+				 " start: usize) -> usize {"
+				 if not is_recursive(self.resolved.structs,
+				                     placement.type_name or "") else
+				 f"\tpub fn {_ident(base + '_span_from_at')}(&self,"
+				 " start: usize, depth: usize) -> usize {"),
 				"\t\tlet mut at = start;",
 				# The counter only where the stopping rule reads it. A run the
 				# message counts stops at `n`; one that runs to the end of the
@@ -5025,7 +5091,10 @@ class Emitter:
 				"",
 				f"\t\twhile {bound}at < self.bytes.len() {{",
 				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
-				"\t\t\tlet size    = element.extent();",
+				("\t\t\tlet size    = element.extent();"
+				 if not is_recursive(self.resolved.structs,
+				                     placement.type_name or "") else
+				 "\t\t\tlet size    = element.extent_at(depth + 1);"),
 				"",
 				"\t\t\tif size == 0 || at + size > self.bytes.len() {",
 				"\t\t\t\tbreak;",
@@ -5035,11 +5104,31 @@ class Emitter:
 				"\t\t}",
 				"\t\tat - start",
 				"\t}",
-				"",
-				f"\tpub fn {_ident(base + '_span')}(&self) -> usize {{",
-				f"\t\tself.{_ident(base + '_span_from')}"
-				f"(self.{_ident(base + '_offset')}())",
-				"\t}",
+				*( ["",
+				    f"\tpub fn {_ident(base + '_span')}(&self) -> usize {{",
+				    f"\t\tself.{_ident(base + '_span_from')}"
+				    f"(self.{_ident(base + '_offset')}())",
+				    "\t}"]
+				   if not is_recursive(self.resolved.structs,
+				                       placement.type_name or "") else
+				   # The element names itself: the depth travels with the
+				   # walk, and the plain forms start it at zero.
+				   ["",
+				    f"\tpub fn {_ident(base + '_span_from')}(&self,"
+				    " start: usize) -> usize {",
+				    f"\t\tself.{_ident(base + '_span_from_at')}(start, 0)",
+				    "\t}",
+				    "",
+				    f"\tpub fn {_ident(base + '_span_at')}(&self,"
+				    " depth: usize) -> usize {",
+				    f"\t\tself.{_ident(base + '_span_from_at')}"
+				    f"(self.{_ident(base + '_offset')}(), depth)",
+				    "\t}",
+				    "",
+				    f"\tpub fn {_ident(base + '_span')}(&self) -> usize {{",
+				    f"\t\tself.{_ident(base + '_span_from_at')}"
+				    f"(self.{_ident(base + '_offset')}(), 0)",
+				    "\t}"] ),
 			])
 		return lines
 

@@ -580,40 +580,11 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 	source, resolved, outcomes = analyse(args.schema)
 
-	# A recursive type is describable but not yet generable (0054). The
-	# layout, the map and the wire contract are correct for one -- which is
-	# the specification path, and the one two consumers actually adopted --
-	# while every backend emits an `extent` that calls itself. In C that does
-	# not even compile without a forward declaration, and with one it would be
-	# run-time recursion in generated code that 20.1 promises has none, with
-	# `depth` and `limit` enforced nowhere.
-	#
-	# Refused with the reason rather than emitted, on 26.69's precedent: a
-	# caller who asked for this mode and found a header that does not build
-	# would conclude the generator was broken. What is missing is named, so
-	# the refusal says which half of the tool works.
-	recursive = sorted(
-		name for name, struct in resolved.structs.items()
-		if any(entry.placement.type_name == name for entry in struct.entries))
-	if recursive and args.target != "c":
-		from situc.diagnostics import error
-
-		named = ", ".join(f"`{name}`" for name in recursive)
-		raise error(
-			f"no accessors yet in {args.target} for a recursive type:"
-			f" {named}",
-			resolved.structs[recursive[0]].layout.span,
-			label = "declared here",
-			notes = ["`--target c` generates for one: its extent carries "
-			         "a depth and stops at the declared bound, so the "
-			         "recursion is bounded by the schema rather than by the "
-			         "message's own length (20.1)",
-			         "this backend would emit an `extent` that calls itself "
-			         "with nothing bounding it, so it is refused rather than "
-			         "emitted",
-			         "the specification path works for every target -- "
-			         "commit the map and the wire contract and check them "
-			         "in CI"])
+	# A recursive type generated for every target since 0054's second half:
+	# the extent carries a depth and the run's span passes it on, so the
+	# recursion is bounded by the schema rather than by the message's own
+	# length. What used to stand here was a refusal, and what it refused was
+	# a header that did not compile.
 
 	files: dict[str, str]
 	warnings: list[Diagnostic]

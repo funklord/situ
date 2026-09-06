@@ -45,6 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	depth_limit, is_recursive,
 	codec_entry_point,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
@@ -1595,18 +1596,48 @@ class Emitter:
 			"",
 			"\t/* The walk, from a base the caller already knows: the same",
 			"\t * helper every delimited member has, for the same reason. */",
-			f"\t[[nodiscard]] std::uint32_t {name}_span_from(std::uint32_t start)"
-			" const noexcept",
-			"\t{",
-			*from_, *tail,
-			"\t\t(void)n;",
-			"\t\treturn at - start;",
-			"\t}",
-			"",
-			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
-			"\t{",
-			f"\t\treturn {name}_span_from({start});",
-			"\t}",
+			*( [
+				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+				"(std::uint32_t start) const noexcept",
+				"\t{",
+				*from_, *tail,
+				"\t\t(void)n;",
+				"\t\treturn at - start;",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from({start});",
+				"\t}",
+			] if not is_recursive(self.resolved.structs, placement.type_name or "") else [
+				# The element names itself, so the walk descends and the
+				# depth travels with it. Four entry points: the `_at` forms
+				# carry the counter and the plain ones start it at zero.
+				f"\t[[nodiscard]] std::uint32_t {name}_span_from_at"
+				"(std::uint32_t start, std::uint32_t depth) const noexcept",
+				"\t{",
+				*from_, *tail,
+				"\t\t(void)n;",
+				"\t\treturn at - start;",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+				"(std::uint32_t start) const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from_at(start, 0);",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] std::uint32_t {name}_span_at"
+				"(std::uint32_t depth) const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from_at({start}, depth);",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from_at({start}, 0);",
+				"\t}",
+			] ),
 			*self._run_index(struct, placement, walk,
 			                 self._element_cond(element, placement), inner),
 		]
@@ -2015,7 +2046,8 @@ class Emitter:
 			"\t * Framing such a message is the layer below's job. */",
 		]
 
-	def _extent_terms(self, struct: ResolvedStruct) -> list[str] | None:
+	def _extent_terms(self, struct: ResolvedStruct,
+			depth: str | None = None) -> list[str] | None:
 		"""The lengths one instance of a variable struct sums to, or None.
 
 		The arithmetic and the refusals are shared (traverse.extent_parts);
@@ -2037,7 +2069,7 @@ class Emitter:
 
 		terms = [str(constant)]
 		for placement in variable:
-			length = self._length_expression(struct, placement)
+			length = self._length_expression(struct, placement, depth=depth)
 			if length is None:
 				return None
 			terms.append(length)
@@ -2081,15 +2113,43 @@ class Emitter:
 		if terms is None:
 			return []
 
-		return [
+		head = [
 			"",
 			f"\t/* How many bytes one `{struct.name}` occupies. A run of these is",
 			"\t * walked, and the walk needs to know where each one ends. */",
-			"\t[[nodiscard]] std::uint32_t extent() const noexcept",
-			"\t{",
-			f"\t\treturn {' + '.join(terms)};",
-			"\t}",
 		]
+		if not is_recursive(self.resolved.structs, struct.name):
+			return [*head,
+			        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
+			        "\t{",
+			        f"\t\treturn {' + '.join(terms)};",
+			        "\t}"]
+
+		# A struct that names itself (0054). The body carries the depth so
+		# the recursion is bounded by the schema rather than by the message's
+		# own length -- without it a three-byte node nests 21845 deep in a
+		# 64 KB message, and 20.1's bounded stack is what the bound is for.
+		#
+		# Zero at the limit stops the walk rather than refusing, because this
+		# returns a length and has no error channel. The refusal belongs in
+		# `validate`; this is a stack backstop, safe for the reason a text
+		# number's `_value` is safe -- a validated frame never reaches it.
+		limit = depth_limit(self.schema, struct.name)
+		deep  = self._extent_terms(struct, depth="depth")
+		return [*head,
+		        "\t[[nodiscard]] std::uint32_t extent_at(std::uint32_t depth)"
+		        " const noexcept",
+		        "\t{",
+		        f"\t\tif (depth >= {limit}u) {{",
+		        "\t\t\treturn 0;\t/* `[depth]`/`[limit]`, not the frame */",
+		        "\t\t}",
+		        f"\t\treturn {' + '.join(deep or terms)};",
+		        "\t}",
+		        "",
+		        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
+		        "\t{",
+		        "\t\treturn extent_at(0);",
+		        "\t}"]
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			bounded: bool = False) -> str:
@@ -2375,7 +2435,8 @@ class Emitter:
 		        f" / {rule.group_in}) * {rule.group_out}")
 
 	def _length_expression(self, struct: ResolvedStruct,
-			placement: Placement, running: str | None = None) -> str | None:
+			placement: Placement, running: str | None = None,
+			depth: str | None = None) -> str | None:
 		"""The length a caller sees, clamped to `[size = N]` where one is.
 
 		A pinned member holds N bytes whatever the length field says, so a
@@ -2387,14 +2448,16 @@ class Emitter:
 		there are four of them per backend and the differential found the
 		one that was missed (0039).
 		"""
-		found = self._raw_length_expression(struct, placement, running)
+		found = self._raw_length_expression(struct, placement, running,
+		                                    depth)
 		pin   = pinned_bytes(placement)
 		if pin is None or found is None:
 			return found
 		return f"situ_min_u32({found}, {pin}u)"
 
 	def _raw_length_expression(self, struct: ResolvedStruct,
-			placement: Placement, running: str | None = None) -> str | None:
+			placement: Placement, running: str | None = None,
+			depth: str | None = None) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement)
@@ -2419,8 +2482,14 @@ class Emitter:
 		# one byte and called it the field.
 		if is_counted_run(self.resolved.structs, placement):
 			name = bare_name(local_name(struct, placement))
-			return (f"{name}_span_from({running})" if running is not None
-			        else f"{name}_span()")
+			# Inside a recursive extent's `_at` body the span carries the
+			# depth on, or the counter restarts one level down and bounds
+			# nothing (26.112).
+			if running is not None:
+				return (f"{name}_span_from({running})" if depth is None
+				        else f"{name}_span_from_at({running}, {depth})")
+			return (f"{name}_span()" if depth is None
+			        else f"{name}_span_at({depth})")
 
 		if placement.size_expr is not None:
 			# Bounded leaves, signed arithmetic, one clamp (14.2b).
@@ -2440,8 +2509,13 @@ class Emitter:
 			# were the exception, and it cost a rescan of everything before
 			# the run on every accumulating pass over it.
 			if running is not None:
-				return f"{name}_span_from({running})"
-			return f"{name}_span()"
+				return (f"{name}_span_from({running})" if depth is None
+				        else f"{name}_span_from_at({running}, {depth})")
+			# Inside a recursive extent's `_at` body the span carries the
+			# depth on, or the counter restarts one level down and bounds
+			# nothing (26.112).
+			return (f"{name}_span()" if depth is None
+			        else f"{name}_span_at({depth})")
 
 		# A nested struct with no single size. Without this the sum treated
 		# it as zero bytes wide and placed whatever follows on top of it.
@@ -2758,7 +2832,10 @@ class Emitter:
 				"\t * declined as having an offset this could not resolve,",
 				"\t * which was true only because this was missing. */",
 				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
-				"(std::uint32_t start) const noexcept",
+				+ ("(std::uint32_t start) const noexcept"
+				   if not is_recursive(self.resolved.structs, placement.type_name or "")
+				   else "_at(std::uint32_t start, std::uint32_t depth)"
+				        " const noexcept"),
 				"\t{",
 				"\t\tstd::uint32_t at = start;",
 				"\t\tstd::uint32_t n  = 0;",
@@ -2772,7 +2849,10 @@ class Emitter:
 				"\t\t\t}",
 				"",
 				f"\t\t\tconst {inner} element(raw);",
-				"\t\t\tconst std::uint32_t size = element.extent();",
+				("\t\t\tconst std::uint32_t size = element.extent();"
+				 if not is_recursive(self.resolved.structs, placement.type_name or "")
+				 else "\t\t\tconst std::uint32_t size ="
+				      " element.extent_at(depth + 1);"),
 				"",
 				"\t\t\tif (size == 0 || at + size > raw_.limit) {",
 				"\t\t\t\tbreak;",
@@ -2782,11 +2862,36 @@ class Emitter:
 				"\t\t}",
 				"\t\treturn at - start;",
 				"\t}",
-				"",
-				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
-				"\t{",
-				f"\t\treturn {name}_span_from({name}_offset());",
-				"\t}",
+				*( ["",
+				    f"\t[[nodiscard]] std::uint32_t {name}_span()"
+				    " const noexcept",
+				    "\t{",
+				    f"\t\treturn {name}_span_from({name}_offset());",
+				    "\t}"]
+				   if not is_recursive(self.resolved.structs, placement.type_name or "")
+				   else
+				   # The element names itself, so the walk descends and the
+				   # depth travels with it. The plain forms start it at zero
+				   # for a caller with no business knowing it exists.
+				   ["",
+				    f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+				    "(std::uint32_t start) const noexcept",
+				    "\t{",
+				    f"\t\treturn {name}_span_from_at(start, 0);",
+				    "\t}",
+				    "",
+				    f"\t[[nodiscard]] std::uint32_t {name}_span_at"
+				    "(std::uint32_t depth) const noexcept",
+				    "\t{",
+				    f"\t\treturn {name}_span_from_at({name}_offset(),"
+				    " depth);",
+				    "\t}",
+				    "",
+				    f"\t[[nodiscard]] std::uint32_t {name}_span()"
+				    " const noexcept",
+				    "\t{",
+				    f"\t\treturn {name}_span_from_at({name}_offset(), 0);",
+				    "\t}"] ),
 			]
 
 		lines.extend([

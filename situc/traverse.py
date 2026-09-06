@@ -1370,6 +1370,45 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 	return True
 
 
+def is_recursive(structs: dict[str, "ResolvedStruct"], name: str) -> bool:
+	"""Whether this struct names itself (0054).
+
+	One decision, four spellings. Every backend needs it for the same two
+	reasons and each would otherwise answer it privately: a self-referencing
+	extent calls its own run's span and that span calls the extent back, so
+	the pair may need forward declaration, and the recursion needs a depth or
+	a hostile message nests as deep as its own bytes allow.
+
+	Direct self-reference only, which is what `check_no_recursive_types`
+	permits -- a mutual cycle is still refused and 0054 leaves it open.
+	"""
+	struct = structs.get(name)
+	return struct is not None and any(
+		entry.placement.type_name == name for entry in struct.entries)
+
+
+def depth_limit(schema: "ast.Schema", name: str) -> int:
+	"""How deep a build follows a recursion before it stops measuring.
+
+	`[limit]` where the schema states one and `[depth]` otherwise.
+	`check_depth_bounds` has already refused a limit above the depth, so the
+	format's own bound is the ceiling either way.
+
+	Read from the declaration rather than from a placement: both attributes
+	say what the generated code must enforce, and nothing downstream of the
+	solver needs them, so they are not carried on `StructLayout`.
+	"""
+	found: dict[str, int] = {}
+	for decl in schema.structs():
+		if decl.name != name:
+			continue
+		for attr in decl.attrs:
+			if attr.name in ("depth", "limit") \
+					and isinstance(attr.value, ast.IntLiteral):
+				found[attr.name] = attr.value.value
+	return found.get("limit", found.get("depth", 1))
+
+
 def declared_value_bounds(placement: Placement,
 		env: Env) -> tuple[int | None, int | None]:
 	"""`[min]` and `[max]` folded to integers, for export as constants.

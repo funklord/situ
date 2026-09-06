@@ -82,6 +82,15 @@ SUFFIXES = frozenset({
 	# so it cannot collide with a field -- but the affix check reads every
 	# generated name and this is one.
 	"holed",
+	# A recursive type's walk carries a depth (0054), so the run's span gains
+	# `_at` and `_from_at` forms beside the plain ones. A schema field named
+	# `x_span_at` would collide with them exactly as `x_len` collides with a
+	# getter, which is what this set exists to say.
+	"span_at", "span_from_at",
+	# The extent's own depth-carrying form, for the same reason. It is not a
+	# member's affix -- `extent_at` is the struct's -- but this check reads
+	# every generated name.
+	"extent_at",
 })
 
 

@@ -132,7 +132,7 @@ def test_a_limit_without_a_depth_is_refused() -> None:
 		layout("struct s [limit = 4] { u8 a; }\n")
 
 
-def test_only_c_generates_for_a_recursive_type_so_far() -> None:
+def test_every_backend_generates_for_a_recursive_type() -> None:
 	"""The line this phase draws, and the refusal names which half works.
 
 	Every backend would emit an `extent` that calls itself. In C that does not
@@ -150,15 +150,12 @@ def test_only_c_generates_for_a_recursive_type_so_far() -> None:
 
 		assert main(["map", str(path)]) == 0
 		assert main(["wire", str(path)]) == 0
-		# C generates for one: its extent carries a depth and stops at the
+		# All four generate: each extent carries a depth and stops at the
 		# declared bound, so the recursion is bounded by the schema rather
 		# than by the message's own length.
-		assert main(["build", str(path), "--target", "c", "--out", tmp]) == 0
-		# The other three do not yet, and say so rather than emitting a
-		# header that does not compile (26.69).
-		for target in ("cpp", "rust", "python"):
+		for target in ("c", "cpp", "rust", "python"):
 			assert main(["build", str(path), "--target", target,
-			             "--out", tmp]) != 0, target
+			             "--out", tmp]) == 0, target
 
 
 def test_verify_reports_a_compiler_fault_as_one(tmp_path: Path) -> None:
@@ -279,3 +276,42 @@ int main(void)
 	# Past it, the extent stops at the bound: 32 levels of three bytes.
 	used, extent = rows[3]
 	assert used == 192 and extent == 96, rows
+
+
+def test_every_backend_carries_the_depth_into_its_walk() -> None:
+	"""The bound is only a bound if the counter survives the descent.
+
+	Each backend's extent calls its run's span and the span calls the
+	element's extent back. If the plain form is used there, the counter
+	restarts one level down and bounds nothing -- which is 26.112's "a bound
+	with a public entry point that restarts it is not a bound", met in a
+	generator rather than in the walker.
+
+	Asserted on the four emitted sources rather than by running them, because
+	three of the four need a toolchain and this is the property that has to
+	hold in all four. The executable half is
+	`test_the_generated_c_bounds_the_recursion_by_the_schema`, and the
+	measured agreement -- 3, 93, 96, 96 bytes at 1, 31, 32 and 40 levels of
+	nesting, identical in C, C++, Rust and Python -- is in 26.283.
+	"""
+	from situc.codegen.c import generate as gen_c
+	from situc.codegen.cpp import generate as gen_cpp
+	from situc.codegen.python import generate as gen_py
+	from situc.codegen.rust import generate as gen_rs
+
+	schema   = parse_text(PREAMBLE + NODE)
+	resolved = resolve(schema, solve(schema))
+
+	built = {
+		"c":      gen_c(schema, resolved, "unit").header,
+		"cpp":    gen_cpp(schema, resolved, "unit").header,
+		"python": gen_py(schema, resolved, "unit").module,
+		"rust":   gen_rs(schema, resolved, "unit").module,
+	}
+	for name, text in built.items():
+		assert "depth >= 32" in text or "depth >= 32u" in text, name
+		# The descent passes the counter on rather than starting a new one.
+		assert "depth + 1" in text, name
+		# And the entry point starts it at zero, so a caller never sees it.
+		assert "_at(0" in text or "_at(view, 0u)" in text \
+			or "extent_at(0)" in text, name

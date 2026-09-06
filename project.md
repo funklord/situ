@@ -169,16 +169,18 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   carried `WALK_DEPTH_MAX` since it was written; this is that mechanism
   reaching the compiler, not a new one.
 
-  **The describing half is implemented; the generating half is not.** A
-  struct that names itself and declares `[depth = N]` is accepted, laid out
-  and mapped, and `situc map`, `wire` and `verify` are correct for one.
-  `situc build` refuses it by name, because every backend would emit an
-  `extent` that calls itself -- run-time recursion in generated code that
-  20.1 promises has none, with neither `depth` nor `limit` enforced
-  anywhere. A header that does not compile is worse than a refusal (26.69).
+  **Implemented, in all four backends.** A struct that names itself and
+  declares `[depth = N]` is accepted, laid out, mapped and generated: each
+  extent carries a depth and the run's span passes it on, so the recursion
+  is bounded by the schema rather than by the message's own length. Measured
+  identical across C, C++, Rust and Python (26.283).
 
-  Mutual recursion stays refused, as the record leaves it. `SITU_ERR_DEPTH`
-  and the walkers' side are the generating half and are not built.
+  Mutual recursion stays refused, as the record leaves it. What is still
+  open is the honest refusal: at the limit an extent answers zero, because
+  it returns a length and has no error channel, so `validate` is where a
+  message past `[depth]` or `[limit]` should be refused by name -- and the
+  walkers' `WALK_DEPTH_MAX` is still compared against nothing the schema
+  declares.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
@@ -22926,6 +22928,68 @@ line as well as the body, because the summary is what a CI log keeps.
 nothing in the file called it.** openmlx4 found that by using it. An
 untested claim in a docstring is a signal with no artifact, and it
 reached HEAD because the sentence was easier to write than the call.
+
+### 26.283 The same bound in four descriptions, and the directive behind it
+
+0054's generating half finished. All four backends emit a recursive type
+and all four bound it the same way. Measured by building and running each
+-- three needed a toolchain and all three had one:
+
+    levels   bytes    C    C++   Rust  Python
+         1       3     3      3      3      3
+        31      93    93     93     93     93
+        32      96    96     96     96     96
+        40     120    96     96     96     96
+
+Nesting past the declared 32 stops at 96 bytes -- 32 levels of three --
+in every description, rather than following the message. **The last row
+is the whole feature**: before it, Rust and Python measured 120 and would
+have gone on measuring whatever arrived, which for a three-byte node is
+21845 frames in a 64 KB message.
+
+**The shape is one decision and four renderings, which is what this tree
+does with every shared question.** `is_recursive` and `depth_limit` are in
+`traverse.py` beside `classify` and `extent_parts`; each backend renders
+`_at` forms carrying a `uint32_t`, a `usize` or an `int`. C's copies were
+private for one commit and are gone.
+
+**What made it four separate pieces of work rather than one** is that
+each backend has two or three span emitters and only one of them serves a
+counted run of variable elements. In C, C++ and Rust the first edit went
+into the wrong one every time -- the generated file compiled or ran and
+simply did not carry the depth, which reads exactly like success until
+the 40-level row is checked. **A depth that is threaded through three of
+four call paths is not threaded**, and nothing but running it says so.
+
+**Two population assertions caught what review would not.** C++ keeps a
+set of every affix its emitter can produce, so `span_at` and
+`span_from_at` arriving unlisted went red immediately -- a schema field
+named `x_span_at` would collide with them exactly as `x_len` collides
+with a getter. And the depth test asserts on all four sources rather than
+on one: `depth >= 32` present, `depth + 1` passed on, `_at(0` at the
+entry point. The middle one is the load-bearing assertion, because a
+backend that starts a fresh counter each level satisfies the first and
+bounds nothing -- 26.112's "a bound with a public entry point that
+restarts it is not a bound", met in a generator.
+
+**And the directive that prompted it is wider than recursion.** Set by
+the copyright holder 2026-09-07: *"we are making the best and most
+versatile tools, so if something is required for a protocol
+specification, we build it. We need to support all kinds of text
+protocols too."*
+
+That settles netcfgd's open question in the affirmative and reverses the
+framing this file carried for a day. Their brief asked whether a
+structured-text codec family was in scope and offered situ the clean no
+-- and the answer is that a format somebody has to describe is in scope
+by definition. What their section 3 establishes stands as the design
+input: five of the six things they measured are the same fact asked five
+ways, and what survives is **members identified by name with no order**,
+plus an enum spelling that is no language's identifier. The first is not
+a restriction to relax around the edges: 9.6's "discriminant strictly
+before the variant in layout order" is a statement about a world where
+order exists, and text has no order to state. That is the design work,
+and it is not this entry's.
 
 ## 27. Questions, and how they were settled
 
