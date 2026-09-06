@@ -22084,6 +22084,61 @@ The test asserts both digit strings. A walker that sized everything at
 zero would pass the bad one alone, and the valid case is what says the
 lax reader still reads.
 
+### 26.272 Generated code the size of hand-written, except where it was 3x
+
+Asked whether situ's accessors are bigger or smaller than hand-crafted
+ones, and measured rather than answered. IPv4's fixed header, every field
+read once, against a competent hand-written set -- named offsets, explicit
+byte order, no bounds checks. `.text` of the object, gcc x86-64:
+
+                        -Os              -O2
+    byte-aligned    situ 36  hand 36   situ 40  hand 40
+    bit-packed      situ 252 hand 77   situ 80  hand 82
+
+**The byte-aligned answer is the one the design predicts and it holds
+exactly.** `situ_ipv4_header_total_length_get` is one load and one bswap,
+which is what a person writes. Identical at both levels.
+
+**The bit-packed row was a defect, and `-Os` is where it lived.** At -O2
+situ is two bytes smaller than hand-written. At -Os gcc stops inlining
+`situ_bits_get_msb` once a function holds enough of them -- six here --
+and emits one out-of-line copy. The generated call passes literals,
+`situ_bits_get_msb(view.base, 51u, 13u)`, and out of line those become
+register arguments, so the byte-at-a-time loop that folds to two loads and
+a mask survives into the object and runs. Seven calls into a run-time
+loop, where hand-written code has fourteen instructions.
+
+    5e:  call 0 <situ_bits_get_msb>       x7
+    0000 <situ_bits_get_msb>:
+    19:  cmp %ecx,%edx ; 1d: movzbl (%rdi,%rcx,1) ... 2c: jmp 19
+
+Slower as well as bigger, and `-Os` is what `build-and-commit.md` mandates
+for these projects. Nine of the thirty-one example schemas emit a
+bit-field read: tcp, mqtt, rtc, dns, ipv4, telemetry, ntp, dnsname,
+message.
+
+`SITU_ALWAYS_INLINE` on the four bit helpers takes 252 to **78**, against
+77 by hand. C++ reads bit fields through the same four functions, so it
+inherits this; the walker does not, its offsets being run-time values by
+construction.
+
+**The cost, measured in the other direction, because a fix tested only
+where it helps is not tested.** The derived codecs call these in loops
+with a run-time offset, and inlining there grows twelve functions --
+`base16`, `manchester`, `4b5b`, the two stuffings -- by 3 to 54 bytes,
+8475 to 8799 total. Taken: those are per-symbol inner loops, so what is
+being bought with 324 bytes is a call removed from each iteration, and
+the accessor path is code every consumer of a bit-packed schema pays for
+without having written it.
+
+**The first version of the test passed with the fix reverted.** Four bit
+fields is under gcc's inlining threshold, so the fixture named the hazard
+and could not reach it -- a test over the safe path, green either way. It
+reads sixteen now, gcc declines at six, and the sabotage fails through the
+`nm` assertion rather than through a compile error. The assertion is on
+the symbol rather than on a byte count, since a count is a claim in a
+particular compiler's units.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

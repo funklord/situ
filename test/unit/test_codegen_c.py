@@ -37,6 +37,7 @@ WARNINGS = [
 HOST_CC  = shutil.which("gcc") or shutil.which("cc")
 CROSS_CC = shutil.which("aarch64-linux-gnu-gcc")
 OBJDUMP  = shutil.which("objdump")
+NM       = shutil.which("nm")
 
 
 def emit(body: str, preamble: str = PREAMBLE, name: str = "unit") -> tuple[str, str]:
@@ -47,7 +48,8 @@ def emit(body: str, preamble: str = PREAMBLE, name: str = "unit") -> tuple[str, 
 
 
 def compile_generated(tmp_path: Path, body: str, preamble: str = PREAMBLE,
-		compiler: str | None = None, extra: str = "") -> None:
+		compiler: str | None = None, extra: str = "",
+		optimisation: str | None = None) -> None:
 	"""Write the generated pair plus an optional probe and compile them."""
 	header, source = emit(body, preamble)
 	(tmp_path / "unit.h").write_text(header, encoding="ascii")
@@ -58,7 +60,9 @@ def compile_generated(tmp_path: Path, body: str, preamble: str = PREAMBLE,
 		(tmp_path / "probe.c").write_text(extra, encoding="ascii")
 		sources.append(str(tmp_path / "probe.c"))
 
-	command = [compiler or HOST_CC or "cc", *WARNINGS,
+	flags = WARNINGS if optimisation is None else \
+	        [f if not f.startswith("-O") else optimisation for f in WARNINGS]
+	command = [compiler or HOST_CC or "cc", *flags,
 	           f"-I{RUNTIME}", f"-I{tmp_path}", "-c", *sources]
 	result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
@@ -241,6 +245,50 @@ def test_bit_order_selects_the_helper() -> None:
 	header, _ = emit("struct S { u3 a; u5 b; }",
 	                 preamble="endian big;\nbit_order lsb_first;\n")
 	assert "situ_bits_get_lsb" in header
+
+
+@pytest.mark.skipif(HOST_CC is None or NM is None,
+                    reason="no host compiler or nm")
+def test_a_bit_field_read_leaves_no_call_behind_at_minus_os(tmp_path: Path) -> None:
+	"""The helpers exist to fold, and `static inline` does not make them.
+
+	Every generated bit-field read passes a literal offset and width, and the
+	helper collapses to two loads and a mask once those are constants. At -Os
+	-- which is what these projects build with -- gcc stops inlining it once a
+	function holds enough of them: one out-of-line copy is emitted, the
+	constants arrive in registers, the byte-at-a-time loop survives, and each
+	read becomes a call into a run-time loop. Measured on IPv4's seven bit
+	fields at -Os before the fix: 252 bytes of .text against 77 for the same
+	reads by hand, and 78 after it.
+
+	**Sixteen fields, because four is under the threshold and passes either
+	way.** The first draft of this test read four and stayed green with the
+	attribute reverted -- a fixture that named the hazard and could not reach
+	it. gcc declines at six here, so sixteen is chosen to sit well clear of a
+	heuristic that is nobody's contract. A compiler that inlines all sixteen
+	regardless makes this pass without discriminating, which is the honest
+	limit of asserting on generated code: it is a control on gcc and a
+	property everywhere.
+
+	The assertion is on the symbol rather than on a byte count, which is a
+	property of the compiler. A surviving call is exactly the defect; a size
+	threshold would be a different claim in a different compiler's units.
+	"""
+	count  = 16
+	fields = " ".join(f"u3 f{i};" for i in range(count))
+	reads  = " + ".join(f"(uint32_t)situ_S_f{i}_get(view)" for i in range(count))
+	probe  = ("#include \"unit.h\"\n"
+	          "uint32_t probe(const uint8_t *p, uint32_t len)\n"
+	          "{\n"
+	          "\tsitu_view_t view = { (uint8_t *)(uintptr_t)p, len, 1u };\n"
+	          f"\treturn {reads};\n"
+	          "}\n")
+	compile_generated(tmp_path, "struct S [allow_straddle] { " + fields + " }",
+	                  extra=probe, optimisation="-Os")
+
+	symbols = subprocess.run([NM or "nm", str(tmp_path / "probe.o")],
+	                         capture_output=True, text=True, check=True).stdout
+	assert "situ_bits_get_msb" not in symbols, symbols
 
 
 def test_enum_field_exposes_its_typedef() -> None:

@@ -336,7 +336,31 @@ static inline void situ_put_ne64(uint8_t *p, uint64_t v)
  *              significant bits.
  * ------------------------------------------------------------------------ */
 
-static inline uint64_t situ_bits_get_msb(const uint8_t *base, uint32_t off, uint32_t width)
+/* Force inlining where the whole point of a helper is to fold at its call
+ * site. Generated accessors pass a literal bit offset and width, and the
+ * body below collapses to two loads and a mask once those are constants.
+ *
+ * `static inline` is not enough. At -Os -- which is what these projects
+ * build with -- gcc declines to inline the bit helpers at all: it emits one
+ * out-of-line copy, the constants arrive in registers instead of folding,
+ * the byte-at-a-time loop survives, and every bit-field read becomes a call
+ * into a run-time loop. Measured on IPv4's seven bit fields at -Os: 252
+ * bytes of .text against 77 for the same reads written by hand, and 78 with
+ * the attribute. The byte-aligned accessors were already identical to
+ * hand-written code at both levels; this is the one construct that was not.
+ *
+ * A compiler without the attribute gets an empty definition and correct but
+ * larger code, which is the right way for this to degrade. */
+#if defined(__has_attribute)
+#	if __has_attribute(always_inline)
+#		define SITU_ALWAYS_INLINE __attribute__((always_inline))
+#	endif
+#endif
+#ifndef SITU_ALWAYS_INLINE
+#	define SITU_ALWAYS_INLINE
+#endif
+
+SITU_ALWAYS_INLINE static inline uint64_t situ_bits_get_msb(const uint8_t *base, uint32_t off, uint32_t width)
 {
 	uint32_t first = off / 8u;
 	uint32_t last  = (off + width - 1u) / 8u;
@@ -354,7 +378,7 @@ static inline uint64_t situ_bits_get_msb(const uint8_t *base, uint32_t off, uint
 	return width == 64u ? acc : acc & (((uint64_t)1 << width) - 1u);
 }
 
-static inline void situ_bits_set_msb(uint8_t *base, uint32_t off, uint32_t width, uint64_t v)
+SITU_ALWAYS_INLINE static inline void situ_bits_set_msb(uint8_t *base, uint32_t off, uint32_t width, uint64_t v)
 {
 	uint32_t first = off / 8u;
 	uint32_t last  = (off + width - 1u) / 8u;
@@ -377,7 +401,7 @@ static inline void situ_bits_set_msb(uint8_t *base, uint32_t off, uint32_t width
 	}
 }
 
-static inline uint64_t situ_bits_get_lsb(const uint8_t *base, uint32_t off, uint32_t width)
+SITU_ALWAYS_INLINE static inline uint64_t situ_bits_get_lsb(const uint8_t *base, uint32_t off, uint32_t width)
 {
 	uint32_t first = off / 8u;
 	uint32_t last  = (off + width - 1u) / 8u;
@@ -394,7 +418,7 @@ static inline uint64_t situ_bits_get_lsb(const uint8_t *base, uint32_t off, uint
 	return width == 64u ? acc : acc & (((uint64_t)1 << width) - 1u);
 }
 
-static inline void situ_bits_set_lsb(uint8_t *base, uint32_t off, uint32_t width, uint64_t v)
+SITU_ALWAYS_INLINE static inline void situ_bits_set_lsb(uint8_t *base, uint32_t off, uint32_t width, uint64_t v)
 {
 	uint32_t first = off / 8u;
 	uint32_t last  = (off + width - 1u) / 8u;
