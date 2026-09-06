@@ -303,6 +303,15 @@ struct placed_run {
 	// separates them is a sanitizer over a heap buffer of exactly the right
 	// size, which is `test_a_wide_array_behind_a_variable_member_is_guarded`.
 	u16  marks[2];
+	// And a run of STRUCT elements, which is a third path again: a byte
+	// array is a span, a wide scalar is reached by index, and a struct
+	// element is a sub-view. Rust and Python read `offset_bytes` here too
+	// and raised `offset is dynamic` rather than building, where C and C++
+	// had always used the offset function (26.266). Unlike `marks`, this
+	// one IS caught here -- the fault was a traceback rather than a read
+	// past the frame, and a schema that does not compile fails the
+	// compile check every backend already runs.
+	beat  pairs[2];
 	u16  tag;
 }
 

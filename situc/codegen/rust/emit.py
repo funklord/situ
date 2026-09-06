@@ -5137,8 +5137,36 @@ class Emitter:
 
 		name  = _ident(local_name(struct, placement))
 		count = placement.array_count or 0
-		start = placement.offset_bytes
 		outer = _pascal(placement.type_name or "")
+
+		# `offset_bytes` asserts on a member the message places, so a
+		# `rec run[2]` behind a variable-length member raised `offset is
+		# dynamic` rather than building -- the third path to reach that
+		# assertion after the byte array (26.259) and the wide scalar
+		# (26.262). C and C++ have always used the offset function here and
+		# bounded the sub-view with it.
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return ["", f"\t// {placement.path}: its offset is a sum this"
+			        " backend cannot render."]
+
+		# A static offset sits inside `SIZE_MIN`, which acquisition checked,
+		# and keeps the slice it always had. A dynamic one is a sum the
+		# message chose and can land past the end -- where an unchecked
+		# slice panics rather than answering, which is the one thing an
+		# accessor may not do. Same shape as the single nested member above.
+		if placement.offset_bits is not None:
+			body = [f"\t\t{outer}::new(&self.bytes[{placement.offset_bytes}"
+			        f" + index * {outer}::SIZE..])"]
+		else:
+			body = [
+				f"\t\tlet at = {start} + index * {outer}::SIZE;",
+				f"\t\tif self.bytes.len() < at"
+				f" || self.bytes.len() - at < {outer}::SIZE {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\t{outer}::new(&self.bytes[at..])",
+			]
 
 		return [
 			"",
@@ -5147,7 +5175,7 @@ class Emitter:
 			f"\t\tif index >= {count} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			f"\t\t{outer}::new(&self.bytes[{start} + index * {outer}::SIZE..])",
+			*body,
 			"\t}",
 		]
 

@@ -3059,6 +3059,33 @@ class Emitter:
 			if placement.type_name not in self.structs:
 				return ["", f"\t# {placement.path}: element type"
 				        f" {placement.type_name} is not emitted yet."]
+			# `offset_bytes` asserts on a member the message places, so a
+			# `rec run[2]` behind a variable-length member raised `offset
+			# is dynamic` rather than building -- the third path to that
+			# assertion after the byte array and the wide scalar. C and
+			# C++ have always used the offset function and bounded the
+			# sub-view with it.
+			start = self._offset_expression(struct, placement)
+			if start is None:
+				return ["", f"\t# {placement.path}: its offset is a sum this"
+				        " backend cannot render."]
+
+			# A static offset is inside the minimum acquisition checked. A
+			# dynamic one is a sum the message chose and can land past the
+			# end, where a view over absent bytes is what `BoundsError`
+			# exists to refuse -- the same guard the single nested member
+			# carries.
+			if placement.offset_bits is not None:
+				reach: list[str] = []
+				at = f"{placement.offset_bytes} + index * {nested}.SIZE_BYTES"
+			else:
+				at = f"({start}) + index * {nested}.SIZE_BYTES"
+				reach = [
+					f"\t\tif self._len - ({at}) < {nested}.SIZE_BYTES:",
+					f"\t\t\traise BoundsError(\"{placement.path}[\""
+					"\n\t\t\t\tf\"{index}]: the frame does not reach it\")",
+				]
+
 			return [
 				"", f"\tdef {name}(self, index: int) -> {nested}:",
 				f'\t\t"""Element `index` of {count}. Bounded by the count as',
@@ -3066,9 +3093,9 @@ class Emitter:
 				'\t\tview and are not elements."""',
 				f"\t\tif not 0 <= index < {count}:",
 				f"\t\t\traise IndexError(f\"{placement.path}[{{index}}] of {count}\")",
+				*reach,
 				f"\t\treturn {nested}(self._msg,",
-				f"\t\t\tself._at + {placement.offset_bytes}"
-				f" + index * {nested}.SIZE_BYTES, {nested}.SIZE_BYTES)",
+				f"\t\t\tself._at + {at}, {nested}.SIZE_BYTES)",
 			]
 
 		# `_offset_expression`, not `offset_bytes`, which asserts on a member

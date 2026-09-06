@@ -21777,6 +21777,51 @@ which is now false in the same way C's comment was, each of them spelling
 stay silent is the safe direction of a disagreement rather than the
 absence of one, and it is left recorded rather than fixed here.
 
+### 26.266 The third branch of the same emitter
+
+`rec run[2]` -- a fixed count of a fixed STRUCT -- behind a
+variable-length member. `situc build` raised
+
+    AssertionError: offset is dynamic
+
+in Rust and Python, out of `Placement.offset_bytes`. C and C++ have
+always used the offset function here and bounded the sub-view with
+`situ_view_sub`.
+
+**This is the third path to that assertion and the second time the
+lesson did not travel.** An array is emitted as one of three things
+depending on its element: a byte array is a SPAN, a wide scalar is
+reached by INDEX, and a struct element is a SUB-VIEW. Three branches of
+one function, each reading `offset_bytes` directly. 26.259 fixed the
+first, 26.262 the second, and this was still there -- so "the byte-array
+branch reads the raw property" was a finding about a branch when it was a
+finding about the function.
+
+Each backend uses its own existing convention for a nested member the
+frame does not reach: Rust's `Err(Error::Bounds)` behind a
+`bytes.len() - at < SIZE` check, Python's `BoundsError`. The static case
+keeps the arithmetic it had, so corpus output is byte-identical in both.
+
+**One fix closed the whole family.** `tool/sweep.py --only=-fixed-rec-`
+was 12 crashes out of 12 in the sample that found it, and is 40 agreed
+out of 40 after.
+
+**The corpus addition catches this one, and 26.262's did not.** Both put
+the construct in `edges.situ`; the difference is what the fault was. A
+traceback fails the compile check every backend already runs. A read past
+the frame does not, because the four-way driver fills a prefix of a
+zeroed `static uint8_t raw[4096]` and an unguarded read lands on zeros
+everywhere. **Which instrument covers a fix is a property of the failure,
+not of the construct** -- and the way to know is to sabotage and watch,
+which is how both were settled rather than assumed.
+
+**The neighbouring family is a different root, left open deliberately.**
+`vrec run[2]` -- a fixed count of a VARIABLE record -- still fails 18 of
+20 with `error: 'run_span' was not declared in this scope`. That shape is
+a counted run and has to be walked, so a later member's offset calls a
+span function nothing emits. Folding it in here would have hidden a
+second defect inside a change about the first.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
