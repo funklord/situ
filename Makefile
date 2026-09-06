@@ -205,8 +205,36 @@ cross-test:
 install: runtime
 	install -d '$(DESTDIR)$(PREFIX)/lib/situc'
 	find situc -name '*.py' -exec install -Dm644 '{}' '$(DESTDIR)$(PREFIX)/lib/{}' \;
+	@# The schemas, laid out exactly as they are here. `import std "..."`
+	@# resolves under this directory, so mirroring the tree is what makes one
+	@# path name the same file whether situ is installed or run in place --
+	@# `import std "std/kernels.situ"`, `import std "example/ipv4/ipv4.situ"`.
+	@#
+	@# The examples ship because they were written to be used and read, not
+	@# only to be tested against. `example/designed.txt` says which of them
+	@# situ invented rather than described, and ships with them: a described
+	@# schema can be imported and held to a real specification, a designed one
+	@# names no external authority.
+	@#
+	@# Only the schemas and the committed contracts beside them -- the map and
+	@# the wire file are what a consumer diffs in review. Vectors stay here:
+	@# they are this suite's inputs, some of them large, and nothing installed
+	@# reads them.
 	install -d '$(DESTDIR)$(PREFIX)/share/situc/std'
 	install -m644 std/*.situ '$(DESTDIR)$(PREFIX)/share/situc/std'
+	install -m644 example/designed.txt '$(DESTDIR)$(PREFIX)/share/situc/example/designed.txt' \
+		2>/dev/null || { install -d '$(DESTDIR)$(PREFIX)/share/situc/example'; \
+		install -m644 example/designed.txt '$(DESTDIR)$(PREFIX)/share/situc/example'; }
+	@# One directory per schema, as here, so a rename of this tree's layout is
+	@# a rename of the installed one and needs no change to any import.
+	for dir in example/*/; do \
+		name=$$(basename "$$dir"); \
+		[ -f "$$dir$$name.situ" ] || continue; \
+		install -d "$(DESTDIR)$(PREFIX)/share/situc/example/$$name"; \
+		install -m644 "$$dir$$name.situ" "$$dir$$name.situ.map" \
+			"$$dir$$name.situ.wire" \
+			"$(DESTDIR)$(PREFIX)/share/situc/example/$$name"; \
+	done
 	install -Dm644 runtime/python/situ_runtime.py \
 		'$(DESTDIR)$(PREFIX)/lib/situc/_runtime/situ_runtime.py'
 	@# VERSION ships beside the module: situc.__version__ reads it, and

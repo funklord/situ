@@ -110,18 +110,26 @@ def library_root() -> Path | None:
 	Found the way `bin/situc` finds its package and for the same reason:
 	situc has to run from a bare interpreter with nothing installed, so it
 	locates itself rather than being told where it is. Two shapes, checked in
-	order -- the source tree, where the package is `<tree>/situc` and the
-	schemas are `<tree>/std`; and an installed prefix, where `make install`
-	puts the package in `<prefix>/lib/situc` and the schemas in
-	`<prefix>/share/situc/std`.
+	order -- the source tree, and an installed prefix where `make install`
+	puts the package in `<prefix>/lib/situc`.
+
+	**It is the root that HOLDS the schema directories, not one of them**,
+	so that `<prefix>/share/situc` mirrors the source tree entry for entry
+	and one path names the same file in both. The alternative -- a root of
+	`<tree>/std`, which this returned for an hour -- makes an installed
+	layout that categorises schemas impossible to mirror in a source tree
+	that does not, and the two then disagree about what
+	`import std "protocol/x.situ"` means. Mirroring costs a `std/` in the
+	spelling and buys the property that matters: a schema that compiles here
+	compiles against an installed situ, unchanged.
 
 	`situc --print-std-dir` prints what this returns, so a build system can
 	compute the path without a schema having to contain one.
 	"""
 	package = Path(__file__).resolve().parent
-	for candidate in (package.parent / "std",
-	                  package.parent.parent / "share" / "situc" / "std"):
-		if candidate.is_dir():
+	for candidate in (package.parent,
+	                  package.parent.parent / "share" / "situc"):
+		if (candidate / "std").is_dir():
 			return candidate
 	return None
 

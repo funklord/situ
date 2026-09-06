@@ -139,10 +139,10 @@ def test_the_library_form_reads_from_situ_s_own_directory(tmp_path: Path) -> Non
 	and compile on one machine.
 	"""
 	root = library_root()
-	assert root is not None and (root / "kernels.situ").is_file(), root
+	assert root is not None and (root / "std" / "kernels.situ").is_file(), root
 
 	path = write(tmp_path, "mine.situ",
-	             'import std "kernels.situ";\n' + BUFFER
+	             'import std "std/kernels.situ";\n' + BUFFER
 	             + "struct s { u8 a; }\n")
 	names = {decl.name for decl in load(path).decls
 	         if isinstance(decl, ast.CodecDecl)}
@@ -159,10 +159,11 @@ def test_the_two_forms_do_not_fall_back_to_each_other(tmp_path: Path) -> None:
 	`kernels.situ` sitting next to the importing file must not satisfy
 	`import std`, and a library name must not satisfy a relative import.
 	"""
-	write(tmp_path, "kernels.situ", "codec local_only {\n\tgranularity = byte;\n}\n")
+	write(tmp_path, "std/kernels.situ",
+	      "codec local_only {\n\tgranularity = byte;\n}\n")
 
 	# The local file is right there, and `import std` still reaches past it.
-	path  = write(tmp_path, "a.situ", 'import std "kernels.situ";\n' + BUFFER
+	path  = write(tmp_path, "a.situ", 'import std "std/kernels.situ";\n' + BUFFER
 	              + "struct s { u8 a; }\n")
 	names = {decl.name for decl in load(path).decls
 	         if isinstance(decl, ast.CodecDecl)}
@@ -170,7 +171,7 @@ def test_the_two_forms_do_not_fall_back_to_each_other(tmp_path: Path) -> None:
 	assert "local_only" not in names
 
 	# And the relative form reads the local one, not the library's.
-	path  = write(tmp_path, "b.situ", 'import "kernels.situ";\n' + BUFFER
+	path  = write(tmp_path, "b.situ", 'import "std/kernels.situ";\n' + BUFFER
 	              + "struct s { u8 a; }\n")
 	names = {decl.name for decl in load(path).decls
 	         if isinstance(decl, ast.CodecDecl)}
@@ -193,7 +194,7 @@ def test_a_library_import_needs_no_file_to_resolve_against() -> None:
 	"""A relative import cannot be resolved in a schema parsed from a string,
 	and says so. A library one can, since it is not measured from anywhere --
 	which is the case an editor and the language server are in."""
-	schema = parse_text('import std "kernels.situ";\n' + BUFFER
+	schema = parse_text('import std "std/kernels.situ";\n' + BUFFER
 	                    + "struct s { u8 a; }\n")
 	names  = {decl.name for decl in schema.decls
 	          if isinstance(decl, ast.CodecDecl)}
@@ -217,5 +218,58 @@ def test_the_form_survives_a_round_trip() -> None:
 
 	schema = parse_text(BUFFER + "struct s { u8 a; }\n")
 	schema.decls.insert(0, ast.ImportDirective(schema.decls[0].span,
-	                                           "kernels.situ", True))
-	assert 'import std "kernels.situ";' in unparse(schema)
+	                                           "std/kernels.situ", True))
+	assert 'import std "std/kernels.situ";' in unparse(schema)
+
+
+# -- what ships, and which half of the corpus it is -------------------------
+
+
+def test_the_corpus_is_partitioned() -> None:
+	"""`example/designed.txt` names the schemas situ invented, and this holds
+	it to the directory rather than to somebody's memory of it.
+
+	A population assertion rather than a spot check: a name in the file that
+	is not a directory is a rename nobody followed, and a directory in
+	neither class is a schema that arrived without anybody deciding what it
+	is -- which is the one that matters, because the default a reader will
+	assume is `described`, and a designed schema borrowed as though it were
+	described is homework in somebody's production build.
+	"""
+	root     = Path(__file__).resolve().parents[2] / "example"
+	listed   = {line.strip() for line in
+	            (root / "designed.txt").read_text(encoding="ascii").splitlines()
+	            if line.strip() and not line.startswith("#")}
+	present  = {d.name for d in root.iterdir()
+	            if d.is_dir() and (d / f"{d.name}.situ").is_file()}
+
+	assert listed <= present, f"named but absent: {sorted(listed - present)}"
+	assert listed, "the designed set is empty, which no longer describes this tree"
+	described = present - listed
+	assert described, "every schema is designed, which cannot be right"
+
+	# The two classes together are the whole corpus, by construction above --
+	# what this pins is that the count has not quietly drifted to nothing.
+	assert len(described) > len(listed), (sorted(described), sorted(listed))
+
+
+def test_every_designed_schema_says_so_in_its_own_text() -> None:
+	"""The list is second-hand, so it is checked against the schemas.
+
+	Each designed schema names what it is in its opening comment -- a
+	`project.md` example number, or the sentence `telemetry.situ` and
+	`keystore.situ` use. A file listed here whose own text claims an external
+	specification is a misclassification, and that is the direction that
+	costs somebody something.
+	"""
+	root   = Path(__file__).resolve().parents[2] / "example"
+	listed = {line.strip() for line in
+	          (root / "designed.txt").read_text(encoding="ascii").splitlines()
+	          if line.strip() and not line.startswith("#")}
+
+	for name in sorted(listed):
+		head = (root / name / f"{name}.situ").read_text(
+			encoding="ascii")[:900].lower()
+		assert ("project.md example" in head
+		        or "designed rather than described" in head
+		        or "invented for itself" in head), name

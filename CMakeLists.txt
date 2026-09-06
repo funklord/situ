@@ -55,6 +55,21 @@ install(DIRECTORY editor DESTINATION lib FILES_MATCHING PATTERN "*.py")
 install(FILES VERSION DESTINATION lib/situc)
 install(DIRECTORY std/ DESTINATION share/situc/std FILES_MATCHING PATTERN "*.situ")
 
+# The examples ship too, laid out as they are in the tree so that
+# `import std "example/ipv4/ipv4.situ"` names one file whether situ is
+# installed or run in place. The schema and the two committed contracts beside
+# it -- a consumer diffs the map and the wire file in review -- and not the
+# vectors, which are this suite's inputs and which nothing installed reads.
+#
+# `test_the_two_installers_put_the_same_files_there` is what holds this to the
+# Makefile: a second installer is a second thing to be wrong, and it was.
+install(DIRECTORY example/ DESTINATION share/situc/example
+	FILES_MATCHING
+	PATTERN "*.situ"
+	PATTERN "*.situ.map"
+	PATTERN "*.situ.wire")
+install(FILES example/designed.txt DESTINATION share/situc/example)
+
 # The manual page, from the same source the Makefile and the deb use. One
 # copy, three installers -- the arrangement test_cmake.py exists to keep.
 install(FILES packaging/situc.1 DESTINATION share/man/man1)

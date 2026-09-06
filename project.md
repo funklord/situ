@@ -3751,9 +3751,9 @@ because the alternative is an ambiguity rather than because it is tidier:
   search path, so which file an import names does not depend on how situc was
   invoked -- a search path makes that a property of the invocation, which is
   exactly what 17.0 refuses to leave open.
-- **`import std "kernels.situ";` reads from the directory situ installed its
-  own schemas into**, which is the other half of that rule rather than an
-  exception to it. 17.0's objection is to a search *path* -- a list, where
+- **`import std "std/kernels.situ";` reads from where situ installed its own
+  schemas**, which is the other half of that rule rather than an exception to
+  it. 17.0's objection is to a search *path* -- a list, where
   "which of these won?" has no visible answer. This is one directory, found
   the way `bin/situc` finds its own package, so an import still names exactly
   one file. What it depends on is which situ is installed, and that is the
@@ -3761,6 +3761,13 @@ because the alternative is an ambiguity rather than because it is tidier:
   `../../../usr/share/situc/std/kernels.situ` into a schema that then compiles
   on one machine. `situc --print-std-dir` prints the directory, for a build
   system that needs the path outside a schema.
+
+  **The root is what HOLDS the schema directories rather than one of them**, so
+  `<prefix>/share/situc` mirrors this tree entry for entry and one path names
+  the same file in both -- `import std "example/ipv4/ipv4.situ"` compiles here
+  and against an installed situ, unchanged. It costs a `std/` in the spelling
+  of a `std/` file, which is the price of the mirror and is worth revisiting
+  when the directories are named.
 
   **Neither form falls back to the other**, which is what makes the second
   spelling worth having rather than a convenience. A fallback would mean that
@@ -22547,6 +22554,72 @@ tests failing together, in a run that took fifty minutes instead of
 fourteen, is a fact about the machine before it is a fact about the
 code**, and reading one error message settled it faster than reading any
 diff would have.
+
+### 26.278 The examples ship, and become a library by being importable
+
+Instructed by the copyright holder: install the examples, split out the
+teaching ones, install the rest. "Why would we create them if not to use
+and inform a user?"
+
+**They were already importable and nobody had tried.** `import
+"ipv4.situ"` into a consumer's `tunnel` struct produces a full capability
+map, checksum coverage carried through onto `tunnel.inner`, directives
+not colliding. So this was never a rework -- only 27 of them did not
+ship, and none of them could be named.
+
+**The root moved from `<tree>/std` to the tree itself**, which it had
+been for about an hour. The reason is a wall worth recording, because
+every cheaper arrangement hits it: **an installed layout that categorises
+schemas cannot be mirrored by a source tree that does not, and one import
+spelling cannot mean two things.** Either the source tree is categorised
+-- which is a 27-directory move touching 35 path-constructing references,
+and which decides the naming question the holder had explicitly deferred
+-- or the install mirrors the source. Mirroring costs a `std/` in the
+spelling of a `std/` file and buys the property that matters: a schema
+that compiles here compiles against an installed situ, unchanged, and a
+later rename of these directories moves the import paths with them
+without touching the language.
+
+**The split is recorded rather than built into a path**, for the same
+reason. `example/designed.txt` lists the five schemas situ invented --
+`keystore`, `message`, `packet`, `register`, `telemetry` -- and the other
+26 are described. **The corpus names its own taxonomy**, which is why
+this needed no judgement: `keystore.situ` says "every other directory
+here is a public format somebody else specified ... or an exercise named
+for the capability it demonstrates", and `telemetry.situ` says "designed
+rather than described. The other examples document formats that already
+exist." The list is held to the tree by a partition assertion and to the
+schemas by a second test reading each one's opening comment, because a
+list of names is second-hand and the direction that costs somebody
+something is a designed schema borrowed as though it were specified.
+
+**And making them a library found what being a document had hidden.**
+Importing `example/ipv4/ipv4.situ` and `std/kernels.situ` together is
+refused: `codec internet_checksum is declared more than once`. Measured
+across the corpus:
+
+    6 of 31 examples redeclare a name std/ has
+        internet_checksum   icmp, ipv4, tcp, udp
+        crc32               png
+        aes_gcm_128         packet
+
+    5 names are declared by more than one example
+        header      dnsname, message, packet
+        msg_type    message, netlink, packet
+        packet      mqtt, packet
+        record      dtls, message
+
+Nothing is broken: 17.0a's namespace is flat by decision, and
+`check_unique_declarations` is doing exactly what it says. What the
+measurement shows is that **each example was written to be read alone**,
+and self-containment is correct for a document and wrong for a library
+member. One example imports fine; two may not.
+
+Left open, and it belongs with the naming: whether a library member
+should `import std "std/kernels.situ"` rather than restate a codec, or
+whether these want the `namespace` that decision 0012 already provides.
+The second is the larger answer and the one that scales past six
+collisions.
 
 ## 27. Questions, and how they were settled
 

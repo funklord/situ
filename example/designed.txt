@@ -1,0 +1,24 @@
+# Schemas here that situ designed, rather than described.
+#
+# `keystore.situ` states the taxonomy this file records: "Every other
+# directory here is a public format somebody else specified -- ARP, DNS,
+# SQLite, MQTT, protobuf -- or an exercise named for the capability it
+# demonstrates." `telemetry.situ` says the same from the other side:
+# "designed rather than described. The other examples document formats that
+# already exist."
+#
+# The distinction is not decoration. A described schema can be imported into
+# somebody's production build and held to a real specification; a designed one
+# names no external authority, so importing it is borrowing situ's homework.
+# Both ship -- they exist to inform a reader, which is the whole reason to
+# write them -- and this file is what tells the two apart until the
+# directories themselves do.
+#
+# One name per line, matching a directory under `example/`.
+# `test_the_corpus_is_partitioned` asserts every schema is in exactly one
+# class and that every name here is a directory that exists.
+keystore
+message
+packet
+register
+telemetry

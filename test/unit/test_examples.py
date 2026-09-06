@@ -330,8 +330,13 @@ def test_every_example_the_readmes_name_exists() -> None:
 	"""
 	named: set[str] = set()
 	for readme in (EXAMPLES.parent / "README.md", EXAMPLES / "README.md"):
-		named |= set(re.findall(r"example/([a-z0-9_]+)", readme.read_text(
-			encoding="ascii")))
+		# Not followed by a dot: `example/designed.txt` is a file under
+		# `example/`, not an example, and the bare class captured `designed`
+		# and then looked for a directory of that name. A character class is
+		# a claim about what a path may contain -- this one had to learn that
+		# a path may also stop at a file.
+		named |= set(re.findall(r"example/([a-z0-9_]+)(?![a-z0-9_.])",
+		                        readme.read_text(encoding="ascii")))
 		# example/README.md links relatively: `[mqtt](mqtt/)`.
 		if readme.parent.name == "examples":
 			named |= set(re.findall(r"\]\(([a-z0-9_]+)/\)", readme.read_text(

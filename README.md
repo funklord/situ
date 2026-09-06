@@ -376,15 +376,24 @@ endian big;             // or `little`, `native`
 bit_order msb_first;    // or `lsb_first`
 strictness = strict;    // or `lenient`
 import "std/codecs.situ";      // relative to this file
-import std "codecs.situ";      // from what situ installed
+import std "std/codecs.situ";  // from what situ installed
 ```
 
 The two import forms resolve differently and neither falls back to the other.
 A quoted path is read relative to the importing file, so which file it names
-never depends on how `situc` was invoked. `import std "..."` reads from the
-directory situ installs its own schemas into, which is what lets a schema name
-a shipped codec without hard-coding a prefix; `situc --print-std-dir` prints
-that directory for a build system that needs the path outside a schema.
+never depends on how `situc` was invoked. `import std "..."` reads from where
+situ installed its own schemas, which is what lets a schema name a shipped
+codec or format without hard-coding a prefix. That directory mirrors this tree
+entry for entry, so one path names the same file whether situ is installed or
+run in place: `import std "example/ipv4/ipv4.situ"` works either way.
+`situc --print-std-dir` prints it, for a build system that needs the path
+outside a schema.
+
+The examples ship, because they were written to be used and read rather than
+only tested against. `example/designed.txt` records which of them situ invented
+rather than described: a described schema is held to somebody else's
+specification and can be imported on that basis, while a designed one names no
+external authority.
 
 **The target is the medium, and it is a bundle of assumptions rather than a
 label.** Each brings what is true of its medium and refuses what cannot live

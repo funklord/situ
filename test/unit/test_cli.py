@@ -686,7 +686,13 @@ def test_print_std_dir_names_a_directory_that_is_there(
 	assert len(printed) == 1, printed
 	root = Path(printed[0])
 	assert root.is_dir(), root
-	assert sorted(p.name for p in root.glob("*.situ")), root
+	# The root HOLDS the schema directories rather than being one, so that an
+	# installed prefix mirrors the source tree entry for entry. Asserted
+	# through a file the mirror must contain, not through a glob of the root
+	# itself -- which finds nothing here and would have passed silently if
+	# the root ever moved somewhere empty.
+	assert (root / "std" / "kernels.situ").is_file(), root
+	assert (root / "example").is_dir(), root
 
 
 def test_it_names_only_the_flags_that_are_global() -> None:

@@ -168,6 +168,7 @@ def test_every_installed_path_belongs_to_exactly_one_package() -> None:
 	assert installed == {
 		"/lib", "/lib/situc", "/lib/situc/_runtime/situ_runtime.py",
 		"/share/situc/std", "/bin/situc",
+		"/share/situc/example", "/share/situc/example/designed.txt",
 		"/include/situ.h", "/lib/libsitu.a",
 		"/share/man/man1/situc.1",
 		"/bin/situ-walk",
