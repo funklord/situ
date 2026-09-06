@@ -429,6 +429,75 @@ def test_every_schema_generates_and_compiles(path: Path, tmp_path: Path) -> None
 	assert result.returncode == 0, f"{path.parent.name}:\n{result.stderr}"
 
 
+PADDED = "struct s { u16 used; u8 data[used]; pad_to(4); u16 trailer; }"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_required_counts_a_pad_as_the_bytes_it_occupies(
+		tmp_path: Path) -> None:
+	"""`pad_to(n)` is 0 to n-1 bytes, and `required` counted it as none.
+
+	The step that adds a member's length asked `_length_expression`, which
+	answers the array count -- and a pad has not got one, so it came out
+	`at = at + ((uint32_t)0u)`, under a comment about reading bytes that
+	reads none. A frame reader then asked for up to three bytes too few and
+	resynchronised inside the following message, on every message.
+
+	The alignment is taken at the PAD'S OWN BASE rather than at the running
+	`at`, which is the part that is easy to get wrong and was: `at` is a
+	running TOTAL and the constant it starts from is every fixed member,
+	including the `trailer` that sits AFTER the pad. Aligning `at` for
+	`u16 used; u8 data[used]; pad_to(4); u16 trailer;` aligns `2 + n + 2`
+	and answers 4 where the truth is 6.
+
+	Run over a whole pad cycle rather than one length, because three of the
+	four residues are wrong under either mistake and the fourth is right by
+	accident: `used = 2` needs no padding at all, and a test that happened
+	to pick it would have passed against both bugs.
+	"""
+	schema   = parse_text(PREAMBLE + PADDED)
+	resolved = resolve(schema, solve(schema))
+	files    = dict(generate(schema, resolved, "unit").files())
+	files.update(frame_c.generate(schema, resolved, "unit", "situ"))
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit_frame.h"
+
+int main(void)
+{
+	for (uint16_t n = 0; n <= 8u; n++) {
+		uint8_t  buf[64];
+		uint32_t need = 0xEEEEu;
+		/* `used`, then n bytes, then up to the next multiple of four,
+		 * then a two-byte trailer. */
+		const uint32_t want = ((((uint32_t)n + 2u) + 3u) / 4u) * 4u + 2u;
+
+		memset(buf, 0, sizeof buf);
+		buf[0] = (uint8_t)(n >> 8);
+		buf[1] = (uint8_t)n;
+
+		if (situ_s_required(buf, (uint32_t)sizeof buf, &need) != SITU_OK)
+			return 2;
+		if (need != want)
+			return 3;
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_every_schema_frame_layer_compiles(path: Path, tmp_path: Path) -> None:

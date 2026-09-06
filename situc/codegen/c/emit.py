@@ -2989,6 +2989,47 @@ class Emitter:
 			if not self._has_length(struct, placement):
 				return self._unframeable(struct)
 			local = c_name(self._local(struct, placement))
+
+			# A pad reads nothing, so none of the below applies to it: no
+			# bytes have to have arrived to know how long it is, and the
+			# length is `align_up(at, n) - at` (0043). `_length_expression`
+			# answers the array count, which a pad has not got, so this came
+			# out as `at = at + ((uint32_t)0u)` -- a pad counted as zero
+			# bytes, under a comment about reading bytes that reads none. A
+			# frame reader then asked for one to three bytes too few and
+			# resynchronised inside the next message, on every message
+			# (26.265).
+			#
+			# NOT clamped, which is why this does not reuse the accessors'
+			# `situ_align_up_u32(at, n, view.limit)`. That clamp is right
+			# where the question is which bytes are in the frame and wrong
+			# here, where the question is how many a whole one needs:
+			# clamping would shorten the answer to what has already arrived,
+			# which is the one thing `required` must never do.
+			pad = pad_alignment(placement)
+			if pad is not None:
+				# `at` is a running TOTAL, not a running offset: the constant
+				# it starts from is every fixed member, including the ones
+				# AFTER this pad. So the alignment is taken at the pad's own
+				# base rather than at `at`, or a `pad_to(4)` behind a 2-byte
+				# length and in front of a 2-byte trailer aligns `2 + n + 2`
+				# and answers 4 where the truth is 6.
+				base = self._base_expression(struct, placement)
+				steps.extend([
+					"",
+					f"\t/* {placement.path}: a pad reads nothing. Its length"
+					f" is where it",
+					f"\t * ends, the next multiple of {pad}, less where it"
+					" starts -- and",
+					"\t * `at` is a total rather than an offset, so the"
+					" alignment is",
+					"\t * taken at the pad's own base (0043). */",
+					f"\tat = at + (situ_align_up_u32({base}, {pad}u,"
+					" view.limit)",
+					f"\t           - {base});",
+				])
+				continue
+
 			steps.extend([
 				"",
 				f"\t/* {placement.path}: reading its length means reading bytes"

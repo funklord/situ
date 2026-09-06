@@ -21714,6 +21714,69 @@ as a length (14.2b)". `walk.py` answers 0; the C walker refuses. That is
 the length VM's arithmetic rather than anything about bits, and folding
 it in here would have hidden it inside a change about something else.
 
+### 26.265 A pad counted as no bytes, and the total that is not an offset
+
+`required` answers how many bytes a whole message needs. For a struct
+carrying `pad_to(4)` it emitted:
+
+    /* pickle_string.<pad>: reading its length means reading bytes that
+     * have to be here first. */
+    at = at + ((uint32_t)0u);
+
+A pad is 0 to 3 bytes and this counted it as none, under a comment about
+reading bytes that reads none. The step asks `_length_expression`, which
+answers the array count, and a pad has not got one.
+
+**What it costs is a stream framer.** `required` is what a reader asks
+before it has the whole message, so an answer three bytes short means the
+reader takes a short frame, calls it complete, and starts the next one
+inside this one. Every message, silently, on any format that pads.
+
+The expression was already in the same header:
+`situ_pickle_string_trailer_offset` applies `situ_align_up_u32`, and the
+reserved-byte check spells the length as `align_up(at, n) - at` with a
+comment saying it is "computed the same way the offset function advances
+the running sum (0043)". Only `required` did not ask.
+
+**The correction is where the alignment is taken, and the obvious version
+is wrong.** Aligning `at` compiles, reads correctly, and is wrong in
+eight of nine cases:
+
+    used=0  need=4   want=6
+    used=3  need=8   want=10
+
+`at` is a running TOTAL, not a running offset: the constant it starts
+from is every fixed member, including the `trailer` that sits AFTER the
+pad. Aligning it aligns `2 + n + 2`. The alignment belongs at the pad's
+own base, which `situ_pickle_string_pad_offset(view)` already answers as
+`2 + used`.
+
+**Caught by checking the arithmetic, not by reading the line.** The
+generated statement looked right both times. What separated them was a
+probe comparing `need` against a hand-computed `align_up(2 + n, 4) + 2`
+over a whole pad cycle.
+
+**And the cycle is why it is a cycle.** Three of the four residues are
+wrong under either mistake and the fourth is right by accident: `used=2`
+needs no padding, so a test that happened to pick that length would have
+passed against both. It runs 0 to 8, and both sabotages fail -- the
+original zero, and the wrong base.
+
+**The clamp is worth a sentence because it looks like a bug and is not.**
+`situ_align_up_u32(at, n, limit)` clamps to the view, which is right when
+the question is which bytes are in the frame and looks wrong when the
+question is how many a whole message needs. It is harmless here: where
+the frame is complete the pad's base is below the limit and the alignment
+is exact, and where it is truncated a clamped answer is still the lower
+bound `required` promises.
+
+**The other three refuse to emit `required` at all** for these structs --
+"No `required`: one of its members has no length this can compute" --
+which is now false in the same way C's comment was, each of them spelling
+`align_up` elsewhere in its own output. C answering correctly while three
+stay silent is the safe direction of a disagreement rather than the
+absence of one, and it is left recorded rather than fixed here.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
