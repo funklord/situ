@@ -22229,6 +22229,85 @@ expressible with the subtraction lifted above zero --
 congruent to 0 mod 256 and at least 765 -- and C and Python agree on all
 1260 byte quadruples tried, 12 of them accepted, so it discriminates.
 
+### 26.274 The conversion the accessor applies and the checker beside it skips
+
+openmlx4 reported `situc verify` accepting a `bcd4`/`bcd2` field holding
+non-digit nibbles that the generated C validator refuses. It is not
+verify: verify builds the **Python** accessors in memory and runs their
+`validate`, so it was faithfully reporting what the Python description
+said, and three of the four descriptions were wrong.
+
+    C       situ_bcd_valid(...) in validate    refuses 07 E1 09 1C
+    C++     no check                           accepts
+    Python  imports bcd_valid, never calls it  accepts
+    Rust    runtime has bcd_valid, unused      accepts
+
+**The runtime half was written four times and the emitter half once.**
+`situ_bcd_valid`, Python's `bcd_valid` and Rust's `bcd_valid` all
+existed; one emitter asked. C's `test_a_bcd_field_is_validated_nibble_
+by_nibble` has passed throughout, which is why a per-backend test is the
+wrong instrument for this class -- it only catches a backend somebody
+remembered to write one for.
+
+The bytes are `07 E1 09 1C`, 2017-09-28 written in binary rather than
+BCD. That is a defect openmlx4 shipped and a real ConnectX-3 corrected
+them about, `0x12` reading as 18 in binary and 12 in BCD, and their
+vector exists to stop it returning.
+
+**A second bug underneath, and it is the same fault pointed the other
+way.** Chasing the first, Rust's `validate` turned out to compare a bcd
+bound against the packed nibbles: `[max = 12]` on a `bcd2 month`
+compiled to `read_be(self.bytes, 6, 1) > 12`, so December -- `0x12`,
+which that backend's own getter reads as 12 -- was refused by that
+backend's own validator. Built and run against C:
+
+    raw    getter   Rust before   Rust after   C
+    0x10    10        Err            Ok        ok
+    0x12    12        Err            Ok        ok
+    0x13    13        Err           Err        refused
+    0x99    99        Err           Err        refused
+
+**The identical fault in the other conversion was found and fixed
+before, and the comment recording it sits four lines above the `else`
+that had this one** -- `[min = 70701]` on cpio's magic compared
+`0x303730373031` against 70701 and refused GNU cpio's own header. So the
+shape is worth naming rather than the instance: **a conversion the
+accessor applies and the checker beside it skips.** Wherever a value is
+stored in one encoding and read in another, the two are separate code
+paths and only one of them is obviously about the encoding.
+
+**Why the four-way differential does not catch it, which is the part
+worth keeping.** It does call `validate` in all four backends and diff
+the answers, and `example/rtc/rtc.situ` has eight bcd fields with ranges
+on them. It stays green under sabotage. Two reasons compounding:
+
+- **`validate` returns on the first failure, so two backends can print
+  the same answer for different reasons.** Before the digit check
+  existed C refused on digits while Rust refused on the bound; both
+  printed `validate 2`, and a comparison of answers cannot see a
+  disagreement about the reason.
+- **Seeing the remaining disagreement needs a buffer every check passes
+  in C and one fails in Rust** -- which for a struct of eight
+  constrained BCD fields means random bytes forming a valid wall clock.
+  They essentially never do.
+
+So the differential is strong on accessors and weak on `validate` over a
+heavily constrained struct. That is 26.35's lesson from the other end: a
+suite assembled to confirm correct behaviour mostly does not notice
+incorrect behaviour, and here the *distribution* is what fails to reach
+the case rather than the probe.
+
+**The first version of the cross-backend test passed with the fix
+reverted in the one backend it was written for.** It asserted
+`"bcd_valid" not in text`, and Python's generated module imports
+`bcd_valid` on a line that names it and never calls it -- which was the
+entire defect. A test whose passing condition is met by the bug it
+hunts. It asserts on `bcd_valid(` now, and every sabotage asserts its own
+substitution count before the gate runs. openmlx4's session made the
+same mistake within the hour from the other direction, a `sed` pattern
+short by one space that printed "2 vectors conform" twice; two shapes,
+one lesson, and the only kind of corroboration that counts here.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

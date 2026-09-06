@@ -356,3 +356,75 @@ def test_the_comparison_sees_refusals_at_all() -> None:
 		f"the scoring now finds {seen} refusals where it found none. That is "
 		f"new information: either a backend has stopped emitting an accessor, "
 		f"or a note has been worded into REFUSALS' reach.")
+
+
+def test_every_backend_checks_a_bcd_field_nibble_by_nibble() -> None:
+	"""A BCD field can hold a bit pattern that is not a number, and the getter
+	cannot report it -- decoding returns a number either way. Parsing is where
+	it has to be caught, and for a long time exactly one of the four caught it.
+
+	Measured on `07 E1 09 1C`, 2017-09-28 written in binary rather than BCD --
+	which is a defect openmlx4 shipped and a real ConnectX-3 corrected them
+	about, `0x12` reading as 18 in binary and 12 in BCD. C refused it; C++,
+	Python and Rust accepted it. `situc verify` runs the Python description,
+	so it reported "2 vectors conform" over a vector written to prove that
+	defect could not return.
+
+	The runtime half was done four times -- `situ_bcd_valid`, `bcd_valid` in
+	Python and in Rust all existed -- and the emitter half once. Python's
+	generated module even imported `bcd_valid` and never called it.
+
+	Asserted across the four rather than in each backend's own suite, because
+	that is the shape of the fault: C's `test_a_bcd_field_is_validated_nibble
+	_by_nibble` has passed throughout, and a per-backend test only catches
+	this in a backend somebody remembered to write one for.
+	"""
+	source   = Source("unit.situ", "target buffer;\nendian big;\n"
+	                  "struct s { bcd4 year; bcd2 month; }\n")
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	built = {
+		"c":      generate_c(schema, resolved, "unit").source,
+		"cpp":    generate_cpp(schema, resolved, "unit").header,
+		"python": generate_py(schema, resolved, "unit").module,
+		"rust":   generate_rs(schema, resolved, "unit").module,
+	}
+	# The paren matters, and the first draft of this test did without it and
+	# was vacuous for the backend it was written for. Python's generated
+	# module imports `bcd_valid` on a line that names it and does not call
+	# it -- which was the whole defect -- so `"bcd_valid" in text` was
+	# satisfied by the import while nothing checked a nibble. A test whose
+	# passing condition is met by the bug it hunts.
+	silent = [name for name, text in built.items()
+	          if "bcd_valid(" not in text]
+	assert not silent, f"backends not checking BCD nibbles: {silent}"
+
+
+def test_no_backend_compares_a_bcd_bound_against_the_packed_nibbles() -> None:
+	"""`[max = 12]` on a `bcd2 month` is a bound on the month, not on the byte.
+
+	Rust read every non-text member through its raw load, so December -- `0x12`,
+	which that backend's own getter reads as 12 -- was refused by that
+	backend's own validator. Measured against C over `01 09 10 12 13 99`: the
+	two agreed on four and disagreed on `0x10` and `0x12`, both valid months
+	Rust alone refused.
+
+	The identical fault in the other conversion was found and fixed earlier --
+	`[min = 70701]` on cpio's magic compared `0x303730373031` against 70701 and
+	refused GNU cpio's own header -- and was not carried across to BCD. The
+	comment recording it sits four lines above the `else` that had the bug.
+
+	Pinned as the decode reaching the comparison, since what makes this
+	backend-specific is which expression `_attr_checks` is handed.
+	"""
+	source   = Source("unit.situ", "target buffer;\nendian big;\n"
+	                  "struct s { bcd2 month [max = 12]; }\n")
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	module = generate_rs(schema, resolved, "unit").module
+	bound  = [line for line in module.splitlines() if "> 12" in line]
+	assert bound, module
+	for line in bound:
+		assert "bcd_decode" in line, line

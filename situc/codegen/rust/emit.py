@@ -5767,8 +5767,33 @@ class Emitter:
 				mine.extend(self._text_number_checks(
 					struct, placement, _ident(local_name(struct, placement))))
 				read = f"self.{_ident(local_name(struct, placement))}_value()"
+			elif scalar.is_bcd:
+				# The same bits-versus-values fault as the text number above,
+				# in the other conversion, and it was not carried across when
+				# that one was fixed. `[max = 12]` on a `bcd2 month` compared
+				# the raw byte, so December -- 0x12, which this backend's own
+				# getter reads as 12 -- was refused by its own validator.
+				# Measured against C over 0x01, 0x09, 0x10, 0x12, 0x13 and
+				# 0x99: the two agreed on four and disagreed on 0x10 and
+				# 0x12, both of them valid months Rust alone refused.
+				#
+				# Spelled as the decode rather than as `self.name()` so the
+				# versioned arm below, which matches on the getter, does not
+				# end up calling it inside a match on itself.
+				read = (f"situ_rt::bcd_decode("
+				        f"{self._raw_load(placement, scalar, offset)},"
+				        f" {scalar.digits})")
 			else:
 				read = self._raw_load(placement, scalar, offset)
+
+			if scalar.is_bcd:
+				mine.extend([
+					f"\t\tif !situ_rt::bcd_valid("
+					f"{self._raw_load(placement, scalar, offset)},"
+					f" {scalar.digits}) {{",
+					"\t\t\treturn Err(Error::Constraint);",
+					"\t\t}",
+				])
 
 			enum = self.enums.get(placement.type_name or "")
 			if enum is not None \

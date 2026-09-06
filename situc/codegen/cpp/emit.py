@@ -6088,6 +6088,22 @@ class Emitter:
 				"\t\t}",
 			])
 
+		# A BCD field can hold a bit pattern that is not a number: a nibble
+		# above nine. The getter cannot report that -- it decodes either way
+		# -- so parsing is where it has to be caught. C has asked this since
+		# BCD arrived and the other three never did.
+		if scalar.is_bcd:
+			raw = self._raw_load(scalar, placement,
+			                     f"raw_.base + {placement.offset_bytes}")
+			lines.extend([
+				f"\t\t/* {placement.path}: every nibble must be a decimal"
+				" digit */",
+				f"\t\tif (!situ_bcd_valid(static_cast<std::uint64_t>({raw}),"
+				f" {scalar.digits})) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			])
+
 		lines.extend(self._attr_checks(struct, placement, read))
 
 		if versioned and lines:

@@ -4769,6 +4769,21 @@ class Emitter:
 				f" {enum.name}\")",
 			])
 
+		# A BCD field can hold a bit pattern that is not a number: a nibble
+		# above nine. The getter cannot report that -- it decodes either way
+		# -- so parsing is where it has to be caught. C has asked this since
+		# BCD arrived and the other three never did, so `07 E1 09 1C` -- a
+		# date written in binary rather than BCD, which is a defect a real
+		# card caught for openmlx4 -- was refused by one description and
+		# accepted by three.
+		if scalar.is_bcd:
+			lines.extend([
+				f"\t\tif not bcd_valid({self._raw_load(placement, scalar)},"
+				f" {scalar.digits}):",
+				f"\t\t\traise ConstraintError(\"{placement.path} holds a"
+				" nibble above nine\")",
+			])
+
 		lines.extend(self._attr_checks(struct, placement, read))
 
 		if versioned and lines:
