@@ -1370,6 +1370,34 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 	return True
 
 
+def bit_extractor(scalar: ScalarType, placement: Placement) -> str:
+	"""Which of the runtime's bit extractors reads this field: msb, lsb or ne.
+
+	**Two questions that look like one.** A field narrower than a byte, or
+	one that straddles, is assembled in the schema's *bit* order -- that is
+	what `bit_order msb_first` means and it has nothing to do with byte
+	order. A field that is a whole number of bytes but not 1, 2, 4 or 8 --
+	`u24`, `u40`, `u48`, `u56` -- has no `get_le32` to go through and falls
+	to the same extractor, but there the *byte* order decides, because the
+	bytes are whole and their order is what `endian` states.
+
+	Shared because the two callers answered it differently and the answers
+	agreed everywhere anybody looked. The view read `endian` for the second
+	case; `--owned` read `bit_order` for both. They coincide for every
+	big-endian schema and for every width that is not a whole number of
+	bytes, which is why no test and no example separated them -- and for a
+	little-endian `u24` the view read 0x332211 where the owned decode read
+	0x112233, self-consistently and wrong. Reported by openmlx4, who found
+	it by pointing this tree's own lens at it rather than by tripping over
+	it: a conversion the accessor applies and the path beside it skips.
+	"""
+	if scalar.is_bit_packed:
+		return "lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST else "msb"
+	if placement.endian is ast.Endian.NATIVE:
+		return "ne"
+	return "lsb" if placement.endian is ast.Endian.LITTLE else "msb"
+
+
 def is_recursive(structs: dict[str, "ResolvedStruct"], name: str) -> bool:
 	"""Whether this struct names itself (0054).
 

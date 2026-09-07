@@ -44,6 +44,7 @@ from situc.traverse import (
 	NOT_A_MEMBER,
 	Check, arm_members, arm_of, classify_check, containment_order,
 	pinned_runs,
+	bit_extractor,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
 	is_own_member,
@@ -6389,7 +6390,7 @@ class Emitter:
 			return self._conditional_load(scalar, placement, base, offset)
 
 		if scalar.is_bit_packed:
-			order = "lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST else "msb"
+			order = bit_extractor(scalar, placement)
 			raw   = (f"situ_bits_get_{order}({base}, {placement.offset_bits}u, "
 			         f"{scalar.bits}u)")
 			if scalar.signed:
@@ -6409,7 +6410,7 @@ class Emitter:
 
 		# Non-word whole-byte widths (u24, u48) go through the bit path, which
 		# handles any width without a special case.
-		assembly = _bit_assembly(placement.endian)
+		assembly = bit_extractor(scalar, placement)
 		raw = f"situ_bits_get_{assembly}({base}, {placement.offset_bits}u, {width}u)"
 		if scalar.signed:
 			return f"({self._ctype(scalar)})situ_sign_extend({raw}, {width}u)"

@@ -23056,6 +23056,63 @@ being added to the enum and not to the prose -- a class C can report and
 Rust cannot being a condition a Rust consumer has no way to express, in
 that test's own words.
 
+### 26.285 Two paths answering one question from two different facts
+
+openmlx4 reported `--owned` reading a little-endian `u24` big-endian. It
+is the BCD shape again -- a conversion the accessor applies and the path
+beside it skips -- but the mechanism is sharper, because **neither path
+was wrong about the fact it consulted.**
+
+    view:   situ_bits_get_lsb(view.base, 8u, 24u)
+    owned:  situ_bits_get_msb(data,      8u, 24u)
+
+Over `00 11 22 33` the view read 0x332211 and the owned decode 0x112233.
+Self-consistently: the round trip stayed byte-identical and said nothing,
+which is 26.275's lesson arriving on the very next field.
+
+**One question, two facts, and both are real.** A field narrower than a
+byte is assembled in the schema's **bit** order -- that is what
+`bit_order msb_first` means, and it has nothing to do with byte order. A
+field that is a whole number of bytes but not 1, 2, 4 or 8 -- `u24`,
+`u40`, `u48`, `u56` -- has no `get_le32` to go through and falls to the
+same extractor, but there the **byte** order decides, because the bytes
+are whole and their order is what `endian` states.
+
+The view split those in two. `--owned` asked `bit_order` for both. Every
+other backend reads the view's path, so the disagreement had exactly one
+place to live.
+
+**Why nothing here separated them, which is the part worth carrying.**
+The two answers coincide for every big-endian schema and for every width
+that is not a whole number of bytes. openmlx4's grid, reproduced here by
+sabotaging the fix and watching which cells fail:
+
+    u9  u12  u20  u33    little: agree      big: agree
+    u24 u40  u48  u56    little: DIFFER     big: agree
+
+Half of one row out of eight cells. Situ's corpus has no little-endian
+`u24` in an owned form, and neither did openmlx4's -- their `u24` is in a
+big-endian file and their little-endian schema's widest integer is a
+`u16`, which goes through `get_le16` on both paths. **They found it by
+pointing this tree's lens at it rather than by tripping over it**, which
+is the first time one of these was found by looking.
+
+**The fix is one function, not two corrected copies.** `bit_extractor`
+in `traverse.py` answers "which of the three extractors reads this
+field", and both the view and the owned form call it. Correcting
+`owned.py` alone would have left two answers that agree today, which is
+what the lens keeps finding.
+
+**And openmlx4 caught their own vacuous measurement before sending it**,
+which is why the grid above is trustworthy: their first scope run
+reported `u9`, `u12` and `u20` as agreeing in both orders, and they had
+not been tested -- the generated struct was not byte-aligned, the build
+failed, and both greps came back empty. Empty matched empty. Their
+second probe checks the build succeeded and the file exists before
+comparing. That is the same shape as the import satisfying a substring
+in 26.284, in somebody else's tree and caught before it cost anybody
+anything.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -42,7 +42,7 @@ from situc.types import ScalarKind
 from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import own_entries, pinned_runs
+from situc.traverse import bit_extractor, own_entries, pinned_runs
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -166,9 +166,13 @@ def _read(placement: Placement, prefix: str) -> str:
 	width  = storage_width(scalar.bits)
 
 	if placement.offset_bits % BITS_PER_BYTE or scalar.bits not in WORD_WIDTHS:
-		# Bit-packed: the runtime's extractor takes a bit offset and a width,
-		# and the bit order is the schema's rather than the host's.
-		order = "msb" if placement.bit_order is ast.BitOrder.MSB_FIRST else "lsb"
+		# The runtime's extractor takes a bit offset and a width, and which
+		# of the three reads it is `traverse.bit_extractor`'s to say -- not
+		# this file's. It answered `bit_order` for both cases the view splits
+		# in two, so a little-endian `u24` was read big-endian here and
+		# correctly here alone: the two paths were self-consistent and
+		# disagreed with each other (26.285).
+		order = bit_extractor(scalar, placement)
 		raw = (f"(uint{width}_t)situ_bits_get_{order}(data, "
 		       f"{placement.offset_bits}u, {scalar.bits}u)")
 	elif scalar.bits == 8:
@@ -196,7 +200,10 @@ def _write(placement: Placement, prefix: str, value: str) -> list[str]:
 		value = f"situ_bcd_encode((uint64_t){value}, {scalar.digits}u)"
 
 	if placement.offset_bits % BITS_PER_BYTE or scalar.bits not in WORD_WIDTHS:
-		order = "msb" if placement.bit_order is ast.BitOrder.MSB_FIRST else "lsb"
+		# The other half of the same conversion, and it has to move with it:
+		# an encode that packs in the order the decode does not unpack turns
+		# a self-consistent misreading into a round trip that corrupts.
+		order = bit_extractor(scalar, placement)
 		return [f"\tsitu_bits_set_{order}(data, {placement.offset_bits}u, "
 		        f"{scalar.bits}u, (uint64_t){value});"]
 

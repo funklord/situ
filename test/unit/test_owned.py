@@ -370,3 +370,83 @@ int main(void)
 	assert "DIFFER" not in ran.stdout, ran.stdout
 	assert ran.stdout.count("agree") == 7, ran.stdout
 	assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+@pytest.mark.parametrize("width", [24, 40, 48, 56])
+@pytest.mark.parametrize("order", ["little", "big"])
+def test_the_owned_form_reads_a_wide_field_in_the_declared_byte_order(
+		width: int, order: str, tmp_path: Path) -> None:
+	"""A width that is a whole number of bytes but not 1, 2, 4 or 8.
+
+	These have no `get_le32` to go through and fall to the runtime's bit
+	extractor, where the *byte* order decides which one -- the bytes are
+	whole and their order is what `endian` states. The view read `endian`
+	for this; `--owned` read `bit_order`, which is the right question for a
+	sub-byte field and the wrong one here.
+
+	The two coincide for every big-endian schema and for every width that is
+	not a whole number of bytes, which is why nothing in this repository
+	separated them. For a little-endian `u24` over `00 11 22 33` the view
+	read 0x332211 and the owned decode read 0x112233 -- self-consistently,
+	so the round trip stayed byte-identical and said nothing.
+
+	Reported by openmlx4, who found it by pointing this tree's own lens at
+	it rather than by tripping over it. Both orders and all four widths are
+	parametrised because the bug lived in exactly half that grid, and a
+	fixture on the failing half alone would not show that the other half was
+	always right.
+	"""
+	if COMPILER is None:
+		pytest.skip("no C compiler")
+
+	body = (f"target buffer;\nendian {order};\nbit_order msb_first;\n"
+	        f"struct s {{ u8 tag; u{width} value; }}\n")
+	# `build` takes a schema PATH, this file's corpus being on disk.
+	schema = tmp_path / "unit.situ"
+	schema.write_text(body, encoding="ascii")
+	names, where = build(schema, tmp_path)
+	assert "s" in names, names
+
+	bytes_ = width // 8
+	driver = f"""#include <stdio.h>
+#include "unit.h"
+#include "unit_owned.h"
+int main(void)
+{{
+	uint8_t buf[1 + {bytes_}];
+	situ_msg_t msg;
+	situ_view_t view;
+	situ_s_t owned;
+	unsigned i;
+
+	buf[0] = 0x5Au;
+	for (i = 0; i < {bytes_}u; i++) {{
+		buf[1 + i] = (uint8_t)(0x11u * (i + 1u));
+	}}
+	situ_msg_init(&msg, buf, sizeof buf);
+	if (situ_s_view(&msg, 0u, &view) != SITU_OK) {{ return 1; }}
+	if (situ_s_decode(buf, sizeof buf, &owned) != SITU_OK) {{ return 1; }}
+	printf("%llu %llu\\n", (unsigned long long)situ_s_value_get(view),
+	       (unsigned long long)owned.value);
+	return 0;
+}}
+"""
+	(where / "probe.c").write_text(driver, encoding="ascii")
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{where}", f"-I{RUNTIME}",
+		 str(where / "probe.c"), str(where / "unit.c"),
+		 str(where / "unit_owned.c"), str(RUNTIME / "situ.c"),
+		 "-o", str(where / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(where / "probe")], capture_output=True, text=True)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+	seen, held = (int(n) for n in ran.stdout.split())
+	assert held == seen, f"view {seen:#x} against owned {held:#x}"
+
+	# And the value is the one the byte order names, not merely a matching
+	# pair: two paths agreeing on the wrong number would satisfy the line
+	# above, which is how the BCD case stayed hidden.
+	raw = bytes(0x11 * (i + 1) for i in range(bytes_))
+	assert seen == int.from_bytes(raw, order), (hex(seen), order)
