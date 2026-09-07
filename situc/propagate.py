@@ -288,7 +288,7 @@ def _is_repeat_while(context: Context) -> bool:
 
 
 def _is_delimited(context: Context) -> bool:
-	return context.placement.delimiter is not None
+	return bool(context.placement.delimiters)
 
 
 def _is_text_number(context: Context) -> bool:
@@ -317,7 +317,7 @@ def _is_loose_text_number(context: Context) -> bool:
 
 def _is_uncapped_scan(context: Context) -> bool:
 	placement = context.placement
-	return placement.delimiter is not None and placement.delimiter_cap is None
+	return bool(placement.delimiters) and placement.delimiter_cap is None
 
 
 def _is_relaxed_delimiter(context: Context) -> bool:
@@ -327,7 +327,7 @@ def _is_relaxed_delimiter(context: Context) -> bool:
 	which is checked on parse, and is what keeps the field Canonical.
 	"""
 	placement = context.placement
-	return (placement.delimiter is not None
+	return (bool(placement.delimiters)
 	        and (placement.delimiter_quote is not None
 	             or placement.delimiter_escape is not None))
 

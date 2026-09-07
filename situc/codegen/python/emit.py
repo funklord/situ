@@ -319,8 +319,10 @@ class Emitter:
 		              for entry in struct.entries]
 
 		needed = []
-		if any(p.delimiter is not None for p in placements):
+		if any(len(p.delimiters) == 1 for p in placements):
 			needed.append("scan")
+		if any(len(p.delimiters) > 1 for p in placements):
+			needed.append("scan_any")
 		if any(p.radix is not None for p in placements):
 			needed.append("parse_uint")
 		if any(p.radix_minimal for p in placements):
@@ -3412,9 +3414,19 @@ class Emitter:
 
 	# -- delimited members (section 8.6) --------------------------------
 
-	def _scan_call(self, placement: Placement, data: str, limit: str) -> str:
+	def _scan_call(self, placement: Placement, data: str, limit: str,
+			part: int | None = None) -> str:
 		delim = placement.delimiter
 		assert delim is not None
+
+		if len(placement.delimiters) > 1:
+			# `scan_any` hands back the pair, and the two callers take the
+			# half they want -- `[0]` for the content and `[1]` for the
+			# length of whichever alternative matched.
+			table = ", ".join(repr(one) for one in placement.delimiters)
+			call = f"scan_any({data}, {limit}, ({table}))"
+			return call if part is None else f"{call}[{part}]"
+
 		args = [data, limit, repr(delim)]
 
 		if placement.delimiter_quote is not None:
@@ -3433,7 +3445,7 @@ class Emitter:
 		gives: a caller who has to write `packet.line_len()` writes the parser
 		by hand instead, and a backend nobody uses enforces nothing.
 		"""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 		name  = py_name(local_name(struct, placement))
 		delim = placement.delimiter
 		start = self._offset_expression(struct, placement)
@@ -3464,6 +3476,7 @@ class Emitter:
 		# scan says where the next member starts, and the value is what is
 		# left after the whitespace at either end.
 		scan = f"{name}_raw_len" if placement.trimmed else f"{name}_len"
+		many = len(placement.delimiters) > 1
 
 		lines = [
 			"",
@@ -3474,12 +3487,23 @@ class Emitter:
 			"",
 			f"\tdef {scan}_from(self, at: int) -> int:",
 			f'\t\t"""The scan, from a base the caller already knows."""',
-			f"\t\treturn {self._scan_call(placement, data_at, limit_at)}",
+			f"\t\treturn {self._scan_call(placement, data_at, limit_at, 0 if many else None)}",
 			"",
+		] + ([
+			f"\tdef {name}_took_from(self, at: int) -> int:",
+			'\t\t"""How long the alternative that matched is.',
+			"",
+			"\t\tWith several the span's delimiter is a property of the",
+			'\t\tmessage rather than of the schema."""',
+			f"\t\treturn {self._scan_call(placement, data_at, limit_at, 1)}",
+			"",
+		] if many else []) + [
 			"\t@property",
 			f"\tdef {scan}(self) -> int:",
-			f'\t\t"""To the first {_doc(render_delimiter(delim))}, or the'
-			' whole run."""',
+			('\t\t"""To the first '
+			 + _doc(" or ".join(render_delimiter(one)
+			                    for one in placement.delimiters))
+			 + ', or the whole run."""'),
 			f"\t\treturn self.{scan}_from(self.{name}_offset)",
 			"",
 			f"\tdef {name}_terminated_from(self, at: int) -> bool:",
@@ -3487,8 +3511,10 @@ class Emitter:
 			"",
 			f"\tdef {name}_span_from(self, at: int) -> int:",
 			f'\t\t"""Content plus delimiter, from a known base."""',
-			f"\t\treturn self.{scan}_from(at) + ({len(delim)}"
-			f" if self.{name}_terminated_from(at) else 0)",
+			(f"\t\treturn self.{scan}_from(at) + self.{name}_took_from(at)"
+			 if many else
+			 f"\t\treturn self.{scan}_from(at) + ({len(delim)}"
+			 f" if self.{name}_terminated_from(at) else 0)"),
 			"",
 			"\t@property",
 			f"\tdef {name}_terminated(self) -> bool:",
@@ -3805,7 +3831,7 @@ class Emitter:
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element."""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is None or self._extent_expression(element) is None:
 			return ["", f"\t# No accessors for {placement.path}: one"
@@ -3953,7 +3979,7 @@ class Emitter:
 				f'\t\t\traise TruncatedError("{placement.path}: '
 				'incomplete", at)',
 			])
-			if placement.delimiter is not None:
+			if placement.delimiters:
 				steps.extend([
 					f"\t\tif not probe.{local}_terminated:",
 					"\t\t\t# The delimiter is not in what we have, and how"
@@ -4580,7 +4606,7 @@ class Emitter:
 		# A delimited member's extent is wherever the delimiter turns out to
 		# be, and `_span` is the member's own answer. One name for "how far
 		# this member reaches", whether it is a byte run or a run of records.
-		if (placement.delimiter is not None or placement.repeat_while is not None
+		if (placement.delimiters or placement.repeat_while is not None
 				or is_counted_run(self.resolved.structs, placement)):
 			name = py_name(local_name(struct, placement))
 			# Every kind that reaches here has the `_from` form: a byte array's

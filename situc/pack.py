@@ -240,8 +240,31 @@ RelationResolver = Callable[[str], "tuple[int, int] | None"]
 class Program:
 	"""A growing bytecode buffer, so a caller can emit several and share one."""
 
-	def __init__(self) -> None:
+	def __init__(self, encodings: tuple[str, ...] = ("ascii",)) -> None:
 		self.code = bytearray()
+		#: What the schema's `encoding` directive named. Carried here rather
+		#: than looked up, because a `Program` is built per expression and
+		#: the directive is the file's.
+		self.encodings = encodings
+
+	def character(self, expr: "ast.CharLiteral") -> int:
+		"""A character literal, as the number its encodings agree on.
+
+		The schema's `encoding` line decided this at parse time and the
+		image carries the number -- so a walker needs no codec, and a
+		character that the declared encodings disagreed about never reached
+		here: it was refused where it was written.
+
+		ASCII where nothing declared, which is the same default `expr.py`
+		uses. The two read the same table, so a schema cannot mean one
+		thing to the compiler and another to the image.
+		"""
+		from situc.types import EncodingError, character_value
+
+		try:
+			return character_value(expr.value, self.encodings)
+		except EncodingError as why:		# pragma: no cover - refused earlier
+			raise PackError(f"`{expr.value}`: {why}") from None
 
 	def emit(self, op: int, operand: int | None = None,
 	         width: str = "<I") -> None:
@@ -262,6 +285,14 @@ class Program:
 		known: dict[str, int] = consts or {}
 		if isinstance(expr, ast.IntLiteral):
 			self.emit(Op.PUSH, expr.value, "<q")
+			return
+		if isinstance(expr, ast.CharLiteral):
+			# A character is a compile-time constant like any other, and the
+			# image carries the NUMBER: by the time a walker reads it the
+			# encoding question has been asked and answered, so nothing
+			# downstream needs a codec. Which is the same argument the
+			# comment above makes for a `const`.
+			self.emit(Op.PUSH, expr.code, "<q")
 			return
 		if isinstance(expr, ast.Remaining):
 			self.emit(Op.REMAINING)
@@ -317,6 +348,9 @@ class Program:
 		"""
 		if isinstance(expr, ast.IntLiteral):
 			self.emit(Op.PUSH, expr.value, "<q")
+			return
+		if isinstance(expr, ast.CharLiteral):
+			self.emit(Op.PUSH, expr.code, "<q")
 			return
 		if isinstance(expr, (ast.NameRef, ast.Access)):
 			path = _path_of(expr)
@@ -392,7 +426,7 @@ class Program:
 #: once you know what it counted.
 CONSTRUCTS: tuple[tuple[str, Callable[[Placement], bool]], ...] = (
 	("region",     lambda p: bool(p.regions)),
-	("delimiter",  lambda p: p.delimiter is not None),
+	("delimiter",  lambda p: bool(p.delimiters)),
 	("radix",      lambda p: p.radix is not None),
 	("variant",    lambda p: bool(p.arm_cases)),
 	("codec",      lambda p: p.codec is not None),
@@ -780,7 +814,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	          and isinstance(decl.value, ast.IntLiteral)}
 
 	# -- the bytecode, first, because a placement record points into it --
-	program = Program()
+	encodings = next((decl.encodings for decl in schema.decls
+	                  if isinstance(decl, ast.EncodingDirective)), ("ascii",))
+	program = Program(encodings)
 	code_at: dict[str, int] = {}
 	for owner, placement in rows:
 		field = members.get(placement.path)
@@ -835,7 +871,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		# what protects the terminator. Asking the expansion there reported
 		# an expression the image had failed to carry, when the length was
 		# never going to come from arithmetic.
-		if placement.delimiter is not None:
+		if placement.delimiters:
 			continue
 		rule = traverse.region_extent(resolved.structs[owner], placement,
 		                              codec_decls.get(placement.codec or ""),
@@ -969,7 +1005,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# backend.
 			if placement.kind in ("coded", "sealed") \
 					and placement.path not in code_at \
-					and placement.delimiter is None:
+					and not placement.delimiters:
 				whole = False
 				continue
 			# A `[since]` member is checked only where the message's own
@@ -1427,8 +1463,18 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			arms_blob += _struct.pack(
 				"<IIqIB3x", at, _u32(placement_index.get(chosen or "")),
 				value, _u32(selects), arm_kind)
-		if placement.delimiter is not None:
-			raw = placement.delimiter[:15]
+		# One ROW per alternative, all under the same placement index. The
+		# table is sorted by placement and a walker binary-searches it, so
+		# consecutive rows for one member cost the format nothing new -- and
+		# `until "," | "]" | "}"` is three rows rather than a record that
+		# would have to carry a count and a bound on it.
+		#
+		# `quote`, `escape` and `cap` belong to the member and are repeated
+		# on each row rather than being read from the first: a walker that
+		# found the second row first would otherwise get zero for all three,
+		# and which row it finds first is a property of a binary search.
+		for one in placement.delimiters:
+			raw = one[:15]
 			delims_blob += _struct.pack(
 				"<IIIIB15s", at,
 				_u32(placement.delimiter_quote),

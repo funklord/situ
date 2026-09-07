@@ -19,7 +19,7 @@ from typing import TypeVar
 from situc import ast, kernels, namespaces, wellformed
 from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
-from situc.types import WidthError, lookup, literal_bytes
+from situc.types import TEXT_ENCODINGS, WidthError, lookup, literal_bytes
 
 
 EnumT = TypeVar("EnumT", bound=Enum)
@@ -186,6 +186,12 @@ class Parser:
 	def __init__(self, source: Source) -> None:
 		self.source = source
 		self.tokens = tokenize(source)
+		#: What the `encoding` directive has said so far. A delimiter written
+		#: as a character is resolved as the parser reads it, so this is
+		#: state rather than a later pass -- and `check_encoding_place`
+		#: refuses a directive that arrives after a struct, which is what
+		#: keeps "so far" and "the file's" the same thing.
+		self.encodings: tuple[str, ...] = ("ascii",)
 		self.pos    = 0
 		# Set by `codec X extern { ... }`, which implies its own binding. The
 		# implied impl is appended after the declaration so both spellings of a
@@ -316,6 +322,7 @@ class Parser:
 			"target":	self.parse_target,
 			"endian":	self.parse_endian,
 			"bit_order":	self.parse_bit_order,
+			"encoding":	self.parse_encoding,
 			"strictness":	self.parse_strictness,
 			"import":	self.parse_import,
 			"const":	self.parse_const,
@@ -337,7 +344,7 @@ class Parser:
 				f"unknown declaration `{token.text}`",
 				token.span,
 				label = "not a declaration keyword",
-				notes = ["expected `target`, `endian`, `bit_order`, `import`, `const`, "
+				notes = ["expected `target`, `endian`, `bit_order`, `encoding`, `import`, `const`, "
 				         "`enum`, `struct`, `require`, `assert`, `invariant` or "
 				         "`relation`"],
 			)
@@ -580,6 +587,44 @@ class Parser:
 			)
 		self.expect_symbol(";", "after the bit_order directive")
 		return ast.BitOrderDirective(self.span_from(start), order)
+
+	def parse_encoding(self) -> ast.EncodingDirective:
+		"""`encoding utf8;` or `encoding ascii | iso8859_1;`.
+
+		The `|` is the same alternation `[must_eq]` already takes and that
+		`until` takes below: one spelling for "any of these", so a reader who
+		has met it once has met all three.
+		"""
+		start = self.advance()
+		names: list[str] = []
+		while True:
+			token = self.expect_ident("an encoding")
+			if token.text not in TEXT_ENCODINGS:
+				raise error(
+					f"unknown encoding `{token.text}`",
+					token.span,
+					label = "not an encoding this compiler knows",
+					notes = ["the encodings are "
+					         + ", ".join(f"`{name}`"
+					                     for name in sorted(TEXT_ENCODINGS)),
+					         "a character literal is accepted only where every "
+					         "one of them gives it the same single code unit, "
+					         "so declaring several is a check rather than a "
+					         "hedge"],
+				)
+			if token.text in names:
+				raise error(
+					f"`{token.text}` is listed twice",
+					token.span,
+					label = "already named",
+				)
+			names.append(token.text)
+			if self.accept_symbol("|") is None:
+				break
+
+		self.expect_symbol(";", "after the encoding directive")
+		self.encodings = tuple(names)
+		return ast.EncodingDirective(self.span_from(start), self.encodings)
 
 	def parse_import(self) -> ast.ImportDirective:
 		"""`import "path";` or `import std "path";`.
@@ -2115,36 +2160,89 @@ class Parser:
 			return None
 
 		start = self.advance()
-		token = self.current
+		found: list[bytes] = []
+		seen: dict[bytes, Span] = {}
 
-		if token.kind is not TokenKind.STRING:
-			raise error(
-				"a delimiter must be a string literal",
-				token.span,
-				label = "expected a string",
-				notes = ['`until "\\r\\n"` or `until "\\0"`: the bytes a member '
-				         "ends at",
-				         "an expression would have to be evaluated against the "
-				         "data the delimiter is being looked for in"],
-			)
-		self.advance()
+		while True:
+			token = self.current
 
-		if not token.text:
-			raise error(
-				"an empty delimiter matches everywhere",
-				token.span,
-				label = "no bytes to look for",
-				notes = ["a zero-length delimiter is found at offset 0 of any "
-				         "buffer, so the member would always be empty"],
-			)
+			if token.kind is TokenKind.CHAR:
+				# A delimiter that is one character rather than one byte,
+				# which is what a text format's delimiters actually are.
+				# Its bytes are the encoding's, and the encoding is the
+				# file's -- so a comma is a comma in ASCII, UTF-8 and every
+				# ISO-8859 part, and a schema that named encodings which
+				# disagree about it is refused rather than picking one.
+				self.advance()
+				raw = self._character_bytes(token)
+			elif token.kind is TokenKind.STRING:
+				self.advance()
+				raw = token.text.encode("latin-1")
+			else:
+				raise error(
+					"a delimiter must be a string or a character",
+					token.span,
+					label = "expected a string or a character",
+					notes = ['`until "\\r\\n"` or `until \'\\0\'`: the bytes a '
+					         "member ends at",
+					         "an expression would have to be evaluated against "
+					         "the data the delimiter is being looked for in"],
+				)
+
+			if not raw:
+				raise error(
+					"an empty delimiter matches everywhere",
+					token.span,
+					label = "no bytes to look for",
+					notes = ["a zero-length delimiter is found at offset 0 of "
+					         "any buffer, so the member would always be empty"],
+				)
+			if raw in seen:
+				raise error(
+					"the same delimiter twice",
+					token.span,
+					label = "already an alternative",
+					notes = ["a scan stops at the first occurrence of any of "
+					         "them, so a repeat changes nothing and is more "
+					         "likely a typo than a choice"],
+				)
+			seen[raw] = token.span
+			found.append(raw)
+
+			if self.accept_symbol("|") is None:
+				break
 
 		cap: ast.Expr | None = None
 		if self.current.is_ident("max"):
 			self.advance()
 			cap = self.parse_expr()
 
-		return ast.Until(self.span_from(start), token.text.encode("latin-1"),
-		                 cap = cap)
+		return ast.Until(self.span_from(start), tuple(found), cap = cap)
+
+	def _character_bytes(self, token: Token) -> bytes:
+		"""A character literal as the bytes the schema's encodings agree on.
+
+		The encodings SEEN SO FAR, which is what makes `check_encoding_place`
+		refuse a directive below a struct: a file-level claim that is only
+		true of part of the file would be worse than none.
+		"""
+		from situc.types import EncodingError, character_value
+
+		try:
+			value = character_value(token.text, self.encodings)
+		except EncodingError as why:
+			raise error(
+				f"`\'{token.text}\'` is not one value under this schema's "
+				"encodings",
+				token.span,
+				label = str(why),
+				notes = ["`encoding` names what a character literal may mean, "
+				         "and a literal is accepted only where every encoding "
+				         "named gives it the same single code unit"],
+			) from None
+		width = 2 if self.encodings[0].startswith("utf16") else 1
+		return value.to_bytes(width, "little"
+		                      if self.encodings[0] == "utf16le" else "big")
 
 	def parse_qualification(self, head: Token) -> str:
 		"""`outer::Header`, from the `::` at the cursor.
@@ -2435,6 +2533,12 @@ class Parser:
 		if token.kind is TokenKind.STRING:
 			self.advance()
 			return ast.StringLiteral(token.span, token.text)
+
+		if token.kind is TokenKind.CHAR:
+			self.advance()
+			return ast.CharLiteral(
+				token.span, token.text,
+				int.from_bytes(self._character_bytes(token), "big"))
 
 		if self.accept_symbol("(") is not None:
 			inner = self.parse_expr()

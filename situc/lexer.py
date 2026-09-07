@@ -18,6 +18,7 @@ class TokenKind(Enum):
 	IDENT	= "identifier"
 	INT	= "integer"
 	STRING	= "string"
+	CHAR	= "character"
 	SYMBOL	= "symbol"
 	EOF	= "end of file"
 
@@ -127,6 +128,8 @@ class Lexer:
 			return self.scan_int()
 		if char == '"':
 			return self.scan_string()
+		if char == "'":
+			return self.scan_char()
 
 		for symbol in SYMBOLS:
 			if self.text.startswith(symbol, start):
@@ -139,7 +142,11 @@ class Lexer:
 				f"non-ASCII byte 0x{ord(char):02x} outside a string literal",
 				self.span(start),
 				label = "not permitted here",
-				notes = ["situ source is ASCII; only string literals may hold other bytes"],
+				notes = ["situ source is ASCII; only string and character "
+				         "literals may hold other bytes",
+				         "a character that is not ASCII is written `'e'` with "
+				         "the character itself, and what it is worth is what "
+				         "the schema's `encoding` says"],
 			)
 
 		raise error(f"unexpected character `{char}`", self.span(start))
@@ -210,7 +217,54 @@ class Lexer:
 		raise error("unterminated string literal", self.span(start, start + 1),
 		            label = "opened here")
 
-	def scan_escape(self) -> str:
+	def scan_char(self) -> Token:
+		"""`'{'`: one character, not one byte.
+
+		The distinction is the whole reason this exists. A byte is written
+		`0x7B` and means that number; a character is written `'{'` and means
+		whatever an encoding says it is -- which for the structural bytes of
+		a text format is the same number in ASCII, UTF-8 and every
+		ISO-8859 part, and is deliberately NOT the same in UTF-16. Writing
+		the number hides that agreement; writing the character lets the
+		compiler check it, which is what `encoding` is for.
+
+		The escapes are the string literal's, plus `\'`. A character
+		literal holds exactly one character, so `''` and `'ab' are refused
+		here rather than becoming a string with a different quote.
+		"""
+		start = self.pos
+		self.pos += 1
+		chunks: list[str] = []
+
+		while self.pos < len(self.text):
+			char = self.text[self.pos]
+			if char == "'":
+				self.pos += 1
+				body = "".join(chunks)
+				if len(body) != 1:
+					raise error(
+						"a character literal holds exactly one character",
+						self.span(start),
+						label = ("found nothing" if not body
+						         else f"found {len(body)} characters"),
+						notes = ["`'a'` is one character; a run of them is a "
+						         "string, written with double quotes",
+						         "an escape counts as the character it names: "
+						         "`'\\n'` is one"],
+					)
+				return Token(TokenKind.CHAR, body, self.span(start))
+			if char == "\n":
+				break
+			if char == "\\":
+				chunks.append(self.scan_escape(quote="'"))
+				continue
+			chunks.append(char)
+			self.pos += 1
+
+		raise error("unterminated character literal",
+		            self.span(start, start + 1), label = "opened here")
+
+	def scan_escape(self, quote: str = '"') -> str:
 		start = self.pos
 		self.pos += 1
 		if self.pos >= len(self.text):
@@ -218,7 +272,8 @@ class Lexer:
 
 		char = self.text[self.pos]
 		self.pos += 1
-		simple = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"'}
+		simple = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\",
+		          quote: quote}
 		if char in simple:
 			return simple[char]
 		if char == "x":
@@ -226,7 +281,7 @@ class Lexer:
 
 		raise error(f"unknown escape sequence `\\{char}`", self.span(start, self.pos),
 		            notes = ["the escapes are `\\n`, `\\t`, `\\r`, `\\0`, "
-		                     "`\\\\`, `\\\"` and `\\xNN`"])
+		                     f"`\\\\`, `\\{quote}` and `\\xNN`"])
 
 	def scan_hex_escape(self, start: int) -> str:
 		"""`\\xNN`: one byte, written with the ASCII characters that name it.

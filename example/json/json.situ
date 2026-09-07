@@ -16,10 +16,25 @@
 target buffer;
 endian big;
 
+// What a character literal in this file is worth. Three encodings rather
+// than one, because JSON's own answer is UTF-8 (RFC 8259 section 8.1) and
+// what arrives on a socket is frequently ASCII and occasionally Latin-1 --
+// and every structural byte this schema switches on is the same value in
+// all three. Declaring the three is what makes that a checked fact rather
+// than an assumption: a literal these encodings disagree about is refused
+// with the disagreement named.
+encoding ascii | utf8 | latin1;
+
 // The first byte says which kind of value this is, and it belongs to the
 // value: a variant switches on a *field*, and a field is bytes. So the
 // discriminant is the opening brace, the opening bracket, the opening quote,
 // the `t` of `true`. Each arm holds what comes after it.
+//
+// Written as characters and not as numbers, which is the difference between
+// a schema that asserts an agreement and one that checks it. `0x7B` says
+// that number and stays silent about which encoding made it that; `'{'` says
+// the character, and the `encoding` line above turns "these three agree" into
+// something the compiler refuses to let drift.
 //
 // `[depth]` bounds the recursion and every struct in the cycle states the
 // same one -- which is the rule rather than a repetition: a walk entering at
@@ -33,13 +48,13 @@ endian big;
 struct value [depth = 64] {
 	u8  kind;
 	variant body switch (kind) {
-		case 0x7B:  object   as_object;		// '{'
-		case 0x5B:  array    as_array;		// '['
-		case 0x22:  text     as_string;		// '"'
-		case 0x74:  yes      as_true;		// 't'
-		case 0x66:  no       as_false;		// 'f'
-		case 0x6E:  nothing  as_null;		// 'n'
-		default:    error;
+		case '{':  object   as_object;
+		case '[':  array    as_array;
+		case '"':  text     as_string;
+		case 't':  yes      as_true;
+		case 'f':  no       as_false;
+		case 'n':  nothing  as_null;
+		default:   error;
 	}
 }
 
@@ -52,7 +67,7 @@ struct value [depth = 64] {
 // element just read, so the member that ends in `}` is the one that ends the
 // run -- and it is part of it, which is what makes the brace accounted for.
 struct object [depth = 64] {
-	member  entries[] while (sep == 0x2C);
+	member  entries[] while (sep == ',');
 }
 
 // One member: `"key":value` and the byte that follows it.
@@ -71,7 +86,7 @@ struct member [depth = 64] {
 
 // An array is the same shape with no keys.
 struct array [depth = 64] {
-	element  entries[] while (sep == 0x2C);
+	element  entries[] while (sep == ',');
 }
 
 struct element [depth = 64] {
@@ -102,11 +117,18 @@ struct nothing { u8  rest[3]  [must_eq = "ull"]; }
 // The bill. Two of these are the language's and one is what they cost
 // together, which is the part worth reading.
 //
-// A NUMBER cannot be framed. `1` ends at whichever of `,`, `]`, `}` or a
-// space comes first, and `until` takes ONE delimiter -- there is no spelling
-// for "ends at any of these bytes". `[must_eq = "070701" | "070702"]` in
-// `cpio.situ` shows the alternation already exists for a pinned value, so the
-// missing thing is narrow and nameable: `until "," | "]" | "}"`.
+// A NUMBER still cannot be framed, and the reason has moved. `until` takes
+// several delimiters now -- `until ',' | ']' | '}'` is exactly the set a JSON
+// number ends at, and `example/http` uses the same construct for CRLF against
+// a bare LF. What is left is the other half: a delimited member's span
+// INCLUDES its delimiter (8.6.1), because for a CRLF-framed line the CRLF
+// belongs to the line. A separator does not belong to what precedes it. So a
+// number framed that way would swallow the comma, and the `sep` that ends the
+// run would read the byte after it.
+//
+// The missing construct is therefore narrow and nameable, and it is not the
+// alternation: a delimiter a member ends BEFORE rather than at. `until` is a
+// terminator; this wants a separator, and situ has one word for both.
 //
 // WHITESPACE between tokens cannot be skipped. Every construct here accounts
 // for its bytes exactly, and JSON permits space, tab, CR and LF between any

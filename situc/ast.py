@@ -50,6 +50,31 @@ class StringLiteral(Expr):
 
 
 @dataclass(frozen=True)
+class CharLiteral(Expr):
+	"""`','`: one character, whose bytes an encoding decides.
+
+	Kept apart from `IntLiteral` all the way to evaluation, and that is the
+	point rather than an implementation detail. `0x2C` is a number and means
+	that number; `','` is a character and means whatever the schema's
+	`encoding` says -- which for a structural byte is the same number in
+	ASCII, UTF-8 and every ISO-8859 part, and is a different number in
+	UTF-16. Writing the number asserts an agreement nobody checked; writing
+	the character asks the compiler to check it.
+	"""
+
+	span: Span
+	value: str
+	#: What the schema's declared encodings agree it is worth,
+	#: resolved where it was written. Carried on the node rather
+	#: than looked up later, because every consumer wants the
+	#: NUMBER and only two want the character: the unparser, which
+	#: prints the schema back, and a diagnostic. Resolving it once
+	#: also puts the refusal at the literal, which is where a
+	#: reader can see which encodings disagreed.
+	code: int = 0
+
+
+@dataclass(frozen=True)
 class NameRef(Expr):
 	"""A bare identifier."""
 
@@ -154,6 +179,19 @@ class Until(Node):
 	The delimiter is bytes rather than text: a schema may frame on `0x00` as
 	readily as on CRLF, and the lexer's string literal already carries either.
 
+	**Several of them, because a scalar in a text format usually ends at
+	whichever of a set comes first.** A JSON number ends at `,`, `]`, `}` or
+	a space; a shell word at a space, a tab or a newline. One delimiter could
+	not say that, so such a field could not be described at all -- the schema
+	either refused it or measured it wrongly. `until "," | "]" | "}"` is the
+	same alternation `[must_eq]` and `encoding` take.
+
+	Where two alternatives match at the same offset the LONGER one wins, so
+	`until "\\r" | "\\r\\n"` ends the member after the newline rather than
+	before it. Stated because the two are not interchangeable: the span
+	includes the delimiter, so which one matched decides where the next
+	member starts.
+
 	`quoted` and `escape` are how a protocol says the delimiter may appear
 	inside the content after all. Without one of them the content simply may
 	not contain the delimiter, which is not a restriction situ invented --
@@ -166,10 +204,23 @@ class Until(Node):
 	"""
 
 	span: Span
-	delimiter: bytes
+	delimiters: tuple[bytes, ...]
 	quoted: int | None	= None
 	escape: int | None	= None
 	cap: Expr | None	= None
+
+	@property
+	def delimiter(self) -> bytes:
+		"""The first alternative.
+
+		Kept for the readers that genuinely want one -- a diagnostic's
+		example, the minimum-size floor -- and deliberately NOT used by
+		anything that scans: a scan over the first of three alternatives is
+		wrong in a way nothing downstream would notice, which is why
+		`delimiters` is the field and this is a property with a docstring
+		saying so.
+		"""
+		return self.delimiters[0]
 
 	@property
 	def is_relaxed(self) -> bool:
@@ -796,6 +847,27 @@ class EndianDirective(Decl):
 class BitOrderDirective(Decl):
 	span: Span
 	bit_order: BitOrder
+
+
+@dataclass(frozen=True)
+class EncodingDirective(Decl):
+	"""`encoding utf8;`, or `encoding ascii | utf8 | iso8859_1;`.
+
+	What a character literal means, stated once for the schema. A LIST
+	rather than one name because that is what a text format actually offers:
+	an HTTP header is ASCII by specification and ISO-8859-1 in practice, and
+	a schema that had to pick one would be wrong about half the traffic.
+
+	Declaring several is not vagueness -- it is the strongest thing a schema
+	can say about bytes whose encoding the data does not carry, and it is
+	decidable: a character literal is accepted only where every listed
+	encoding gives it the same single code unit. `','` is 0x2C in all of
+	them and passes; `'e' with an acute accent is one byte in ISO-8859-1
+	and two in UTF-8, and is refused with both spellings named.
+	"""
+
+	span: Span
+	encodings: tuple[str, ...]
 
 
 @dataclass(frozen=True)

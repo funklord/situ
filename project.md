@@ -23540,6 +23540,119 @@ refuses any drift in it, so it cannot go wrong quietly -- but whether a
 cycle should be able to state its bound once is a question the rule's
 author had no instance to judge against and now does. **The holder's.**
 
+### 26.290 A character is not a byte, and a terminator is not a separator
+
+Two changes from one reading of `example/json`, and they turned out to be
+the same complaint: **a schema was writing `0x7B` where it meant `'{'`.**
+
+**`0x7B` asserts an agreement nobody checked.** It is the number a brace
+is in ASCII, in UTF-8 and in every ISO-8859 part, and it is a different
+number in UTF-16 -- and the schema said none of that. `'{'` says the
+character, and `encoding ascii | utf8 | latin1;` says what the file
+believes about its bytes, so the agreement becomes something the compiler
+refuses to let drift.
+
+**The list is the point, not a hedge.** A text format's encoding is
+frequently not in its bytes: JSON says UTF-8 (RFC 8259 8.1) and what
+arrives is often ASCII and occasionally Latin-1; an HTTP field is ASCII by
+specification and Latin-1 in practice. Naming several states what is
+actually known, and a literal is accepted only where every one of them
+gives it the same single code UNIT -- a unit, not a byte, so `'A'` under
+`utf16be` is 0x0041 and fits a `u16`.
+
+Three ways a literal fails, each named: not representable, more than one
+code unit, or the encodings disagree. The third took finding a pair to
+test with -- most of ISO-8859 agrees below 0xA0 and the parts that differ
+mostly differ by one of them not having the character at all. The section
+sign is 0xA7 in Latin-1 and 0xFD in ISO-8859-5, both a single byte, and
+nothing but comparing the values catches it.
+
+**The number is resolved where the character is written**, and carried on
+the node. Every consumer wants the number; only the unparser and a
+diagnostic want the character. That also puts the refusal at the literal,
+which is where a reader can see which encodings disagreed -- and it made
+`Env` simpler rather than more complicated, since nothing downstream needs
+the encodings at all.
+
+**`explicit` already meant what the character needed it to mean.** The
+`while` predicate reaches a host compiler AS TEXT, and `expr_to_source`
+has an `explicit` flag whose docstring says why: situ's precedence table
+is C's and Rust's is not, so the text is parenthesised before it crosses.
+A character is the other thing a host compiler spells differently --
+Rust reads `','` as a `char` and Python as a `str`, and neither compares
+to an integer. So the same flag emits the number, and the character comes
+back when situ prints its own source. One boundary, one flag, and the
+second reason was already written down beside the first.
+
+**And `until` takes several delimiters now.** A JSON number ends at `,`,
+`]`, `}` or a space; an HTTP header line at CRLF or, from most
+hand-written clients, a bare LF. One delimiter could not say that, so such
+a field was refused or measured wrongly.
+
+`example/http` is the worked case and was chosen because its alternatives
+have DIFFERENT LENGTHS, which is where the interesting bug lives: the span
+includes the delimiter, so which one matched decides where the next header
+starts. Measured on the generated C:
+
+    Host: a\r\n    value span 4
+    Host: a\n      value span 3
+    Host: a        value span 2
+
+The longest match at the earliest offset wins. `"\r"` and `"\r\n"` match
+in one place, and taking the shorter leaves the newline as the next
+member's first byte -- a wrong offset for every conforming message rather
+than for an unusual one. Six descriptions make that choice and all six had
+to be told: three runtimes gained a `scan_any`, both walkers gained the
+matched length, and the packer writes one table ROW per alternative rather
+than a record carrying a count.
+
+**`Placement.delimiter` became `delimiters`, and the rename was the
+method.** A scan over the first of three alternatives finds the wrong end
+of the member and nothing downstream could tell -- so the field's type was
+changed to make every reader decide. 115 uses, 80 of them presence tests
+that mypy sorted mechanically, and 35 real reads that each needed an
+answer. The first alternative is still available as a property, with a
+docstring saying which callers may use it.
+
+**A single delimiter compiles to exactly what it always did.** Every
+schema in the corpus but one is unchanged, byte for byte, and the two-scan
+cost of reading the matched length is paid only by the members that asked
+for it.
+
+**What is refused rather than half-built**, and each is describable: a
+RECORD RUN with several delimiters, because it checks its terminator only
+where an element would start and that is a different walk; a delimited
+member with several and an escaping form, because `quoted` carries state
+that would have to be carried past each alternative; and an `encoding`
+directive below a struct, because a character is resolved where it is
+written and a file-level claim that is true of half the file is worse than
+none.
+
+**The escaping-form refusal did not fire when it was written**, and the
+test is what found it: `Until.is_relaxed` reads fields the parser never
+sets, since `[quoted = ...]` is an ATTRIBUTE that `layout` reads from the
+member. A guard over a field nothing populates is a guard that cannot
+fail, which is this file's oldest entry restated in a construct that is
+one day old.
+
+**One more disagreement, found by the instrument that exists for it.**
+Rust's plain `_span()` kept adding the FIRST alternative's length while
+`_span_from()` learned the matched one, so an HTTP field ending in a bare
+LF measured a byte long there and correctly here -- and the run over those
+fields then took one element fewer than the other three. The four-way
+differential over random bytes caught it on a 57-byte buffer nobody wrote.
+Both forms go through `_span_from` in all four backends now, which is the
+fix that cannot come apart again.
+
+**And JSON's number is still not describable, for a different reason than
+before.** The alternation was half of what it needed. The other half is
+that `until` is a TERMINATOR -- the delimiter belongs to the member, which
+is right for a CRLF-framed line and wrong for a separator. A number framed
+that way swallows the comma, and the `sep` that ends the object's run
+reads the byte after it. So the missing construct is a delimiter a member
+ends BEFORE rather than at, and situ has one word for both. **The
+holder's**, and the example says so in its own text.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

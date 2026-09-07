@@ -359,6 +359,41 @@ pub fn scan(bytes: &[u8], delim: &[u8]) -> usize {
 	limit
 }
 
+/// Where the first of ANY of `delims` is, and how long it was.
+///
+/// A scalar in a text format usually ends at whichever of a set comes first
+/// -- a JSON number at `,`, `]`, `}` or a space. `until "," | "]" | "}"` is
+/// that, and this is the scan it compiles to.
+///
+/// Returns `(offset, took)`, with `took` the length of the alternative that
+/// matched and 0 where none did: a delimited member's span includes its
+/// delimiter, so which one matched decides where the next member starts.
+///
+/// Earliest offset wins, and the longest match at that offset -- `\r` and
+/// `\r\n` can match in the same place, and taking the shorter would leave
+/// the newline as the next member's first byte.
+#[inline]
+pub fn scan_any(bytes: &[u8], delims: &[&[u8]]) -> (usize, usize) {
+	let limit = bytes.len();
+
+	for i in 0..limit {
+		let mut best = 0usize;
+		for one in delims {
+			let n = one.len();
+			if n == 0 || n <= best || i + n > limit {
+				continue;
+			}
+			if &bytes[i..i + n] == *one {
+				best = n;
+			}
+		}
+		if best != 0 {
+			return (i, best);
+		}
+	}
+	(limit, 0)
+}
+
 /// The same, with a byte that makes the delimiter inert.
 ///
 /// `quote` toggles: inside a quoted run the delimiter is content. `escape`

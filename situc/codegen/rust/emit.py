@@ -359,7 +359,7 @@ class Emitter:
 		# that use them.
 		types: list[str] = []
 		for held in own_members(struct):
-			if held.repeat_while is not None or held.delimiter is not None:
+			if held.repeat_while is not None or held.delimiters:
 				types.extend(self._run_index_type(struct, held))
 			if held.kind == "tlv" and held.tlv_grammar is not None \
 					and held.tlv_grammar.walkable:
@@ -3247,6 +3247,15 @@ class Emitter:
 		assert delim is not None
 		bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
 
+		if len(placement.delimiters) > 1:
+			# `scan_any` returns the pair, and the two callers each take the
+			# half they want. Rust makes that free -- a tuple destructured
+			# at the call site -- where C needed an out parameter.
+			table = ", ".join(
+				"b\"" + "".join(f"\\x{byte:02x}" for byte in one) + "\""
+				for one in placement.delimiters)
+			return f"situ_rt::scan_any({slice_expr}, &[{table}])"
+
 		if placement.delimiter_quote is None and placement.delimiter_escape is None:
 			return f"situ_rt::scan({slice_expr}, {bytes_})"
 
@@ -3283,7 +3292,7 @@ class Emitter:
 		count and no way to lose one. `span` is content plus delimiter, which
 		is what the next member's offset is computed from.
 		"""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 		name  = _ident(local_name(struct, placement))
 		base  = c_name(local_name(struct, placement))
 		delim = placement.delimiter
@@ -3312,10 +3321,12 @@ class Emitter:
 		# With `[trim]` the framing and the value are different numbers.
 		scan = _ident(f"{base}_raw_len" if placement.trimmed else f"{base}_len")
 
+		many  = len(placement.delimiters) > 1
 		lines = [
 			"",
-			f"\t/// `{placement.path}` runs to the first"
-			f" {render_delimiter(delim)}.",
+			f"\t/// `{placement.path}` runs to the first "
+			+ " or ".join(render_delimiter(one)
+			              for one in placement.delimiters) + ".",
 			f"\tpub fn {_ident(f'{base}_offset')}(&self) -> usize {{",
 			*(self._offset_body(struct, placement)
 			  or [f"\t\t{self._unparen(start)}"]),
@@ -3325,9 +3336,21 @@ class Emitter:
 			"\t/// that sums offsets has one, and the plain form below",
 			"\t/// re-derives it by rescanning everything before this member.",
 			f"\tpub fn {scan}_from(&self, at: usize) -> usize {{",
-			f"\t\t{self._scan_call(placement, sliced_at)}",
+			(f"\t\t{self._scan_call(placement, sliced_at)}.0" if many else
+			 f"\t\t{self._scan_call(placement, sliced_at)}"),
 			"\t}",
 			"",
+		] + ([
+			"\t/// How long the alternative that matched is. With several",
+			"\t/// the span's delimiter is a property of the message rather",
+			"\t/// than of the schema, so it is read rather than written as",
+			"\t/// a constant.",
+			f"\tpub fn {_ident(f'{base}_took_from')}(&self, at: usize)"
+			" -> usize {",
+			f"\t\t{self._scan_call(placement, sliced_at)}.1",
+			"\t}",
+			"",
+		] if many else []) + [
 			f"\tpub fn {scan}(&self) -> usize {{",
 			f"\t\tself.{scan}_from(self.{_ident(f'{base}_offset')}())",
 			"\t}",
@@ -3339,9 +3362,11 @@ class Emitter:
 			"",
 			f"\tpub fn {_ident(f'{base}_span_from')}(&self, at: usize)"
 			" -> usize {",
-			f"\t\tself.{scan}_from(at) + "
-			f"if self.{_ident(f'{base}_terminated_from')}(at)"
-			f" {{ {len(delim)} }} else {{ 0 }}",
+			(f"\t\tself.{scan}_from(at) + "
+			 f"self.{_ident(f'{base}_took_from')}(at)" if many else
+			 f"\t\tself.{scan}_from(at) + "
+			 f"if self.{_ident(f'{base}_terminated_from')}(at)"
+			 f" {{ {len(delim)} }} else {{ 0 }}"),
 			"\t}",
 			"",
 			"\t/// Whether the delimiter is there. It is not when the frame was",
@@ -3353,8 +3378,15 @@ class Emitter:
 			"",
 			"\t/// Content plus delimiter: where the next member starts.",
 			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
-			f"\t\tself.{scan}() + if self."
-			f"{_ident(f'{base}_terminated')}() {{ {len(delim)} }} else {{ 0 }}",
+			# Through `_span_from`, so the two forms cannot disagree. They
+			# did: `_span_from` learned the matched length and this one kept
+			# adding the FIRST alternative's, so an HTTP field ending in a
+			# bare LF measured a byte long here and correctly there -- and
+			# the run over those fields then took one element fewer than the
+			# other three backends. Found by the four-way differential over
+			# random bytes, which is what it is for.
+			f"\t\tself.{_ident(f'{base}_span_from')}"
+			f"(self.{_ident(f'{base}_offset')}())",
 			"\t}",
 			"",
 			"\t/// The member's bytes, before anything is trimmed.",
@@ -3833,7 +3865,7 @@ class Emitter:
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element."""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is None or self._extent_expression(element) is None:
 			return ["", f"\t// No accessors for {placement.path}: one"
@@ -3969,7 +4001,7 @@ class Emitter:
 
 		lines: list[str] = []
 		digits = (f"self.{_ident(f'{base}_raw')}()"
-		          if placement.delimiter is not None
+		          if placement.delimiters
 		          else f"self.{_ident(f'{base}_digits')}()")
 
 		if placement.radix_minimal:
@@ -3988,7 +4020,7 @@ class Emitter:
 		# And whatever the schema declared about the number. The delimited
 		# branch `continue`s before the scalar path that emits those, so a
 		# delimited text number's `[min]` and `[max]` reached no backend.
-		if placement.delimiter is not None:
+		if placement.delimiters:
 			lines.extend(self._attr_checks(
 				struct, placement,
 				f"self.{_ident(local_name(struct, placement))}_value()"))
@@ -4103,7 +4135,7 @@ class Emitter:
 				"\t\t\treturn situ_rt::Framing::Need(at);",
 				"\t\t}",
 			])
-			if placement.delimiter is not None:
+			if placement.delimiters:
 				steps.extend([
 					f"\t\tif !probe.{local}() {{",
 					"\t\t\t// The delimiter is not in what we have, and how"
@@ -4476,7 +4508,7 @@ class Emitter:
 		way the count is written.
 		"""
 		return (placement.array_count is None
-		        and placement.delimiter is None
+		        and not placement.delimiters
 		        and placement.repeat_while is None
 		        and not data_sized(placement))
 
@@ -4807,13 +4839,13 @@ class Emitter:
 		# rather than four answers to one schema.
 		if arm_of(struct, placement) is not None \
 				and (placement.repeat_while is not None
-				     or placement.delimiter is not None
+				     or placement.delimiters
 				     or is_counted_run(self.resolved.structs, placement)):
 			return None
 
 		# Wherever the delimiter turns out to be. One name for "how far this
 		# member reaches", whether it is a byte run or a run of records.
-		if placement.delimiter is not None or placement.repeat_while is not None:
+		if placement.delimiters or placement.repeat_while is not None:
 			name = c_name(local_name(struct, placement))
 			# Every kind that reaches here has the `_from` form: a byte array's
 			# scan, a record run's walk and a `while` run's. The runs were the

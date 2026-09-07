@@ -34,6 +34,9 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.BitOrderDirective):
 		return [_indent(depth, f"bit_order {decl.bit_order.value}")]
 
+	if isinstance(decl, ast.EncodingDirective):
+		return [_indent(depth, "encoding " + " | ".join(decl.encodings))]
+
 	if isinstance(decl, ast.ImportDirective):
 		where = "std " if decl.library else ""
 		return [_indent(depth, f"import {where}{decl.path!r}")]

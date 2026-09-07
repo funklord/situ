@@ -19,7 +19,8 @@ import difflib
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
-from situc.types import NUMERIC_BOUNDS, ScalarKind, is_scalar_name, literal_bytes
+from situc.types import (NUMERIC_BOUNDS, TEXT_ENCODINGS, ScalarKind,
+                         is_scalar_name, literal_bytes)
 
 Structs = dict[str, ast.StructDecl]
 
@@ -70,6 +71,7 @@ def check(schema: ast.Schema) -> None:
 	check_nonce_references(schema)
 	check_codec_sizes(schema)
 	check_registers(schema)
+	check_encoding_place(schema)
 	check_no_recursive_types(schema)
 	check_depth_bounds(schema)
 	check_delimiters(schema)
@@ -79,6 +81,41 @@ def check(schema: ast.Schema) -> None:
 	check_versions(schema)
 	check_invariants(schema)
 	check_relations(schema)
+
+
+def check_encoding_place(schema: ast.Schema) -> None:
+	"""`encoding` is a claim about the file, so it comes before the file.
+
+	A character literal is resolved where it is written, against the
+	encodings declared SO FAR -- which is the only way to resolve it at all
+	without a second pass, and is exactly right as long as "so far" and "the
+	file's" are the same thing. A directive below a struct breaks that: the
+	literals above it would mean one thing and the ones below another, from
+	a line that reads like a statement about the whole file.
+
+	Refused rather than scoped. A per-struct encoding is a reasonable
+	language and is not this one; making the directive quietly mean
+	"from here on" would be that language arriving without anybody choosing
+	it.
+	"""
+	seen = False
+	for decl in schema.decls:
+		if isinstance(decl, ast.EncodingDirective):
+			if seen:
+				raise error(
+					"`encoding` comes before the structs it describes",
+					decl.span,
+					label = "declared after a struct",
+					notes = ["a character literal is resolved where it is "
+					         "written, so a directive here would give the "
+					         "literals above it a different meaning from the "
+					         "ones below",
+					         "move it up with `target` and `endian`, which are "
+					         "the file's in the same way"],
+				)
+			continue
+		if isinstance(decl, (ast.StructDecl, ast.EnumDecl)):
+			seen = True
 
 
 #: Attributes that only mean anything on a delimited member.
@@ -101,6 +138,57 @@ def check_delimiters(schema: ast.Schema) -> None:
 
 def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 	name = getattr(member, "name", "a reserved member")
+
+	if member.until is not None and len(member.until.delimiters) > 1:
+		# Alternation is built for the construct that needed it: a scalar
+		# whose end is whichever of a set comes first, which is a byte run
+		# or a text number. The other two delimited constructs ask a
+		# different question of the delimiter and are refused rather than
+		# emitted half-converted.
+		#
+		# A RECORD RUN checks the terminator only where an element would
+		# start (8.6.3), so "any of these" has to mean "any of these, at an
+		# element boundary" -- describable, and a different walk from the
+		# one this built. A CODED region's delimiter frames the codec's
+		# output, and which alternative ended it decides how many bytes the
+		# decoder is given.
+		if member.array is not None and member.array.size is None \
+				and not is_scalar_name(member.type_ref.name):
+			raise error(
+				f"`{name}` is a run of records with several delimiters",
+				member.until.span,
+				label = "more than one alternative",
+				notes = ["a run of records checks its terminator only where "
+				         "an element would start, so alternation there is a "
+				         "different walk from the one a byte run does",
+				         "alternation is for a member that ends at whichever "
+				         "of a set of bytes comes first -- a scalar, not a "
+				         "run of them"],
+			)
+		# The member's ATTRIBUTES, not `until.is_relaxed`: the escaping forms
+		# are written `[quoted = ...]` beside the member and `layout` reads
+		# them from there, so the AST node's own fields are never set and a
+		# check on them could not fire. Found by writing the test first.
+		if any(attr.name in DELIMITER_ATTRS for attr in member.attrs):
+			raise error(
+				f"`{name}` has several delimiters and an escaping form",
+				member.until.span,
+				label = "more than one alternative",
+				notes = ["`quoted` and `escape` say how a delimiter may "
+				         "appear inside the content, and with several the "
+				         "scan has to carry that state past each of them",
+				         "state one delimiter, or drop the escaping form"],
+			)
+		if getattr(member, "codec", None) is not None:
+			raise error(
+				f"`{name}` is a coded region with several delimiters",
+				member.until.span,
+				label = "more than one alternative",
+				notes = ["the delimiter frames what the codec is given, so "
+				         "which alternative ended the region decides how many "
+				         "bytes are decoded",
+				         "state one delimiter for a coded region"],
+			)
 
 	if member.until is None:
 		for attr in member.attrs:
@@ -1373,13 +1461,13 @@ UNIMPLEMENTED_ATTRS: dict[str, str] = {
 	           "attribute is read by nothing",
 }
 
-#: What `[encoding = ...]` may say. Section 8.6 names `ascii` and `utf8`;
-#: decision 0044 adds `utf16le` and `utf16be`, which name their code unit's
-#: byte order rather than inheriting it from the field's `endian` scope. An
-#: unknown one is refused rather than ignored: a schema declaring an encoding
-#: and getting no check would be worse off than one declaring nothing, which
-#: is also why bare `utf16` is refused -- it does not say the order.
-TEXT_ENCODINGS = frozenset({"ascii", "utf8", "utf16le", "utf16be"})
+#: What `[encoding = ...]` may say, which is `types.TEXT_ENCODINGS` -- the
+#: same list the `encoding` directive and a character literal read, because
+#: three places answering "which encodings exist" separately is three places
+#: to disagree. An unknown one is refused rather than ignored: a schema
+#: declaring an encoding and getting no check would be worse off than one
+#: declaring nothing, which is also why bare `utf16` is not in it -- it does
+#: not say the order.
 
 
 #: Attributes whose *place* has been established, by reading what reads them.

@@ -531,7 +531,7 @@ def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 	knows how to pin down, and guessing would put every later member on an
 	offset the check would then assert with confidence.
 	"""
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		if placement.type_name in resolved.structs:
 			# A run of records, synthesised empty: the terminator stands where
 			# the first element would. Building a populated one would mean
@@ -649,7 +649,7 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	]
 
 	delimited = [(placement, offset) for placement, offset in offsets
-	             if placement.delimiter is not None]
+	             if placement.delimiters]
 	if delimited:
 		body.extend([
 			"",
@@ -659,7 +659,7 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 			"\t * are arithmetic about a frame that does not exist. */",
 		])
 		for placement, offset in delimited:
-			assert placement.delimiter is not None
+			assert placement.delimiters
 			# A byte array's delimiter ends its content; a run's terminator
 			# stands where an element would start. Putting a run's terminator
 			# after three bytes of zeros made the walk try to parse those
@@ -739,7 +739,7 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 	# false count for the same reason, and fell through to the nested-struct
 	# branch the moment it stopped. A run has `_count` and `_at`; it has no
 	# `_view`, because there is no one instance to take a view of.
-	if placement.delimiter is not None or placement.sized_by is not None \
+	if placement.delimiters or placement.sized_by is not None \
 			or placement.repeat_while is not None \
 			or placement.array_count is not None:
 		# A delimited byte run has a pointer and a length like any other; only
@@ -758,7 +758,7 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 		at    = ident(prefix, struct.name, local, "at")
 		first = f"first_{local}"
 
-		if placement.delimiter is not None:
+		if placement.delimiters:
 			# The instance is the empty run. Asking for element 0 must fail,
 			# and the count must be zero -- which is the answer a walk that
 			# looked for its terminator anywhere rather than only where an
@@ -1044,7 +1044,7 @@ def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	about.
 	"""
 	placement = entry.placement
-	if placement.offset_bits != 0 or placement.delimiter is None:
+	if placement.offset_bits != 0 or not placement.delimiters:
 		suite.skip(placement.path,
 		           "a text number behind another member has no fixed offset to "
 		           "write digits at")
@@ -1132,7 +1132,7 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 		return		# same: its getter takes an out-parameter, because there
 				# is no value to return when the field is not there
 
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		_delimited_checks(suite, struct, entry, prefix, extent)
 		return		# it has no `_get` and no fixed extent: the checks below
 				# read `size_bits`, which for one of these is the
@@ -1353,7 +1353,7 @@ def _nested_placement_check(suite: Suite, resolved: ResolvedSchema,
 	# false `array_count = 1` and was excluded above for the wrong reason; the
 	# right one is that a run has `_at`, and `_instance_assertions` is where
 	# runs are checked.
-	if placement.repeat_while is not None or placement.delimiter is not None:
+	if placement.repeat_while is not None or placement.delimiters:
 		return
 	if placement.offset_bits % BITS_PER_BYTE != 0:
 		return

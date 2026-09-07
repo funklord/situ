@@ -238,7 +238,7 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# other three asked here, got `REGION`, and emitted nothing -- so a
 	# dot-stuffed body was unreachable in three backends out of four.
 	if placement.kind in ("coded", "sealed") \
-			and placement.delimiter is not None:
+			and placement.delimiters:
 		return Member.DELIMITED
 
 	# ...and one without a delimiter is still a region of bytes with a
@@ -297,7 +297,7 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	if placement.repeat_while is not None:
 		return Member.REPEAT_WHILE
 
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		return (Member.RECORD_RUN if placement.type_name in structs
 		        else Member.DELIMITED)
 
@@ -328,7 +328,7 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# about a type that plainly has one -- because the array branch was the
 	# only one that could have it. The delimited form of the same construct
 	# is caught above by its delimiter.
-	if placement.radix is not None and placement.delimiter is None:
+	if placement.radix is not None and not placement.delimiters:
 		return Member.TEXT_NUMBER
 
 	# Before NESTED: an array of structs names a struct type and is not one.
@@ -424,7 +424,7 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 		return (Check.NOTHING if unmatched_values_pass(placement)
 		        else Check.DISCRIMINANT)
 
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		return (Check.NOTHING if placement.type_name in structs
 		        else Check.DELIMITED)
 
@@ -437,7 +437,7 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 	# neither of, and its digits were parsed by nothing: cpio's magic is
 	# `decimal u32 magic[6] [min = 70701, max = 70702]` and `07070x` validated
 	# clean in all four backends. Two classifiers, one fact, learned once.
-	if placement.radix is not None and placement.delimiter is None:
+	if placement.radix is not None and not placement.delimiters:
 		return Check.TEXT_NUMBER
 
 	# Before NESTED: an array of structs is not a nested struct, and calling
@@ -547,7 +547,7 @@ def unmeasurable_inside(structs: dict[str, "ResolvedStruct"],
 	A length driven by a field *outside* the region is neither, and is the
 	shape 26.35 wrote the extent rule for.
 	"""
-	return (member.delimiter is not None
+	return (bool(member.delimiters)
 	        or member.repeat_while is not None
 	        or member.sized_by == "remaining"
 	        or is_counted_run(structs, member))
@@ -890,7 +890,7 @@ def byte_span(placement: Placement) -> tuple[int, int] | None:
 	# This is the `array_count` lesson one level down (invariant 25). The
 	# count was flatly false and this is a true number answering a different
 	# question, which is the harder kind to notice.
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		return None
 
 	first = placement.offset_bits // BITS_PER_BYTE
@@ -1071,7 +1071,7 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 			continue
 		if placement.sized_by == "remaining":
 			return False
-		if placement.kind in ("coded", "sealed") and placement.delimiter is None:
+		if placement.kind in ("coded", "sealed") and not placement.delimiters:
 			return False		# the extent is the codec's expansion, not a length
 
 		if placement.kind == "variant":
@@ -1339,8 +1339,8 @@ def is_run(placement: Placement, structs: Container[str]) -> bool:
 	byte array is that the element is a struct, which is what makes framing a
 	question about the element rather than about a scan.
 	"""
-	return (placement.repeat_while is not None
-	        or (placement.delimiter is not None
+	return bool(placement.repeat_while is not None
+	        or (placement.delimiters
 	            and placement.type_name in structs))
 
 
@@ -1723,7 +1723,7 @@ def declares_its_own_length(placement: Placement) -> bool:
 	"""
 	return (data_sized(placement)
 	        and placement.sized_by != "remaining"
-	        and placement.delimiter is None
+	        and not placement.delimiters
 	        and placement.located is None)
 
 

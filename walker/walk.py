@@ -210,7 +210,7 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 			and index not in view.image.delimiters:
 		return placement.radix_digits * BITS_PER_BYTE
 	if index in view.image.delimiters and placement.type_struct == NONE:
-		content, terminated = scan(view, index)
+		content, terminated, took = scan(view, index)
 		# The delimiter is part of the member only when it is there. An
 		# unterminated one reached as far as the cap or the buffer allowed,
 		# and the member after it starts at that point rather than being
@@ -218,8 +218,14 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 		# them is sixteen bytes long, and smtp's `argument` begins at
 		# sixteen. Refusing instead dropped every member after a truncated
 		# one, which is not what any backend does.
-		width = content + (len(view.image.delimiters[index]) if terminated
-		                   else 0)
+		# `took` and not the delimiter's length, because with several
+		# alternatives there is no such thing: which one matched is a fact
+		# about the message. `len(delimiters[index])` was the COUNT of them
+		# the moment that field became a tuple, which would have been a
+		# wrong span that happened to be right for every one-alternative
+		# schema -- so the type change and the scan change had to land
+		# together.
+		width = content + (took if terminated else 0)
 		return width * BITS_PER_BYTE
 	if placement.size_code != NONE:
 		count = _evaluate(view, placement.size_code,
@@ -872,20 +878,28 @@ def write_bytes(view: View, index: int, value: bytes) -> None:
 	buffer[first:last] = value
 
 
-def scan(view: View, index: int) -> tuple[int, bool]:
-	"""How far a delimited member reaches, and whether it was terminated.
+def scan(view: View, index: int) -> tuple[int, bool, int]:
+	"""How far a delimited member reaches, whether it was terminated, and
+	how long the delimiter that ended it was.
 
-	The two answers are separate on purpose, and the C runtime says why: a
+	The first two are separate on purpose, and the C runtime says why: a
 	member whose delimiter is absent is *truncated*, not empty, and a getter
-	is not the place to decide what to do about that. So this returns the
-	content length and the fact, and the caller reports both.
+	is not the place to decide what to do about that.
 
-	Naive matching, as the runtime does it: a delimiter is one or two bytes
-	in every format this targets, and the generated code stays something a
-	reader can check against the spec they are implementing.
+	The third exists because `until "," | "]" | "}"` makes the delimiter's
+	length a property of the MESSAGE. The span includes the delimiter, so a
+	caller that added a constant would place the next member wrongly on two
+	of the three -- and only where the alternatives differ in length, which
+	is the kind of thing a corpus finds a year later. Zero where nothing
+	terminated it.
+
+	Naive matching, as the runtime does it, and the same tie-break: the
+	earliest offset wins, and the longest alternative at that offset --
+	`"\r"` and `"\r\n"` can match in the same place, and taking the
+	shorter would leave the newline as the next member's first byte.
 	"""
-	delim = view.image.delimiters.get(index)
-	if not delim:
+	delims = view.image.delimiters.get(index)
+	if not delims:
 		raise Refused(f"placement {index} has no delimiter in this image")
 	quote, escape, cap = view.image.delimiter_rules.get(index, (NONE, NONE, NONE))
 
@@ -894,9 +908,10 @@ def scan(view: View, index: int) -> tuple[int, bool]:
 	if cap != NONE:
 		limit = min(limit, cap)
 
-	data = view.buffer[start:start + limit]
+	data   = view.buffer[start:start + limit]
+	shortest = min(len(one) for one in delims)
 	quoted, at = False, 0
-	while at + len(delim) <= len(data):
+	while at + shortest <= len(data):
 		byte = data[at]
 		if escape != NONE and byte == escape:
 			at += 2			# the next byte is content, whatever it is
@@ -905,10 +920,13 @@ def scan(view: View, index: int) -> tuple[int, bool]:
 			quoted = not quoted
 			at += 1
 			continue
-		if not quoted and data[at:at + len(delim)] == delim:
-			return at, True
+		if not quoted:
+			took = max((len(one) for one in delims
+			            if data[at:at + len(one)] == one), default=0)
+			if took:
+				return at, True, took
 		at += 1
-	return limit, False
+	return limit, False, 0
 
 
 def varint(view: View, index: int) -> tuple[int, int]:
@@ -961,7 +979,7 @@ def digits_of(view: View, index: int) -> bytes:
 	read exactly the same bytes or they are checking different fields.
 	"""
 	if index in view.image.delimiters:
-		content, _ = scan(view, index)
+		content, _, _ = scan(view, index)
 	else:
 		content = size_bits(view, index) // BITS_PER_BYTE
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE

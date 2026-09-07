@@ -599,8 +599,18 @@ def evaluate(expr: ast.Expr, env: Env) -> int:
 			notes = ["frame-relative sizing arrives in phase 5 (project.md section 26.5)"],
 		)
 
+	if isinstance(expr, ast.CharLiteral):
+		# Resolved at the literal, where the encodings that disagreed can be
+		# named. By the time an expression is folded there is nothing left
+		# to decide.
+		return expr.code
+
 	if isinstance(expr, ast.StringLiteral):
-		raise error("a string is not an integer expression", expr.span)
+		raise error("a string is not an integer expression", expr.span,
+		            notes = ["a single character is `\'a\'`, whose value the "
+		                     "schema's `encoding` decides",
+		                     "a run of bytes is a `[must_eq]` or an `until` "
+		                     "delimiter, not an integer"])
 
 	raise error("expression is not a compile-time constant", expr.span)
 

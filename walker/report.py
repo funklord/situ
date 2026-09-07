@@ -255,7 +255,7 @@ def content_bytes(view: View, index: int) -> bytes:
 	numbers differ by the delimiter's width and an owned value wants the
 	smaller one.
 	"""
-	content, _ = scan(view, index)
+	content, _, _ = scan(view, index)
 	head, width = _trim_span(view, index, content)
 	start = view.at + offset_bits(view, index) // 8 + head
 	if start + width > view.limit:
@@ -981,7 +981,7 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 	for index in _delimited(image, struct_index):
 		local = _local(image, index)
 		try:
-			content, terminated = scan(view, index)
+			content, terminated, _took = scan(view, index)
 			content = _trimmed(view, index, content)
 		except Refused:
 			continue

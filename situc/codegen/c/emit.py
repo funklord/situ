@@ -1508,7 +1508,7 @@ class Emitter:
 
 		# A text number with a width rather than a delimiter (8.6.2): three
 		# digits, padded, and no scan at all.
-		if placement.radix is not None and placement.delimiter is None:
+		if placement.radix is not None and not placement.delimiters:
 			lines.extend(self._fixed_text_number(struct, placement))
 			# And the non-failing read, which the delimited form beside it has
 			# always emitted. An expression over a text driver names
@@ -1531,7 +1531,7 @@ class Emitter:
 			lines.extend(self._run_index(struct, placement))
 			return lines
 
-		if placement.delimiter is not None:
+		if placement.delimiters:
 			lines.extend(self._delimited(struct, placement))
 			if placement.radix is not None:
 				lines.extend(self._text_number(struct, placement))
@@ -1553,7 +1553,7 @@ class Emitter:
 		# bytes of one were unreachable, which is a strange thing for a
 		# treat-as-bytes region. The delimited case has had a pointer all
 		# along, because the scan path emits one.
-		if placement.kind == "coded" and placement.delimiter is None:
+		if placement.kind == "coded" and not placement.delimiters:
 			lines.extend(self._coded_region(struct, placement))
 			return lines
 
@@ -2918,7 +2918,7 @@ class Emitter:
 		the end of the block. Scanning for it anywhere found the first one and
 		stopped there.
 		"""
-		return (placement.delimiter is not None
+		return (bool(placement.delimiters)
 		        and placement.type_name in self.structs)
 
 	def _is_counted_run(self, placement: Placement) -> bool:
@@ -2961,7 +2961,7 @@ class Emitter:
 		distinction rather than the union.
 		"""
 		return (placement.kind == "field"
-		        and placement.delimiter is None
+		        and not placement.delimiters
 		        and placement.array_count is None
 		        and placement.sized_by is None
 		        and placement.size_expr is None
@@ -3594,7 +3594,7 @@ class Emitter:
 				steps.extend(walk)
 				continue
 
-			if placement.delimiter is not None:
+			if placement.delimiters:
 				terminated = ident(self.prefix, struct.name, local, "terminated")
 				steps.extend([
 					f"\tif (!{terminated}_from(view, at)) {{",
@@ -3728,7 +3728,7 @@ class Emitter:
 				]),
 			])
 		else:
-			assert placement.delimiter is not None
+			assert placement.delimiters
 			delim = placement.delimiter
 			sym   = ident(self.prefix, struct.name, local, "delim")
 			body.extend([
@@ -4317,7 +4317,7 @@ class Emitter:
 		occupies no bytes, and a walk that took it would not terminate on
 		input somebody chose.
 		"""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 		element = self.resolved.structs[placement.type_name]
 		# A *fixed-size* element has no extent function -- its extent is its
 		# size and every caller has that already -- and reading that absence
@@ -4442,7 +4442,7 @@ class Emitter:
 		missing is truncated rather than empty, and a getter is not the place
 		to decide what to do about that; `validate` is.
 		"""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 
 		local  = c_name(self._local(struct, placement))
 		delim  = placement.delimiter
@@ -4464,14 +4464,33 @@ class Emitter:
 		# and only one function is emitted for both.
 		scan_len = raw if placement.trimmed else length
 
+		many = len(placement.delimiters) > 1
+		took = ident(self.prefix, struct.name, local, "took")
+
 		lines = [
-			f"/* `{placement.name}` runs to the first {render_delimiter(delim)}."
-			" Reaching anything after",
+			f"/* `{placement.name}` runs to the first "
+			+ (self._delimiter_list(placement) if many
+			   else render_delimiter(delim))
+			+ ". Reaching anything after",
 			" * it means this scan, which is why the map calls their offsets"
 			" Scanned",
 			" * rather than Dynamic: it is a search, and the delimiter may not"
 			" be there. */",
-			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
+		] + (
+			[f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};"]
+			if not many else
+			[f"static const uint8_t {sym}_{i}[{len(one)}] = {{"
+			 + ", ".join(f"0x{byte:02X}u" for byte in one) + "};"
+			 for i, one in enumerate(placement.delimiters)]
+			+ [f"static const uint8_t *const {sym}[{len(placement.delimiters)}]"
+			   " = {"
+			   + ", ".join(f"{sym}_{i}"
+			               for i in range(len(placement.delimiters))) + "};",
+			   f"static const uint8_t {sym}_len[{len(placement.delimiters)}]"
+			   " = {"
+			   + ", ".join(f"{len(one)}u" for one in placement.delimiters)
+			   + "};"]
+		) + [
 			"",
 			"/* The scan, from a base the caller already knows.",
 			" *",
@@ -4486,9 +4505,37 @@ class Emitter:
 			f"static inline uint32_t {scan_len}_from(situ_view_t view,"
 			" uint32_t at)",
 			"{",
+		] + ([
+			"\tuint32_t took = 0u;",
+			"",
+			f"\treturn {self._scan_call(placement, 'view.base + at', self._scan_limit(placement, 'at'), sym, 'took')};",
+		] if many else [
 			f"\treturn {self._scan_call(placement, 'view.base + at', self._scan_limit(placement, 'at'), sym)};",
+		]) + [
 			"}",
 			"",
+		] + ([
+			"/* How long the alternative that matched is. The span includes"
+			" the",
+			" * delimiter, and with several of them that length is a"
+			" property of",
+			" * the message rather than of the schema -- so it is read"
+			" rather than",
+			" * written as a constant. Two scans for one span, which is what"
+			" the",
+			" * alternation costs and is why a single delimiter still"
+			" compiles to",
+			" * the one-scan form above. */",
+			f"static inline uint32_t {took}_from(situ_view_t view,"
+			" uint32_t at)",
+			"{",
+			"\tuint32_t took = 0u;",
+			"",
+			f"\t(void){self._scan_call(placement, 'view.base + at', self._scan_limit(placement, 'at'), sym, 'took')};",
+			"\treturn took;",
+			"}",
+			"",
+		] if many else []) + [
 			f"static inline uint32_t {scan_len}(situ_view_t view)",
 			"{",
 			f"\treturn {scan_len}_from(view, {base});",
@@ -4511,8 +4558,10 @@ class Emitter:
 			"\t * member ran to the end of the buffer, and claiming the extra",
 			"\t * bytes would put the next one past the limit its own bounds",
 			"\t * check trusts. */",
-			f"\treturn {scan_len}_from(view, at) + "
-			f"({terminated}_from(view, at) ? {len(delim)}u : 0u);",
+			(f"\treturn {scan_len}_from(view, at) + {took}_from(view, at);"
+			 if many else
+			 f"\treturn {scan_len}_from(view, at) + "
+			 f"({terminated}_from(view, at) ? {len(delim)}u : 0u);"),
 			"}",
 			"",
 			f"static inline uint32_t {span}(situ_view_t view)",
@@ -4816,7 +4865,7 @@ class Emitter:
 		# extra bytes -- which nothing caught while the accessor was emitted
 		# for `table` kernels alone and no delimited region used one.
 		span    = (f"{ident(self.prefix, struct.name, local, 'len')}(view)"
-		           if placement.delimiter is not None
+		           if placement.delimiters
 		           else self._length_expression(struct, placement))
 		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
 		bound   = decode_bound(codec, placement)
@@ -5110,10 +5159,24 @@ class Emitter:
 		return (f"situ_min_u32({placement.delimiter_cap}u, "
 		        f"situ_remaining_u32(view.limit, {base}))")
 
+	def _delimiter_list(self, placement: Placement) -> str:
+		"""Every alternative, for a comment: ``"," `` or ``"]" `` or ...."""
+		return " or ".join(render_delimiter(one)
+		                   for one in placement.delimiters)
+
 	def _scan_call(self, placement: Placement, data: str, limit: str,
-			sym: str) -> str:
+			sym: str, took: str | None = None) -> str:
 		delim = placement.delimiter
 		assert delim is not None
+
+		if len(placement.delimiters) > 1:
+			# `until "," | "]" | "}"`. `wellformed` refuses this beside an
+			# escaping form, so there is no relaxed variant to reach: the
+			# state a quote carries would have to be carried past each
+			# alternative, which is a fifth scan rather than a parameter.
+			assert took is not None, "the caller has to name a `took`"
+			return (f"situ_scan_any({data}, {limit}, {sym}, {sym}_len, "
+			        f"{len(placement.delimiters)}u, &{took})")
 
 		if placement.delimiter_quote is None and placement.delimiter_escape is None:
 			return f"situ_scan({data}, {limit}, {sym}, {len(delim)}u)"
@@ -5618,7 +5681,7 @@ class Emitter:
 		# delimiter turns out to be. The member emits its own `_span`, which
 		# scans, and everything downstream sums that call rather than trying to
 		# inline the search (section 8.6.1).
-		if (placement.delimiter is not None or placement.repeat_while is not None
+		if (placement.delimiters or placement.repeat_while is not None
 				or self._is_counted_run(placement)):
 			# One name for "how far this member reaches", whichever kind it
 			# is: a byte array's `_span` is its content plus the delimiter, a
@@ -5666,7 +5729,7 @@ class Emitter:
 				and placement.kind == "field"
 				and placement.array_count is None
 				and placement.sized_by is None
-				and placement.delimiter is None):
+				and not placement.delimiters):
 			assert self._struct_extent(nested), "_has_length checks this first"
 			local = c_name(self._local(struct, placement))
 			site  = ident(self.prefix, struct.name, local, "extent")
@@ -5805,7 +5868,7 @@ class Emitter:
 			# The other three decline the member and say so, so C was alone
 			# in answering, and alone in answering wrongly.
 			nested_member = (placement.kind == "field"
-			                 and placement.delimiter is None
+			                 and not placement.delimiters
 			                 and placement.array_count is None
 			                 and placement.sized_by is None)
 			if (placement.repeat_while is not None
@@ -5835,7 +5898,7 @@ class Emitter:
 		# code did not compile. C++, Rust and Python all emit `required`
 		# for the same schema, so C was alone -- and alone in a layer no
 		# test compiled.
-		if placement.delimiter is not None:
+		if placement.delimiters:
 			return True
 		return self._region_length(struct, placement) is not None
 
@@ -6948,7 +7011,7 @@ class Emitter:
 		wide = ident(self.prefix, struct.name, local, "len")
 		# The fixed-width form has no `_len`: its length is the digit count
 		# the schema declared, which is a constant here.
-		count = (f"{wide}(view)" if placement.delimiter is not None
+		count = (f"{wide}(view)" if placement.delimiters
 		         else f"{placement.array_count}u")
 
 		if placement.radix_minimal:
@@ -7181,7 +7244,7 @@ class Emitter:
 	def _is_arm_struct(self, placement: Placement) -> bool:
 		"""Whether an arm is one struct rather than a run of them."""
 		return (placement.array_count is None
-		        and placement.delimiter is None
+		        and not placement.delimiters
 		        and placement.repeat_while is None
 		        and not data_sized(placement))
 
@@ -7250,7 +7313,7 @@ class Emitter:
 		# here. They appear in this struct's entries under a dotted path
 		# because the map names them, and carrying the delimiter through so
 		# the map reads consistently brought them into this loop as well.
-		if placement.delimiter is not None:
+		if placement.delimiters:
 			if "." in placement.path[len(struct.name) + 1:]:
 				return []
 			return self._delimiter_check(struct, placement)
@@ -7359,7 +7422,7 @@ class Emitter:
 		# twin already had; this backend keeps its own chain and needs it
 		# here.
 		text_number = (scalar is not None and placement.radix is not None
-		               and placement.delimiter is None)
+		               and not placement.delimiters)
 
 		if scalar is None or (placement.array_count is not None
 		                      and not text_number):

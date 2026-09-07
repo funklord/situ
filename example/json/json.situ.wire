@@ -19,7 +19,7 @@ endian big
 target buffer
 
 struct array size=1..
-  @0x0000   1..       element    entries  while=sep==0x2C
+  @0x0000   1..       element    entries  while=sep==','
 
 struct element size=1..
   @0x0000   0..       value      held
@@ -39,7 +39,7 @@ struct nothing size=3
   @0x0000   3         u8         rest  big must_eq="ull"
 
 struct object size=4..
-  @0x0000   4..       member     entries  big while=sep==0x2C
+  @0x0000   4..       member     entries  big while=sep==','
 
 struct text size=1..
   @0x0000   until:22  u8         chars

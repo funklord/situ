@@ -49,7 +49,7 @@ def _runs(struct: ResolvedStruct) -> list[Placement]:
 			continue
 		if placement.scalar is None or placement.scalar.bits != 8:
 			continue
-		if placement.sized_by is None and placement.delimiter is None:
+		if placement.sized_by is None and not placement.delimiters:
 			continue
 		found.append(placement)
 	return found

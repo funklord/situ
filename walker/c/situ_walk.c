@@ -300,6 +300,45 @@ static const uint8_t *delimiter_rules(const situ_walk_image *image,
 	                 image->delimiter_stride, index);
 }
 
+/* Every alternative a member ends at: the run of consecutive rows the packer
+ * wrote for one placement.
+ *
+ * `until "," | "]" | "}"` is three rows of one table rather than a record
+ * carrying a count, which costs the format nothing -- the table is sorted by
+ * placement and already searched. What it costs a READER is this function:
+ * `table_row` finds one of the equal rows and which one is a property of a
+ * binary search, so the first has to be walked back to.
+ *
+ * `*first` is that row and `*count` how many follow it, both zero where the
+ * member is not delimited. */
+static void delimiter_span(const situ_walk_image *image, uint32_t index,
+                           const uint8_t **first, uint32_t *count)
+{
+	const uint8_t *found = delimiter_rules(image, index);
+
+	*first = NULL;
+	*count = 0u;
+	if (found == NULL) {
+		return;
+	}
+
+	const uint32_t stride = image->delimiter_stride;
+	const uint8_t *at     = found;
+
+	while (at > image->delimiters
+	       && u32_at(at - stride) == index) {
+		at -= stride;
+	}
+	*first = at;
+
+	const uint8_t *end = image->delimiters
+	                     + (size_t)image->delimiter_count * stride;
+	while (at < end && u32_at(at) == index) {
+		*count += 1u;
+		at     += stride;
+	}
+}
+
 static int delimiter_at(const uint8_t *message, const uint8_t *delim,
                         uint32_t width)
 {
@@ -314,21 +353,29 @@ static int delimiter_at(const uint8_t *message, const uint8_t *delim,
 situ_walk_err situ_walk_scan(const situ_walk_image *image,
                              const uint8_t *message, uint32_t len,
                              uint32_t index, uint32_t at,
-                             uint32_t *content, int *terminated)
+                             uint32_t *content, int *terminated,
+                             uint32_t *took)
 {
-	const uint8_t *rules = delimiter_rules(image, index);
+	const uint8_t *rules = NULL;
+	uint32_t       alts  = 0u;
+
+	delimiter_span(image, index, &rules, &alts);
 	if (rules == NULL) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
+	const uint32_t stride = image->delimiter_stride;
 	const uint32_t quote  = u32_at(rules + 4);
 	const uint32_t escape = u32_at(rules + 8);
 	const uint32_t cap    = u32_at(rules + 12);
-	const uint32_t width  = rules[16];
-	const uint8_t *delim  = rules + 17;
 
-	if (width == 0u || width > DELIMITER_MAX) {
-		return SITU_WALK_MALFORMED;
+	*took = 0u;
+	for (uint32_t d = 0u; d < alts; d++) {
+		const uint32_t wide = rules[(size_t)d * stride + 16];
+
+		if (wide == 0u || wide > DELIMITER_MAX) {
+			return SITU_WALK_MALFORMED;
+		}
 	}
 	if (at > len) {
 		return SITU_WALK_BOUNDS;
@@ -343,8 +390,10 @@ situ_walk_err situ_walk_scan(const situ_walk_image *image,
 
 	int      quoted = 0;
 	uint32_t i      = 0u;
-	while (width <= limit && i <= limit - width) {
+	while (i < limit) {
 		const uint8_t byte = message[at + i];
+		uint32_t      best = 0u;
+		uint32_t      d;
 
 		if (escape != SITU_WALK_NONE && byte == (uint8_t)escape) {
 			i += 2u;	/* the next byte is content, whatever it is */
@@ -355,9 +404,25 @@ situ_walk_err situ_walk_scan(const situ_walk_image *image,
 			i += 1u;
 			continue;
 		}
-		if (!quoted && delimiter_at(message + at + i, delim, width)) {
+		/* The longest alternative that matches here, which is the same
+		 * tie-break `situ_scan_any` makes and for the same reason: `"\r"`
+		 * and `"\r\n"` can match in one place, and taking the shorter
+		 * leaves the newline as the next member's first byte. */
+		for (d = 0u; !quoted && d < alts; d++) {
+			const uint8_t *row  = rules + (size_t)d * stride;
+			const uint32_t wide = row[16];
+
+			if (wide <= best || i + wide > limit) {
+				continue;
+			}
+			if (delimiter_at(message + at + i, row + 17, wide)) {
+				best = wide;
+			}
+		}
+		if (best != 0u) {
 			*content    = i;
 			*terminated = 1;
+			*took       = best;
 			return SITU_WALK_OK;
 		}
 		i += 1u;
@@ -1208,14 +1273,19 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 		}
 
 		uint32_t content    = 0u;
+		uint32_t took       = 0u;
 		int      terminated = 0;
 		err = situ_walk_scan(image, message, len, index, at / 8u,
-		                     &content, &terminated);
+		                     &content, &terminated, &took);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
 
-		*out = (content + (terminated ? delim[16] : 0u)) * 8u;
+		/* `took` and not the row's own width: with several alternatives
+		 * there is no such thing as "the delimiter's length", and which
+		 * row a binary search happened to land on is not the one that
+		 * matched. */
+		*out = (content + (terminated ? took : 0u)) * 8u;
 		return SITU_WALK_OK;
 	}
 
@@ -1640,9 +1710,10 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		at /= 8u;
 		width /= 8u;
 		if (delimiter_rules(image, index) != NULL) {
-			int terminated = 0;
+			int      terminated = 0;
+			uint32_t took       = 0u;
 			err = situ_walk_scan(image, message, len, index, at,
-			                     &width, &terminated);
+			                     &width, &terminated, &took);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
@@ -2157,9 +2228,10 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				continue;
 			}
 			uint32_t content    = 0u;
+			uint32_t took       = 0u;
 			int      terminated = 0;
 			err = situ_walk_scan(image, message, len, index, at / 8u,
-			                     &content, &terminated);
+			                     &content, &terminated, &took);
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
 			}
@@ -2188,9 +2260,10 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (span > 0u) {
 				uint32_t content = wide / 8u;
 				if (delimiter_rules(image, index) != NULL) {
-					int terminated = 0;
+					int      terminated = 0;
+					uint32_t took       = 0u;
 					err = situ_walk_scan(image, message, len, index, at / 8u,
-					                     &content, &terminated);
+					                     &content, &terminated, &took);
 					if (err == SITU_WALK_UNSUPPORTED) {
 						return err;
 					}

@@ -227,7 +227,8 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 situ_walk_err situ_walk_scan(const situ_walk_image *image,
                                  const uint8_t *message, uint32_t len,
                                  uint32_t index, uint32_t at,
-                                 uint32_t *content, int *terminated);
+                                 uint32_t *content, int *terminated,
+                                 uint32_t *took);
 
 /* How wide a member is, in bits. A constant where the image knows one; a
  * `size_code` program otherwise, which is what `size = Bounded` costs.

@@ -65,7 +65,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	# Only where something scans. A helper nobody calls is dead Lua in a file
 	# a user is expected to read before trusting it.
-	if any(entry.placement.delimiter is not None
+	if any(entry.placement.delimiters
 	       for struct in resolved.structs.values()
 	       for entry in struct.entries):
 		lines.extend(SCAN_HELPER)
@@ -376,7 +376,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# bytes for an eight-byte number, overlapping everything after it. Shown
 	# as a string, which is what the bytes are: an analyst reading a cpio
 	# header wants to see "070701".
-	if placement.radix is not None and placement.delimiter is None:
+	if placement.radix is not None and not placement.delimiters:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
 
@@ -812,7 +812,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# delimited member carried `array_count = 1` -- so the check below failed
 	# for the wrong reason and the right thing happened by accident. Removing
 	# that lie from the solver is what exposed it.
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		return _delimited(resolved, struct, placement, field, seek)
 
 	if placement.kind == "variant":
@@ -1405,7 +1405,7 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	nested = resolved.structs.get(placement.type_name or "")
 	if nested is not None and not nested.layout.is_fixed_size \
-			and placement.array_count is None and placement.delimiter is None:
+			and placement.array_count is None and not placement.delimiters:
 		# ...and only where that extent function exists. A struct ending in
 		# `[remaining]` has none -- where it ends is where the *frame* does,
 		# which its own bytes never say -- and naming one anyway is a Lua

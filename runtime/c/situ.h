@@ -664,6 +664,60 @@ static inline uint32_t situ_scan(const uint8_t *data, uint32_t limit,
 	return limit;
 }
 
+/* The same over several delimiters: where the first of ANY of them is.
+ *
+ * A scalar in a text format usually ends at whichever of a set comes first --
+ * a JSON number at `,`, `]`, `}` or a space; a shell word at a space, a tab
+ * or a newline. `until "," | "]" | "}"` is that, and this is the scan it
+ * compiles to.
+ *
+ * `*took` is the length of the alternative that matched, and zero where none
+ * did. The caller needs it because a delimited member's span INCLUDES its
+ * delimiter, so which one matched decides where the next member starts --
+ * with one delimiter that length is a constant and the generated code uses
+ * `situ_scan` instead, which is why every schema written before this one
+ * compiles to exactly what it did.
+ *
+ * The LONGEST match at the earliest offset wins. Two alternatives can match
+ * in the same place -- `"\r"` and `"\r\n"` -- and taking the shorter would
+ * leave the newline as the next member's first byte. Earliest first, longest
+ * second, and both are the caller's to rely on.
+ */
+static inline uint32_t situ_scan_any(const uint8_t *data, uint32_t limit,
+        const uint8_t *const *delims, const uint8_t *lens, uint32_t count,
+        uint32_t *took)
+{
+	uint32_t i;
+	uint32_t d;
+
+	*took = 0u;
+	for (i = 0u; i < limit; i++) {
+		uint32_t best = 0u;
+
+		for (d = 0u; d < count; d++) {
+			const uint32_t n = lens[d];
+			uint32_t       j;
+
+			if (n == 0u || n <= best || i + n > limit) {
+				continue;
+			}
+			for (j = 0u; j < n; j++) {
+				if (data[i + j] != delims[d][j]) {
+					break;
+				}
+			}
+			if (j == n) {
+				best = n;
+			}
+		}
+		if (best != 0u) {
+			*took = best;
+			return i;
+		}
+	}
+	return limit;
+}
+
 /* The same, with a byte that makes the delimiter inert.
  *
  * `quote` toggles: inside a quoted run the delimiter is content. `escape`

@@ -297,7 +297,7 @@ def _reads(struct: ResolvedStruct, prefix: str,
 		# one spelling missing: a length written as arithmetic reached the
 		# scalar branch below and asked for a `_get` that takes no index.
 		if placement.array_count is None \
-				and (placement.delimiter is not None
+				and (placement.delimiters
 				     or data_sized(placement)):
 			lines.extend(_variable_read(frozenset(resolved.structs), struct,
 			                            placement, local, prefix))
@@ -565,7 +565,7 @@ def _variable_read(structs: frozenset[str], struct: ResolvedStruct,
 			"\t}",
 		]
 
-	if placement.delimiter is not None and placement.radix is not None:
+	if placement.delimiters and placement.radix is not None:
 		# A text number: the parse is the interesting part, and it returns an
 		# error rather than a value.
 		return [

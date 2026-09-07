@@ -413,7 +413,7 @@ def _find_unbounded_regions(resolved: ResolvedSchema) -> list[Suggestion]:
 				         "field instead of `remaining`")
 			elif driver:
 				where = f"give `{driver}` a `[max = N]`"
-			elif placement.delimiter is not None:
+			elif placement.delimiters:
 				where = ("cap the scan with `max N` after the `until` clause, "
 				         "so a frame that never terminates stops somewhere")
 			elif placement.type_name in resolved.structs:

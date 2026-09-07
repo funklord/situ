@@ -75,7 +75,7 @@ def _can_own(placement: Placement, resolved: ResolvedSchema) -> bool:
 	if placement.kind in ("variant", "region", "tlv", "opaque", "coded",
 	                      "sealed", "authenticated"):
 		return False
-	if placement.delimiter is not None or placement.repeat_while is not None:
+	if placement.delimiters or placement.repeat_while is not None:
 		return False
 	if placement.sized_by is not None:
 		return False

@@ -91,6 +91,11 @@ SUFFIXES = frozenset({
 	# member's affix -- `extent_at` is the struct's -- but this check reads
 	# every generated name.
 	"extent_at",
+	# `until "," | "]" | "}"`: how long the alternative that matched is. Only
+	# a member with several delimiters has one, and a schema field called
+	# `x_took_from` would collide with it exactly as `x_len` collides with a
+	# getter.
+	"took_from",
 })
 
 

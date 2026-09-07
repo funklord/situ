@@ -242,7 +242,7 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		# zero, for a region the data sizes -- was compared by nothing
 		# (26.35).
 		if placement.codec is not None:
-			if placement.delimiter is not None:
+			if placement.delimiters:
 				found.append(Ask(Probe.DELIMITED, local))
 			elif placement.kind == "coded" \
 					and placement.size_max_bits is not None \
@@ -274,7 +274,7 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# than emitting from it.
 			if placement.array_count is not None or data_sized(placement) \
 					or placement.sized_by is not None \
-					or placement.delimiter is not None:
+					or placement.delimiters:
 				continue
 
 			# ...and only at a constant offset. 19.4 says a versioned member

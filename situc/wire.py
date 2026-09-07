@@ -221,8 +221,11 @@ def _position(placement: Placement) -> str:
 
 
 def _width(placement: Placement) -> str:
-	if placement.delimiter is not None:
-		return f"until:{placement.delimiter.hex()}"
+	if placement.delimiters:
+		# Every alternative, `|`-separated as the schema writes them. The
+		# wire signature is a committed contract, so a member that ends at
+		# three bytes and shows one would be a diff nobody reviewed.
+		return "until:" + "|".join(one.hex() for one in placement.delimiters)
 	if placement.size_max_bits != placement.size_bits:
 		hi = ("" if placement.size_max_bits is None
 		      else str(placement.size_max_bits // BITS_PER_BYTE))

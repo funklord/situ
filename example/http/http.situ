@@ -14,6 +14,14 @@
 target buffer;
 endian big;
 
+// What a character literal here is worth. Two, because a header field's
+// bytes are ASCII by RFC 9110 section 5.5 and Latin-1 in practice -- the
+// specification says a recipient SHOULD treat other octets as opaque, which
+// is a fact about the traffic rather than about the grammar. Both agree
+// about every byte this schema switches on, and a literal they disagreed
+// about would be refused with the disagreement named.
+encoding ascii | latin1;
+
 // One header line. `name` stops at the colon and folds case, because
 // `Content-Length` and `content-length` are one field name; `value` stops at
 // the CRLF and ignores the optional whitespace around itself.
@@ -21,11 +29,24 @@ endian big;
 // Both are `canonical = NonCanonical`, and the map says so: two byte
 // sequences carry the same meaning, which is exactly what that axis is for.
 struct header_field {
-	u8  name[]   until ":"     [case_insensitive, encoding = ascii];
-	u8  value[]  until "\r\n"  [trim];
+	u8  name[]   until ':'              [case_insensitive, encoding = ascii];
+	u8  value[]  until "\r\n" | '\n'    [trim];
 }
 
-// The delimiter is `:` and not `": "`. RFC 9112 permits `name:value` with no
+// `until "\r\n" | '\n'` is the second thing a real request made this file
+// learn, and it is the same lesson as the colon below: RFC 9112 section 2.2
+// says a recipient MAY recognise a bare LF as a line terminator, and one
+// that does not loses every message from a sender that sends one -- which is
+// most of what a hand-written client emits.
+//
+// Two alternatives of DIFFERENT lengths, which is the case worth having in
+// the corpus: the span includes the delimiter, so which one matched decides
+// where the next header starts. The longest match at the earliest offset
+// wins, so a proper CRLF ends the field after the newline rather than
+// leaving it as the next field's first byte -- and a schema that listed only
+// `'\n'` would frame every conforming message one byte short.
+
+// The delimiter is `':'` and not `": "`. RFC 9112 permits `name:value` with no
 // space at all, and a tab where a space would do, so demanding one loses
 // every header that omits it -- which is what the first draft of this file
 // did, and what running it against a realistic request showed in one line.

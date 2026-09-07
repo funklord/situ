@@ -325,7 +325,12 @@ class Placement:
 	#: found by scanning rather than computed. Everything after it has
 	#: `offset = Scanned` rather than `Dynamic` -- a search that can fail,
 	#: not an addition that cannot (doc/decision/0020-delimited-data.md).
-	delimiter: bytes | None		= None
+	#: Every alternative the member ends at, in schema order, and empty
+	#: where it is not delimited. A TUPLE and not one `bytes`, because a
+	#: scan over the first of three would be wrong in a way nothing
+	#: downstream could notice -- so the field's type makes every reader
+	#: decide, which is what renaming it was for.
+	delimiters: tuple[bytes, ...]	= ()
 	#: How the delimiter is made inert inside the content, where a protocol
 	#: admits it there. Both cost `canonical = NonCanonical`, because two byte
 	#: sequences then encode one value.
@@ -358,6 +363,21 @@ class Placement:
 	#: it gives the value's domain rather than its width in the buffer, which
 	#: for a text number depends on the number (section 8.6.2).
 	radix: int | None		= None
+
+	@property
+	def delimiter(self) -> bytes:
+		"""The first alternative, for readers that genuinely want one.
+
+		A diagnostic's example, the minimum-size floor, the byte a
+		`terminated` check compares -- these want *a* delimiter and are
+		right with the first. **A scan is not one of them**: scanning for
+		the first of three alternatives finds the wrong end of the member
+		and nothing downstream could tell. So the field is `delimiters`,
+		this is a property with this docstring, and every scan site was
+		made to say which it meant when the field was renamed.
+		"""
+		return self.delimiters[0]
+
 	@property
 	def radix_max(self) -> int | None:
 		"""The largest value this text number can hold.
@@ -1029,7 +1049,7 @@ class Solver:
 			# `getattr`, because `sealed` shares this function and has no
 			# `covers` clause of its own -- same reason as `until` above.
 			coded_covers  = tuple(getattr(region, "covers", ())),
-			delimiter     = until.delimiter if until is not None else None,
+			delimiters    = until.delimiters if until is not None else (),
 			delimiter_cap = (evaluate(until.cap, self.result.env)
 			                 if until is not None and until.cap is not None
 			                 else None),
@@ -1738,7 +1758,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
-			delimiter          = member.until.delimiter if member.until else None,
+			delimiters         = member.until.delimiters if member.until else (),
 			repeat_while       = _repeat_source(member),
 			repeat_shown       = _repeat_source(member, explicit=False),
 			repeat_cap         = self._repeat_cap(member),

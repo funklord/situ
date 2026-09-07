@@ -99,8 +99,8 @@ def _by_namespace(decls: list[ast.Decl]) -> list[tuple[str, list[ast.Decl]]]:
 
 def _group(decl: ast.Decl) -> str:
 	if isinstance(decl, (ast.TargetDirective, ast.EndianDirective,
-	                     ast.BitOrderDirective, ast.ImportDirective,
-	                     ast.StrictnessDirective)):
+	                     ast.BitOrderDirective, ast.EncodingDirective,
+	                     ast.ImportDirective, ast.StrictnessDirective)):
 		return "directive"
 	if isinstance(decl, ast.ConstDecl):
 		return "const"
@@ -124,6 +124,9 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 
 	if isinstance(decl, ast.BitOrderDirective):
 		return [f"bit_order {decl.bit_order.value};"]
+
+	if isinstance(decl, ast.EncodingDirective):
+		return ["encoding " + " | ".join(decl.encodings) + ";"]
 
 	if isinstance(decl, ast.ImportDirective):
 		where = "std " if decl.library else ""
@@ -513,6 +516,18 @@ def _expr(expr: ast.Expr, parent_binding: int, explicit: bool = False,
 	if isinstance(expr, ast.IntLiteral):
 		return expr.text
 
+	if isinstance(expr, ast.CharLiteral):
+		# `explicit` means "this text is going to a host compiler", which is
+		# the flag the precedence note above is about -- and a character is
+		# the other thing a host compiler spells differently. Rust reads
+		# `','` as a `char` and Python as a `str`; neither compares to an
+		# integer, and the schema's own answer is the number. So the number
+		# is what crosses that boundary, and the character is what comes
+		# back when situ prints its own source.
+		if explicit:
+			return str(expr.code)
+		return f"'{_escape(expr.value, quote=chr(39))}'"
+
 	if isinstance(expr, ast.StringLiteral):
 		return f'"{_escape(expr.value)}"'
 
@@ -584,9 +599,13 @@ def _until_to_source(until: "ast.Until | None") -> str:
 	if until is None:
 		return ""
 
-	body = _escape(until.delimiter.decode("latin-1"))
+	# Every alternative, so that unparsing round-trips: a schema written
+	# `until "," | "]"` and printed back as `until ","` would be a different
+	# schema, which is what `situc dump-ast` exists not to be.
+	body = " | ".join(f'"{_escape(one.decode("latin-1"))}"'
+	                  for one in until.delimiters)
 	cap  = f" max {expr_to_source(until.cap)}" if until.cap is not None else ""
-	return f' until "{body}"{cap}'
+	return f" until {body}{cap}"
 
 
 def _while_to_source(repeat: "ast.While | None") -> str:
@@ -605,10 +624,18 @@ def _while_to_source(repeat: "ast.While | None") -> str:
 	return f" while ({expr_to_source(repeat.predicate)}){cap}"
 
 
-def _escape(text: str) -> str:
+def _escape(text: str, quote: str = '"') -> str:
+	"""Escaped for a literal delimited by `quote`.
+
+	The two literals escape their own quote and not the other's: `'"'` is a
+	character literal holding a double quote and needs no backslash, and
+	writing one produces `\\"` inside single quotes, which the lexer refuses
+	as an unknown escape. JSON's string delimiter is that character, so the
+	round trip found it the first time a schema used one.
+	"""
 	out = []
 	for char in text:
-		if char in '\\"':
+		if char == "\\" or char == quote:
 			out.append("\\" + char)
 		elif char == "\n":
 			out.append("\\n")

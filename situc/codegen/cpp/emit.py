@@ -1359,27 +1359,57 @@ class Emitter:
 		so the storage argument still holds: one array with static storage
 		duration per function, initialised at compile time.
 		"""
-		delim = placement.delimiter
-		assert delim is not None
-		return "situ_delim_" + "".join(f"{byte:02x}" for byte in delim)
+		assert placement.delimiters
+		# Every alternative, not the first: two members whose sets begin with
+		# the same byte would otherwise name one array and get whichever
+		# declaration the compiler saw last. `_` between them, which no hex
+		# pair can produce, so the name is unambiguous rather than merely
+		# unlikely to collide.
+		return "situ_delim_" + "_".join(
+			"".join(f"{byte:02x}" for byte in one)
+			for one in placement.delimiters)
 
 	def _delimiter_decl(self, placement: Placement, indent: str) -> str:
 		"""The declaration `_delimiter_array` names, at `indent`.
 
 		`static` so it is not rebuilt on the stack each call, and `constexpr`
 		so the bytes are the compiler's rather than an initialiser that runs.
+
+		With several alternatives it is a table of them plus their lengths,
+		which is what `situ_scan_any` takes. One alternative emits exactly
+		what it always did, so every schema written before the alternation
+		compiles to the same bytes.
 		"""
-		delim = placement.delimiter
-		assert delim is not None
-		return (f"{indent}static constexpr std::uint8_t "
-		        f"{self._delimiter_array(placement)}[] = {{"
-		        + ", ".join(f"0x{byte:02X}" for byte in delim) + "};")
+		array = self._delimiter_array(placement)
+		if len(placement.delimiters) == 1:
+			return (f"{indent}static constexpr std::uint8_t "
+			        f"{array}[] = {{"
+			        + ", ".join(f"0x{byte:02X}"
+			                    for byte in placement.delimiter) + "};")
+
+		lines = [
+			f"{indent}static constexpr std::uint8_t {array}_{i}[] = {{"
+			+ ", ".join(f"0x{byte:02X}" for byte in one) + "};"
+			for i, one in enumerate(placement.delimiters)
+		] + [
+			f"{indent}static constexpr const std::uint8_t *const {array}[] = {{"
+			+ ", ".join(f"{array}_{i}"
+			            for i in range(len(placement.delimiters))) + "};",
+			f"{indent}static constexpr std::uint8_t {array}_len[] = {{"
+			+ ", ".join(f"{len(one)}" for one in placement.delimiters) + "};",
+		]
+		return "\n".join(lines)
 
 	def _scan_expression(self, placement: Placement, data: str,
-			limit: str) -> str:
+			limit: str, took: str | None = None) -> str:
 		delim = placement.delimiter
 		assert delim is not None
 		array = self._delimiter_array(placement)
+
+		if len(placement.delimiters) > 1:
+			assert took is not None, "the caller has to name a `took`"
+			return (f"situ_scan_any({data}, {limit}, {array}, {array}_len, "
+			        f"{len(placement.delimiters)}u, &{took})")
 
 		if placement.delimiter_quote is None and placement.delimiter_escape is None:
 			return f"situ_scan({data}, {limit}, {array}, {len(delim)}u)"
@@ -1401,7 +1431,7 @@ class Emitter:
 		between the two headers for one schema should not have to learn a
 		second vocabulary for the same three numbers.
 		"""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 		name  = bare_name(local_name(struct, placement))
 		delim = placement.delimiter
 		start = self._offset_expression(struct, placement)
@@ -1435,10 +1465,12 @@ class Emitter:
 		# left after the whitespace at either end. Without it they are one.
 		scan = f"{name}_raw_len" if placement.trimmed else f"{name}_len"
 
+		many = len(placement.delimiters) > 1
 		lines = [
 			"",
-			f"\t/* {placement.path} runs to the first"
-			f" {render_delimiter(delim)}. */",
+			f"\t/* {placement.path} runs to the first "
+			+ " or ".join(render_delimiter(one)
+			              for one in placement.delimiters) + ". */",
 			f"\t[[nodiscard]] std::uint32_t {name}_offset() const noexcept",
 			"\t{",
 			*(self._offset_body(struct, placement) or [f"\t\treturn {start};"]),
@@ -1447,8 +1479,30 @@ class Emitter:
 			" const noexcept",
 			"\t{",
 			self._delimiter_decl(placement, "\t\t"),
+		] + ([
+			"\t\tstd::uint32_t took = 0;",
+			"",
+			f"\t\treturn {self._scan_expression(placement, 'raw_.base + at', limit_at, 'took')};",
+		] if many else [
 			f"\t\treturn {self._scan_expression(placement, 'raw_.base + at', limit_at)};",
+		]) + [
 			"\t}",
+		] + ([
+			"\t/* How long the alternative that matched is. With several the",
+			"\t * span's delimiter is a property of the message rather than",
+			"\t * of the schema, so it is read rather than written as a",
+			"\t * constant -- two scans for one span, which is what the",
+			"\t * alternation costs. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_took_from"
+			"(std::uint32_t at) const noexcept",
+			"\t{",
+			self._delimiter_decl(placement, "\t\t"),
+			"\t\tstd::uint32_t took = 0;",
+			"",
+			f"\t\t(void){self._scan_expression(placement, 'raw_.base + at', limit_at, 'took')};",
+			"\t\treturn took;",
+			"\t}",
+		] if many else []) + [
 			f"\t[[nodiscard]] std::uint32_t {scan}() const noexcept",
 			"\t{",
 			f"\t\treturn {scan}_from({name}_offset());",
@@ -1465,8 +1519,9 @@ class Emitter:
 			f"\t[[nodiscard]] std::uint32_t {name}_span_from(std::uint32_t at)"
 			" const noexcept",
 			"\t{",
-			f"\t\treturn {scan}_from(at) + "
-			f"({name}_terminated_from(at) ? {len(delim)}u : 0u);",
+			(f"\t\treturn {scan}_from(at) + {name}_took_from(at);" if many else
+			 f"\t\treturn {scan}_from(at) + "
+			 f"({name}_terminated_from(at) ? {len(delim)}u : 0u);"),
 			"\t}",
 			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
 			"\t{",
@@ -1835,7 +1890,7 @@ class Emitter:
 		returns `[[nodiscard]] err`, so an out-of-range index cannot be
 		ignored into a use of an uninitialised view.
 		"""
-		assert placement.delimiter is not None
+		assert placement.delimiters
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is None or not self._extent_terms(element):
 			return ["", f"\t/* No accessors for {placement.path}: one"
@@ -2036,7 +2091,7 @@ class Emitter:
 				"\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t}",
 			])
-			if placement.delimiter is not None:
+			if placement.delimiters:
 				steps.extend([
 					f"\t\tif (!{name_of}_terminated()) {{",
 					"\t\t\t/* The delimiter is not in what we have, and how"
@@ -2620,7 +2675,7 @@ class Emitter:
 		# than four answers to one schema.
 		if arm_of(struct, placement) is not None \
 				and (placement.repeat_while is not None
-				     or placement.delimiter is not None
+				     or placement.delimiters
 				     or is_counted_run(self.resolved.structs, placement)):
 			return None
 
@@ -2653,7 +2708,7 @@ class Emitter:
 		# delimiter turns out to be, and `_span()` is the member's own answer.
 		# The same call serves a byte array and a run of records -- one name
 		# for "how far this member reaches", whichever it is.
-		if placement.delimiter is not None or placement.repeat_while is not None:
+		if placement.delimiters or placement.repeat_while is not None:
 			name = bare_name(local_name(struct, placement))
 			# Every kind that reaches here has the `_from` form now: a byte
 			# array's scan, a record run's walk and a `while` run's. The runs
@@ -6198,7 +6253,7 @@ class Emitter:
 			      f"raw_.base + {name}_offset(), {name}_raw_len())")
 			# The fixed-width form has no `_len`: its length is the digit
 			# count the schema declared, which is a constant here.
-			count = (f"{name}_len()" if placement.delimiter is not None
+			count = (f"{name}_len()" if placement.delimiters
 			         else f"{placement.array_count}u")
 			lines.extend([
 				"\t\t/* `[minimal]`: one spelling per value. */",
@@ -6354,7 +6409,7 @@ class Emitter:
 		count is written.
 		"""
 		return (placement.array_count is None
-		        and placement.delimiter is None
+		        and not placement.delimiters
 		        and placement.repeat_while is None
 		        and not data_sized(placement))
 

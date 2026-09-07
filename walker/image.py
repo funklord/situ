@@ -197,8 +197,13 @@ class Image:
 	#: walk that gathers a different number knows it misread the section.
 	pinned_runs: dict[int, list[bytes]]	= field(default_factory=dict)
 
-	#: placement index -> the bytes it ends at, from the delimiter table.
-	delimiters: dict[int, bytes]		= field(default_factory=dict)
+	#: placement index -> every alternative it may end at, in table order.
+	#:
+	#: A TUPLE because `until "," | "]" | "}"` is three rows of one table,
+	#: and a walker that read the first would find the wrong end of the
+	#: member with nothing to say so. The packer writes them consecutively
+	#: and this collects them.
+	delimiters: dict[int, tuple[bytes, ...]]	= field(default_factory=dict)
 	#: placement index -> (quote, escape, cap), each `none` where the format
 	#: has none. `quote` toggles: inside a quoted run the delimiter is
 	#: content. `escape` applies to the byte after it, itself included.
@@ -357,7 +362,8 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			where, quote, escape, cap, length = _struct.unpack_from(
 				"<IIIIB", blob, at + i * stride)
 			start = at + i * stride + 17
-			image.delimiters[where] = blob[start:start + length]
+			image.delimiters[where] = image.delimiters.get(where, ()) \
+				+ (blob[start:start + length],)
 			image.delimiter_rules[where] = (quote, escape, cap)
 
 	if REGIONS in found:

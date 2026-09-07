@@ -481,6 +481,38 @@ def align_up(at: int, n: int, limit: int) -> int:
 	return advance(at, pad, limit)
 
 
+def scan_any(data: memoryview | bytes, limit: int,
+		delims: tuple[bytes, ...]) -> tuple[int, int]:
+	"""Where the first of ANY of `delims` is, and how long it was.
+
+	A scalar in a text format usually ends at whichever of a set comes first
+	-- a JSON number at `,`, `]`, `}` or a space. `until "," | "]" | "}"` is
+	that, and this is the scan it compiles to.
+
+	Returns `(offset, took)`, with `took` the length of the alternative that
+	matched and 0 where none did. The caller needs both because a delimited
+	member's span includes its delimiter, so which one matched decides where
+	the next member starts.
+
+	Earliest offset wins, and the LONGEST match at that offset. Two
+	alternatives can match in the same place -- `\r` and `\r\n` -- and
+	taking the shorter would leave the newline as the next member's first
+	byte.
+	"""
+	raw   = bytes(data)[:limit]
+	found = limit
+	took  = 0
+	for one in delims:
+		if not one or len(one) > limit:
+			continue
+		at = raw.find(one)
+		if at < 0 or at > found:
+			continue
+		if at < found or len(one) > took:
+			found, took = at, len(one)
+	return (found, took) if took else (limit, 0)
+
+
 def scan(data: memoryview | bytes, limit: int, delim: bytes,
 		quote: int = NO_BYTE, escape: int = NO_BYTE) -> int:
 	"""Where a delimited member's content stops (section 8.6.1).

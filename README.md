@@ -542,7 +542,8 @@ decides the capability vector:
 ```situ
 u8   fixed[4];                        // a count
 u8   rest[remaining];                 // to the end of the frame
-u8   name[]    until ":";             // to a delimiter
+u8   name[]    until ':';             // to a delimiter, written as a character
+u8   value[]   until "\r\n" | '\n';    // or to whichever of several comes first
 u8   method[]  until " " max 16;      // bounded, so it stays allocatable
 nlattr attrs[] while (nla_len >= 4);  // while a predicate over each element holds
 u8   pixels[n] at file.pixel_offset;  // placed where the data says
@@ -903,8 +904,8 @@ struct status_line {
 }
 
 struct header_field {
-	u8  name[]   until ":"     [case_insensitive, encoding = ascii];
-	u8  value[]  until "\r\n"  [trim];
+	u8  name[]   until ':'              [case_insensitive, encoding = ascii];
+	u8  value[]  until "\r\n" | '\n'    [trim];
 }
 ```
 

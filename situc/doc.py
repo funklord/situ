@@ -162,7 +162,7 @@ def _label(struct: ResolvedStruct, placement: Placement) -> str:
 	# it stops is in the data. It read `name[1]` while the solver claimed a
 	# count of one, and somebody implementing from that diagram writes a
 	# fixed-width parser.
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		return f"{local}..."
 	# A text number's bracket is a width in bytes, not a count of elements
 	# (8.6.2), so `magic[6]` reads as six magics where there is one number in
@@ -396,11 +396,12 @@ def _stride(placement: Placement) -> str:
 
 
 def _size(placement: Placement) -> str:
-	if placement.delimiter is not None:
+	if placement.delimiters:
 		# What a reader needs is where it stops, not how many bytes the
 		# delimiter takes -- which is what the fixed-size branch below
 		# reported, and it is the one number nobody wants.
-		shown = render_delimiter(placement.delimiter).strip("`")
+		shown = " or ".join(render_delimiter(one).strip("`")
+		                    for one in placement.delimiters)
 		if placement.delimiter_cap is not None:
 			return f"to {shown}, max {placement.delimiter_cap}"
 		return f"to {shown}"

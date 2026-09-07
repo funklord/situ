@@ -284,3 +284,79 @@ def literal_bytes(text: str) -> bytes | None:
 		return text.encode("latin-1")
 	except UnicodeEncodeError:
 		return None
+
+
+#: Every text encoding this compiler knows, against the Python codec that
+#: realises it.
+#:
+#: Section 8.6 named `ascii` and `utf8`; decision 0044 added the two UTF-16
+#: orders, which name their code unit's byte order rather than inheriting it
+#: from the field's `endian` scope -- which is also why bare `utf16` is not
+#: here, since it does not say the order.
+#:
+#: The ISO-8859 family is here because a text format's encoding is frequently
+#: not stated in its bytes and is frequently not UTF-8: an HTTP header field
+#: is ASCII by specification and Latin-1 in practice, and a schema forced to
+#: pick one would be wrong about half the traffic. Naming several is what
+#: `encoding a | b;` is for.
+#:
+#: The codec is Python's, and it is used at COMPILE time only -- to work out
+#: what a character literal is worth. Nothing generated carries a table:
+#: by the time a backend sees the literal it is the number the encoding said
+#: it was, which is the same number a hex escape would have given and is a
+#: number somebody checked.
+TEXT_ENCODINGS: dict[str, str] = {
+	"ascii":    "ascii",
+	"utf8":     "utf-8",
+	"utf16le":  "utf-16-le",
+	"utf16be":  "utf-16-be",
+	"latin1":   "iso-8859-1",
+	**{f"iso8859_{part}": f"iso-8859-{part}"
+	   for part in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16)},
+}
+
+#: How wide one code unit of each encoding is, in bytes. A character literal
+#: resolves to a single unit or it is refused, and the unit is what the
+#: comparison is against -- so `'A'` under `utf16le` is 0x0041 and fits a
+#: `u16`, and under `ascii` it is 0x41 and fits a `u8`.
+CODE_UNIT_BYTES: dict[str, int] = {
+	name: (2 if name.startswith("utf16") else 1) for name in TEXT_ENCODINGS
+}
+
+
+class EncodingError(Exception):
+	"""A character that is not one code unit, or not the same one."""
+
+
+def character_value(char: str, encodings: tuple[str, ...]) -> int:
+	"""What `char` is worth under every one of `encodings`.
+
+	Raises `EncodingError` naming the disagreement where the encodings do not
+	agree, where the character is not representable, or where it needs more
+	than one code unit. Those three are the whole of what makes a character
+	literal decidable rather than a guess: a schema that lists several
+	encodings has said the bytes could be any of them, and a literal is only
+	usable where that statement does not change its value.
+	"""
+	seen: dict[int, list[str]] = {}
+	for name in encodings:
+		codec = TEXT_ENCODINGS[name]
+		try:
+			raw = char.encode(codec)
+		except UnicodeEncodeError:
+			raise EncodingError(
+				f"`{name}` cannot represent this character") from None
+		width = CODE_UNIT_BYTES[name]
+		if len(raw) != width:
+			raise EncodingError(
+				f"`{name}` needs {len(raw)} bytes for it, and one code unit "
+				f"there is {width}")
+		value = int.from_bytes(raw, "little" if name == "utf16le" else "big")
+		seen.setdefault(value, []).append(name)
+
+	if len(seen) > 1:
+		shown = "; ".join(
+			f"{', '.join(names)} say {value:#04x}"
+			for value, names in sorted(seen.items()))
+		raise EncodingError(f"the declared encodings disagree: {shown}")
+	return next(iter(seen))
