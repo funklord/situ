@@ -531,10 +531,27 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
  * device the stack is the arena's neighbour, so the depth is a number here
  * rather than a property of the input.
  *
- * Eight, because the deepest nesting in this repository's corpus is three and
- * a walker that refuses a legitimate schema is worse than one that costs a
- * few frames. Refused by name when it is reached, never guessed at. */
+ * Eight, and the reason has been re-measured rather than inherited. It was
+ * "the deepest nesting in this repository's corpus is three", which stopped
+ * being true when `example/json` arrived: one level of JSON braces is three
+ * structs, so eight buys under three levels.
+ *
+ * What decides it is the stack, and that is measurable. Summing the largest
+ * frame of every function in the recursion cycle of this file, built `-Os`
+ * for x86-64: `size_bits_deep` 200, `situ_walk_eval` 296, `offset_bits_deep`
+ * 152, `read_deep` 104, `struct_extent` 104, `arm_bits` 88 -- 944 bytes for
+ * one level in the worst case, and about 300 on the ordinary path. Eight is
+ * therefore around 7.5 KB worst case, which is a real fraction of a small
+ * device's stack and is why the number is small.
+ *
+ * Overridable, because the comment above has always said the arena is this
+ * program's and the code did not let a program say so. A host tool reading
+ * deep JSON defines it higher; a device with 8 KB of stack leaves it or
+ * lowers it. Reaching it is `SITU_WALK_UNSUPPORTED` either way -- refused by
+ * name, never guessed at. */
+#ifndef WALK_DEPTH_MAX
 #define WALK_DEPTH_MAX 8u
+#endif
 
 /* The depth the schema declares for `shape`, or WALK_DEPTH_MAX where it
  * declares none.
@@ -569,6 +586,11 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
                                     const uint8_t *message, uint32_t len,
                                     uint32_t shape, uint32_t index,
                                     uint32_t depth, uint32_t *out);
+
+static situ_walk_err struct_extent(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t depth,
+                                   uint32_t *out);
 
 /* A field of a struct nested `base` bytes into this frame.
  *
@@ -705,6 +727,79 @@ static const uint8_t *arm_rows(const situ_walk_image *image, uint32_t index,
  * extent's -- the generated C has the same `: 0u`, and refusing here counted
  * zero dnsname labels where every backend counted one.
  */
+/* `image_struct.struct_flags`, at byte 12 of the entry.
+ *
+ * Bit 0: whether the image carries *every* check this struct needs. The
+ * packer sets it, and a walker that ignored it would report OK for a struct
+ * whose rules it was never given.
+ *
+ * Bit 1: whether one instance can be measured from its own bytes. A struct
+ * that ends at its frame rather than at a length it carries has no extent of
+ * its own, so nothing may descend into one. */
+#define STRUCT_VALIDATABLE 0x01u
+#define STRUCT_MEASURABLE  0x02u
+
+/* How many bytes the selected arm occupies.
+ *
+ * An arm that is a variable-length struct is measured here rather than
+ * through `size_bits_deep`, which cannot: its nested-struct branch tests
+ * that the member belongs to THIS struct, and an arm does not -- so an arm
+ * fell through to the record's own `size_bits`, which is the MINIMUM. That
+ * is the fault this file already records `qname` catching one construct
+ * over, and it stayed invisible until a schema recursed through an arm,
+ * where the minimum is the struct with the recursion left out.
+ *
+ * The arm starts where the variant does, which is what makes it measurable
+ * without asking for the arm's own offset -- and asking would place the
+ * variant, whose extent is this. */
+static situ_walk_err arm_bits(const situ_walk_image *image,
+                              const uint8_t *message, uint32_t len,
+                              uint32_t shape, uint32_t variant,
+                              uint32_t chosen, uint32_t depth, uint32_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, chosen, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	if (held.type_struct != SITU_WALK_NONE
+	                && held.type_struct < image->struct_count
+	                && held.array_count == SITU_WALK_NONE
+	                && held.size_code == SITU_WALK_NONE
+	                && held.repeat_code == SITU_WALK_NONE
+	                && delimiter_rules(image, chosen) == NULL) {
+		const uint8_t *inner = image->structs
+		                       + held.type_struct * image->struct_stride;
+
+		if (u32_at(inner + 8) == SITU_WALK_NONE
+		                && (u32_at(inner + 12) & STRUCT_MEASURABLE) != 0u) {
+			uint32_t at = 0u;
+
+			err = offset_bits_deep(image, message, len, shape, variant,
+			                       depth, &at);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			at /= 8u;
+			if (at > len) {
+				return SITU_WALK_BOUNDS;
+			}
+
+			uint32_t extent = 0u;
+			err = struct_extent(image, message + at, len - at,
+			                    held.type_struct, depth + 1u, &extent);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			*out = extent * 8u;
+			return SITU_WALK_OK;
+		}
+	}
+	return size_bits_deep(image, message, len, shape, chosen, depth + 1u,
+	                      out);
+}
+
 static situ_walk_err variant_bits(const situ_walk_image *image,
                                   const uint8_t *message, uint32_t len,
                                   uint32_t shape, uint32_t index,
@@ -718,8 +813,14 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
 	/* The enclosing shape's ceiling: an arm belongs to it, and asking the
 	 * build's number here while `struct_extent` asked the schema's would be
 	 * two bounds on one walk -- which is how a bound acquires a public entry
-	 * point that restarts it (26.112). */
-	if (depth >= depth_ceiling(image, shape)) {
+	 * point that restarts it (26.112).
+	 *
+	 * `>` for `struct_extent`'s reason, and it has to be the SAME word: the
+	 * two guard one walk, so a `>=` here refuses one level before the walk
+	 * does. Measured on a schema recursing through an arm, where this
+	 * walker stopped at eight nested structs and the other five took
+	 * nine. */
+	if (depth > depth_ceiling(image, shape)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
@@ -754,14 +855,14 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
 				*out = 0u;
 				return SITU_WALK_OK;
 			}
-			return size_bits_deep(image, message, len, shape, chosen,
-			                      depth + 1u, out);
+			return arm_bits(image, message, len, shape, index, chosen,
+			                depth, out);
 		}
 	}
 
 	if (fallback != SITU_WALK_NONE) {
-		return size_bits_deep(image, message, len, shape, fallback,
-		                      depth + 1u, out);
+		return arm_bits(image, message, len, shape, index, fallback,
+		                depth, out);
 	}
 
 	*out = 0u;
@@ -781,18 +882,6 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
  * Zero is an answer rather than a refusal. A `name` whose first label does not
  * fit holds no labels and is zero bytes long. The guard against a zero extent
  * belongs where it stops something, which is the walk below. */
-/* `image_struct.struct_flags`, at byte 12 of the entry.
- *
- * Bit 0: whether the image carries *every* check this struct needs. The
- * packer sets it, and a walker that ignored it would report OK for a struct
- * whose rules it was never given.
- *
- * Bit 1: whether one instance can be measured from its own bytes. A struct
- * that ends at its frame rather than at a length it carries has no extent of
- * its own, so nothing may descend into one. */
-#define STRUCT_VALIDATABLE 0x01u
-#define STRUCT_MEASURABLE  0x02u
-
 static situ_walk_err struct_extent(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,

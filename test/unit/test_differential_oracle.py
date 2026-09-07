@@ -21,6 +21,7 @@ import base64
 import binascii
 import ctypes
 import importlib
+import importlib.util
 import itertools
 import math
 import random
@@ -74,14 +75,34 @@ def build_module(schema: Path, tmp: Path) -> object:
 	(where / "situ_runtime.py").write_text(runtime.read_text(encoding="ascii"),
 	                                       encoding="ascii")
 
+	# Loaded under a name of this harness's own, not the schema's. A schema
+	# is free to be called `json`, and importing the generated module under
+	# that name replaces the STDLIB `json` in `sys.modules` for the rest of
+	# the session -- which is what happened: twelve oracles that had nothing
+	# to do with JSON failed with `module 'json' has no attribute 'loads'`,
+	# because the module they were reading their own corpus with had been
+	# swapped underneath them.
+	#
+	# `situ_runtime` still comes off the path, because the generated module
+	# imports it by name.
+	loaded = f"situ_generated_{next(_BUILDS)}"
 	sys.path.insert(0, str(where))
 	try:
 		importlib.invalidate_caches()
-		for stale in (schema.stem, "situ_runtime"):
-			sys.modules.pop(stale, None)
-		return importlib.import_module(schema.stem)
+		sys.modules.pop("situ_runtime", None)
+		spec = importlib.util.spec_from_file_location(
+			loaded, where / f"{schema.stem}.py")
+		assert spec is not None and spec.loader is not None
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+		return module
 	finally:
 		sys.path.remove(str(where))
+		# `situ_runtime` stays in `sys.modules` on purpose: the driver
+		# functions import it when they run, which is after this returns and
+		# after the path is gone. Popping it here made every oracle fail on
+		# a missing runtime, which is this loader's own hazard met from the
+		# other side.
 
 
 @pytest.mark.parametrize("oracle", ORACLES, ids=[o.name for o in ORACLES])
@@ -1145,8 +1166,12 @@ def test_the_corpus_is_not_this_project_s_opinion() -> None:
 	# the byte order and the size they ask it for. The guard caught the
 	# delegation when it was added, which is the guard working -- a corpus
 	# function whose body shows no tool is exactly what it is watching for.
+	# `_json_dumps(` for `_pymodbus(`'s reason: CPython's `json` is the
+	# independent implementation and it is a library. The shapes are named
+	# here and the BYTES are its -- every framing decision in a document,
+	# which is the half a layout language is on trial for.
 	elsewhere = ("subprocess", "_run(", "_randpkt(", "_pymodbus(",
-	             "_paho_packets(", "_tiff(")
+	             "_paho_packets(", "_tiff(", "_json_dumps(")
 
 	for oracle in ORACLES:
 		corpus = DRIVERS[oracle.name][0]

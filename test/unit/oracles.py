@@ -62,9 +62,9 @@ def have(tool: str) -> bool:
 	would report it missing on every machine and skip the oracle silently --
 	which is the failure this whole file is about.
 	"""
-	if tool == "pymodbus":
+	if tool in ("pymodbus", "json"):
 		import importlib.util
-		return importlib.util.find_spec("pymodbus") is not None
+		return importlib.util.find_spec(tool) is not None
 	return shutil.which(tool) is not None
 
 
@@ -1066,7 +1066,85 @@ def mqtt_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 	return found
 
 
+#: Structures for the JSON corpus. Shapes rather than bytes: what goes on
+#: the wire is `json.dumps`'s, and every framing decision in it -- where a
+#: comma goes, how a string is quoted, where a value ends -- is CPython's.
+#:
+#: Strings only, and compact, because that is the subset `example/json`
+#: describes and says it describes. The filter is declared in the schema
+#: rather than applied quietly here, which is the difference between a
+#: narrowed corpus and a corpus chosen to make a schema look right.
+JSON_SHAPES: tuple[object, ...] = (
+	"hi",
+	{"a": "b"},
+	{"a": "b", "c": "d"},
+	{"a": {"b": "c"}},
+	["x", "y"],
+	{"a": ["b", {"c": "d"}]},
+	[["x"]],
+	{"key with spaces": "and a longer value"},
+	True,
+	False,
+	None,
+)
+
+
+def _json_dumps(shape: object) -> str:
+	"""CPython's writer, compact. Kept in its own helper so that the corpus
+	function below visibly delegates to it, which is what
+	`test_the_corpus_is_not_this_project_s_opinion` reads."""
+	import json
+
+	return json.dumps(shape, separators=(",", ":"))
+
+
+def json_corpus(tmp: Path) -> bytes:
+	"""One document per line, each written by CPython's `json`."""
+	return ("\n".join(_json_dumps(shape) for shape in JSON_SHAPES)
+	        + "\n").encode("ascii")
+
+
+def json_says(corpus: bytes, tmp: Path) -> list[dict[str, int]]:
+	"""Where each document ends, according to the reader that wrote it.
+
+	`raw_decode` returns the index one past the value it parsed, which is
+	exactly the question a situ extent answers -- so this is a differential
+	on framing rather than on values, and framing is what a layout language
+	is for.
+	"""
+	import json
+
+	reader = json.JSONDecoder()
+	found  = []
+	for line in corpus.decode("ascii").splitlines():
+		_value, end = reader.raw_decode(line)
+		found.append({"kind": line.encode("ascii")[0], "extent": end})
+	return found
+
+
+def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
+	from situ_runtime import Message
+
+	found = []
+	for line in corpus.decode("ascii").splitlines():
+		data = line.encode("ascii")
+		view = module.value(Message(bytearray(data)), 0, len(data))  # type: ignore[attr-defined]
+		view.validate()
+		found.append({"kind": int(view.kind), "extent": int(view._extent)})
+	return found
+
+
 ORACLES: tuple[Oracle, ...] = (
+	Oracle(
+		name   = "json",
+		schema = ROOT / "example" / "json" / "json.situ",
+		tool   = "json",
+		why    = ("CPython's `json` writes each document and `raw_decode` "
+		          "says where it ends -- which is the question a situ extent "
+		          "answers, so what is on trial is framing rather than "
+		          "values. The independent implementation is a library "
+		          "rather than a command, as `pymodbus` is."),
+	),
 	Oracle(
 		name   = "cpio",
 		schema = ROOT / "example" / "cpio" / "cpio.situ",
@@ -1270,6 +1348,7 @@ LIES = {
 #: How to drive each oracle. Kept beside `ORACLES` rather than in it so the
 #: dataclass stays data.
 DRIVERS = {
+	"json": (json_corpus, json_says, json_situ),
 	"cpio": (cpio_corpus, cpio_says, cpio_situ),
 	"bmp":  (bmp_corpus, bmp_says, bmp_situ),
 	"protobuf": (proto_corpus, proto_says, proto_situ),

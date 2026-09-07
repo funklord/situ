@@ -222,6 +222,26 @@ class Emitter:
 		        " * other, so no definition order puts both first. */",
 		        *[f"class {c_name(peer)};" for peer in named]]
 
+	def _recursive_members(self, struct: ResolvedStruct,
+			cycle: set[str]) -> list[tuple[Placement, str | None]]:
+		"""Members typed as something in this struct's cycle, arms too, each
+		with the condition under which it is present. See the C backend."""
+		found: list[tuple[Placement, str | None]] = []
+		for placement in own_members(struct):
+			if (placement.type_name or "") in cycle:
+				found.append((placement, None))
+				continue
+			if placement.kind != "variant" or placement.discriminant is None:
+				continue
+			disc = self._over_fields(struct, placement.discriminant)
+			for arm, member in arm_members(struct, placement):
+				if member is None or (member.type_name or "") not in cycle:
+					continue
+				found.append((member,
+				              None if arm.value is None
+				              else f"{disc} == {arm.value}u"))
+		return found
+
 	def _defer_across_cycle(self, name: str, order: list[str],
 			lines: list[str]) -> tuple[list[str], list[str]]:
 		"""Move member bodies that name a later peer out of the class.
@@ -2491,8 +2511,8 @@ class Emitter:
 			"\t\t}",
 		]
 
-	def _variant_length(self, struct: ResolvedStruct,
-			placement: Placement) -> str | None:
+	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
+			depth: str | None = None) -> str | None:
 		"""How many bytes the selected arm occupies, as one expression.
 
 		A conditional chain rather than a statement `switch`, because callers
@@ -2515,7 +2535,10 @@ class Emitter:
 			if member.is_fixed_size:
 				length = f"{member.size_bits // BITS_PER_BYTE}u"
 			else:
-				rendered = self._length_expression(struct, member)
+				# The depth travels into the arm too, or a tagged tree
+				# restarts the counter at every level of itself.
+				rendered = self._length_expression(struct, member,
+				                                   depth=depth)
 				if rendered is None:
 					return None
 				length = f"({rendered})"
@@ -2585,7 +2608,7 @@ class Emitter:
 			depth: str | None = None) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
 		if placement.kind == "variant":
-			return self._variant_length(struct, placement)
+			return self._variant_length(struct, placement, depth)
 
 		# A run inside a variant arm has no length here, because the arm
 		# emitter has no walk: an arm is emitted by a family of its own, and
@@ -2610,11 +2633,14 @@ class Emitter:
 			# Inside a recursive extent's `_at` body the span carries the
 			# depth on, or the counter restarts one level down and bounds
 			# nothing (26.112).
+			# `_at` only where the ELEMENT recurses; see the C backend.
+			deep = depth is not None and is_recursive(
+				self.resolved.structs, placement.type_name or "")
 			if running is not None:
-				return (f"{name}_span_from({running})" if depth is None
-				        else f"{name}_span_from_at({running}, {depth})")
-			return (f"{name}_span()" if depth is None
-			        else f"{name}_span_at({depth})")
+				return (f"{name}_span_from_at({running}, {depth})" if deep
+				        else f"{name}_span_from({running})")
+			return (f"{name}_span_at({depth})" if deep
+			        else f"{name}_span()")
 
 		if placement.size_expr is not None:
 			# Bounded leaves, signed arithmetic, one clamp (14.2b).
@@ -2633,14 +2659,18 @@ class Emitter:
 			# array's scan, a record run's walk and a `while` run's. The runs
 			# were the exception, and it cost a rescan of everything before
 			# the run on every accumulating pass over it.
-			if running is not None:
-				return (f"{name}_span_from({running})" if depth is None
-				        else f"{name}_span_from_at({running}, {depth})")
 			# Inside a recursive extent's `_at` body the span carries the
 			# depth on, or the counter restarts one level down and bounds
-			# nothing (26.112).
-			return (f"{name}_span()" if depth is None
-			        else f"{name}_span_at({depth})")
+			# nothing (26.112) -- but only where the ELEMENT recurses, since
+			# that is what makes the `_at` form exist. A delimited byte run
+			# has none, and asking for one named a function nothing defines.
+			deep = depth is not None and is_recursive(
+				self.resolved.structs, placement.type_name or "")
+			if running is not None:
+				return (f"{name}_span_from_at({running}, {depth})" if deep
+				        else f"{name}_span_from({running})")
+			return (f"{name}_span_at({depth})" if deep
+			        else f"{name}_span()")
 
 		# A nested struct with no single size. Without this the sum treated
 		# it as zero bytes wide and placed whatever follows on top of it.
@@ -4245,6 +4275,10 @@ class Emitter:
 		if nested is not None and not nested.layout.is_fixed_size \
 				and has_computable_extent(self.resolved.structs, nested):
 			inner = c_name(nested.name)
+			# An arm that IS the recursion -- `case 1: node kid`, which is
+			# how a tagged tree is written. The depth travels with it as it
+			# does through a run's span and an ordinary nested member.
+			deep = is_recursive(self.resolved.structs, nested.name)
 			return [
 				*head,
 				# How many bytes this arm occupies, for the switch that places
@@ -4252,16 +4286,33 @@ class Emitter:
 				# only the ordinary nested member emitted one, so the first
 				# schema with a variable-size arm -- MQTT's CONNECT, three
 				# times over -- named a member function nothing defines.
+				*([] if not deep else [
+					f"\t[[nodiscard]] std::uint32_t {name}_extent_at"
+					"(std::uint32_t depth) const noexcept",
+					"\t{",
+					"\t\tsitu_view_t whole;",
+					"",
+					f"\t\tif (situ_view_sub(this->raw(), {start},",
+					f"\t\t\t\tsitu_remaining_u32(raw_.limit, {start}),"
+					" &whole) != SITU_OK) {",
+					"\t\t\treturn 0;",
+					"\t\t}",
+					f"\t\treturn ::{self.namespace}::{inner}(whole)"
+					".extent_at(depth + 1);",
+					"\t}",
+				]),
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
 				"\t{",
-				"\t\tsitu_view_t whole;",
-				"",
-				f"\t\tif (situ_view_sub(this->raw(), {start},",
-				f"\t\t\t\tsitu_remaining_u32(raw_.limit, {start}), &whole)"
-				" != SITU_OK) {",
-				"\t\t\treturn 0;",
-				"\t\t}",
-				f"\t\treturn ::{self.namespace}::{inner}(whole).extent();",
+				*([f"\t\treturn {name}_extent_at(0);"] if deep else [
+					"\t\tsitu_view_t whole;",
+					"",
+					f"\t\tif (situ_view_sub(this->raw(), {start},",
+					f"\t\t\t\tsitu_remaining_u32(raw_.limit, {start}),"
+					" &whole) != SITU_OK) {",
+					"\t\t\treturn 0;",
+					"\t\t}",
+					f"\t\treturn ::{self.namespace}::{inner}(whole).extent();",
+				]),
 				"\t}",
 				f"\t[[nodiscard]] ::situ::rt::err {name}"
 				f"(::{self.namespace}::{inner} &out) const noexcept",
@@ -5968,10 +6019,8 @@ class Emitter:
 		# three faults were the same in all four backends, because all four
 		# were written from the same first draft.
 		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
-		for placement in own_members(struct):
+		for placement, guard in self._recursive_members(struct, cycle):
 			target = placement.type_name or ""
-			if target not in cycle:
-				continue
 			name  = bare_name(local_name(struct, placement))
 			inner = f"::{self.namespace}::{c_name(target)}"
 			start = self._offset_expression(struct, placement)
@@ -5979,11 +6028,13 @@ class Emitter:
 				continue
 
 			if classify(struct, placement, self.structs) is Member.NESTED:
+				reach = ("at < raw_.limit" if guard is None
+				         else f"at < raw_.limit && ({guard})")
 				lines.extend([
 					"\t\t{",
 					f"\t\t\tconst std::uint32_t at = {start};",
 					"",
-					"\t\t\tif (at < raw_.limit) {",
+					f"\t\t\tif ({reach}) {{",
 					f"\t\t\t\tconst {inner} element(situ_view_t{{",
 					"\t\t\t\t\traw_.base + at, raw_.limit - at,",
 					"\t\t\t\t\traw().generation });",
@@ -6383,14 +6434,19 @@ class Emitter:
 			# frame does not contain the member, or the member is there and
 			# malformed. The accessor refuses the first now (26.31), and
 			# `validate` is where a caller who does validate hears about it.
+			# `_held`, because a member may be CALLED `held`: the accessor
+			# and the local would then share a name and `held(held)` asks a
+			# `::situ::value` to be a function. JSON's array element holds
+			# exactly that member, and a generated local named after a
+			# schema construct is a collision the schema gets to cause.
 			return [
 				"\t\t{",
-				f"\t\t\t{held} held;",
-				f"\t\t\tif (const ::situ::rt::err e = {name}(held);"
+				f"\t\t\t{held} _held;",
+				f"\t\t\tif (const ::situ::rt::err e = {name}(_held);"
 				" e != ::situ::rt::err::ok) {",
 				"\t\t\t\treturn e;",
 				"\t\t\t}",
-				"\t\t\tif (const ::situ::rt::err e = held.validate();"
+				"\t\t\tif (const ::situ::rt::err e = _held.validate();"
 				" e != ::situ::rt::err::ok) {",
 				"\t\t\t\treturn e;",
 				"\t\t\t}",

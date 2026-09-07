@@ -1,0 +1,153 @@
+// JSON (RFC 8259), as far as a layout language reaches.
+//
+// Here for the construct that makes it possible at all. A value contains an
+// object, an object contains members, and a member contains a value: that is
+// a mutual cycle, and situ refused every one of them until decision 0054 was
+// amended. It is also the first schema in this directory whose recursion runs
+// through a *variant arm* -- `case 0x7B: object` is how a tagged tree is
+// written, and how every format with a "kind" byte reaches its children.
+//
+// It is here for the boundary as much as for the construct. JSON is a
+// GRAMMAR and situ describes LAYOUTS, and the two disagree in exactly two
+// places. Both are written down below rather than papered over, because a
+// schema that quietly describes a subset is worse than one that says which
+// subset it describes.
+
+target buffer;
+endian big;
+
+// The first byte says which kind of value this is, and it belongs to the
+// value: a variant switches on a *field*, and a field is bytes. So the
+// discriminant is the opening brace, the opening bracket, the opening quote,
+// the `t` of `true`. Each arm holds what comes after it.
+//
+// `[depth]` bounds the recursion and every struct in the cycle states the
+// same one -- which is the rule rather than a repetition: a walk entering at
+// `member` spends `member`'s number, so two numbers for one cycle would be
+// an ambiguity (17.0). It counts nested STRUCTS, not turns: one level of
+// JSON nesting is value -> object -> member -> value, three structs, so 64
+// here is about twenty-one levels of braces.
+//
+// `default: error` is the boundary and not an oversight. See the note above
+// `assert` at the foot of this file.
+struct value [depth = 64] {
+	u8  kind;
+	variant body switch (kind) {
+		case 0x7B:  object   as_object;		// '{'
+		case 0x5B:  array    as_array;		// '['
+		case 0x22:  text     as_string;		// '"'
+		case 0x74:  yes      as_true;		// 't'
+		case 0x66:  no       as_false;		// 'f'
+		case 0x6E:  nothing  as_null;		// 'n'
+		default:    error;
+	}
+}
+
+// An object is members until one does not end in a comma.
+//
+// `while (sep == 0x2C)` rather than `until "}"`, and the difference is the
+// whole reason this construct exists: `until` asks whether the terminator
+// stands where the NEXT element would start, and JSON separates members with
+// a comma while terminating the object with a brace. A `while` asks about the
+// element just read, so the member that ends in `}` is the one that ends the
+// run -- and it is part of it, which is what makes the brace accounted for.
+struct object [depth = 64] {
+	member  entries[] while (sep == 0x2C);
+}
+
+// One member: `"key":value` and the byte that follows it.
+//
+// `open` is the key's opening quote and `sep` is the comma or the closing
+// brace. Neither is decoration: a member has to account for every byte
+// between where it starts and where the next one does, or the run walks into
+// the middle of itself.
+struct member [depth = 64] {
+	u8     open;
+	u8     key[]  until "\"";
+	u8     colon;
+	value  held;
+	u8     sep;
+}
+
+// An array is the same shape with no keys.
+struct array [depth = 64] {
+	element  entries[] while (sep == 0x2C);
+}
+
+struct element [depth = 64] {
+	value  held;
+	u8     sep;
+}
+
+// A string, from after its opening quote to its closing one.
+//
+// `canonical` is weakened here and the map says so, which is right: `A`
+// and `A` are the same string and different bytes. Escapes are the reader's
+// to interpret -- situ frames the span and does not decode it, and a `\"`
+// inside the content ends this scan early. That is the third thing this file
+// cannot do and the one that is a genuine gap rather than a language
+// boundary: `[escape = "\\"]` exists for exactly this and is asserted below.
+struct text {
+	u8  chars[]  until "\"";
+}
+
+// The three literals. Each is its first byte -- the discriminant -- plus the
+// rest, pinned, because a value that begins with `t` and is not `true` is
+// malformed and this is the one place in the file where situ can say so.
+struct yes     { u8  rest[3]  [must_eq = "rue"]; }
+struct no      { u8  rest[4]  [must_eq = "alse"]; }
+struct nothing { u8  rest[3]  [must_eq = "ull"]; }
+
+// ---------------------------------------------------------------------------
+// The bill. Two of these are the language's and one is what they cost
+// together, which is the part worth reading.
+//
+// A NUMBER cannot be framed. `1` ends at whichever of `,`, `]`, `}` or a
+// space comes first, and `until` takes ONE delimiter -- there is no spelling
+// for "ends at any of these bytes". `[must_eq = "070701" | "070702"]` in
+// `cpio.situ` shows the alternation already exists for a pinned value, so the
+// missing thing is narrow and nameable: `until "," | "]" | "}"`.
+//
+// WHITESPACE between tokens cannot be skipped. Every construct here accounts
+// for its bytes exactly, and JSON permits space, tab, CR and LF between any
+// two tokens. So this describes the compact form -- which is what a
+// serialiser emits by default and what most JSON on a wire is, and is a
+// subset either way.
+//
+// AND THE TWO COMBINE INTO SOMETHING NEITHER SAYS ALONE. `default: error`
+// refuses a number when a value is validated on its own -- `1` raises
+// straight away. Inside a document it does neither, because a value with an
+// unmatched discriminant has an extent of ZERO (which every backend and both
+// walkers agree on: zero is what a walk refuses to advance by), and `validate`
+// does not descend into the elements of a run. Measured:
+//
+//     {"a":12}    8 bytes    extent 7    validate ok
+//
+// A short measurement and no complaint, which is the answer this repository
+// rates worst -- and it is here rather than hidden because the two rules that
+// produce it are each correct and neither mentions the other. Until the
+// alternation above exists, a reader of a document that may hold numbers gets
+// the right answer only by validating each value it reaches.
+//
+// AND THE WALKERS FOLLOW LESS OF IT THAN THE GENERATED CODE, on purpose.
+// `[depth = 64]` is the format's number; a walker spends its own, because it
+// reads a schema it was handed at run time and the stack is the program's.
+// Both refuse by name rather than measuring short -- so
+// `{"a":["b",{"c":"d"}]}` is nine structs, which a default `situ-walk` build
+// declines and `-DWALK_DEPTH_MAX=64` measures at twenty-one bytes. Summing
+// the largest frame of every function in that walker's recursion cycle,
+// `-Os` on x86-64, one level costs at most 944 bytes, which is why the
+// default is small and why it is overridable.
+//
+// None of this is a gap in the schema. It is what this format asks of situ,
+// which is what an example is for.
+
+// What framing in text costs, recorded the way `http.situ` records it: each
+// of these fails, and the failure is the measurement.
+assert random_access(object.entries);
+assert canonical(text.chars);
+
+// And the one requirement. A document starts at offset zero, because nothing
+// precedes it -- so the first byte is at a known place even though nothing
+// after it is.
+require absolute_static(value.kind);

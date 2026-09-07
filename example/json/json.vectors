@@ -1,0 +1,46 @@
+# Documents, written by hand and checked against Python's `json` module for
+# what they are: `json.loads` accepts every one of them.
+#
+# Compact, because that is the subset this schema describes -- see the note
+# at the foot of `json.situ`. Every byte is accounted for by some member, so
+# the extent of each of these equals its own length, and that is what a run
+# over them depends on.
+
+# A string. The value's own byte is the opening quote and `text` holds what
+# follows, to the closing one.
+value string 22 68 69 22
+	kind = 34
+
+# An object with one member. `{` is the discriminant, `}` is the member's
+# `sep` -- the byte that ends the run because it is not a comma.
+value object 7B 22 61 22 3A 22 62 22 7D
+	kind = 123
+
+# Two members, so the comma does its job: the first member ends in one and
+# the run continues.
+value pair 7B 22 61 22 3A 22 62 22 2C 22 63 22 3A 22 64 22 7D
+	kind = 123
+
+# An object inside an object, which is the cycle this example is for:
+# value -> object -> member -> value.
+value nested 7B 22 61 22 3A 7B 22 62 22 3A 22 63 22 7D 7D
+	kind = 123
+
+# An array, and a mixed one: the elements are a string and an object.
+value array 5B 22 78 22 2C 22 79 22 5D
+	kind = 91
+
+value mixed 7B 22 61 22 3A 5B 22 62 22 2C 7B 22 63 22 3A 22 64 22 7D 5D 7D
+	kind = 123
+
+# The three literals. Each is its first byte plus a pinned tail, which is the
+# one place this schema can say that a value beginning `t` and not spelling
+# `true` is malformed.
+value yes 74 72 75 65
+	kind = 116
+
+value no 66 61 6C 73 65
+	kind = 102
+
+value nothing 6E 75 6C 6C
+	kind = 110

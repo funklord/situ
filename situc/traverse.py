@@ -1122,15 +1122,31 @@ def _variant_is_measurable(structs: dict[str, ResolvedStruct],
 
 	An `opaque` default consumes whatever is left, so a variant carrying one
 	is exactly as long as the view it was handed -- `[remaining]` by another
-	spelling, and refused for the same reason. The layout already says so by
-	leaving the variant with no maximum.
-	"""
-	if variant.size_max_bits is None:
-		return False
+	spelling, and refused for the same reason.
 
-	for _, member in arm_members(struct, variant):
+	**Asked of the arm, not of the variant's maximum.** This read
+	`variant.size_max_bits is None`, which is true of an `opaque` arm and
+	equally true of an arm that IS the recursion -- two causes wearing one
+	signal, and the second one is bounded by `[depth]` rather than
+	unbounded. So a schema recursing through a variant arm was called
+	unmeasurable, `extent_parts` returned None, and the C backend emitted a
+	prototype for an extent it then declined to define: a header that does
+	not compile, which is how `check_no_recursive_types` came to refuse the
+	shape outright. `Arm.opaque` answers the question the proxy was
+	standing in for.
+
+	A recursive arm is measurable for the same reason a recursive run is:
+	the recursion has to terminate in the data, and how deep it may go is
+	what the schema declares.
+	"""
+	for arm, member in arm_members(struct, variant):
 		if member is None:
-			continue		# `default: error`; no arm, so no length to know
+			# `default: error` selects nothing, so there is no length to
+			# know; `default: opaque` selects everything left, which is
+			# `[remaining]` under another name.
+			if arm.opaque:
+				return False
+			continue
 		if member.is_fixed_size:
 			continue
 		if member.sized_by == "remaining":
@@ -1138,6 +1154,7 @@ def _variant_is_measurable(structs: dict[str, ResolvedStruct],
 
 		element = structs.get(member.type_name or "")
 		if element is not None and element.name not in seen \
+				and element is not struct \
 				and not element.layout.is_fixed_size \
 				and not has_computable_extent(structs, element,
 				                              seen | {struct.name}):

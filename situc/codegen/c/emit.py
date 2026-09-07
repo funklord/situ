@@ -142,6 +142,12 @@ class Emitter:
 		#: holds the order is
 		#: `test_a_versioned_constraint_is_actually_checked`.
 		self._emitted: set[str] = set()
+		#: Structs whose extent is being rendered right now. A variant arm
+		#: that is the recursion asks for its own struct's extent while that
+		#: extent is being built, and every such caller is asking a yes/no
+		#: question -- `_struct_extent` answers it from here rather than
+		#: re-entering. The solver's `in_progress` guard, one layer out.
+		self._in_extent: set[str] = set()
 		#: Emit the second accessor family (decision 0022). The consumer's
 		#: choice rather than the schema's: an embedded receiver and a desktop
 		#: inspector read the same bytes and want opposite trade-offs, and a
@@ -2463,20 +2469,38 @@ class Emitter:
 		"""
 		site   = ident(self.prefix, struct.name, local, "extent")
 		extent = ident(self.prefix, nested, "extent")
-		return [
-			f"/* How many bytes `{placement.name}` occupies, for the switch",
-			" * that places whatever follows the variant. */",
-			f"static inline uint32_t {site}(situ_view_t view)",
-			"{",
+		# An arm that IS the recursion -- `case 1: node kid`, which is how a
+		# tagged tree is written and how JSON's value reaches its object.
+		# The depth travels with it exactly as it does through a run's span
+		# and through an ordinary nested member; without it the counter
+		# restarts at every level of the tree and `[depth]` bounds nothing.
+		deep  = self._recursive(nested)
+		taken = "(situ_view_t view, uint32_t depth)" if deep \
+		        else "(situ_view_t view)"
+		body  = [
 			"\tsitu_view_t whole;",
 			"",
 			f"\tif (situ_view_sub(view, {base}, "
 			f"situ_remaining_u32(view.limit, {base}), &whole) != SITU_OK) {{",
 			"\t\treturn 0u;",
 			"\t}",
-			f"\treturn {extent}(whole);",
+			(f"\treturn {extent}_at(whole, depth + 1u);" if deep
+			 else f"\treturn {extent}(whole);"),
 			"}",
 		]
+		return [
+			f"/* How many bytes `{placement.name}` occupies, for the switch",
+			" * that places whatever follows the variant. */",
+			f"static inline uint32_t {site}" + ("_at" if deep else "") + taken,
+			"{",
+			*body,
+		] + ([
+			"",
+			f"static inline uint32_t {site}(situ_view_t view)",
+			"{",
+			f"\treturn {site}_at(view, 0u);",
+			"}",
+		] if deep else [])
 
 	def _arm_elements(self, struct: ResolvedStruct, placement: Placement,
 			local: str, base: str, test: str,
@@ -3052,24 +3076,26 @@ class Emitter:
 		# `expr.items[].body` -- a member of the element -- and generated a
 		# walk over an accessor spelled for a member `expr` does not have.
 		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
-		for placement in own_members(struct):
+		for placement, guard in self._recursive_members(struct, cycle):
 			target = placement.type_name or ""
-			if target not in cycle:
-				continue
-			local = c_name(self._local(struct, placement))
-			peer  = ident(self.prefix, target, "nesting")
+			local  = c_name(self._local(struct, placement))
+			peer   = ident(self.prefix, target, "nesting")
 
 			base = self._base_expression(struct, placement, gated=False)
 
 			if self._is_nested_member(placement):
-				# One of them, not a run: `item.body` is a single `expr`.
+				# One of them, not a run: `item.body` is a single `expr`,
+				# and `node.body.kid` is the arm of a tagged tree.
+				reach = (f"situ_view_sub(view, {base},"
+				         f" situ_remaining_u32(view.limit, {base}), &element)"
+				         " == SITU_OK")
 				lines.extend([
 					"\t{",
 					"\t\tsitu_view_t element;",
 					"",
-					f"\t\tif (situ_view_sub(view, {base},"
-					f" situ_remaining_u32(view.limit, {base}), &element)",
-					"\t\t\t\t== SITU_OK) {",
+					f"\t\tif ({reach}",
+					*([] if guard is None else [f"\t\t\t\t&& ({guard})"]),
+					"\t\t\t\t) {",
 					f"\t\t\tconst uint32_t found = {peer}_at(element,"
 					" depth + 1u);",
 					"",
@@ -3129,6 +3155,41 @@ class Emitter:
 		              "}"])
 		return lines
 
+	def _recursive_members(self, struct: ResolvedStruct,
+			cycle: set[str]) -> list[tuple[Placement, str | None]]:
+		"""Members of `struct` typed as something in its cycle, arms too,
+		each with the condition under which it is there.
+
+		`own_members` answers for the frame and drops a variant's arms,
+		which is right for placing bytes and wrong here: `case 1: node kid`
+		is a member of this struct that holds the recursion, and it is how a
+		tagged tree is written. An arm's own placement is reached through
+		`arm_members`, so the two lists are asked separately and joined.
+
+		**An arm carries a guard and an ordinary member does not.** The arm
+		is present only when the discriminant selects it, and a probe that
+		descended regardless would read whatever follows the discriminant as
+		the recursive type -- so a leaf whose other arm happens to hold a
+		byte the probe reads as a tag comes back nested, and `validate`
+		refuses a message the format allows. The condition is the same
+		comparison the extent's own ternary chain makes.
+		"""
+		found: list[tuple[Placement, str | None]] = []
+		for placement in own_members(struct):
+			if (placement.type_name or "") in cycle:
+				found.append((placement, None))
+				continue
+			if placement.kind != "variant" or placement.discriminant is None:
+				continue
+			disc = self._over_fields(struct, placement.discriminant, "view")
+			for arm, member in arm_members(struct, placement):
+				if member is None or (member.type_name or "") not in cycle:
+					continue
+				found.append((member,
+				              None if arm.value is None
+				              else f"{disc} == {arm.value}u"))
+		return found
+
 	def _declared_depth(self, name: str) -> int:
 		"""The format's own `[depth]`, which is what makes a message
 		malformed rather than merely more than this build will follow."""
@@ -3174,6 +3235,14 @@ class Emitter:
 				" exactly the",
 				"\t * frames the limit exists to save. */",
 				f"\tif ({name}(view) > {limit}u) {{",
+				"\t\t/* The struct, not one of its members: nesting is the",
+				"\t\t * shape's property and no member is the one that",
+				"\t\t * broke it. Said here because `check`'s contract is",
+				"\t\t * that every refusal sets `*which` on the line above",
+				"\t\t * it -- a rule the depth checks did not know about,",
+				"\t\t * and the first recursive schema in the corpus is",
+				"\t\t * what asked. */",
+				"\t\t*which = 0xFFFFFFFFu;",
 				"\t\treturn SITU_ERR_DEPTH;",
 				"\t}",
 			]
@@ -3182,6 +3251,9 @@ class Emitter:
 			" (`[depth]`), so a message",
 			"\t * past it is malformed in the way a thirteenth month is. */",
 			f"\tif ({name}(view) > {declared}u) {{",
+			"\t\t/* The struct, not one of its members: nesting is the",
+			"\t\t * shape's property and no member broke it. */",
+			"\t\t*which = 0xFFFFFFFFu;",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 		]
@@ -3238,6 +3310,54 @@ class Emitter:
 				f"static inline uint32_t {deep}_at(situ_view_t view,"
 				" uint32_t depth);",
 			])
+		return lines + self._predicate_prototypes(struct, cycle)
+
+	def _predicate_prototypes(self, struct: ResolvedStruct,
+			cycle: list[str]) -> list[str]:
+		"""Getters a `while` predicate reads on a peer in this cycle.
+
+		A `while` run's walk asks the element a question -- `sep == 0x2C` --
+		which is a getter on the element's struct, and `containment_order`
+		cannot put both members of a cycle first. So `object`'s walk called
+		`situ_member_sep_get` seventeen hundred lines above its definition
+		and the header did not compile. The other three backends are
+		unaffected: C++ orders classes and declares the cycle's, Rust and
+		Python resolve names at call time.
+
+		Only scalars, and only the names the predicate actually contains: a
+		`static inline` declared and never defined is a warning, and this
+		header is built with `-Werror`.
+		"""
+		import re
+
+		lines: list[str] = []
+		for placement in own_members(struct):
+			if placement.repeat_while is None:
+				continue
+			element = self.resolved.structs.get(placement.type_name or "")
+			if element is None or element.name not in cycle:
+				continue
+			# `_required` frames a run one element at a time by asking the
+			# element the same question, so it crosses the cycle too --
+			# `frameable` because that is what decides whether the element
+			# has one to call, and declaring a `static inline` nothing
+			# defines is a warning this header treats as an error.
+			if frameable(self.resolved.structs, element):
+				lines.append(
+					"static inline situ_err_t "
+					f"{ident(self.prefix, element.name, 'required')}"
+					"(const uint8_t *data, uint32_t have, uint32_t *need);")
+			for held in readable_names(element):
+				local = local_name(element, held)
+				if held.scalar is None or "." in local:
+					continue
+				if not re.search(rf"\b{re.escape(local)}\b",
+				                 placement.repeat_while):
+					continue
+				lines.append(
+					f"static inline {self._field_ctype(held)} "
+					f"{ident(self.prefix, element.name, c_name(local), 'get')}"
+					"(situ_view_t view);")
 		return lines
 
 	def _struct_extent(self, struct: ResolvedStruct) -> list[str]:
@@ -3246,6 +3366,16 @@ class Emitter:
 		Needed to walk a run of them: the next element starts where this one
 		ends, and for a struct whose own members are delimited that is not a
 		constant. A fixed-size struct has `SIZE_FIXED` and needs none of this.
+
+		**Ten of the eleven callers ask this as a predicate** -- "does this
+		struct have an extent function" -- and one of them is reached from
+		inside the emission of the same struct's own extent. That is fine
+		for a run, whose element is a different struct, and it does not
+		terminate for a variant arm that IS the recursion: the arm's length
+		is the struct's extent, which asks for the arm's length. Answered
+		from `_in_extent` rather than by recursing, and the answer is yes --
+		a recursive extent exists and is bounded by `[depth]`, which is
+		precisely what makes the arm describable.
 		"""
 		# Only where something walks a run of these. Emitted for every variable
 		# struct it was dead code in most headers, and in one case a function
@@ -3253,6 +3383,12 @@ class Emitter:
 		# confident zero.
 		if not self._is_run_element(struct.name):
 			return []
+		if struct.name in self._in_extent:
+			# Re-entered from its own arm. A non-empty answer, because every
+			# caller that can arrive here is asking whether the function
+			# exists; the one caller that wants the lines is the outer call,
+			# which is still running and will return them.
+			return ["/* recursive: this struct's own extent, in flight */"]
 		# The arithmetic is shared (traverse.extent_parts); only rendering the
 		# per-member lengths is C's business.
 		parts = extent_parts(self.resolved.structs, struct)
@@ -3260,6 +3396,21 @@ class Emitter:
 			return []
 		constant, variable = parts
 
+		self._in_extent.add(struct.name)
+		try:
+			return self._extent_body(struct, constant, variable)
+		finally:
+			self._in_extent.discard(struct.name)
+
+	def _extent_body(self, struct: ResolvedStruct, constant: int,
+			variable: list[Placement]) -> list[str]:
+		"""The extent function itself, with `_in_extent` held by the caller.
+
+		Split out so the marker covers every length this renders -- the
+		plain forms and the `_at` ones. It covered only the first, and the
+		second is where a recursive arm asks for its own struct's extent
+		again.
+		"""
 		terms: list[str | tuple[str, int]] = []
 		for placement in variable:
 			if not self._has_length(struct, placement):
@@ -5389,7 +5540,7 @@ class Emitter:
 		]
 
 	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
-			held: str = "view") -> str | None:
+			held: str = "view", depth: str | None = None) -> str | None:
 		"""How many bytes the selected arm occupies, as one expression.
 
 		A ternary chain rather than a `switch`, because callers want this
@@ -5417,7 +5568,12 @@ class Emitter:
 			elif not self._has_length(struct, member):
 				return None
 			else:
-				length = f"({self._length_expression(struct, member, held)})"
+				# The depth travels into the arm too, or a tagged tree
+				# restarts the counter at every level -- the run's span and
+				# the ordinary nested member both carry it, and the arm was
+				# the third member kind that reaches a recursive type.
+				length = (
+					f"({self._length_expression(struct, member, held, depth=depth)})")
 
 			if arm.value is None:
 				chain = length		# `default:` with an arm; matches anything
@@ -5485,11 +5641,20 @@ class Emitter:
 			# The runs were the exception until the walks grew the helper,
 			# and the exception cost a full rescan of everything before the
 			# run on every accumulating pass over it.
+			# `_at` only where the ELEMENT recurses, which is what makes
+			# the form exist at all. A delimited byte run has no element
+			# struct and no `_at` span, and this asked for one whenever a
+			# depth was in scope: `u8 key[] until "\""` inside a recursive
+			# struct named a `_span_at` nothing defines. JSON's object key
+			# is the first delimited member inside a recursive struct in
+			# this repository.
+			deep = depth is not None and self._recursive(
+				placement.type_name or "")
 			if running is not None:
-				return (f"{span}_from({held}, {running})" if depth is None
-				        else f"{span}_from_at({held}, {running}, {depth})")
-			return (f"{span}({held})" if depth is None
-			        else f"{span}_at({held}, {depth})")
+				return (f"{span}_from_at({held}, {running}, {depth})" if deep
+				        else f"{span}_from({held}, {running})")
+			return (f"{span}_at({held}, {depth})" if deep
+			        else f"{span}({held})")
 
 		# A nested struct with no single size. Its own `_extent` needs a view
 		# positioned at the member, which is not something an expression can
@@ -5517,7 +5682,7 @@ class Emitter:
 			return f"{site}_at({held}, {depth})"
 
 		if placement.kind == "variant":
-			chain = self._variant_length(struct, placement, held)
+			chain = self._variant_length(struct, placement, held, depth)
 			assert chain is not None, "callers check _has_length first"
 			return chain
 

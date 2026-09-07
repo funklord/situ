@@ -199,8 +199,13 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   its structs and not the rest, is refused. All six descriptions stop on
   the same message, which they did not before: the walkers counted structs
   where the generated code counts edges, and no test spanned the two
-  layers. A cycle through a variant arm is refused for now -- it emitted a
-  C header that does not compile, so the refusal narrows nothing.
+  layers.
+
+  **A cycle through a variant arm is one too** (26.289), which is how a
+  tagged tree is written -- `example/json` is the worked case, and the
+  refusal it replaced rested on a proxy: a variant with no maximum reads
+  as unbounded, and a recursive arm has none for a different reason. The
+  arm carries `opaque` now and the check asks it.
 
   Still open, and openmlx4's finding rather than a design gap: a format
   that ends its list with a sentinel and declares no maximum has a `limit`
@@ -23417,6 +23422,123 @@ any of this could run at all -- it guarded `element is struct` and
 recursed until Python's own limit on a mutual pair, which is the
 "non-terminating" section 2 meant, met in a function the solver's own
 guard does not cover.
+
+### 26.289 What JSON asked for, and the eight things it found on the way
+
+`example/json` describes objects, arrays, strings and the three literals,
+and it is the first schema here whose recursion runs through a **variant
+arm** -- `case 0x7B: object` is how a tagged tree is written, and how any
+format with a kind byte reaches its children. 26.288 refused that shape a
+day earlier on the reasoning that a variant with no maximum is unbounded.
+
+**The refusal was a proxy standing in for a fact the resolved layer had
+thrown away.** `_variant_is_measurable` read `variant.size_max_bits is
+None`, which is true of an `opaque` default that swallows the rest and
+equally true of an arm that IS the recursion -- whose maximum has no
+closed form for an entirely different reason, and which `[depth]` bounds.
+The resolved `Arm` could not tell the two apart, so it carries `opaque`
+now and the check asks the arm. That is `evidence.md`'s *ask the object
+you mean* met in this compiler's own data.
+
+**The arm is the third member kind that reaches a recursive type**, after
+a run's span and an ordinary nested member, and it needed the same three
+things in all four backends: an `_at` form on the arm's extent, the depth
+threaded through the variant's ternary chain, and the nesting probe
+descending into it -- **guarded by the discriminant**, because an arm is
+there only when it is selected and a probe that descended regardless
+reads whatever follows the tag as the recursive type.
+
+**And the C emitter re-entered itself.** Ten of the eleven callers of
+`_struct_extent` ask it as a predicate, and one of those is reached from
+inside the emission of the same struct's extent: the arm's length is the
+struct's extent, which asks for the arm's length. `_in_extent` answers it
+the way the solver's `in_progress` does, and the marker has to cover the
+`_at` body as well as the plain one -- it covered only the first, and the
+second is where the arm asks.
+
+**What JSON asked for and situ has not got.** A number ends at whichever
+of `,`, `]`, `}` or a space comes first, and `until` takes ONE delimiter.
+`cpio.situ` already writes `[must_eq = "070701" | "070702"]`, so the
+alternation exists for a pinned value and the missing thing is narrow and
+nameable: `until "," | "]" | "}"`. **The holder's call**, and the whole
+reason the example refuses numbers by name rather than describing them
+badly.
+
+**The consequence of two correct rules meeting, measured.** A value whose
+discriminant matches no arm has an extent of zero -- which every backend
+and both walkers agree on, deliberately, because zero is what a walk
+refuses to advance by. And `validate` does not descend into the elements
+of a run. Neither rule mentions the other, and together:
+
+    {"a":12}    8 bytes    extent 7    validate ok
+
+A short measurement and no complaint, which is the answer this file rates
+worst. It is in the example's own text rather than hidden, because both
+halves are right and the combination is what a reader has to know.
+
+**Three name collisions, one per language, all of them the schema's to
+cause.** A generated local named after a schema construct is a collision
+waiting for a schema to write it, and JSON writes three: Python's walk
+assigned `element = element(...)`, shadowing the class with the local, for
+a schema whose array holds a struct called `element`; C++'s nested
+validate wrote `held(held)` for a member called `held`; and Python's
+nesting probe assigned one local from two different classes, which runs
+fine and which mypy reads as the first one's type. The locals carry
+underscores now and the probe's is per member.
+
+**A double quote is a delimiter, and no schema here had one.** `until
+"\""` put a bare quote inside a generated Python docstring and inside a
+generated error message, and the module did not parse. The other three
+backends put the same text in a comment and are unaffected. Writing the
+helper that escapes it broke `emit.py` itself the same way, inside a
+minute, which is the shape of the fault rather than a separate one.
+
+**C could not order the cycle's accessors and did not know it.** A
+`while` predicate reads a field of the ELEMENT -- `sep == 0x2C` -- and
+`containment_order` cannot put both members of a cycle first, so
+`object`'s walk called `situ_member_sep_get` seventeen hundred lines
+above its definition. `_required` crosses the same way. Both are declared
+now, and only where the predicate names them: a `static inline` nothing
+defines is a warning this header treats as an error.
+
+**`WALK_DEPTH_MAX` had a reason that had expired, and now has a measured
+one.** It was "the deepest nesting in this repository's corpus is three",
+which stopped being true the moment JSON arrived: one level of braces is
+three structs. What decides it is the stack, which is measurable --
+summing the largest frame of every function in the walker's recursion
+cycle, `-Os` on x86-64, one level costs at most **944 bytes** and about
+300 on the ordinary path. Eight is therefore about 7.5 KB, which is a
+real fraction of a small device's stack. So the number stays and becomes
+`#ifndef`-overridable, because the comment above it has always said the
+arena is this program's and the code gave a program no way to say so:
+`-DWALK_DEPTH_MAX=64` measures `{"a":["b",{"c":"d"}]}` where the default
+declines it by name.
+
+**The oracle is CPython, and it is a differential on framing.**
+`json.JSONDecoder.raw_decode` returns the index one past the value it
+parsed, which is the question a situ extent answers -- so the two are
+compared on where a document ends rather than on what is in it. The
+corpus is `json.dumps`'s bytes: the shapes are named in the test file and
+every framing decision in them, where a comma goes and how a string is
+quoted, is CPython's.
+
+**And the harness was swapping the stdlib out from under itself.** The
+oracle loader imported each generated module under the SCHEMA's name and
+popped that name from `sys.modules` first, so building `json.situ` left
+the generated module installed as `json` for the rest of the session:
+twelve oracles with nothing to do with JSON failed with `module 'json'
+has no attribute 'loads'`. It loads under a private name now. The same
+hazard reaches a user -- `situc build json.situ --target python` writes
+`json.py` -- and that one is theirs to know about rather than situ's to
+prevent.
+
+**One piece of design feedback, from the rule's first real user.**
+`[depth = 64]` appears five times in this schema, once per struct in the
+cycle, which is what 26.288 settled and what keeps the number unambiguous
+wherever a walk enters. It reads as repetition and `check_no_recursive_types`
+refuses any drift in it, so it cannot go wrong quietly -- but whether a
+cycle should be able to state its bound once is a question the rule's
+author had no instance to judge against and now does. **The holder's.**
 
 ## 27. Questions, and how they were settled
 

@@ -159,14 +159,16 @@ was listed first. `depth` counts nested structs, not turns of the cycle:
 `[depth = 8]` over `expr <-> item` admits eight nested structs, four of
 each.
 
-**A cycle through a variant arm is refused for now**, which is a narrowing
-of what was permitted rather than of what worked: such a schema passed
-`check_no_recursive_types` and emitted a C header that does not compile,
-declaring an extent it never defined, because `_variant_is_measurable`
-refuses a variant with no maximum and a recursive arm has none. The two
-causes of "no maximum" -- an `opaque` default that consumes the rest, and a
-recursion whose maximum has no closed form -- share one signal, and
-separating them is what that case needs. Refused by name until then.
+~~**A cycle through a variant arm is refused for now.**~~ **Amended
+2026-09-07 (26.289): it is a cycle like any other**, and the day's
+refusal rested on the proxy this paragraph already named -- a variant
+with no maximum read as unbounded, and a recursive arm has none because
+its maximum has no closed form rather than because it is the rest of the
+view. The resolved `Arm` carries `opaque` now and the check asks it. The
+arm is the third member kind that reaches a recursive type, after a run's
+span and an ordinary nested member, and carries the depth as they do.
+`example/json` is the worked case: a value contains an object, an object
+contains members, and a member contains a value.
 
 Whether `limit` belongs in the schema at all, rather than as a build flag.
 The argument for the schema is that it is then in the artifact `map --check`

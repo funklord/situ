@@ -2219,6 +2219,9 @@ class Emitter:
 				and has_computable_extent(self.resolved.structs, nested):
 			inner = _pascal(nested.name)
 			base  = c_name(local_name(struct, placement))
+			# An arm that IS the recursion -- `case 1: node kid`, which is
+			# how a tagged tree is written. The depth travels with it.
+			deep = is_recursive(self.resolved.structs, nested.name)
 			return [
 				*head,
 				# How many bytes this arm occupies, for the switch that places
@@ -2226,12 +2229,26 @@ class Emitter:
 				# only the ordinary nested member emitted one, so the first
 				# schema with a variable-size arm named a method nothing
 				# defines -- MQTT's CONNECT, three times over.
+				*([] if not deep else [
+					f"\tpub fn {_ident(base + '_extent_at')}"
+					"(&self, depth: usize) -> usize {",
+					f"\t\tlet at = {self._unparen(start)};",
+					"\t\tif self.bytes.len() < at {",
+					"\t\t\treturn 0;",
+					"\t\t}",
+					f"\t\t{inner} {{ bytes: &self.bytes[at..] }}"
+					".extent_at(depth + 1)",
+					"\t}",
+					"",
+				]),
 				f"\tpub fn {_ident(base + '_extent')}(&self) -> usize {{",
-				f"\t\tlet at = {self._unparen(start)};",
-				"\t\tif self.bytes.len() < at {",
-				"\t\t\treturn 0;",
-				"\t\t}",
-				f"\t\t{inner} {{ bytes: &self.bytes[at..] }}.extent()",
+				*([f"\t\tself.{_ident(base + '_extent_at')}(0)"] if deep else [
+					f"\t\tlet at = {self._unparen(start)};",
+					"\t\tif self.bytes.len() < at {",
+					"\t\t\treturn 0;",
+					"\t\t}",
+					f"\t\t{inner} {{ bytes: &self.bytes[at..] }}.extent()",
+				]),
 				"\t}",
 				"",
 				f"\tpub fn {name}(&self) -> Result<{inner}<'_>> {{",
@@ -3719,14 +3736,23 @@ class Emitter:
 		cap  = ("" if placement.repeat_cap is None
 		        else f" && n < {placement.repeat_cap}")
 
-		def walk_from(from_: str) -> list[str]:
+		# The `_at` form takes a depth and has to SPEND it: Rust's
+		# `-D warnings` refuses an unused parameter, and an unspent one means
+		# the run restarts the counter one level down (26.112). The counted
+		# run's emitter threaded it and this one only declared it, which no
+		# schema could show until one recursed through a `while` run.
+		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+
+		def walk_from(from_: str, depth: str | None = None) -> list[str]:
+			step = ("element.extent()" if depth is None
+			        else f"element.extent_at({depth} + 1)")
 			return [
 			f"\t\tlet mut at = {from_};",
 			"\t\tlet mut n  = 0usize;",
 			"",
 			f"\t\twhile at < self.bytes.len(){cap} {{",
 			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
-			"\t\t\tlet size = element.extent();",
+			f"\t\t\tlet size = {step};",
 			"\t\t\tif size == 0 || at + size > self.bytes.len() {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
@@ -3782,7 +3808,7 @@ class Emitter:
 				# depth travels with it.
 				f"\tpub fn {_ident(f'{base}_span_from_at')}(&self,"
 				" start: usize, depth: usize) -> usize {",
-				*walk_from("start"), *tail,
+				*walk_from("start", "depth"), *tail,
 				"\t\tlet _ = n;",
 				"\t\tat - start",
 				"\t}",
@@ -4631,8 +4657,8 @@ class Emitter:
 			"\t}",
 		]
 
-	def _variant_length(self, struct: ResolvedStruct,
-			placement: Placement) -> str | None:
+	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
+			depth: str | None = None) -> str | None:
 		"""How many bytes the selected arm occupies, as one expression.
 
 		A conditional chain rather than a statement `switch`, because callers
@@ -4655,7 +4681,10 @@ class Emitter:
 			if member.is_fixed_size:
 				length = str(member.size_bits // BITS_PER_BYTE)
 			else:
-				rendered = self._length_expression(struct, member)
+				# The depth travels into the arm too, or a tagged tree
+				# restarts the counter at every level of itself.
+				rendered = self._length_expression(struct, member,
+				                                   depth=depth)
 				if rendered is None:
 					return None
 				# A branch body is a block and `-D warnings` rejects
@@ -4766,7 +4795,7 @@ class Emitter:
 			placement: Placement, running: str | None = None,
 			depth: str | None = None) -> str | None:
 		if placement.kind == "variant":
-			return self._variant_length(struct, placement)
+			return self._variant_length(struct, placement, depth)
 
 		# A run inside a variant arm has no length here, because the arm
 		# emitter has no walk: an arm is emitted by a family of its own, and
@@ -4793,13 +4822,15 @@ class Emitter:
 			# Inside a recursive extent's `_at` body the span carries the
 			# depth on, or the counter restarts one level down and bounds
 			# nothing (26.112).
+			# `_at` only where the ELEMENT recurses; see the C backend.
+			deep = depth is not None and is_recursive(
+				self.resolved.structs, placement.type_name or "")
 			if running is not None:
-				return (f"self.{_ident(name + '_span_from')}({running})"
-				        if depth is None else
-				        f"self.{_ident(name + '_span_from_at')}"
-				        f"({running}, {depth})")
-			return (f"self.{_ident(name + '_span')}()" if depth is None
-			        else f"self.{_ident(name + '_span_at')}({depth})")
+				return (f"self.{_ident(name + '_span_from_at')}"
+				        f"({running}, {depth})" if deep else
+				        f"self.{_ident(name + '_span_from')}({running})")
+			return (f"self.{_ident(name + '_span_at')}({depth})" if deep
+			        else f"self.{_ident(name + '_span')}()")
 
 		# Arithmetic over a field rather than a reference to one. Without this
 		# the member fell through to the scalar case and this backend read one
@@ -4808,13 +4839,15 @@ class Emitter:
 			base = c_name(local_name(struct, placement))
 			# Inside a recursive extent's `_at` body the span carries the
 			# depth on, or the counter restarts one level down (26.112).
+			# `_at` only where the ELEMENT recurses; see the C backend.
+			deep = depth is not None and is_recursive(
+				self.resolved.structs, placement.type_name or "")
 			if running is not None:
-				return (f"self.{_ident(base + '_span_from')}({running})"
-				        if depth is None else
-				        f"self.{_ident(base + '_span_from_at')}"
-				        f"({running}, {depth})")
-			return (f"self.{_ident(base + '_span')}()" if depth is None
-			        else f"self.{_ident(base + '_span_at')}({depth})")
+				return (f"self.{_ident(base + '_span_from_at')}"
+				        f"({running}, {depth})" if deep else
+				        f"self.{_ident(base + '_span_from')}({running})")
+			return (f"self.{_ident(base + '_span_at')}({depth})" if deep
+			        else f"self.{_ident(base + '_span')}()")
 
 		if placement.size_expr is not None:
 			# Bounded leaves, signed arithmetic, one clamp (14.2b).
@@ -5983,10 +6016,8 @@ class Emitter:
 		# sub-views are sized by the bounded extent -- a window the bound has
 		# already closed. See the C backend's probe for both.
 		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
-		for placement in own_members(struct):
+		for placement, guard in self._recursive_members(struct, cycle):
 			target = placement.type_name or ""
-			if target not in cycle:
-				continue
 			base  = c_name(local_name(struct, placement))
 			inner = _pascal(target)
 			at    = self._offset_expression(struct, placement)
@@ -5994,9 +6025,11 @@ class Emitter:
 				continue
 
 			if classify(struct, placement, self.structs) is Member.NESTED:
+				reach = ("at < self.bytes.len()" if guard is None
+				         else f"at < self.bytes.len() && ({guard})")
 				lines.extend([
 					f"\t\tlet at = {at};",
-					"\t\tif at < self.bytes.len() {",
+					f"\t\tif {reach} {{",
 					f"\t\t\tlet element = {inner} "
 					"{ bytes: &self.bytes[at..] };",
 					"\t\t\tlet found = element.nesting_at(depth + 1);",
@@ -6034,6 +6067,26 @@ class Emitter:
 		              "\tpub fn nesting(&self) -> usize {",
 		              "\t\tself.nesting_at(0)", "\t}"])
 		return lines
+
+	def _recursive_members(self, struct: ResolvedStruct,
+			cycle: set[str]) -> list[tuple[Placement, str | None]]:
+		"""Members typed as something in this struct's cycle, arms too, each
+		with the condition under which it is present. See the C backend."""
+		found: list[tuple[Placement, str | None]] = []
+		for placement in own_members(struct):
+			if (placement.type_name or "") in cycle:
+				found.append((placement, None))
+				continue
+			if placement.kind != "variant" or placement.discriminant is None:
+				continue
+			disc = self._over_fields(struct, placement.discriminant, "self")
+			for arm, member in arm_members(struct, placement):
+				if member is None or (member.type_name or "") not in cycle:
+					continue
+				found.append((member,
+				              None if arm.value is None
+				              else f"{disc} == {arm.value}"))
+		return found
 
 	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
 		"""The two depth verdicts, which are different verdicts (0054)."""

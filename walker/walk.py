@@ -175,7 +175,7 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 		# two, and dnsname's `qname` sub-view came back the wrong length.
 		return _while_walk(view, index, depth)[1] * BITS_PER_BYTE
 	if index in view.image.arms:
-		return _variant_bits(view, index)
+		return _variant_bits(view, index, depth)
 	if index in view.image.varints:
 		# A varint's width is in its own bytes. The record's `size_bits` is
 		# the minimum -- one byte -- so summing that placed everything after
@@ -339,7 +339,7 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 	return placement.size_bits
 
 
-def _variant_bits(view: View, index: int) -> int:
+def _variant_bits(view: View, index: int, depth: int = 0) -> int:
 	"""A variant's extent: the arm the discriminant selects, not the worst
 	case and not the minimum.
 
@@ -362,15 +362,50 @@ def _variant_bits(view: View, index: int) -> int:
 			fallback = chosen
 			continue
 		if case == value:
-			return 0 if chosen == NONE else size_bits(view, chosen)
+			return 0 if chosen == NONE else _arm_bits(view, index, chosen,
+			                                          depth)
 	if fallback is not None and fallback != NONE:
-		return size_bits(view, fallback)
+		return _arm_bits(view, index, fallback, depth)
 	# No arm matches and the default selects nothing. The extent is zero
 	# rather than a refusal: a discriminant naming no arm is a malformed
 	# message, and saying so is `validate`'s job, not the extent's. C's
 	# generated extent has the same `: 0u`, and refusing here counted zero
 	# dnsname labels where every backend counted one.
 	return 0
+
+
+def _arm_bits(view: View, variant: int, chosen: int, depth: int) -> int:
+	"""How many bytes the selected arm occupies.
+
+	An arm that is a variable-length struct is measured here rather than
+	through `size_bits`, which cannot: its nested-struct branch tests that
+	the member belongs to THIS struct, and an arm does not -- so an arm fell
+	through to the record's `size_bits`, which is the MINIMUM. That is the
+	same fault this file records dnsname catching one construct over, and it
+	was invisible until a schema recursed through an arm, where the minimum
+	is the struct with the recursion left out.
+
+	The arm starts where the variant does, which is what makes it
+	measurable without asking `offset_bits` for the arm -- and asking would
+	walk the variant whose extent is this, which is why the test in
+	`size_bits` is there.
+	"""
+	placement = view.image.placements[chosen]
+	shape     = view.image.structs[placement.type_struct] \
+		if placement.type_struct != NONE else None
+
+	if (shape is not None and not shape.fixed and shape.measurable
+			and placement.array_count == NONE
+			and placement.size_code == NONE
+			and placement.repeat_code == NONE
+			and chosen not in view.image.delimiters):
+		at = view.at + offset_bits(view, variant) // BITS_PER_BYTE
+		if at > view.limit:
+			raise Refused(f"arm {chosen} starts past the frame")
+		inner = View(view.image, view.buffer, placement.type_struct, at,
+		             view.limit)
+		return struct_extent(inner, depth + 1) * BITS_PER_BYTE
+	return size_bits(view, chosen, depth)
 
 
 def _value_in(view: View, index: int, base: int) -> int:

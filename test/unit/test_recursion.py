@@ -129,18 +129,17 @@ def test_a_mutual_cycle_is_described() -> None:
 	(MUTUAL.replace("struct expr [depth = 8]",
 	                "struct expr [depth = 8, limit = 4]")
 	        .format(item_attrs=" [depth = 8]"), "some of its structs"),
-	# Through a variant arm, which situ does not render: the extent of a
-	# variant is the arm its discriminant selects, and an arm that IS the
-	# recursion has no maximum, so `_variant_is_measurable` refuses it and
-	# the C backend used to emit a header declaring an extent it never
-	# defined. Refused by name rather than emitted broken.
-	("struct node [depth = 8] {\n"
+	# A cycle through a variant arm with no bound on it. The arm shape is
+	# permitted -- it is how a tagged tree is written and `SHAPES["arm"]`
+	# builds one -- and what is refused here is the same thing refused of
+	# every other shape: a recursion nobody bounded.
+	("struct node {\n"
 	 "\tu8   tag;\n"
 	 "\tvariant body switch (tag) {\n"
 	 "\t\tcase 1:  node kid;\n"
 	 "\t\tdefault: u8 pad;\n"
 	 "\t}\n"
-	 "}\n", "variant arm"),
+	 "}\n", "contains itself"),
 ])
 def test_a_cycle_states_one_bound_for_all_of_it(body: str, why: str) -> None:
 	"""`depth` bounds the cycle, not a struct of it.
@@ -599,6 +598,18 @@ SHAPES: dict[str, tuple[str, Callable[[int], bytes], str]] = {
 		lambda k: bytes(b"".join(bytes([0, 0, 1, 0]) for _ in range(k))
 		                + bytes([0, 0, 0])),
 		"expr"),
+	# A tagged tree: the recursion is the arm a discriminant selects, which
+	# is how JSON reaches its object from its value and how every format
+	# with a "kind" byte is written. Refused for a day on the reasoning that
+	# a variant with no maximum is unbounded -- true of an `opaque` arm and
+	# not of this one, whose maximum has no closed form for the same reason
+	# a recursive run's does not.
+	"arm": (
+		"struct node [depth = 8] {\n\tu8 tag;\n"
+		"\tvariant body switch (tag) {\n"
+		"\t\tcase 1:  node kid;\n\t\tdefault: u8 pad;\n\t}\n}\n",
+		lambda k: bytes([1] * k + [0, 0]),
+		"node"),
 }
 
 #: What each shape answers at `k` turns, as (extent, nesting, valid).
@@ -611,6 +622,7 @@ EXPECTED = {
 	"counted": {8: (27, 8, True), 9: (27, 9, False)},
 	"while":   {8: (9,  8, True), 9: (10, 9, False)},
 	"mutual":  {4: (19, 8, True), 5: (19, 10, False)},
+	"arm":     {8: (10, 8, True), 9: (9,  9, False)},
 }
 
 

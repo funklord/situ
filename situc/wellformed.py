@@ -3282,13 +3282,13 @@ def check_no_recursive_types(schema: ast.Schema) -> None:
 	not eight `expr`s. That is what bounds the stack, which is what the
 	number is for, and it is what every walk already counts.
 
-	**A cycle through a variant arm is refused for now**, and that is a
-	narrowing of what this function used to permit rather than of what
-	worked: such a schema passed here and emitted a C header that does not
-	compile, declaring `situ_node_extent` and defining nothing, because
-	`_variant_is_measurable` refuses a variant with no maximum and a
-	recursive arm has none. Refused by name is what this compiler does with
-	a construct it cannot render.
+	**A cycle through a variant arm is a cycle like any other**, and is how
+	a tagged tree is written: `case 0x7B: object body` is JSON's, and a
+	value contains an object contains a member contains a value. It was
+	refused for a day, because `_variant_is_measurable` read a variant with
+	no maximum as unbounded and a recursive arm has none -- two causes
+	wearing one signal, since the arm's maximum has no closed form rather
+	than being the rest of the view. The arm says which it is now.
 	"""
 	structs = {decl.name: decl for decl in schema.structs()}
 
@@ -3302,22 +3302,6 @@ def check_no_recursive_types(schema: ast.Schema) -> None:
 def _check_cycle(cycle: list[str], structs: Structs) -> None:
 	"""What a cycle has to say about itself before it is describable."""
 	members = cycle[:-1]
-
-	through = _arm_edge(cycle, structs)
-	if through is not None:
-		raise error(
-			f"`{through[0]}` reaches `{through[1]}` through a variant arm",
-			structs[through[0]].span,
-			label = "declared here",
-			notes = [f"cycle: {' -> '.join(cycle)}",
-			         "a recursive type is bounded by `[depth]`, and the "
-			         "extent of a variant is the arm its discriminant "
-			         "selects -- which situ does not yet compute for an arm "
-			         "that is the recursion",
-			         "move the recursive member out of the variant, or "
-			         "carry it as a run whose count the discriminant "
-			         "decides"],
-		)
 
 	undeclared = [name for name in members
 	              if _declared_depth(structs[name]) is None]

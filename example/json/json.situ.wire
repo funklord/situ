@@ -1,0 +1,60 @@
+# situ wire signature v1
+# schema: json.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian big
+target buffer
+
+struct array size=1..
+  @0x0000   1..       element    entries  while=sep==0x2C
+
+struct element size=1..
+  @0x0000   0..       value      held
+  ~         1         u8         sep
+
+struct member size=4..
+  @0x0000   1         u8         open
+  @0x0001   until:22  u8         key
+  ~         1         u8         colon
+  ~         0..       value      held
+  ~         1         u8         sep
+
+struct no size=4
+  @0x0000   4         u8         rest  big must_eq="alse"
+
+struct nothing size=3
+  @0x0000   3         u8         rest  big must_eq="ull"
+
+struct object size=4..
+  @0x0000   4..       member     entries  big while=sep==0x2C
+
+struct text size=1..
+  @0x0000   until:22  u8         chars
+
+struct value size=2..
+  @0x0000   1         u8         kind
+  @0x0001   1..       variant    body
+  body switch: kind
+  body case 34: as_string text
+  body case 91: as_array array
+  body case 102: as_false no
+  body case 110: as_null nothing
+  body case 116: as_true yes
+  body case 123: as_object object
+  body case default: error
+
+struct yes size=3
+  @0x0000   3         u8         rest  big must_eq="rue"

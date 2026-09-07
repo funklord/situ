@@ -154,10 +154,16 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                11,
-	("no-scalar", "struct", "fixed"):            42,
-	("no-scalar", "struct", "unmeasurable"):     16,
+	("no-scalar", "struct", "fixed"):            45,
+	("no-scalar", "struct", "unmeasurable"):     19,
 	("no-scalar", "not-struct", ""):              1,
 }
+
+#: Both middle cells moved by three when `example/json` arrived: a JSON value
+#: is a variant with six arms, three of them variable structs -- object,
+#: array and string -- and three of them fixed, the tails of `true`, `false`
+#: and `null`. The counts are numbers and the cells are the population; a
+#: schema that adds a cell still fails here, which is what this is for.
 
 #: The whole of the last cell, by path. One member, and the condition that
 #: declines it is written about the *other* fact.
@@ -1123,7 +1129,11 @@ def test_the_python_condition_is_python() -> None:
 	# The condition as *code*. `||` legitimately survives in the docstring
 	# that quotes the schema, which is what a looser assertion caught.
 	assert "if not ((self.next == 43) or (self.next == 44))" not in source
-	assert "if not ((element.next == 43) or (element.next == 44)):" in source
+	# `_element`, not `element`: the walk's local carries an underscore now,
+	# because a schema is free to name a struct `element` and
+	# `element = element(...)` shadows the class before it is called
+	# (26.289). The assertion is about the OPERATORS either way.
+	assert "if not ((_element.next == 43) or (_element.next == 44)):" in source
 
 
 def test_the_rust_reads_are_widened() -> None:

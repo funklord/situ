@@ -157,11 +157,20 @@ class Arm:
 	`member` is the path of the member this arm selects, and None for
 	`default: error` -- an arm that selects nothing, whose extent is not zero
 	but undefined, there being no such message.
+
+	`opaque` tells that arm from `default: opaque;`, which also selects no
+	member and means the opposite: everything left belongs to it. The two
+	were indistinguishable here, so the one thing that told them apart was
+	the variant's own maximum going None -- a proxy that is also None for a
+	recursive arm, which has no closed-form maximum for an entirely
+	different reason. Asking the arm is the fix, and it is `evidence.md`'s
+	"ask the object you mean, not something correlated with it".
 	"""
 
 	source: str | None
 	value: int | None
 	member: str | None
+	opaque: bool		= False
 
 
 @dataclass(frozen=True)
@@ -1434,7 +1443,8 @@ class Solver:
 				# neither contributes a fixed extent of its own.
 				if arm.is_opaque:
 					high = None
-				arm_cases.append(Arm(source, value, None))
+				arm_cases.append(Arm(source, value, None,
+				                     opaque = arm.is_opaque))
 				continue
 
 			arm_cases.append(Arm(source, value,

@@ -153,6 +153,29 @@ class Generated:
 		return {f"{self.basename}.py": self.module}
 
 
+def _doc(text: str) -> str:
+	"""Schema-derived text, safe inside a triple-quoted docstring.
+
+	A delimiter is bytes the schema chose, and one of the bytes it may
+	choose is a double quote -- `render_delimiter` shows it between
+	backticks, which lands in the middle of a docstring and ends it three
+	characters early. The module then did not parse, and the schema that
+	produced it was the first in this repository to frame anything with a
+	quote. JSON is that schema.
+
+	Written while writing this: the first version of THIS docstring quoted
+	the offending characters to explain them and stopped `emit.py` itself
+	from parsing, which is the same fault one layer up and took under a
+	minute to make.
+
+	The other three backends put the same text in a comment and need
+	nothing, which is why this lives here and not in the shared
+	`render_delimiter`: escaping there would put a backslash in three
+	languages that have no use for one.
+	"""
+	return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def py_name(path: str) -> str:
 	"""`c_name`, mangled where Python could not parse the result.
 
@@ -2273,18 +2296,33 @@ class Emitter:
 				and has_computable_extent(self.resolved.structs, nested):
 			inner = py_name(nested.name)
 			base  = py_name(local_name(struct, placement))
+			# An arm that IS the recursion -- `case 1: node kid`, which is
+			# how a tagged tree is written and how JSON's value reaches its
+			# object. The depth travels with it.
+			deep = is_recursive(self.resolved.structs, nested.name)
 			return [
 				# How many bytes this arm occupies, for the switch that places
 				# whatever follows the variant. The length chain names it and
 				# only the ordinary nested member emitted one, so the first
 				# schema with a variable-size arm named an attribute nothing
 				# defines -- MQTT's CONNECT, three times over.
+				*([] if not deep else [
+					"",
+					f"\tdef {base}_extent_at(self, depth: int) -> int:",
+					f'\t\t"""How many bytes {placement.path} occupies here,',
+					'\t\tat this depth in the recursion."""',
+					f"\t\tstart = {start}",
+					f"\t\treturn {inner}(self._msg, self._at + start,",
+					"\t\t\tmax(0, self._len - start))._extent_at(depth + 1)",
+				]),
 				"", "\t@property",
 				f"\tdef {base}_extent(self) -> int:",
 				f'\t\t"""How many bytes {placement.path} occupies here."""',
-				f"\t\tstart = {start}",
-				f"\t\treturn {inner}(self._msg, self._at + start,",
-				"\t\t\tmax(0, self._len - start))._extent",
+				*([f"\t\treturn self.{base}_extent_at(0)"] if deep else [
+					f"\t\tstart = {start}",
+					f"\t\treturn {inner}(self._msg, self._at + start,",
+					"\t\t\tmax(0, self._len - start))._extent",
+				]),
 				*head,
 				f"\t\twhole = {inner}(self._msg, self._at + ({start}),",
 				f"\t\t\tmax(0, self._len - ({start})))",
@@ -3245,9 +3283,9 @@ class Emitter:
 				"\t\tn  = 0",
 				"",
 				"\t\twhile at < self._len:",
-				f"\t\t\telement = {inner}(self._msg, self._at + at,",
+				f"\t\t\t_element = {inner}(self._msg, self._at + at,",
 				"\t\t\t\tself._len - at)",
-				"\t\t\tsize    = element._extent",
+				"\t\t\tsize    = _element._extent",
 				"\t\t\tif size == 0 or at + size > self._len:",
 				"\t\t\t\t# A zero-extent element would walk here forever,",
 				"\t\t\t\t# and one past the limit was never in this frame.",
@@ -3334,12 +3372,12 @@ class Emitter:
 			"		n  = 0",
 			"",
 			f"		while {stop}at < self._len:",
-			f"			element = {inner}(self._msg, self._at + at,"
+			f"			_element = {inner}(self._msg, self._at + at,"
 			" self._len - at)",
-			("			size    = element._extent"
+			("			size    = _element._extent"
 			 if not is_recursive(self.resolved.structs,
 			                     placement.type_name or "") else
-			 "			size    = element._extent_at(depth + 1)"),
+			 "			size    = _element._extent_at(depth + 1)"),
 			"			if size == 0 or at + size > self._len:",
 			"				break",
 			"			at += size",
@@ -3440,7 +3478,8 @@ class Emitter:
 			"",
 			"\t@property",
 			f"\tdef {scan}(self) -> int:",
-			f'\t\t"""To the first {render_delimiter(delim)}, or the whole run."""',
+			f'\t\t"""To the first {_doc(render_delimiter(delim))}, or the'
+			' whole run."""',
 			f"\t\treturn self.{scan}_from(self.{name}_offset)",
 			"",
 			f"\tdef {name}_terminated_from(self, at: int) -> bool:",
@@ -3634,7 +3673,7 @@ class Emitter:
 		asking `remaining > 0` would otherwise be true past the end.
 		"""
 		return self._over_fields(
-			element, placement.repeat_while or "", "element",
+			element, placement.repeat_while or "", "_element",
 			extra = {"remaining": f"max(0, {limit} - {cursor})"})
 
 	def _repeat_while(self, struct: ResolvedStruct,
@@ -3664,7 +3703,8 @@ class Emitter:
 		# generated a module that raised AttributeError on its own extent.
 		# The counted form was the one the corpus and the suite exercised.
 		deep = is_recursive(self.resolved.structs, placement.type_name or "")
-		step = ("element._extent_at(depth + 1)" if deep else "element._extent")
+		step = ("_element._extent_at(depth + 1)" if deep
+		        else "_element._extent")
 
 		return [
 			"",
@@ -3685,7 +3725,7 @@ class Emitter:
 			"\t\tstarts: list[int] = []",
 			"",
 			f"\t\twhile at < self._len{cap}:",
-			f"\t\t\telement = {inner}(self._msg, self._at + at, self._len - at)",
+			f"\t\t\t_element = {inner}(self._msg, self._at + at, self._len - at)",
 			f"\t\t\tsize    = {step}",
 			"\t\t\tif size == 0 or at + size > self._len:",
 			"\t\t\t\tbreak",
@@ -3800,8 +3840,8 @@ class Emitter:
 			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"
 			f"self._at + at + {len(delim)}]) == {delim!r}:",
 			"\t\t\t\tbreak",
-			f"\t\t\telement = {inner}(self._msg, self._at + at, self._len - at)",
-			"\t\t\tsize    = element._extent",
+			f"\t\t\t_element = {inner}(self._msg, self._at + at, self._len - at)",
+			"\t\t\tsize    = _element._extent",
 			"\t\t\tif size == 0 or at + size > self._len:",
 			"\t\t\t\tbreak",
 			"\t\t\tstarts.append(at)",
@@ -3977,7 +4017,7 @@ class Emitter:
 			cond = self._element_condition(element, placement, "at", "have")
 			body.extend([
 				*read,
-				f"\t\t\telement = {inner}(probe._msg, at, part)",
+				f"\t\t\t_element = {inner}(probe._msg, at, part)",
 				"\t\t\tat += part",
 				"",
 				"\t\t\t# The condition is asked about the element just"
@@ -4167,10 +4207,8 @@ class Emitter:
 		# fatal in a mutual one, where a turn costs two levels and the
 		# truncation compounds until `nesting` saturates AT the bound.
 		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
-		for placement in own_members(struct):
+		for placement, guard in self._recursive_members(struct, cycle):
 			target = placement.type_name or ""
-			if target not in cycle:
-				continue
 			name  = py_name(local_name(struct, placement)).replace(".", "_")
 			inner = py_name(target)
 			start = self._offset_expression(struct, placement)
@@ -4178,28 +4216,38 @@ class Emitter:
 				continue
 
 			if classify(struct, placement, self.structs) is Member.NESTED:
+				reach = ("start < self._len" if guard is None
+				         else f"start < self._len and ({guard})")
+				# One local per member, not one per function. Python has no
+				# block scope, so two arms descending into two different
+				# structs would be two assignments to one name -- and mypy
+				# reads the first as the variable's type and calls the
+				# second an error. A JSON value has six arms and three of
+				# them are structs.
+				held = f"_element_{name}"
 				lines.extend([
 					f"\t\tstart = {start}",
-					"\t\tif start < self._len:",
-					f"\t\t\telement = {inner}(self._msg, self._at + start,",
+					f"\t\tif {reach}:",
+					f"\t\t\t{held} = {inner}(self._msg, self._at + start,",
 					"\t\t\t\tself._len - start)",
-					"\t\t\tfound = element.nesting_at(depth + 1)",
+					f"\t\t\tfound = {held}.nesting_at(depth + 1)",
 					"\t\t\tif found > deepest:",
 					"\t\t\t\tdeepest = found",
 				])
 				continue
 
+			held = f"_element_{name}"
 			lines.extend([
 				f"\t\tat = {start}",
 				f"\t\tfor _ in range(self.{name}_count):",
 				"\t\t\tif at >= self._len:",
 				"\t\t\t\tbreak",
-				f"\t\t\telement = {inner}(self._msg, self._at + at,",
+				f"\t\t\t{held} = {inner}(self._msg, self._at + at,",
 				"\t\t\t\tself._len - at)",
-				"\t\t\tfound = element.nesting_at(depth + 1)",
+				f"\t\t\tfound = {held}.nesting_at(depth + 1)",
 				"\t\t\tif found > deepest:",
 				"\t\t\t\tdeepest = found",
-				"\t\t\tsize = element._extent",
+				f"\t\t\tsize = {held}._extent",
 				"\t\t\tif size == 0 or size > self._len - at:",
 				"\t\t\t\tbreak",
 				"\t\t\tat += size",
@@ -4210,6 +4258,26 @@ class Emitter:
 		              "\tdef nesting(self) -> int:",
 		              "\t\treturn self.nesting_at(0)"])
 		return lines
+
+	def _recursive_members(self, struct: ResolvedStruct,
+			cycle: set[str]) -> list[tuple[Placement, str | None]]:
+		"""Members typed as something in this struct's cycle, arms too, each
+		with the condition under which it is present. See the C backend."""
+		found: list[tuple[Placement, str | None]] = []
+		for placement in own_members(struct):
+			if (placement.type_name or "") in cycle:
+				found.append((placement, None))
+				continue
+			if placement.kind != "variant" or placement.discriminant is None:
+				continue
+			disc = self._over_fields(struct, placement.discriminant, "self")
+			for arm, member in arm_members(struct, placement):
+				if member is None or (member.type_name or "") not in cycle:
+					continue
+				found.append((member,
+				              None if arm.value is None
+				              else f"{disc} == {arm.value}"))
+		return found
 
 	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
 		"""The two depth verdicts, which are different verdicts (0054)."""
@@ -4385,8 +4453,8 @@ class Emitter:
 			f' this {placement.discriminant}")',
 		]
 
-	def _variant_length(self, struct: ResolvedStruct,
-			placement: Placement) -> str | None:
+	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
+			depth: str | None = None) -> str | None:
 		"""How many bytes the selected arm occupies, as one expression.
 
 		A conditional chain rather than a statement `switch`, because callers
@@ -4409,7 +4477,10 @@ class Emitter:
 			if member.is_fixed_size:
 				length = str(member.size_bits // BITS_PER_BYTE)
 			else:
-				rendered = self._length_expression(struct, member)
+				# The depth travels into the arm too, or a tagged tree
+				# restarts the counter at every level of itself.
+				rendered = self._length_expression(struct, member,
+				                                   depth=depth)
 				if rendered is None:
 					return None
 				length = f"({rendered})"
@@ -4504,7 +4575,7 @@ class Emitter:
 			placement: Placement, running: str | None = None,
 			depth: str | None = None) -> str | None:
 		if placement.kind == "variant":
-			return self._variant_length(struct, placement)
+			return self._variant_length(struct, placement, depth)
 
 		# A delimited member's extent is wherever the delimiter turns out to
 		# be, and `_span` is the member's own answer. One name for "how far
@@ -4518,11 +4589,19 @@ class Emitter:
 			# every accumulating pass over it.
 			# Inside a recursive extent's `_at` body the span carries the
 			# depth on, or the counter restarts one level down (26.112).
+			# `_at` only where the ELEMENT recurses, which is what makes
+			# the form exist. A delimited byte run has no element struct and
+			# no `_at` span, and this asked for one whenever a depth was in
+			# scope -- so a delimited member inside a recursive struct named
+			# a `_span_at` nothing defines. JSON's object key is the first
+			# one in this repository.
+			deep = depth is not None and is_recursive(
+				self.resolved.structs, placement.type_name or "")
 			if running is not None:
-				return (f"self.{name}_span_from({running})" if depth is None
-				        else f"self.{name}_span_from_at({running}, {depth})")
-			return (f"self.{name}_span" if depth is None
-			        else f"self.{name}_span_at({depth})")
+				return (f"self.{name}_span_from_at({running}, {depth})" if deep
+				        else f"self.{name}_span_from({running})")
+			return (f"self.{name}_span_at({depth})" if deep
+			        else f"self.{name}_span")
 
 		# Arithmetic over a field rather than a reference to one. Without this
 		# the member fell through to the scalar case and this backend read one
@@ -4697,7 +4776,7 @@ class Emitter:
 			# literal in generated source. `b'\r\n'` says the same thing and
 			# survives the trip.
 			f'\t\t\t\t"{placement.path} has no '
-			f'{repr(delim).replace(chr(92), chr(92) * 2)}: '
+			f'{_doc(repr(delim))}: '
 			'the frame stops first")',
 		]
 		# The encoding, over the span the scan found. See the C backend for
