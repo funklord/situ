@@ -599,13 +599,14 @@ def _until_to_source(until: "ast.Until | None") -> str:
 	if until is None:
 		return ""
 
-	# Every alternative, so that unparsing round-trips: a schema written
-	# `until "," | "]"` and printed back as `until ","` would be a different
-	# schema, which is what `situc dump-ast` exists not to be.
-	body = " | ".join(f'"{_escape(one.decode("latin-1"))}"'
-	                  for one in until.delimiters)
+	# Every alternative, as the schema wrote it. Round-tripping the BYTES
+	# would print `","` for a schema that wrote `','` -- the same delimiter
+	# and not the same source, and the spelling is the author's.
+	body = " | ".join(until.shown) if until.shown else " | ".join(
+		f'"{_escape(one.decode("latin-1"))}"' for one in until.delimiters)
 	cap  = f" max {expr_to_source(until.cap)}" if until.cap is not None else ""
-	return f" until {body}{cap}"
+	word = "until" if until.consumed else "before"
+	return f" {word} {body}{cap}"
 
 
 def _while_to_source(repeat: "ast.While | None") -> str:

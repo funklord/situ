@@ -225,7 +225,13 @@ def _width(placement: Placement) -> str:
 		# Every alternative, `|`-separated as the schema writes them. The
 		# wire signature is a committed contract, so a member that ends at
 		# three bytes and shows one would be a diff nobody reviewed.
-		return "until:" + "|".join(one.hex() for one in placement.delimiters)
+		# `until:` or `before:`, because the two frame the same bytes
+		# differently and a reader of the signature has to be able to tell:
+		# one puts the delimiter inside the member and the other leaves it
+		# for the next.
+		word = "until" if placement.delimiter_consumed else "before"
+		return f"{word}:" + "|".join(one.hex()
+		                             for one in placement.delimiters)
 	if placement.size_max_bits != placement.size_bits:
 		hi = ("" if placement.size_max_bits is None
 		      else str(placement.size_max_bits // BITS_PER_BYTE))

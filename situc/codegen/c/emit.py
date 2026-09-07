@@ -48,6 +48,7 @@ from situc.traverse import (
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
 	is_own_member, is_recursive,
+	must_be_terminated,
 	local_name, offset_plan, own_members, recursion_cycle,
 	readable_names,
 	region_extent,
@@ -4466,6 +4467,7 @@ class Emitter:
 
 		many = len(placement.delimiters) > 1
 		took = ident(self.prefix, struct.name, local, "took")
+		consumed = placement.delimiter_consumed
 
 		lines = [
 			f"/* `{placement.name}` runs to the first "
@@ -4558,7 +4560,11 @@ class Emitter:
 			"\t * member ran to the end of the buffer, and claiming the extra",
 			"\t * bytes would put the next one past the limit its own bounds",
 			"\t * check trusts. */",
-			(f"\treturn {scan_len}_from(view, at) + {took}_from(view, at);"
+			# `before` adds nothing: the delimiter is a SEPARATOR and
+			# belongs to neither side, so the member ends where the scan
+			# stopped and the next one starts at the delimiter itself.
+			(f"\treturn {scan_len}_from(view, at);" if not consumed else
+			 f"\treturn {scan_len}_from(view, at) + {took}_from(view, at);"
 			 if many else
 			 f"\treturn {scan_len}_from(view, at) + "
 			 f"({terminated}_from(view, at) ? {len(delim)}u : 0u);"),
@@ -6933,6 +6939,10 @@ class Emitter:
 				"\t * choice, as with any other array of structs. */",
 			]
 
+		# `before` asks for nothing here: the delimiter belongs to what
+		# follows, so its absence means there is nothing after this member
+		# rather than that the frame stopped early. One decision, five
+		# readers -- `traverse.must_be_terminated`.
 		lines = [
 			f"\t/* `{placement.name}` runs to {render_delimiter(delim)}, and a",
 			"\t * frame that does not contain it was cut short: the member ran",
@@ -6940,7 +6950,7 @@ class Emitter:
 			f"\tif (!{ident(self.prefix, struct.name, local, 'terminated')}(view)) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
-		]
+		] if must_be_terminated(placement) else []
 
 		# The encoding, over the span the scan found. `_encoding_check`
 		# below cannot reach a delimited member -- it needs a static offset

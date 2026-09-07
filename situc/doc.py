@@ -402,9 +402,14 @@ def _size(placement: Placement) -> str:
 		# reported, and it is the one number nobody wants.
 		shown = " or ".join(render_delimiter(one).strip("`")
 		                    for one in placement.delimiters)
+		# "to" against "up to": the first says the delimiter is inside the
+		# member and the second that it is not, which is the whole
+		# difference between `until` and `before` and is what a reader of
+		# this column is sizing a buffer against.
+		word = "to" if placement.delimiter_consumed else "up to"
 		if placement.delimiter_cap is not None:
-			return f"to {shown}, max {placement.delimiter_cap}"
-		return f"to {shown}"
+			return f"{word} {shown}, max {placement.delimiter_cap}"
+		return f"{word} {shown}"
 	# The count is in elements, and this column is otherwise in bytes: a
 	# constant array two rows down says "8 bytes" for four `u16`s. So `[n]`
 	# beside a `u16` read as n bytes, and half the array was invisible to

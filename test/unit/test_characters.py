@@ -270,3 +270,71 @@ def test_the_directive_comes_before_the_structs() -> None:
 	ones below -- from a line that reads like a statement about the file."""
 	with pytest.raises(SituError, match="before the structs"):
 		build("struct s { u8 a; }\nencoding ascii;\n")
+
+
+# -- `before` ---------------------------------------------------------------
+#
+# `until` is a TERMINATOR: the delimiter belongs to the member, which is what
+# a CRLF is to the line it ends. `before` is a SEPARATOR: it belongs to
+# neither side, which is what a comma is between two JSON members. One word
+# could not say both, and every text format has both.
+
+BEFORE = ("encoding ascii;\n"
+          "struct field {\n"
+          "\tu8  value[] before ',' | ']' | '}';\n"
+          "\tu8  sep;\n"
+          "}\n")
+
+
+def test_before_leaves_the_delimiter_for_the_next_member() -> None:
+	"""The whole difference, and the reason the member after it can read
+	the delimiter at all."""
+	resolved = build(BEFORE)
+	held = next(e.placement for e in resolved.structs["field"].entries
+	            if e.placement.name == "value")
+	assert held.delimiters == (b",", b"]", b"}")
+	assert held.delimiter_consumed is False
+
+
+def test_until_still_takes_it() -> None:
+	"""The control. Without it the test above would pass against a compiler
+	that had stopped consuming delimiters altogether."""
+	resolved = build("struct s { u8 v[] until ','; u8 a; }\n")
+	held = next(e.placement for e in resolved.structs["s"].entries
+	            if e.placement.name == "v")
+	assert held.delimiter_consumed is True
+
+
+def test_a_before_member_need_not_be_terminated() -> None:
+	"""`validate` requires an `until` delimiter to be there -- a member
+	without it was cut short. It must not require a `before` one: the
+	delimiter belongs to whatever comes next, and whether there is a next
+	is the enclosing structure's business.
+
+	A JSON number at the end of a document has no separator after it, and a
+	check that refused it would call every such document malformed. That is
+	what happened, for about ten minutes, and the schema that showed it was
+	the one the construct was built for.
+	"""
+	from situc.traverse import must_be_terminated
+
+	resolved = build(BEFORE)
+	held = next(e.placement for e in resolved.structs["field"].entries
+	            if e.placement.name == "value")
+	assert not must_be_terminated(held)
+
+	consumed = build("struct s { u8 v[] until ','; u8 a; }\n")
+	other = next(e.placement for e in consumed.structs["s"].entries
+	             if e.placement.name == "v")
+	assert must_be_terminated(other)
+
+
+def test_before_round_trips_as_before() -> None:
+	"""`situc dump-ast` and the unparser print the keyword that was
+	written: a schema printed back as `until` would be a different schema,
+	and the two differ by exactly one byte of framing."""
+	from situc.unparse import unparse
+
+	printed = unparse(parse_text(PREAMBLE + BEFORE))
+	assert "before ',' | ']' | '}'" in printed, printed
+	assert " until " not in printed, printed

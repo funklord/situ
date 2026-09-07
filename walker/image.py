@@ -208,6 +208,11 @@ class Image:
 	#: has none. `quote` toggles: inside a quoted run the delimiter is
 	#: content. `escape` applies to the byte after it, itself included.
 	delimiter_rules: dict[int, tuple[int, int, int]] = field(default_factory=dict)
+
+	#: Whether the delimiter belongs to the member: `until` against
+	#: `before`. Kept apart from the rules above because it decides the
+	#: SPAN rather than the scan, and those are read in different places.
+	delimiter_consumed: dict[int, bool]	= field(default_factory=dict)
 	#: Placements inside an `authenticated` or `sealed` region. A walk reads
 	#: those through a gate, which this walker does not render.
 	regions: set[int]			= field(default_factory=set)
@@ -359,12 +364,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if DELIMITERS in found:
 		at, records, stride = found[DELIMITERS]
 		for i in range(records):
-			where, quote, escape, cap, length = _struct.unpack_from(
-				"<IIIIB", blob, at + i * stride)
-			start = at + i * stride + 17
+			where, quote, escape, cap, length, consumed = _struct.unpack_from(
+				"<IIIIBB", blob, at + i * stride)
+			start = at + i * stride + 18
 			image.delimiters[where] = image.delimiters.get(where, ()) \
 				+ (blob[start:start + length],)
 			image.delimiter_rules[where] = (quote, escape, cap)
+			image.delimiter_consumed[where] = bool(consumed)
 
 	if REGIONS in found:
 		at, records, stride = found[REGIONS]

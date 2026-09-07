@@ -225,7 +225,11 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 		# wrong span that happened to be right for every one-alternative
 		# schema -- so the type change and the scan change had to land
 		# together.
-		width = content + (took if terminated else 0)
+		# `before` adds nothing: a separator belongs to neither side, so the
+		# member ends where the scan stopped and the delimiter is the next
+		# member's first byte.
+		consumed = view.image.delimiter_consumed.get(index, True)
+		width = content + (took if terminated and consumed else 0)
 		return width * BITS_PER_BYTE
 	if placement.size_code != NONE:
 		count = _evaluate(view, placement.size_code,

@@ -66,6 +66,7 @@ from situc.traverse import (
 	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members, recursion_cycle,
+	must_be_terminated,
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -1465,7 +1466,8 @@ class Emitter:
 		# left after the whitespace at either end. Without it they are one.
 		scan = f"{name}_raw_len" if placement.trimmed else f"{name}_len"
 
-		many = len(placement.delimiters) > 1
+		many     = len(placement.delimiters) > 1
+		consumed = placement.delimiter_consumed
 		lines = [
 			"",
 			f"\t/* {placement.path} runs to the first "
@@ -1519,7 +1521,9 @@ class Emitter:
 			f"\t[[nodiscard]] std::uint32_t {name}_span_from(std::uint32_t at)"
 			" const noexcept",
 			"\t{",
-			(f"\t\treturn {scan}_from(at) + {name}_took_from(at);" if many else
+			# `before` adds nothing; see the C backend.
+			(f"\t\treturn {scan}_from(at);" if not consumed else
+			 f"\t\treturn {scan}_from(at) + {name}_took_from(at);" if many else
 			 f"\t\treturn {scan}_from(at) + "
 			 f"({name}_terminated_from(at) ? {len(delim)}u : 0u);"),
 			"\t}",
@@ -6199,13 +6203,14 @@ class Emitter:
 		delim = placement.delimiter
 		assert delim is not None
 
+		# `before` asks for nothing here; see `traverse.must_be_terminated`.
 		lines = [
 			f"\t\t/* {placement.path} runs to {render_delimiter(delim)}; a frame",
 			"\t\t * without it was cut short. */",
 			f"\t\tif (!{name}_terminated()) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
-		]
+		] if must_be_terminated(placement) else []
 
 		# The encoding, over the span the scan found. See the C backend for
 		# why this lives here: the fixed-width check needs a static offset

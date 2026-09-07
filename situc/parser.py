@@ -74,6 +74,40 @@ class _CodecProperties:
 		)
 
 
+def _spelled(text: str, quote: str) -> str:
+	"""A literal as the schema wrote it, quotes and escapes included.
+
+	Kept so the unparser can print `','` for a schema that wrote `','`
+	rather than the `","` the bytes alone would give. The same idea as
+	`IntLiteral.text`: a spelling that means the identical thing is still
+	the author's, and a round trip that loses it has lost something nobody
+	can get back.
+	"""
+	out = []
+	for char in text:
+		if char == "\\" or char == quote:
+			out.append("\\" + char)
+		elif char == "\n":
+			out.append("\\n")
+		elif char == "\t":
+			out.append("\\t")
+		elif char == "\r":
+			out.append("\\r")
+		elif char == "\0":
+			out.append("\\0")
+		elif " " <= char <= "~":
+			out.append(char)
+		else:
+			# Escaped, including a character that IS a character: a
+			# delimiter's bytes come from latin-1, so 0xC0 is `A` with a
+			# grave accent and printing it raw would put a non-ASCII byte in
+			# a `.situ` file AND change what the literal means under any
+			# other encoding. `\xE9` re-parses to the same byte and says
+			# which byte it is, which is what a binary delimiter needs.
+			out.append(f"\\x{ord(char):02X}")
+	return quote + "".join(out) + quote
+
+
 def evaluate_literal(expr: ast.Expr) -> int | None:
 	"""An integer literal, or None. Used where a property must be a constant
 	the parser can see, rather than an expression a later pass folds."""
@@ -2156,11 +2190,16 @@ class Parser:
 		relaxations are attributes rather than more keywords: `[quoted = '"']`
 		reads as a property of the field, which it is.
 		"""
-		if not self.current.is_ident("until"):
+		if not self.current.is_ident("until", "before"):
 			return None
 
-		start = self.advance()
+		# `before` is a soft keyword, read the way `at` and `std` are: an
+		# identifier in this one position, so no schema that used the word as
+		# a name stops parsing.
+		consumed = self.current.text == "until"
+		start    = self.advance()
 		found: list[bytes] = []
+		shown: list[str]   = []
 		seen: dict[bytes, Span] = {}
 
 		while True:
@@ -2175,9 +2214,11 @@ class Parser:
 				# disagree about it is refused rather than picking one.
 				self.advance()
 				raw = self._character_bytes(token)
+				shown.append(_spelled(token.text, "'"))
 			elif token.kind is TokenKind.STRING:
 				self.advance()
 				raw = token.text.encode("latin-1")
+				shown.append(_spelled(token.text, '"'))
 			else:
 				raise error(
 					"a delimiter must be a string or a character",
@@ -2217,7 +2258,8 @@ class Parser:
 			self.advance()
 			cap = self.parse_expr()
 
-		return ast.Until(self.span_from(start), tuple(found), cap = cap)
+		return ast.Until(self.span_from(start), tuple(found), cap = cap,
+		                 consumed = consumed, shown = tuple(shown))
 
 	def _character_bytes(self, token: Token) -> bytes:
 		"""A character literal as the bytes the schema's encodings agree on.

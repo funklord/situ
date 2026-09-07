@@ -1031,6 +1031,23 @@ def container_bits(placement: Placement, widths: tuple[int, ...]) -> int | None:
 	return None
 
 
+def must_be_terminated(placement: "Placement") -> bool:
+	"""Whether `validate` requires the delimiter to be there.
+
+	It does for `until`: the delimiter belongs to the member, so a member
+	without it was cut short and the frame stops early. It does NOT for
+	`before`: the delimiter belongs to whatever comes next, and whether
+	there is a next is the enclosing structure's business rather than this
+	member's. A JSON number at the end of a document has no separator after
+	it and is not malformed.
+
+	One decision, five readers -- four backends and the packer -- because
+	each of them emits or records this check, and five answers to it is how
+	they come apart.
+	"""
+	return bool(placement.delimiters) and placement.delimiter_consumed
+
+
 def has_computable_extent(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct,
 		seen: frozenset[str] = frozenset()) -> bool:

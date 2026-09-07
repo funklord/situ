@@ -338,6 +338,10 @@ class Placement:
 	delimiter_escape: int | None	= None
 	#: A bound on the scan, from `until D max N`.
 	delimiter_cap: int | None	= None
+	#: Whether the delimiter belongs to this member: `until` against
+	#: `before`. The scan is the same and only the span differs, so this is
+	#: read wherever a span adds the delimiter's length and nowhere else.
+	delimiter_consumed: bool	= True
 	#: The array's size expression as source, where it is not a bare field
 	#: reference. `sized_by` holds a path and holds nothing for
 	#: `data[(len + 1) * 8 - 2]`, so a backend reading only that emitted a
@@ -1050,6 +1054,8 @@ class Solver:
 			# `covers` clause of its own -- same reason as `until` above.
 			coded_covers  = tuple(getattr(region, "covers", ())),
 			delimiters    = until.delimiters if until is not None else (),
+			delimiter_consumed = until.consumed if until is not None
+			                     else True,
 			delimiter_cap = (evaluate(until.cap, self.result.env)
 			                 if until is not None and until.cap is not None
 			                 else None),
@@ -1759,6 +1765,8 @@ class Solver:
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
 			delimiters         = member.until.delimiters if member.until else (),
+			delimiter_consumed = (member.until.consumed if member.until
+			                      else True),
 			repeat_while       = _repeat_source(member),
 			repeat_shown       = _repeat_source(member, explicit=False),
 			repeat_cap         = self._repeat_cap(member),

@@ -44,3 +44,24 @@ value no 66 61 6C 73 65
 
 value nothing 6E 75 6C 6C
 	kind = 110
+
+# Numbers, which this schema could not frame until `until` took several
+# delimiters and `before` stopped consuming them. Each ends at the byte that
+# separates it from what follows, and that byte belongs to the object.
+value number 31 32
+	kind = 49
+
+value in_object 7B 22 61 22 3A 31 32 7D
+	kind = 123
+
+value two_numbers 7B 22 61 22 3A 31 32 2C 22 62 22 3A 33 7D
+	kind = 123
+
+value number_array 5B 31 2C 32 2C 33 30 5D
+	kind = 91
+
+# A number is whatever the bytes between the delimiters are, so the exponent
+# and the sign cost nothing extra -- which is the point of framing rather
+# than parsing.
+value scientific 2D 31 2E 35 65 33
+	kind = 45

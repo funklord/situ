@@ -34,6 +34,9 @@ struct no size=4 atomic=NonAtomic
 struct nothing size=3 atomic=NonAtomic
   nothing.rest                           offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
 
+struct number size=1.. mutate=Shifting effect=EffectOnRead
+  number.rest                            offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
+
 struct object size=4.. access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
   object.entries                         offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
   object.entries[]                       offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
@@ -70,6 +73,8 @@ struct value size=2.. access=Sequential mutate=Shifting address=Unstable atomic=
   value.body.as_false.rest               offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   value.body.as_null                     offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   value.body.as_null.rest                offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  value.body.as_number                   offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
+  value.body.as_number.rest              offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
 
 struct yes size=3 atomic=NonAtomic
   yes.rest                               offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic

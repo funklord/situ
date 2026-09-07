@@ -60,6 +60,7 @@ from situc.traverse import (
 	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members, recursion_cycle,
+	must_be_terminated,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -3321,7 +3322,8 @@ class Emitter:
 		# With `[trim]` the framing and the value are different numbers.
 		scan = _ident(f"{base}_raw_len" if placement.trimmed else f"{base}_len")
 
-		many  = len(placement.delimiters) > 1
+		many     = len(placement.delimiters) > 1
+		consumed = placement.delimiter_consumed
 		lines = [
 			"",
 			f"\t/// `{placement.path}` runs to the first "
@@ -3362,7 +3364,9 @@ class Emitter:
 			"",
 			f"\tpub fn {_ident(f'{base}_span_from')}(&self, at: usize)"
 			" -> usize {",
-			(f"\t\tself.{scan}_from(at) + "
+			# `before` adds nothing; see the C backend.
+			(f"\t\tself.{scan}_from(at)" if not consumed else
+			 f"\t\tself.{scan}_from(at) + "
 			 f"self.{_ident(f'{base}_took_from')}(at)" if many else
 			 f"\t\tself.{scan}_from(at) + "
 			 f"if self.{_ident(f'{base}_terminated_from')}(at)"
@@ -3961,11 +3965,12 @@ class Emitter:
 			return []		# checked under the element's own struct
 
 		base  = c_name(local_name(struct, placement))
+		# `before` asks for nothing here; see `traverse.must_be_terminated`.
 		lines = [
 			f"\t\tif !self.{_ident(f'{base}_terminated')}() {{",
 			"\t\t\treturn Err(Error::Constraint);",
 			"\t\t}",
-		]
+		] if must_be_terminated(placement) else []
 		# The encoding, over the span the scan found. See the C backend for
 		# why it lives here rather than with the fixed-width check, which
 		# needs a static offset and a declared count.

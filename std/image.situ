@@ -259,7 +259,21 @@ struct image_arm {
 	u8   arm_pad[3];
 }
 
-// `until "D"`: where a member ends when no length says so. The bytes are
+// `until "D"` or `before "D"`: where a member ends when no length says so.
+//
+// `consumed` is the difference and it is one bit: a TERMINATOR belongs to
+// what it ends and a SEPARATOR belongs to neither side, so the scan is
+// identical and only the span moves. A byte rather than a bit in `length`,
+// which would have fitted -- a flag packed into a number is a flag nobody
+// reads, and this record had three spare bytes of padding to spend.
+//
+// One ROW per alternative, all under the same placement: `until "," | "]"`
+// is two rows, and a reader collects the consecutive ones. `quote`,
+// `escape`, `cap` and `consumed` belong to the MEMBER and are repeated on
+// each, because which row a binary search lands on first is not a property
+// anything should depend on.
+//
+// The bytes are
 // inline because every delimiter in the tree is one, two or five bytes, and
 // an offset into a pool would cost as much as the bytes for all of them.
 // The member is `octets` rather than `bytes` because the generated Python
@@ -271,7 +285,9 @@ struct image_delimiter {
 	u32  escape;                      // the other escaping form, or `none`
 	u32  cap;                         // `until D max N`, or `none`
 	u8   length;
+	u8   consumed;                    // 1 for `until`, 0 for `before`
 	u8   octets[15];
+	u8   delim_pad[3];
 }
 
 // An `authenticated` or `sealed` region, and the member's membership of one.
@@ -483,7 +499,7 @@ require size(image_section) == 16;
 require size(image_struct) == 16;
 require size(image_placement) == 48;
 require size(image_arm) == 24;
-require size(image_delimiter) == 32;
+require size(image_delimiter) == 36;
 require size(image_region) == 16;
 require size(image_codec) == 4;
 require size(image_varint) == 12;

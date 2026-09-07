@@ -56,13 +56,15 @@ struct image_constraint size=16
   @0x000c   1         image_check check
   @0x000d   3         u8         constraint_pad  little
 
-struct image_delimiter size=32
+struct image_delimiter size=36
   @0x0000   4         u32        placement  little
   @0x0004   4         u32        quote  little
   @0x0008   4         u32        escape  little
   @0x000c   4         u32        cap  little
   @0x0010   1         u8         length
-  @0x0011   15        u8         octets  little
+  @0x0011   1         u8         consumed
+  @0x0012   15        u8         octets  little
+  @0x0021   3         u8         delim_pad  little
 
 struct image_depth size=12
   @0x0000   4         u32        shape  little

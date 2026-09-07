@@ -415,7 +415,7 @@ situ_walk_err situ_walk_scan(const situ_walk_image *image,
 			if (wide <= best || i + wide > limit) {
 				continue;
 			}
-			if (delimiter_at(message + at + i, row + 17, wide)) {
+			if (delimiter_at(message + at + i, row + 18, wide)) {
 				best = wide;
 			}
 		}
@@ -1265,6 +1265,8 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 	const uint8_t *delim = (held.type_struct == SITU_WALK_NONE)
 	                     ? delimiter_rules(image, index) : NULL;
 	if (delim != NULL) {
+		const int consumed = delim[17] != 0u;
+
 		uint32_t at = 0u;
 		err = offset_bits_deep(image, message, len, shape, index, depth,
 		                       &at);
@@ -1284,8 +1286,12 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 		/* `took` and not the row's own width: with several alternatives
 		 * there is no such thing as "the delimiter's length", and which
 		 * row a binary search happened to land on is not the one that
-		 * matched. */
-		*out = (content + (terminated ? took : 0u)) * 8u;
+		 * matched.
+		 *
+		 * And nothing at all for `before`: a separator belongs to neither
+		 * side, so the member ends where the scan stopped and the
+		 * delimiter is the next member's first byte. */
+		*out = (content + (terminated && consumed ? took : 0u)) * 8u;
 		return SITU_WALK_OK;
 	}
 

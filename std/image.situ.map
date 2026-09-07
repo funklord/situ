@@ -37,13 +37,15 @@ struct image_constraint size=16 repr=ValueConverted atomic=NonAtomic
   image_constraint.check                 offset=AbsoluteStatic(0x0C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
   image_constraint.constraint_pad        offset=AbsoluteStatic(0x0D) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
-struct image_delimiter size=32 repr=ValueConverted atomic=NonAtomic
+struct image_delimiter size=36 repr=ValueConverted atomic=NonAtomic
   image_delimiter.placement              offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_delimiter.quote                  offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image_delimiter.escape                 offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_delimiter.cap                    offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image_delimiter.length                 offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  image_delimiter.octets                 offset=AbsoluteStatic(0x11) size=Fixed(15) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  image_delimiter.consumed               offset=AbsoluteStatic(0x11) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  image_delimiter.octets                 offset=AbsoluteStatic(0x12) size=Fixed(15) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  image_delimiter.delim_pad              offset=AbsoluteStatic(0x21) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
 struct image_depth size=12 repr=ValueConverted
   image_depth.shape                      offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

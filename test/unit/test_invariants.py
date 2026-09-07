@@ -155,15 +155,18 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                11,
 	("no-scalar", "struct", "fixed"):            45,
-	("no-scalar", "struct", "unmeasurable"):     19,
+	("no-scalar", "struct", "unmeasurable"):     20,
 	("no-scalar", "not-struct", ""):              1,
 }
 
 #: Both middle cells moved by three when `example/json` arrived: a JSON value
 #: is a variant with six arms, three of them variable structs -- object,
 #: array and string -- and three of them fixed, the tails of `true`, `false`
-#: and `null`. The counts are numbers and the cells are the population; a
-#: schema that adds a cell still fails here, which is what this is for.
+#: and `null`. The unmeasurable cell moved again by one when `before` let
+#: that variant describe a NUMBER, whose `default` arm had been
+#: `default: error` and is now a seventh arm holding a variable struct.
+#: The counts are numbers and the cells are the population; a schema that
+#: adds a cell still fails here, which is what this is for.
 
 #: The whole of the last cell, by path. One member, and the condition that
 #: declines it is written about the *other* fact.

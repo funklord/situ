@@ -23653,6 +23653,81 @@ reads the byte after it. So the missing construct is a delimiter a member
 ends BEFORE rather than at, and situ has one word for both. **The
 holder's**, and the example says so in its own text.
 
+### 26.291 A terminator is not a separator, and JSON is described
+
+`until` has always meant "the member ends here, and the delimiter is
+part of it" -- which is right for a CRLF, because a CRLF belongs to the
+line it ends. It is wrong for a comma. The comma in `{"a":1,"b":2}`
+belongs to neither the `1` nor the `"b"`, and a member that swallowed it
+would leave the byte after it as the separator its own run reads.
+
+**One word could not say both, and every text format has both.** `before`
+is the second, and it differs from `until` in one bit: the scan is the
+same search over the same alternatives, and only the span moves. So it is
+a flag on the delimiter rather than a second construct -- `Until.consumed`
+in the AST, one byte in the image record, one branch in each of the four
+spans and both walkers.
+
+**It closes `example/json`.** A number is now
+
+    struct number { u8 rest[] before ',' | ']' | '}'; }
+
+which needed both of this week's language changes and neither alone: the
+alternation because a number ends at whichever of a set comes first, and
+`before` because the byte that ends it belongs to the object. Every
+document in the vectors measures its own length now, numbers included,
+and the example's bill is one line: whitespace, which is a grammar's job
+rather than a layout's.
+
+The wrong answer is worth keeping beside the right one, because it is
+what this cost:
+
+    {"a":12}    8 bytes    extent 7    validate ok      before `before`
+    {"a":12}    8 bytes    extent 8    validate ok      now
+
+**And it needed one thing nobody would have predicted from the
+construct.** `validate` requires an `until` delimiter to be THERE -- a
+member without it was cut short, and the frame stops early. That check
+must not fire for `before`: the delimiter belongs to whatever comes next,
+and whether there is a next is the enclosing structure's business. A JSON
+number at the end of a document has no separator after it and is not
+malformed.
+
+For about ten minutes every bare number was `ConstraintError`, and the
+schema that showed it was the one the construct was built for. The fix is
+`traverse.must_be_terminated`, asked by five readers -- four backends and
+the packer -- because each of them emits or records that check and five
+answers to one question is how they come apart.
+
+**The image record grew rather than packing a flag into a length.** It
+was exactly 32 bytes with three bytes of padding to spend, and `u8
+consumed` spends one of them. A bit in `length` would have fitted and
+would have been a flag nobody reads: the length is 0..15 and its top bits
+are free, which is precisely the argument that produces a field meaning
+two things.
+
+**The unparser needed the SPELLING back.** `until.delimiters` is bytes, so
+a schema written `before ','` printed back as `before ","` -- the same
+delimiter and not the same source. `Until.shown` carries what the author
+wrote, which is `IntLiteral.text`'s reason one construct over: a spelling
+that means the identical thing is still theirs, and a round trip that
+loses it has lost something nobody can get back.
+
+**Two things the corpus caught that the construct did not suggest.** The
+unparser's new spelling printed a binary delimiter as the character its
+byte happens to be -- SLIP's `0xC0` came back as an A-grave, which is a
+non-ASCII byte in a `.situ` file and a different literal under any
+encoding but Latin-1. It escapes everything outside printable ASCII now,
+so `'\xE9'` says which byte it is. And the arm census moved again: JSON's
+`default: error` became a seventh arm holding a variable struct, which is
+the population assertion doing its job rather than a number to update.
+
+**What `before` does not change.** The scan, the alternation, the cap, the
+`terminated` accessor, and every schema that used `until` -- all
+unchanged, byte for byte. The two keywords differ where they should differ
+and nowhere else, which is what made this a small change on top of a large
+one rather than a second delimited-member family.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

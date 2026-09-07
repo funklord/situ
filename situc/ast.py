@@ -174,7 +174,12 @@ class ArraySpec(Node):
 
 @dataclass(frozen=True)
 class Until(Node):
-	"""`until "\\r\\n"` -- where a delimited member stops (section 8.6.1).
+	"""`until "\\r\\n"` or `before ','` -- where a delimited member stops
+	(section 8.6.1).
+
+	One node for both, because they differ in one bit and in nothing else:
+	the scan is the same search and the span is the only thing that moves.
+	Named `Until` for the keyword that came first.
 
 	The delimiter is bytes rather than text: a schema may frame on `0x00` as
 	readily as on CRLF, and the lexer's string literal already carries either.
@@ -208,6 +213,28 @@ class Until(Node):
 	quoted: int | None	= None
 	escape: int | None	= None
 	cap: Expr | None	= None
+	#: Whether the delimiter belongs to the member -- `until` against
+	#: `before`.
+	#:
+	#: A TERMINATOR ends what precedes it and is part of it: a CRLF belongs
+	#: to the line it ends, which is why a delimited member's span has
+	#: always included it. A SEPARATOR stands between two things and belongs
+	#: to neither: the comma in `{"a":1,"b":2}` is not part of the `1`, and
+	#: a member that swallowed it would leave the byte after it as the next
+	#: member's first.
+	#:
+	#: One word could not say both, and every text format has both. The scan
+	#: is identical and only the span differs, which is why this is a flag
+	#: on the delimiter rather than a second construct.
+	consumed: bool		= True
+	#: Each delimiter as the schema wrote it, `'a'` or `"ab"` including the
+	#: quotes. The bytes are what everything computes with; this is what the
+	#: unparser prints, so a schema written with characters comes back with
+	#: characters. `IntLiteral.text` is the same idea and for the same
+	#: reason: a spelling that means the identical thing is still the
+	#: author's, and `dump-ast` printing something they did not write is a
+	#: round trip that has lost information nobody can get back.
+	shown: tuple[str, ...]	= ()
 
 	@property
 	def delimiter(self) -> bytes:

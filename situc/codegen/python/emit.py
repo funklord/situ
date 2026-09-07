@@ -60,6 +60,7 @@ from situc.traverse import (
 	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members, recursion_cycle,
+	must_be_terminated,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -3476,7 +3477,8 @@ class Emitter:
 		# scan says where the next member starts, and the value is what is
 		# left after the whitespace at either end.
 		scan = f"{name}_raw_len" if placement.trimmed else f"{name}_len"
-		many = len(placement.delimiters) > 1
+		many     = len(placement.delimiters) > 1
+		consumed = placement.delimiter_consumed
 
 		lines = [
 			"",
@@ -3511,7 +3513,9 @@ class Emitter:
 			"",
 			f"\tdef {name}_span_from(self, at: int) -> int:",
 			f'\t\t"""Content plus delimiter, from a known base."""',
-			(f"\t\treturn self.{scan}_from(at) + self.{name}_took_from(at)"
+			# `before` adds nothing; see the C backend.
+			(f"\t\treturn self.{scan}_from(at)" if not consumed else
+			 f"\t\treturn self.{scan}_from(at) + self.{name}_took_from(at)"
 			 if many else
 			 f"\t\treturn self.{scan}_from(at) + ({len(delim)}"
 			 f" if self.{name}_terminated_from(at) else 0)"),
@@ -4793,6 +4797,7 @@ class Emitter:
 		delim = placement.delimiter
 		assert delim is not None
 
+		# `before` asks for nothing here; see `traverse.must_be_terminated`.
 		lines = [
 			f"\t\tif not self.{name}_terminated:",
 			f"\t\t\traise ConstraintError(",
@@ -4804,7 +4809,7 @@ class Emitter:
 			f'\t\t\t\t"{placement.path} has no '
 			f'{_doc(repr(delim))}: '
 			'the frame stops first")',
-		]
+		] if must_be_terminated(placement) else []
 		# The encoding, over the span the scan found. See the C backend for
 		# why it lives here rather than with the fixed-width check, which
 		# needs a static offset and a declared count.

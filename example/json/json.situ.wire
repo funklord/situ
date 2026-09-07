@@ -38,6 +38,9 @@ struct no size=4
 struct nothing size=3
   @0x0000   3         u8         rest  big must_eq="ull"
 
+struct number size=1..
+  @0x0000   before:2c|5d|7d u8         rest
+
 struct object size=4..
   @0x0000   4..       member     entries  big while=sep==','
 
@@ -54,7 +57,7 @@ struct value size=2..
   body case 110: as_null nothing
   body case 116: as_true yes
   body case 123: as_object object
-  body case default: error
+  body case default: as_number number
 
 struct yes size=3
   @0x0000   3         u8         rest  big must_eq="rue"

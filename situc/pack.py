@@ -47,7 +47,7 @@ SECTION_BYTES	= 16
 STRUCT_BYTES	= 16
 PLACEMENT_BYTES	= 50
 ARM_BYTES	= 24
-DELIMITER_BYTES	= 32
+DELIMITER_BYTES	= 36
 REGION_BYTES	= 16
 CODEC_BYTES	= 4
 VARINT_BYTES	= 12
@@ -1293,7 +1293,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# CONSTRAINT for `kv_block` where C said OK.
 				if placement.type_name in resolved.structs:
 					continue
-				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
+				# And `before` requires nothing: the delimiter belongs to
+				# what follows, so its absence means there is nothing after
+				# this member rather than that the frame stopped early
+				# (`traverse.must_be_terminated`).
+				if traverse.must_be_terminated(placement):
+					constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
 
 				# The encoding, over the content the scan found. All four
 				# backends check this now; until they did, `[encoding =
@@ -1476,11 +1481,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		for one in placement.delimiters:
 			raw = one[:15]
 			delims_blob += _struct.pack(
-				"<IIIIB15s", at,
+				"<IIIIBB15s3x", at,
 				_u32(placement.delimiter_quote),
 				_u32(placement.delimiter_escape),
 				_u32(placement.delimiter_cap),
-				len(raw), raw)
+				len(raw), 1 if placement.delimiter_consumed else 0, raw)
 		if placement.regions:
 			flags = (1 if placement.sealed_by else 0) \
 				| (2 if placement.unverified_ok else 0)
