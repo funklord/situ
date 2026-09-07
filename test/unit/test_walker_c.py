@@ -1453,3 +1453,123 @@ def test_a_truncated_image_is_malformed_rather_than_read(
 	                     capture_output=True, text=True)
 
 	assert ran.stdout.strip() == "malformed"
+
+
+_RECURSIVE = """target buffer;
+endian big;
+
+struct node [depth = 32, limit = {limit}] {{
+	{head}
+	{run}
+}}
+"""
+
+#: The two shapes a struct holds a run of itself in. They share nothing above
+#: `struct_extent`: a `while` run asks a predicate after each element, a
+#: counted run asks a length program once and multiplies -- except that a
+#: recursive element has no width to multiply, which is the case this walker
+#: refused outright while `walk.py` walked it.
+_RUNS = {
+	"while":   ("u8    more;", "node  kids[] while (more != 0);"),
+	"counted": ("u8    count;", "node  kids[count];"),
+}
+
+
+def _nest(levels: int) -> bytes:
+	"""A message nested `levels` deep, read the same way by both shapes: one
+	byte per level, meaning "another follows" as a predicate and "one child"
+	as a count."""
+	return bytes(1 if i + 1 < levels else 0 for i in range(levels))
+
+
+def _recursive_image(shape: str, limit: int) -> bytes:
+	head, run = _RUNS[shape]
+	return _inline_image(_RECURSIVE.format(limit=limit, head=head, run=run))
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("shape", sorted(_RUNS))
+@pytest.mark.parametrize("levels", [1, 4, 8, 9])
+def test_they_agree_about_a_run_of_a_recursive_struct(
+		tmp_path: Path, shape: str, levels: int) -> None:
+	"""Both run shapes, on both sides of the ceiling, in both walkers.
+
+	This found two faults that neither walker's own tests could, because
+	each was internally consistent:
+
+	The counted run of variable-length elements was `SITU_WALK_UNSUPPORTED`
+	here and walked in `walk.py` since 26.267 -- so `node children[count]`,
+	which is the shape a recursive type most naturally takes, was measurable
+	in one reader and not the other.
+
+	And `depth` counted hops through `situ_walk.c` rather than levels of
+	struct: `struct_extent` spent one reaching a member and `size_bits_deep`
+	spent another descending into it, so a struct level cost two and
+	`[limit = 8]` bought four here against `walk.py`'s eight. Both walkers
+	refused deep messages and both refused them by name; they simply refused
+	different messages, which is invisible to either one alone.
+
+	`levels` straddles the ceiling deliberately: 8 is the last message a
+	`[limit = 8]` schema admits and 9 is the first it does not, so a walker
+	that stops early and one that stops late are both caught, and a walker
+	that never stops is caught by the second of them.
+	"""
+	blob    = _recursive_image(shape, 8)
+	message = _nest(levels)
+
+	assert c_widths(tmp_path, blob, message) == python_widths(blob, message)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("shape", sorted(_RUNS))
+def test_the_schema_moves_both_walkers_together(
+		tmp_path: Path, shape: str) -> None:
+	"""Agreement is worth nothing if both agree on a constant.
+
+	The test above compares two readers at one limit, and would pass for two
+	walkers that had both ignored the schema and used the same built-in
+	number -- which is exactly the state 0054 was written to leave. So this
+	one changes the schema and asserts that what both walkers admit changes
+	with it: a four-level message is refused under `[limit = 2]` and read
+	under `[limit = 8]`, in C and in Python.
+	"""
+	deep = _nest(4)
+
+	shallow_c = c_widths(tmp_path, _recursive_image(shape, 2), deep)
+	deeper_c  = c_widths(tmp_path, _recursive_image(shape, 8), deep)
+
+	assert shallow_c == python_widths(_recursive_image(shape, 2), deep)
+	assert deeper_c  == python_widths(_recursive_image(shape, 8), deep)
+	assert "refused" in shallow_c, shallow_c
+	assert "refused" not in deeper_c, deeper_c
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("shape", sorted(_RUNS))
+@pytest.mark.parametrize(("levels", "expected"),
+                         [(3, "0"), (8, "0"), (9, "cannot-say")])
+def test_a_message_past_the_ceiling_is_unanswerable_in_both(
+		tmp_path: Path, shape: str, levels: int, expected: str) -> None:
+	"""`validate` has two channels, and the ceiling belongs to the other one.
+
+	Past `[limit]` a message is *well formed* and refused anyway -- 26.284's
+	reasoning, and why the four generated backends spell it `SITU_ERR_DEPTH`
+	rather than a constraint error. The walker has no such verdict and should
+	not grow one: what it has is the second channel, "this build cannot say",
+	which carries exactly that meaning.
+
+	Python answered **0** here, off a walk that had stopped: `_validate`
+	breaks on `Unplaceable`, correctly, for a member no backend emits an
+	offset for -- and the ceiling was arriving wearing that exception. C
+	answered `cannot-say` for the same bytes throughout. Two validators, one
+	image, opposite answers, and the differential that exists to catch
+	exactly this had no recursive schema in its corpus.
+
+	The expected values are pinned rather than only compared, because two
+	walkers agreeing on OK for a message neither followed is agreement.
+	"""
+	blob    = _recursive_image(shape, 8)
+	message = _nest(levels)
+
+	assert c_verdict(tmp_path, blob, message) == python_verdict(blob, message)
+	assert c_verdict(tmp_path, blob, message) == expected

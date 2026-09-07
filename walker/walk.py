@@ -59,6 +59,27 @@ class Unplaceable(Refused):
 	"""
 
 
+class TooDeep(Unplaceable):
+	"""...and this one is not about the message at all.
+
+	The ceiling: the schema's `[limit]` where it states one, this build's
+	`WALK_DEPTH_MAX` otherwise. A statement about how far this walker
+	follows, which is why it is not a verdict on the bytes -- past
+	`[limit]` a message is *well formed* and refused anyway, which is
+	26.284's reasoning and the reason the generated backends spell it
+	`SITU_ERR_DEPTH` rather than a constraint error.
+
+	A subclass of `Unplaceable` because everything that stops for one
+	stops for this: the two run walks re-raise it, and `size_bits` has
+	nothing to answer either way. What separates them is `validate`, which
+	*breaks* on a member nothing can place -- correctly, since no backend
+	emits an offset for one -- and must not, for this. Breaking here
+	reported a twelve-level message as well formed under `[limit = 8]`,
+	from a walk that had stopped: C answered `cannot-say` for the same
+	bytes, and the two validators disagreed.
+	"""
+
+
 @dataclass
 class View:
 	"""A struct over a buffer: a base, a limit, and the image behind them."""
@@ -241,6 +262,20 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 					# nothing, which is a bound with a public entry
 					# point that restarts it (26.112).
 					size = struct_extent(inner, depth + 1)
+				except Unplaceable:
+					# The ceiling, which is a refusal about the
+					# walk rather than about this element --
+					# `_while_walk`'s distinction, which this loop
+					# did not make. `Unplaceable` subclasses
+					# `Refused`, so `except Refused` swallowed it:
+					# a twelve-level chain under `[limit = 8]` came
+					# back eight bytes long instead of refused,
+					# which is a plausible number and the answer
+					# this walker's own notes twice say not to
+					# give. The `while` run beside it refused
+					# correctly throughout, so the two runs
+					# disagreed about the same schema's number.
+					raise
 				except Refused:
 					break
 				# The two bounds every generated walk carries: a zero-extent
@@ -1040,7 +1075,7 @@ def struct_extent(view: View, depth: int = 0) -> int:
 	walker's own notes record twice.
 	"""
 	if depth >= _ceiling(view.image, view.struct):
-		raise Unplaceable(
+		raise TooDeep(
 			"nested deeper than this walker follows: the schema's `[limit]` "
 			"where it states one, and this build's ceiling otherwise")
 	shape = view.shape

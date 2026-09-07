@@ -22,7 +22,7 @@ from enum import Enum
 from situc import ast
 from situc import kernels
 from situc.ast import Schema
-from situc.types import pinned_shown, literal_bytes
+from situc.types import ScalarType, pinned_shown, literal_bytes
 from math import lcm
 
 from situc.expr import Env

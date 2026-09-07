@@ -834,9 +834,29 @@ static situ_walk_err struct_extent(const situ_walk_image *image,
 			continue;
 		}
 
+		/* `depth` counts LEVELS OF STRUCT, not hops through this file.
+		 * Since 0054 it is compared against a number the schema wrote
+		 * down, so what it counts has to be what the schema was counting:
+		 * measuring a member of THIS struct stays at this level, and only
+		 * a descent into another instance -- the nested member below, the
+		 * two run walks, `validate` -- spends one.
+		 *
+		 * It read `depth + 1u`, which cost a level here and another on the
+		 * way back into `struct_extent`, so a struct level cost two and
+		 * `[limit = 8]` bought four. `walk.py` spent one, and the two
+		 * walkers disagreed about the schema's own number -- which is the
+		 * whole of what 0054 added. Found by walking a counted run in both
+		 * and comparing where each stopped.
+		 *
+		 * The variant hop in `variant_bits` still spends one, and is left
+		 * spending it: an arm is measured within this struct, so it is the
+		 * same kind of hop as this one, but nothing bounds a malformed
+		 * image whose arms select each other except the counter. It costs
+		 * a level in a shape no schema here has and refuses a loop in an
+		 * image no packer here writes. */
 		uint32_t wide = 0u;
 		err = size_bits_deep(image, message, len, shape, first + i,
-		                     depth + 1u, &wide);
+		                     depth, &wide);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -1168,10 +1188,8 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 	}
 
 	/* A sized run: the program answers a count of elements, and the
-	 * element width is what each costs. */
-	if (held.element_bits == SITU_WALK_NONE) {
-		return SITU_WALK_UNSUPPORTED;
-	}
+	 * element width is what each costs -- except where the elements have no
+	 * common width, which is the walk below. */
 
 	/* `remaining` means "to the end of the frame *from here*", not the
 	 * frame's whole length. Passing the latter made every `[remaining]` run
@@ -1211,6 +1229,60 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 	if (count < 0) {
 		count = 0;
 	}
+
+	/* A counted run of VARIABLE-length elements. The count says how many,
+	 * each element says how long it is, and there is no stride to multiply
+	 * -- so the width below is wrong by exactly the factor the elements
+	 * vary by, and this refused rather than guess.
+	 *
+	 * The refusal outlived its reason. `walk.py` records the same one and
+	 * the premise it rested on: "no backend emits a span for one, so
+	 * nothing after such a run is placed by anybody". That stopped being
+	 * true when `classify` and `is_counted_run` were reconciled, all five
+	 * descriptions began emitting the span, and `walk.py` started walking
+	 * it (26.267). This walker kept refusing, so the one shape a recursive
+	 * struct most naturally takes -- `node children[count]` -- was walkable
+	 * in Python and UNSUPPORTED here.
+	 *
+	 * The loop is `while_walk`'s, minus the predicate, and it stops the
+	 * same four ways: the count runs out, the frame does, an element
+	 * measures zero and would not advance, or one measures more than the
+	 * frame holds and was never an element. And UNSUPPORTED propagates
+	 * where everything else breaks, for `while_walk`'s reason: "this build
+	 * cannot measure that element" reported as a short run is a wrong
+	 * length that reads exactly like a right one, and the depth ceiling
+	 * arrives wearing precisely that error. */
+	if (held.element_bits == SITU_WALK_NONE) {
+		if (held.type_struct == SITU_WALK_NONE) {
+			return SITU_WALK_UNSUPPORTED;	/* not a run of records */
+		}
+		if (from > len) {
+			return SITU_WALK_BOUNDS;
+		}
+
+		uint32_t at = from;
+		int64_t  i;
+
+		for (i = 0; i < count && at < len; i++) {
+			uint32_t extent = 0u;
+			err = struct_extent(image, message + at, len - at,
+			                    held.type_struct, depth + 1u, &extent);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				break;
+			}
+			if (extent == 0u || extent > len - at) {
+				break;
+			}
+			at += extent;
+		}
+
+		*out = (at - from) * 8u;
+		return SITU_WALK_OK;
+	}
+
 	if ((uint64_t)count > 0xffffffffu / held.element_bits) {
 		return SITU_WALK_BOUNDS;
 	}

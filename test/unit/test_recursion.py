@@ -421,6 +421,17 @@ WHILE_NODE = ("struct node [depth = 32, limit = {limit}] {{\n"
               "\tnode  kids[] while (more != 0);\n"
               "}}\n")
 
+#: The other way a struct holds a run of itself, and the one a recursive
+#: type takes most naturally -- a tree node says how many children it has.
+#: It is a separate shape all the way down: `while` asks a predicate after
+#: each element and this asks a length program once, so they meet at
+#: `struct_extent` and share nothing above it. Held to the same numbers
+#: because the schema's are the same numbers.
+COUNTED_NODE = ("struct node [depth = 32, limit = {limit}] {{\n"
+                "\tu8    count;\n"
+                "\tnode  kids[count];\n"
+                "}}\n")
+
 
 def test_the_image_carries_the_declared_depth() -> None:
 	"""A side table, keyed by shape, for the reason `image_version` is one:
@@ -436,10 +447,23 @@ def test_the_image_carries_the_declared_depth() -> None:
 	assert (declared, limit) == (32, 5), image.depths
 
 
-@pytest.mark.parametrize(("limit", "walks", "refuses"),
-                         [(2, 1, 4), (8, 6, 12)])
+def _chain(levels: int) -> bytes:
+	"""A message nested `levels` deep, for either run shape.
+
+	One byte per level, and the byte means "another one follows" in both:
+	the `while` run reads it as its predicate and the counted run reads it
+	as a count of one. So the same bytes exercise two constructs that share
+	nothing above `struct_extent`, which is what makes comparing them worth
+	anything.
+	"""
+	return bytes(1 if i + 1 < levels else 0 for i in range(levels))
+
+
+@pytest.mark.parametrize("body", [WHILE_NODE, COUNTED_NODE],
+                         ids=["while", "counted"])
+@pytest.mark.parametrize("limit", [2, 8])
 def test_the_python_walker_follows_the_schema_not_its_own_ceiling(
-		limit: int, walks: int, refuses: int) -> None:
+		body: str, limit: int) -> None:
 	"""The point of the whole exercise.
 
 	`WALK_DEPTH_MAX` was a number chosen for this corpus and compared
@@ -453,20 +477,37 @@ def test_the_python_walker_follows_the_schema_not_its_own_ceiling(
 	What makes this a test is that raising the schema's number raises what
 	the walker follows.
 
+	And on two run shapes, because it was asserted on one and the other was
+	wrong. `_while_walk` re-raises the ceiling and breaks on everything
+	else, under a comment saying why: "breaking here would call a too-deep
+	message a short run". The counted run beside it wrote `except Refused:
+	break`, and `Unplaceable` subclasses `Refused` -- so a twelve-level
+	chain under `[limit = 8]` came back eight bytes long instead of
+	refused. One shape refusing correctly is not evidence about the other,
+	and the two are asserted together now for that reason rather than for
+	symmetry.
+
+	`TooDeep` by name rather than `Refused`: the ceiling, a frame that ran
+	out, and a member nothing can place are three answers, and only the
+	narrowest says the bound fired. The name exists because `validate` has
+	to tell the third from this one -- it breaks on the third and must not
+	on this (26.287).
+
 	Before this the Python walker had no bound at all: Python's recursion
 	limit was the only thing stopping a hostile message, and a
 	`RecursionError` is a traceback where a refusal belongs.
 	"""
 	from walker.image import load
-	from walker.walk import Refused, acquire, struct_extent
+	from walker.walk import TooDeep, acquire, struct_extent
 
-	image = load(_packed(WHILE_NODE.format(limit=limit)))
+	image = load(_packed(body.format(limit=limit)))
 
-	def chain(levels: int) -> bytes:
-		return bytes(1 if i + 1 < levels else 0 for i in range(levels))
+	# The boundary itself, rather than a level either side of it. A
+	# conservative pair -- walks 6, refuses 12 -- passes for a walker that
+	# stops anywhere between, which is what let the C walker spend two
+	# levels per level of struct without this file noticing.
+	ok = struct_extent(acquire(image, _chain(limit), 0))
+	assert ok == limit, (limit, ok)
 
-	ok = struct_extent(acquire(image, chain(walks), 0))
-	assert ok == walks, (limit, walks, ok)
-
-	with pytest.raises(Refused):
-		struct_extent(acquire(image, chain(refuses), 0))
+	with pytest.raises(TooDeep):
+		struct_extent(acquire(image, _chain(limit + 1), 0))

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from walker import vm
 from walker.image import NONE, Image
-from walker.walk import (BITS_PER_BYTE, Refused, Unplaceable, View,
+from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable, View,
                          acquire, digits_of,
                          parse_digits, read_bytes, read_scalar,
                          _read_at, offset_bits, scan, size_bits,
@@ -574,6 +574,23 @@ def _validate(image: Image, view: View, struct_index: int,
 		try:
 			at   = offset_bits(view, index)
 			wide = size_bits(view, index)
+		except TooDeep:
+			# The ceiling, which is a statement about this walker and not
+			# about the message: past `[limit]` a message is well formed
+			# and refused anyway (26.284), which is why the four backends
+			# spell it `SITU_ERR_DEPTH` rather than a constraint error.
+			# There is no such verdict here and there should not be, so
+			# the answer is the one this function already has for "this
+			# image cannot say" -- `cannot-say`, which is what the C
+			# walker returns for the same bytes.
+			#
+			# Before the split this arrived as `Unplaceable` and hit the
+			# `break` below, so a twelve-level chain under `[limit = 8]`
+			# validated **clean** off a walk that had stopped. C said
+			# `cannot-say` throughout, and the disagreement was invisible
+			# because the validate differential's corpus has no recursion
+			# in it.
+			return None
 		except Unplaceable:
 			# Not BOUNDS, and the distinction is the whole of this branch.
 			# A member nothing can place -- something before it has no

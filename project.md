@@ -183,8 +183,13 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   only truncate.
 
   **Both walkers read the schema's depth** from a side table in the packed
-  image, at every site rather than one (26.286). Mutual recursion stays
-  refused, as the record leaves it.
+  image, at every site rather than one (26.286) -- and spend it at the same
+  rate, which they did not at first: C counted hops through its own file
+  rather than levels of struct, so `[limit = 8]` bought four levels there
+  and eight in Python (26.287). Both run shapes are walked, counted and
+  `while`, and a message past the ceiling is `cannot-say` in both rather
+  than a verdict -- the reader's refusal is not a judgement on the bytes.
+  Mutual recursion stays refused, as the record leaves it.
 
   Still open, and openmlx4's finding rather than a design gap: a format
   that ends its list with a sentinel and declares no maximum has a `limit`
@@ -23160,17 +23165,130 @@ a traceback where a refusal belongs: it names no struct, carries no
 verdict, and reads as a crash in the walker rather than a judgement about
 the bytes.
 
-**What this does not cover, measured rather than assumed.** Neither
-walker can walk a *counted* run of a recursive struct -- `situ_walk_size_
-bits` answers `UNSUPPORTED` for `node children[count]`. That is not the
-depth work: the walker at HEAD refuses it identically, and the branch
-that handles a nested variable struct is gated on `size_code == NONE`,
-which a counted run is not. So the depth ceiling is demonstrated through
-a `while` run, and the counted case is a separate gap with its own cause.
+~~**What this does not cover, measured rather than assumed.** Neither
+walker can walk a *counted* run of a recursive struct.~~ **Closed in
+26.287, and half of it was wrong when written.** `walk.py` had walked
+that shape since 26.267 and this entry said neither walker could,
+because the claim was measured in C and written about both. Chasing the
+one that was true found two more, including a disagreement about the
+number this entry had just finished demonstrating.
 
 **And the committed contracts caught the format change**, which is what
 they are for: `std/image.situ.map` and `.wire` went stale the moment the
 section was added, and the suite said so before anything shipped.
+
+### 26.287 Two readers of one image, agreeing about different messages
+
+`node children[count]` is the shape a recursive type most naturally
+takes -- a tree node that says how many children it has -- and it was
+`SITU_WALK_UNSUPPORTED` in the C walker. Fixing that found three more
+faults that neither walker's own tests could see, because each walker
+was internally consistent and only the comparison is not.
+
+**The refusal outlived its reason, and its own comment said so.**
+`walk.py` records the same refusal and the premise it rested on: "no
+backend emits a span for one, so nothing after such a run is placed by
+anybody". That stopped being true when `classify` and `is_counted_run`
+were reconciled and all five descriptions began emitting the span, and
+`walk.py` started walking it at 26.267. The C walker kept refusing.
+26.286 then reported the gap as *both* walkers' -- measured in C,
+written about both, which is `evidence.md`'s voice rule met from the
+inside: a measurement taken in one place and stated about two.
+
+**The counted run swallowed the ceiling where the `while` run
+propagated it.** `_while_walk` catches `Unplaceable` and re-raises,
+under a comment saying why -- "breaking here would call a too-deep
+message a short run". The counted loop twelve lines above it wrote
+`except Refused: break`, and `Unplaceable` subclasses `Refused`. So a
+twelve-level chain under `[limit = 8]` came back **eight bytes long
+instead of refused**: a plausible number, which is the answer this file
+rates worst, produced by the guard for a truncated frame catching the
+guard for a hostile one.
+
+Worth naming as a shape rather than a slip: **an exception hierarchy
+makes two refusals one to every handler that does not name the
+narrower.** The subclass was introduced precisely so a caller that does
+not care can catch `Refused` -- and the caller that *does* care reads
+identically to one that does not.
+
+**And the two walkers spent the schema's number at different rates.**
+`depth` was compared against `depth_ceiling` as though it counted
+levels of struct, and in C it counted hops through `situ_walk.c`:
+`struct_extent` spent one reaching a member and `size_bits_deep` spent
+another descending into it, so a struct level cost two. `[limit = 8]`
+bought **four levels in C and eight in Python**. Both walkers refused
+deep messages, both refused by name, and both looked right alone -- they
+simply refused different messages.
+
+    limit=8, before   C follows 4   walk.py follows 8
+    limit=8, after    C follows 8   walk.py follows 8
+    limit=2, after    C follows 2   walk.py follows 2
+
+The variant hop is left spending a level, and the comment says so. An
+arm is measured within its own struct, so by the rule above it should
+cost nothing -- but nothing else bounds an image whose arms select each
+other, and the packer's guarantee is not the walker's to assume about
+an image it is handed at run time. It costs a level in a shape no
+schema here has and refuses a loop in an image no packer here writes.
+
+**And `validate` gave the ceiling the wrong channel.** `_validate`
+*breaks* on `Unplaceable` -- correctly, and for a reason the comment
+gives: a member nothing can place is one no backend emits an offset for,
+so nothing after it can be placed either and the walk stops. The ceiling
+arrived wearing that exception, so a twelve-level message under
+`[limit = 8]` **validated clean off a walk that had stopped**, while C
+answered `cannot-say` for the same bytes.
+
+C is right, and 26.284 is why. Past `[limit]` a message is *well formed*
+and refused anyway, which is a statement about the reader rather than
+about the bytes -- so it belongs in the walker's error channel and not in
+its verdict. The four backends spell it `SITU_ERR_DEPTH` for exactly that
+reason, and `cannot-say` is the walker's own word for the same thing.
+
+The fix is a third exception, `TooDeep`, under `Unplaceable`. **Three
+answers were sharing two names**: a frame that ran out, a member nothing
+can place, and a bound this build declines to cross. `validate` is the
+only caller that has to tell the last two apart -- both run walks re-raise
+either -- and it is the caller that got it wrong, which is what the
+subclass is for.
+
+**What found all four was comparing the two walkers, which is what
+this file already says the C walker is for.** `test_walker_c.py` opens
+by saying the check that matters is that they agree -- and it had
+compared them over `example/udp` and a dozen inline schemas, none of
+which recurses. A differential is only as wide as its corpus, and the
+construct added last is the one it has never seen.
+
+**The boundary is the case, and a conservative pair hides this.** The
+existing test asserted 6 levels walked and 12 refused under
+`[limit = 8]`, which passes for any walker stopping anywhere between --
+including C's four. Asserting `limit` levels admitted and `limit + 1`
+refused is what makes the number the subject. Confirmed by sabotage:
+restoring the double count fails only at 8 levels, and passes at 1 and
+4.
+
+**Four faults, one instrument, and it was already in the tree.** Each
+walker was self-consistent and each looked right alone; nothing but the
+comparison could see any of them. Two of the four are one shape -- an
+exception hierarchy conflating two refusals, in two callers twelve lines
+and one file apart -- one is a counter measuring the wrong thing, and one
+is a refusal whose premise had been retired in the other walker and not
+in this one.
+
+**Not covered, and separately true of both.** A counted run's *elements*
+are not validated -- `validate` treats a run as a run and checks the
+member rather than recursing -- and an arm that is a recursive struct
+measures as its minimum in both walkers, because an arm is not a member
+of the struct holding the variant and the nested-struct branch tests for
+one. Both are pre-existing, shared, and not this.
+
+**And `situ-walk` still prints no `count=` line for one.** `_while_runs`
+selects on `repeat_code`, so the renderer lists a `while` run of records
+and not a counted one, though `situ_walk_count` answers for both. That is
+the differ's probe vocabulary rather than the walk: a new line in the
+walker's output is a new question asked of the four backends, and adding
+one to close a cosmetic gap would put a false disagreement in front of
+whoever ran it next. Recorded rather than done.
 
 ## 27. Questions, and how they were settled
 
