@@ -718,6 +718,35 @@ static inline uint32_t situ_scan_any(const uint8_t *data, uint32_t limit,
 	return limit;
 }
 
+/* How many leading bytes are in a set: the lead a `skip` member owns.
+ *
+ * The inverse question to `situ_scan`, and it needs its own function rather
+ * than a delimiter list because it is a MEMBERSHIP test repeated -- "while
+ * the next byte is one of these" -- where a scan matches a sequence. So the
+ * set is bytes rather than strings, and one that ran to the end of the
+ * buffer returns `limit` rather than failing: whitespace to the end of a
+ * message is a message with no member after it, which the member's own
+ * bounds check is what reports.
+ */
+static inline uint32_t situ_skip(const uint8_t *data, uint32_t limit,
+        const uint8_t *set, uint32_t count)
+{
+	uint32_t i;
+	uint32_t d;
+
+	for (i = 0u; i < limit; i++) {
+		for (d = 0u; d < count; d++) {
+			if (data[i] == set[d]) {
+				break;
+			}
+		}
+		if (d == count) {
+			return i;
+		}
+	}
+	return limit;
+}
+
 /* The same, with a byte that makes the delimiter inert.
  *
  * `quote` toggles: inside a quoted run the delimiter is content. `escape`

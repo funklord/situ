@@ -66,6 +66,7 @@ enum image_section_tag : u32 {
 	relation_musts = 19,
 	pinned_runs  = 20,     // the bytes a `[must_eq]` on a byte run pins
 	depths       = 21,     // how deep a recursive struct may nest (0054)
+	skips        = 22,     // the whitespace a member owns in front of it
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -290,6 +291,22 @@ struct image_delimiter {
 	u8   delim_pad[3];
 }
 
+// `skip`: the bytes that may stand in front of a member and belong to it.
+//
+// One ROW per byte, all under the same placement, which is `image_delimiter`'s
+// arrangement for `until "," | "]"` and is here for the same reason: the table
+// is sorted by placement and already searched, so consecutive rows cost the
+// format nothing and there is no count to carry or bound.
+//
+// A SET of bytes rather than a sequence, which is the whole difference from a
+// delimiter. A lead runs while the next byte is in the set; a scan runs until
+// a sequence matches. So a row holds one byte and never a length.
+struct image_skip {
+	u32  placement;
+	u8   octet;
+	u8   skip_pad[3];
+}
+
 // An `authenticated` or `sealed` region, and the member's membership of one.
 struct image_region {
 	u32  placement;
@@ -481,6 +498,7 @@ require absolute_static(image_struct);
 require absolute_static(image_placement);
 require absolute_static(image_arm);
 require absolute_static(image_delimiter);
+require absolute_static(image_skip);
 require absolute_static(image_region);
 require absolute_static(image_codec);
 require absolute_static(image_varint);
@@ -500,6 +518,7 @@ require size(image_struct) == 16;
 require size(image_placement) == 48;
 require size(image_arm) == 24;
 require size(image_delimiter) == 36;
+require size(image_skip) == 8;
 require size(image_region) == 16;
 require size(image_codec) == 4;
 require size(image_varint) == 12;

@@ -639,7 +639,7 @@ def test_every_construct_the_tree_uses_is_encoded() -> None:
 	# Named rather than counted: a family vanishing from the tree would
 	# otherwise silently reduce what this asserts.
 	assert set(carried) == {
-		"region", "delimiter", "radix", "variant", "codec",
+		"region", "delimiter", "skip", "radix", "variant", "codec",
 		"repeat", "varint", "located", "tlv", "indexed",
 	}, sorted(carried)
 

@@ -226,6 +226,11 @@ class Parser:
 		#: refuses a directive that arrives after a struct, which is what
 		#: keeps "so far" and "the file's" the same thing.
 		self.encodings: tuple[str, ...] = ("ascii",)
+		#: What `whitespace` has declared, for a bare `skip` to mean. Empty
+		#: until a directive says otherwise, and a bare `skip` with nothing
+		#: here is refused rather than given a set somebody guessed.
+		self.whitespace: tuple[int, ...] = ()
+		self.whitespace_shown: tuple[str, ...] = ()
 		self.pos    = 0
 		# Set by `codec X extern { ... }`, which implies its own binding. The
 		# implied impl is appended after the declaration so both spellings of a
@@ -357,6 +362,7 @@ class Parser:
 			"endian":	self.parse_endian,
 			"bit_order":	self.parse_bit_order,
 			"encoding":	self.parse_encoding,
+			"whitespace":	self.parse_whitespace,
 			"strictness":	self.parse_strictness,
 			"import":	self.parse_import,
 			"const":	self.parse_const,
@@ -659,6 +665,119 @@ class Parser:
 		self.expect_symbol(";", "after the encoding directive")
 		self.encodings = tuple(names)
 		return ast.EncodingDirective(self.span_from(start), self.encodings)
+
+	def parse_whitespace(self) -> ast.WhitespaceDirective:
+		"""`whitespace ' ' | '\\t' | '\\r' | '\\n';`
+
+		The same alternation `encoding` and `until` take, and two refusals
+		of its own: a repeat says nothing twice, and an alternative wider
+		than a byte is a construct `skip` does not have.
+		"""
+		start = self.advance()
+		values, shown = self._byte_set("the whitespace set")
+		self.expect_symbol(";", "after the whitespace directive")
+		self.whitespace       = values
+		self.whitespace_shown = shown
+		return ast.WhitespaceDirective(self.span_from(start), values, shown)
+
+	def _byte_set(self, what: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
+		"""`' ' | '\\t'` -- single bytes, alternated, each written once.
+
+		Bytes rather than strings, which is what separates this from
+		`parse_until`. A skip is a membership test repeated -- while the
+		next byte is one of these -- so a two-byte alternative would be a
+		repeated match of a SEQUENCE, and situ has no such construct. Saying
+		so at the literal is what makes the refusal readable: the character
+		is named, and so is the encoding that gave it two bytes.
+		"""
+		values: list[int] = []
+		shown: list[str]  = []
+		seen: dict[int, Span] = {}
+
+		while True:
+			token = self.current
+
+			if token.kind is TokenKind.CHAR:
+				self.advance()
+				raw = self._character_bytes(token)
+				spelling = _spelled(token.text, "'")
+			elif token.kind is TokenKind.STRING:
+				self.advance()
+				raw = token.text.encode("latin-1")
+				spelling = _spelled(token.text, '"')
+			else:
+				raise error(
+					f"{what} is written as characters",
+					token.span,
+					label = "expected a character",
+					notes = ["`whitespace ' ' | '\\t' | '\\r' | '\\n';` -- "
+					         "the bytes that may stand between tokens",
+					         "one byte per alternative: this is a set a byte "
+					         "is tested against, not a sequence to match"],
+				)
+
+			if len(raw) != 1:
+				raise error(
+					f"{spelling} is {len(raw)} bytes, and a skip tests one",
+					token.span,
+					label = f"{len(raw)} byte(s) under this file's encodings",
+					notes = ["a skip runs while the NEXT BYTE is in the set, "
+					         "so an alternative wider than a byte would be a "
+					         "sequence to match rather than a set to test",
+					         "the encodings are "
+					         + " | ".join(self.encodings)],
+				)
+			byte = raw[0]
+			if byte in seen:
+				raise error(
+					f"{spelling} is listed twice",
+					token.span,
+					label = "already in the set",
+					notes = ["a byte is in the set or it is not, so a repeat "
+					         "changes nothing and is more likely a typo"],
+				)
+			seen[byte] = token.span
+			values.append(byte)
+			shown.append(spelling)
+
+			if self.accept_symbol("|") is None:
+				break
+
+		return tuple(values), tuple(shown)
+
+	def parse_skip(self) -> ast.Skip | None:
+		"""`skip`, or `skip ' ' | '\\t'`.
+
+		A soft keyword in this one position, read the way `before` and `at`
+		are, so no schema that used the word as a name stops parsing. The
+		bare form means the file's `whitespace` set and is refused where
+		there is none -- a default nobody declared is exactly the assumption
+		the directive exists to remove.
+		"""
+		if not self.current.is_ident("skip"):
+			return None
+
+		start = self.advance()
+
+		if self.current.kind in (TokenKind.CHAR, TokenKind.STRING):
+			values, shown = self._byte_set("a skip set")
+			return ast.Skip(self.span_from(start), values, shown)
+
+		if not self.whitespace:
+			raise error(
+				"`skip` with no whitespace declared",
+				self.span_from(start),
+				label = "there is no set to skip",
+				notes = ["`whitespace ' ' | '\\t' | '\\r' | '\\n';` above "
+				         "the structs says what this format calls whitespace",
+				         "or name the bytes here: `skip ' ' | '\\t'`",
+				         "situ does not supply a set, because which bytes may "
+				         "stand between tokens is the format's answer and the "
+				         "formats disagree"],
+			)
+
+		return ast.Skip(self.span_from(start), self.whitespace,
+		                self.whitespace_shown, declared = True)
 
 	def parse_import(self) -> ast.ImportDirective:
 		"""`import "path";` or `import std "path";`.
@@ -2094,13 +2213,17 @@ class Parser:
 		                 until   = field.until,
 		                 repeat  = field.repeat,
 		                 radix   = radix,
-		                 located = field.located)
+		                 located = field.located,
+		                 skip    = field.skip)
 
 	def parse_field(self) -> ast.Field:
 		start    = self.current
 		type_ref = self.parse_type_ref()
 		name     = self.expect_ident("a field name")
 		array    = self.parse_array_spec()
+		# Before `until`, because it is read in the order the bytes are: a
+		# skip says where the member begins and a delimiter where it ends.
+		skip     = self.parse_skip()
 		until    = self.parse_until()
 		repeat   = self.parse_while()
 		located  = self.parse_located()
@@ -2108,7 +2231,7 @@ class Parser:
 		attrs    = self.parse_attrs()
 		self._expect_field_terminator(array)
 		return ast.Field(self.span_from(start), name.text, type_ref, array, pin,
-		                 attrs, until, repeat, located=located)
+		                 attrs, until, repeat, located=located, skip=skip)
 
 	#: The words a newcomer reaches for to size a run, none of which situ
 	#: uses: the length goes inside the brackets. `suggestion/hydra.md` -- the

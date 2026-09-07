@@ -87,6 +87,11 @@ SUFFIXES = frozenset({
 	# `x_span_at` would collide with them exactly as `x_len` collides with a
 	# getter, which is what this set exists to say.
 	"span_at", "span_from_at",
+	# `skip` gives a member a lead, and the lead is three questions: how
+	# many bytes of it stand at a point, where it begins, and how far the
+	# member reaches from there. A schema field named `x_stride` would
+	# collide with them exactly as `x_len` collides with a getter.
+	"lead", "start", "stride", "stride_from",
 	# The extent's own depth-carrying form, for the same reason. It is not a
 	# member's affix -- `extent_at` is the struct's -- but this check reads
 	# every generated name.

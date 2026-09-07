@@ -763,6 +763,28 @@ def _located_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return lines
 
 
+def _lead(placement: Placement) -> list[str]:
+	"""The Lua that steps the cursor past a member's lead.
+
+	A membership test repeated, which is what `skip` is: it stops at the
+	first byte that is not in the set. Bounded by the tvb, since a lead that
+	runs to the end of the capture leaves no member after it and reading one
+	byte further is what raises inside Wireshark rather than in situ.
+	"""
+	if not placement.skip:
+		return []
+
+	test = " and ".join(f"byte ~= 0x{one:02X}" for one in placement.skip)
+	return [
+		f"\t-- {placement.path}: the whitespace in front of it is its own",
+		"\twhile at < tvb:len() do",
+		"\t\tlocal byte = tvb(at, 1):uint()",
+		f"\t\tif {test} then break end",
+		"\t\tat = at + 1",
+		"\tend",
+	]
+
+
 def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> list[str]:
 	name  = _local(struct, placement)
@@ -773,6 +795,14 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	start = placement.offset_bits
 	at    = "at" if start is None else str(start // BITS_PER_BYTE)
 	seek  = [] if start is None else [f"\tat = {at}"]
+
+	# `skip`: the whitespace in front of the member is the member's own, so
+	# the cursor steps over it before anything is shown -- and it steps over
+	# it exactly once, which is why this is threaded into `seek` rather than
+	# repeated in each branch below. A dissector that read the member at the
+	# cursor showed the first space and placed everything after it one run
+	# early, which is the disagreement with the walker that found this.
+	seek = seek + _lead(placement)
 
 	# `at expr`: the message says where this member is, so the cursor is the
 	# wrong answer and advancing past it is a second wrong answer. Section 9.8

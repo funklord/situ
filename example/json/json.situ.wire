@@ -23,14 +23,14 @@ struct array size=1..
 
 struct element size=1..
   @0x0000   0..       value      held
-  ~         1         u8         sep
+  ~         1         u8         sep  skip=20090d0a
 
 struct member size=4..
-  @0x0000   1         u8         open
-  @0x0001   until:22  u8         key
-  ~         1         u8         colon
+  ~         1         u8         open  skip=20090d0a
+  ~         until:22  u8         key
+  ~         1         u8         colon  skip=20090d0a
   ~         0..       value      held
-  ~         1         u8         sep
+  ~         1         u8         sep  skip=20090d0a
 
 struct no size=4
   @0x0000   4         u8         rest  big must_eq="alse"
@@ -39,7 +39,7 @@ struct nothing size=3
   @0x0000   3         u8         rest  big must_eq="ull"
 
 struct number size=1..
-  @0x0000   before:2c|5d|7d u8         rest
+  @0x0000   before:2c|5d|7d u8         rest  trim
 
 struct object size=4..
   @0x0000   4..       member     entries  big while=sep==','
@@ -48,8 +48,8 @@ struct text size=1..
   @0x0000   until:22  u8         chars
 
 struct value size=2..
-  @0x0000   1         u8         kind
-  @0x0001   1..       variant    body
+  ~         1         u8         kind  skip=20090d0a
+  ~         1..       variant    body
   body switch: kind
   body case 34: as_string text
   body case 91: as_array array

@@ -536,6 +536,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"versioned-member",
 		"trimmed-value",
 		"case-insensitive-token",
+		"skipped-lead",
 		# Decision 0047, the `file` target.
 		"file-durable-write",
 		"file-append",
@@ -547,6 +548,45 @@ def test_reachable_rows_are_all_tested() -> None:
 #
 #   authenticated, sealed                                           phase 8
 #   register no_rmw, register EffectOnRead                          phase 10
+
+
+# -- row: skipped-lead (section 8.6.8) --------------------------------------
+
+
+SKIPPED = ("whitespace ' ' | '\\t';"
+           "struct S { u8 a; u8 b skip; u8 c; }")
+
+
+def test_a_lead_makes_the_member_scanned() -> None:
+	"""Not `Dynamic`, which is the weaker word: arithmetic over values
+	already read cannot fail, and reading a lead is a search that can run to
+	the end of the buffer."""
+	assert axis_of(SKIPPED, "S.b", Axis.OFFSET) == Value("Scanned")
+	assert rules_for(SKIPPED, "S.b", Axis.OFFSET) == ["skipped-lead"]
+
+
+def test_a_lead_costs_the_read_as_well_as_the_offset() -> None:
+	"""Three more axes, and each for its own reason: nothing computes the
+	member's address, a pointer to it moves when the whitespace does, and a
+	read walks the lead so its cost is in the data."""
+	assert axis_of(SKIPPED, "S.b", Axis.ACCESS)  == Value("Sequential")
+	assert axis_of(SKIPPED, "S.b", Axis.ADDRESS) == Value("Unstable")
+	assert axis_of(SKIPPED, "S.b", Axis.EFFECT)  == Value("EffectOnRead")
+
+
+def test_a_lead_leaves_the_members_own_size_alone() -> None:
+	"""The distinction the whole construct turns on: `u8 b skip` is one byte
+	of value wherever it lands, and the whitespace is part of what the
+	member OCCUPIES rather than of what it holds."""
+	assert axis_of(SKIPPED, "S.b", Axis.SIZE) == Value("Fixed", ("1",))
+
+
+def test_the_member_before_a_lead_keeps_its_static_offset() -> None:
+	"""A lead is at its member's START, so nothing before it moves -- which
+	is what separates this row from `scanned-predecessor`, where the scan is
+	at an earlier member's end and only what follows is affected."""
+	assert axis_of(SKIPPED, "S.a", Axis.OFFSET) == Value("AbsoluteStatic", ("0x00",))
+	assert axis_of(SKIPPED, "S.c", Axis.OFFSET) == Value("Scanned")
 
 
 # -- row: endian = from(marker) ---------------------------------------------

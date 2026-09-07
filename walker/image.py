@@ -27,6 +27,7 @@ SECTION_BYTES	= 16
 #: refused, which is the property the directory exists for.
 STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
+SKIPS                             = 22
 VARINTS, TLVS, INDEXES             = 9, 10, 11
 NAMES, VECTORS, MARKERS            = 12, 13, 14
 CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
@@ -213,6 +214,13 @@ class Image:
 	#: `before`. Kept apart from the rules above because it decides the
 	#: SPAN rather than the scan, and those are read in different places.
 	delimiter_consumed: dict[int, bool]	= field(default_factory=dict)
+	#: placement index -> the bytes that may precede it and belong to it
+	#: (`skip`), in table order.
+	#:
+	#: A tuple rather than a set because the schema wrote them in an order
+	#: and `situ dump-ast` prints them back in it; membership is the only
+	#: thing the walk asks.
+	skip: dict[int, tuple[int, ...]]	= field(default_factory=dict)
 	#: Placements inside an `authenticated` or `sealed` region. A walk reads
 	#: those through a gate, which this walker does not render.
 	regions: set[int]			= field(default_factory=set)
@@ -371,6 +379,15 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				+ (blob[start:start + length],)
 			image.delimiter_rules[where] = (quote, escape, cap)
 			image.delimiter_consumed[where] = bool(consumed)
+
+	if SKIPS in found:
+		at, records, stride = found[SKIPS]
+		for i in range(records):
+			where, octet = _struct.unpack_from("<IB", blob, at + i * stride)
+			# One row per byte, consecutive under the same placement, the
+			# way a delimiter's alternatives are. A walker built before
+			# this section existed skips it by tag and reads the rest.
+			image.skip[where] = image.skip.get(where, ()) + (octet,)
 
 	if REGIONS in found:
 		at, records, stride = found[REGIONS]

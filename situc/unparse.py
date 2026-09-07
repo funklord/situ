@@ -128,6 +128,10 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.EncodingDirective):
 		return ["encoding " + " | ".join(decl.encodings) + ";"]
 
+	if isinstance(decl, ast.WhitespaceDirective):
+		return ["whitespace " + _byte_set_to_source(decl.values,
+		                                            decl.shown) + ";"]
+
 	if isinstance(decl, ast.ImportDirective):
 		where = "std " if decl.library else ""
 		return [f'import {where}"{_escape(decl.path)}";']
@@ -365,6 +369,7 @@ def member_to_source(member: ast.Member) -> str:
 		parts = [_radix_to_source(getattr(member, "radix", None)),
 		         member.type_ref.name, " ", member.name,
 		         _array_to_source(member.array),
+		         _skip_to_source(getattr(member, "skip", None)),
 		         _until_to_source(getattr(member, "until", None)),
 		         _while_to_source(getattr(member, "repeat", None))]
 		if member.located is not None:
@@ -586,6 +591,36 @@ RADIX_KEYWORDS = {10: "decimal", 16: "hex"}
 
 def _radix_to_source(radix: int | None) -> str:
 	return f"{RADIX_KEYWORDS[radix]} " if radix in RADIX_KEYWORDS else ""
+
+
+def _byte_set_to_source(values: tuple[int, ...],
+		shown: tuple[str, ...]) -> str:
+	"""`' ' | '\\t'` -- the set as the schema wrote it.
+
+	The spelling rather than the bytes, for `_until_to_source`'s reason and
+	with its fallback: a set that arrived without one is printed as escaped
+	characters, and everything outside printable ASCII is escaped rather
+	than emitted as the character its byte happens to be.
+	"""
+	if shown:
+		return " | ".join(shown)
+	return " | ".join(f"'{_escape(chr(one), quote=chr(39))}'"
+	                  for one in values)
+
+
+def _skip_to_source(skip: "ast.Skip | None") -> str:
+	"""`skip`, or `skip ' ' | '\\t'` where the member named its own set.
+
+	The bare form is printed bare. A schema that wrote `skip` against the
+	file's `whitespace` said one thing in one place, and printing the
+	expansion back at every member would turn one declaration into four
+	copies of it -- the same round trip `Until.shown` exists to keep.
+	"""
+	if skip is None:
+		return ""
+	if skip.declared:
+		return " skip"
+	return " skip " + _byte_set_to_source(skip.values, skip.shown)
 
 
 def _until_to_source(until: "ast.Until | None") -> str:

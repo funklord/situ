@@ -338,6 +338,21 @@ class Placement:
 	delimiter_escape: int | None	= None
 	#: A bound on the scan, from `until D max N`.
 	delimiter_cap: int | None	= None
+	#: `skip`: the byte values that may precede this member and belong to
+	#: it, in the order the schema wrote them. Empty for a member with no
+	#: lead, which is nearly all of them.
+	#:
+	#: The lead is part of the member's SPAN and not of its size: `u8 kind
+	#: skip` is one byte of value wherever it lands, and what the whitespace
+	#: costs is the offset. So `size_bits` still says 8 and `is_fixed_size`
+	#: still says yes, while the member's offset and everything after it
+	#: become Scanned.
+	skip: tuple[int, ...]		= ()
+	#: What the author wrote, for the unparser.
+	skip_shown: tuple[str, ...]	= ()
+	#: Whether it was written as a bare `skip` against the file's declared
+	#: set, so the unparser prints the word rather than the expansion.
+	skip_declared: bool		= False
 	#: Whether the delimiter belongs to this member: `until` against
 	#: `before`. The scan is the same and only the span differs, so this is
 	#: read wherever a span adds the delimiter's length and nowhere else.
@@ -1684,6 +1699,16 @@ class Solver:
 
 		path   = f"{prefix}.{name}"
 		scalar = self.effective_scalar(member, local)
+
+		# `skip` widens the cursor BEFORE this member rather than after it,
+		# which is the whole difference from `until`. A delimiter is at the
+		# member's end, so reaching the member is still arithmetic and only
+		# what follows it is a search; a lead is at the member's start, so
+		# this member is the first one nobody can compute the offset of.
+		skip = getattr(member, "skip", None)
+		if skip is not None:
+			state.cursor = state.cursor.advance(Interval(0, None))
+
 		cursor = state.cursor
 
 		element = self.element_extent(member, local)
@@ -1767,6 +1792,9 @@ class Solver:
 			delimiters         = member.until.delimiters if member.until else (),
 			delimiter_consumed = (member.until.consumed if member.until
 			                      else True),
+			skip               = skip.values if skip else (),
+			skip_shown         = skip.shown if skip else (),
+			skip_declared      = bool(skip and skip.declared),
 			repeat_while       = _repeat_source(member),
 			repeat_shown       = _repeat_source(member, explicit=False),
 			repeat_cap         = self._repeat_cap(member),
@@ -1790,6 +1818,17 @@ class Solver:
 			# before the placement would have blamed the delimited member for
 			# its own delimiter.
 			state.scan = (name, member.span)
+
+		if skip is not None:
+			# After the placement for the same reason, from the other end:
+			# this member's own offset is scanned because of its own lead,
+			# which the `skipped-lead` row says in its own words. What the
+			# blame chain is for is the members AFTER it, which would
+			# otherwise report a dynamic offset with nothing named.
+			if state.scan is None:
+				state.scan = (name, member.span)
+			if state.cause is None:
+				state.cause = (name, member.span, "Unbounded")
 
 		if isinstance(member, ast.Field) and member.type_ref.scalar is None:
 			self.absorb_nested(member, layout, path, cursor, element,

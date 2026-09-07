@@ -25,6 +25,18 @@ endian big;
 // with the disagreement named.
 encoding ascii | utf8 | latin1;
 
+// And what may stand between two tokens. RFC 8259 section 2 says exactly
+// these four bytes, which is why the set is written down rather than assumed:
+// HTTP's optional whitespace is two of them, XML's is these four plus
+// nothing, and a compiler that picked one would be wrong about the others.
+//
+// Declared once and reached by a bare `skip` on the members that permit it.
+// Five of them do, which is the whole of what JSON's whitespace rule comes to
+// in a layout: a run of these bytes may precede a token, and it belongs to the
+// token it precedes -- because a struct's members partition its bytes exactly,
+// and the member before it is finished.
+whitespace ' ' | '\t' | '\r' | '\n';
+
 // The first byte says which kind of value this is, and it belongs to the
 // value: a variant switches on a *field*, and a field is bytes. So the
 // discriminant is the opening brace, the opening bracket, the opening quote,
@@ -46,7 +58,7 @@ encoding ascii | utf8 | latin1;
 // `default:` is the number, and that is the arm this file waited two
 // language changes for. See `number` below.
 struct value [depth = 64] {
-	u8  kind;
+	u8  kind  skip;
 	variant body switch (kind) {
 		case '{':  object   as_object;
 		case '[':  array    as_array;
@@ -77,12 +89,21 @@ struct object [depth = 64] {
 // between where it starts and where the next one does, or the run walks into
 // the middle of itself.
 struct member [depth = 64] {
-	u8     open;
+	u8     open   skip;
 	u8     key[]  until "\"";
-	u8     colon;
+	u8     colon  skip;
 	value  held;
-	u8     sep;
+	u8     sep    skip;
 }
+
+// Three of the five leads are here, and the two that are not are as
+// interesting. `key` has none because nothing may stand between a quote and
+// the string it opens -- the whitespace rule is about the space BETWEEN
+// tokens, and a string's opening quote and its content are one token. `held`
+// has none because it does not need one: a value's own first member is
+// `kind`, which skips, so whitespace before a value is already accounted for
+// by the value. A lead there as well would be a second answer to one
+// question, and the run would walk into the middle of itself.
 
 // An array is the same shape with no keys.
 struct array [depth = 64] {
@@ -91,7 +112,7 @@ struct array [depth = 64] {
 
 struct element [depth = 64] {
 	value  held;
-	u8     sep;
+	u8     sep  skip;
 }
 
 // A string, from after its opening quote to its closing one.
@@ -125,8 +146,20 @@ struct text {
 // with is read as a number of length zero rather than refused -- which
 // `[digits_valid]` would catch if situ had a check for "these bytes are a
 // JSON number", and which is a grammar rather than a layout.
+// `[trim]` is the trailing half, and it does not quite reach. A number's
+// scan runs to whichever delimiter comes first, so the whitespace AFTER the
+// digits is inside the member rather than in front of the separator that
+// follows -- the scan gets there before the separator's lead does, and one
+// of them has to own those bytes. `[trim]` takes them out of the VALUE,
+// which is what a caller reads. What it does not take out is a CR or an LF:
+// `[trim]` is HTTP's optional whitespace, space and horizontal tab, which is
+// what that attribute has always meant and is a smaller set than this file's
+// `whitespace`. So `{"a": 1\n}` frames correctly and its number reads back
+// with the newline still on it. Widening `trim` to a declared set is a
+// change to an attribute five schemas here use, which is not this
+// construct's to make.
 struct number {
-	u8  rest[] before ',' | ']' | '}';
+	u8  rest[] before ',' | ']' | '}' [trim];
 }
 
 struct yes     { u8  rest[3]  [must_eq = "rue"]; }
@@ -134,15 +167,42 @@ struct no      { u8  rest[4]  [must_eq = "alse"]; }
 struct nothing { u8  rest[3]  [must_eq = "ull"]; }
 
 // ---------------------------------------------------------------------------
-// The bill, and it is one line long now.
+// The bill, and what is left of it is one thing that is not a gap.
 //
-// WHITESPACE between tokens cannot be skipped. Every construct here accounts
-// for its bytes exactly, and JSON permits space, tab, CR and LF between any
-// two tokens. So this describes the compact form -- which is what a
-// serialiser emits by default and what most JSON on a wire is, and is a
-// subset either way. Skipping it is a grammar's job rather than a layout's:
-// a member whose start depends on how many spaces preceded it has no offset
-// anybody can compute, which is the line 8.6 draws.
+// WHITESPACE IS ACCOUNTED FOR NOW, by the five `skip` clauses above. It used
+// to be the last line of this bill, and the entry said skipping it was "a
+// grammar's job rather than a layout's" because "a member whose start depends
+// on how many spaces preceded it has no offset anybody can compute". The
+// first half of that was wrong and the second half was right, which is what
+// made it convincing.
+//
+// The line 8.6 draws is not that every offset is arithmetic -- half this
+// schema's offsets are not. It is that every byte belongs to exactly one
+// member. Whitespace keeps that: the run in front of a token is the token's
+// own, because the member before it is finished and a struct's members
+// partition its bytes exactly. What it costs is the offset, which drops to
+// Scanned -- and that is a price this schema was already paying for every
+// member after the first delimiter.
+//
+// WHAT IT COSTS HERE, exactly, is the requirement that used to be at the
+// foot of this file:
+//
+//     require absolute_static(value.kind);
+//
+// It said a document starts at offset zero because nothing precedes it. That
+// stopped being true the moment whitespace could: ` {"a":1}` is a JSON
+// document, and its first token is at offset one. So the claim is an `assert`
+// below, where it reads as the measurement it now is rather than as a demand
+// the schema cannot meet. Permitting leading whitespace and knowing where the
+// first byte is are the same question asked twice, and JSON's answer is the
+// first.
+//
+// TRAILING whitespace belongs to nobody, and that is the honest remaining
+// edge. `{"a":1} ` is eight bytes and this schema measures seven of them: a
+// lead belongs to the member that FOLLOWS it, and after the last token there
+// is no member to follow. That is not a wrong measurement -- the document is
+// seven bytes and the eighth is not part of it -- but a caller framing a
+// stream has to know it, because the extent will not step over it.
 //
 // It used to be three lines. A NUMBER could not be framed at all, for two
 // reasons that arrived a commit apart. `until` took one delimiter and a
@@ -151,17 +211,24 @@ struct nothing { u8  rest[3]  [must_eq = "ull"]; }
 // belongs to neither side. `until ',' | ']' | '}'` fixed the first and
 // `before` the second, and `number` above is what they buy together.
 //
-// The measurement that recorded the cost is worth keeping, because it is
-// what a wrong answer looked like:
+// The measurements that recorded each cost are worth keeping, because they
+// are what a wrong answer looked like:
 //
-//     {"a":12}    8 bytes    extent 7    validate ok      (before `before`)
-//     {"a":12}    8 bytes    extent 8    validate ok      (now)
+//     {"a":12}      8 bytes     extent 7    validate ok   (before `before`)
+//     {"a":12}      8 bytes     extent 8    validate ok
+//     { "a" : 12 }  12 bytes    extent 8    validate ok   (before `skip`)
+//     { "a" : 12 }  12 bytes    extent 12   validate ok
 //
 // The seven came from two rules that were each correct and neither of which
 // mentioned the other: a value whose discriminant matched no arm has an
 // extent of zero, and `validate` does not descend into the elements of a
 // run. A short measurement and no complaint is the answer this repository
 // rates worst, and it took a language change rather than a fix.
+//
+// The eight is the same shape one construct along. Every member measured its
+// own bytes correctly and the whitespace between them belonged to no member
+// at all, so the sum was short by exactly the bytes nobody had claimed --
+// and `validate` was content, because every constraint it knows about held.
 //
 // AND THE WALKERS FOLLOW LESS OF IT THAN THE GENERATED CODE, on purpose.
 // `[depth = 64]` is the format's number; a walker spends its own, because it
@@ -181,7 +248,8 @@ struct nothing { u8  rest[3]  [must_eq = "ull"]; }
 assert random_access(object.entries);
 assert canonical(text.chars);
 
-// And the one requirement. A document starts at offset zero, because nothing
-// precedes it -- so the first byte is at a known place even though nothing
-// after it is.
-require absolute_static(value.kind);
+// And the one that used to be a requirement. A document does start at offset
+// zero -- but its first TOKEN need not, because whitespace may precede it,
+// and `value.kind` is the token rather than the byte. This is what permitting
+// whitespace costs, stated where a reader will see it.
+assert absolute_static(value.kind);

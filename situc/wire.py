@@ -299,6 +299,12 @@ def _constraints(placement: Placement) -> list[str]:
 		facts.append("minimal")
 	if placement.trimmed:
 		facts.append("trim")
+	if placement.skip:
+		# A committed fact about the bytes, not a convenience: a member
+		# that may be preceded by whitespace frames differently from one
+		# that may not, and a peer reading this has to be able to tell.
+		facts.append("skip=" + "".join(f"{byte:02x}"
+		                               for byte in placement.skip))
 	if placement.case_insensitive:
 		facts.append("fold-case")
 	if placement.delimiter_quote is not None:

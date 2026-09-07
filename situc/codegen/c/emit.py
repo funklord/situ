@@ -1332,9 +1332,17 @@ class Emitter:
 			return []
 
 		lines_bounds = self._value_bounds(struct, placement)
-		if lines_bounds:
-			return lines_bounds + self._field_body(struct, entry)
-		return self._field_body(struct, entry)
+		body = self._field_body(struct, entry)
+
+		# After the body, because the stride is the lead plus the CONTENT and
+		# a delimited member's content length is its own `_span_from`, which
+		# the body emits. Nothing earlier calls it: a stride is read by the
+		# members that follow this one and by the struct's extent, both of
+		# which are emitted later still.
+		if self._leads_here(struct, placement):
+			body = body + self._stride_helpers(struct, placement)
+
+		return lines_bounds + body if lines_bounds else body
 
 	def _value_bounds(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -1493,6 +1501,12 @@ class Emitter:
 		# anyway named an offset function that was never defined, which C
 		# happens to refuse; a language that resolved it later would have
 		# taken the wrong bytes instead.
+		if self._leads_here(struct, placement):
+			# Before the offset function, which calls it. The lead is what
+			# makes the offset dynamic in the first place, so there is no
+			# arrangement in which this comes later.
+			lines.extend(self._lead_scan(struct, placement))
+
 		if placement.offset_bits is None:
 			blocker = self._offset_blocker(struct, placement)
 			if blocker is not None:
@@ -2905,6 +2919,114 @@ class Emitter:
 		members are the codec's output and are not in this list.
 		"""
 		return own_members(struct)
+
+	# -- leads (`skip`) --------------------------------------------------
+
+	def _leads_here(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""Whether THIS struct emits the lead family for this member.
+
+		Asked in one place because the stride and the scan have to agree
+		about it: a stride emitted where the scan is not is a call to a
+		function nobody defines, which C refuses at the point of use and
+		the other three would not notice until the accessor ran.
+
+		The exclusions are `_field_body`'s own. A nested struct's member
+		belongs to that struct, an element's field belongs to the element
+		type, and an arm's members are emitted by a family of their own --
+		each has its own offset chain, and the lead belongs beside it.
+		"""
+		if not placement.skip:
+			return False
+		if self._arm_guard(struct, placement) is not None:
+			return False
+		if not is_own_member(struct, placement):
+			return False
+		return (self._has_length(struct, placement)
+		        and self._offset_blocker(struct, placement) is None)
+
+	def _lead_scan(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The byte set, and how many leading bytes are in it.
+
+		A set rather than a delimiter list, and the difference is the whole
+		construct: a scan matches a SEQUENCE and stops before it, a lead
+		tests one byte at a time and stops at the first that is not in the
+		set. `situ_skip` is that, and it is why `situ_scan_any` could not be
+		reused with one-byte alternatives -- it would answer where the
+		whitespace STARTS.
+		"""
+		local  = c_name(self._local(struct, placement))
+		sym    = ident(self.prefix, struct.name, local, "lead_set")
+		fn     = ident(self.prefix, struct.name, local, "lead_from")
+		count  = len(placement.skip)
+		bytes_ = ", ".join(f"0x{byte:02X}u" for byte in placement.skip)
+		shown  = " ".join(one.replace("\\", "\\\\")
+		                  for one in placement.skip_shown) or f"{count} byte(s)"
+
+		return [
+			"",
+			f"/* The bytes that may stand in front of `{placement.name}`:"
+			f" {shown}.",
+			" *",
+			" * They are the member's own, so the struct still partitions its",
+			" * bytes exactly -- what the lead costs is the offset, which is",
+			" * a scan from here on rather than a number. */",
+			f"static const uint8_t {sym}[{count}] = {{{bytes_}}};",
+			"",
+			f"static inline uint32_t {fn}(situ_view_t view, uint32_t at)",
+			"{",
+			f"\treturn situ_skip(view.base + at,"
+			f" situ_remaining_u32(view.limit, at), {sym}, {count}u);",
+			"}",
+		]
+
+	def _stride_helpers(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""How far a lead member reaches: its lead plus its content.
+
+		One function rather than adding the lead at every site, because the
+		sites are the offset chain of every later member, the struct's
+		extent and the offsets cache -- and a lead added at three of those
+		and missed at the fourth is a member placed on top of another with
+		nothing to report it.
+		"""
+		local  = c_name(self._local(struct, placement))
+		lead   = ident(self.prefix, struct.name, local, "lead_from")
+		stride = ident(self.prefix, struct.name, local, "stride")
+		start  = ident(self.prefix, struct.name, local, "start")
+		deep   = self._lead_needs_depth(placement)
+
+		if placement.is_fixed_size:
+			content = f"{placement.size_bits // BITS_PER_BYTE}u"
+		else:
+			content = self._content_length_expression(
+				struct, placement, "view", running="at + lead",
+				depth="depth" if deep else None)
+
+		suffix = "_at" if deep else ""
+		carry  = ", uint32_t depth" if deep else ""
+		pass_  = ", depth" if deep else ""
+
+		return [
+			"",
+			f"/* How far `{placement.name}` reaches from `at`: the whitespace",
+			" * in front of it, then the member itself. Every sum over the",
+			" * members of this struct goes through here, which is what keeps",
+			" * the lead from being counted in some of them and not others. */",
+			f"static inline uint32_t {stride}_from{suffix}(situ_view_t view,"
+			f" uint32_t at{carry})",
+			"{",
+			f"\tconst uint32_t lead = {lead}(view, at);",
+			"",
+			f"\treturn lead + ({content});",
+			"}",
+			"",
+			f"static inline uint32_t {stride}{suffix}(situ_view_t view{carry})",
+			"{",
+			f"\treturn {stride}_from{suffix}(view, {start}(view){pass_});",
+			"}",
+		]
 
 	# -- delimited members (section 8.6.1) ------------------------------
 
@@ -5247,7 +5369,16 @@ class Emitter:
 			if step.kind == "record":
 				assert step.placement is not None
 				local = c_name(self._local(struct, step.placement))
-				steps.append(f"\tout->{local} = at;")
+				if step.placement.skip:
+					# The recorded offset is where the MEMBER starts, which
+					# is past its lead -- `at` is where the whitespace does.
+					# The advance below re-reads the lead as part of the
+					# stride rather than consuming it here, so that `at`
+					# stays the value every other term is measured from.
+					lead = ident(self.prefix, struct.name, local, "lead_from")
+					steps.append(f"\tout->{local} = at + {lead}(view, at);")
+				else:
+					steps.append(f"\tout->{local} = at;")
 			elif step.placement is None:
 				steps.append(f"\tat = at + {step.size}u;")
 			else:
@@ -5344,9 +5475,18 @@ class Emitter:
 			terms.append(self._length_expression(struct, other,
 			                                     running="offset"))
 
+		# A lead member's chain gets its own name, and `_offset` is built on
+		# top of it. Reaching the member means summing what precedes it and
+		# THEN reading the whitespace, and those are two facts: the stride
+		# helper needs the first alone, every accessor needs the second, and
+		# a single function could only have answered one of them.
+		leads = bool(placement.skip)
+		outer = ident(self.prefix, struct.name, local, "offset")
+		inner = ident(self.prefix, struct.name, local,
+		              "start" if leads else "offset")
+
 		lines = [
-			f"static inline uint32_t "
-			f"{ident(self.prefix, struct.name, local, 'offset')}(situ_view_t view)",
+			f"static inline uint32_t {inner}(situ_view_t view)",
 			"{",
 			f"\tuint32_t offset = {constant}u;",
 		]
@@ -5370,6 +5510,24 @@ class Emitter:
 			lines.append("\t(void)view;")
 
 		lines.extend(["", "\treturn offset;", "}"])
+
+		if leads:
+			lead = ident(self.prefix, struct.name, local, "lead_from")
+			lines.extend([
+				"",
+				f"/* Past the whitespace, which is where `{placement.name}`",
+				" * actually starts. Saturating like every other term: a lead",
+				" * that runs to the end of the view leaves the member outside",
+				" * it, and the accessors' own bounds check is what reports"
+				" that. */",
+				f"static inline uint32_t {outer}(situ_view_t view)",
+				"{",
+				f"\tconst uint32_t start = {inner}(view);",
+				"",
+				f"\treturn situ_advance_u32(start, {lead}(view, start),"
+				" view.limit);",
+				"}",
+			])
 		return lines
 
 	def _located_accessor(self, struct: ResolvedStruct,
@@ -5675,11 +5833,47 @@ class Emitter:
 	def _raw_length_expression(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view", running: str | None = None,
 			depth: str | None = None) -> str:
+		"""How many bytes a member occupies, at runtime -- lead included.
+
+		A `skip` member's SPAN is its lead plus its content, and this is the
+		function every offset chain and every extent sums, so the lead has to
+		be inside the answer here rather than at the sites. `_stride` is that
+		sum; `_content_length_expression` below is the content alone, which
+		is what the stride helper itself is written from.
+		"""
+		if placement.skip:
+			local  = c_name(self._local(struct, placement))
+			stride = ident(self.prefix, struct.name, local, "stride")
+			deep   = "_at" if self._lead_needs_depth(placement) else ""
+			carry  = f", {depth}" if deep else ""
+			if running is not None:
+				return f"{stride}_from{deep}({held}, {running}{carry})"
+			return f"{stride}{deep}({held}{carry})"
+		return self._content_length_expression(struct, placement, held,
+		                                       running, depth)
+
+	def _lead_needs_depth(self, placement: Placement) -> bool:
+		"""Whether a lead member's content length carries the depth counter.
+
+		Only where the content is itself a recursive struct or a run of one.
+		A lead in front of a scalar or a byte run has nothing to count, and
+		emitting the `_at` form for it would name a depth no caller has.
+		"""
+		return self._recursive(placement.type_name or "")
+
+	def _content_length_expression(self, struct: ResolvedStruct,
+			placement: Placement, held: str = "view",
+			running: str | None = None,
+			depth: str | None = None) -> str:
 		"""How many bytes a variable-length member occupies, at runtime.
 
 		`held` names the view in scope, which is `gate.view` inside a sealed
 		region: the length is read from a plaintext field at the same offsets,
 		through whichever view the caller holds.
+
+		The member's CONTENT, so a lead is not in it. `_raw_length_expression`
+		adds that, and the one caller that wants the content alone is the
+		stride helper, which is where the two are put back together.
 		"""
 		gated = held != "view"
 

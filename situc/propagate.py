@@ -352,6 +352,10 @@ def _is_past_a_scan(context: Context) -> bool:
 	return context.placement.scan_cause is not None
 
 
+def _has_lead(context: Context) -> bool:
+	return bool(context.placement.skip)
+
+
 def _is_array(placement: Placement) -> bool:
 	return placement.array_count is not None or placement.sized_by is not None
 
@@ -765,6 +769,33 @@ TABLE: tuple[Row, ...] = (
 			            "into an error instead of a read to the end of the buffer",
 		),
 		applies = _is_delimited,
+	),
+	Row(
+		rule = Rule(
+			name      = "skipped-lead",
+			construct = "a member that begins after a run of whitespace",
+			effects   = (
+				Effect(Axis.OFFSET, Value("Scanned"),
+				       "how many bytes of whitespace stand before it is in "
+				       "the message rather than in the schema, so where the "
+				       "member begins is found by reading them"),
+				Effect(Axis.ACCESS, Value("Sequential"),
+				       "there is no arithmetic that finds this field: the "
+				       "lead has to be walked, and so does everything "
+				       "between it and the frame base"),
+				Effect(Axis.ADDRESS, Value("Unstable"),
+				       "a pointer to it moves whenever the whitespace before "
+				       "it changes length, which a serialiser is free to do"),
+				Effect(Axis.EFFECT, Value("EffectOnRead"),
+				       "reading it walks the lead, so the cost of a read "
+				       "depends on the data rather than on the schema"),
+			),
+			remedy    = "drop the `skip` where the format does not actually "
+			            "permit whitespace here; a member with no lead keeps "
+			            "the offset the members before it give it, and that "
+			            "costs nothing but knowing the format",
+		),
+		applies = _has_lead,
 	),
 	Row(
 		rule = Rule(

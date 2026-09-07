@@ -550,6 +550,29 @@ u8   pixels[n] at file.pixel_offset;  // placed where the data says
 u32  crc @ 0x1c;                      // assert the offset the solver computed
 ```
 
+`before` is `until`'s other half: `until` is a TERMINATOR and the delimiter
+belongs to the member, `before` is a SEPARATOR and it belongs to neither
+side. A CRLF is the first; the comma in `{"a":1,"b":2}` is the second.
+
+### Where a member begins
+
+Every text format has bytes that may stand between two tokens and mean
+nothing, and the run in front of a token belongs to that token -- because a
+struct's members partition its bytes exactly and the member before it is
+finished:
+
+```situ
+whitespace ' ' | '\t' | '\r' | '\n';    // what this format calls whitespace
+u8   kind    skip;                      // that set, if it is there
+u8   colon   skip ' ' | '\t';           // or a set of this member's own
+```
+
+The set is declared rather than supplied, because the formats disagree:
+those four bytes are JSON's by RFC 8259, and HTTP's optional whitespace is
+two of them. What a lead costs is the offset -- reaching the member means
+reading the whitespace, so it and everything after it are `Scanned`, which
+is the price a delimiter already charges.
+
 ### Choosing between layouts, and describing a run of items
 
 A `variant` is one of several layouts chosen by a field already read, and it

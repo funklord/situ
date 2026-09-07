@@ -72,6 +72,8 @@ def check(schema: ast.Schema) -> None:
 	check_codec_sizes(schema)
 	check_registers(schema)
 	check_encoding_place(schema)
+	check_whitespace_place(schema)
+	check_skips(schema)
 	check_no_recursive_types(schema)
 	check_depth_bounds(schema)
 	check_delimiters(schema)
@@ -98,24 +100,178 @@ def check_encoding_place(schema: ast.Schema) -> None:
 	"from here on" would be that language arriving without anybody choosing
 	it.
 	"""
-	seen = False
+	_check_directive_place(
+		schema, ast.EncodingDirective, "encoding",
+		["a character literal is resolved where it is written, so a "
+		 "directive here would give the literals above it a different "
+		 "meaning from the ones below",
+		 "move it up with `target` and `endian`, which are the file's in "
+		 "the same way"])
+
+
+def check_whitespace_place(schema: ast.Schema) -> None:
+	"""`whitespace` is a claim about the file, so it comes before the file.
+
+	`check_encoding_place`'s reason, and the same mechanism underneath it: a
+	bare `skip` is resolved against what the directive has said SO FAR, so a
+	directive below a struct would give the members above it one set and the
+	ones below another, from a line that reads like a statement about the
+	whole file.
+	"""
+	_check_directive_place(
+		schema, ast.WhitespaceDirective, "whitespace",
+		["a bare `skip` is resolved where it is written, so a directive "
+		 "here would give the members above it a different set from the "
+		 "ones below",
+		 "move it up with `target` and `encoding`, which are the file's in "
+		 "the same way"])
+
+
+def _check_directive_place(schema: ast.Schema, kind: type[ast.Decl],
+		word: str, notes: list[str]) -> None:
+	"""A file-level directive comes before that file's own structs.
+
+	PER FILE, which `import` is what makes necessary. Imported declarations
+	are spliced in AHEAD of the importing file's own, so a schema that both
+	imports a file carrying one of these directives and declares its own met
+	a struct before its own directive -- and was refused, by a diagnostic
+	pointing at line 4 of a file whose line 4 is at the top.
+
+	It is not a special case for imports. The rule was always about one
+	file: a directive is resolved where it is written and governs the
+	literals written after it IN THAT FILE, so what a struct from somewhere
+	else sits before decides nothing. Comparing declarations from two files
+	was the bug, and the source path is what tells them apart.
+
+	Found while adding `whitespace`, which would have doubled it. It reached
+	`encoding` first and is fixed for both.
+	"""
+	declared: set[str] = set()
+
 	for decl in schema.decls:
-		if isinstance(decl, ast.EncodingDirective):
-			if seen:
+		where = decl.span.source.path
+		if isinstance(decl, kind):
+			if where in declared:
 				raise error(
-					"`encoding` comes before the structs it describes",
+					f"`{word}` comes before the structs it describes",
 					decl.span,
 					label = "declared after a struct",
-					notes = ["a character literal is resolved where it is "
-					         "written, so a directive here would give the "
-					         "literals above it a different meaning from the "
-					         "ones below",
-					         "move it up with `target` and `endian`, which are "
-					         "the file's in the same way"],
+					notes = notes,
 				)
 			continue
 		if isinstance(decl, (ast.StructDecl, ast.EnumDecl)):
-			seen = True
+			declared.add(where)
+
+
+def check_skips(schema: ast.Schema) -> None:
+	"""What a lead may not be combined with.
+
+	Each refusal is a member that would have two answers to one question.
+	The lead is unbounded and it is at the member's START, and those are the
+	two facts every one of these turns on.
+	"""
+	structs = {struct.name for struct in schema.structs()}
+
+	for struct in schema.structs():
+		for member, in_arm in _members_and_whether_in_an_arm(struct.members):
+			if not isinstance(member, ast.Field) or member.skip is None:
+				continue
+			if in_arm:
+				raise error(
+					f"`{member.name}` is inside a variant arm and skips",
+					member.skip.span,
+					label = "a lead inside an arm",
+					notes = ["an arm's members are placed by a family of "
+					         "their own, and a lead is part of the offset "
+					         "chain each backend builds for a struct's own "
+					         "members",
+					         "put the members in a struct and the struct in "
+					         "the arm, which every backend does reach"],
+				)
+			_check_one_skip(member, structs)
+
+
+def _members_and_whether_in_an_arm(
+		members: tuple[ast.Member, ...],
+		in_arm: bool = False) -> list[tuple[ast.Member, bool]]:
+	"""Every member, paired with whether a variant arm holds it.
+
+	`_walk_members` flattens and forgets, and for this question the answer
+	IS the nesting: a member declared inside `case 1:` is reached by the
+	arm family rather than by the struct's own offset chain, which is where
+	a lead lives.
+	"""
+	found: list[tuple[ast.Member, bool]] = []
+	for member in members:
+		found.append((member, in_arm))
+		found.extend(_members_and_whether_in_an_arm(
+			nested(member), in_arm or isinstance(member, ast.Variant)))
+	return found
+
+
+def _check_one_skip(member: ast.Field, structs: set[str]) -> None:
+	name = member.name
+	where = member.skip.span if member.skip is not None else member.span
+
+	if member.located is not None:
+		raise error(
+			f"`{name}` is placed by a field and also skips",
+			where,
+			label = "a lead on a located member",
+			notes = ["`at expr` says where the member sits, measured from "
+			         "the start of the message, so there is nothing before "
+			         "it for a lead to follow",
+			         "drop the `skip`, or drop the `at`"],
+		)
+
+	if member.repeat is not None:
+		raise error(
+			f"`{name}` is a run, and a lead on a run is ambiguous",
+			where,
+			label = "a lead on a `while` run",
+			notes = ["it would read as either one lead before the run or one "
+			         "before every element, and those are different formats",
+			         "put the `skip` on the element's first member, which "
+			         "says the second unambiguously"],
+		)
+
+	if member.array is not None and member.array.size is not None:
+		raise error(
+			f"`{name}` is an array, and a lead on an array is ambiguous",
+			where,
+			label = "a lead on a counted run",
+			notes = ["it would read as either one lead before the array or "
+			         "one before every element, and those are different "
+			         "formats",
+			         "give the element a struct of its own and put the "
+			         "`skip` on its first member"],
+		)
+
+	if member.until is not None and member.array is not None \
+			and member.array.size is None \
+			and member.type_ref.name in structs:
+		raise error(
+			f"`{name}` is a run of records, and a lead on a run is ambiguous",
+			where,
+			label = "a lead on a record run",
+			notes = ["a run of records checks its terminator where an "
+			         "element would start, so a lead would have to be part "
+			         "of that test rather than of the run",
+			         "put the `skip` on the record's first member"],
+		)
+
+	if member.until is not None and member.until.cap is not None:
+		raise error(
+			f"`{name}` has a cap and a lead, and the cap does not bound it",
+			where,
+			label = "a lead under a capped scan",
+			notes = ["`max N` bounds the whole member, delimiter included "
+			         "(8.6.1), and situ has no bound for a lead -- so "
+			         "accepting both would make the cap a claim it does not "
+			         "keep",
+			         "drop the cap, or drop the `skip` and let the member "
+			         "before it end where the whitespace does"],
+		)
 
 
 #: Attributes that only mean anything on a delimited member.

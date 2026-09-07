@@ -48,6 +48,7 @@ STRUCT_BYTES	= 16
 PLACEMENT_BYTES	= 50
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 36
+SKIP_BYTES	= 8
 REGION_BYTES	= 16
 CODEC_BYTES	= 4
 VARINT_BYTES	= 12
@@ -85,6 +86,7 @@ SECTION_CODE		= 3
 SECTION_STRINGS		= 4
 SECTION_ARMS		= 5
 SECTION_DELIMITERS	= 6
+SECTION_SKIPS		= 22
 SECTION_REGIONS		= 7
 SECTION_CODECS		= 8
 SECTION_VARINTS		= 9
@@ -427,6 +429,7 @@ class Program:
 CONSTRUCTS: tuple[tuple[str, Callable[[Placement], bool]], ...] = (
 	("region",     lambda p: bool(p.regions)),
 	("delimiter",  lambda p: bool(p.delimiters)),
+	("skip",       lambda p: bool(p.skip)),
 	("radix",      lambda p: p.radix is not None),
 	("variant",    lambda p: bool(p.arm_cases)),
 	("codec",      lambda p: p.codec is not None),
@@ -442,7 +445,7 @@ CONSTRUCTS: tuple[tuple[str, Callable[[Placement], bool]], ...] = (
 #: image means moving its name in here -- which is what makes the report
 #: retire itself as the format grows.
 ENCODED: frozenset[str] = frozenset({
-	"region", "delimiter", "radix", "variant", "codec",
+	"region", "delimiter", "skip", "radix", "variant", "codec",
 	"repeat", "located", "varint", "tlv", "indexed",
 })
 
@@ -1425,6 +1428,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	varints_blob = bytearray()
 	arms_blob    = bytearray()
 	delims_blob  = bytearray()
+	skips_blob   = bytearray()
 	regions_blob = bytearray()
 	tlvs_blob    = bytearray()
 	index_blob   = bytearray()
@@ -1486,6 +1490,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				_u32(placement.delimiter_escape),
 				_u32(placement.delimiter_cap),
 				len(raw), 1 if placement.delimiter_consumed else 0, raw)
+		# One row per byte of the set, consecutive under this placement --
+		# the delimiter table's arrangement, for its reason: the table is
+		# sorted by placement and binary-searched, so consecutive rows cost
+		# nothing and no row has to carry a count.
+		for byte in placement.skip:
+			skips_blob += _struct.pack("<IB3x", at, byte)
+
 		if placement.regions:
 			flags = (1 if placement.sealed_by else 0) \
 				| (2 if placement.unverified_ok else 0)
@@ -1630,6 +1641,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	for section, blob, stride in (
 			(SECTION_ARMS, arms_blob, ARM_BYTES),
 			(SECTION_DELIMITERS, delims_blob, DELIMITER_BYTES),
+			(SECTION_SKIPS, skips_blob, SKIP_BYTES),
 			(SECTION_REGIONS, regions_blob, REGION_BYTES),
 			(SECTION_CODECS, codecs_blob, CODEC_BYTES),
 			(SECTION_VARINTS, varints_blob, VARINT_BYTES),

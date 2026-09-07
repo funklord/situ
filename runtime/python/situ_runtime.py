@@ -481,6 +481,26 @@ def align_up(at: int, n: int, limit: int) -> int:
 	return advance(at, pad, limit)
 
 
+def skip_run(data: "memoryview | bytes", limit: int,
+		lead: tuple[int, ...]) -> int:
+	"""How many leading bytes of `data` are in `lead`.
+
+	The lead a `skip` member owns. The inverse question to `scan`, and it
+	needs its own function rather than a delimiter list because it is a
+	MEMBERSHIP test repeated -- while the next byte is one of these -- where
+	a scan matches a sequence.
+
+	A lead that runs to the end of the buffer returns `limit` rather than
+	failing: whitespace to the end of a message is a message with no member
+	after it, which the member's own bounds check reports.
+	"""
+	raw = bytes(data)[:limit]
+	for i, byte in enumerate(raw):
+		if byte not in lead:
+			return i
+	return len(raw)
+
+
 def scan_any(data: memoryview | bytes, limit: int,
 		delims: tuple[bytes, ...]) -> tuple[int, int]:
 	"""Where the first of ANY of `delims` is, and how long it was.

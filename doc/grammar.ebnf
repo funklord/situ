@@ -21,7 +21,16 @@ directive	= "target" target_kind [ "append" ] ";"
 	| "endian" endian ";"
 	| "bit_order" bitorder ";"
 	| "strictness" "=" strictness ";"
+	| "encoding" ident { "|" ident } ";"
+	| "whitespace" byte_set ";"
 	| "import" string ";" ;
+(* Section 8.6.7. What a character literal is worth. A list rather than one
+ * name because that is what a text format actually offers, and it is a check
+ * rather than a hedge: a literal is accepted only where every listed encoding
+ * gives it the same single code unit. *)
+(* Section 8.6.8. What this format calls whitespace, for a bare `skip` to
+ * mean. Declared rather than supplied, because the formats disagree: JSON's
+ * set is four bytes and HTTP's optional whitespace is two of them. *)
 
 target_kind	= "buffer" | "mmio" | "file" ;
 (* Section 8.1, decision 0047. `file` sets `effect = EffectOnWrite` on every
@@ -69,8 +78,17 @@ member		= field | reserved | marker_field | block | variant | tag_field
  * it occupies whatever that costs and shows nothing. *)
 pad		= "pad_to" "(" digits ")" ";" ;
 
-field		= [ radix ] type_ref ident [ array_spec ] [ until | repeat ]
-		  [ located ] [ pin ] [ attrs ] ";" ;
+field		= [ radix ] type_ref ident [ array_spec ] [ skip ]
+		  [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
+(* Section 8.6.8. A run of bytes that may precede the member and belongs to
+ * it -- read before `until`, because the two are read in the order the bytes
+ * are: a lead says where the member begins and a delimiter where it ends.
+ * Single BYTES rather than sequences: a lead runs while the next byte is in
+ * the set, where a scan matches a sequence, so an alternative wider than a
+ * byte is refused. Bare means the file's `whitespace` set and is refused
+ * where there is none. *)
+skip		= "skip" [ byte_set ] ;
+byte_set	= char { "|" char } ;
 (* `at expr` places the member where the data says, measured from the start of
  * the message. Distinct from `pin`, which asserts the offset the solver
  * computed and places nothing -- section 9.8. *)
@@ -116,7 +134,9 @@ size_expr	= expr | "remaining" ;
  * delimiter is a string literal rather than an expression: it would
  * otherwise have to be evaluated against the data it is being looked for
  * in. `max` bounds the scan. *)
-until		= "until" string [ "max" expr ] ;
+until		= ( "until" | "before" ) delimiter { "|" delimiter }
+		  [ "max" expr ] ;
+delimiter	= string | char ;
 pin		= "@" expr ;
 
 attrs		= "[" attr { "," attr } "]" ;

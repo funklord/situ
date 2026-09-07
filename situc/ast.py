@@ -261,6 +261,40 @@ class Until(Node):
 
 
 @dataclass(frozen=True)
+class Skip(Node):
+	"""`skip` -- a run of bytes that may precede a member and belongs to it.
+
+	Whitespace between tokens is what every text format has and no layout
+	construct could say. `until` and `before` describe where a member
+	*ends*; this describes where one *begins*, which is a different fact and
+	needed a different word.
+
+	The bytes are the member's. A schema's members partition their struct
+	exactly, so the run cannot belong to nobody -- and it cannot belong to
+	what came before, because the member before it is finished. What it
+	costs is the member's offset: reaching it means reading the run, which
+	is a scan, so the member and everything after it drop to `Scanned`.
+
+	One BYTE per alternative rather than a string, which is the difference
+	from `Until`. A skip is a membership test repeated -- "while the next
+	byte is one of these" -- and a two-byte alternative would be a repeated
+	match of a sequence, which is a construct situ does not have. A
+	character whose encoding gives it more than one byte is refused with the
+	encoding named.
+	"""
+
+	span: Span
+	#: The byte values, in the order the schema wrote them.
+	values: tuple[int, ...]
+	#: What the author wrote, for the unparser: `'\t'` including the quotes.
+	shown: tuple[str, ...]	= ()
+	#: True where the schema wrote a bare `skip` and meant the file's
+	#: `whitespace` set. Kept so the unparser prints the word rather than
+	#: the expansion -- the same reason `Until.shown` exists.
+	declared: bool		= False
+
+
+@dataclass(frozen=True)
 class While(Node):
 	"""`while (separator == 0x2D)` -- a run that ends after an element that
 	fails a predicate (section 8.6.6).
@@ -339,6 +373,11 @@ class Field(Member):
 	#: sense: it contributes nothing to the enclosing struct's extent, and
 	#: nothing is placed after it.
 	located: Expr | None		= None
+	#: `u8 kind skip;` -- a run of bytes that precedes this member and
+	#: belongs to it. Before `until` in the declaration because it says
+	#: where the member *begins*, and the two are read in the order the
+	#: bytes are.
+	skip: Skip | None		= None
 
 
 @dataclass(frozen=True)
@@ -895,6 +934,31 @@ class EncodingDirective(Decl):
 
 	span: Span
 	encodings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WhitespaceDirective(Decl):
+	"""`whitespace ' ' | '\\t' | '\\r' | '\\n';` -- what this format calls
+	whitespace.
+
+	A file-level statement for `encoding`'s reason: which bytes may stand
+	between tokens is a property of the FORMAT and not of any one member,
+	and a schema repeating the set at every token would be four chances to
+	write down a different one. JSON's set is RFC 8259 section 2's four
+	bytes; HTTP's optional whitespace is two, space and horizontal tab; and
+	the difference between them is exactly why situ does not choose.
+
+	It is also what makes `skip` decidable. A member may name its own set
+	inline, and a bare `skip` means this one -- so a schema that says
+	`skip` without declaring one is refused rather than being given a
+	default somebody would have had to guess.
+	"""
+
+	span: Span
+	#: The byte values, in the order the schema wrote them.
+	values: tuple[int, ...]
+	#: What the author wrote, for the unparser.
+	shown: tuple[str, ...]	= ()
 
 
 @dataclass(frozen=True)

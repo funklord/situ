@@ -65,3 +65,32 @@ value number_array 5B 31 2C 32 2C 33 30 5D
 # than parsing.
 value scientific 2D 31 2E 35 65 33
 	kind = 45
+
+# Whitespace, which this schema described none of until `skip`. Every one of
+# these is the same document as one above with bytes between its tokens, and
+# every one measures its own length -- which is what a run over them needs.
+
+# A member with a space around every token: five leads fire, one per
+# `skip` in the schema, and the extent is the document's own length.
+value spaced 7B 20 22 61 22 20 3A 20 31 32 20 7D
+	kind = 123
+
+# Whitespace before the document itself, which is what turned the old
+# `require absolute_static(value.kind)` into an assert.
+value leading 20 20 7B 22 61 22 3A 20 31 32 7D
+	kind = 123
+
+# An array, spaced. The lead on `element.sep` is what accounts for the
+# space before each comma, and the one on `value.kind` for the space after.
+value array_spaced 5B 20 31 20 2C 20 32 20 2C 20 33 30 20 5D
+	kind = 91
+
+# A pretty-printed object, tabs and newlines included, which is what a
+# serialiser writes when a person is going to read it.
+value indented 7B 0A 09 22 61 22 20 3A 20 22 62 22 2C 0A 09 22 63 22 20 3A 20 33 0A 7D
+	kind = 123
+
+# The cycle and the whitespace together: every nesting level is spaced,
+# so a lead is read at every turn of value -> object -> member -> value.
+value deep_spaced 7B 20 22 61 22 20 3A 20 7B 20 22 62 22 20 3A 20 5B 20 31 20 2C 20 32 20 5D 20 7D 20 7D
+	kind = 123

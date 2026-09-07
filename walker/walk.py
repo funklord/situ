@@ -111,8 +111,48 @@ def acquire(image: Image, buffer: Bytes, struct: int) -> View:
 	return View(image, buffer, struct, 0, len(buffer))
 
 
+def lead_bytes(view: View, index: int) -> int:
+	"""How many bytes of whitespace stand in front of a member (`skip`).
+
+	Those bytes are the member's own -- a struct's members partition its
+	bytes exactly, and the lead cannot belong to the member before it,
+	which is finished. So this is part of the member's SPAN and not of its
+	size, and `offset_bits` and `size_bits` each add it once.
+
+	A membership test repeated rather than a scan: it stops at the first
+	byte that is NOT in the set, where `scan` stops where a sequence
+	matches.
+	"""
+	lead = view.image.skip.get(index)
+	if not lead:
+		return 0
+
+	# Bounded by the BUFFER as well as by the view. A view's limit is what
+	# the caller said the frame holds, and a message shorter than its own
+	# declared lengths is exactly the input this walker exists to survive --
+	# so a lead at an offset past the end reads no bytes rather than raising.
+	start = view.at + chain_bits(view, index) // BITS_PER_BYTE
+	end   = min(view.at + view.limit, len(view.buffer))
+	at    = 0
+	while start + at < end:
+		if view.buffer[start + at] not in lead:
+			break
+		at += 1
+	return at
+
+
 def offset_bits(view: View, index: int) -> int:
 	"""Where a member starts, in bits from the view's base.
+
+	Past its lead, where it has one: `chain_bits` is where the whitespace
+	begins and this is where the member does.
+	"""
+	return chain_bits(view, index) \
+		+ lead_bytes(view, index) * BITS_PER_BYTE
+
+
+def chain_bits(view: View, index: int) -> int:
+	"""Where a member's own bytes begin, whitespace included.
 
 	A constant where the image knows one. Otherwise the members before it
 	are summed, which is the answer `offset = Dynamic` names -- and the
@@ -152,6 +192,17 @@ def offset_bits(view: View, index: int) -> int:
 
 
 def size_bits(view: View, index: int, depth: int = 0) -> int:
+	"""How many bits a member occupies, its lead included.
+
+	The SPAN rather than the size, because this is what `chain_bits` sums:
+	a member's whitespace is part of what it occupies even though it is no
+	part of what it holds. `content_bits` is the member alone.
+	"""
+	return lead_bytes(view, index) * BITS_PER_BYTE \
+		+ content_bits(view, index, depth)
+
+
+def content_bits(view: View, index: int, depth: int = 0) -> int:
 	"""How many bits a member occupies.
 
 	A delimited member's is the scan's answer plus the delimiter itself: the
@@ -437,7 +488,7 @@ def _value_in(view: View, index: int, base: int) -> int:
 		raise Refused(f"placement {index} has no static offset to base")
 
 	start = placement.offset_bits + base * BITS_PER_BYTE
-	width = size_bits(view, index)
+	width = content_bits(view, index)
 	if width <= 0 or width > 64:
 		raise Refused(f"a {width}-bit scalar is not one to read")
 	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
@@ -553,7 +604,7 @@ def read_scalar(view: View, index: int) -> int:
 		              f"the discriminant selects is what holds a value")
 
 	start = offset_bits(view, index)
-	width = size_bits(view, index)
+	width = content_bits(view, index)
 	if width <= 0 or width > 64:
 		raise Refused(f"a {width}-bit scalar is not one to read")
 
@@ -599,7 +650,7 @@ def write_scalar(view: View, index: int, value: int) -> None:
 		raise Refused(f"placement {index} is a variant, not a scalar")
 
 	start = offset_bits(view, index)
-	width = size_bits(view, index)
+	width = content_bits(view, index)
 	if width <= 0 or width > 64:
 		raise Refused(f"a {width}-bit scalar is not one to write")
 
@@ -831,7 +882,7 @@ def _signed(value: int, width: int, is_signed: bool) -> int:
 def read_bytes(view: View, index: int) -> bytes:
 	"""A member's bytes, for the runs and arrays that have no scalar value."""
 	start = offset_bits(view, index)
-	width = size_bits(view, index)
+	width = content_bits(view, index)
 	if start % BITS_PER_BYTE or width % BITS_PER_BYTE:
 		raise Refused("a byte run that does not start on a byte")
 	first = view.at + start // BITS_PER_BYTE
@@ -860,7 +911,7 @@ def write_bytes(view: View, index: int, value: bytes) -> None:
 	are there and this writes exactly that many.
 	"""
 	start = offset_bits(view, index)
-	width = size_bits(view, index)
+	width = content_bits(view, index)
 	if start % BITS_PER_BYTE or width % BITS_PER_BYTE:
 		raise Refused("a byte run that does not start on a byte")
 
@@ -985,7 +1036,7 @@ def digits_of(view: View, index: int) -> bytes:
 	if index in view.image.delimiters:
 		content, _, _ = scan(view, index)
 	else:
-		content = size_bits(view, index) // BITS_PER_BYTE
+		content = content_bits(view, index) // BITS_PER_BYTE
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	data  = bytes(view.buffer[start:start + content])
 	if not data:

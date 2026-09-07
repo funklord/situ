@@ -634,6 +634,25 @@ class OffsetStep:
 	size: int			= 0
 
 
+def occupies_fixed_bytes(placement: Placement) -> bool:
+	"""Whether this member contributes a CONSTANT to an offset chain.
+
+	Not the same question as `is_fixed_size`, and `skip` is what separated
+	them. A member's SIZE is how many bytes its value occupies; its SPAN is
+	how far the next member is from where this one started. Those were one
+	number until a lead could precede a member: `u8 kind skip` is one byte
+	of value at every offset it ever lands on, and the whitespace in front
+	of it is part of what the member occupies.
+
+	So the accessors go on asking `is_fixed_size` -- they read one byte --
+	and everything that ADDS UP members asks this. Three shared functions
+	do that (`preceding_parts`, `offset_plan`, `extent_parts`) and four
+	backends read all three, which is why the fix is one predicate here
+	rather than a condition in twelve places.
+	"""
+	return placement.is_fixed_size and not placement.skip
+
+
 def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 		has_length: "Callable[[Placement], bool]") -> list[OffsetStep] | None:
 	"""How to resolve every dynamic offset in one pass, or None.
@@ -682,7 +701,7 @@ def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 			flush()
 			steps.append(OffsetStep("align", held, size=pad))
 			continue
-		if held.is_fixed_size:
+		if occupies_fixed_bytes(held):
 			pending += held.size_bits // BITS_PER_BYTE
 			continue
 		if not has_length(held):
@@ -1203,7 +1222,7 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	variable: list[Placement] = []
 
 	for placement in own_members(struct):
-		if placement.is_fixed_size:
+		if occupies_fixed_bytes(placement):
 			constant_bits += placement.size_bits
 		else:
 			variable.append(placement)
@@ -1297,7 +1316,7 @@ def preceding_parts(struct: ResolvedStruct,
 	for other in walk_order(struct, placement):
 		if other.path == placement.path:
 			break
-		if other.is_fixed_size:
+		if occupies_fixed_bytes(other):
 			bits += other.size_bits
 			continue
 		if bits % BITS_PER_BYTE:

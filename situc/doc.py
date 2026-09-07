@@ -396,6 +396,15 @@ def _stride(placement: Placement) -> str:
 
 
 def _size(placement: Placement) -> str:
+	# A lead is part of what the member occupies, so it belongs in the
+	# column somebody sizes a buffer from -- and it is unbounded, which is
+	# the fact a reader most needs and the one a byte count cannot carry.
+	if placement.skip:
+		return "whitespace + " + _size_without_lead(placement)
+	return _size_without_lead(placement)
+
+
+def _size_without_lead(placement: Placement) -> str:
 	if placement.delimiters:
 		# What a reader needs is where it stops, not how many bytes the
 		# delimiter takes -- which is what the fixed-size branch below

@@ -15,6 +15,7 @@
 #define TAG_ENUM_VALUES 16u
 #define TAG_VERSIONS   17u
 #define TAG_DEPTHS     21u
+#define TAG_SKIPS      22u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
@@ -35,6 +36,7 @@
 #define REGION_READS    13u	/* `<IIIB3x`: placement, owner, codec, flags */
 #define VERSION_READS    8u	/* `<II`: shape, version-field placement */
 #define DEPTH_READS     12u	/* `<III`: shape, depth, limit */
+#define SKIP_READS       5u	/* `<IB3x`: placement, one byte of the set */
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -201,6 +203,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->versions       = image + offset;
 			out->version_count  = items;
 			out->version_stride = stride;
+		} else if (kind == TAG_SKIPS) {
+			if (stride < SKIP_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->skips       = image + offset;
+			out->skip_count  = items;
+			out->skip_stride = stride;
 		} else if (kind == TAG_DELIMITERS) {
 			if (stride < DELIMITER_READS) {
 				return SITU_WALK_MALFORMED;
@@ -337,6 +346,79 @@ static void delimiter_span(const situ_walk_image *image, uint32_t index,
 		*count += 1u;
 		at     += stride;
 	}
+}
+
+/* -- leads (`skip`) ------------------------------------------------------ */
+
+/* Every byte a member's lead may be made of: the run of consecutive rows the
+ * packer wrote for one placement, exactly as `delimiter_span` collects a
+ * member's alternatives and for the same reason -- `table_row` finds one of
+ * the equal rows and which one is a property of a binary search. */
+static void skip_span(const situ_walk_image *image, uint32_t index,
+                      const uint8_t **first, uint32_t *count)
+{
+	const uint8_t *found = table_row(image->skips, image->skip_count,
+	                                 image->skip_stride, index);
+
+	*first = NULL;
+	*count = 0u;
+	if (found == NULL) {
+		return;
+	}
+
+	const uint32_t stride = image->skip_stride;
+	const uint8_t *at     = found;
+
+	while (at > image->skips && u32_at(at - stride) == index) {
+		at -= stride;
+	}
+	*first = at;
+
+	const uint8_t *end = image->skips
+	                     + (size_t)image->skip_count * stride;
+	while (at < end && u32_at(at) == index) {
+		*count += 1u;
+		at     += stride;
+	}
+}
+
+/* How many bytes of a member's declared set stand at `at`.
+ *
+ * A membership test repeated, where a scan matches a sequence: it stops at
+ * the first byte that is NOT in the set. Those bytes are the member's own --
+ * a struct's members partition its bytes exactly and the lead cannot belong
+ * to the member before it, which is finished -- so this is part of the
+ * member's SPAN and no part of its size. */
+static uint32_t lead_bytes(const situ_walk_image *image,
+                           const uint8_t *message, uint32_t len,
+                           uint32_t index, uint32_t at)
+{
+	const uint8_t *rows  = NULL;
+	uint32_t       count = 0u;
+
+	skip_span(image, index, &rows, &count);
+	if (rows == NULL || at > len) {
+		return 0u;
+	}
+
+	const uint32_t stride = image->skip_stride;
+	uint32_t       i      = 0u;
+
+	while (at + i < len) {
+		const uint8_t byte = message[at + i];
+		uint32_t      d;
+
+		for (d = 0u; d < count; d++) {
+			if (byte == rows[(size_t)d * stride + 4u]) {
+				break;
+			}
+		}
+		if (d == count) {
+			break;
+		}
+		i += 1u;
+	}
+	return i;
 }
 
 static int delimiter_at(const uint8_t *message, const uint8_t *delim,
@@ -580,6 +662,16 @@ static situ_walk_err offset_bits_deep(const situ_walk_image *image,
                                       const uint8_t *message, uint32_t len,
                                       uint32_t shape, uint32_t index,
                                       uint32_t depth, uint32_t *out);
+
+static situ_walk_err chain_bits_deep(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t index,
+                                     uint32_t depth, uint32_t *out);
+
+static situ_walk_err content_bits_deep(const situ_walk_image *image,
+                                       const uint8_t *message, uint32_t len,
+                                       uint32_t shape, uint32_t index,
+                                       uint32_t depth, uint32_t *out);
 
 static situ_walk_err read_at(const uint8_t *message, uint32_t len,
                              const situ_walk_placement *held,
@@ -1151,10 +1243,52 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 	return size_bits_deep(image, message, len, shape, index, 0u, out);
 }
 
+/* How many bits a member occupies, its lead included.
+ *
+ * The SPAN rather than the size, because this is what the offset chain sums:
+ * a member's whitespace is part of what it occupies even though it is no
+ * part of what it holds. `content_bits_deep` is the member alone, and that
+ * is what a value read takes its width from. */
 static situ_walk_err size_bits_deep(const situ_walk_image *image,
                                     const uint8_t *message, uint32_t len,
                                     uint32_t shape, uint32_t index,
                                     uint32_t depth, uint32_t *out)
+{
+	uint32_t content = 0u;
+	uint32_t chain   = 0u;
+	situ_walk_err err = content_bits_deep(image, message, len, shape, index,
+	                                      depth, &content);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (table_row(image->skips, image->skip_count, image->skip_stride,
+	              index) == NULL) {
+		*out = content;
+		return SITU_WALK_OK;
+	}
+
+	err = chain_bits_deep(image, message, len, shape, index, depth, &chain);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (chain % 8u != 0u) {
+		*out = content;
+		return SITU_WALK_OK;
+	}
+
+	const uint32_t lead = lead_bytes(image, message, len, index, chain / 8u);
+
+	if (lead > (0xffffffffu - content) / 8u) {
+		return SITU_WALK_BOUNDS;
+	}
+	*out = content + lead * 8u;
+	return SITU_WALK_OK;
+}
+
+static situ_walk_err content_bits_deep(const situ_walk_image *image,
+                                       const uint8_t *message, uint32_t len,
+                                       uint32_t shape, uint32_t index,
+                                       uint32_t depth, uint32_t *out)
 {
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
@@ -1483,10 +1617,43 @@ situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
 	return offset_bits_deep(image, message, len, shape, index, 0u, out);
 }
 
+/* Where a member starts: the chain, and then past its lead.
+ *
+ * Two functions because they are two facts. `chain_bits_deep` is the sum of
+ * what precedes the member, which is where its whitespace begins; this is
+ * where the member itself does, and it is what every read is measured from.
+ * The lead is bytes, so a chain that does not land on a byte boundary has
+ * none to add -- a bit-packed member is never given one, and asking would
+ * mean reading a byte that is half somebody else's. */
 static situ_walk_err offset_bits_deep(const situ_walk_image *image,
                                       const uint8_t *message, uint32_t len,
                                       uint32_t shape, uint32_t index,
                                       uint32_t depth, uint32_t *out)
+{
+	uint32_t chain = 0u;
+	situ_walk_err err = chain_bits_deep(image, message, len, shape, index,
+	                                    depth, &chain);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	if (chain % 8u == 0u) {
+		const uint32_t lead = lead_bytes(image, message, len, index,
+		                                 chain / 8u);
+		if (lead > (0xffffffffu - chain) / 8u) {
+			return SITU_WALK_BOUNDS;
+		}
+		chain += lead * 8u;
+	}
+
+	*out = chain;
+	return SITU_WALK_OK;
+}
+
+static situ_walk_err chain_bits_deep(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t index,
+                                     uint32_t depth, uint32_t *out)
 {
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
@@ -1702,7 +1869,8 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
-		err = size_bits_deep(image, message, len, shape, index, depth, &width);
+		err = content_bits_deep(image, message, len, shape, index, depth,
+		                        &width);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}

@@ -1067,7 +1067,17 @@ class Emitter:
 			if step.kind == "record":
 				assert step.placement is not None
 				local = _ident(c_name(local_name(struct, step.placement)))
-				body.append(f"\t\tlet {local} = at;")
+				if step.placement.skip:
+					# Past the lead: `at` is where the whitespace starts and
+					# the member starts after it. The stride below re-reads
+					# the lead rather than consuming it here, so `at` stays
+					# the value every other term is measured from.
+					lead = _ident(c_name(local_name(struct, step.placement))
+					              + "_lead")
+					body.append(f"\t\tlet {local} = at"
+					            f" + self.{lead}(at);")
+				else:
+					body.append(f"\t\tlet {local} = at;")
 				captured.append(local)
 			elif step.kind == "align":
 				body.append(f"\t\tat = situ_rt::align_up(at, {step.size}, "
@@ -2342,7 +2352,82 @@ class Emitter:
 	def _getter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		bounds = self._value_bounds(struct, entry.placement) \
 			if entry.placement.kind == "field" else []
-		return bounds + self._getter_body(struct, entry)
+		lead = self._lead_methods(struct, entry.placement)
+		return bounds + lead + self._getter_body(struct, entry)
+
+	def _lead_methods(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`skip`: the whitespace in front of a member, and what it costs.
+
+		Three functions, each a different question. `_lead` is how many
+		bytes of it stand at a given point; `_start` is where it begins,
+		which is the sum of what precedes the member; `_stride_from` is how
+		far the member reaches from there, lead included, which is what
+		every later member adds.
+		"""
+		# The struct's OWN members only. A nested struct's member belongs to
+		# that struct, an element's field to the element type, and an arm's
+		# to the family that emits the arm -- each has its own offset chain,
+		# and the lead belongs beside it. Emitting one here would name a
+		# helper from a chain nothing in this class computes: C refuses that
+		# at the point of use, and these three would not notice until the
+		# accessor ran.
+		if not placement.skip or not is_own_member(struct, placement):
+			return []
+
+		name  = c_name(local_name(struct, placement))
+		chain = self._chain_body(struct, placement)
+		if chain is None:
+			return []
+
+		content = (str(placement.size_bits // BITS_PER_BYTE)
+		           if placement.is_fixed_size else
+		           self._content_length_expression(struct, placement,
+		                                           running="at + lead"))
+		if content is None:
+			return []
+
+		set_   = ", ".join(str(byte) for byte in placement.skip)
+		shown  = " ".join(placement.skip_shown) or "the declared set"
+		lead   = _ident(name + "_lead")
+		start  = _ident(name + "_start")
+		stride = _ident(name + "_stride")
+
+		return [
+			"",
+			f"\t/// The whitespace in front of {placement.path}: {shown}.",
+			"\t///",
+			"\t/// Those bytes are the member's own, so the struct still",
+			"\t/// partitions its bytes exactly. What the lead costs is the",
+			"\t/// offset, which is a scan from here on rather than a number.",
+			f"\tpub fn {lead}(&self, at: usize) -> usize {{",
+			f"\t\tif at >= self.bytes.len() {{",
+			"\t\t\treturn 0;",
+			"\t\t}",
+			f"\t\tsitu_rt::skip_run(&self.bytes[at..], &[{set_}])",
+			"\t}",
+			"",
+			"\t/// Where the whitespace begins, which is where the member",
+			"\t/// before this one ended.",
+			f"\tpub fn {start}(&self) -> usize {{",
+			# A chain of constants never reassigns `at`, and `-D warnings`
+			# makes `unused_mut` an error. `resolve_offsets` carries the
+			# same allow for the same reason.
+			"\t\t#[allow(unused_mut)]",
+			*chain,
+			"\t}",
+			"",
+			f"\t/// How far {placement.path} reaches from `at`: the",
+			"\t/// whitespace, and then the member.",
+			f"\tpub fn {stride}_from(&self, at: usize) -> usize {{",
+			f"\t\tlet lead = self.{lead}(at);",
+			f"\t\tlead + ({content})",
+			"\t}",
+			"",
+			f"\tpub fn {stride}(&self) -> usize {{",
+			f"\t\tself.{stride}_from(self.{start}())",
+			"\t}",
+		]
 
 	def _value_bounds(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -4384,6 +4469,26 @@ class Emitter:
 
 	def _offset_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
+		"""Where a member starts, past its lead where it has one.
+
+		The chain appears twice in the wrapped form. Same bargain as the
+		other backends: the statement form next door is what a caller reads
+		when the cost matters.
+		"""
+		chain = self._chain_expression(struct, placement)
+		if chain is None or not placement.skip:
+			return chain
+
+		name = _ident(c_name(local_name(struct, placement)) + "_lead")
+		# Through `advance` rather than `saturating_add`, and not only for
+		# the saturation the other terms get: a chain that is the constant
+		# `0` is an ambiguous integer literal with a method called on it,
+		# which rustc refuses. A function signature gives it a type.
+		return (f"situ_rt::advance({chain}, self.{name}({chain}),"
+		        " self.bytes.len())")
+
+	def _chain_expression(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
 		"""Where a member starts: the same walk every backend does."""
 		if placement.offset_bits is not None:
 			return str(placement.offset_bits // BITS_PER_BYTE)
@@ -4740,6 +4845,25 @@ class Emitter:
 
 	def _offset_body(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str] | None:
+		"""Where the member starts: the chain, and then past its lead.
+
+		Two steps because they are two facts. `_chain_body` sums what
+		precedes the member, which is where its whitespace begins; this is
+		where the member itself does.
+		"""
+		chain = self._chain_body(struct, placement)
+		if chain is None or not placement.skip:
+			return chain
+
+		name = c_name(local_name(struct, placement))
+		return chain[:-1] + [
+			f"\t\tat = situ_rt::advance(at, self.{_ident(name + '_lead')}(at),"
+			" self.bytes.len());",
+			"\t\tat",
+		]
+
+	def _chain_body(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str] | None:
 		"""The offset accessor's body, accumulating rather than summing.
 
 		`_offset_expression` builds `0 + a_span() + b_span()`, and each of
@@ -4829,6 +4953,23 @@ class Emitter:
 		return f"core::cmp::min({_unwrapped(found)}, {pin})"
 
 	def _raw_length_expression(self, struct: ResolvedStruct,
+			placement: Placement, running: str | None = None,
+			depth: str | None = None) -> str | None:
+		"""How many bytes a member occupies -- its lead included.
+
+		The span rather than the size, because this is what every offset
+		chain and every extent sums.
+		"""
+		if placement.skip:
+			name = c_name(local_name(struct, placement))
+			if running is not None:
+				return (f"self.{_ident(name + '_stride_from')}"
+				        f"({running})")
+			return f"self.{_ident(name + '_stride')}()"
+		return self._content_length_expression(struct, placement, running,
+		                                       depth)
+
+	def _content_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,
 			depth: str | None = None) -> str | None:
 		if placement.kind == "variant":

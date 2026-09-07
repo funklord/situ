@@ -394,6 +394,25 @@ pub fn scan_any(bytes: &[u8], delims: &[&[u8]]) -> (usize, usize) {
 	(limit, 0)
 }
 
+/// How many leading bytes are in a set: the lead a `skip` member owns.
+///
+/// The inverse question to `scan`, and it needs its own function rather than
+/// a delimiter list because it is a membership test repeated -- while the
+/// next byte is one of these -- where a scan matches a sequence.
+///
+/// A lead that runs to the end of the buffer returns the length rather than
+/// failing: whitespace to the end of a message is a message with no member
+/// after it, which the member's own bounds check reports.
+#[inline]
+pub fn skip_run(bytes: &[u8], lead: &[u8]) -> usize {
+	for (i, byte) in bytes.iter().enumerate() {
+		if !lead.contains(byte) {
+			return i;
+		}
+	}
+	bytes.len()
+}
+
 /// The same, with a byte that makes the delimiter inert.
 ///
 /// `quote` toggles: inside a quoted run the delimiter is content. `escape`

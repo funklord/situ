@@ -456,6 +456,8 @@ directive     = "target"     target_kind [ "append" ] ";"
               | "endian"     endian ";"
               | "strictness" "=" strictness ";"
               | "bit_order"  bitorder ";"
+              | "encoding"   ident { "|" ident } ";"     (* section 8.6.7 *)
+              | "whitespace" byte_set ";"                (* section 8.6.8 *)
               | "import"     string ";" ;
 
 target_kind   = "buffer" | "mmio" | "file" ;
@@ -492,8 +494,8 @@ struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 member        = field | reserved | block | variant | tag_field | pad ;
 pad           = "pad_to" "(" digits ")" ";" ;        (* section 8.4 *)
 
-field         = [ radix ] type_ref ident [ array_spec ] [ until | repeat ]
-                [ pin ] [ attrs ] ";" ;
+field         = [ radix ] type_ref ident [ array_spec ] [ skip ]
+                [ until | repeat ] [ pin ] [ attrs ] ";" ;
 repeat        = "while" "(" expr ")" [ "max" expr ] ;   (* section 8.6.6 *)
 radix         = "decimal" | "hex" ;          (* section 8.6.2 *)
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
@@ -521,7 +523,16 @@ size_expr     = expr | "remaining" ;
    delimiter is a string literal rather than an expression: it would
    otherwise have to be evaluated against the data it is being looked
    for in. `max` bounds the scan. *)
-until         = "until" string [ "max" expr ] ;
+until         = ( "until" | "before" ) delimiter { "|" delimiter }
+                [ "max" expr ] ;
+delimiter     = string | char ;
+
+(* Section 8.6.8. A run of bytes that may precede a member and belongs to
+   it. Single BYTES rather than sequences: a lead runs while the next byte
+   is in the set, where a scan matches a sequence. Bare means the file's
+   `whitespace` set, and is refused where there is none. *)
+skip          = "skip" [ byte_set ] ;
+byte_set      = char { "|" char } ;
 pin           = "@" expr ;
 
 attrs         = "[" attr { "," attr } "]" ;
@@ -1918,6 +1929,7 @@ output can be read against this table directly.
 | `relaxed-delimiter` | a delimited member whose delimiter may occur in its content | `canonical := NonCanonical` |
 | `unbounded-scan` | a delimited member with no cap on the scan | `effect := EffectOnRead` |
 | `scanned-predecessor` | a member found by scanning for a delimiter earlier in the frame | `offset := Scanned`, `access := Sequential`, `address := Unstable` |
+| `skipped-lead` | a member that begins after a run of whitespace | `offset := Scanned`, `access := Sequential`, `address := Unstable`, `effect := EffectOnRead` |
 | `repeat-while` | a run that ends after the element failing a condition | `access := Sequential`, `mutate := Shifting` |
 | `text-number` | a number written as digits rather than stored as bits | `repr := TextConverted` |
 | `non-minimal-text-number` | a text number that accepts leading zeros | `canonical := NonCanonical` |
@@ -23727,6 +23739,142 @@ the population assertion doing its job rather than a number to update.
 unchanged, byte for byte. The two keywords differ where they should differ
 and nowhere else, which is what made this a small change on top of a large
 one rather than a second delimited-member family.
+
+### 26.292 Whitespace is a member's, and the bill said it could not be
+
+`example/json` carried this as the last line of its bill:
+
+> WHITESPACE between tokens cannot be skipped. [...] Skipping it is a
+> grammar's job rather than a layout's: a member whose start depends on
+> how many spaces preceded it has no offset anybody can compute, which is
+> the line 8.6 draws.
+
+**The first half was wrong and the second half was right, which is what
+made it convincing.** No offset anybody can compute is exactly correct --
+and half this schema's offsets were already uncomputable, because a
+delimited member's successor is found by scanning and not by arithmetic.
+The line 8.6 draws is not that every offset is arithmetic. It is that
+**every byte belongs to exactly one member**, and whitespace keeps that:
+the run in front of a token is the token's own, because the member before
+it is finished and a struct's members partition its bytes exactly.
+
+So `skip` is the third clause in the same family as `until` and `before`,
+and it points the other way. Those two say where a member ENDS; this says
+where one BEGINS, which is a different fact about the bytes and is why it
+needed a word rather than an attribute.
+
+    whitespace ' ' | '\t' | '\r' | '\n';   // the file's set
+    u8  colon  skip;                     // that set
+    u8  colon  skip ' ' | '\t';          // this member's own
+
+**The set is declared, not supplied.** JSON's whitespace is those four
+bytes by RFC 8259 section 2; HTTP's optional whitespace is two of them.
+A compiler that had a default would be silently wrong about one of those,
+so a bare `skip` with no directive is refused and says which line is
+missing -- the same argument `encoding` settles for character literals,
+and the directive sits beside it and obeys the same placement rule.
+
+**A byte set, not a delimiter list, and the refusal says so.** A scan
+matches a SEQUENCE and stops before it; a lead tests one byte at a time
+and stops at the first that is not in the set. So an alternative wider
+than a byte is refused rather than being made to work: it would be a
+repeated match of a sequence, which is a construct situ does not have.
+`situ_skip`, `skip_run` and `lead_bytes` are that test in the three
+runtimes and both walkers, and none of them could have been `scan_any`
+over one-byte alternatives -- that answers where the whitespace STARTS.
+
+**What it costs is stated in one predicate, and that is the whole of the
+implementation's shape.** A member's SIZE is how many bytes its value
+occupies; its SPAN is how far the next member sits from where this one
+started. Those were one number until a lead could precede a member. So
+the accessors go on asking `is_fixed_size` -- they read one byte -- and
+everything that ADDS UP members asks `traverse.occupies_fixed_bytes`.
+Three shared functions do that summing (`preceding_parts`, `offset_plan`,
+`extent_parts`) and all four backends read all three, which is why the
+change is one predicate rather than a condition in twelve places.
+
+Each backend then needed exactly two hooks and one emitter: the length
+expression returns the STRIDE (lead plus content) so every chain and every
+extent gets it once, the offset function gains a step past the lead, and
+a `_lead_from` / `_start` / `_stride_from` family says what those two
+mean. The walkers split the same way -- `chain_bits` against
+`offset_bits`, `content_bits` against `size_bits` -- and the five value
+reads that pair an offset with a width were moved to the content form,
+which is the one place a wrong split reads a byte too many.
+
+**The requirement it cost is the honest part.** `example/json` said
+
+    require absolute_static(value.kind);
+
+on the grounds that a document starts at offset zero because nothing
+precedes it. That stopped being true the moment whitespace could:
+` {"a":1}` is a JSON document and its first token is at offset one. It is
+an `assert` now, which in this repository's idiom is a measurement rather
+than a demand -- the same way `http.situ` records what framing in text
+costs. Permitting leading whitespace and knowing where the first byte is
+are one question asked twice, and JSON's answer is the first.
+
+The measurements, beside the ones 26.291 left:
+
+    {"a":12}      8 bytes     extent 8     validate ok
+    { "a" : 12 }  12 bytes    extent 8     validate ok   before `skip`
+    { "a" : 12 }  12 bytes    extent 12    validate ok
+
+**The eight is 26.291's seven one construct along, and it is the same
+shape.** Every member measured its own bytes correctly, the whitespace
+between them belonged to no member at all, and the sum was short by
+exactly the bytes nobody had claimed -- with `validate` content, because
+every constraint it knows about held. A short measurement and no
+complaint, twice in two days, from two different constructs that each
+left bytes unowned.
+
+**Trailing whitespace is the edge that remains, and it is not a defect.**
+A lead belongs to the member that FOLLOWS it, and after the last token
+there is no member to follow -- so `{"a":1} ` is eight bytes and this
+schema measures seven. The document really is seven bytes; the eighth is
+not part of it. What a caller framing a stream has to know is that the
+extent will not step over it, which the example now says.
+
+**Refused rather than half-built, each describable and none silently
+wrong.** A lead on a `while` run, on a counted array or on a record run
+would read as either one lead before the run or one before every element,
+and those are different formats -- the remedy is the element's first
+member, which says the second unambiguously. A lead on a located member
+has nothing to follow. And a lead under a `max` is refused because **the
+cap is documented to bound the whole member, delimiter included (8.6.1)**
+and there is no bound for a lead: accepting both would have left a
+guarantee false rather than merely incomplete. Whether `skip max N`
+should exist is open, and the reason it was not built is that a member
+would then carry two caps and a reader would have to know which bounds
+what.
+
+**And it found a defect in the construct before it.** `import` splices the
+imported file's declarations in AHEAD of the importing file's own, so a
+schema that both imports a file carrying an `encoding` directive and
+declares its own met a struct before its own directive -- and was refused,
+by a diagnostic pointing at line 4 of a file whose line 4 is at the top.
+The rule was always about ONE FILE: a directive is resolved where it is
+written and governs the literals written after it in that file, so what a
+struct from somewhere else sits before decides nothing. Comparing
+declarations from two files was the bug, and the source path is what tells
+them apart. It reached `encoding` in 26.290 and `whitespace` would have
+doubled it; both read the path now.
+
+**What the sabotages proved, and they proved different things.** Making
+`occupies_fixed_bytes` ignore the lead is caught only by the generated
+code -- the pretty document measures 1 byte instead of 12 -- because that
+predicate is the backends' shared decision and no walker reads it. Making
+the walker's `offset_bits` drop the lead is caught by three walker
+assertions and by neither backend. And dropping it from the C walker's
+offset alone is caught by the value, not by the width: `b` reads as a
+space. **Three mechanisms, three disjoint sets of red tests**, which is
+what says the tests are aimed at the mechanisms rather than at the
+feature.
+
+**What `skip` does not change.** Every schema without one compiles to
+what it did before, byte for byte: the predicate that decides all of this
+is false wherever `placement.skip` is empty, so the whole construct is
+absent from the corpus except where a schema asked for it.
 
 ## 27. Questions, and how they were settled
 

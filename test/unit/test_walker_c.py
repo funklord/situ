@@ -974,6 +974,53 @@ def test_they_agree_that_an_unterminated_member_reaches_its_cap(
 	assert c_answers(tmp_path, blob, message) == ["refused", "255"]
 
 
+SKIPPED = """target buffer;
+endian big;
+whitespace ' ' | '\\t';
+
+struct counted {
+	u8  a;
+	u8  b  skip;
+	u8  c;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_where_whitespace_precedes_a_member(tmp_path: Path) -> None:
+	"""A lead is the newest place two readers of one image can come apart,
+	and it is the first construct that moves a member's OWN offset rather
+	than the offsets after it.
+
+	Both halves are asserted because either alone passes with the lead
+	counted twice: the value says the member was found past the whitespace,
+	and the width says the whitespace was charged to it exactly once. A
+	walker that added the lead to the offset and not to the span would
+	answer `b` correctly and place `c` on top of it."""
+	blob    = packed_text(SKIPPED)
+	message = b"a  \tbc"
+
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+	assert c_answers(tmp_path, blob, message) == ["97", "98", "99"]
+	assert c_widths(tmp_path, blob, message) == python_widths(blob, message)
+	assert c_widths(tmp_path, blob, message) == ["1", "4", "1"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_an_absent_lead_costs_nothing(tmp_path: Path) -> None:
+	"""The control for the case above, and the one that separates "the lead
+	was read" from "the lead was assumed": the same schema over bytes with
+	no whitespace in them must give the same answers a schema without
+	`skip` would."""
+	blob    = packed_text(SKIPPED)
+	message = b"abc"
+
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+	assert c_answers(tmp_path, blob, message) == ["97", "98", "99"]
+	assert c_widths(tmp_path, blob, message) == python_widths(blob, message)
+	assert c_widths(tmp_path, blob, message) == ["1", "1", "1"]
+
+
 TEXT_FIXED = """target buffer;
 endian big;
 

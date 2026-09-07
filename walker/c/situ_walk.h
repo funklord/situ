@@ -69,6 +69,11 @@ typedef struct {
 	const uint8_t *delimiters;
 	uint32_t       delimiter_count;
 	uint32_t       delimiter_stride;
+	/* `skip`: one row per byte of a member's lead set, sorted by
+	 * placement and consecutive under it, the way delimiters are. */
+	const uint8_t *skips;
+	uint32_t       skip_count;
+	uint32_t       skip_stride;
 
 	/* One row per *arm*, so a variant has several and they are contiguous:
 	 * the table is sorted by placement like every other. */
